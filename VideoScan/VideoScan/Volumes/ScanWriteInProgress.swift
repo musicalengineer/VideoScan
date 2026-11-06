@@ -47,12 +47,43 @@ struct ScanFileStat: Equatable, Sendable {
     let sizeBytes: Int64
     let modifiedAt: Date
 
-    /// The file's current stat; nil when it cannot be read (gone).
+    /// The file's current stat; nil when it is gone OR unreadable. Callers
+    /// that must tell those apart (the scan's second stat) use `read`.
     static func of(path: String) -> ScanFileStat? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
-        return ScanFileStat(sizeBytes: (attrs[.size] as? Int64) ?? 0,
-                            modifiedAt: (attrs[.modificationDate] as? Date) ?? .distantPast)
+        if case .present(let stat) = read(path: path) { return stat }
+        return nil
     }
+
+    /// stat(2) with its errno: only ENOENT/ENOTDIR is absence; EACCES, EIO…
+    /// is a file that is there but cannot be read (Codex 2026-11-05 re-review
+    /// 3, P0: the second stat turned every error into "gone after the probe"
+    /// → Still writing, zero errors).
+    static func read(path: String) -> ScanFileReading {
+        var sb = stat()
+        guard stat(path, &sb) == 0 else {
+            let code = errno
+            return code == ENOENT || code == ENOTDIR ? .gone : .inaccessible(errno: code)
+        }
+        let modified = Date(timeIntervalSince1970: TimeInterval(sb.st_mtimespec.tv_sec) + TimeInterval(sb.st_mtimespec.tv_nsec) / 1_000_000_000)
+        return .present(ScanFileStat(sizeBytes: Int64(sb.st_size), modifiedAt: modified))
+    }
+}
+
+/// What one stat(2) said: the file, its absence, or an error that is not absence.
+enum ScanFileReading: Equatable, Sendable {
+    case present(ScanFileStat)
+    case gone
+    case inaccessible(errno: Int32)
+}
+
+/// The scan's verdict after ffprobe, from the second stat.
+enum ScanAfterProbe: Equatable, Sendable {
+    /// Unchanged under the probe: build the row.
+    case clean
+    /// Changed, settling, or gone: skipped — "still being written — rescan later".
+    case skip(why: String)
+    /// Present but unreadable now (EACCES, EIO…): an error with its reason, never a skip.
+    case inaccessible(errno: Int32)
 }
 
 /// What a single-file reprobe produced: the probe, or the typed fact that
@@ -187,13 +218,34 @@ extension VideoScanModel {
         let after: ScanFileStat?
         if !afterProbe {
             after = before
-        } else if let seam = scanSecondStatForTesting {
-            after = seam(path)   // the seam's nil means "gone", never "ask the disk"
+        } else if case .present(let stat) = secondStat(path: path) {
+            after = stat
         } else {
-            after = ScanFileStat.of(path: path)
+            after = nil
         }
         return ScanWriteInProgress.reason(before: before, after: after,
                                           now: scanClockForTesting?() ?? Date(), settleSeconds: scanSettleSeconds)
+    }
+
+    /// The second stat — through the test seam when set (its `.gone` means
+    /// "gone", never "ask the disk").
+    nonisolated func secondStat(path: String) -> ScanFileReading {
+        scanSecondStatForTesting?(path) ?? ScanFileStat.read(path: path)
+    }
+
+    /// The scan's verdict after ffprobe: clean, skipped (changed/settling/gone),
+    /// or inaccessible — the errno rule of the first stat applied to the second.
+    nonisolated func afterProbeCheck(path: String, before: ScanFileStat) -> ScanAfterProbe {
+        switch secondStat(path: path) {
+        case .inaccessible(let code):
+            return .inaccessible(errno: code)
+        case .present(let after):
+            return ScanWriteInProgress.reason(before: before, after: after, now: scanClockForTesting?() ?? Date(),
+                                              settleSeconds: scanSettleSeconds).map { .skip(why: $0) } ?? .clean
+        case .gone:
+            return ScanWriteInProgress.reason(before: before, after: nil, now: scanClockForTesting?() ?? Date(),
+                                              settleSeconds: scanSettleSeconds).map { .skip(why: $0) } ?? .clean
+        }
     }
 
     /// Probe ONE file the caller just wrote: wait for it to settle

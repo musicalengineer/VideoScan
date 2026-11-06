@@ -382,6 +382,60 @@ class NightlyGauntletTests(unittest.TestCase):
             self.assertNotIn(ch, message.strip()[1:-1])
 
 
+class WatchdogLockHandoffTests(unittest.TestCase):
+    """Codex 2026-11-05 re-review 3 (P1): the nightly suite's real supervisor
+    (scripts/lib/process_group_watchdog.sh) launched its worker with Popen and
+    no pass_fds, so fd 9 — the testbed lock — was dropped before the actual
+    work: with the supervisors gone and the worker alive, a second owner was
+    admitted. The real handoff, with a real kernel lock: shell takes the lock
+    on fd 9, the watchdog starts a worker, shell + watchdog are SIGKILLed, the
+    worker lives on → BUSY until the worker exits → FREE."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.t = pathlib.Path(self.tmp.name)
+        self.lock = self.t / "lock"
+
+    def tearDown(self):
+        (self.t / "hold").unlink(missing_ok=True)
+        self.tmp.cleanup()
+
+    def probe(self):
+        return subprocess.run([sys.executable, str(REPO / "scripts/testbed_lock.py"), "probe", str(self.lock)],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+
+    def test_the_watchdogs_worker_keeps_the_lock_after_its_supervisors_die(self):
+        hold, pidfile, log = self.t / "hold", self.t / "worker.pid", self.t / "out.log"
+        hold.touch()
+        script = (
+            'mkdir -p "$LOCK" && exec 9>>"$LOCK/flock" && '
+            'answer="$(python3 "$HELPER" hold 9 "$LOCK" "nightly suite (watchdog)")" && [ "$answer" = HELD ] || exit 9; '
+            'source "$LIB"; '
+            'run_with_process_group_watchdog 120 1 "$LOG" sh -c \'echo $$ > "$PIDFILE"; while [ -e "$HOLD" ]; do sleep 0.05; done\''
+        )
+        env = dict(os.environ, LOCK=str(self.lock), HELPER=str(REPO / "scripts/testbed_lock.py"),
+                   LIB=str(REPO / "scripts/lib/process_group_watchdog.sh"), LOG=str(log),
+                   PIDFILE=str(pidfile), HOLD=str(hold))
+        shell = subprocess.Popen(["/bin/bash", "-c", script], env=env, start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            wait_for(lambda: pidfile.exists() and pidfile.read_text().strip(), what="the worker to start")
+            worker = int(pidfile.read_text().strip())
+            self.assertTrue(self.probe().startswith("BUSY nightly suite (watchdog)"), self.probe())
+            # Kill the supervisors: the shell and its python watchdog, not the worker.
+            supervisors = subprocess.run(["pgrep", "-P", str(shell.pid)], capture_output=True, text=True).stdout.split()
+            for pid in supervisors:
+                os.kill(int(pid), 9)
+            shell.kill(); shell.wait()
+            time.sleep(0.5)
+            self.assertEqual(subprocess.run(["kill", "-0", str(worker)]).returncode, 0, "fixture: the worker must still be alive")
+            self.assertTrue(self.probe().startswith("BUSY nightly suite (watchdog)"),
+                            f"the lock must live on with the worker: {self.probe()}")
+        finally:
+            hold.unlink(missing_ok=True)
+        wait_for(lambda: self.probe() == "FREE", what="the kernel to drop the lock when the worker exits")
+
+
 class RotaGauntletTests(unittest.TestCase):
 
     def rota(self, body):

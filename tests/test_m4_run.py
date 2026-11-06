@@ -176,9 +176,14 @@ class DryRunTests(unittest.TestCase):
         out = p.stdout
         self.assertIn(f'push -q ricksm4.local:dev/VideoScan {sha}:refs/m4run/{sha}', out)
         self.assertIn('+ ssh ricksm4.local', out)
-        self.assertIn(f"checkout -q --detach '{sha}'", out)
+        # The caller never checks the testbed out: the host does, under the lock.
+        self.assertNotIn('checkout -q --detach', out)
+        self.assertIn(f'the host checks out {sha} into', out)
+        self.assertNotIn(f"bootout gui/$uid/com.videoscan.m4run\n", out)
         self.assertIn('launchctl bootstrap gui/', out)
         self.assertIn('<key>LimitLoadToSessionType</key><string>Aqua</string>', out)
+        self.assertRegex(out, r'<key>Label</key><string>com\.videoscan\.m4run\.\d{8}_\d{6}_\d+</string>')
+        self.assertRegex(out, r'install .*m4_run\.sh -> ricksm4\.local:.*/m4run/bin/\d{8}_\d{6}_\d+/m4_run\.sh')
         for arg in ('__host', 'ui', sha, '--host', 'm4', '--only', 'Gauntlet07FamilyMapUITests'):
             self.assertIn(f'<string>{arg}</string>', out)
         self.assertIn('/m4run/work', out)
@@ -237,11 +242,13 @@ class HostLockTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=20).stdout.strip()
 
     def test_free_lock_is_taken_and_released(self):
+        # No testbed repo under this HOME: the host refuses under the lock
+        # (it never touched a tree) and releases.
         p = self.host('s1')
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)
         log = (self.root / 'out/s1-ui/run.log').read_text()
-        self.assertIn('START', log)
-        self.assertIn('OUTCOME RED testbed', log)
+        self.assertIn('OUTCOME REFUSED cannot add worktree', log)
+        self.assertNotIn('START', log)
         self.assertEqual(self.probe(), 'FREE', 'lock left behind')
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/s1-ui'))
 
@@ -261,9 +268,10 @@ class HostLockTests(unittest.TestCase):
         os.close(dead)                                            # the holder is gone: its fd closed with it
         (self.root / 'lock' / 'pid').write_text('999999')
         p = self.host('s3')
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)                        # past the lock; refused only for the missing testbed
         log = (self.root / 'out/s3-ui/run.log').read_text()
-        self.assertIn('START', log)
+        self.assertIn('OUTCOME REFUSED cannot add worktree', log)
+        self.assertNotIn('busy', log)
         self.assertNotIn('reclaim', log)
         self.assertEqual(self.probe(), 'FREE')
 
@@ -450,6 +458,139 @@ class LockRaceTests(unittest.TestCase):
         self.assertIn('OUTCOME GREEN', log_c)
         self.assertNotIn('reclaim', log_c)
         self.assertEqual(c.returncode, 0)
+
+
+FAKE_LAUNCHCTL = r'''#!/usr/bin/env python3
+# Stand-in for launchctl: `bootstrap gui/<uid> <plist>` starts the plist's
+# ProgramArguments detached (what launchd would do) and records it; every
+# call is appended to $M4RUN_TEST_LAUNCHCTL_LOG.
+import os, plistlib, subprocess, sys
+args = sys.argv[1:]
+with open(os.environ["M4RUN_TEST_LAUNCHCTL_LOG"], "a") as f:
+    f.write(" ".join(args) + "\n")
+if args[:1] == ["bootstrap"]:
+    with open(args[2], "rb") as f:
+        plist = plistlib.load(f)
+    subprocess.Popen(plist["ProgramArguments"], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+sys.exit(0)
+'''
+
+# The deep run inside the testbed worktree: announces itself, holds until released.
+FAKE_GAUNTLET_ENV_HOLD = r'''#!/bin/sh
+echo "$$" >> "$M4RUN_TEST_STARTS"
+while [ -e "$M4RUN_TEST_HOLD" ]; do sleep 0.05; done
+printf 'GAUNTLET PASSED sha=%s total=9s unit=PASSED results=%s publish=queued\n' \
+    "$(git rev-parse --short=8 HEAD)" "$M4RUN_TEST_RESULT"
+exit 0
+'''
+
+
+class CallerMutationTests(unittest.TestCase):
+    """Codex 2026-11-05 re-review 3 (P1): the caller probed FREE, then checked
+    the SHA out and booted the LaunchAgent out BEFORE the host took the lock —
+    a second caller could clobber a live run's worktree and agent. Now every
+    mutation of the shared testbed happens on the host under the lock, and the
+    caller's steps are additive (per-run bin dir, per-run agent label).
+
+    End to end on the "ultra" host (local, no ssh): a fake launchctl starts
+    the agent's command detached, as launchd would; a real git repo plays
+    ~/dev/VideoScan with two commits (the fake deep run blocks until released)."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        home = pathlib.Path(self.home.name)
+        self.repo = home / 'dev' / 'VideoScan'
+        (self.repo / 'scripts').mkdir(parents=True)
+        (self.repo / 'fake').mkdir()
+        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+            shutil.copy(REPO / 'scripts' / name, self.repo / 'scripts' / name)
+        gauntlet = self.repo / 'scripts' / 'run_gauntlet.sh'
+        gauntlet.write_text(FAKE_GAUNTLET_ENV_HOLD)
+        gauntlet.chmod(0o755)
+        git = ['git', '-C', str(self.repo)]
+        env = dict(os.environ, HOME=self.home.name, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        subprocess.run(git + ['init', '-q'], check=True, env=env)
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'a'], check=True, env=env)
+        self.sha_a = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env, capture_output=True, text=True).stdout.strip()
+        (self.repo / 'fake' / 'second').write_text('b\n')
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'b'], check=True, env=env)
+        self.sha_b = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env, capture_output=True, text=True).stdout.strip()
+        self.bin = home / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'launchctl').write_text(FAKE_LAUNCHCTL)
+        (self.bin / 'launchctl').chmod(0o755)
+        self.test = home / 'test'
+        self.test.mkdir()
+        self.root = home / 'ultrarun'
+        self.wt = home / 'dev' / 'VideoScan-wt' / 'ultra-testbed'
+        self.launchctl_log = self.test / 'launchctl.log'
+        self.launchctl_log.touch()
+        (self.test / 'result.json').write_text(
+            '{"status": "passed", "commit": "%s", "stages": [], "inventory_errors": []}' % self.sha_b)
+        self.env = dict(os.environ, HOME=self.home.name, PATH=f"{self.bin}:{os.environ['PATH']}",
+                        M4RUN_TEST_LAUNCHCTL_LOG=str(self.launchctl_log), M4RUN_TEST_HOLD=str(self.test / 'hold'),
+                        M4RUN_TEST_STARTS=str(self.test / 'starts'), M4RUN_TEST_RESULT=str(self.test / 'result.json'))
+
+    def tearDown(self):
+        (self.test / 'hold').unlink(missing_ok=True)
+        time.sleep(0.3)
+        self.home.cleanup()
+
+    def wait_for(self, predicate, what, timeout=30.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f'timed out waiting for {what}')
+
+    def caller(self, sha, **extra):
+        return subprocess.Popen(['/bin/bash', str(self.repo / 'scripts/m4_run.sh'), 'deep', '--host', 'ultra',
+                                 '--ref', sha, '--force'], env=dict(self.env, **extra),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    def head(self):
+        return subprocess.run(['git', '-C', str(self.wt), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+
+    def run_logs(self):
+        return {p.parent.name: p.read_text() for p in (self.root / 'out').glob('*-deep/run.log')} if (self.root / 'out').exists() else {}
+
+    def test_a_second_caller_never_touches_a_live_runs_tree_runner_or_agent(self):
+        starts, hold, pause = self.test / 'starts', self.test / 'hold', self.test / 'pause'
+        hold.touch(); pause.touch()
+        a = self.caller(self.sha_a, VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE=str(pause))
+        try:
+            self.wait_for(lambda: (self.test / 'pause.paused').exists(), 'A past its probe')
+            b = self.caller(self.sha_b)
+            self.assertEqual(b.wait(timeout=60), 0, b.stdout.read())
+            self.wait_for(lambda: starts.exists(), "B's deep run to start (its agent holds the lock)")
+            self.assertEqual(self.head(), self.sha_b)
+            runner_b = next((self.root / 'bin').glob('*/m4_run.sh'))
+            runner_b_bytes, runner_b_mtime = runner_b.read_bytes(), runner_b.stat().st_mtime_ns
+            log_before = self.launchctl_log.read_text()
+            self.assertEqual(log_before.count('bootstrap'), 1)
+            pause.unlink()                                             # A resumes with another SHA
+            self.assertEqual(a.wait(timeout=60), 0, "the caller only ships; the host refuses")
+            self.wait_for(lambda: any('OUTCOME REFUSED' in l for l in self.run_logs().values()), "A's agent to be refused")
+            self.assertEqual(self.head(), self.sha_b, "A clobbered B's checked-out tree")
+            self.assertEqual((runner_b.read_bytes(), runner_b.stat().st_mtime_ns), (runner_b_bytes, runner_b_mtime),
+                             "A overwrote B's installed runner")
+            log_after = self.launchctl_log.read_text()
+            self.assertNotIn('bootout', log_after, "A booted out an agent while B's was live")
+            self.assertEqual(log_after.count('bootstrap'), 2)
+            self.assertEqual(len(starts.read_text().split()), 1, 'two deep runs on one testbed')
+            refused = [l for l in self.run_logs().values() if 'OUTCOME REFUSED' in l]
+            self.assertEqual(len(refused), 1)
+            self.assertIn('busy: deep sha=' + self.sha_b[:9], refused[0])
+        finally:
+            hold.unlink(missing_ok=True)
+        self.wait_for(lambda: any('OUTCOME GREEN' in l for l in self.run_logs().values()), "B's run to finish")
+        self.assertEqual(self.head(), self.sha_b)
+        self.assertEqual([l for l in self.run_logs().values() if 'START' in l and 'OUTCOME GREEN' in l].__len__(), 1)
 
 
 if __name__ == '__main__':

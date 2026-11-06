@@ -233,7 +233,7 @@ struct ScanStillBeingWrittenTests {
         let path = try Self.movie(in: sb, named: "settled.mov")
         try Self.settle(path)
         let url = URL(fileURLWithPath: path)
-        sb.model.scanSecondStatForTesting = { _ in ScanFileStat(sizeBytes: 999_999_999, modifiedAt: .distantPast) }
+        sb.model.scanSecondStatForTesting = { _ in .present(ScanFileStat(sizeBytes: 999_999_999, modifiedAt: .distantPast)) }
         let scanned = await sb.model.probeFileOutcome(url: url)
         #expect(scanned.stillBeingWritten, "fixture sanity: the seam makes the scan skip")
         let rec = await sb.model.probeFile(url: url)
@@ -302,7 +302,7 @@ struct ScanStillBeingWrittenTests {
                 h.write(Data(repeating: 0x5A, count: 1_000_000))
                 h.closeFile()
             }
-            return ScanFileStat.of(path: p)
+            return ScanFileStat.read(path: p)
         }
         let outcome = await sb.model.probeFileOutcome(url: url)
         #expect(outcome.stillBeingWritten)
@@ -380,7 +380,7 @@ struct ScanStillBeingWrittenTests {
         try Self.settle(path)
         sb.model.scanSecondStatForTesting = { p in
             if let h = FileHandle(forWritingAtPath: p) { h.seekToEndOfFile(); h.write(Data(repeating: 0x5A, count: 4096)); h.closeFile() }
-            return ScanFileStat.of(path: p)
+            return ScanFileStat.read(path: p)
         }
         let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
         #expect(outcome.stillBeingWritten)
@@ -397,10 +397,46 @@ struct ScanStillBeingWrittenTests {
         let sb = try Self.sandbox("gone"); defer { sb.cleanup() }
         let path = try Self.movie(in: sb, named: "gone.mov")
         try Self.settle(path)
-        sb.model.scanSecondStatForTesting = { _ in nil }
+        sb.model.scanSecondStatForTesting = { _ in .gone }
         let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
         #expect(outcome.stillBeingWritten)
         #expect(outcome.notes.contains("gone after the probe"), Comment(rawValue: outcome.notes))
+    }
+
+    @Test("a file whose parent loses search permission AFTER ffprobe ran is an error with its reason and keeps the execution — never Still writing, never Gone")
+    func inaccessibleAfterTheProbeIsAnErrorNotASkip() async throws {
+        // Codex 2026-11-05 re-review 3 (P0): the second stat turned every
+        // attributes error into nil → "gone after the probe" → Still writing,
+        // zero errors. The errno rule of the first stat applies here too.
+        let sb = try Self.sandbox("eacces2"); defer { sb.cleanup() }
+        let fm = FileManager.default
+        let parent = sb.files.appendingPathComponent("locked", isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let path = parent.appendingPathComponent("settled.mov").path
+        try fm.moveItem(atPath: TestMediaGenerator.generate(container: "mov", streams: .videoOnly, duration: 1.0, prefix: "test_eacces2"), toPath: path)
+        try Self.settle(path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+        let parentPath = parent.path
+        sb.model.scanSecondStatForTesting = { p in
+            // The writer's parent locks up between the two stats.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parentPath)
+            return ScanFileStat.read(path: p)
+        }
+        let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(!outcome.stillBeingWritten, "unreadable is not a skip")
+        #expect(!outcome.fileNotFound, "unreadable is not Gone")
+        #expect(outcome.probe.isPlayable == VideoScanModel.notAccessibleVerdict, Comment(rawValue: outcome.probe.isPlayable))
+        #expect(outcome.notes.contains("Permission denied") && outcome.notes.contains("after ffprobe ran"), Comment(rawValue: outcome.notes))
+        #expect(outcome.ffprobeRan, "ffprobe did run: the execution is kept")
+        let tally = ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw, ffprobeRan: outcome.ffprobeRan,
+                                        sniffRejected: outcome.sniffRejected, stillBeingWritten: outcome.stillBeingWritten,
+                                        fileNotFound: outcome.fileNotFound)
+        #expect(tally == .init(tileKey: StreamType.ffprobeFailed.rawValue, ranFFprobe: true, isProbeError: true))
+        // The reading itself tells absence from error.
+        #expect(ScanFileStat.read(path: path) == .inaccessible(errno: EACCES))
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+        #expect(ScanFileStat.read(path: parent.appendingPathComponent("nope.mov").path) == .gone)
+        #expect(ScanFileStat.of(path: path) != nil)
     }
 
     // MARK: Sensor — the defaults

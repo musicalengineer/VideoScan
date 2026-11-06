@@ -40,6 +40,22 @@ extension VideoScanModel {
     /// "Gone". The unmount-abort trail counts it like "File not found".
     nonisolated static let notAccessibleVerdict = "Not accessible"
 
+    /// The outcome for a file stat(2) refused for a reason other than absence,
+    /// before or after ffprobe: Failed tile, Errors card, never Gone, never a
+    /// skip; `ffprobeRan` is the process runner's evidence when ffprobe did run.
+    nonisolated static func notAccessibleOutcome(url: URL, errno code: Int32, ffprobeRan: Bool, when: String) -> ProbeOutcome {
+        var o = ProbeOutcome()
+        o.filename            = url.lastPathComponent
+        o.ext                 = url.pathExtension.uppercased()
+        o.fullPath            = url.path
+        o.directory           = url.deletingLastPathComponent().path
+        o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        o.probe.isPlayable    = notAccessibleVerdict
+        o.notes               = MachineNote.line(author: .scan, text: "File could not be read: \(String(cString: strerror(code))) (errno \(code)) — \(when)")
+        o.ffprobeRan          = ffprobeRan
+        return o
+    }
+
     /// Streams `target.searchPath` and drains a probe group against it.
     /// Returns the collected records, total discovered, and total completed.
     func runTargetProbeGroup(
@@ -795,32 +811,35 @@ extension VideoScanModel {
         // file whose parent lost search permission (EACCES) or whose volume
         // errors (EIO) — only ENOENT/ENOTDIR is absence (Codex 2026-11-05
         // re-review 2, P0: "Gone, zero errors" for a file still there).
-        var sb = stat()
-        guard stat(path, &sb) == 0 else {
-            let code = errno
+        let firstStat: ScanFileStat
+        switch ScanFileStat.read(path: path) {
+        case .present(let stat):
+            firstStat = stat
+        case .gone:
             var o = ProbeOutcome()
             o.filename            = url.lastPathComponent
             o.ext                 = url.pathExtension.uppercased()
             o.fullPath            = path
             o.directory           = url.deletingLastPathComponent().path
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            if code == ENOENT || code == ENOTDIR {
-                o.probe.isPlayable = "File not found"
-                o.notes            = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
-                o.fileNotFound     = true          // gone before the probe: never "ffprobed", never an ffprobe failure
-            } else {
-                // Present (or unknowable) but unreadable: an error with its reason, never "Gone".
-                o.probe.isPlayable = Self.notAccessibleVerdict
-                o.notes            = MachineNote.line(author: .scan, text: "File could not be read: \(String(cString: strerror(code))) (errno \(code)) — ffprobe skipped")
-            }
+            o.probe.isPlayable    = "File not found"
+            o.notes               = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
+            o.fileNotFound        = true          // gone before the probe: never "ffprobed", never an ffprobe failure
             return o
+        case .inaccessible(let code):
+            // Present (or unknowable) but unreadable: an error with its reason, never "Gone".
+            return Self.notAccessibleOutcome(url: url, errno: code, ffprobeRan: false, when: "ffprobe skipped")
         }
 
         // Get file attributes for cache key and record population
         let attrs = try? fm.attributesOfItem(atPath: path)
         let fileSize = (attrs?[.size] as? Int64) ?? 0
         let modDate = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
-        let before = ScanFileStat(sizeBytes: fileSize, modifiedAt: modDate)
+        // The two stats of the write-in-progress rule come from the SAME
+        // source (stat(2), nanosecond mtime): Foundation's modificationDate
+        // is coarser, and a before/after pair from different sources reads
+        // every file as "changed under the probe".
+        let before = firstStat
 
         // Still being written? (Verify Catalog bug 3, 2026-10-17.) An mtime
         // inside the settle window is judged BEFORE the cache can vouch
@@ -911,9 +930,18 @@ extension VideoScanModel {
 
         // The second stat: a row is built only from a file that did not
         // change under the probe (bug 3). Never cached — the next scan looks.
-        // If ffprobe DID run on it, that execution still counts.
-        if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
-            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: probeResult.launched)
+        // If ffprobe DID run on it, that execution still counts. A stat that
+        // fails for a reason other than absence is an error, not a skip
+        // (Codex 2026-11-05 re-review 3, P0).
+        if skipIfStillBeingWritten {
+            switch afterProbeCheck(path: path, before: before) {
+            case .clean:
+                break
+            case .skip(let why):
+                return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: probeResult.launched)
+            case .inaccessible(let code):
+                return Self.notAccessibleOutcome(url: url, errno: code, ffprobeRan: probeResult.launched, when: "after ffprobe ran")
+            }
         }
 
         ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,
