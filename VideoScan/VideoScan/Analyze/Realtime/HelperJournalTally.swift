@@ -1,36 +1,37 @@
 // HelperJournalTally.swift — what VideoScan Background wrote today, counted
 // from its own journal (Realtime Content Analysis, 2026-11-05).
 //
-// READ ONLY. The helper's journal (`background/journal/<day>.jsonl`) is the
-// typed record of every observation it made; this reads the NEWEST day file
-// through `ObservationJournal.read` — the same reader the app's applier uses
-// — and never writes, seals, compacts or marks anything. The cursor keeps a
-// byte offset, so each refresh reads only what was appended since.
+// READ ONLY, and simple on purpose (Codex re-review 2, Rick's KISS): every
+// refresh re-folds the NEWEST day file (`background/journal/<day>.jsonl`)
+// from byte 0 — no cursor, no offsets, nothing to invalidate when the file is
+// truncated, regrown, replaced or rewritten. The helper pane refreshes every
+// few seconds, which is far more often than the journal needs.
+//
+// Bounded: the file is opened with O_NOFOLLOW and must be a regular file
+// (fstat), its size must be under `maxBytes`, and the read loop itself stops
+// at the cap — a symlink to /dev/zero, a FIFO or a runaway file is refused in
+// words, never read. Over the cap → unavailable with the size.
 //
 // Classification (one rule, pinned by HelperJournalTallyTests):
 //   era found       field `era.fused`, state `inferred`, a value that parses
-//                   as a year range (MachineEraResolver.range) — the line the
-//                   inspector would show as the era;
-//   gave up         field `era.none` with evidence.gaveUp == true (the
-//                   give-up line EraRecordMapper writes after 3 tries);
+//                   as a year range (MachineEraResolver.range);
+//   gave up         field `era.none` with evidence.gaveUp == true;
 //   no usable era   any other `era.none` line (DECISIONS 2026-11-01: never an era);
 //   other           every other valid line (era.yearRange windows, ocr.date…);
-//   unreadable      a line the reader refused (not JSON, wrong version, an
-//                   id that does not match) — counted, never guessed at.
+//   unreadable      not a JSON object with the journal's keys, or a line over
+//                   ObservationJournal.maxLineBytes — counted, never guessed at.
+// Each line is read as JSON (`JSONSerialization`), not through the applier's
+// full decode: the applier verifies every line's id before it commits one;
+// this counts what the file says. A torn last line (no newline) is reported
+// and not counted.
 //
-// Unavailable, with the reason (Codex F5/F9, 2026-11-05): a read that throws,
-// a file that grew past `maxBytesPerRefresh` since the last read, or an
-// unterminated tail longer than the journal's own line cap. The counts are
-// then zero and `available` is false — never stale numbers shown as live —
-// and an over-cap tail is not rescanned until the file changes size.
+// Memory: the file's bytes (≤ maxBytes, 64 MB) for the length of one fold,
+// plus the counts and ≤ 8 observations. Time: ~5 µs a line (HelperJournalTally
+// scale test: 100k lines measured, budget 10 s).
 //
-// Memory: counts, the newest `latestCap` observations (≈ 200 B each), and one
-// read buffer inside `ObservationJournal.read` (≤ 1 MB + maxLines decoded
-// lines ≈ 4 KB each). Work per refresh ≤ `maxBytesPerRefresh`.
-//
-// (For Rick: a fold over an append-only log with a persisted cursor; the
-// actor is the one place the cursor mutates.)
+// (For Rick: a pure fold over the file's bytes; the only state is the result.)
 
+import Darwin
 import Foundation
 import VideoScanCore
 
@@ -49,6 +50,7 @@ struct HelperJournalTally: Equatable, Sendable {
     }
 
     static let latestCap = 8
+    static let notReadYet = "not read yet"
 
     /// The day file the counts are from; nil = no journal file yet.
     var file: String?
@@ -57,158 +59,145 @@ struct HelperJournalTally: Equatable, Sendable {
     var gaveUp = 0
     var other = 0
     var unreadable = 0
-    /// Valid + unreadable lines counted so far.
+    /// Valid + unreadable lines counted.
     var lines: Int { eraFound + eraNone + gaveUp + other + unreadable }
     /// The file ends in a torn line (a write in flight or a crash); it is not counted.
     var torn = false
     /// Newest first, at most `latestCap`.
     var latest: [Observation] = []
-    /// Bytes of the file folded in so far (the cursor; tests pin incremental reads).
-    var bytesRead = 0
-    /// The counts are unavailable and this is why (a failed read, a file over a cap).
+    /// Bytes of the file folded (the whole file).
+    var bytes = 0
+    /// The counts are unavailable and this is why (not read yet, a failed read, a file over a cap).
     var readProblem: String?
 
     var available: Bool { readProblem == nil }
 
-    // MARK: The rule
-
-    static func classify(_ line: ObservationLine) -> Kind {
-        if line.field == EraRecordMapper.noneField {
-            return gaveUp(line) ? .gaveUp : .eraNone
-        }
-        if line.field == MachineEraResolver.fusedField, line.state == "inferred", MachineEraResolver.range(line.value) != nil {
-            return .eraFound
-        }
-        return .other
-    }
-
-    /// evidence.gaveUp == true (EraRecordMapper's give-up line).
-    static func gaveUp(_ line: ObservationLine) -> Bool {
-        guard let evidence = (try? JSONSerialization.jsonObject(with: Data(line.evidenceJSON.utf8))) as? [String: Any] else { return false }
-        return (evidence["gaveUp"] as? Bool) == true
-    }
-
-    /// The give-up reason, verbatim, when the evidence carries one.
-    static func reason(_ line: ObservationLine) -> String? {
-        guard let evidence = (try? JSONSerialization.jsonObject(with: Data(line.evidenceJSON.utf8))) as? [String: Any] else { return nil }
-        return evidence["reason"] as? String
-    }
-
-    static func words(_ line: ObservationLine, kind: Kind) -> String {
-        switch kind {
-        case .eraFound: return "era found — " + AnalysisResultsReport.eraWords(line.value)
-        case .eraNone: return "no usable era"
-        case .gaveUp: return "gave up — " + (reason(line) ?? "no reason recorded")
-        case .other: return "\(line.field) = \(line.value)"
-        case .unreadable: return "unreadable line"
-        }
-    }
-
-    mutating func add(_ read: ObservationJournal.ReadLine) {
-        switch read.result {
-        case .failure:
-            unreadable += 1
-        case .success(let line):
-            let kind = Self.classify(line)
-            switch kind {
-            case .eraFound: eraFound += 1
-            case .eraNone: eraNone += 1
-            case .gaveUp: gaveUp += 1
-            case .other: other += 1
-            case .unreadable: unreadable += 1
-            }
-            guard kind != .other else { return }
-            latest.insert(Observation(id: line.id, at: line.at, kind: kind, words: Self.words(line, kind: kind)), at: 0)
-            if latest.count > Self.latestCap { latest.removeLast(latest.count - Self.latestCap) }
-        }
-    }
-
-    /// The tally with no counts and the reason (Codex F5: never stale numbers).
+    /// The tally with no counts and the reason (never stale or invented numbers).
     static func unavailable(file: String?, _ why: String) -> HelperJournalTally {
         var t = HelperJournalTally()
         t.file = file
         t.readProblem = why
         return t
     }
+
+    // MARK: The rule (on the line's JSON object)
+
+    static func classify(field: String, value: String, state: String, evidence: [String: Any]) -> Kind {
+        if field == EraRecordMapper.noneField {
+            return (evidence["gaveUp"] as? Bool) == true ? .gaveUp : .eraNone
+        }
+        if field == MachineEraResolver.fusedField, state == "inferred", MachineEraResolver.range(value) != nil {
+            return .eraFound
+        }
+        return .other
+    }
+
+    /// The same rule on a decoded line (tests write lines through ObservationLine).
+    static func classify(_ line: ObservationLine) -> Kind {
+        let evidence = (try? JSONSerialization.jsonObject(with: Data(line.evidenceJSON.utf8))) as? [String: Any] ?? [:]
+        return classify(field: line.field, value: line.value, state: line.state, evidence: evidence)
+    }
+
+    static func words(kind: Kind, value: String, field: String, evidence: [String: Any]) -> String {
+        switch kind {
+        case .eraFound: return "era found — " + AnalysisResultsReport.eraWords(value)
+        case .eraNone: return "no usable era"
+        case .gaveUp: return "gave up — " + ((evidence["reason"] as? String) ?? "no reason recorded")
+        case .other: return "\(field) = \(value)"
+        case .unreadable: return "unreadable line"
+        }
+    }
+
+    /// Fold one line's bytes (without the newline).
+    mutating func add(line: Data) {
+        guard line.count <= ObservationJournal.maxLineBytes,
+              let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+              (object["v"] as? Int) == ObservationLine.version,
+              let id = object["id"] as? String, let field = object["field"] as? String,
+              let value = object["value"] as? String, let state = object["state"] as? String,
+              let at = (object["at"] as? NSNumber)?.int64Value else {
+            unreadable += 1
+            return
+        }
+        let evidence = object["evidence"] as? [String: Any] ?? [:]
+        let kind = Self.classify(field: field, value: value, state: state, evidence: evidence)
+        switch kind {
+        case .eraFound: eraFound += 1
+        case .eraNone: eraNone += 1
+        case .gaveUp: gaveUp += 1
+        case .other: other += 1
+        case .unreadable: unreadable += 1
+        }
+        guard kind != .other else { return }
+        latest.insert(Observation(id: id, at: at, kind: kind, words: Self.words(kind: kind, value: value, field: field, evidence: evidence)), at: 0)
+        if latest.count > Self.latestCap { latest.removeLast(latest.count - Self.latestCap) }
+    }
+
+    /// Fold a whole file's bytes: lines split on "\n"; a tail with no newline is torn.
+    static func fold(_ data: Data, file: String) -> HelperJournalTally {
+        var t = HelperJournalTally()
+        t.file = file
+        t.bytes = data.count
+        var start = data.startIndex
+        while start < data.endIndex {
+            guard let newline = data[start...].firstIndex(of: 0x0A) else {
+                t.torn = true
+                break
+            }
+            if newline > start { t.add(line: data[start..<newline]) }
+            start = newline + 1
+        }
+        return t
+    }
 }
 
-/// Reads the newest day file incrementally; the one place the cursor moves.
-actor HelperJournalCursor {
-    private let journal: ObservationJournal
-    private var tally = HelperJournalTally()
-    /// The file size at which an over-cap unterminated tail was last seen;
-    /// the tail is not rescanned until the size changes (Codex F9).
-    private var tornTailSize: Int?
-    /// Lines per `ObservationJournal.read` call (its own cap is the memory bound).
-    static let chunkLines = 4096
-    /// A refresh never reads more than this; a file that grew more since the
-    /// last read is unavailable with the reason (Codex F9).
-    static let maxBytesPerRefresh = 64 << 20
-    /// Refreshes that scanned bytes (tests: a parked over-cap tail scans nothing).
-    private(set) var scans = 0
-    /// The day file's inode as last seen; a change means the file was replaced.
-    private var fileInode: UInt64?
+/// Reads the newest day file, bounded, from byte 0.
+enum HelperJournalReader {
+    /// A day file larger than this is refused (today's biggest real file is 6 MB).
+    static let maxBytes = 64 << 20
 
-    init(directory: URL) {
-        journal = ObservationJournal(directory: directory)
-    }
-
-    /// The file's inode (`st_ino`), nil when it cannot be stat'ed.
-    private static func inode(_ url: URL) -> UInt64? {
-        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? NSNumber)?.uint64Value
-    }
-
-    /// Fold in everything appended since the last call, up to `maxLines`
-    /// (a refresh never reads forever; the next one continues). A newer day
-    /// file replaces the tally — the counts are for one day file.
-    func refresh(maxLines: Int = 200_000) -> HelperJournalTally {
+    /// The newest day file's tally, or why it is unavailable. Runs wherever it
+    /// is called (the store calls it in its detached helper refresh).
+    static func read(directory: URL) -> HelperJournalTally {
+        let journal = ObservationJournal(directory: directory)
         guard let newest = journal.dayFiles().last else {
-            tally = .unavailable(file: nil, "no journal file yet in \(journal.directory.path)")
-            return tally
+            return .unavailable(file: nil, "no journal file yet in \(directory.path)")
         }
-        if tally.file != newest {
-            tally = HelperJournalTally()
-            tally.file = newest
-            tornTailSize = nil
+        switch readBounded(directory.appendingPathComponent(newest)) {
+        case .success(let data): return HelperJournalTally.fold(data, file: newest)
+        case .failure(let why): return .unavailable(file: newest, "\(newest) \(why.words)")
         }
-        let size = journal.size(of: newest)
-        // The same name truncated or replaced (a new inode, or shorter than what
-        // was read) is another file: rebuild from byte 0 (Codex re-review 3).
-        let inode = Self.inode(journal.directory.appendingPathComponent(newest))
-        if inode != fileInode || size < tally.bytesRead {
-            if fileInode != nil { tally = HelperJournalTally(); tally.file = newest; tornTailSize = nil }
-            fileInode = inode
+    }
+
+    /// The file's bytes if it is a regular file under `maxBytes` — opened
+    /// without following a symlink, checked with fstat, read at most
+    /// `maxBytes + 1` bytes so a file that grows under us is still refused.
+    static func readBounded(_ url: URL) -> Result<Data, Refusal> {
+        let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else {
+            let code = errno
+            return .failure(Refusal(code == ELOOP ? "is not a regular file (a symbolic link) — not read"
+                                    : "could not be opened: \(String(cString: strerror(code))) (errno \(code))"))
         }
-        if let parked = tornTailSize, parked == size { return tally }      // the over-cap tail has not moved
-        tornTailSize = nil
-        if !tally.available { tally = HelperJournalTally(); tally.file = newest }   // a cleared problem starts the counts again
-        guard size - tally.bytesRead <= Self.maxBytesPerRefresh else {
-            tally = .unavailable(file: newest, "\(newest) grew by \((size - tally.bytesRead) >> 20) MB since the last read, "
-                                 + "over the \(Self.maxBytesPerRefresh >> 20) MB cap per refresh")
-            return tally
+        defer { Darwin.close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { return .failure(Refusal("could not be stat'ed (errno \(errno))")) }
+        guard (st.st_mode & S_IFMT) == S_IFREG else { return .failure(Refusal("is not a regular file — not read")) }
+        guard st.st_size <= off_t(maxBytes) else {
+            return .failure(Refusal("is \(Int(st.st_size) >> 20) MB, over the \(maxBytes >> 20) MB cap — not read"))
         }
-        scans += 1
-        var budget = maxLines
-        while budget > 0 {
-            let chunk: ObservationJournal.ReadResult
-            do {
-                chunk = try journal.read(file: newest, from: tally.bytesRead, maxLines: min(Self.chunkLines, budget))
-            } catch {
-                tally = .unavailable(file: newest, "\(newest) could not be read: \(error)")
-                return tally
+        var data = Data()
+        data.reserveCapacity(Int(st.st_size))
+        var chunk = [UInt8](repeating: 0, count: 1 << 20)
+        while data.count <= maxBytes {
+            let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if n < 0 {
+                if errno == EINTR { continue }
+                return .failure(Refusal("could not be read: \(String(cString: strerror(errno))) (errno \(errno))"))
             }
-            for line in chunk.lines { tally.add(line) }
-            budget -= chunk.lines.count
-            tally.bytesRead = chunk.nextOffset
-            tally.torn = chunk.tornAt != nil
-            if let tornAt = chunk.tornAt, size - tornAt > ObservationJournal.maxLineBytes {
-                tornTailSize = size
-                tally = .unavailable(file: newest, "an unterminated line of \((size - tornAt) >> 10) KB at the end of \(newest) "
-                                     + "(over the \(ObservationJournal.maxLineBytes >> 10) KB line cap) — the counts wait until it ends")
-                return tally
-            }
-            if chunk.atEnd || chunk.lines.isEmpty { break }
+            if n == 0 { return .success(data) }
+            data.append(contentsOf: chunk[0..<n])
         }
-        return tally
+        return .failure(Refusal("grew past the \(maxBytes >> 20) MB cap while being read — not read"))
     }
 }

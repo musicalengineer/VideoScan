@@ -153,13 +153,12 @@ struct RealtimeContentAnalysisCodexTests {
         try journal.append([try ObservationLine(subjectID: String(repeating: "a", count: 64), field: MachineEraResolver.fusedField,
                                                 value: "1991-1995", by: SeatedApproach.eraA2.signer, at: 1, confidence: 0.6,
                                                 evidence: [:], job: "T", unit: 0)])
-        let cursor = HelperJournalCursor(directory: dir)
-        let ok = await cursor.refresh()
+        let ok = HelperJournalReader.read(directory: dir)
         #expect(ok.eraFound == 1 && ok.readProblem == nil)
         let file = dir.appendingPathComponent(ok.file ?? "")
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
-        let broken = await cursor.refresh()
+        let broken = HelperJournalReader.read(directory: dir)
         #expect(broken.readProblem != nil, "the reason is said")
         #expect(broken.eraFound == 0 && broken.lines == 0, "stale counts are not shown as live: \(broken)")
     }
@@ -198,8 +197,8 @@ struct RealtimeContentAnalysisCodexTests {
         #expect(s.secondsPerFile == nil, "VLM not timed: no number")
     }
 
-    // F9 — an unterminated huge line is bounded and unavailable
-    @Test func anUnterminatedHugeLineIsUnavailableWithTheReason() async throws {
+    // F9 — an unterminated huge tail is reported torn and not counted; the read is bounded by the file cap
+    @Test func anUnterminatedHugeTailIsTornNotCounted() async throws {
         let dir = URL(fileURLWithPath: try scratch("f9"))
         let name = ObservationJournal.fileName(for: Date())
         var bytes = Data()
@@ -208,10 +207,10 @@ struct RealtimeContentAnalysisCodexTests {
                                          evidence: [:], job: "T", unit: 0).encoded)
         bytes.append(Data(repeating: 0x61, count: 2 * ObservationJournal.maxLineBytes))   // no newline: a runaway write
         try bytes.write(to: dir.appendingPathComponent(name))
-        let cursor = HelperJournalCursor(directory: dir)
-        let t = await cursor.refresh()
-        #expect(t.readProblem?.contains("unterminated") == true, "\(String(describing: t.readProblem))")
-        #expect(t.eraFound == 0, "unavailable, not partial")
+        let t = HelperJournalReader.read(directory: dir)
+        #expect(t.available && t.torn, "\(t)")
+        #expect(t.eraFound == 1 && t.unreadable == 0, "the complete line counts; the torn tail does not")
+        #expect(t.bytes == bytes.count)
     }
 }
 
@@ -254,27 +253,6 @@ struct RealtimeContentAnalysisCodexRuleTests {
         #expect(o.liveCaptioned == 1, "the file is done (the batch's count is unchanged)")
         #expect(o.liveWithCaptions == 0 && o.liveTranscribed == 0, "nothing reached the catalog, nothing is counted as banked")
         #expect(o.recentActivity.first?.output?.banked == false)
-    }
-
-    // F9: a parked over-cap journal tail is not rescanned until the file changes size
-    @Test func aParkedTailIsNotRescanned() async throws {
-        let dir = URL(fileURLWithPath: try scratch("f9p"))
-        let name = ObservationJournal.fileName(for: Date())
-        let url = dir.appendingPathComponent(name)
-        try Data(repeating: 0x61, count: ObservationJournal.maxLineBytes + 1).write(to: url)
-        let cursor = HelperJournalCursor(directory: dir)
-        _ = await cursor.refresh()
-        let scans = await cursor.scans
-        _ = await cursor.refresh()
-        _ = await cursor.refresh()
-        #expect(await cursor.scans == scans, "the same size: no rescan")
-        let handle = try FileHandle(forWritingTo: url)
-        try handle.seekToEnd()
-        try handle.write(contentsOf: Data([0x0A]))   // the runaway line ends: one unreadable line
-        try handle.close()
-        let t = await cursor.refresh()
-        #expect(await cursor.scans == scans + 1)
-        #expect(t.available && t.unreadable == 1, "\(t)")
     }
 
     // F7: the disk rate is per device
@@ -329,18 +307,17 @@ struct RealtimeContentAnalysisCodexRoundTwoTests {
         let dir = URL(fileURLWithPath: try scratch("r3"))
         let journal = ObservationJournal(directory: dir)
         try journal.append([try line(1)])
-        let cursor = HelperJournalCursor(directory: dir)
-        let first = await cursor.refresh()
+        let first = HelperJournalReader.read(directory: dir)
         #expect(first.eraFound == 1)
         let url = dir.appendingPathComponent(try #require(first.file))
         try Data().write(to: url)                          // truncated in place (same inode)
-        let truncated = await cursor.refresh()
+        let truncated = HelperJournalReader.read(directory: dir)
         #expect(truncated.eraFound == 0 && truncated.lines == 0 && truncated.available, "rebuilt from the shorter file: \(truncated)")
         var replacement = Data()
         replacement.append(try line(2).encoded)
         replacement.append(try line(3).encoded)
         try replacement.write(to: url, options: .atomic)    // replaced (a new inode), longer than before
-        let replaced = await cursor.refresh()
+        let replaced = HelperJournalReader.read(directory: dir)
         #expect(replaced.eraFound == 2 && replaced.lines == 2 && replaced.available, "rebuilt from the new file: \(replaced)")
     }
 
@@ -400,7 +377,107 @@ struct RealtimeContentAnalysisCodexRoundTwoSensorTests {
         for gone in ["AnalysisResultsReport.inProgress(", "answeredInJournal(", "readAttempts(", "EraAttemptStore", "TryingCounter"] {
             #expect(!store.contains(gone), "no second journal/attempts reader: `\(gone)`")
         }
-        #expect(try code("HelperJournalTally.swift").contains("systemFileNumber"), "the cursor watches the file's identity (re-review 3)")
+        #expect(try code("HelperJournalTally.swift").contains("O_NOFOLLOW"), "the reader never follows a symlink (re-review 2, finding 5)")
+    }
+}
+
+// MARK: - Re-review 2 (codex-review-re-review-2-…-2026-11-05.md): findings 1–5
+
+/// A runner whose extraction finds nothing (0 scenes) — the empty-extraction
+/// case of the waiting lane (re-review 2, finding 3).
+actor EmptyDossierRunner: CaptionRunner {
+    nonisolated let modelID = "stub-empty-vlm"
+    func caption(videoPath: String, atTimestamps timestamps: [Double]) async throws -> [SceneCaption] { [] }
+    func dossier(videoPath: String, atTimestamps timestamps: [Double]) async throws -> DossierExtraction { .empty }
+}
+
+@MainActor
+@Suite("Realtime Content Analysis — Codex re-review 2, red first")
+struct RealtimeContentAnalysisCodexRoundThreeTests {
+
+    private func line(_ i: Int) throws -> ObservationLine {
+        try ObservationLine(subjectID: String(repeating: "d", count: 63) + String(i), field: MachineEraResolver.fusedField,
+                            value: "1991-1995", by: SeatedApproach.eraA2.signer, at: Int64(i), confidence: 0.6,
+                            evidence: [:], job: "T", unit: i)
+    }
+
+    // 1: the same file truncated and regrown to the same length is read as it is now
+    @Test func aRegrownDayFileOfTheSameLengthIsReadAsItIsNow() async throws {
+        let dir = URL(fileURLWithPath: try scratch("r3-1"))
+        let journal = ObservationJournal(directory: dir)
+        try journal.append([try line(1)])
+        let first = HelperJournalReader.read(directory: dir)
+        #expect(first.eraFound == 1)
+        let url = dir.appendingPathComponent(try #require(first.file))
+        let length = try Data(contentsOf: url).count
+        var garbage = Data(repeating: 0x78, count: length - 1)      // same length, one malformed line
+        garbage.append(0x0A)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: garbage)
+        try handle.close()
+        let now = HelperJournalReader.read(directory: dir)
+        #expect(now.eraFound == 0 && now.unreadable == 1 && now.available, "what the file says now, nothing remembered: \(now)")
+    }
+
+    // 2 (the store half lives beside the Probe: RealtimeAnalysisStoreTests.theHelperPaneIsUnknownUntilTheFirstRead)
+
+    // 3: an empty extraction that finished still shows no "frames to rip"
+    @Test func anEmptyExtractionThatFinishedShowsNoFramesToRip() async throws {
+        let dir = try scratch("r3-3")
+        let model = VideoScanModel()
+        let a = record(dir + "/a.mov")
+        let b = record(dir + "/b.mov", streamType: .videoOnly)
+        model.records = [a, b]
+        let runner = EmptyDossierRunner()
+        let orch = CaptionOrchestrator(runnerFactory: { runner })
+        let transcriber = StubAudioTranscriber(transcriptText: "hello", delay: .milliseconds(1_200))
+        let batch = Task { await orch.runDossierBatch(runner: runner, transcriber: transcriber, candidates: [a, b],
+                                                      framesPerFile: 3, force: false, model: model) }
+        try await Task.sleep(for: .milliseconds(400))
+        let laneB = try #require(RealtimeAnalysisStore.inApp(from: orch).lanes.first { $0.filename == "b.mov" })
+        #expect(!laneB.hasCaptions, "0 scenes")
+        #expect(laneB.extractionDone, "the extractor finished — an explicit fact, not inferred from output")
+        #expect(laneB.verb.contains("waiting"))
+        #expect(!laneB.showsFramesToRip, "the extractor is done: no frames to rip, even with 0 scenes")
+        await batch.value
+    }
+
+    // 4: one refused accelerator entry makes the GPU reading absent (the disk reader's rule)
+    @Test func aRefusedAcceleratorEntryIsNotAUtilization() {
+        #expect(MachineCounterReader.gpuUtilization(entries: [.value(20), .value(35)]).value == 35, "the max over accelerators")
+        let mixed = MachineCounterReader.gpuUtilization(entries: [.value(20), .absent("no PerformanceStatistics")])
+        #expect(mixed.problem == "1 of 2 IOAccelerator entries refused: no PerformanceStatistics", "\(mixed)")
+        #expect(MachineCounterReader.gpuUtilization(entries: []).problem == "no IOAccelerator in the IORegistry")
+    }
+
+    // 5: a non-regular day file (a symlink to /dev/zero) is refused at open, never read
+    @Test(.timeLimit(.minutes(1)))
+    func aNonRegularDayFileIsRefusedNotRead() async throws {
+        let dir = URL(fileURLWithPath: try scratch("r3-5"))
+        let name = ObservationJournal.fileName(for: Date())
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent(name), withDestinationURL: URL(fileURLWithPath: "/dev/zero"))
+        // A race with a clock: a bounded reader answers at once; an unbounded one would still be reading /dev/zero.
+        let answered: HelperJournalTally? = await withTaskGroup(of: HelperJournalTally?.self) { group in
+            group.addTask { HelperJournalReader.read(directory: dir) }
+            group.addTask { try? await Task.sleep(for: .seconds(5)); return nil }
+            let first = await group.next().flatMap { $0 }
+            group.cancelAll()
+            return first
+        }
+        let t = try #require(answered, "the read did not return within 5 s: it is not bounded")
+        #expect(!t.available && t.readProblem?.contains("not a regular file") == true, "\(t)")
+    }
+
+    // 5: a regular day file over the byte cap is refused with its size, never folded
+    @Test func aDayFileOverTheByteCapIsRefused() async throws {
+        let dir = URL(fileURLWithPath: try scratch("r3-5b"))
+        let name = ObservationJournal.fileName(for: Date())
+        let handle = try FileHandle(forWritingTo: { let u = dir.appendingPathComponent(name); FileManager.default.createFile(atPath: u.path, contents: nil); return u }())
+        try handle.truncate(atOffset: UInt64(HelperJournalReader.maxBytes + 1))   // sparse: the size is the fact
+        try handle.close()
+        let t = HelperJournalReader.read(directory: dir)
+        #expect(!t.available && t.readProblem?.contains("over the") == true && t.readProblem?.contains("MB cap") == true, "\(t)")
     }
 }
 

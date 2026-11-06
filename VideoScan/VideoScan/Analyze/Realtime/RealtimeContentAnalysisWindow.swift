@@ -299,7 +299,7 @@ struct RealtimeContentAnalysisContent: View {
     private var helperJournalWords: String {
         var parts: [String] = []
         if let problem = helper.tally.readProblem {
-            parts.append("counts unavailable — " + problem)
+            parts.append(problem == HelperJournalTally.notReadYet ? "reading the journal…" : "counts unavailable — " + problem)
         } else if let file = helper.tally.file {
             parts.append("journal \(file): \(helper.tally.lines.formatted()) lines"
                          + (helper.tally.other > 0 ? " (\(helper.tally.other.formatted()) supporting lines: year-range windows, on-screen dates)" : "")

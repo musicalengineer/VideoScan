@@ -34121,7 +34121,7 @@
       "tests": [
         "aNewerDayFileReplacesTheTally",
         "aPoisonedFileIsCountedNotGuessed",
-        "aRefreshReadsOnlyWhatWasAppended",
+        "aRefreshSeesWhatWasAppended",
         "noJournalSaysSo",
         "scaleHundredThousandLines",
         "theCountsAndTheWordsAreTheJournalsOwn",
@@ -34168,6 +34168,7 @@
         "pauseResumeStopReachTheEngineOncePerClick",
         "startTicksAndStopEndsTheLoop",
         "theHelperIsAskedOnItsCadenceAndItsWordsAreLoggedOnce",
+        "theHelperPaneIsUnknownUntilTheFirstRead",
         "theHelpersFilesAreReadAndNeverWritten",
         "theKernelAndTheFilesAreReadOffTheMainActor",
         "theNewCounterIsResetWithTheOthersAndCountedAtBothBankingSites",
@@ -34183,22 +34184,27 @@
         "RealtimeContentAnalysisCodexRuleTests",
         "RealtimeContentAnalysisCodexRoundTwoTests",
         "RealtimeContentAnalysisCodexRoundTwoSensorTests",
+        "RealtimeContentAnalysisCodexRoundThreeTests",
         "RealtimeContentAnalysisCodexSensorTests"
       ],
       "tests": [
         "aChangedDiskSetOrARefusedDriverIsNotARate",
+        "aDayFileOverTheByteCapIsRefused",
         "aJournalReadFailureIsUnavailableWithTheReason",
         "aLaneNeverClaimsBanking",
         "aLaneSaysExtractedAndARowSaysBankedOnlyWhenItWas",
         "aLaneWaitingOnThePreviousTranscriptSaysSo",
-        "aParkedTailIsNotRescanned",
+        "aNonRegularDayFileIsRefusedNotRead",
+        "aRefusedAcceleratorEntryIsNotAUtilization",
         "aRefusedBankCountsNoCaptionsAndNoTranscript",
+        "aRegrownDayFileOfTheSameLengthIsReadAsItIsNow",
         "aSuccessfulEmptyTranscriptIsNoSpeechInThePipelinedPath",
         "aSuccessfulEmptyTranscriptIsNoSpeechInTheSerialPath",
         "aThrownTranscriptionIsStillAFailure",
         "aTruncatedOrReplacedDayFileIsRebuilt",
+        "anEmptyExtractionThatFinishedShowsNoFramesToRip",
         "anEmptyPassShowsZeroTotals",
-        "anUnterminatedHugeLineIsUnavailableWithTheReason",
+        "anUnterminatedHugeTailIsTornNotCounted",
         "anUntimedFileNeverCountsAsZeroSeconds",
         "captionsCountsOnlyFilesWhoseCaptionsBanked",
         "serialTranscriptionIsTimed",
@@ -36919,7 +36925,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3375,
+      "expected_floor": 3380,
       "name": "unit",
       "package_expected_floor": 787,
       "package_selectors": [
@@ -37579,7 +37585,8 @@
         "VideoScanTests/RealtimeContentAnalysisCodexRuleTests",
         "VideoScanTests/RealtimeContentAnalysisCodexSensorTests",
         "VideoScanTests/RealtimeContentAnalysisCodexRoundTwoTests",
-        "VideoScanTests/RealtimeContentAnalysisCodexRoundTwoSensorTests"
+        "VideoScanTests/RealtimeContentAnalysisCodexRoundTwoSensorTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexRoundThreeTests"
       ]
     },
     {

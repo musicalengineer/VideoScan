@@ -216,22 +216,32 @@ actor MachineCounterReader {
         let kr = IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator)
         guard kr == KERN_SUCCESS else { return .absent("IOServiceGetMatchingServices(IOAccelerator) failed (kern_return \(kr))") }
         defer { IOObjectRelease(iterator) }
-        var best: Double?
-        var accelerators = 0
+        var entries: [MachineCounterRaw<Double>] = []
         var entry = IOIteratorNext(iterator)
         while entry != 0 {
-            accelerators += 1
             if let stats = IORegistryEntryCreateCFProperty(entry, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
                 .takeRetainedValue() as? [String: Any],
                let util = (stats["Device Utilization %"] as? NSNumber)?.doubleValue {
-                best = max(best ?? 0, util)
+                entries.append(.value(util))
+            } else {
+                entries.append(.absent("no PerformanceStatistics[\"Device Utilization %\"]"))
             }
             IOObjectRelease(entry)
             entry = IOIteratorNext(iterator)
         }
-        guard accelerators > 0 else { return .absent("no IOAccelerator in the IORegistry") }
-        guard let best else { return .absent("IOAccelerator has no PerformanceStatistics[\"Device Utilization %\"]") }
-        return .value(best)
+        return gpuUtilization(entries: entries)
+    }
+
+    /// The max over accelerators — unless any entry refused, which makes the
+    /// whole reading absent with the reason (the disk reader's rule; Codex
+    /// re-review 2, finding 4: a partial max is not a max). Pure.
+    static func gpuUtilization(entries: [MachineCounterRaw<Double>]) -> MachineCounterRaw<Double> {
+        guard !entries.isEmpty else { return .absent("no IOAccelerator in the IORegistry") }
+        let refused = entries.compactMap(\.problem)
+        if let first = refused.first {
+            return .absent("\(refused.count) of \(entries.count) IOAccelerator entries refused: \(first)")
+        }
+        return .value(entries.compactMap(\.value).max() ?? 0)
     }
 
     static func readAvailableMemory() -> MachineCounterRaw<UInt64> {

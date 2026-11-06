@@ -64,12 +64,11 @@ struct HelperJournalTallyTests {
         try journal.append([try found(1), try gaveUp(2), try none(3), try window(4)])
         let before = try Data(contentsOf: dir.appendingPathComponent(ObservationJournal.fileName(for: Date())))
 
-        let cursor = HelperJournalCursor(directory: dir)
-        let t = await cursor.refresh()
+        let t = HelperJournalReader.read(directory: dir)
         #expect(t.file == ObservationJournal.fileName(for: Date()))
         #expect(t.eraFound == 1 && t.gaveUp == 1 && t.eraNone == 1 && t.other == 1 && t.unreadable == 0)
         #expect(t.lines == 4 && !t.torn && t.readProblem == nil)
-        #expect(t.bytesRead == before.count, "the cursor sits at the end of the file")
+        #expect(t.bytes == before.count, "the whole file was folded")
         #expect(t.latest.map(\.kind) == [.eraNone, .gaveUp, .eraFound], "newest first; windows are not listed")
         #expect(t.latest[2].words == "era found — early 1990s (1991–1995)")
         #expect(t.latest[1].words.hasPrefix("gave up — gave up after 3 tries: 6 of 6 frames would not decode"))
@@ -105,8 +104,7 @@ struct HelperJournalTallyTests {
         bytes.append(Data("{\"torn\":".utf8))                     // a write in flight / a crash: no newline
         try bytes.write(to: dir.appendingPathComponent(name))
 
-        let cursor = HelperJournalCursor(directory: dir)
-        let t = await cursor.refresh()
+        let t = HelperJournalReader.read(directory: dir)
         #expect(t.eraFound == 1 && t.eraNone == 1)
         #expect(t.unreadable == 3, "not JSON, wrong version, over the cap: \(t.unreadable)")
         #expect(t.torn, "the torn tail is reported, not counted")
@@ -120,23 +118,22 @@ struct HelperJournalTallyTests {
         try handle.seekToEnd()
         try handle.write(contentsOf: more)
         try handle.close()
-        let t2 = await cursor.refresh()
+        let t2 = HelperJournalReader.read(directory: dir)
         #expect(t2.unreadable == 4 && t2.gaveUp == 1 && !t2.torn)
-        #expect(t2.eraFound == 1 && t2.eraNone == 1, "earlier counts are kept, not re-read")
-        #expect(t2.bytesRead == bytes.count + more.count)
+        #expect(t2.eraFound == 1 && t2.eraNone == 1)
+        #expect(t2.bytes == bytes.count + more.count)
     }
 
-    @Test func aRefreshReadsOnlyWhatWasAppended() async throws {
-        let dir = try scratchDirectory("incremental")
+    @Test func aRefreshSeesWhatWasAppended() async throws {
+        let dir = try scratchDirectory("appended")
         let journal = ObservationJournal(directory: dir)
         try journal.append([try found(1)])
-        let cursor = HelperJournalCursor(directory: dir)
-        let first = await cursor.refresh()
+        let first = HelperJournalReader.read(directory: dir)
         let appended = try journal.append([try found(2), try none(3)])
-        let second = await cursor.refresh()
-        #expect(second.bytesRead == first.bytesRead + appended.bytes)
+        let second = HelperJournalReader.read(directory: dir)
+        #expect(second.bytes == first.bytes + appended.bytes)
         #expect(second.eraFound == 2 && second.eraNone == 1 && second.lines == 3)
-        let third = await cursor.refresh()
+        let third = HelperJournalReader.read(directory: dir)
         #expect(third == second, "nothing appended: nothing changes")
     }
 
@@ -144,23 +141,22 @@ struct HelperJournalTallyTests {
         let dir = try scratchDirectory("days")
         let yesterday = ObservationJournal(directory: dir, now: { Date(timeIntervalSince1970: 1_793_838_600) })   // 2026-11-05 UTC
         try yesterday.append([try found(1), try found(2)])
-        let cursor = HelperJournalCursor(directory: dir)
-        let t1 = await cursor.refresh()
+        let t1 = HelperJournalReader.read(directory: dir)
         #expect(t1.file == "2026-11-05.jsonl" && t1.eraFound == 2)
         let today = ObservationJournal(directory: dir, now: { Date(timeIntervalSince1970: 1_793_925_000) })       // 2026-11-06 UTC
         try today.append([try none(3)])
-        let t2 = await cursor.refresh()
+        let t2 = HelperJournalReader.read(directory: dir)
         #expect(t2.file == "2026-11-06.jsonl" && t2.eraFound == 0 && t2.eraNone == 1, "the counts are one day file's")
     }
 
     @Test func noJournalSaysSo() async throws {
         let dir = try scratchDirectory("empty")
-        let t = await HelperJournalCursor(directory: dir).refresh()
-        #expect(t.file == nil && t.lines == 0)
+        let t = HelperJournalReader.read(directory: dir)
+        #expect(t.file == nil && t.lines == 0 && !t.available)
         #expect(t.readProblem?.hasPrefix("no journal file yet") == true)
     }
 
-    @Test("SCALE: 100k journal lines fold within a budget and hold ≤ 8 observations")
+    @Test("SCALE: 100k journal lines re-fold from byte 0 within a budget and hold ≤ 8 observations")
     func scaleHundredThousandLines() async throws {
         let dir = try scratchDirectory("scale")
         let journal = ObservationJournal(directory: dir)
@@ -175,13 +171,13 @@ struct HelperJournalTallyTests {
             }
         }
         try journal.append(lines)
-        let cursor = HelperJournalCursor(directory: dir)
         let clock = ContinuousClock()
-        let took = await clock.measure { _ = await cursor.refresh() }
-        let t = await cursor.refresh()
+        let took = clock.measure { _ = HelperJournalReader.read(directory: dir) }
+        let t = HelperJournalReader.read(directory: dir)
         #expect(t.lines == 100_000 && t.eraFound == 25_000 && t.eraNone == 25_000 && t.gaveUp == 25_000 && t.other == 25_000)
         #expect(t.latest.count == HelperJournalTally.latestCap)
         #expect(t.latest.first?.at == 99_998, "the newest verdict line (windows are not listed)")
-        #expect(took < .seconds(30), "100k lines took \(took)")
+        #expect(t.bytes < HelperJournalReader.maxBytes, "the fixture sits under the cap: \(t.bytes >> 20) MB")
+        #expect(took < .seconds(10), "100k lines took \(took)")
     }
 }

@@ -45,6 +45,8 @@ private final class Probe: @unchecked Sendable {
     var pauses = 0, resumes = 0, stops = 0
     var enabled = false
     var reply: Result<ServiceStatus, Refusal> = .failure(Refusal("the helper is not running"))
+    /// A slow XPC answer (re-review 2, finding 2).
+    var statusDelay: Duration = .zero
     var inApp = RealtimeAnalysisState.InApp()
     var tally = HelperJournalTally()
     var machine = MachineSample(cpuBusyPercent: 40, cpuProblem: nil, gpuUtilizationPercent: 94, gpuProblem: nil,
@@ -58,7 +60,7 @@ private func store(_ p: Probe, tick: Duration = .milliseconds(500), helperEvery:
     let sources = RealtimeAnalysisStore.Sources(
         inApp: { p.inApp },
         helperEnabled: { p.enabled },
-        helperStatus: { p.statusCalls += 1; return p.reply },
+        helperStatus: { if p.statusDelay > .zero { try? await Task.sleep(for: p.statusDelay) }; p.statusCalls += 1; return p.reply },
         journal: { p.tally },
         machine: { p.machine },
         journalWords: { p.journalWords },
@@ -144,6 +146,20 @@ struct RealtimeAnalysisStoreTests {
         #expect(s.state.helper.tally == p.tally)
     }
 
+    // Codex re-review 2, finding 2: before the first read the helper pane is unknown, not zeros and not "off in Settings"
+    @Test func theHelperPaneIsUnknownUntilTheFirstRead() async throws {
+        let p = Probe()
+        p.enabled = true
+        p.statusDelay = .seconds(3)                                  // XPC has not answered yet
+        let s = store(p)
+        await s.refreshNow()                                          // one tick, the helper refresh still in flight
+        #expect(!s.state.helper.tally.available, "no counts before the first read: \(s.state.helper.tally)")
+        #expect(s.state.helper.tally.readProblem == "not read yet")
+        #expect(s.state.helper.progressWords == "reading…", "\(s.state.helper.progressWords)")
+        #expect(s.state.helper.availability == .unknown)
+        s.stop()
+    }
+
     @Test func pauseResumeStopReachTheEngineOncePerClick() async {
         let p = Probe()
         let s = store(p)
@@ -204,12 +220,14 @@ struct RealtimeContentAnalysisSensorTests {
         let store = try code("RealtimeAnalysisStore.swift")
         #expect(store.contains("EraPlanner.journalDirectory(stateRoot: stateRoot)"), "the journal folder is the helper's own")
         let tally = try code("HelperJournalTally.swift")
-        #expect(tally.contains("journal.read(file: newest, from: tally.bytesRead"), "the applier's own reader, incrementally")
+        #expect(tally.contains("O_RDONLY | O_NOFOLLOW | O_CLOEXEC") && tally.contains("S_IFREG"), "read-only, no symlink, regular files only")
+        #expect(tally.contains("while data.count <= maxBytes"), "the read loop itself is bounded")
     }
 
     @Test func theKernelAndTheFilesAreReadOffTheMainActor() throws {
         #expect(try code("MachineCounters.swift").contains("actor MachineCounterReader"))
-        #expect(try code("HelperJournalTally.swift").contains("actor HelperJournalCursor"))
+        #expect(try code("HelperJournalTally.swift").contains("enum HelperJournalReader"), "a pure, bounded reader")
+        #expect(try code("RealtimeAnalysisStore.swift").contains("h.tally = await journal()"), "folded inside the detached helper task")
         let store = try code("RealtimeAnalysisStore.swift")
         #expect(store.contains("Task.detached(priority: .utility)"), "the helper refresh is a detached task")
         #expect(store.contains("tick: Duration = .milliseconds(500)"), "≤ 2 Hz")
@@ -282,7 +300,7 @@ struct RealtimeContentAnalysisMockupTests {
                   hasCaptions: false, isVideoOnly: false),
             .init(id: UUID(), filename: "Beach_Day_1987.mov", path: "/Volumes/Tapes/Beach_Day_1987.mov", recordID: UUID(),
                   stage: "Whisper", verb: "transcribing audio…", startedAt: t.addingTimeInterval(-19), framesPlanned: 6, clipSeconds: 128,
-                  hasCaptions: true, isVideoOnly: false),
+                  hasCaptions: true, isVideoOnly: false, extractionDone: true),
         ]
         func out(_ name: String, _ ago: Double, caption: String?, excerpt: String?, scenes: Int, videoOnly: Bool = false,
                  noSpeech: Bool = false) -> RealtimeAnalysisState.Output {
@@ -367,7 +385,6 @@ struct RealtimeContentAnalysisMockupTests {
                                          planned: [JobKind.era.rawValue: 244]))
         p.tally.file = "2026-11-06.jsonl"
         p.tally.eraFound = 22; p.tally.eraNone = 7; p.tally.gaveUp = 2; p.tally.other = 131
-        p.tally.bytesRead = 342_146
         p.tally.latest = [
             .init(id: "a", at: 1_793_925_466, kind: .gaveUp, words: "gave up — gave up after 3 tries: 6 of 6 frames would not decode (ffmpeg: ffmpeg exited 0 and wrote no frame)"),
             .init(id: "b", at: 1_793_925_401, kind: .eraFound, words: "era found — early 1990s (1991–1995)"),

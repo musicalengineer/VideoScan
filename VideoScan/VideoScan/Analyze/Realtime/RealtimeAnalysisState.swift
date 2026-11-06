@@ -54,12 +54,14 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         var hasCaptions: Bool
         var isVideoOnly: Bool
         var noSpeech: Bool = false
+        /// The extractor returned (with or without scenes) — an explicit fact,
+        /// never inferred from the output (re-review 2, finding 3).
+        var extractionDone: Bool = false
 
         var isTranscribing: Bool { stage.lowercased().contains("whisper") }
 
-        /// "N frames to rip" is shown only while the extractor is still on them
-        /// (re-review 5: a lane waiting on the previous file's Whisper is not ripping).
-        var showsFramesToRip: Bool { framesPlanned > 0 && !isTranscribing && !hasCaptions }
+        /// "N frames to rip" is shown only while the extractor is still on them.
+        var showsFramesToRip: Bool { framesPlanned > 0 && !extractionDone }
 
         /// The OUT column while the file is still in flight: nothing has
         /// reached the catalog yet, and the words say so.
@@ -168,6 +170,8 @@ struct RealtimeAnalysisState: Equatable, Sendable {
     // MARK: The background helper (era)
 
     enum HelperAvailability: Equatable, Sendable {
+        /// Nothing read yet (the window just opened): no claim either way.
+        case unknown
         /// VideoScan Background is off in Settings; asking would start it, so we don't.
         case disabled
         /// Enabled, but the XPC status call failed (the words say why).
@@ -183,13 +187,16 @@ struct RealtimeAnalysisState: Equatable, Sendable {
     }
 
     struct Helper: Equatable, Sendable {
-        var availability: HelperAvailability = .disabled
+        /// Unknown until the first XPC answer (or the Settings check) lands —
+        /// the pane never says "off" or shows zeros from no evidence (re-review 2).
+        var availability: HelperAvailability = .unknown
         var backoffWords: String?
         /// The newest era job the helper reports (active or last finished).
         var era: HelperJob?
         /// The helper's own plan size for the era kind (`ServiceStatus.planned`).
         var planned: Int?
-        var tally: HelperJournalTally = HelperJournalTally()
+        /// Unavailable ("not read yet") until the first fold of the journal lands.
+        var tally: HelperJournalTally = .unavailable(file: nil, HelperJournalTally.notReadYet)
         // No "tries in progress" here (Codex re-review 1/2/6, Rick's KISS): that
         // number needs the catalog plus every journal day file; the Results
         // sheet owns the rule and the window points at it.
@@ -203,6 +210,7 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         /// helper's plan size is shown only when no run is on.
         static func progressWords(availability: HelperAvailability, era: HelperJob?, planned: Int?, backoff: String?) -> String {
             switch availability {
+            case .unknown: return "reading…"
             case .disabled: return "off in Settings"
             case .silent(let why): return "not answering — \(why)"
             case .answered: break

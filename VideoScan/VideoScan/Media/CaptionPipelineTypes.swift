@@ -108,6 +108,9 @@ struct PipelineLane: Identifiable, Equatable {
     /// Whisper ran to the end and found no speech (an empty transcript,
     /// banked as such) — not a failure (Codex F3, 2026-11-05).
     var noSpeech: Bool = false
+    /// The scene extractor returned for this file, with or without scenes
+    /// (Codex re-review 2, 2026-11-05: the fact, not inferred from output).
+    var extractionDone: Bool = false
 }
 
 /// What one completed file produced, captured from the banked extraction

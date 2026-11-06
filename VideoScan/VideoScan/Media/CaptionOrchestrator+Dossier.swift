@@ -478,13 +478,13 @@ extension CaptionOrchestrator {
                 // Whisper (the hand-off below) and says so (Codex re-review 5).
                 updateLane(laneID,
                            verb: pendingWhisper == nil ? "banking scenes…" : "waiting for the previous file's transcript…",
-                           hasCaptions: hasCaptions)
+                           hasCaptions: hasCaptions, extractionDone: true)
             } else {
                 updateLane(
                     laneID,
                     stage: whisperStage,
                     verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
-                    hasCaptions: hasCaptions
+                    hasCaptions: hasCaptions, extractionDone: true
                 )
             }
             appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs (%d scene(s))", plan.filename, vlmSec, extraction.scenes.count))
@@ -766,9 +766,9 @@ extension CaptionOrchestrator {
             let whisper = stages.contains(.transcript) && !plan.hasNoAudio && !userSkipped ? transcriber : nil
             if let whisper {
                 updateLane(laneID, stage: Self.stageDisplayName(forModelID: whisper.modelID),
-                           verb: "transcribing audio…", hasCaptions: hasCaptions)
+                           verb: "transcribing audio…", hasCaptions: hasCaptions, extractionDone: true)
             } else {
-                updateLane(laneID, hasCaptions: hasCaptions)
+                updateLane(laneID, hasCaptions: hasCaptions, extractionDone: true)
             }
 
             // Whisper is timed here too (Codex F8, 2026-11-05): nil when it did not run.

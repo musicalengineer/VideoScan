@@ -213,7 +213,8 @@ extension CaptionOrchestrator {
         hasCaptions: Bool? = nil,
         hasTranscript: Bool? = nil,
         transcriptFailed: Bool? = nil,
-        noSpeech: Bool? = nil
+        noSpeech: Bool? = nil,
+        extractionDone: Bool? = nil
     ) {
         guard let i = activeLanes.firstIndex(where: { $0.id == id }) else { return }
         if let stage { activeLanes[i].stageName = stage }
@@ -222,6 +223,7 @@ extension CaptionOrchestrator {
         if let hasTranscript { activeLanes[i].hasTranscript = hasTranscript }
         if let transcriptFailed { activeLanes[i].transcriptFailed = transcriptFailed }
         if let noSpeech { activeLanes[i].noSpeech = noSpeech }
+        if let extractionDone { activeLanes[i].extractionDone = extractionDone }
     }
 
     /// Close a lane. No-op if it was already cleared.

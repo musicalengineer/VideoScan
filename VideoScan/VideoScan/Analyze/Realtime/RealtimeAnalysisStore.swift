@@ -12,7 +12,7 @@
 //     the kernel calls never run on the main actor);
 //   * every `helperEvery` seconds, in ONE detached task, asks the helper for
 //     its XPC status (only when enabled — asking starts it), folds its journal
-//     through HelperJournalCursor (read-only, incremental). No "tries in
+//     through HelperJournalReader (read-only, bounded, from byte 0). No "tries in
 //     progress" (Codex re-review, Rick's KISS): that needs the catalog plus
 //     every journal day file; the Results sheet owns it.
 // Publishes are equality-gated: a tick that changed nothing sends nothing.
@@ -84,14 +84,14 @@ final class RealtimeAnalysisStore: ObservableObject {
     static func production(model: VideoScanModel, orchestrator: CaptionOrchestrator) -> RealtimeAnalysisStore {
         let stateRoot = URL(fileURLWithPath: model.catalogStore.fileLocation).deletingLastPathComponent()
             .appendingPathComponent("background", isDirectory: true)
-        let cursor = HelperJournalCursor(directory: EraPlanner.journalDirectory(stateRoot: stateRoot))
+        let journalDirectory = EraPlanner.journalDirectory(stateRoot: stateRoot)
         let reader = MachineCounterReader()
         let runner = AnalyzeRunner(model: model, orchestrator: orchestrator, center: nil)
         let sources = Sources(
             inApp: { [weak orchestrator] in orchestrator.map(inApp(from:)) ?? RealtimeAnalysisState.InApp() },
             helperEnabled: { BackgroundServiceRegistrar.isEnabled },
             helperStatus: { await BackgroundServiceClient().status() },
-            journal: { await cursor.refresh() },
+            journal: { HelperJournalReader.read(directory: journalDirectory) },
             machine: { await reader.sample() },
             journalWords: { [weak model] in model?.journalApplier.counts.map(JournalApplierWords.statusLine) },
             note: { [weak model] line in
@@ -143,7 +143,8 @@ final class RealtimeAnalysisStore: ObservableObject {
             RealtimeAnalysisState.Lane(id: l.id, filename: l.filename, path: l.path, recordID: l.recordID,
                                        stage: l.stageName, verb: l.verb, startedAt: l.startedAt,
                                        framesPlanned: l.framesPlanned, clipSeconds: l.clipSeconds,
-                                       hasCaptions: l.hasCaptions, isVideoOnly: l.isVideoOnly)
+                                       hasCaptions: l.hasCaptions, isVideoOnly: l.isVideoOnly,
+                                       noSpeech: l.noSpeech, extractionDone: l.extractionDone)
         }
         s.recent = o.recentActivity.map { c in
             RealtimeAnalysisState.Output(id: c.id, filename: c.filename, path: c.path, recordID: c.recordID,
@@ -255,11 +256,18 @@ final class RealtimeAnalysisStore: ObservableObject {
         let signer = sources.seatedSigner
         let words = sources.journalWords()
         return Task.detached(priority: .utility) { [weak self] in
-            let reply: Result<ServiceStatus, Refusal>? = enabled ? await status() : nil
-            var h = Self.helper(from: reply, enabled: enabled, seatedSigner: signer, previous: previous)
+            // The journal first (local, bounded, fast) and landed at once, so a
+            // slow XPC answer never holds the counts back (re-review 2, finding 2).
+            var h = previous
             h.tally = await journal()
             h.journalWords = words
-            let landed = h
+            let partial = h
+            await MainActor.run { [weak self] in
+                guard let self, self.helperTask != nil else { return }
+                self.pendingHelper = partial
+            }
+            let reply: Result<ServiceStatus, Refusal>? = enabled ? await status() : nil
+            let landed = Self.helper(from: reply, enabled: enabled, seatedSigner: signer, previous: h)
             await MainActor.run { [weak self] in
                 guard let self, self.helperTask != nil else { return }
                 self.pendingHelper = landed
@@ -274,6 +282,7 @@ final class RealtimeAnalysisStore: ObservableObject {
         if next.helper.availability != state.helper.availability {
             let words: String
             switch next.helper.availability {
+            case .unknown: words = "VideoScan Background not read yet"
             case .disabled: words = "VideoScan Background is off in Settings — its pane shows the journal only"
             case .silent(let why): words = "VideoScan Background did not answer — \(why)"
             case .answered: words = "VideoScan Background answered"
