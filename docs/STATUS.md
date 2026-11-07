@@ -22,6 +22,13 @@
    Analysis ▸ Realtime…, or right-click an Analyze row in MFO), the Realtime Catalog Scan tiles (Not media / Gone / Not
    accessible / Failed = Errors; `a5674d9dd`), the file dossier view, the Results sheet, the Whisper red/green smoke.
    Reports and mockups: `~/dev/VideoScan/.scratch/kept-2026-11-06/`.
+   **Overnight 11/06→07 (experiment, streamlined process):** the **Observations window** — Content Analysis ▸
+   Observations…, the Realtime window's "See what we learned" after a pass, or right-click rows ▸ Observations…: what the
+   machine found across many files in three chevrons (Technical · Patterns & events · Across the collection), one search
+   over every observation (captions, transcripts, on-screen text, eras, people found, events, format readings), a filter
+   per tier, hits open the file or its dossier. Machine observations only — never a file name, note or tag (Rick 11/06).
+   Design: `docs/design/file_dossier_view.md` Part II (the embedding search and SigLIP 2 frame search are designed there,
+   not built). Report and mockups: the night-shift worktree's `.scratch/reports/observations-2026-11-07.md`.
 4. **Catalog went red for ~3 min at 17:02 (#441):** Update runs the catalog check BEFORE Detect Duplicates, so 262
    sampled-hash groups whose members now have different full hashes (revealed by #434's re-hashing) turned the chip
    Unhealthy until the next check; Detect Duplicates had already fixed them a second later. Fix: verify last.

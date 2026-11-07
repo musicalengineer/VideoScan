@@ -39,7 +39,8 @@ extension GRDBReader: CatalogAnalysisResultsReading {
     /// selection — and `rejected` = Rick vetoed that value afterwards (`rejectedLaterSQL`, the
     /// twin of the resolver's and the dossier's `isRejected`; Codex 11/05). Precedence, as the
     /// dossier's Era line: found, then rejected, then given up, then no usable era.
-    private static func verdicts(signerFilter: String) -> String {
+    /// Shared with the Observations window's reads (+Observations.swift): ONE classification (rule 4).
+    static func verdicts(signerFilter: String) -> String {
         """
         SELECT v.by, v.subject_id, v.gave, v.none, nf.value AS fvalue,
                (nf.seq IS NOT NULL AND NOT \(MachineEraResolver.rejectedLaterSQL("nf"))) AS found,

@@ -66,6 +66,8 @@ final class RealtimeAnalysisStore: ObservableObject {
         var isRunning: @MainActor (AnalyzeCycler) -> Bool = { _ in false }
         /// Take a drive this run queued out of the dossier queue (Stop).
         var dequeue: @MainActor (String) -> Void = { _ in }
+        /// Open the Observations window for a scope — ObservationsWindowController in production ("See what we learned").
+        var openObservations: @MainActor (ObservationsScope) -> Void = { _ in }
     }
 
     @Published private(set) var state = RealtimeAnalysisState()
@@ -132,7 +134,11 @@ final class RealtimeAnalysisStore: ObservableObject {
                 return runner.isRunning(c) || o.queueDispatchInFlight
                     || o.queuedVolumePrefixes.contains { !o.parkedVolumePrefixes.contains($0) }
             },
-            dequeue: { [weak orchestrator] prefix in orchestrator?.dequeueAnalyze(volumePrefix: prefix) })
+            dequeue: { [weak orchestrator] prefix in orchestrator?.dequeueAnalyze(volumePrefix: prefix) },
+            openObservations: { [weak model] scope in
+                guard let model else { return }
+                ObservationsWindowController.shared.show(model: model, scope: scope, source: "realtime-pass")
+            })
         return RealtimeAnalysisStore(sources: sources, dossiers: FileDossierLoader.production(model: model))
     }
 
@@ -259,6 +265,9 @@ final class RealtimeAnalysisStore: ObservableObject {
         var next = state
         next.inApp = sources.inApp()
         let sampledAt = sources.now()
+        // A pass began (idle/finished → analyzing): remember when, for "See what we learned".
+        let wasRunning = [.analyzing, .paused, .stopping].contains(state.inApp.phase)
+        if next.inApp.phase == .analyzing, !wasRunning { next.passStartedAt = sampledAt }
         foldLeft(into: &next, now: sampledAt)
         next.machine.apply(await sources.machine(), at: sampledAt)
         if helperTask == nil, lastHelperAt.map({ sampledAt.timeIntervalSince($0) >= TimingBudget.seconds(helperEvery) }) ?? true {
@@ -385,8 +394,22 @@ final class RealtimeAnalysisStore: ObservableObject {
         plan.steps.forEach(sources.runStep)
         var running = state
         running.leftRunActive = true
+        running.passStartedAt = now
         publish(running)
         return plan
+    }
+
+    // MARK: "See what we learned" (Rick 2026-11-06)
+
+    /// The Observations window scoped to every observation stamped since this
+    /// pass began — through its one door. Refused (and logged) with no pass.
+    func seeWhatWeLearned() {
+        guard let at = state.passStartedAt else {
+            sources.note("See what we learned — not opened: no pass was watched from its start")
+            return
+        }
+        sources.note("See what we learned — opening the Observations window for the pass since \(at)")
+        sources.openObservations(.since(Int64(at.timeIntervalSince1970)))
     }
 
     /// The tick's part: the plan, whether its engines are busy, and the
