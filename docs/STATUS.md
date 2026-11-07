@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-06 (Friday ~17:15). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-07 (Saturday ~00:00, SigLIP 2 Frames search). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves now (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -27,8 +27,12 @@
    machine found across many files in three chevrons (Technical · Patterns & events · Across the collection), one search
    over every observation (captions, transcripts, on-screen text, eras, people found, events, format readings), a filter
    per tier, hits open the file or its dossier. Machine observations only — never a file name, note or tag (Rick 11/06).
-   Design: `docs/design/file_dossier_view.md` Part II (the embedding search and SigLIP 2 frame search are designed there,
-   not built). Report and mockups: the night-shift worktree's `.scratch/reports/observations-2026-11-07.md`.
+   Design: `docs/design/file_dossier_view.md` Part II. Report and mockups: the night-shift worktree's
+   `.scratch/reports/observations-2026-11-07.md`.
+   **Then (11/07, experiment for Saturday's demo):** the window's **Words | Frames** switch — SigLIP 2 text→frame search,
+   native MLX Swift on the GPU (no Python), 8 frames per video in its own rebuildable cache (never the catalog), built by
+   the `Index Frames` MFO job (Index Frames… in Frames mode; Pause/Stop; re-run resumes). Item 1 of §II.7 (text
+   embeddings over observations) is still designed only. Report: `.scratch/kept-2026-11-07/reports/siglip-2026-11-07.md`.
 4. **Catalog went red for ~3 min at 17:02 (#441):** Update runs the catalog check BEFORE Detect Duplicates, so 262
    sampled-hash groups whose members now have different full hashes (revealed by #434's re-hashing) turned the chip
    Unhealthy until the next check; Detect Duplicates had already fixed them a second later. Fix: verify last.

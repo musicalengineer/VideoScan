@@ -3400,6 +3400,25 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Observations/FrameIndexTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameIndexTests"
+      ],
+      "tests": [
+        "topKIsCosineOrderBestFirstAndHonoursKAndThePerContentCap",
+        "tiesOrderByDigestThenTime",
+        "theCacheKeyIsModelContentAndMilliseconds",
+        "aRowOutsideTheScopeIsNeverAHit",
+        "theReaderReturnsExactlyTheScopesContents",
+        "aHitMapsBackToTheFrameThatProducedIt",
+        "aMissingOrBrokenIndexIsNotBuiltOrUnreadableNeverAPartialAnswer",
+        "aCrashBetweenTheMatrixAndTheSidecarLeavesTheOldIndex",
+        "aSeededBuilderKnowsWhatIsDoneAndKeepsFailures"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Observations/ObservationsReportTests.swift",
       "stage": "unit",
       "suites": [
@@ -17395,6 +17414,19 @@
       ]
     },
     {
+      "blocked_reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexRealRunTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameIndexRealRunTests"
+      ],
+      "tests": [
+        "indexTheConfiguredSlice",
+        "runTheTenQueries"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FramePrefetcherTests.swift",
@@ -17410,6 +17442,27 @@
         "frameSkipping",
         "yieldsFramesFromMOV",
         "yieldsFramesFromTS"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigLIPEmbedderTests",
+        "FrameSearchStoreTests",
+        "FrameIndexJobTests",
+        "FrameSearchSensorTests",
+        "FrameSearchMockupTests"
+      ],
+      "tests": [
+        "tokensAndVectorsMatchTheReferenceImplementation",
+        "aRedImageRanksTheRedClipFirst",
+        "aHitNamesTheFileAndTimeOfTheRowThatProducedItAndStaysInScope",
+        "noIndexOrAnUnreadableOneIsIndexNotBuiltAndNoHits",
+        "indexesPicturesSkipsOfflineRecordsUndecodableAndResumes",
+        "noModelExtensionAndNothingWritesTheCatalog",
+        "framesDark"
       ]
     },
     {
@@ -37118,11 +37171,15 @@
         {
           "name": "tests/test_dossier_demo.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FrameIndexRealRunTests.swift",
+          "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3390,
+      "expected_floor": 3397,
       "name": "unit",
-      "package_expected_floor": 795,
+      "package_expected_floor": 804,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -37164,6 +37221,7 @@
         "VideoScanCoreTests.FileDossierReviewTests",
         "VideoScanCoreTests.FileDossierTests",
         "VideoScanCoreTests.FileDossierUnknownTests",
+        "VideoScanCoreTests.FrameIndexTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",
         "VideoScanCoreTests.ImportComparatorTests",
@@ -37524,6 +37582,10 @@
         "VideoScanTests/FootageLikenessVerifyRuleTests",
         "VideoScanTests/FormattingExtendedTests",
         "VideoScanTests/FormattingTests",
+        "VideoScanTests/FrameIndexJobTests",
+        "VideoScanTests/FrameSearchMockupTests",
+        "VideoScanTests/FrameSearchSensorTests",
+        "VideoScanTests/FrameSearchStoreTests",
         "VideoScanTests/GedcomLookupConcurrencyTests",
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
@@ -37701,6 +37763,7 @@
         "VideoScanTests/SetAsideVisibilityTests",
         "VideoScanTests/ShortClipTests",
         "VideoScanTests/SideStoreAuthorityTests",
+        "VideoScanTests/SigLIPEmbedderTests",
         "VideoScanTests/SigningIdentitySensorTests",
         "VideoScanTests/SoundCopyFinderDecideTests",
         "VideoScanTests/SoundCopyFinderScaleTests",

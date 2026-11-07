@@ -55,6 +55,7 @@ struct AppSupportSideStoreInventoryTests {
         "current.json": .derived,                             // compiled family graph / sync pointer
         "last_sync.txt": .derived,
         "pronunciation-drill-manifest.json": .derived,
+        "index.json": .derived,                               // observations/siglip2/<model>/: the SigLIP 2 frame index sidecar (FrameIndex.swift)
         // Logs, receipts, reports, job memory
         "integrity-latest.json": .logOrReport,
         "integrity-2026-10-16.json": .logOrReport,
@@ -101,6 +102,7 @@ struct AppSupportSideStoreInventoryTests {
         "concat.txt": .notAppSupport, "transcript.txt": .notAppSupport,                                      // temp
         "thumbs.db": .notAppSupport,                           // a scan skip name
         "xmark.bin": .notAppSupport,                           // an SF Symbol
+        "tokenizer.json": .notAppSupport, "tokenizer_config.json": .notAppSupport,                          // HF hub cache (SigLIP 2 weights)
     ]
 
     /// Every file-name literal in the app and VideoScanCore sources.
