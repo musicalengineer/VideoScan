@@ -236,9 +236,22 @@ struct RealtimeContentAnalysisContent: View {
                 countTile("skipped", inApp.skipped, .secondary, "forward.end")
             }
         } label: {
-            Label("Done this pass", systemImage: "checkmark.seal")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.green)
+            HStack(spacing: 10) {
+                Label("Done this pass", systemImage: "checkmark.seal")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.green)
+                // The hand-off (Rick 2026-11-06): once the pass has finished,
+                // the Observations window scoped to what this pass produced.
+                if state.showsSeeWhatWeLearned {
+                    Button { store.seeWhatWeLearned() } label: {
+                        Label("See what we learned", systemImage: "sparkle.magnifyingglass")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("What the machine observed in the files this pass analyzed — three tiers, searchable, read-only")
+                    .accessibilityIdentifier("realtime.ca.observations")
+                }
+            }
         }
     }
 

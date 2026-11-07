@@ -156,7 +156,7 @@ the first.
   burned-in dates (SQL `LIKE`, ASCII case-insensitive, `%`/`_` escaped), machine eras (the query against the era's
   decade words "early 1990s" / "1990s" and the years in its range, in Swift over the distinct era values, then the files
   of the matching values), people the machine found (name), event names, and the technical readings (the query against
-  each distinct probe tuple's values and interpretation words — "straight tape capture", "ProRes" — then the files of
+  each distinct probe tuple's values and interpretation words — "FireWire capture", "ProRes" — then the files of
   the matching tuples). A hit = tier · kind · the observation text (a snippet around the match, with its time in the
   clip) · who said it (model / signer) · the file it came from. Ordered by tier, kind, file name, time; capped at 2,000
   hits and 500 per kind, and the words say when a cap was hit. Double-click reveals the file in the Catalog; Show

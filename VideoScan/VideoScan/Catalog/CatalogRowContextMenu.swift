@@ -175,6 +175,7 @@ extension CatalogContent {
         }
         Divider()
         findItems(rec: rec, pureActive: selection.pureActive)
+        observationsItem(selectedRecs: selection.selected)
         Divider()
         removeAndDeleteItems(activeRecs: selection.active,
                              deletableRecs: deletableRecs)

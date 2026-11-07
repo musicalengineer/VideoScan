@@ -307,6 +307,16 @@ struct RealtimeAnalysisState: Equatable, Sendable {
     /// A run this window started has not finished yet.
     var leftRunActive = false
 
+    // MARK: "See what we learned" (Rick 2026-11-06)
+
+    /// When the pass this window watched began (the transition into
+    /// Analyzing, or "Analyze the N left"'s START); the Observations window
+    /// is scoped to every observation stamped since then.
+    var passStartedAt: Date?
+
+    /// The hand-off shows once the pass has finished and we know when it started.
+    var showsSeeWhatWeLearned: Bool { inApp.phase == .finished && passStartedAt != nil }
+
     /// Nothing is running here or in the plan's engines.
     var isIdleForLeft: Bool {
         !(inApp.phase == .analyzing || inApp.phase == .paused || inApp.phase == .stopping)

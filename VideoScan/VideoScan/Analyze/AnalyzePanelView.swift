@@ -134,6 +134,13 @@ struct AnalyzePanelView: View {
             Button("Results…") { showResults = true }
                 .help("What VideoScan Background's analyzers produced: eras found, none, given up, still to do (read-only)")
                 .accessibilityIdentifier("analyze.results")
+            // Observations… (Rick 2026-11-06): what the machine observed across
+            // the catalog, in three tiers, searchable — one door, read-only.
+            Button("Observations…") {
+                ObservationsWindowController.shared.show(model: model, scope: .everything, source: "panel")
+            }
+            .help("What the analyzers observed across the catalog — technical readings, eras, scenes, speech, on-screen text, people — searchable, read-only")
+            .accessibilityIdentifier("analyze.observations")
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(coverage.report.activeRecords.formatted()) files in the catalog")
                     .font(.callout)
