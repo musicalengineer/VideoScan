@@ -7,7 +7,7 @@
  "entry_count": 369,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
-   "ccn": 25,
+   "ccn": 17,
    "nloc": 61
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::AnalyzeRowStateRule.state": {
@@ -1066,7 +1066,7 @@
    "ccn": 12,
    "nloc": 91
   },
-  "VideoScan/VideoScan/People/DossierDashboardView+Coverage.swift::CatalogCoverage.init records : [ VideoRecord ] , scope : AnalysisScope = AnalysisScope": {
+  "VideoScan/VideoScan/People/DossierDashboardView+Coverage.swift::CatalogCoverage.init records : [ VideoRecord ] , scope : AnalysisScope = AnalysisScope , unreadable : UnreadableContentIndex = . none": {
    "ccn": 21,
    "nloc": 39
   },
