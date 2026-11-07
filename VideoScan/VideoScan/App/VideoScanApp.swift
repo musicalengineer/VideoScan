@@ -632,6 +632,8 @@ struct VideoScanApp: App {
                         // reference until the outer capture is spelled out.
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
+                        // The Observations window (an NSWindow) starts Index Frames here.
+                        FrameIndexHost.center = fileOpsCenter
                         // A Catalog rename refuses to rewrite the archive
                         // index while a Promote appends to it.
                         let center = fileOpsCenter

@@ -221,8 +221,18 @@ the word histograms (≤ 20,000 distinct keys while counting, 25 kept each).
    rip where cached, else a few per file through the existing ffmpeg path (read-only on media), embedded with SigLIP 2
    B/16 (Core ML `palmier-io/siglip2-base-coreml`, or MPS via `transformers`; the 11/05 research report, rows 23–24);
    frame vectors cached keyed by (content SHA-256, timestamp, model id); a hit shows the thumbnail, file, time and
-   similarity. **Status 11/06: designed, not built** (no SigLIP 2 weights on this Mac; the exact-word window came first,
-   as asked). The honest order: 1 → measure → 2 → hand-check ten queries on real footage and write down what it got wrong.
+   similarity. **Status 11/07: built as an experiment** (Rick 11/06 "build the next step siglip 2"; item 1 still
+   designed only). Native, no Python at runtime: `google/siglip2-base-patch16-224` (plain SigLIP architecture) as MLX
+   Swift modules in `Observations/FrameSearch/SigLIPEmbedder.swift`, GPU float16, Gemma tokenizer from
+   swift-transformers, weights from the HF hub cache; parity with transformers' reference pinned by
+   `SigLIPEmbedderTests` (same token ids, cosine ≥ 0.99). Frames: 8 per video at the captioner's times
+   (`framesEvenlySpaced`), decoded through the captioner's frame door. Index: Core `FrameIndex` (flat L2-normalised
+   matrix + `index.json` sidecar, Float16 on disk, crash-safe generations) under
+   `Application Support/VideoScan/observations/siglip2/<model>/`, keyed (content SHA-256, ms, model id), never the
+   catalog; built by the `indexFrames` MFO job (Pause/Stop, resume = skip what is done). Search: the window's
+   **Words | Frames** switch; the text tower embeds the query (model kept warm in-process), exact cosine top-48
+   (≤ 2 per content) over the scope's contents. Measurements and the ten-query hand-check:
+   `.scratch/kept-2026-11-07/reports/siglip-2026-11-07.md`.
 3. **Clustering for tier 3** (recurring scenes / places / topics): k-means over the observation vectors off-main,
    cached by catalog generation. Designed, not built.
 

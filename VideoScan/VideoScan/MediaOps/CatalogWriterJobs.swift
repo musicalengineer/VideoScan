@@ -30,10 +30,11 @@ extension MediaFileOperationKind {
 
     /// Kinds that read media, or add one derivative when they finish.
     /// `.findMaster` (2026-10-26) writes nothing at all: it reads the
-    /// fingerprint sidecar read-only and logs its answers.
+    /// fingerprint sidecar read-only and logs its answers. `.indexFrames`
+    /// (2026-11-07) writes only its own cache folder (FrameIndexJob).
     static let notCatalogWriters: Set<MediaFileOperationKind> = [
         .combine, .compare, .extract, .ripFrames, .reformat, .transcode, .cleanup, .trim,
-        .balanceAudio, .rebuildAudio, .compareFootage, .findMaster,
+        .balanceAudio, .rebuildAudio, .compareFootage, .findMaster, .indexFrames,
     ]
 
     var writesCatalog: Bool { Self.catalogWriters.contains(self) }

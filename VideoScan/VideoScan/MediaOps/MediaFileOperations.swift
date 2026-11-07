@@ -483,6 +483,15 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let findMaster = Self("findMaster", hasDetailView: true,
         style: .init(badge: "MASTER?", logVerb: "find master", fill: .init(0.15, 0.00, 1.00)))
 
+    // Index Frames (2026-11-07, SigLIP 2 Frames search) — warm amber-olive: a
+    // reading verb whose only write is its own rebuildable cache folder.
+    /// "Index frames (SigLIP 2)" (Rick 2026-11-06, docs/design/file_dossier_view.md
+    /// §II.7): a few frames per video embedded by SigLIP 2's image tower into
+    /// Application Support/VideoScan/observations/siglip2 — never the catalog,
+    /// never media. Read-only on media; restart = resume. FrameIndexJob.
+    static let indexFrames = Self("indexFrames", hasDetailView: false,
+        style: .init(badge: "Frames Index", logVerb: "index frames", fill: .init(0.55, 0.45, 0.00)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -492,7 +501,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog, .validateCatalog, .findMaster,
+        .verifyCatalog, .validateCatalog, .findMaster, .indexFrames,
     ]
 
     /// Badge text — rendered in small caps by the row view.

@@ -27,7 +27,17 @@ import VideoScanCore
 
 struct ObservationsContent: View {
 
+    /// Words: the one search over every observation's text. Frames: SigLIP 2 text→frame search (FrameSearch/).
+    enum Mode: String, CaseIterable, Identifiable {
+        case words = "Words"
+        case frames = "Frames"
+        var id: String { rawValue }
+    }
+
     @ObservedObject var store: ObservationsStore
+    /// The Frames mode's store (nil: no Frames mode, e.g. the mockups).
+    private let frames: FrameSearchStore?
+    @State private var mode: Mode
     @State private var query = ""
     @State private var expanded: Set<FileDossier.Layer>
     @State private var filters: [FileDossier.Layer: String] = [:]
@@ -40,9 +50,12 @@ struct ObservationsContent: View {
 
     /// Rick's call for the dossier (11/05): chevrons start collapsed; here the
     /// statistics open first so the window says something at once.
-    init(store: ObservationsStore, expanded: Set<FileDossier.Layer> = [.collection], mockup: Bool = false) {
+    init(store: ObservationsStore, frames: FrameSearchStore? = nil, mode: Mode = .words,
+         expanded: Set<FileDossier.Layer> = [.collection], mockup: Bool = false) {
         self.store = store
+        self.frames = frames
         self.mockup = mockup
+        _mode = State(initialValue: frames == nil ? .words : mode)
         _expanded = State(initialValue: expanded)
     }
 
@@ -90,7 +103,9 @@ struct ObservationsContent: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             searchField
-            if let failure = store.failure {
+            if mode == .frames, let frames {
+                FrameSearchView(frames: frames, dossiers: store.loader.dossiers)
+            } else if let failure = store.failure {
                 Text("The observations could not be read: \(failure)").foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else if store.search != nil || store.searching || store.searchFailure != nil {
@@ -137,6 +152,14 @@ struct ObservationsContent: View {
         }
     }
 
+    static let framesPrompt = "Describe a picture — \"a birthday cake with candles\", \"the beach\", \"a dog\""
+
+    /// The field's words go to the mode's search.
+    private func submit() {
+        let q = query
+        if mode == .frames, let frames { Task { await frames.search(q) } } else { Task { await store.search(q) } }
+    }
+
     static let searchPrompt = "Search what the machine observed — a word in a caption or transcript, on-screen text, an era (\"early 1990s\"), a person, a format (\"ProRes\")"
 
     private var searchField: some View {
@@ -146,17 +169,26 @@ struct ObservationsContent: View {
                 Text(store.search?.query ?? Self.searchPrompt).foregroundStyle(store.search == nil ? .secondary : .primary).frame(maxWidth: .infinity, alignment: .leading)
                 Text("Search").padding(.horizontal, 10).padding(.vertical, 3).background(Color.accentColor.opacity(0.8)).foregroundStyle(.white).cornerRadius(5)
             } else {
-                TextField(Self.searchPrompt, text: $query)
+                TextField(mode == .frames ? Self.framesPrompt : Self.searchPrompt, text: $query)
                     .textFieldStyle(.plain)
-                    .onSubmit { Task { await store.search(query) } }
+                    .onSubmit { submit() }
                     .accessibilityIdentifier("observations.search")
                 if !query.isEmpty {
-                    Button { query = ""; Task { await store.search("") } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    Button { query = ""; submit() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                         .buttonStyle(.borderless)
                 }
-                Button("Search") { Task { await store.search(query) } }
-                    .disabled(ObservationsSearch.normalized(query) == nil || store.searching)
+                Button("Search") { submit() }
+                    .disabled(ObservationsSearch.normalized(query) == nil || store.searching || (frames?.searching ?? false))
                     .keyboardShortcut(.defaultAction)
+                if frames != nil {
+                    Picker("", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 150)
+                        .help("Words: what the analyzers wrote. Frames: pictures that look like the words (SigLIP 2, on this Mac).")
+                        .accessibilityIdentifier("observations.mode")
+                        .onChange(of: mode) { _, _ in if !query.isEmpty { submit() } }
+                }
             }
         }
         .padding(8)
@@ -325,6 +357,7 @@ final class ObservationsWindowController {
 
     private var window: NSWindow?
     private var store: ObservationsStore?
+    private var frames: FrameSearchStore?
     private var closeObserver: NSObjectProtocol?
 
     /// The one door: the Content Analysis panel's Observations…, the Realtime
@@ -335,13 +368,16 @@ final class ObservationsWindowController {
         if let w = window, w.isVisible, let store {
             loader.note("shown from \(source) for \(scope.words)")
             Task { await store.set(scope: scope) }
+            if let frames { Task { await frames.set(scope: scope) } }
             w.makeKeyAndOrderFront(nil)
             return
         }
         close()
         let store = ObservationsStore(scope: scope, loader: loader)
         self.store = store
-        let hosting = NSHostingView(rootView: ObservationsContent(store: store))
+        let frames = FrameSearchStore(scope: scope, loader: FrameSearchLoader.production(model: model))
+        self.frames = frames
+        let hosting = NSHostingView(rootView: ObservationsContent(store: store, frames: frames))
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable],
                          backing: .buffered, defer: false)
@@ -358,6 +394,8 @@ final class ObservationsWindowController {
                 guard let self else { return }
                 self.store?.cancel()
                 self.store = nil
+                self.frames?.cancel()
+                self.frames = nil
                 self.window = nil
                 if let obs = self.closeObserver {
                     NotificationCenter.default.removeObserver(obs)
@@ -374,6 +412,8 @@ final class ObservationsWindowController {
         }
         store?.cancel()
         store = nil
+        frames?.cancel()
+        frames = nil
         window?.close()
         window = nil
     }
