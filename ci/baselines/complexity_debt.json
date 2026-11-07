@@ -7,7 +7,7 @@
  "entry_count": 369,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
-   "ccn": 25,
+   "ccn": 17,
    "nloc": 61
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::AnalyzeRowStateRule.state": {
