@@ -124,6 +124,7 @@
   .parts .ver { margin-top: 10px; letter-spacing: .04em; }
   .parts .since { color: var(--muted); font-size: 13px; }
   .grow-up { color: var(--good); }
+  .value .growth { margin-left: 1.6em; }
   .grow-down { color: var(--bad); }
   .tile.wide .hosts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
   .fails, .fails > summary { display: inline; }
@@ -1101,20 +1102,27 @@ function renderHead(d) {
   // Version + tip of main + CI on main
   const v = S.version;
   const ci = d.ciRun && d.ciRun.done ? d.ciRun.done : null;
-  const ciWords = ci ? `CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
+  const ciWords = ci ? `GitHub CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
     : (hist.length ? `CI on main: result unknown (Actions API unavailable) · last metrics row ${fmtWhen(last.ts)}` : "CI on main: " + NO_DATA);
   // Application Source and Version in one tile (Rick 2026-11-08): lines of code, one line per
-  // part with its growth since the first row that split app from tests (green up, red down),
+  // part with its growth so far this month (green up, red down; Rick 2026-11-08: monthly progress),
   // then the version, main's tip, and CI on main, each on its own line.
-  const first = hist.find(r => isNum(r.app_source_lines));
+  // The baseline is the last row before the 1st of this month (Eastern); the first row if none.
+  const withSource = hist.filter(r => isNum(r.app_source_lines));
+  const ref = new Date(toTime(last.ts) || Date.now());
+  const monthStart = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), 1, 5);   // 00:00 EST ≈ 05:00 UTC
+  const before = withSource.filter(r => toTime(r.ts) < monthStart);
+  const first = before.length ? before[before.length - 1] : withSource[0];
+  const sinceWords = `since ${new Date(monthStart).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} 1`;
   const delta = key => {
     if (!first || !isNum(first[key]) || !isNum(last[key])) return "";
     const d = last[key] - first[key];
     return d ? ` <span class="${d > 0 ? "grow-up" : "grow-down"}">${d > 0 ? "+" : "−"}${n(Math.abs(d))}</span>` : "";
   };
   const part = (name, key, note = "") => isNum(last[key]) ? `<span class="part">${name} ${n(last[key])}${note}${delta(key)}</span>` : "";
-  const since = first ? `<span class="part since">growth since ${day(first.ts)}${stale(last.ts)}</span>` : "";
-  const sourceValue = isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines of code${delta("app_source_lines")}</small>` : `<span class="word grey">${NO_DATA}</span>`;
+  const since = stale(last.ts) ? `<span class="part since">${stale(last.ts)}</span>` : "";
+  const total = delta("app_source_lines");
+  const sourceValue = isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines of code</small>${total ? `<small class="growth">${total} (${sinceWords})</small>` : ""}` : `<span class="word grey">${NO_DATA}</span>`;
   const parts = isNum(last.app_source_lines)
     ? part("Swift", "app_swift_lines") + part("Python", "app_python_lines")
       + part("Tests", "test_lines", " <small>(not counted)</small>") + part("Tooling", "tooling_lines", " <small>(not counted)</small>") + since
