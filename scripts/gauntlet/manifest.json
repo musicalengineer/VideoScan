@@ -30034,6 +30034,40 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TreeIdentityDeriverCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TreeIdentityDeriverCharacterizationTests",
+        "TreeIdentityDeriverStepTests"
+      ],
+      "tests": [
+        "aLoneMatchIsCertainByBirthOrFullNameElseOffered",
+        "aPlainExportsFirstRecordIsEvidenceOnlyForTheOwner",
+        "aPointerPinOnThisTreeClaimsItsRecord",
+        "aRootThatIsTheOnlyCompatibleNamesakeIsCertainForAnyone",
+        "aRowStoredOnThePinnedProfileConstrainsToo",
+        "anIncompatibleOwnerPinFallsThroughToTheRoot",
+        "anOwnerPinClaimedByAnotherProfileFallsThroughToTheName",
+        "compatibleNamesakesAreUniqueCompatibleAndUnclaimed",
+        "kinshipAloneSettlesOnlyOneCompatibleRecord",
+        "kinshipRowsThatNoMatchSatisfiesLeaveAllMatchesToAsk",
+        "kinshipRowsThatSeveralMatchesSatisfyNarrowThenBirthYearDecides",
+        "loneMatchVerdictByBirthFullNameOrOffered",
+        "manyNamesakesAreCappedForTheSheet",
+        "nameMatchesJoinNamesakesAndDropTheIncompatible",
+        "narrowedByKinshipWithoutRowsLeavesTheMatches",
+        "noEvidenceAtAllIsNone",
+        "ownerSettingVerdictNeedsTheRecordCompatibleAndUnclaimed",
+        "pointerPinsWithoutAFingerprintFailClosed",
+        "rootVerdictSpeaksForOneRootAloneTheOwnerOrSeveralRoots",
+        "severalNamesakesVerdictAsksAroundARootElseUsesTheOneDatedRecord",
+        "severalUndatedMatchesWithOneDatedAreSettledByBirthYear",
+        "theOwnerTakesTheRootBesideANamesakeButOthersAreAsked",
+        "twoRecordedRootsSpelledLikeTheProfileAreAsked"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TreeIdentityDeriverTests.swift",
@@ -37458,7 +37492,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3490,
+      "expected_floor": 3513,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -38077,6 +38111,8 @@
         "VideoScanTests/TranscodeTests",
         "VideoScanTests/TransitionRuleTests",
         "VideoScanTests/TrashWarningsSensorTests",
+        "VideoScanTests/TreeIdentityDeriverCharacterizationTests",
+        "VideoScanTests/TreeIdentityDeriverStepTests",
         "VideoScanTests/TreeIdentityRefreshOwnershipTests",
         "VideoScanTests/TreeIdentityStaleCoverageTests",
         "VideoScanTests/TreeWalkStep0LineAttributionTests",
