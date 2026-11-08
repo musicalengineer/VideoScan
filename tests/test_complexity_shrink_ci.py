@@ -85,3 +85,39 @@ def test_ccn15_excess_shrink_refuses_an_empty_scan(tmp_path):
     cm.write_ccn15_excess(path, 300, {})
     plan = cm.ccn15_excess_shrink_plan(str(tmp_path), path, str(tmp_path / "ov.jsonl"), funcs=[])
     assert plan["problems"] and not plan["changed"]
+
+
+def test_shrink_baseline_resolves_default_paths_against_root_not_cwd(tmp_path, monkeypatch):
+    worktree = tmp_path / "worktree"
+    src_dir = worktree / "VideoScan" / "VideoScan" / "Catalog"
+    src_dir.mkdir(parents=True)
+    (src_dir / "Other.swift").write_text(mid_ccn("body", 20))
+
+    base_dir = worktree / "ci" / "baselines"
+    base_dir.mkdir(parents=True)
+    debt_file = base_dir / "complexity_debt.json"
+    excess_file = base_dir / "complexity_ccn15_excess.json"
+
+    cm.write_baseline(str(debt_file), {f"{OTHER}::body": {"ccn": 25, "nloc": 50}})
+    cm.write_ccn15_excess(str(excess_file), 10, {OTHER: 10})
+
+    other_dir = tmp_path / "other"
+    other_base_dir = other_dir / "ci" / "baselines"
+    other_base_dir.mkdir(parents=True)
+    cwd_debt = other_base_dir / "complexity_debt.json"
+    cwd_excess = other_base_dir / "complexity_ccn15_excess.json"
+    cm.write_baseline(str(cwd_debt), {f"{OTHER}::body": {"ccn": 99, "nloc": 99}})
+    cm.write_ccn15_excess(str(cwd_excess), 99, {OTHER: 99})
+
+    monkeypatch.chdir(other_dir)
+
+    ret = cm.main(["--root", str(worktree), "--shrink-baseline"])
+    assert ret == 0
+
+    shrunk_debt = cm.load_baseline(str(debt_file))
+    assert shrunk_debt[f"{OTHER}::body"]["ccn"] == 20
+    shrunk_excess = cm.load_ccn15_excess(str(excess_file))
+    assert shrunk_excess["total_excess"] == 5
+
+    assert cm.load_baseline(str(cwd_debt))[f"{OTHER}::body"]["ccn"] == 99
+    assert cm.load_ccn15_excess(str(cwd_excess))["total_excess"] == 99
