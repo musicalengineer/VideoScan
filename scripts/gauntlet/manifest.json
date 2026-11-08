@@ -27371,12 +27371,21 @@
         "aCancelDuringReconcileAppliesNothing",
         "aCleanRunCopiesVerifiesAndPublishesTheSummary",
         "aDestinationCollisionFailsTheCopyAndTouchesNeitherFile",
+        "aDryRunOverEveryBucketChangesNoRow",
         "aDryRunPaintsTheCountsAndChangesNothing",
+        "aFailedCopyDoesNotStopTheNextAndAFollowedMoveKeepsItsDiscoveredPath",
         "aReadOnlyDestinationFolderFailsTheCopyAndLeavesNothingBehind",
         "aSourceMissingAtReconcileIsMarkedAndNothingIsCopied",
         "aSourceSideMoveIsFollowedThenCopied",
+        "aSuccessfulCopyRewritesDirectoryAndHashAndKeepsTheFirstHopsProvenance",
+        "aWitnessThatStopsVouchingBeforeApplyMakesTheRunCopyInstead",
         "anExtensionlessRecoveredFileLandsWithItsInferredExtension",
-        "anUnreadableSourceIsNeitherCopiedNorMarkedAndTheRunSaysSo"
+        "anUnknownJobIDDoesNothing",
+        "anUnreadableSourceIsNeitherCopiedNorMarkedAndTheRunSaysSo",
+        "recordsGoneBeforeTheRunnerStartsFailTheJobCleanly",
+        "theInferredExtensionIsSkippedWhenOffAndACollisionOnTheNewNameIsRefused",
+        "theSnapshotHoldsEveryBucketsStateBeforeTheFirstMutation",
+        "theSummaryCapsTheFailedPathListAtTwentyButCountsEveryFailure"
       ]
     },
     {

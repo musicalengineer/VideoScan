@@ -22,6 +22,7 @@
 // /Volumes, never App Support.
 
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -369,5 +370,246 @@ struct RelocateRunCharacterizationTests {
         let text = await console(model)
         #expect(text.contains("[1/2] "), "\(text)")
         #expect(text.contains("✓ copied 1500 bytes") || text.contains("✓ copied 2500 bytes"))
+    }
+
+    // MARK: Codex test-gap pass (2026-11-07) — order, continuation, provenance, caps, entry exits
+
+    /// Finding 1: Bucket E is re-proved IN THE RUNNER, after classification
+    /// and before anything is applied. The witness vouches while reconcile
+    /// classifies, then stops vouching (the independence probe the runner
+    /// reads at re-proof time): the source is copied instead of skipped.
+    @Test func aWitnessThatStopsVouchingBeforeApplyMakesTheRunCopyInstead() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let src = ws.source.appendingPathComponent("kids.bin")
+        let (size, md5) = try writeFile(at: src, bytes: 2048)
+        let witnessVol = ws.root.appendingPathComponent("MyBook3Terabytes", isDirectory: true)
+        try FileManager.default.createDirectory(at: witnessVol, withIntermediateDirectories: true)
+        let witness = witnessVol.appendingPathComponent("kids.bin")
+        try FileManager.default.copyItem(at: src, to: witness)
+        let rec = makeRecord(src, size: size, md5: md5)
+        let witnessRec = makeRecord(witness, size: size, md5: md5)
+        let model = makeModel(ws, [rec, witnessRec])
+        // Classification blocks inside its first independence question until
+        // the test has swapped the probe the runner will re-prove with.
+        let gate = DispatchSemaphore(value: 0)
+        let first = OSAllocatedUnfairLock(initialState: true)
+        model.relocateWitnessIndependence = { witnessPath, sourcePath, root in
+            if first.withLock({ let f = $0; $0 = false; return f }) { gate.wait() }
+            return RelocateReconcile.witnessIsNotTheSourceFile(witnessPath, sourcePath, root)
+        }
+        model.relocateVolume(options(ws))
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now < deadline, model.reconcileProgress == nil { await Task.yield() }
+        model.relocateWitnessIndependence = { _, _, _ in false }
+        gate.signal()
+        let status = try await runToEnd(model)
+
+        #expect(status == .awaitingDone)
+        #expect(rec.fullPath == ws.dest.appendingPathComponent("kids.bin").path, "copied instead: \(rec.fullPath)")
+        #expect(!rec.notes.contains("reason=dup-on-other-volume"), "no redundancy note: \(rec.notes)")
+        #expect(model.dashboard.relocateSafelyRedundant == 0 && model.dashboard.relocateSafelyRedundantBytes == 0)
+        #expect(model.dashboard.relocateSucceeded == 1)
+        #expect(model.pendingRelocateSummary?.witnessSamples.isEmpty == true)
+        #expect(FileManager.default.fileExists(atPath: src.path) && FileManager.default.fileExists(atPath: witness.path))
+        let text = await console(model)
+        #expect(text.contains("no safe copy is on disk now"), "\(text)")
+    }
+
+    /// Findings 2 and 3: the snapshot holds every bucket's PRE-apply state
+    /// (B not yet marked, C at its recorded path, D at its source path), and
+    /// a dry run over the same rows changes none of them.
+    private func bucketsBCD(_ ws: Workspace) throws -> (b: VideoRecord, c: VideoRecord, d: VideoRecord, cActual: URL, dDest: URL) {
+        let bRec = makeRecord(ws.source.appendingPathComponent("gone.bin"), size: 11, md5: "22222222222222222222222222222222")
+        let cRecorded = ws.source.appendingPathComponent("old/m.bin")
+        let cActual = ws.source.appendingPathComponent("new/m.bin")
+        let (cs, cm) = try writeFile(at: cActual, bytes: 3000, seed: 29)
+        let cRec = makeRecord(cRecorded, size: cs, md5: cm)
+        let dSrc = ws.source.appendingPathComponent("pre.bin")
+        let (ds, dm) = try writeFile(at: dSrc, bytes: 1024, seed: 37)
+        let dDest = ws.dest.appendingPathComponent("pre.bin")
+        try FileManager.default.copyItem(at: dSrc, to: dDest)
+        try FileManager.default.removeItem(at: dSrc)
+        let dRec = makeRecord(dSrc, size: ds, md5: dm)
+        for r in [bRec, cRec, dRec] { r.notes = "before" }
+        return (bRec, cRec, dRec, cActual, dDest)
+    }
+
+    @Test func theSnapshotHoldsEveryBucketsStateBeforeTheFirstMutation() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let f = try bucketsBCD(ws)
+        let model = makeModel(ws, [f.b, f.c, f.d])
+
+        model.relocateVolume(options(ws))
+        _ = try await runToEnd(model)
+
+        #expect(f.b.archiveStage == .manuallyDeleted)
+        #expect(f.c.notes.contains("source-side move detected") && f.c.fullPath.hasPrefix(ws.dest.path))
+        #expect(f.d.fullPath == f.dDest.path && f.d.notes.contains("adopted existing copy at dest"))
+        let name = try #require(snapshots(ws).first)
+        let text = try String(contentsOf: ws.catalog.appendingPathComponent(name), encoding: .utf8)
+            .replacingOccurrences(of: "\\/", with: "/")
+        #expect(!text.contains("source-side move detected") && !text.contains("adopted existing copy"),
+                "no note written before the snapshot")
+        #expect(!text.contains(f.dDest.path) && !text.contains(f.cActual.path), "no path rewritten before the snapshot")
+        #expect(!text.contains("manuallyDeleted"), "Bucket B not marked before the snapshot")
+        #expect(text.contains(ws.source.appendingPathComponent("old/m.bin").path), "C at its recorded path")
+        #expect(text.contains(ws.source.appendingPathComponent("pre.bin").path), "D at its source path")
+    }
+
+    @Test func aDryRunOverEveryBucketChangesNoRow() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let f = try bucketsBCD(ws)
+        let before = [f.b, f.c, f.d].map { ($0.fullPath, $0.directory, $0.notes, $0.archiveStage, $0.originalFullPath, $0.originVolume) }
+        let model = makeModel(ws, [f.b, f.c, f.d])
+
+        model.relocateVolume(options(ws, dryRun: true))
+        let status = try await runToEnd(model)
+
+        #expect(status == .awaitingDone)
+        let after = [f.b, f.c, f.d].map { ($0.fullPath, $0.directory, $0.notes, $0.archiveStage, $0.originalFullPath, $0.originVolume) }
+        for (x, y) in zip(before, after) {
+            #expect(x.0 == y.0 && x.1 == y.1 && x.2 == y.2 && x.3 == y.3 && x.4 == y.4 && x.5 == y.5, "\(x) → \(y)")
+        }
+        #expect(model.dashboard.relocateManuallyDeleted == 1 && model.dashboard.relocateSourceMoves == 1
+                && model.dashboard.relocateAdopted == 1)
+        #expect(model.dashboard.relocateCompleted == 2, "B + D painted; C would copy")
+        #expect(snapshots(ws).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: ws.dest.appendingPathComponent("new/m.bin").path))
+    }
+
+    /// Finding 4: a failure does not stop the run — the next file copies;
+    /// a followed source-side move that then fails keeps the DISCOVERED path.
+    @Test func aFailedCopyDoesNotStopTheNextAndAFollowedMoveKeepsItsDiscoveredPath() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let a = ws.source.appendingPathComponent("a.bin")
+        let (sa, ma) = try writeFile(at: a, bytes: 1000)
+        try writeFile(at: ws.dest.appendingPathComponent("a.bin"), bytes: 10, seed: 3)       // collision
+        let b = ws.source.appendingPathComponent("b.bin")
+        let (sb, mb) = try writeFile(at: b, bytes: 1200, seed: 41)
+        let cActual = ws.source.appendingPathComponent("new/c.bin")
+        let (sc, mc) = try writeFile(at: cActual, bytes: 1400, seed: 43)
+        try writeFile(at: ws.dest.appendingPathComponent("new/c.bin"), bytes: 10, seed: 5)   // collision after the move
+        let ra = makeRecord(a, size: sa, md5: ma), rb = makeRecord(b, size: sb, md5: mb)
+        let rc = makeRecord(ws.source.appendingPathComponent("old/c.bin"), size: sc, md5: mc)
+        let model = makeModel(ws, [ra, rb, rc])
+
+        model.relocateVolume(options(ws))
+        _ = try await runToEnd(model)
+
+        #expect(ra.archiveStage == .salvageFailed && ra.fullPath == a.path)
+        #expect(rb.fullPath == ws.dest.appendingPathComponent("b.bin").path && rb.archiveStage == .none, "the next file still copied")
+        #expect(rc.archiveStage == .salvageFailed && rc.fullPath == cActual.path, "keeps the discovered source path: \(rc.fullPath)")
+        #expect(rc.notes.contains("source-side move detected") && rc.notes.contains("destination already exists"))
+        #expect(model.dashboard.relocateSalvageFailed == 2 && model.dashboard.relocateSucceeded == 1
+                && model.dashboard.relocateBytesCopied == sb)
+        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
+        let failed = Set(model.pendingRelocateSummary?.salvageFailedPaths ?? [])
+        #expect(failed == [a.path, cActual.path], "\(failed)")
+        let job = try #require(model.relocateQueue.last)
+        #expect(job.copyProgress?.done == 3 && job.copyProgress?.total == 3 && job.copyProgress?.bytesCopied == sb,
+                "\(String(describing: job.copyProgress))")
+    }
+
+    /// Finding 7: what a successful copy writes on the record — directory,
+    /// the destination's partial hash, provenance (first hop kept).
+    @Test func aSuccessfulCopyRewritesDirectoryAndHashAndKeepsTheFirstHopsProvenance() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let a = ws.source.appendingPathComponent("deep/a.bin")
+        let (sa, ma) = try writeFile(at: a, bytes: 1500)
+        let b = ws.source.appendingPathComponent("b.bin")
+        let (sb, mb) = try writeFile(at: b, bytes: 1600, seed: 47)
+        let ra = makeRecord(a, size: sa, md5: ma), rb = makeRecord(b, size: sb, md5: mb)
+        rb.originVolume = "EarlierDrive"
+        rb.notes = "kept note"
+        let originA = ra.volumeName
+        let model = makeModel(ws, [ra, rb])
+
+        model.relocateVolume(options(ws))
+        _ = try await runToEnd(model)
+
+        let destA = ws.dest.appendingPathComponent("deep/a.bin")
+        #expect(ra.fullPath == destA.path && ra.directory == destA.deletingLastPathComponent().path)
+        #expect(ra.partialMD5 == FileHasher.partialMD5(path: destA.path))
+        #expect(ra.originalFullPath == a.path && ra.originVolume == originA)
+        #expect(rb.originVolume == "EarlierDrive", "the first hop's origin is kept")
+        #expect(rb.notes == "kept note", "a clean copy adds no note")
+    }
+
+    @Test func theInferredExtensionIsSkippedWhenOffAndACollisionOnTheNewNameIsRefused() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let off = ws.source.appendingPathComponent("clipA")
+        let (so, mo) = try writeFile(at: off, bytes: 900)
+        let ro = makeRecord(off, size: so, md5: mo); ro.container = "mov,mp4,m4a,3gp,3g2,mj2"
+        let model = makeModel(ws, [ro])
+        var opts = options(ws); opts.addInferredExtensionOnRecovery = false
+        model.relocateVolume(opts)
+        _ = try await runToEnd(model)
+        #expect(ro.fullPath == ws.dest.appendingPathComponent("clipA").path, "OFF: byte-for-byte name: \(ro.fullPath)")
+
+        let ws2 = try Self.makeWorkspace(); defer { ws2.cleanup() }
+        let clip = ws2.source.appendingPathComponent("clip")
+        let (sc, mc) = try writeFile(at: clip, bytes: 900)
+        let occupant = ws2.dest.appendingPathComponent("clip.mov")
+        try writeFile(at: occupant, bytes: 50, seed: 7)
+        let occupantBytes = contents(occupant)
+        let rc = makeRecord(clip, size: sc, md5: mc); rc.container = "mov,mp4,m4a,3gp,3g2,mj2"
+        let model2 = makeModel(ws2, [rc])
+        model2.relocateVolume(options(ws2))
+        _ = try await runToEnd(model2)
+        #expect(rc.archiveStage == .salvageFailed && rc.fullPath == clip.path)
+        #expect(rc.notes.contains("destination already exists: \(occupant.path)"), "\(rc.notes)")
+        #expect(contents(occupant) == occupantBytes, "no overwrite, no uniquing")
+        #expect(!FileManager.default.fileExists(atPath: ws2.dest.appendingPathComponent("clip").path))
+    }
+
+    /// Finding 9: the summary lists the first 20 failed paths; the count is all.
+    @Test func theSummaryCapsTheFailedPathListAtTwentyButCountsEveryFailure() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        var recs: [VideoRecord] = []
+        for i in 0..<21 {
+            let url = ws.source.appendingPathComponent(String(format: "f%02d.bin", i))
+            let (s, m) = try writeFile(at: url, bytes: 300 + i, seed: 11 + i)
+            try writeFile(at: ws.dest.appendingPathComponent(url.lastPathComponent), bytes: 5, seed: 2)
+            recs.append(makeRecord(url, size: s, md5: m))
+        }
+        let model = makeModel(ws, recs)
+        model.relocateVolume(options(ws))
+        _ = try await runToEnd(model)
+
+        let summary = try #require(model.pendingRelocateSummary)
+        #expect(summary.salvageFailedCount == 21 && summary.salvageFailedPaths.count == 20)
+        #expect(summary.salvageFailedPaths == Array(recs.map(\.fullPath).prefix(20)), "the first 20, in run order")
+        #expect(recs.allSatisfy { $0.archiveStage == .salvageFailed })
+    }
+
+    /// Finding 10: the runner's own entry checks.
+    @Test func recordsGoneBeforeTheRunnerStartsFailTheJobCleanly() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let src = ws.source.appendingPathComponent("x.bin")
+        let (size, md5) = try writeFile(at: src, bytes: 512)
+        let model = makeModel(ws, [makeRecord(src, size: size, md5: md5)])
+
+        model.relocateVolume(options(ws))
+        model.records = []                                // before the runner's first turn
+        let status = try await runToEnd(model)
+
+        #expect(status == .failed(reason: "no records in scope"), "\(String(describing: status))")
+        #expect(model.pendingRelocateSummary == nil)
+        #expect(snapshots(ws).isEmpty)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: ws.dest.path)) ?? []).isEmpty)
+    }
+
+    @Test func anUnknownJobIDDoesNothing() async throws {
+        let ws = try Self.makeWorkspace(); defer { ws.cleanup() }
+        let src = ws.source.appendingPathComponent("x.bin")
+        let (size, md5) = try writeFile(at: src, bytes: 512)
+        let rec = makeRecord(src, size: size, md5: md5)
+        let model = makeModel(ws, [rec])
+
+        await model.runRelocate(jobID: UUID())
+
+        #expect(model.relocateQueue.isEmpty && model.pendingRelocateSummary == nil)
+        #expect(rec.fullPath == src.path && rec.notes.isEmpty)
+        #expect(snapshots(ws).isEmpty)
     }
 }
