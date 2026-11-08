@@ -25997,6 +25997,29 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PreviewPaneSurfaceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PreviewPaneSurfaceTests"
+      ],
+      "tests": [
+        "aStripForAnotherRowIsNeverShown",
+        "codecLineMatchesTheOldExpression",
+        "decideMatchesTheOldChainOnEveryCombination",
+        "extractingCountsFromOneAndNeverPastTheTotal",
+        "mediaMatrixRoutesThePlayButton",
+        "noPreviewOutranksAudioOnlyAndTheSpinner",
+        "offlineWinsOverEverything",
+        "peopleLineConfirmedPlainDetectedStarredNoDoubles",
+        "playingWithoutAPlayerFallsThroughToThePoster",
+        "posterHasAPlayButtonOnlyWithAPicture",
+        "selectionCountOnlyWhenSomethingIsSelected",
+        "stopShowsForThePlayerOrThisRowsStrip",
+        "thePreviewPaneSwitchesOnTheDecision"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PreviewServiceForwarderTests.swift",
@@ -37226,7 +37249,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3426,
+      "expected_floor": 3439,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -37748,6 +37771,7 @@
         "VideoScanTests/PreviewFilmstripPlanTests",
         "VideoScanTests/PreviewFrameScorerTests",
         "VideoScanTests/PreviewHelperStatusPresentationTests",
+        "VideoScanTests/PreviewPaneSurfaceTests",
         "VideoScanTests/ProbeEngineErrorPathsTests",
         "VideoScanTests/ProbeExtractionGoldenTests",
         "VideoScanTests/ProbeResultCatalogingTests",
