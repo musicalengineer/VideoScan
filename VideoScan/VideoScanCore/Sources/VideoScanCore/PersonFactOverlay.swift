@@ -196,85 +196,150 @@ extension GedcomFamilyGraph {
     public func applyingFactOverlay(_ overlay: PersonFactOverlay) -> (graph: GedcomFamilyGraph, report: PersonFactOverlayReport) {
         var report = PersonFactOverlayReport()
         guard !overlay.entries.isEmpty else { return (self, report) }
-        var newPeople = people
-        var newFamilies = families
-        var lifeYearsChanged: Set<String> = []
-        var indexStale = false
-
+        var edit = FactOverlayEdit(people: people, families: families)
         for fsid in overlay.entries.keys.sorted() {
-            let entry = overlay.entries[fsid]!
-            guard let id = personIDByFamilySearchID[fsid], var person = newPeople[id] else {
+            guard let id = personIDByFamilySearchID[fsid], edit.people[id] != nil else {
                 report.missingFamilySearchIDs.append(fsid)
                 continue
             }
-            var changedHere = 0
-            for key in entry.facts.keys.sorted() {
-                guard let field = PersonRefreshField(key: key) else { continue }  // unknown key: ignored
-                let value = entry.facts[key]!.value
-                switch field {
-                case .name:
-                    // A name is never erased by an overlay.
-                    guard let value, !value.isEmpty, value != person.name else { continue }
-                    person.name = value; indexStale = true
-                case .surname:
-                    guard value != person.surname else { continue }
-                    person.surname = value; indexStale = true
-                case .sex:
-                    let sex = value ?? ""
-                    guard sex != person.sex else { continue }
-                    person.sex = sex; indexStale = true
-                case .birthDate:
-                    guard value != person.birthDate else { continue }
-                    person.birthDate = value; lifeYearsChanged.insert(id)
-                case .birthPlace:
-                    guard value != person.birthPlace else { continue }
-                    person.birthPlace = value
-                case .deathDate:
-                    guard value != person.deathDate else { continue }
-                    person.deathDate = value; lifeYearsChanged.insert(id)
-                case .deathPlace:
-                    guard value != person.deathPlace else { continue }
-                    person.deathPlace = value
-                case .marriageDate(let spouseFSID):
-                    // The family must already join these two people. A
-                    // spouse the tree does not link is a relationship
-                    // difference, and those are never applied.
-                    guard let familyID = person.spouseOfFamilies.first(where: { familyID in
-                        guard let family = newFamilies[familyID] else { return false }
-                        let isHusband = family.husband == id, isWife = family.wife == id
-                        guard isHusband != isWife,
-                              let partner = isHusband ? family.wife : family.husband else { return false }
-                        return newPeople[partner]?.familySearchID == spouseFSID
-                    }), var family = newFamilies[familyID], family.marriageDate != value else { continue }
-                    family.marriageDate = value
-                    newFamilies[familyID] = family
-                }
-                changedHere += 1
-            }
-            if changedHere > 0 {
-                newPeople[id] = person
+            let changed = edit.apply(overlay.entries[fsid]!.facts, toPersonID: id)
+            if changed > 0 {
                 report.peopleChanged += 1
-                report.fieldsChanged += changedHere
+                report.fieldsChanged += changed
             }
         }
         guard report.fieldsChanged > 0 else { return (self, report) }
+        report.indexDropped = edit.indexStale && indexBox.current != nil
+        let index = edit.indexStale ? nil : indexPatchingLifeYears(of: edit.lifeYearsChanged, in: edit.people)
+        return (replacingRecords(people: edit.people, families: edit.families, index: index), report)
+    }
 
-        // Keep the compiled index when only dates/places moved: patch the
-        // life-years labels for the changed people (O(changed)). A name or
-        // sex change touches postings, sidebar order and married-surname
-        // tokens — drop the index and let it rebuild lazily.
-        var patched: TreeIndex?
-        if !indexStale, let index = indexBox.current {
-            var updates: [Int: String] = [:]
-            for id in lifeYearsChanged {
-                guard let ordinal = index.ordinal(of: id), let person = newPeople[id] else { continue }
-                updates[Int(ordinal)] = GedcomFamilyGraph.lifeYearsLabel(birth: person.birthDate,
-                                                                         death: person.deathDate) ?? ""
-            }
-            patched = updates.isEmpty ? index : index.replacingLifeYears(updates)
+    /// Keep the compiled index when only dates/places moved: the current
+    /// index with the life-years labels of `ids` re-derived from `people`
+    /// (O(changed)); the index itself when no label moved; nil when no
+    /// index is built (it is then built lazily, as before). The caller
+    /// drops the index instead when a name or sex changed.
+    func indexPatchingLifeYears(of ids: Set<String>, in people: [String: Person]) -> TreeIndex? {
+        guard let index = indexBox.current else { return nil }
+        var updates: [Int: String] = [:]
+        for id in ids {
+            guard let ordinal = index.ordinal(of: id), let person = people[id] else { continue }
+            updates[Int(ordinal)] = GedcomFamilyGraph.lifeYearsLabel(birth: person.birthDate,
+                                                                     death: person.deathDate) ?? ""
         }
-        report.indexDropped = indexStale && indexBox.current != nil
-        return (replacingRecords(people: newPeople, families: newFamilies, index: patched), report)
+        return updates.isEmpty ? index : index.replacingLifeYears(updates)
+    }
+
+    /// The person and family tables while an overlay is laid over them,
+    /// and what the changes mean for the compiled index.
+    struct FactOverlayEdit {
+        var people: [String: Person]
+        var families: [String: Family]
+        /// People whose birth or death date changed (their label is patched).
+        var lifeYearsChanged: Set<String> = []
+        /// A name, surname or sex changed: the index must be rebuilt.
+        var indexStale = false
+
+        /// Apply one entry's facts to the person `id` (who must be in
+        /// `people`), in key order. Unknown keys are ignored. Returns how
+        /// many fields changed; the person is written back only then.
+        mutating func apply(_ facts: [String: PersonFactOverlay.Fact], toPersonID id: String) -> Int {
+            guard var person = people[id] else { return 0 }
+            var changed = 0
+            for key in facts.keys.sorted() {
+                guard let field = PersonRefreshField(key: key) else { continue }  // unknown key: ignored
+                if apply(field, value: facts[key]!.value, to: &person) { changed += 1 }
+            }
+            if changed > 0 { people[id] = person }
+            return changed
+        }
+
+        /// One fact. A marriage date lands on the family; every other field
+        /// on the person. True when something changed.
+        mutating func apply(_ field: PersonRefreshField, value: String?, to person: inout Person) -> Bool {
+            let changed: Bool
+            if case .marriageDate(let spouseFSID) = field {
+                changed = setMarriageDate(value, of: person, spouseFamilySearchID: spouseFSID)
+            } else {
+                changed = person.assignOverlayFact(field, value)
+            }
+            guard changed else { return false }
+            switch field.overlayIndexEffect {
+            case .rebuild: indexStale = true
+            case .patchLifeYears: lifeYearsChanged.insert(person.id)
+            case .unindexed: break
+            }
+            return true
+        }
+
+        /// The family must already join these two people. A spouse the tree
+        /// does not link is a relationship difference, and those are never
+        /// applied.
+        mutating func setMarriageDate(_ value: String?, of person: Person, spouseFamilySearchID: String) -> Bool {
+            guard let familyID = person.spouseOfFamilies.first(where: {
+                partnerFamilySearchID(inFamily: $0, of: person.id) == spouseFamilySearchID
+            }), var family = families[familyID], family.marriageDate != value else { return false }
+            family.marriageDate = value
+            families[familyID] = family
+            return true
+        }
+
+        /// The FamilySearch ID of `id`'s partner in a family. Nil when the
+        /// family is unknown, has no partner, or names `id` as both or
+        /// neither spouse.
+        func partnerFamilySearchID(inFamily familyID: String, of id: String) -> String? {
+            guard let family = families[familyID] else { return nil }
+            let isHusband = family.husband == id, isWife = family.wife == id
+            guard isHusband != isWife, let partner = isHusband ? family.wife : family.husband else { return nil }
+            return people[partner]?.familySearchID
+        }
+    }
+}
+
+/// What a changed overlay field does to a compiled TreeIndex.
+enum OverlayIndexEffect: Equatable, Sendable {
+    /// Name, surname or sex: postings, sidebar order and married-surname
+    /// tokens move — drop the index and let it rebuild lazily.
+    case rebuild
+    /// Birth or death date: patch that person's life-years label.
+    case patchLifeYears
+    /// Places and marriage dates are not indexed.
+    case unindexed
+}
+
+extension PersonRefreshField {
+    var overlayIndexEffect: OverlayIndexEffect {
+        switch self {
+        case .name, .surname, .sex: return .rebuild
+        case .birthDate, .deathDate: return .patchLifeYears
+        case .birthPlace, .deathPlace, .marriageDate: return .unindexed
+        }
+    }
+}
+
+extension GedcomFamilyGraph.Person {
+    /// Set one person fact from an overlay value. True when it changed.
+    /// A name is never erased (nil or empty is ignored); a nil sex is "".
+    /// A marriage date is a family fact: never set here (false).
+    mutating func assignOverlayFact(_ field: PersonRefreshField, _ value: String?) -> Bool {
+        switch field {
+        case .name:
+            guard let value, !value.isEmpty else { return false }
+            return Self.assign(value, to: &name)
+        case .surname: return Self.assign(value, to: &surname)
+        case .sex: return Self.assign(value ?? "", to: &sex)
+        case .birthDate: return Self.assign(value, to: &birthDate)
+        case .birthPlace: return Self.assign(value, to: &birthPlace)
+        case .deathDate: return Self.assign(value, to: &deathDate)
+        case .deathPlace: return Self.assign(value, to: &deathPlace)
+        case .marriageDate: return false
+        }
+    }
+
+    private static func assign<Value: Equatable>(_ value: Value, to slot: inout Value) -> Bool {
+        guard slot != value else { return false }
+        slot = value
+        return true
     }
 }
 

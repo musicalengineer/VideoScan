@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 364,
+ "entry_count": 361,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -409,10 +409,6 @@
   "VideoScan/VideoScan/FamilyTree/TreeIdentityCenter.swift::TreeIdentityCenter.pin": {
    "ccn": 18,
    "nloc": 61
-  },
-  "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift::TreeIdentityDeriver.deriveWithResolvedPointerPins": {
-   "ccn": 32,
-   "nloc": 91
   },
   "VideoScan/VideoScan/FootageGroups/FootageGrouping.swift::FootageGrouping.text": {
    "ccn": 20,
@@ -1282,10 +1278,6 @@
    "ccn": 21,
    "nloc": 31
   },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply": {
-   "ccn": 32,
-   "nloc": 238
-  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply.classify": {
    "ccn": 17,
    "nloc": 24
@@ -1397,10 +1389,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift::LineageTrail.walkAllAncestors": {
    "ccn": 16,
    "nloc": 52
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift::GedcomFamilyGraph.applyingFactOverlay": {
-   "ccn": 33,
-   "nloc": 73
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewSweepEngine.swift::PreviewSweepEngine.run": {
    "ccn": 20,

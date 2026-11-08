@@ -805,6 +805,29 @@
       ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceScanApplyCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BirthplaceScanApplyCharacterizationTests",
+        "BirthplaceScanApplyStepTests"
+      ],
+      "tests": [
+        "aCoarseNameNarrowsOnlyAnOpenSearch",
+        "aEuropeanCountryContradictedByACoarseNameStops",
+        "aForeignCountryStopsOnlyBeforeACountryIsKnown",
+        "aUnitOutsideTheSearchIsSkippedNotStopped",
+        "aUnitWithNoSearchIsTakenUnlessItsNameIsAmbiguous",
+        "acceptUnitFollowsTheSearchSetOrTheAmbiguityRule",
+        "establishCountryKeepsTheFirstAndRefusesAContradiction",
+        "outsideGroundStopsUnlessTheCountryIsExcepted",
+        "resolvePinsEachTokenArm",
+        "theFirstCountryIsKeptWithItsRangeAndSearches",
+        "todayAndAlternativesAreDelegated"
+      ]
+    },
+    {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CaptionTextQualityTests.swift",
       "stage": "unit",
@@ -3448,6 +3471,36 @@
         "concurrentBlockedReacquiresConsumeAtMostOneSlot",
         "doublePauseAndDoubleResumeAreNoOps",
         "pauseLendsTheSlotAndResumeTakesItBack"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/PersonFactOverlayApplyCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonFactOverlayApplyCharacterizationTests",
+        "PersonFactOverlayApplyStepTests"
+      ],
+      "tests": [
+        "aClearedDeathDatePatchesTheLifeYearsLabel",
+        "aMarriageDateChangesOnlyTheFamilyWithThatSpouse",
+        "aMarriageDateFromTheWifeSideFindsTheSameFamily",
+        "aNameIsNeverErasedNorRewrittenToItself",
+        "aNilSexBecomesEmptyAndTheSameSexIsNoChange",
+        "aNilSurnameClearsItAndDropsTheIndex",
+        "anEmptyOverlayIsTheSameGraphAndAnEmptyReport",
+        "anIdentityChangeOnAnUnindexedTreeReportsNoDroppedIndex",
+        "applyRecordsTheIndexEffectOfWhatChanged",
+        "assignOverlayFactSetsOnlyWhatDiffers",
+        "eachEntrySeesTheFamiliesEarlierEntriesChanged",
+        "eachFieldNamesItsIndexEffect",
+        "indexPatchingLifeYearsIsNilUnbuiltSameWhenNothingMovedAndPatchedOtherwise",
+        "nameAndDatesTogetherDropTheIndexAndTheRebuildIsCurrent",
+        "partnerLookupRefusesBothNeitherAndMissing",
+        "placesKeepTheIndexUnpatchedAndEqualToAFreshBuild",
+        "refusedMarriageDatesChangeNothing",
+        "theReportCountsPeopleAndFieldsAndListsMissingIDsSorted"
       ]
     },
     {
@@ -29981,6 +30034,41 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TreeIdentityDeriverCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TreeIdentityDeriverCharacterizationTests",
+        "TreeIdentityDeriverStepTests"
+      ],
+      "tests": [
+        "aLoneMatchIsCertainByBirthOrFullNameElseOffered",
+        "aPlainExportsFirstRecordIsEvidenceOnlyForTheOwner",
+        "aPointerPinOnThisTreeClaimsItsRecord",
+        "aRootThatIsTheOnlyCompatibleNamesakeIsCertainForAnyone",
+        "aRowStoredOnThePinnedProfileConstrainsToo",
+        "anIncompatibleOwnerPinFallsThroughToTheRoot",
+        "anOwnerPinClaimedByAnotherProfileFallsThroughToTheName",
+        "compatibleNamesakesAreUniqueCompatibleAndUnclaimed",
+        "kinshipAloneSettlesOnlyOneCompatibleRecord",
+        "kinshipRowsThatNoMatchSatisfiesLeaveAllMatchesToAsk",
+        "kinshipRowsThatSeveralMatchesSatisfyNarrowThenBirthYearDecides",
+        "loneMatchVerdictByBirthFullNameOrOffered",
+        "manyNamesakesAreCappedForTheSheet",
+        "nameMatchesJoinNamesakesAndDropTheIncompatible",
+        "narrowedByKinshipWithoutRowsLeavesTheMatches",
+        "noEvidenceAtAllIsNone",
+        "ownerSettingVerdictNeedsTheRecordCompatibleAndUnclaimed",
+        "pointerPinsWithoutAFingerprintFailClosed",
+        "rootVerdictSpeaksForOneRootAloneTheOwnerOrSeveralRoots",
+        "severalNamesakesVerdictAsksAroundARootElseUsesTheOneDatedRecord",
+        "severalUndatedMatchesWithOneDatedAreSettledByBirthYear",
+        "suggestionsAloneAreOfferedWhenTheNameLadderFoundOnlyAClaimedRecord",
+        "theOwnerTakesTheRootBesideANamesakeButOthersAreAsked",
+        "twoRecordedRootsSpelledLikeTheProfileAreAsked"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TreeIdentityDeriverTests.swift",
@@ -34733,6 +34821,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceScanApplyCharacterizationTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityVolumeIdentityTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -35018,6 +35110,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/PausableGatePermitTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/PersonFactOverlayApplyCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -37397,7 +37493,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3490,
+      "expected_floor": 3514,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -38016,6 +38112,8 @@
         "VideoScanTests/TranscodeTests",
         "VideoScanTests/TransitionRuleTests",
         "VideoScanTests/TrashWarningsSensorTests",
+        "VideoScanTests/TreeIdentityDeriverCharacterizationTests",
+        "VideoScanTests/TreeIdentityDeriverStepTests",
         "VideoScanTests/TreeIdentityRefreshOwnershipTests",
         "VideoScanTests/TreeIdentityStaleCoverageTests",
         "VideoScanTests/TreeWalkStep0LineAttributionTests",

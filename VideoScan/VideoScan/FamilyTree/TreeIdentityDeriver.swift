@@ -298,14 +298,12 @@ struct TreeIdentityDeriver: Sendable {
         return deriveWithResolvedPointerPins(subject)
     }
 
+    /// The evidence rules in rank order; the first that speaks wins.
     private func deriveWithResolvedPointerPins(_ subject: TreeIdentitySubject) -> TreeIdentityDerivation {
         let isOwner = subject.stableID == ownerSubjectID
 
         // 1. The owner's own pin (Hallie's speaker setting).
-        if isOwner, let owner = graph.person(familySearchID: ownerFamilySearchID),
-           isCompatible(owner, subject), !isClaimed(owner, by: subject) {
-            return .certain(TreeIdentityCandidate(owner), reason: .ownerSetting)
-        }
+        if isOwner, let verdict = ownerSettingVerdict(for: subject) { return verdict }
 
         let spellings = Self.spellingsMostSpecificFirst(name: subject.name, aliases: subject.aliases)
 
@@ -313,35 +311,67 @@ struct TreeIdentityDeriver: Sendable {
         // they are RECORDED (a merged tree's HEAD) or the subject is the
         // owner — a plain export's first-INDI root is a "who is me" hint,
         // not evidence about anyone else (2026-08-28 Nathaniel Parker).
-        // The shortcut is owner-strength for the owner profile (the same
-        // precedent HallieOwnerResolver uses); for everyone else the root
-        // must be the ONLY compatible namesake — Dad with a "Richard
-        // Breen" alias must not land on Jr because Jr is the root.
         let rootsConsidered = graph.rootsAreRecorded || isOwner
         var namesakes: [GedcomFamilyGraph.Person] = []
         if rootsConsidered {
-            for spelling in spellings {
-                for person in graph.people(namedLike: spelling)
-                where isCompatible(person, subject) && !isClaimed(person, by: subject) && !namesakes.contains(person) {
-                    namesakes.append(person)
-                }
-            }
-            let rootIDs = Set(graph.roots.map(\.id))
-            let matchingRoots = namesakes.filter { rootIDs.contains($0.id) }
-            if matchingRoots.count == 1, let root = matchingRoots.first,
-               isOwner || namesakes.count == 1 {
-                return .certain(TreeIdentityCandidate(root), reason: .treeRoot)
-            }
-            if matchingRoots.count > 1 {
-                return .ambiguous(matchingRoots.map(TreeIdentityCandidate.init))
-            }
+            namesakes = compatibleNamesakes(of: subject, spellings: spellings)
+            if let verdict = rootVerdict(namesakes: namesakes, isOwner: isOwner) { return verdict }
         }
 
-        // 3. Name / alias match: the shared resolver when it can settle the
-        // profile, else the same most-specific-first ladder directly (the
-        // resolver declines a spelling two profiles claim — "Dad" is Rick's
-        // alias AND Dad's name — but this subject's own spellings are not
-        // in doubt).
+        // 3. Name / alias match, then kinship, then birth year.
+        let matches = nameMatches(for: subject, spellings: spellings, namesakes: namesakes)
+        guard !matches.isEmpty else { return verdictWithoutNameMatch(for: subject) }
+        return verdict(among: matches, for: subject, spellings: spellings, rootsConsidered: rootsConsidered)
+    }
+
+    // MARK: The rules, one step each
+
+    /// Rule 1: the owner's FamilySearch ID pin, when the tree has that
+    /// record, it is compatible, and no other profile claims it.
+    func ownerSettingVerdict(for subject: TreeIdentitySubject) -> TreeIdentityDerivation? {
+        guard let owner = graph.person(familySearchID: ownerFamilySearchID),
+              isCompatible(owner, subject), !isClaimed(owner, by: subject) else { return nil }
+        return .certain(TreeIdentityCandidate(owner), reason: .ownerSetting)
+    }
+
+    /// Every compatible, unclaimed record spelled like any of the subject's
+    /// spellings (most specific first, each record once).
+    func compatibleNamesakes(of subject: TreeIdentitySubject, spellings: [String]) -> [GedcomFamilyGraph.Person] {
+        var namesakes: [GedcomFamilyGraph.Person] = []
+        for spelling in spellings {
+            for person in graph.people(namedLike: spelling)
+            where isCompatible(person, subject) && !isClaimed(person, by: subject) && !namesakes.contains(person) {
+                namesakes.append(person)
+            }
+        }
+        return namesakes
+    }
+
+    /// Rule 2 over the namesakes. The shortcut is owner-strength for the
+    /// owner profile (the same precedent HallieOwnerResolver uses); for
+    /// everyone else the root must be the ONLY compatible namesake — Dad
+    /// with a "Richard Breen" alias must not land on Jr because Jr is the
+    /// root. Two matching roots: ask. Nil = the rule does not speak.
+    func rootVerdict(namesakes: [GedcomFamilyGraph.Person], isOwner: Bool) -> TreeIdentityDerivation? {
+        let rootIDs = Set(graph.roots.map(\.id))
+        let matchingRoots = namesakes.filter { rootIDs.contains($0.id) }
+        if matchingRoots.count == 1, let root = matchingRoots.first, isOwner || namesakes.count == 1 {
+            return .certain(TreeIdentityCandidate(root), reason: .treeRoot)
+        }
+        if matchingRoots.count > 1 {
+            return .ambiguous(matchingRoots.map(TreeIdentityCandidate.init))
+        }
+        return nil
+    }
+
+    /// Rule 3's candidates: the shared resolver when it can settle the
+    /// profile, else the same most-specific-first ladder directly (the
+    /// resolver declines a spelling two profiles claim — "Dad" is Rick's
+    /// alias AND Dad's name — but this subject's own spellings are not in
+    /// doubt). The root rule's namesakes join them; then only compatible,
+    /// unclaimed records remain.
+    func nameMatches(for subject: TreeIdentitySubject, spellings: [String],
+                     namesakes: [GedcomFamilyGraph.Person]) -> [GedcomFamilyGraph.Person] {
         var matches: [GedcomFamilyGraph.Person]
         switch resolver.resolve(subject.name) {
         case .people(let people) where !people.isEmpty:
@@ -353,77 +383,105 @@ struct TreeIdentityDeriver: Sendable {
             }
         }
         for person in namesakes where !matches.contains(person) { matches.append(person) }
-        matches = matches.filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
+        return matches.filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
+    }
 
-        if matches.isEmpty {
-            // 3b. Typed rows alone: every row against a pinned profile
-            // agrees on ONE compatible, unclaimed record. Rick's own
-            // rulings (owner pin + "I am the child of Dad") decide "Dad" =
-            // Richard Harding Breen Sr without any name being matched; the
-            // People tab still asks before pinning (not auto-acceptable).
-            let constraints = kinshipConstraints(for: subject)
-            if var allowed = constraints.first {
-                for constraint in constraints.dropFirst() { allowed.formIntersection(constraint) }
-                let candidates = allowed.sorted().compactMap { graph.people[$0] }
-                    .filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
-                if candidates.count == 1 {
-                    return .certain(TreeIdentityCandidate(candidates[0]), reason: .kinshipToPinned)
-                }
-            }
-            // 4. Review suggestions only.
-            let suggested = FamilyKinshipOverlay.suggestedTreeMatches(
-                canonicalName: subject.name, aliases: subject.aliases, graph: graph)
-                .filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
-            return suggested.isEmpty
-                ? .none
-                : .ambiguous(Self.capped(suggested).map(TreeIdentityCandidate.init))
-        }
-
+    /// No name matched. 3b. Typed rows alone: every row against a pinned
+    /// profile agrees on ONE compatible, unclaimed record. Rick's own
+    /// rulings (owner pin + "I am the child of Dad") decide "Dad" = Richard
+    /// Harding Breen Sr without any name being matched; the People tab
+    /// still asks before pinning (not auto-acceptable). 4. Otherwise the
+    /// overlay's suggestions, for review only.
+    func verdictWithoutNameMatch(for subject: TreeIdentitySubject) -> TreeIdentityDerivation {
         let constraints = kinshipConstraints(for: subject)
-        if !constraints.isEmpty {
-            // "Child of Dad" ⇒ MUST be a child of Dad's tree record. A name
-            // match that violates every typed row is never certain.
-            let consistent = matches.filter { person in
-                constraints.allSatisfy { $0.contains(person.id) }
+        if var allowed = constraints.first {
+            for constraint in constraints.dropFirst() { allowed.formIntersection(constraint) }
+            let candidates = allowed.sorted().compactMap { graph.people[$0] }
+                .filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
+            if candidates.count == 1 {
+                return .certain(TreeIdentityCandidate(candidates[0]), reason: .kinshipToPinned)
             }
-            if consistent.count == 1 {
-                return .certain(TreeIdentityCandidate(consistent[0]), reason: .nameAndKinship)
-            }
-            if consistent.isEmpty {
-                return .ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init))
-            }
-            matches = consistent
         }
+        let suggested = FamilyKinshipOverlay.suggestedTreeMatches(
+            canonicalName: subject.name, aliases: subject.aliases, graph: graph)
+            .filter { isCompatible($0, subject) && !isClaimed($0, by: subject) }
+        return suggested.isEmpty
+            ? .none
+            : .ambiguous(Self.capped(suggested).map(TreeIdentityCandidate.init))
+    }
 
+    /// What the typed kinship rows do to the name matches: decide the
+    /// verdict, or leave the matches they allow.
+    enum KinshipNarrowing {
+        case decided(TreeIdentityDerivation)
+        case narrowed([GedcomFamilyGraph.Person])
+    }
+
+    /// "Child of Dad" ⇒ MUST be a child of Dad's tree record. One match that
+    /// satisfies every row is certain; a name match that violates them all
+    /// is never certain (ask among all matches); several narrow the field.
+    /// No rows reach a pin: the matches stand.
+    func narrowedByKinship(_ matches: [GedcomFamilyGraph.Person],
+                           for subject: TreeIdentitySubject) -> KinshipNarrowing {
+        let constraints = kinshipConstraints(for: subject)
+        guard !constraints.isEmpty else { return .narrowed(matches) }
+        let consistent = matches.filter { person in constraints.allSatisfy { $0.contains(person.id) } }
+        if consistent.count == 1 {
+            return .decided(.certain(TreeIdentityCandidate(consistent[0]), reason: .nameAndKinship))
+        }
+        if consistent.isEmpty {
+            return .decided(.ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init)))
+        }
+        return .narrowed(consistent)
+    }
+
+    /// Rule 3 over non-empty name matches: kinship first, then a lone
+    /// match, then the several-namesakes tie-breaks.
+    func verdict(among nameMatches: [GedcomFamilyGraph.Person], for subject: TreeIdentitySubject,
+                 spellings: [String], rootsConsidered: Bool) -> TreeIdentityDerivation {
+        let matches: [GedcomFamilyGraph.Person]
+        switch narrowedByKinship(nameMatches, for: subject) {
+        case .decided(let verdict): return verdict
+        case .narrowed(let remaining): matches = remaining
+        }
         if matches.count == 1, let one = matches.first {
-            if subject.birthYear != nil, one.birthYearInterval != nil {
-                return .certain(TreeIdentityCandidate(one), reason: .nameAndBirth)
-            }
-            if Self.hasFullNameSpelling(spellings, matching: one) {
-                return .certain(TreeIdentityCandidate(one), reason: .uniqueFullName)
-            }
-            // A lone one-word match ("Nana" → one Nana somewhere on the
-            // tree) is offered, never assumed.
-            return .ambiguous([TreeIdentityCandidate(one)])
+            return loneMatchVerdict(one, for: subject, spellings: spellings)
         }
+        return severalNamesakesVerdict(matches, for: subject, rootsConsidered: rootsConsidered)
+    }
 
-        // Several namesakes. A home person among them beside other
-        // compatible namesakes is exactly the Jr/Sr trap: ask.
+    /// One record left: certain on a birth year both sides know, or on a
+    /// full-name spelling. A lone one-word match ("Nana" → one Nana
+    /// somewhere on the tree) is offered, never assumed.
+    func loneMatchVerdict(_ one: GedcomFamilyGraph.Person, for subject: TreeIdentitySubject,
+                          spellings: [String]) -> TreeIdentityDerivation {
+        if subject.birthYear != nil, one.birthYearInterval != nil {
+            return .certain(TreeIdentityCandidate(one), reason: .nameAndBirth)
+        }
+        if Self.hasFullNameSpelling(spellings, matching: one) {
+            return .certain(TreeIdentityCandidate(one), reason: .uniqueFullName)
+        }
+        return .ambiguous([TreeIdentityCandidate(one)])
+    }
+
+    /// Several namesakes. A home person among them beside other compatible
+    /// namesakes is exactly the Jr/Sr trap: ask. Otherwise the profile's
+    /// birth year settles it when exactly one record carries a (compatible)
+    /// birth date.
+    func severalNamesakesVerdict(_ matches: [GedcomFamilyGraph.Person], for subject: TreeIdentitySubject,
+                                 rootsConsidered: Bool) -> TreeIdentityDerivation {
+        let asked = TreeIdentityDerivation.ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init))
         if rootsConsidered {
             let rootIDs = Set(graph.roots.map(\.id))
-            if matches.contains(where: { rootIDs.contains($0.id) }) {
-                return .ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init))
-            }
+            if matches.contains(where: { rootIDs.contains($0.id) }) { return asked }
         }
-        // The profile's birth year settles it when exactly one record
-        // carries a (compatible) birth date.
         if subject.birthYear != nil {
             let dated = matches.filter { $0.birthYearInterval != nil }
             if dated.count == 1 {
                 return .certain(TreeIdentityCandidate(dated[0]), reason: .nameAndBirth)
             }
         }
-        return .ambiguous(Self.capped(matches).map(TreeIdentityCandidate.init))
+        return asked
     }
 
     private static func needsFingerprint(_ subjects: [TreeIdentitySubject]) -> Bool {

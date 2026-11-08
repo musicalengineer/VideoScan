@@ -327,29 +327,12 @@ public enum BirthplaceUnitResolver {
         mutating func apply(_ token: Token, key: String, range: Range<Int>) -> Hit? {
             switch token {
             case .unit(let unitCountry, _, let unitKey):
-                if let searches {
-                    guard searches.contains(unitCountry) else { return nil }
-                } else if ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) {
-                    // "County Middlesex" is as ambiguous as "Middlesex".
-                    return nil
-                }
-                return Hit(unitKey: unitKey, country: unitCountry, kind: unitCountry.unitKind, matchedComponent: text(range))
-            case .country(let c, let set):
-                // "France, United Kingdom": a European country that the
-                // coarse name to its right rules out is a contradiction,
-                // refused exactly as it was while France was off the map.
-                if country == nil, c.isWesternEurope, let searches, searches.isDisjoint(with: set) {
-                    stopped = true
-                    return nil
-                }
-                if country == nil {
-                    country = c
-                    countryRange = range
-                    searches = set
-                }
+                return acceptUnit(of: unitCountry, unitKey: unitKey, key: key, range: range)
+            case .country(let found, let countrySearches):
+                establishCountry(found, searches: countrySearches, range: range)
                 return nil
-            case .coarse(let set):
-                if searches == nil { searches = set }
+            case .coarse(let narrowed):
+                if searches == nil { searches = narrowed }
                 return nil
             case .foreign:
                 // A foreign country ends the search ONLY while no supported
@@ -367,6 +350,37 @@ public enum BirthplaceUnitResolver {
                 stopped = true
                 return nil
             }
+        }
+
+        /// A unit is the answer when it belongs to the search set the
+        /// country (or coarse name) to its right established; with no
+        /// search yet, only when its name means one place in the world.
+        func acceptUnit(of unitCountry: FamilyMap.Country, unitKey: String, key: String, range: Range<Int>) -> Hit? {
+            if let searches {
+                guard searches.contains(unitCountry) else { return nil }
+            } else if ambiguousWithoutCountry.contains(BirthplaceUnitResolver.undecorated(key)) {
+                // "County Middlesex" is as ambiguous as "Middlesex".
+                return nil
+            }
+            return Hit(unitKey: unitKey, country: unitCountry, kind: unitCountry.unitKind, matchedComponent: text(range))
+        }
+
+        /// The rightmost recognised country wins: the first one met (scanning
+        /// right to left) fixes the country, its text and the unit tables
+        /// the rest may hit; later ones are ignored.
+        mutating func establishCountry(_ found: FamilyMap.Country, searches countrySearches: Set<FamilyMap.Country>,
+                                       range: Range<Int>) {
+            guard country == nil else { return }
+            // "France, United Kingdom": a European country that the coarse
+            // name to its right rules out is a contradiction, refused exactly
+            // as it was while France was off the map.
+            if found.isWesternEurope, let searches, searches.isDisjoint(with: countrySearches) {
+                stopped = true
+                return
+            }
+            country = found
+            countryRange = range
+            searches = countrySearches
         }
 
         /// A shared name ("Limburg"): a unit only for the country already
