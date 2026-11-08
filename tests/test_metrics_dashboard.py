@@ -1003,7 +1003,7 @@ def test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few(t
     assert "Hallie replay did not run: catalog schema not current" in head, head
     assert "Hallie replay incomplete: 12 of 56 incomplete" in head, head
     # 2026-11-08 (Rick): the card's rows carry no "(a few)" at all.
-    assert "13,015 passed · 1 failed · Core 2,267 passed · 0 failed · Hallie replay" in row_text(head)
+    assert "13,015 passed · 1 failed | Core 2,267 passed · 0 failed | Hallie replay" in row_text(head)
     assert "(a few" not in head
     assert "<title>Hallie strict: did not run: catalog schema not current · 0 of 56 ran</title>" in head, head
     assert "<title>Hallie advisory: did not run: catalog schema not current · 0 of 826 ran</title>" in head
@@ -1048,7 +1048,7 @@ def two_studio_fixture(now):
 def row_text(html):
     """A row as read on the page with every failures list closed: the opener's "N failed" stays."""
     html = re.sub(r"(<summary>[^<]*</summary>).*?</details>", r"\1", html, flags=re.S)
-    return re.sub(r"<[^>]+>", "", html)
+    return re.sub(r"<[^>]+>", "", html.replace("<br>", " | "))
 
 
 def card_tile(head):
@@ -1078,9 +1078,9 @@ def test_each_mac_row_keeps_its_newest_run_with_its_own_date(tmp_path):
     (m4_state, m4_head, m4_line), (u_state, u_head, u_line) = rows
     assert m4_state == "watch" and "<b>M4 Max</b>" in m4_head and "64GB RAM" in m4_head and et_when(m4_done) in m4_head
     m4_line, u_line = row_text(m4_line), row_text(u_line)
-    assert m4_line == "13,324 passed · 3 failed · Core 2,455 passed · 0 failed", m4_line
+    assert m4_line == "13,324 passed · 3 failed | Core 2,455 passed · 0 failed", m4_line
     assert u_state == "watch" and "<b>M5 Ultra</b>" in u_head and "96GB RAM" in u_head and et_when(ultra_done) in u_head
-    assert u_line == "13,328 passed · 1 failed · Core 2,455 passed · 0 failed", u_line
+    assert u_line == "13,328 passed · 1 failed | Core 2,455 passed · 0 failed", u_line
     for gone in ("no run", "(a few", "lanes to look at", "all lanes green", "nightly runs of", "Last night", "13,000"):
         assert gone not in words and gone not in value, gone
     assert "<figcaption>" not in head
