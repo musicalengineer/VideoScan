@@ -474,8 +474,9 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "5.1" in head and "build 1" in head and "b07f9da" in head and "CI on main" in head and "success" in head
     assert "376,166" in head and "app only" in head and "+1,958 since" in head        # app_source_lines, never total_swift_lines
     assert "546,428" not in head
-    # The worst Mac counts every lane (M5: 1 app + 2 Core = 3), never a sum across Macs (5).
-    assert "11,211" in head and "3 failing on the worst Mac" in head and "5 failing" not in head, "the worst Mac's count, never a sum across Macs"
+    # 2026-11-08 (Rick): the headline is the most recent run, named and dated (here every cell is
+    # date-only, so the first Mac's), counting every lane of it — never a sum across Macs.
+    assert "11,211 <small>passed · 2 failed on M4 Max " in head and "failing" not in head
     assert "M1" in head and "did not run · build-timeout:5400s" in head
     # RED 2026-10-31: every lane named with its own numbers, the lane that broke it said in words.
     assert "11,207 passed · 1 failed" in head and "Core 2,133 passed · 2 failed" in head and "Hallie replay failed" in head
@@ -483,9 +484,8 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "0 failed — broken" not in head
     # The M4 row has no Core lane fields (older row): it says nothing about Core rather than inventing zeros.
     assert "Core 0 passed" not in head
-    # The runs are named by their own date, not as "the night of" the morning after; since
-    # 2026-11-05 the M4 runs at 14:00, so the tile no longer says "2 AM run" for both Macs.
-    assert "nightly runs of" in head and "2 AM run of" not in head
+    # Each run is dated on its own row (2026-11-08); the line under the rows is the failures links.
+    assert "nightly runs of" not in head and "2 AM run of" not in head and "<summary>M4 failures</summary>" in head
     # RED 2026-10-31 (Rick): one ladder per Mac, one rung per lane of the 2 AM run, each rung coloured by
     # its own lane's verdict (app and Core by the 0 / under-10 / 10-plus rule; Hallie by its pass fraction
     # and status; grey where the lane did not run or the row predates it). The gauntlet is not a rung:
@@ -498,10 +498,11 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert rungs["M4"] == {"app": "watch", "core": "grey", "hallie-strict": "grey", "hallie-advisory": "grey",
                            "hallie-voice": "grey"}, rungs["M4"]
     assert set(rungs["M1"].values()) == {"grey"}, "a Mac whose nightly did not run has an unlit ladder"
-    # Hovering a rung says the lane, its numbers and the reason code; the words under the ladder count the lanes to look at.
+    # Hovering a rung says the lane, its numbers and the reason code; the lane count is the ladder's
+    # accessible label only (Rick 2026-11-08 removed the caption line under each ladder).
     assert "<title>Core package: 2,133 passed · 2 failed (core-failed-tests:2)</title>" in head
     assert "<title>Hallie advisory: 142 of 826 · incomplete</title>" in head
-    assert "4 lanes to look at" in head and "all lanes green" not in head
+    assert 'aria-label="M5: 4 lanes to look at"' in head and "all lanes green" not in head and "<figcaption>" not in head
     assert "red 1 night running" in head and "days since a red night" in head
     value, words = bug_tile(head)
     assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
@@ -590,9 +591,8 @@ def test_only_the_two_studios_show_and_an_off_rota_mac_is_never_named(tmp_path):
     assert "<b>M1</b>" not in nightly and "<b>M5</b>" not in nightly
     assert "the M1 " not in nightly and not re.search(r"the M5(?! Ultra)", nightly)
     head = out["sections"]["head"]
-    assert "<b>M4</b>" in head and "<b>M5 Ultra</b>" in head
-    assert '<div class="tile" data-state="green"><div class="label">Last night&#39;s tests</div>' in head \
-        or '<div class="tile" data-state="green"><div class="label">Last night\'s tests</div>' in head
+    assert "<b>M4 Max</b>" in head and "<b>M5 Ultra</b>" in head
+    assert '<div class="tile" data-state="green"><div class="label">Test Results ' in head
     tests_line = out["sections"]["sum-tests"]
     assert "the M5 Ultra is green" in tests_line
     tl = out["sections"]["tl"]
@@ -1002,14 +1002,134 @@ def test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few(t
     head = out["sections"]["head"]
     assert "Hallie replay did not run: catalog schema not current" in head, head
     assert "Hallie replay incomplete: 12 of 56 incomplete" in head, head
-    assert "13,015 passed · 1 failed (a few)" in head
-    assert "incomplete (a few" not in head and "did not run: catalog schema not current (a few" not in head
+    # 2026-11-08 (Rick): the card's rows carry no "(a few)" at all.
+    assert "13,015 passed · 1 failed · Core 2,267 passed · 0 failed · Hallie replay" in head
+    assert "(a few" not in head
     assert "<title>Hallie strict: did not run: catalog schema not current · 0 of 56 ran</title>" in head, head
     assert "<title>Hallie advisory: did not run: catalog schema not current · 0 of 826 ran</title>" in head
     assert "<title>Hallie strict: 40 of 56 · incomplete · 12 of 56 incomplete</title>" in head, head
     # The reason is a sanitized code turned into words on the page — never a row's free text.
     tl = out["sections"]["tl"]
     assert "Hallie replay did not run: catalog schema not current" in tl
+
+
+def et_when(dt):
+    """The card's date/time words: Eastern time, "Nov 9, 2:00 PM"."""
+    from zoneinfo import ZoneInfo
+    d = dt.astimezone(ZoneInfo("America/New_York"))
+    return f"{d:%b} {d.day}, {(d.hour % 12) or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
+
+
+def two_studio_fixture(now):
+    """The M4 ran yesterday afternoon (14:00 ET slot), the M5 Ultra this morning (02:00):
+    the newest night holds only the Ultra's cell. Returns (fixtures, m4_finished, ultra_finished)."""
+    fx = full_fixtures(now)
+    s = fx["summary_latest.json"]
+    m4_done, ultra_done = now - timedelta(hours=23), now - timedelta(hours=10)
+    for night in s["nightly"]["nights"]:
+        night["hosts"] = {}
+    by_date = {night["date"]: night for night in s["nightly"]["nights"]}
+    lanes = {"core_passed": 2455, "core_failed": 0, "core_status": "ok", "hallie_voice_status": "ok"}
+    # An even older M4 run that must NOT be the one shown.
+    by_date[(now - timedelta(days=3)).strftime("%Y-%m-%d")]["hosts"]["M4"] = dict(
+        lanes, state="green", passed=13000, failed=0, total=13060, reason=None,
+        finished=iso(now - timedelta(days=3)), failed_tests=[])
+    by_date[m4_done.strftime("%Y-%m-%d")]["hosts"]["M4"] = dict(
+        lanes, state="watch", passed=13324, failed=3, total=13394, reason="failed-tests:3", finished=iso(m4_done),
+        failed_tests=["#416: every archive-fixity row's stamp lands in sound_prints through the commit door",
+                      "everyRelationshipBranchMatchesItsRecordedSnapshot()", "scriptedSessionsMatchTheirRecordedSnapshots()"])
+    by_date[ultra_done.strftime("%Y-%m-%d")]["hosts"]["Ultra"] = dict(
+        lanes, state="watch", passed=13328, failed=1, total=13394, reason="failed-tests:1", finished=iso(ultra_done),
+        failed_tests=["everyRelationshipBranchMatchesItsRecordedSnapshot()"])
+    s["nightly"]["hosts"] = ["M4", "Ultra"]
+    return fx, m4_done, ultra_done
+
+
+def card_tile(head):
+    m = re.search(r'<div class="tile"[^>]*><div class="label">(Test Results[^<]*)</div><div class="value">(.*?)</div>'
+                  r'(<div class="ladders">.*?</div>)?<div class="words">(.*?)</div></div>', head, re.S)
+    assert m, head
+    return m.group(1), m.group(2), m.group(4)
+
+
+@needs_node
+def test_each_mac_row_keeps_its_newest_run_with_its_own_date(tmp_path):
+    """RED 2026-11-08 (Rick): at 1 PM the card blanked the M4's row ("no run") because
+    its newest run (yesterday 2 PM) was not in the newest night. Each row now shows that
+    Mac's newest run with its completion time; the label is "Test Results" and the time
+    the summary was published; the headline is the most recent run, named and dated;
+    no "(a few)", no "lanes to look at", no "nightly runs of"."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, m4_done, ultra_done = two_studio_fixture(now)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    label, value, words = card_tile(head)
+    assert label == f"Test Results {et_when(now)}", label
+    assert value == f"13,328 <small>passed · 1 failed on M5 Ultra {et_when(ultra_done)}</small>", value
+    rows = re.findall(r'<span class="(\w+)"><span class="hosthead">(.*?)</span><span class="hostline">(.*?)</span></span>', words)
+    assert len(rows) == 2, words
+    (m4_state, m4_head, m4_line), (u_state, u_head, u_line) = rows
+    assert m4_state == "watch" and "<b>M4 Max</b>" in m4_head and "64GB RAM" in m4_head and et_when(m4_done) in m4_head
+    assert m4_line == "13,324 passed · 3 failed · Core 2,455 passed · 0 failed", m4_line
+    assert u_state == "watch" and "<b>M5 Ultra</b>" in u_head and "96GB RAM" in u_head and et_when(ultra_done) in u_head
+    assert u_line == "13,328 passed · 1 failed · Core 2,455 passed · 0 failed", u_line
+    for gone in ("no run", "(a few", "lanes to look at", "all lanes green", "nightly runs of", "Last night", "13,000"):
+        assert gone not in words and gone not in value, gone
+    assert "<figcaption>" not in head
+    # Both ladders read each Mac's newest run, not the newest night's (empty) cell.
+    ladders = re.findall(r'<svg\b[^>]*class="ladder"[^>]*data-host="([^"]+)"[^>]*>(.*?)</svg>', head, re.S)
+    rungs = {h: dict(re.findall(r'data-lane="([^"]+)" data-state="([^"]+)"', body)) for h, body in ladders}
+    assert rungs["M4"]["app"] == "watch" and rungs["Ultra"]["app"] == "watch", rungs
+
+
+@needs_node
+def test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale(tmp_path):
+    """The row is never blanked; a run older than 36 hours keeps its numbers and date with the STALE cue."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    nights = fx["summary_latest.json"]["nightly"]["nights"]
+    for night in nights:
+        night["hosts"].pop("M4", None)
+    old = now - timedelta(days=3)
+    nights[-4]["hosts"]["M4"] = {"state": "green", "passed": 13000, "failed": 0, "total": 13060, "reason": None,
+                                 "finished": iso(old), "failed_tests": []}
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    m4 = re.search(r'<span class="hosthead">[^<]*<span class="dot[^"]*"></span><b>M4 Max</b>(.*?)</span><span class="hostline">(.*?)</span>', words)
+    assert m4, words
+    assert et_when(old) in m4.group(1) and "STALE" in m4.group(1) and m4.group(2) == "13,000 passed · 0 failed"
+
+
+@needs_node
+def test_failures_links_list_each_macs_failed_test_names(tmp_path):
+    """RED 2026-11-08 (Rick): "nightly runs Nov 8" becomes "M4 failures" and "M5 failures",
+    each opening the list of the tests that failed in that Mac's newest run (names from
+    the summary cell, escaped); a green run says none failed; a count larger than the
+    names says how many are not named."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    nights = fx["summary_latest.json"]["nightly"]["nights"]
+    ultra = next(n["hosts"]["Ultra"] for n in reversed(nights) if "Ultra" in n["hosts"])
+    ultra["failed_tests"] = ["<b>x</b>()"]
+    ultra["failed"] = 2
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    assert "nightly runs" not in words
+    lists = dict(re.findall(r'<details class="fails"><summary>(M\d failures)</summary>(.*?)</details>', words, re.S))
+    assert list(lists) == ["M4 failures", "M5 failures"], words
+    assert re.findall(r"<li>(.*?)</li>", lists["M4 failures"]) == [
+        "#416: every archive-fixity row&#39;s stamp lands in sound_prints through the commit door",
+        "everyRelationshipBranchMatchesItsRecordedSnapshot()", "scriptedSessionsMatchTheirRecordedSnapshots()"]
+    assert re.findall(r"<li>(.*?)</li>", lists["M5 failures"]) == ["&lt;b&gt;x&lt;/b&gt;()"]
+    assert "1 more failed test is not named" in lists["M5 failures"]
+    # A green newest run: the link stays and says nothing failed.
+    m4 = next(n["hosts"]["M4"] for n in reversed(nights) if "M4" in n["hosts"])
+    m4.update(state="green", failed=0, failed_tests=[], reason=None)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    lists = dict(re.findall(r'<details class="fails"><summary>(M\d failures)</summary>(.*?)</details>', words, re.S))
+    assert "No test failed" in lists["M4 failures"] and "<li>" not in lists["M4 failures"]
 
 
 @needs_node
