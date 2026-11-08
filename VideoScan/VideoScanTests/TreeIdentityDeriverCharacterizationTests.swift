@@ -236,6 +236,24 @@ struct TreeIdentityDeriverCharacterizationTests {
         #expect(T.derive(T.subject("Zebedee Quux"), in: g) == .none)
     }
 
+    /// Rule 4 on its own (review gap, 2026-11-07): the name ladder stops at
+    /// the first spelling that matches anything — here the canonical name,
+    /// whose only record another profile has pinned — so rule 3 sees no
+    /// match, while the overlay's suggestions (every spelling) still find
+    /// the alias's record. Offered, never certain. Without this test the
+    /// suggestions call could be deleted and the suite would stay green
+    /// (`kinshipAloneSettlesOnlyOneCompatibleRecord` accepts .none).
+    @Test func suggestionsAloneAreOfferedWhenTheNameLadderFoundOnlyAClaimedRecord() {
+        let g = T.graph([T.Indi("@A@", "Zedekiah /Quill/", "M", fsid: "ZEDQ-001"),
+                         T.Indi("@B@", "Yorick /Plum/", "M")])
+        let claimant = T.subject("Other", pin: .familySearchID("ZEDQ-001"))
+        let subject = T.subject("Zedekiah Quill", aliases: ["Yorick Plum"], sex: .male)
+        let v = T.derive(subject, among: [claimant], in: g)
+        #expect(T.isAmbiguous(v), "\(v)")
+        #expect(T.ids(v) == ["@B@"])
+        #expect(!v.isAutoAcceptable)
+    }
+
     // MARK: Pointer pins
 
     @Test func pointerPinsWithoutAFingerprintFailClosed() {

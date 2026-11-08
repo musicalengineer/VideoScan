@@ -30063,6 +30063,7 @@
         "rootVerdictSpeaksForOneRootAloneTheOwnerOrSeveralRoots",
         "severalNamesakesVerdictAsksAroundARootElseUsesTheOneDatedRecord",
         "severalUndatedMatchesWithOneDatedAreSettledByBirthYear",
+        "suggestionsAloneAreOfferedWhenTheNameLadderFoundOnlyAClaimedRecord",
         "theOwnerTakesTheRootBesideANamesakeButOthersAreAsked",
         "twoRecordedRootsSpelledLikeTheProfileAreAsked"
       ]
@@ -37492,7 +37493,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3513,
+      "expected_floor": 3514,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
