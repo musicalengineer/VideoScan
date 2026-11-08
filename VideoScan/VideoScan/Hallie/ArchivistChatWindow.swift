@@ -30,6 +30,12 @@ enum ArchivistDiagnosticLine {
 
     static func failure(_ operation: FailureOperation, error: Error) -> String {
         let prefix = "[hallie] \(operation.rawValue) failed"
+        if let brain = error as? HallieBrainError {
+            switch brain {
+            case .noCloudKey: return prefix + " reason=no-cloud-key"
+            case .familyMediaRefused: return prefix + " reason=family-media-refused"
+            }
+        }
         guard let translator = error as? NLTranslatorError else {
             return prefix + " reason=unexpected category=\(String(describing: type(of: error)))"
         }
@@ -350,14 +356,17 @@ struct ArchivistChatWindow: View {
                                     .foregroundStyle(.secondary)
                             }
                             .id("thinking")
-                        } else if showTechnicalDetails,
-                                  let responder = lastResponder {
+                        } else if let responder = lastResponder,
+                                  showTechnicalDetails
+                                    || HallieBrainLabel.isCloud(responder: responder) {
                             // RENDER the responder, don't just record it
                             // (codex #315). With a fallback list, "the
                             // Archivist feels slow" and "the primary is
                             // asleep so you are on the laptop" look
-                            // identical without this line.
-                            Text("answered by \(OllamaEndpoints.displayLabel(for: responder))"
+                            // identical without this line. A CLOUD answer
+                            // is always labelled (2026-11-07): what left the
+                            // Mac must never be invisible.
+                            Text("answered by \(HallieBrainLabel.display(responder: responder, localModel: ollamaModel))"
                                  + HallieModePillModel.detailsSuffix(for: hallieMemory.effectiveMode))
                                 .font(.system(size: 13))
                                 .foregroundStyle(.tertiary)
@@ -1232,9 +1241,10 @@ struct ArchivistChatWindow: View {
             let routed = (try? await HallieAppTurnCoordinator.Dependencies.live
                 .startLocalBrain(hosts)) ?? hosts
             guard !Task.isCancelled else { return }
-            var template = OllamaQueryTranslator()
-            template.model = modelName
-            await OllamaFailoverTranslator(hosts: routed, template: template).warmUp()
+            // Through the seam: a cloud brain has nothing to load, and a
+            // missing cloud key is reported by the first question, not here.
+            await (try? HallieBrainResolver.live.backend(
+                hosts: routed, localModel: modelName))?.warmUp()
         }
     }
 
@@ -1302,7 +1312,8 @@ struct ArchivistChatWindow: View {
         HallieResponseCommit.apply(
             response,
             question: question,
-            modelName: ollamaModel,
+            modelName: HallieBrainLabel.modelName(
+                responder: response.responderHost, localModel: ollamaModel),
             requestID: requestID,
             activeRequestID: activeRequestID,
             isCancelled: Task.isCancelled,
@@ -2053,20 +2064,19 @@ struct ArchivistChatWindow: View {
         playAfterAnswer wantsPlayAfter: Bool
     ) {
         isThinking = true
-        var template = OllamaQueryTranslator()
-        template.model = ollamaModel
-        let translator = OllamaFailoverTranslator(
-            hosts: OllamaEndpoints.resolved(from: .standard),
-            template: template,
-            onResponder: { host in
-                Task { @MainActor in lastResponder = host }
-            })
+        let hosts = OllamaEndpoints.resolved(from: .standard)
+        let localModel = ollamaModel
         Task { @MainActor in
             defer {
                 isThinking = false
                 inputFocused = true
             }
             do {
+                let translator = try HallieBrainResolver.live.backend(
+                    hosts: hosts, localModel: localModel,
+                    onResponder: { host in
+                        Task { @MainActor in lastResponder = host }
+                    })
                 let translated = try await translator.translate(question)
                 guard let spec = ArchivistQueryPlanner.kinshipCatalogSpec(
                     translated: translated,

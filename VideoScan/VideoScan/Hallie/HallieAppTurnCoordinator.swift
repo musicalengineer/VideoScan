@@ -317,13 +317,13 @@ enum HallieAppTurnCoordinator {
                 return OllamaLocalServerBootstrap
                     .routeLocalEndpointsToLoopback(hosts)
             },
+            // Every model call resolves its brain HERE, per question, through
+            // the one seam (HallieBrainResolver: Local by default, Cloud only
+            // when chosen in Settings, never an automatic failover).
             translateAST: { question, hosts, modelName in
                 let responder = HallieLiveResponderBox()
-                var template = OllamaQueryTranslator()
-                template.model = modelName
-                let translator = OllamaFailoverTranslator(
-                    hosts: hosts,
-                    template: template,
+                let translator = try HallieBrainResolver.live.backend(
+                    hosts: hosts, localModel: modelName,
                     onResponder: { responder.set($0) })
                 let ast = try await translator.translateAST(question)
                 return Translation(
@@ -332,31 +332,29 @@ enum HallieAppTurnCoordinator {
             },
             interpretTurn: { question, hosts, modelName in
                 let responder = HallieLiveResponderBox()
-                var template = OllamaQueryTranslator()
-                template.model = modelName
-                let translator = OllamaFailoverTranslator(
-                    hosts: hosts,
-                    template: template,
+                let brain = try HallieBrainResolver.live.backend(
+                    hosts: hosts, localModel: modelName,
                     onResponder: { responder.set($0) })
-                let value = try await translator.interpretTurn(question)
+                let value = try await brain.interpretTurn(question)
                 return TurnInterpretation(
                     value: value,
                     responderHost: responder.value ?? "unknown")
             },
             composeConversation: { kind, question, history, hosts, modelName in
                 let responder = HallieLiveResponderBox()
-                var template = OllamaQueryTranslator()
-                template.model = modelName
-                let fleet = OllamaFailoverTranslator(
-                    hosts: OllamaLocalServerBootstrap
-                        .routeLocalEndpointsToLoopback(hosts),
-                    template: template,
-                    onResponder: { responder.set($0) })
+                let brain = Result {
+                    try HallieBrainResolver.live.backend(
+                        hosts: OllamaLocalServerBootstrap
+                            .routeLocalEndpointsToLoopback(hosts),
+                        localModel: modelName,
+                        onResponder: { responder.set($0) })
+                }
                 let reply = await HallieSocialConversation.reply(
-                    kind: kind, question: question, history: history,
+                    kind: kind, question: question,
+                    history: HallieBrainHistoryPolicy.history(history, for: brain),
                     modelCall: { system, user in
-                        try await fleet.composePlainText(
-                            system: system, user: user)
+                        try await brain.get().composePlainText(
+                            system: system, user: user, dataClass: .familyText)
                     })
                 return SocialReply(
                     value: reply,
@@ -466,21 +464,24 @@ enum HallieAppTurnCoordinator {
                     profiles: profiles)
             },
             composeAnswer: { plan, history, hosts, modelName in
-                // Same fleet, same model, same probe/failover walk as
-                // translation; loopback-routed so an already-running local
-                // Ollama is reused without a demand-start.
-                var template = OllamaQueryTranslator()
-                template.model = modelName
-                let fleet = OllamaFailoverTranslator(
-                    hosts: OllamaLocalServerBootstrap
-                        .routeLocalEndpointsToLoopback(hosts),
-                    template: template)
+                // Same brain as translation; loopback-routed so an
+                // already-running local Ollama is reused without a
+                // demand-start. The plan's data class goes to the gate.
+                let brain = Result {
+                    try HallieBrainResolver.live.backend(
+                        hosts: OllamaLocalServerBootstrap
+                            .routeLocalEndpointsToLoopback(hosts),
+                        localModel: modelName)
+                }
                 let composer = HallieGroundedComposer(
                     personaName: HallieCompositionSettings.personaName(),
                     modelCall: { system, user in
-                        try await fleet.composePlainText(system: system, user: user)
+                        try await brain.get().composePlainText(
+                            system: system, user: user, dataClass: plan.dataClass)
                     })
-                return await composer.compose(plan: plan, history: history)
+                return await composer.compose(
+                    plan: plan,
+                    history: HallieBrainHistoryPolicy.history(history, for: brain))
             },
             loadKindWords: { HallieKindWordsStore.shared.book() },
             loadAppOwner: { HallieTurnExecutor.Speakers.fromDefaults() })

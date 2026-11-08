@@ -144,6 +144,10 @@ struct ArchivistEndpointSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Model Configuration")
                 .font(.headline)
+            // Local or Cloud, above the host list (2026-11-07).
+            HallieBrainProviderSection(defaultsStore: defaultsStore)
+            Divider()
+                .padding(.vertical, 2)
             Text("Tried in order, top first. Use a name for a machine on "
                  + "your network, or a full https:// address for a cloud server.")
                 .font(.caption)

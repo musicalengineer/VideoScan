@@ -39,6 +39,9 @@ struct ArchivistAskPopover: View {
     /// Never claims a host we are not actually talking to: the fleet's
     /// first entry while in flight, the real responder once it answers.
     private var askStatusText: String {
+        if HallieBrainResolver.live.provider == .cloud {
+            return "Asking Cloud · \(HallieBrainSettings.cloudModel(.standard))…"
+        }
         let hosts = OllamaEndpoints.resolved(from: .standard)
         let where_ = lastResponder ?? hosts.first ?? "the fleet"
         return "Asking \(ollamaModel) @ \(where_)…"
@@ -222,19 +225,18 @@ struct ArchivistAskPopover: View {
             return
         }
         isThinking = true
-        // Ordered fleet — see OllamaEndpoints / OllamaFailoverTranslator.
-        var template = OllamaQueryTranslator()
-        template.model = ollamaModel
-        let translator = OllamaFailoverTranslator(
-            hosts: OllamaEndpoints.resolved(from: .standard),
-            template: template,
-            onResponder: { host in
-                Task { @MainActor in lastResponder = host }
-            }
-        )
+        // The one brain seam (HallieBrainResolver): the local fleet by
+        // default, Cloud only when chosen in Settings.
+        let hosts = OllamaEndpoints.resolved(from: .standard)
+        let localModel = ollamaModel
         Task { @MainActor in
             defer { isThinking = false }
             do {
+                let translator = try HallieBrainResolver.live.backend(
+                    hosts: hosts, localModel: localModel,
+                    onResponder: { host in
+                        Task { @MainActor in lastResponder = host }
+                    })
                 let spec = try await translator.translate(text)
                 let composed = NLQueryComposer.infixString(
                     for: NLQueryNormalizer.normalize(spec))
