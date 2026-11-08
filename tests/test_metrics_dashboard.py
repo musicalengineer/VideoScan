@@ -485,7 +485,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     # The M4 row has no Core lane fields (older row): it says nothing about Core rather than inventing zeros.
     assert "Core 0 passed" not in head
     # Each run is dated on its own row (2026-11-08); the line under the rows is the failures links.
-    assert "nightly runs of" not in head and "2 AM run of" not in head and "<summary>M4 failures</summary>" in head
+    assert "nightly runs of" not in head and "2 AM run of" not in head and "M4 failures" not in head
     # RED 2026-10-31 (Rick): one ladder per Mac, one rung per lane of the 2 AM run, each rung coloured by
     # its own lane's verdict (app and Core by the 0 / under-10 / 10-plus rule; Hallie by its pass fraction
     # and status; grey where the lane did not run or the row predates it). The gauntlet is not a rung:
@@ -1003,7 +1003,7 @@ def test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few(t
     assert "Hallie replay did not run: catalog schema not current" in head, head
     assert "Hallie replay incomplete: 12 of 56 incomplete" in head, head
     # 2026-11-08 (Rick): the card's rows carry no "(a few)" at all.
-    assert "13,015 passed · 1 failed · Core 2,267 passed · 0 failed · Hallie replay" in head
+    assert "13,015 passed · 1 failed · Core 2,267 passed · 0 failed · Hallie replay" in row_text(head)
     assert "(a few" not in head
     assert "<title>Hallie strict: did not run: catalog schema not current · 0 of 56 ran</title>" in head, head
     assert "<title>Hallie advisory: did not run: catalog schema not current · 0 of 826 ran</title>" in head
@@ -1045,6 +1045,12 @@ def two_studio_fixture(now):
     return fx, m4_done, ultra_done
 
 
+def row_text(html):
+    """A row as read on the page with every failures list closed: the opener's "N failed" stays."""
+    html = re.sub(r"(<summary>[^<]*</summary>).*?</details>", r"\1", html, flags=re.S)
+    return re.sub(r"<[^>]+>", "", html)
+
+
 def card_tile(head):
     m = re.search(r'<div class="tile"[^>]*><div class="label">(Test Results[^<]*)</div><div class="value">(.*?)</div>'
                   r'(<div class="ladders">.*?</div>)?<div class="words">(.*?)</div></div>', head, re.S)
@@ -1071,6 +1077,7 @@ def test_each_mac_row_keeps_its_newest_run_with_its_own_date(tmp_path):
     assert len(rows) == 2, words
     (m4_state, m4_head, m4_line), (u_state, u_head, u_line) = rows
     assert m4_state == "watch" and "<b>M4 Max</b>" in m4_head and "64GB RAM" in m4_head and et_when(m4_done) in m4_head
+    m4_line, u_line = row_text(m4_line), row_text(u_line)
     assert m4_line == "13,324 passed · 3 failed · Core 2,455 passed · 0 failed", m4_line
     assert u_state == "watch" and "<b>M5 Ultra</b>" in u_head and "96GB RAM" in u_head and et_when(ultra_done) in u_head
     assert u_line == "13,328 passed · 1 failed · Core 2,455 passed · 0 failed", u_line
@@ -1103,10 +1110,10 @@ def test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale(tmp_path
 
 @needs_node
 def test_failures_links_list_each_macs_failed_test_names(tmp_path):
-    """RED 2026-11-08 (Rick): "nightly runs Nov 8" becomes "M4 failures" and "M5 failures",
-    each opening the list of the tests that failed in that Mac's newest run (names from
-    the summary cell, escaped); a green run says none failed; a count larger than the
-    names says how many are not named."""
+    """RED 2026-11-08 (Rick, second pass): no separate "M4 failures" / "M5 failures" links;
+    the row's own "N failed" opens the list of the tests that failed in that Mac's newest
+    run (names from the summary cell, escaped); a count larger than the names says how
+    many are not named; a green row's "0 failed" is plain text."""
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     fx, _, _ = two_studio_fixture(now)
     nights = fx["summary_latest.json"]["nightly"]["nights"]
@@ -1115,21 +1122,26 @@ def test_failures_links_list_each_macs_failed_test_names(tmp_path):
     ultra["failed"] = 2
     out = run_page(tmp_path, fx, {"hash": "#all"})
     _, _, words = card_tile(out["sections"]["head"])
-    assert "nightly runs" not in words
-    lists = dict(re.findall(r'<details class="fails"><summary>(M\d failures)</summary>(.*?)</details>', words, re.S))
-    assert list(lists) == ["M4 failures", "M5 failures"], words
-    assert re.findall(r"<li>(.*?)</li>", lists["M4 failures"]) == [
+    assert "failures</summary>" not in words and "M4 failures" not in words and "M5 failures" not in words
+    rows = re.findall(r'<b>(M4 Max|M5 Ultra)</b>.*?<span class="hostline">(.*?)</span></span>', words, re.S)
+    lists = {name: line for name, line in rows}
+    assert set(lists) == {"M4 Max", "M5 Ultra"}, words
+    m4 = re.search(r'<details class="fails"><summary>3 failed</summary>(.*?)</details>', lists["M4 Max"], re.S)
+    assert m4, lists["M4 Max"]
+    assert re.findall(r"<li>(.*?)</li>", m4.group(1)) == [
         "#416: every archive-fixity row&#39;s stamp lands in sound_prints through the commit door",
         "everyRelationshipBranchMatchesItsRecordedSnapshot()", "scriptedSessionsMatchTheirRecordedSnapshots()"]
-    assert re.findall(r"<li>(.*?)</li>", lists["M5 failures"]) == ["&lt;b&gt;x&lt;/b&gt;()"]
-    assert "1 more failed test is not named" in lists["M5 failures"]
-    # A green newest run: the link stays and says nothing failed.
-    m4 = next(n["hosts"]["M4"] for n in reversed(nights) if "M4" in n["hosts"])
-    m4.update(state="green", failed=0, failed_tests=[], reason=None)
+    m5 = re.search(r'<details class="fails"><summary>2 failed</summary>(.*?)</details>', lists["M5 Ultra"], re.S)
+    assert m5, lists["M5 Ultra"]
+    assert re.findall(r"<li>(.*?)</li>", m5.group(1)) == ["&lt;b&gt;x&lt;/b&gt;()"]
+    assert "1 more failed test is not named" in m5.group(1)
+    # A green newest run: "0 failed" is plain text, nothing to open.
+    m4cell = next(n["hosts"]["M4"] for n in reversed(nights) if "M4" in n["hosts"])
+    m4cell.update(state="green", failed=0, failed_tests=[], reason=None)
     out = run_page(tmp_path, fx, {"hash": "#all"})
     _, _, words = card_tile(out["sections"]["head"])
-    lists = dict(re.findall(r'<details class="fails"><summary>(M\d failures)</summary>(.*?)</details>', words, re.S))
-    assert "No test failed" in lists["M4 failures"] and "<li>" not in lists["M4 failures"]
+    line = dict(re.findall(r'<b>(M4 Max|M5 Ultra)</b>.*?<span class="hostline">(.*?)</span></span>', words, re.S))["M4 Max"]
+    assert "0 failed" in line and "<details" not in line, line
 
 
 @needs_node
