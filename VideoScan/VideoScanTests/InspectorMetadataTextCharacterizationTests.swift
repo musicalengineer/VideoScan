@@ -163,13 +163,21 @@ struct InspectorMetadataTextCharacterizationTests {
     }
 
     private func check(_ name: String, _ actual: String, _ golden: String) {
-        if actual != golden {
-            // Leave the actual text where a human can diff it.
-            let dir = URL(fileURLWithPath: "/tmp/vs-charz", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? actual.write(to: dir.appendingPathComponent("\(name).txt"), atomically: true, encoding: .utf8)
+        guard actual != golden else { return }
+        // Leave the actual text where a human can diff it: the per-process
+        // temporary directory (sandbox-safe), and say if that write failed.
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-charz", isDirectory: true)
+            .appendingPathComponent("\(name).txt")
+        var artefact = "actual text in \(file.path)"
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try actual.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            artefact = "could not save the actual text to \(file.path): \(error)"
         }
-        #expect(actual == golden, "\(name) differs — actual text in /tmp/vs-charz/\(name).txt")
+        #expect(actual == golden, "\(name) differs — \(artefact)")
     }
 
     // MARK: Goldens
