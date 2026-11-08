@@ -106,7 +106,6 @@
   /* Lane ladders (Rick 2026-10-31): one per Mac, one rung per lane of the 2 AM run, lit from the bottom. */
   .ladders { display: flex; gap: 18px; margin: 12px 0 4px; flex-wrap: wrap; align-items: flex-end; }
   .ladders figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .ladders figcaption { font-size: 14px; color: var(--muted); font-weight: 600; }
   .ladder { display: block; }
   .ladder .well { fill: var(--chip-bg); stroke: var(--border); }
   .ladder .rung { fill: var(--border); }
@@ -115,8 +114,14 @@
   .ladder .rung.red { fill: var(--bad); }
   .ladder .rung.grey { fill: var(--border); }
   .ladder .lane { fill: var(--muted); font-size: 11px; font-family: inherit; }
-  .hosts { display: flex; gap: 7px; margin: 8px 0 12px; flex-wrap: wrap; }
-  .hosts > span { font-size: 15px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  /* One row per Mac (Rick 2026-11-08): name, RAM and when ITS newest run finished, then that run's counts. */
+  .hosts { display: flex; flex-direction: column; gap: 7px; margin: 8px 0 12px; }
+  .hosts > span { font-size: 15px; display: flex; flex-direction: column; gap: 3px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .hosts .hosthead { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .hosts .hostline { padding-left: 17px; }
+  .fails { display: inline-block; margin-right: 14px; vertical-align: top; }
+  .fails > summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
+  .fails ol { margin: 6px 0 0; padding-left: 22px; font-size: 14px; }
   .hosts > .red { border-color: var(--bad); }
   .hosts > .green { border-color: var(--good); }
   .hosts > .amber { border-color: var(--amber); }
@@ -941,8 +946,7 @@ function ladderSVG(host, cell) {
     ? (look ? `${look} lane${look === 1 ? "" : "s"} to look at` : "all lanes green") + (unlit ? ` · ${unlit} not run` : "")
     : "did not run";
   return `<figure><svg class="ladder" data-host="${esc(host)}" width="${w + labelW}" height="${h}" viewBox="0 0 ${w + labelW} ${h}" role="img" aria-label="${esc(hostName(host))}: ${esc(caption)}">`
-    + `<rect class="well" x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6"/>${rungs}</svg>`
-    + `<figcaption><b>${esc(hostName(host))}</b> · ${esc(caption)}</figcaption></figure>`;
+    + `<rect class="well" x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6"/>${rungs}</svg></figure>`;   // no caption line (Rick 2026-11-08); the aria-label keeps it
 }
 function cellWords(cell) {
   if (!cell) return "no run";
@@ -954,6 +958,55 @@ function cellWords(cell) {
   // "(a few)" describes the app suite's failed count, so it sits beside it — never after a Hallie lane (11/04).
   if (cell.state === "watch") return `${app} (a few${why})${laneWords(cell)}`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
+}
+// ---------------------------------------------------------------- the Test Results card (Rick 2026-11-08)
+// Each Mac's row is ALWAYS its newest run, dated by when that run finished: at 1 PM the
+// M4's 2 PM run of yesterday and the M5 Ultra's 2 AM run of today, never a blank row
+// because a run is "not from last night" (the STALE cue still marks one past 36 h).
+const ET_FMT = { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+// "Nov 9, 2:00 PM", Eastern; a date-only value (a cell without `finished`) is its date alone.
+function whenET(ts) {
+  const t = toTime(ts);
+  if (Number.isNaN(t)) return DASH;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return day(ts);
+  return new Date(t).toLocaleString("en-US", ET_FMT).replace(/ /g, " ");
+}
+// The row's name and memory (hardware facts, Rick's CLAUDE.md), and the failures link's words.
+const HOST_SPEC = { M4: { name: "M4 Max", ram: "64GB RAM" }, Ultra: { name: "M5 Ultra", ram: "96GB RAM" } };
+const FAIL_LINK = { M4: "M4 failures", Ultra: "M5 failures" };
+const specOf = h => HOST_SPEC[h] || { name: hostName(h), ram: "" };
+// The newest night that holds a cell for `h`: { night, cell, when } or null.
+function latestRun(N, h) {
+  for (let i = N.list.length - 1; i >= 0; i--) {
+    const cell = cellOf(N.list[i], h);
+    if (cell) return { night: N.list[i], cell, when: typeof cell.finished === "string" ? cell.finished : N.list[i].date };
+  }
+  return null;
+}
+// One row's counts: app then every other lane, the same words for green and a few failed.
+function runWords(cell) {
+  if (cell.state === "did_not_run") return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
+  const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
+  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell)}${cell.state === "red" ? ` — broken${why}` : ""}`;
+}
+// "M4 failures": the failed tests of that Mac's newest run, by name (only names the
+// publisher proved against the repo's test sources), and how many more were not named.
+function failuresList(h, run) {
+  const label = FAIL_LINK[h] || `${hostName(h)} failures`;
+  const cell = run && run.cell;
+  const names = cell && Array.isArray(cell.failed_tests) ? cell.failed_tests.filter(x => typeof x === "string") : null;
+  const failed = cell ? laneFailed(cell) : 0;
+  let body;
+  if (!cell) body = "No run published.";
+  else if (cell.state === "did_not_run") body = "The run did not run any tests.";
+  else if (!failed) body = "No test failed in this run.";
+  else if (!names) body = `${n(failed)} failed; this run's names were not published.`;
+  else {
+    const more = failed - names.length;
+    body = (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
+      + (more > 0 ? `${n(more)} more failed test${more === 1 ? " is" : "s are"} not named.` : "");
+  }
+  return `<details class="fails"><summary>${esc(label)}</summary>${body}</details>`;
 }
 function stability(N) {
   const L = N.list;
@@ -1048,32 +1101,45 @@ function renderHead(d) {
       ? `Swift ${n(last.app_swift_lines)} · Python ${n(last.app_python_lines)} · <b>app only</b> (tests ${n(last.test_lines)} and tooling ${n(last.tooling_lines)} not counted)${growth}${stale(last.ts)}`
       : "CI rows before 2026-10-11 did not split app from tests"));
 
-  // Last night's tests: one dot per Mac
+  // Test Results <published>: one row per Mac, each its own newest run (see latestRun).
   if (N && N.list.length) {
     const lastNight = N.list[N.list.length - 1];
-    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(hostName(h))}</b> ${esc(cellWords(c))}</span>`; }).join("");
-    const lastWatch = anyWatch(lastNight);
-    const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
-    const primary = ran[0];
-    // The same failing tests show up on every Mac that ran: the worst Mac's count, never a sum.
-    // Every lane of that Mac counts (2026-10-31: "0 failing" sat above a red Core lane).
-    const failing = Math.max(0, ...ran.map(laneFailed));
+    const lastWatch = anyWatch(lastNight);   // the Stability tile below is about nights
+    const runs = N.hosts.map(h => ({ h, run: latestRun(N, h) }));
+    const cellFor = h => { const r = runs.find(x => x.h === h); return r && r.run ? r.run.cell : null; };
+    const hosts = runs.map(({ h, run }) => {
+      const c = run ? run.cell : null;
+      const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey";
+      const sp = specOf(h);
+      return `<span class="${esc(state)}"><span class="hosthead">${dot(state)}<b>${esc(sp.name)}</b>${sp.ram ? ` ${esc(sp.ram)}` : ""} · ${run ? esc(whenET(run.when)) + stale(run.when) : "no run in 90 nights"}</span>`
+        + `<span class="hostline">${c ? esc(runWords(c)) : DASH}</span></span>`;
+    }).join("");
+    // The headline is the most recent run of any Mac, named and dated.
+    const newest = runs.filter(x => x.run).sort((a, b) => toTime(b.run.when) - toTime(a.run.when))[0];
+    const nc = newest ? newest.run.cell : null;
+    const where = newest ? ` on ${esc(specOf(newest.h).name)} ${esc(whenET(newest.run.when))}` : "";
+    const value = !nc ? `<span class="word grey">${DASH}</span>`
+      : nc.state === "did_not_run" ? `<span class="word amber">did not run</span><small>${where}</small>`
+      // Every lane of that Mac counts (2026-10-31: "0 failing" sat above a red Core lane).
+      : `${n(nc.passed)} <small>passed · ${n(laneFailed(nc))} failed${where}</small>`;
     // Two passing Macs are enough when another is offline; each host keeps its own status.
     // Actual test failures still take precedence over the passing quorum.
-    const greenHosts = ran.filter(c => c.state === "green").length;
-    const testState = N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch"
-      : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
+    const cells = N.hosts.map(cellFor);
+    const greenHosts = cells.filter(c => c && c.state === "green").length;
+    const testState = cells.some(c => c && c.state === "red") ? "red" : cells.some(c => c && c.state === "watch") ? "watch"
+      : greenHosts >= 2 ? "green" : cells.some(c => c && c.state === "did_not_run") ? "amber"
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
-    const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellOf(lastNight, h))).join("")}</div>`;
-    tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>nightly runs of ${day(lastNight.date)}${stale(lastNight.date)}`, testState, ladders));
+    const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
+    const published = S.generated ? ` ${whenET(S.generated)}` : "";
+    tiles.push(tile(`Test Results${published}`, value,
+      `<div class="hosts">${hosts}</div>${runs.map(({ h, run }) => failuresList(h, run)).join("")}`, testState, ladders));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
     tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
       `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : lastWatch ? "watch" : "amber"));
   } else {
-    tiles.push(tile("Last night's tests", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
+    tiles.push(tile("Test Results", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
   }
 

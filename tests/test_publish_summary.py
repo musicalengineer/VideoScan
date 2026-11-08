@@ -99,7 +99,8 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     # the table entirely, and the summary says so instead of showing a gap.
     assert n["hosts"] == ["M4", "M5"]
     assert n["off_rota"] == ["M1"]
-    assert n["nights"][0]["hosts"] == {"M4": {"state": "green", "passed": 2631, "failed": 0, "total": 2678, "reason": None, "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None}}
+    assert n["nights"][0]["hosts"] == {"M4": {"state": "green", "passed": 2631, "failed": 0, "total": 2678, "reason": None, "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None,
+                                         "finished": "2026-07-15T07:00:00Z", "failed_tests": []}}
     assert n["nights"][-2]["hosts"]["M4"]["state"] == "green"
     last = n["nights"][-1]["hosts"]
     assert set(last) == {"M5"}
@@ -110,7 +111,8 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     back = pm.nightly_summary(rows, "2026-10-12", rota={"on": ["M4", "M5", "M1"], "off": []})
     assert back["hosts"] == ["M4", "M5", "M1"] and back["off_rota"] == []
     assert back["nights"][-1]["hosts"]["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
-                                                 "reason": "build-timeout:5400s", "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None}
+                                                 "reason": "build-timeout:5400s", "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None,
+                                                 "finished": "2026-10-12T07:00:00Z", "failed_tests": []}
 
 
 def test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane():
@@ -132,7 +134,8 @@ def test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane():
                     "core_passed": 2133, "core_failed": 1, "core_status": "failed", "hallie_status": "failed",
                     "hallie_strict_pass": 52, "hallie_strict_expected": 56, "hallie_strict_status": "failed",
                     "hallie_advisory_pass": 142, "hallie_advisory_expected": 826, "hallie_advisory_status": "incomplete",
-                    "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": "ok"}
+                    "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": "ok",
+                    "finished": "2026-10-31T07:00:00Z", "failed_tests": []}
     pm._check(pm.SCHEMAS["summary_latest.json"]["nightly"], n, "nightly", None)
     # Ten Core failures is broken, like ten app failures; Core counts add to app counts.
     assert pm.classify_nightly_row(dict(row, core_failed=10)) == "red"
@@ -171,6 +174,54 @@ def test_the_cell_carries_how_much_of_each_hallie_lane_ran_and_why_it_did_not():
     older = pm.nightly_summary([night("RicksM4", "2026-11-04", hour="07")], "2026-11-04",
                                rota={"on": ["M4"], "off": []})["nights"][-1]["hosts"]["M4"]
     assert older["hallie_strict_completed"] is None and older["hallie_strict_reason"] is None, "a row without them: null, never 0"
+
+
+def test_the_cell_says_when_the_run_finished_and_names_only_tests_found_in_the_sources(tmp_path):
+    """RED 2026-11-08 (Rick): the card must show each Mac's newest run with its own
+    completion time and list the failed tests by name ("M4 failures"). The cell had
+    neither. `finished` is the row's ts; a failed name is published only when the
+    repo's Swift test sources declare it — a message, a path or a host name never is."""
+    src = tmp_path / "Tests"
+    src.mkdir()
+    (src / "SnapTests.swift").write_text(
+        '@Suite struct SnapTests {\n'
+        '  @Test func everyBranchMatchesItsSnapshot() async throws {}\n'
+        '  @Test("#416: every row\'s stamp lands, and stamping again changes nothing") func stamps() {}\n'
+        '}\n')
+    names = pm.TestNames(roots=[src])
+    row = night("RicksM4", "2026-11-08", hour="20", status="failed", reason="failed-tests:3",
+                passed=13324, failed=3, total=13394, core_failed=1, core_passed=2454,
+                failed_names=['"#416: every row\'s stamp lands, and stamping again changes nothing"',
+                              "everyBranchMatchesItsSnapshot()", "SECRET-TEST",
+                              "/Users/rickb/Library/Application Support/VideoScan/catalog.sqlite"],
+                core_failed_names=["SnapTests.everyBranchMatchesItsSnapshot()", "Donna was here"])
+    n = pm.nightly_summary([row], "2026-11-08", rota={"on": ["M4", "Ultra"], "off": []}, test_names=names)
+    cell = n["nights"][-1]["hosts"]["M4"]
+    assert cell["finished"] == "2026-11-08T20:00:00Z"
+    assert cell["failed_tests"] == ["#416: every row's stamp lands, and stamping again changes nothing",
+                                    "everyBranchMatchesItsSnapshot()", "SnapTests.everyBranchMatchesItsSnapshot()"]
+    pm._check(pm.SCHEMAS["summary_latest.json"]["nightly"], n, "nightly", None)
+    blob = json.dumps(n)
+    for secret in SECRETS:
+        assert secret not in blob, secret
+    # A green row names nothing; the list is capped.
+    green = pm.nightly_summary([night("RicksM4", "2026-11-08", status="ok", passed=5, total=5, failed_names=[])],
+                               "2026-11-08", rota={"on": ["M4"], "off": []}, test_names=names)
+    assert green["nights"][-1]["hosts"]["M4"]["failed_tests"] == []
+    many = dict(row, failed_names=[f"T{i}.everyBranchMatchesItsSnapshot()" for i in range(40)])
+    capped = pm.nightly_summary([many], "2026-11-08", rota={"on": ["M4"], "off": []}, test_names=names)
+    assert len(capped["nights"][-1]["hosts"]["M4"]["failed_tests"]) == pm.FAILED_NAMES_MAX
+    # A cell published before these keys existed still validates.
+    old = {k: v for k, v in cell.items() if k not in ("finished", "failed_tests")}
+    pm._check(("obj", pm._NIGHT), old, "old", None)
+
+
+def test_the_real_test_sources_prove_the_names_the_nightly_prints():
+    """The gate reads the real repo: names the M4 printed on 2026-11-08 are found."""
+    names = pm.repo_test_names()
+    assert names.publishable("everyRelationshipBranchMatchesItsRecordedSnapshot()")
+    assert names.publishable("scriptedSessionsMatchTheirRecordedSnapshots()")
+    assert names.publishable("SECRET-TEST") is None and names.publishable("/Users/rickb/x.swift") is None
 
 
 def test_the_real_rota_runs_the_nightly_on_mac_studios_only():
@@ -494,7 +545,8 @@ def test_publish_writes_summary_latest_beside_the_other_streams(tmp_path):
                                                           "hallie_strict_pass": None, "hallie_strict_expected": None,
                                                           "hallie_strict_status": None, "hallie_advisory_pass": None,
                                                           "hallie_advisory_expected": None, "hallie_advisory_status": None,
-                                                          "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None}}
+                                                          "hallie_strict_completed": None, "hallie_strict_reason": None, "hallie_advisory_completed": None, "hallie_advisory_reason": None, "hallie_voice_status": None,
+                                                          "finished": "2026-10-12T07:00:00Z", "failed_tests": []}}
     assert s["github"]["open_bugs"] == 2
     assert "RicksM5" not in git.remote["summary_latest.json"]
     # Same inputs again: the summary is byte-identical (fixed `now`), so nothing is committed.
