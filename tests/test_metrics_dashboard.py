@@ -472,7 +472,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     head = out["sections"]["head"]
     # Headline strip: version, app-only lines, last night per Mac, stability, open bugs, sprint.
     assert "5.1" in head and "build 1" in head and "b07f9da" in head and "CI on main" in head and "success" in head
-    assert "376,166" in head and "lines of code" in head and "+1,958" in head and "growth since" in head        # app_source_lines, never total_swift_lines
+    assert "376,166" in head and "lines of code" in head and re.search(r"\(since [A-Z][a-z]{2} 1\)", head) and "growth since" not in head        # app_source_lines, never total_swift_lines
     assert "546,428" not in head
     # 2026-11-08 (Rick): the headline is the most recent run, named and dated (here every cell is
     # date-only, so the first Mac's), counting every lane of it — never a sum across Macs.
@@ -1119,7 +1119,7 @@ def test_version_and_app_source_share_a_tile_and_test_results_is_wide(tmp_path):
     labels = re.findall(r'<div class="label">([^<]*)</div>', head)
     assert "Application Source" in labels and "Version" not in labels and "App source" not in labels, labels
     tile = re.search(r'<div class="label">Application Source</div>(.*?)</div></div>', head, re.S).group(1)
-    assert "lines of code" in tile and "VERSION <b>" in tile and "CI on main" in tile, tile
+    assert "lines of code" in tile and "VERSION <b>" in tile and "GitHub CI on main" in tile, tile
     assert tile.index("Swift") < tile.index("VERSION") < tile.index("main <b>") < tile.index("CI on main"), tile
     assert re.search(r'class="grow-(up|down)">[+−][\d,]+<', tile), tile
     assert re.search(r'<div class="tile wide"[^>]*><div class="label">Test Results', head), head
