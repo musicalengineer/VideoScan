@@ -49,19 +49,15 @@ enum RemotePart: Sendable {
     }
 }
 
-/// A forced tool call: the cloud brain's equivalent of Ollama's `format:`.
-/// The schema is carried as JSON bytes so the request stays Sendable.
-struct RemoteTool: Sendable {
-    let name: String
-    let description: String
-    let inputSchema: Data
-}
-
 struct RemoteRequest: Sendable {
     var model: String
     var system: [RemotePart]
     var user: [RemotePart]
-    var tool: RemoteTool?
+    /// Structured outputs: the cloud brain's equivalent of Ollama's
+    /// `format:` (2026-11-08; a forced tool call is a 400 on the 5.5
+    /// models). The FULL Hallie schema, as JSON bytes so the request stays
+    /// Sendable; the body builder sends Anthropic a sanitized copy.
+    var outputSchema: Data?
     var maxTokens: Int
 }
 
@@ -112,16 +108,20 @@ enum RemoteSerializer {
             "model": request.model,
             "max_tokens": request.maxTokens,
             // Prompt caching: the translator's system prompt is ~3k tokens
-            // and identical every turn; the breakpoint covers tools + system.
+            // and identical every turn; the breakpoint covers the system.
             "system": [["type": "text", "text": systemText,
                         "cache_control": ["type": "ephemeral"]]],
             "messages": [["role": "user", "content": userBlocks]],
         ]
-        if let tool = request.tool {
-            let schema = try JSONSerialization.jsonObject(with: tool.inputSchema)
-            body["tools"] = [["name": tool.name, "description": tool.description,
-                              "input_schema": schema]]
-            body["tool_choice"] = ["type": "tool", "name": tool.name]
+        // Never `tools`/`tool_choice`, `temperature`/`top_p`/`top_k`, an
+        // assistant prefill or a `thinking` override: each is a 400 on the
+        // 5.5 models. Thinking stays at the model default.
+        if let schemaData = request.outputSchema {
+            guard let schema = try JSONSerialization.jsonObject(with: schemaData) as? [String: Any] else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            body["output_config"] = ["format": ["type": "json_schema",
+                                                "schema": AnthropicSchemaSanitizer.sanitize(schema)]]
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }

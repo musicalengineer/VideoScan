@@ -134,6 +134,11 @@ enum HallieBrainError: LocalizedError, Equatable {
     case noCloudKey
     /// The remote gate refused a request carrying family media.
     case familyMediaRefused(String)
+    /// The cloud model declined to answer (`stop_reason: refusal`).
+    case cloudRefused
+    /// The cloud reply hit `max_tokens`; its JSON is incomplete and is never
+    /// decoded.
+    case cloudTruncated
 
     var errorDescription: String? {
         switch self {
@@ -142,6 +147,10 @@ enum HallieBrainError: LocalizedError, Equatable {
                 + "(service \(AnthropicKeyLocator.primaryService))"
         case .familyMediaRefused(let what):
             return "refused to send family media to the cloud brain (\(what))"
+        case .cloudRefused:
+            return "the cloud brain declined to answer that question"
+        case .cloudTruncated:
+            return "the cloud brain's answer was cut off before it was complete"
         }
     }
 }

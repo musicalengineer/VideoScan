@@ -34,6 +34,8 @@ enum ArchivistDiagnosticLine {
             switch brain {
             case .noCloudKey: return prefix + " reason=no-cloud-key"
             case .familyMediaRefused: return prefix + " reason=family-media-refused"
+            case .cloudRefused: return prefix + " reason=cloud-refusal"
+            case .cloudTruncated: return prefix + " reason=cloud-max-tokens"
             }
         }
         guard let translator = error as? NLTranslatorError else {

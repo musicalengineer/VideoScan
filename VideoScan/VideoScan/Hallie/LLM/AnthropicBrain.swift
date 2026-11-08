@@ -5,9 +5,14 @@
 // same system prompts and the same JSON schemas (OllamaQueryTranslator's
 // statics), and its reply goes through the same strict decoders
 // (HallieBrainDecoding), the same executors and the same verifier. Ollama
-// constrains output with `format:`; here the equivalent is ONE forced tool
-// call whose input schema wraps the very same schema, so the model can only
-// hand back the JSON object the decoder expects.
+// constrains output with `format:`; here the equivalent is structured
+// outputs (`output_config.format` json_schema) carrying a sanitized copy of
+// the very same schema, and the reply is a text block whose text is the JSON
+// object the decoder expects. (2026-11-08: this replaced a forced tool call;
+// `tool_choice` "tool"/"any" is a 400 on claude-sonnet-5-5 and opus-5-5.)
+//
+// A reply that stopped for `refusal` or `max_tokens` is never decoded — a
+// partial JSON object is not an answer — it becomes a HallieBrainError.
 //
 // WHAT LEAVES THE MAC. Every body is built by RemoteSerializer, which refuses
 // familyMedia before encoding. The question is the user's own words
@@ -23,7 +28,6 @@ import Foundation
 struct AnthropicBrain: HallieBrainBackend {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     static let apiVersion = "2023-06-01"
-    static let toolName = "hallie_answer"
 
     var model: String
     var key: AnthropicAPIKey
@@ -72,9 +76,12 @@ struct AnthropicBrain: HallieBrainBackend {
             model: model,
             system: [.text(system, .public)],
             user: [.text(user, dataClass)],
-            tool: nil,
+            outputSchema: nil,
             maxTokens: 320)
         let root = try await send(request)
+        // A refusal's text is not a composed answer; the composer falls back
+        // to its template. (Truncated prose at 320 tokens is still prose.)
+        if (root["stop_reason"] as? String) == "refusal" { throw HallieBrainError.cloudRefused }
         let text = Self.textBlocks(root)
         guard !text.isEmpty else { throw NLTranslatorError.badResponse("empty message content") }
         return text
@@ -83,37 +90,21 @@ struct AnthropicBrain: HallieBrainBackend {
     /// Nothing to load: the model is always resident on Anthropic's side.
     func warmUp() async {}
 
-    // MARK: Structured output (forced tool call)
+    // MARK: Structured output (output_config json_schema)
 
-    static let toolInstruction = """
-
-
-    Reply ONLY by calling the tool `\(toolName)`. Put the single JSON object \
-    described above in its `answer` field, exactly as you would have written it.
-    """
-
-    /// The tool's input schema: the brain's own schema under `answer`. Wrapped
-    /// because a tool's top level must be an object, and the AST schema's top
-    /// level is a `oneOf`.
-    static func toolSchema(wrapping schema: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
-            "type": "object",
-            "properties": ["answer": schema],
-            "required": ["answer"],
-        ] as [String: Any], options: [.sortedKeys])
-    }
+    /// Room for the JSON object plus whatever thinking the model does by
+    /// default (measured 0 thinking tokens on sonnet-5-5, 2026-11-08). Only
+    /// tokens used are billed.
+    static let structuredMaxTokens = 2048
 
     static func structuredRequest(model: String, text: String, schema: [String: Any],
                                   system: String) throws -> RemoteRequest {
         RemoteRequest(
             model: model,
-            system: [.text(system + toolInstruction, .public)],
+            system: [.text(system, .public)],
             user: [.text(text, .familyText)],
-            tool: RemoteTool(
-                name: toolName,
-                description: "Return Hallie's structured reading of the user's question.",
-                inputSchema: try toolSchema(wrapping: schema)),
-            maxTokens: 1024)
+            outputSchema: try JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys]),
+            maxTokens: structuredMaxTokens)
     }
 
     private func structured<T>(
@@ -127,9 +118,11 @@ struct AnthropicBrain: HallieBrainBackend {
                 model: model, text: text, schema: schema, system: prompt)
             do {
                 let root = try await send(request)
-                let (content, data) = try Self.toolAnswer(root)
+                let (content, data) = try Self.structuredAnswer(root)
                 return try decode(content, data)
             } catch let error as NLTranslatorError {
+                // HallieBrainError (refusal, truncation, gate) is not caught
+                // here: no repair retry is spent on it.
                 guard repairOnBadResponse, hint == nil, error.isRepairable,
                       case .badResponse(let rejection) = error,
                       !Task.isCancelled else { throw error }
@@ -138,26 +131,20 @@ struct AnthropicBrain: HallieBrainBackend {
         }
     }
 
-    /// The tool call's `answer`, as JSON bytes for the shared decoders.
-    /// Tolerates a model that put the JSON in as a string, or flattened it
-    /// (no `answer` wrapper) — the decoder still judges the content.
-    static func toolAnswer(_ root: [String: Any]) throws -> (String, Data) {
-        let blocks = root["content"] as? [[String: Any]] ?? []
-        guard let call = blocks.first(where: {
-            ($0["type"] as? String) == "tool_use" && ($0["name"] as? String) == toolName
-        }), let input = call["input"] as? [String: Any] else {
-            throw NLTranslatorError.badResponse("no \(toolName) tool call in the reply")
+    /// The structured reply's JSON, as text and bytes for the shared
+    /// decoders. `refusal` / `max_tokens` throw BEFORE any text is read, so a
+    /// partial object never reaches a decoder.
+    static func structuredAnswer(_ root: [String: Any]) throws -> (String, Data) {
+        switch root["stop_reason"] as? String {
+        case "refusal": throw HallieBrainError.cloudRefused
+        case "max_tokens": throw HallieBrainError.cloudTruncated
+        default: break
         }
-        let answer: Any = input["answer"] ?? input
-        let data: Data
-        if let string = answer as? String {
-            data = Data(string.utf8)
-        } else if JSONSerialization.isValidJSONObject(answer) {
-            data = try JSONSerialization.data(withJSONObject: answer, options: [.sortedKeys])
-        } else {
-            throw NLTranslatorError.badResponse("tool answer is not a JSON object")
+        let text = textBlocks(root)
+        guard !text.isEmpty else {
+            throw NLTranslatorError.badResponse("no JSON text block in the reply")
         }
-        return (String(bytes: data, encoding: .utf8) ?? "", data)
+        return (text, Data(text.utf8))
     }
 
     static func textBlocks(_ root: [String: Any]) -> String {

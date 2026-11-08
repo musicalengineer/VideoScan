@@ -44,6 +44,8 @@ enum HallieHelperFailure {
             // The gate refused a request; the translator lanes never carry
             // media, so reaching here means a request we would not send.
             case .familyMediaRefused: return .unusableAnswer
+            // The model answered but gave nothing decodable: rephrase.
+            case .cloudRefused, .cloudTruncated: return .unusableAnswer
             }
         }
         if let nl = error as? NLTranslatorError {

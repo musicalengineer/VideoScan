@@ -125,8 +125,16 @@ final class HallieLookupLog: @unchecked Sendable {
     var all: [String] { lock.lock(); defer { lock.unlock() }; return entries }
 }
 
-/// An Anthropic reply carrying one forced tool call.
-func hallieToolReply(_ answerJSON: String) -> String {
-    #"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"hallie_answer","input":{"answer":"#
-        + answerJSON + #"}}],"stop_reason":"tool_use"}"#
+/// An Anthropic structured-output reply: the JSON object is the text of one
+/// text block (2026-11-08; replaced the forced-tool reply).
+func hallieStructuredReply(_ answerJSON: String, stopReason: String = "end_turn") -> String {
+    let root: [String: Any] = [
+        "id": "msg_1", "type": "message", "role": "assistant",
+        "content": [["type": "text", "text": answerJSON]],
+        "stop_reason": stopReason,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else {
+        preconditionFailure("stub reply did not encode")
+    }
+    return String(bytes: data, encoding: .utf8) ?? ""
 }
