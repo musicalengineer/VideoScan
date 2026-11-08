@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 364,
+ "entry_count": 363,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -1397,10 +1397,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift::LineageTrail.walkAllAncestors": {
    "ccn": 16,
    "nloc": 52
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift::GedcomFamilyGraph.applyingFactOverlay": {
-   "ccn": 33,
-   "nloc": 73
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewSweepEngine.swift::PreviewSweepEngine.run": {
    "ccn": 20,
