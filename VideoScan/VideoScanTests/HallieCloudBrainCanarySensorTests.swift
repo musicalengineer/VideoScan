@@ -25,7 +25,7 @@ struct HallieCloudBrainCanarySensor {
         RemoteRequest(model: "claude-sonnet-5-5",
                       system: [.text("Phrase the plan.", .public)],
                       user: [.text("Who is in this clip?", .familyText), part],
-                      tool: nil, maxTokens: 64)
+                      outputSchema: nil, maxTokens: 64)
     }
 
     static let mediaParts: [(String, RemotePart)] = [

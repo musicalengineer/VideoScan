@@ -18048,7 +18048,7 @@
         "roundTrip",
         "routeClasses",
         "shellFlag",
-        "stringAnswer",
+        "structuredAnswerText",
         "testHostPinsLocal",
         "translateBody"
       ]
@@ -34769,6 +34769,37 @@
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieCloudStructuredOutputTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieCloudStructuredOutputShapeTests",
+        "HallieCloudStructuredOutputDecodeTests",
+        "AnthropicSchemaSanitizerTests"
+      ],
+      "tests": [
+        "boundsStillEnforcedLocally",
+        "closesObjects",
+        "composeRefusal",
+        "defsAndRefs",
+        "dropsBounds",
+        "grammarBudget",
+        "mergesEnumSiblings",
+        "namesAreNotKeywords",
+        "noToolInstruction",
+        "nothingTheModelRefuses",
+        "oneOfToAnyOf",
+        "otherOpsDecode",
+        "realSchemas",
+        "refusal",
+        "scale",
+        "structuredOutputsNotForcedTool",
+        "textBlockDecodes",
+        "thinkingBlockIgnored",
+        "truncated"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -37493,7 +37524,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3514,
+      "expected_floor": 3533,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -38178,7 +38209,10 @@
         "VideoScanTests/WorkflowTagsModelTests",
         "VideoScanTests/WorkflowTagsScaleSensorTests",
         "VideoScanTests/WorkspaceActiveTests",
-        "VideoScanTests/WorkspaceImportTests"
+        "VideoScanTests/WorkspaceImportTests",
+        "VideoScanTests/HallieCloudStructuredOutputShapeTests",
+        "VideoScanTests/HallieCloudStructuredOutputDecodeTests",
+        "VideoScanTests/AnthropicSchemaSanitizerTests"
       ]
     },
     {

@@ -12,9 +12,11 @@
 //                 plain error and zero requests; a test host never
 //                 resolves Cloud through `.live`.
 //   Sensor      — HallieCloudBrainCanarySensorTests (sensor lane).
-//   Request shape — the Anthropic body: model, forced tool, wrapped schema,
-//                 cached system prompt, the question only, no media, key
-//                 only in its header.
+//   Request shape — the Anthropic body: model, structured outputs
+//                 (output_config json_schema, sanitized), cached system
+//                 prompt, the question only, no media, key only in its
+//                 header. HallieCloudStructuredOutputTests pins every op on
+//                 every menu model.
 //   Scale / media matrix: N/A — the adapter moves one small text request
 //                 per question and handles no media (it refuses it).
 
@@ -238,7 +240,7 @@ struct HallieBrainChoiceLogicTests {
     func loggedLines() async throws {
         let sink = HallieLineSink()
         let (session, token) = hallieCloudStubSession()
-        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieToolReply(donna1994))
+        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieStructuredReply(donna1994))
         let d = isolatedDefaults()
         HallieBrainSettings.setProvider(.cloud, d)
         let brain = try resolver(d, keyedKeychain, session: session, log: { sink.write($0) })
@@ -326,10 +328,10 @@ struct HallieCloudRequestShapeTests {
         try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    @Test("translateAST: model, forced tool, wrapped schema, cached system, the question only")
+    @Test("translateAST: model, output_config schema, cached system, the question only")
     func translateBody() async throws {
         let (session, token) = hallieCloudStubSession()
-        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieToolReply(donna1994))
+        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieStructuredReply(donna1994))
         let ast = try await hallieStubbedCloudBrain(session).translateAST("show me Donna in 1994")
         guard case .presence(let presence) = ast else {
             Issue.record("expected presence, got \(ast)"); return
@@ -346,18 +348,16 @@ struct HallieCloudRequestShapeTests {
 
         let body = try json(request.body)
         #expect(body["model"] as? String == "claude-sonnet-5-5")
-        #expect(body["max_tokens"] as? Int == 1024)
-        let tools = try #require(body["tools"] as? [[String: Any]])
-        #expect(tools.count == 1)
-        #expect(tools[0]["name"] as? String == "hallie_answer")
-        let schema = try #require(tools[0]["input_schema"] as? [String: Any])
-        #expect(schema["type"] as? String == "object")
-        #expect(schema["required"] as? [String] == ["answer"])
-        let answer = try #require((schema["properties"] as? [String: Any])?["answer"] as? [String: Any])
-        #expect((answer["oneOf"] as? [Any])?.count == 6)
-        let choice = try #require(body["tool_choice"] as? [String: Any])
-        #expect(choice["type"] as? String == "tool")
-        #expect(choice["name"] as? String == "hallie_answer")
+        #expect(body["max_tokens"] as? Int == AnthropicBrain.structuredMaxTokens)
+        #expect(body["tools"] == nil)
+        #expect(body["tool_choice"] == nil)
+        let format = try #require((body["output_config"] as? [String: Any])?["format"] as? [String: Any])
+        #expect(format["type"] as? String == "json_schema")
+        let schema = try #require(format["schema"] as? [String: Any])
+        // The AST schema's six branches as anyOf (oneOf is refused), event
+        // and cross merged because they share one payload.
+        #expect((schema["anyOf"] as? [Any])?.count == 5)
+        #expect(schema["oneOf"] == nil)
 
         let system = try #require(body["system"] as? [[String: Any]])
         #expect(system.count == 1)
@@ -383,7 +383,7 @@ struct HallieCloudRequestShapeTests {
     func interpretConversation() async throws {
         let (session, token) = hallieCloudStubSession()
         HallieCloudStubLedger.shared.queue(
-            token, status: 200, body: hallieToolReply(#"{"shape":"conversation","payload":{"kind":"casual"}}"#))
+            token, status: 200, body: hallieStructuredReply(#"{"shape":"conversation","payload":{"kind":"casual"}}"#))
         let value = try await hallieStubbedCloudBrain(session).interpretTurn("thanks, that's kind of you")
         #expect(value == .conversation(.casual))
     }
@@ -392,8 +392,8 @@ struct HallieCloudRequestShapeTests {
     func repairRetry() async throws {
         let (session, token) = hallieCloudStubSession()
         HallieCloudStubLedger.shared.queue(
-            token, status: 200, body: hallieToolReply(#"{"shape":"presence","payload":{"mediaKind":"HD"}}"#))
-        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieToolReply(donna1994))
+            token, status: 200, body: hallieStructuredReply(#"{"shape":"presence","payload":{"mediaKind":"HD"}}"#))
+        HallieCloudStubLedger.shared.queue(token, status: 200, body: hallieStructuredReply(donna1994))
         _ = try await hallieStubbedCloudBrain(session).translateAST("show me Donna in 1994")
         let seen = HallieCloudStubLedger.shared.seen(token)
         #expect(seen.count == 2)
@@ -402,13 +402,14 @@ struct HallieCloudRequestShapeTests {
         #expect(text.contains("YOUR PREVIOUS ANSWER WAS REJECTED"))
     }
 
-    @Test("an answer given as a JSON string is still judged by the decoder")
-    func stringAnswer() throws {
-        let root = try json(Data(hallieToolReply(#""{\"people\":[\"donna\"]}""#).utf8))
-        let (_, data) = try AnthropicBrain.toolAnswer(root)
+    @Test("the text block's JSON is handed to the decoder verbatim; no text is badResponse")
+    func structuredAnswerText() throws {
+        let root = try json(Data(hallieStructuredReply(#"{"people":["donna"]}"#).utf8))
+        let (content, data) = try AnthropicBrain.structuredAnswer(root)
+        #expect(content == #"{"people":["donna"]}"#)
         #expect(String(bytes: data, encoding: .utf8) == #"{"people":["donna"]}"#)
         #expect(throws: NLTranslatorError.self) {
-            _ = try AnthropicBrain.toolAnswer(["content": [["type": "text", "text": "hi"]]])
+            _ = try AnthropicBrain.structuredAnswer(["content": [], "stop_reason": "end_turn"])
         }
     }
 
