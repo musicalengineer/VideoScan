@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 369,
+ "entry_count": 367,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -802,10 +802,6 @@
    "ccn": 19,
    "nloc": 154
   },
-  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.parse": {
-   "ccn": 18,
-   "nloc": 44
-  },
   "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.run": {
    "ccn": 23,
    "nloc": 93
@@ -1049,10 +1045,6 @@
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.deletionTierCandidates": {
    "ccn": 16,
    "nloc": 40
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.runRelocate scope : [ VideoRecord ] , options : RelocateOptions , jobID : UUID": {
-   "ccn": 31,
-   "nloc": 233
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+RepairLifecycle.swift::VideoScanModel.applyHumanMetadataInheritance": {
    "ccn": 16,
