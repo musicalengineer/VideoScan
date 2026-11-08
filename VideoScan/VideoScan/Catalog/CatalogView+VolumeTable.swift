@@ -776,36 +776,22 @@ extension CatalogView {
         VolumeTableDateText.short(date)
     }
 
-    /// Backup-status pill rendered in the scan-targets header. Color
-    /// hints at recency at a glance: green < 7 days, yellow 7–30,
-    /// orange > 30, red when never. The pill IS the "back up now"
+    /// Backup-status pill rendered in the scan-targets header. Colour is a
+    /// 7-day REMINDER (Rick 2026-11-07, CatalogReminderClock): green under
+    /// 7 days; yellow at 7 days or more, or never — "it's been a while,
+    /// back it up", not an error. The pill IS the "back up now"
     /// button — clicking always runs the same Back Up Catalog… flow as
     /// the File menu (the nag is the button). Reveal-in-Finder of the
     /// last backup moved to the right-click context menu.
     @ViewBuilder
     var backupStatusBadge: some View {
-        let now = Date()
-        let last = model.lastBackupAt
-        let dayCount = last.map { Int(now.timeIntervalSince($0) / 86_400) }
-        // SHORT label, COLOUR carries the urgency, HOVER carries the
-        // detail (Rick 2026-08-11). The old label spelled out
-        // "Backed up 9d ago → VideoScan_Catalog_Archives /…", which ate
-        // a third of the row to say what a yellow tint says instantly.
-        // Green = fresh, yellow = worth considering, orange = overdue,
-        // red = never. Exact date and destination live in the tooltip
-        // (backupBadgeTooltip) and the context menu.
-        let (label, color, icon): (String, Color, String) = {
-            guard last != nil, let dayCount else {
-                return ("Backup Catalog", .red, "externaldrive.badge.exclamationmark")
-            }
-            if dayCount < 7 {
-                return ("Backup Catalog", .green, "externaldrive.badge.checkmark")
-            } else if dayCount < 30 {
-                return ("Backup Catalog", .yellow, "externaldrive.badge.checkmark")
-            } else {
-                return ("Backup Catalog", .orange, "externaldrive.badge.exclamationmark")
-            }
-        }()
+        // SHORT label, COLOUR carries the reminder, HOVER carries the
+        // detail (Rick 2026-08-11). Exact date and destination live in the
+        // tooltip (backupBadgeTooltip) and the context menu. O(1).
+        let fresh = CatalogReminderClock.state(last: model.lastBackupAt, now: Date()) == .fresh
+        let label = "Backup Catalog"
+        let color: Color = fresh ? .green : .yellow
+        let icon = fresh ? "externaldrive.badge.checkmark" : "externaldrive.badge.exclamationmark"
         Button(action: backupBadgeAction) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
@@ -853,11 +839,12 @@ extension CatalogView {
     }
 
     private func backupBadgeTooltip() -> String {
+        let reminder = CatalogReminderClock.backupReminder(last: model.lastBackupAt, now: Date()).map { $0 + "\n\n" } ?? ""
         guard let last = model.lastBackupAt else {
-            return "No catalog backup yet. Click to back up now."
+            return reminder + "Click to back up now."
         }
         let where_ = model.lastBackupPath ?? "(unknown location)"
-        return "Last backed up \(VolumeTableDateText.backupTooltip(last)) → \(where_)\n\nClick to back up now. Right-click to show the last backup in Finder."
+        return reminder + "Last backed up \(VolumeTableDateText.backupTooltip(last)) → \(where_)\n\nClick to back up now. Right-click to show the last backup in Finder."
     }
 
     /// Shorten a bundle path to its containing folder name + ".../leaf",

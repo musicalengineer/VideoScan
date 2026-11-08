@@ -26,7 +26,8 @@
 //                integrity-latest.json (IntegrityReportFacts — the same strict
 //                read the Integrity row and the Database facts' "Last
 //                Validate Catalog" row take). GREEN = it completed, found
-//                no break, within 24 hours (CatalogRealityPolicy.freshFor);
+//                no break, within 7 days (CatalogRealityPolicy.freshFor — the
+//                backstop; the app runs the check itself daily, DailyFileCheck);
 //                YELLOW = older, stopped, or never ran here; RED = it failed,
 //                its report cannot be read, it found a structural BREAK
 //                (reality.breaks — a tier 4 / 5 decision), or the sound print
@@ -352,8 +353,8 @@ enum CatalogStatusLinesPolicy {
     /// verb yet", honestly). A finding no verb can clear (tier 3's measured
     /// silence) is information: it never colours this line, so the decision
     /// counts (`needsDecision`) are not read here at all. YELLOW = older
-    /// than 24 h, stopped part way, or never ran. GREEN = completed within
-    /// 24 h and found no break.
+    /// than the 7-day backstop (`CatalogRealityPolicy.freshFor`), stopped
+    /// part way, or never ran. GREEN = completed within it and found no break.
     static func integrity(_ f: IntegrityReportFacts, now: Date, date: (Date) -> String, timeless: Bool = false) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .database, state: CatalogStatusLineState(c), words: w, detail: d)
@@ -385,7 +386,7 @@ enum CatalogStatusLinesPolicy {
         if now.timeIntervalSince(at) <= CatalogRealityPolicy.freshFor {
             return line(.green, "Integrity check passed\(when)", detail)
         }
-        return line(.yellow, "Yellow: the last integrity check passed\(when) — older than 24 hours. Fix: Check Now… runs it again", detail)
+        return line(.yellow, "Yellow: the last integrity check passed\(when) — older than \(CatalogRealityPolicy.freshForWords). Fix: Check Now… runs it again", detail)
     }
 
     /// "Red: event "Matt": a member points at a row that no longer exists
@@ -476,7 +477,7 @@ enum CatalogStatusLinesPolicy {
         if large(unreachable) {
             return line(.yellow, "Yellow: \(words) — \(unreachable.formatted()) of \(tally.planned.formatted()) files could not be checked. Fix: Check Now… runs it again", detail)
         }
-        if stale { return line(.yellow, "Yellow: \(words) — older than 24 hours. Fix: Check Now… runs it again", detail) }
+        if stale { return line(.yellow, "Yellow: \(words) — older than \(CatalogRealityPolicy.freshForWords). Fix: Check Now… runs it again", detail) }
         if large(notAsked) || large(tally.notChecked) {
             let share = "\(notAsked.formatted()) of \(tally.planned.formatted()) files were on drives not connected at the last check"
             if offline.values.contains(where: { $0 > 0 }) {

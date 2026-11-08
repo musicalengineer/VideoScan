@@ -574,6 +574,9 @@ struct VideoScanApp: App {
     /// Split Duplicate Groups by Full Hash when Full Hashes reaches 100 %.
     /// Told by the MFO center at each job's end (AnalyzerRuns.swift).
     @State private var analyzerFollowUp = AnalyzerRunFollowUp()
+    /// Validate Catalog once a day in the away window, and a catch-up at
+    /// launch / when idle (Rick 2026-11-07). Analyze/DailyFileCheck.swift.
+    @State private var dailyFileCheck = DailyFileCheckScheduler()
     /// Is the background helper on the content work? Catalog Status's
     /// Content line reads it ("in progress" vs yellow; Rick 2026-11-01
     /// evening). Asks over XPC only when the service is enabled.
@@ -719,6 +722,12 @@ struct VideoScanApp: App {
                         // flags are wired in its init.
                         catalogModel.catalogFreshness.observeDossier(captionOrchestrator.dashboardSnapshot)
                         catalogModel.catalogFreshness.startClock()
+                        // Validate Catalog runs itself daily in the away window
+                        // (Rick 2026-11-07; DailyFileCheck.swift): the master
+                        // only, never on a test host.
+                        if !TestEnvironment.isTestHost && catalogSync.mode == .master {
+                            dailyFileCheck.attach(.live(model: catalogModel, center: fileOpsCenter))
+                        }
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active
                         // (AngelJobRunner.isBusy; the façade holds the

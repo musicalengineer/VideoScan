@@ -129,10 +129,16 @@ struct CatalogSyncBanner: View {
         }
     }
 
+    /// The 7-day sync reminder (Rick 2026-11-07, CatalogReminderClock):
+    /// the last good sync is a week or more old. A reminder, not an error.
+    private var syncReminder: String? {
+        CatalogReminderClock.syncReminder(last: sync.state.lastSuccessfulSync, now: Date())
+    }
+
     private var backgroundColor: Color {
-        isFallback
-            ? Color(red: 0.85, green: 0.45, blue: 0.10)   // amber — can't-miss
-            : Color(NSColor.controlBackgroundColor)
+        if isFallback { return Color(red: 0.85, green: 0.45, blue: 0.10) }   // amber — can't-miss
+        if syncReminder != nil { return Color.yellow.opacity(0.18) }        // the 7-day reminder
+        return Color(NSColor.controlBackgroundColor)
     }
 
     private var headlineColor: Color {
@@ -180,6 +186,7 @@ struct CatalogSyncBanner: View {
         var lines: [String] = []
         if case .failed(let reason) = sync.state.phase { lines.append(reason) }
         if let catalog = sync.state.viewerCatalog.words { lines.append(catalog) }
+        if let syncReminder { lines.append(syncReminder) }
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 

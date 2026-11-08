@@ -67,7 +67,7 @@ enum CatalogFreshnessRows {
             row.lastCompleted = audit.lastCompleted
             row.lastOutcome = audit.outcome
             row.needsDecision = audit.needsDecision
-            row.cadence = .seconds(24 * 3_600)
+            row.cadence = .seconds(CatalogRealityPolicy.freshFor)
             if audit.predatesSwitch { row.phrases.uncovered = Self.notSinceTheSwitch("checked") }
         case .soundPrints:
             row.storeUnavailable = facts.soundStoreProblem
@@ -78,7 +78,7 @@ enum CatalogFreshnessRows {
             // uncovered = the rows some built tier could not verify (a tier
             // not run, "could not check", the catalog changed during the
             // run): yellow, naming the tier; lastCompleted = the OLDEST
-            // built tier's date, so the day's cadence judges the stalest
+            // built tier's date, so the cadence judges the stalest
             // one; the note names the tiers not built, whatever the colour.
             let integrity = facts.integrity
             row.covered = row.eligible - integrity.unverified
@@ -86,7 +86,7 @@ enum CatalogFreshnessRows {
             row.lastOutcome = integrity.outcome
             row.needsDecision = integrity.needsDecision
             row.storeUnavailable = integrity.problem
-            row.cadence = .seconds(24 * 3_600)
+            row.cadence = .seconds(CatalogRealityPolicy.freshFor)
             row.note = integrity.note
             if let words = integrity.decisionWords { row.phrases.decision = "— \(words)" }
             if integrity.needsDecision == 0, let words = integrity.unverifiedWords {

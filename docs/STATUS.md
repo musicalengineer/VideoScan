@@ -33,6 +33,10 @@
    native MLX Swift on the GPU (no Python), 8 frames per video in its own rebuildable cache (never the catalog), built by
    the `Index Frames` MFO job (Index Frames… in Frames mode; Pause/Stop; re-run resumes). Item 1 of §II.7 (text
    embeddings over observations) is still designed only. Report: `.scratch/kept-2026-11-07/reports/siglip-2026-11-07.md`.
+   **Then (11/07 evening): the daily file check** — the app runs Validate Catalog itself at 03:30 (catch-up at launch or
+   when idle if over 24 h old; an MFO row with Pause/Stop, "Validate Catalog: daily check — …" lines in catalog.log);
+   the Files/Database lines' backstop is 7 days, not 24 h; the Backup Catalog pill and the viewer's sync chip are 7-day
+   reminders (yellow, no orange/red). DECISIONS 2026-11-07.
 4. **Catalog went red for ~3 min at 17:02 (#441):** Update runs the catalog check BEFORE Detect Duplicates, so 262
    sampled-hash groups whose members now have different full hashes (revealed by #434's re-hashing) turned the chip
    Unhealthy until the next check; Detect Duplicates had already fixed them a second later. Fix: verify last.

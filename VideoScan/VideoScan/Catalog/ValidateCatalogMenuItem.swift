@@ -6,9 +6,10 @@
 // long; Start there runs ValidateCatalogJob as a Media File Operation (the
 // MFO window comes forward via `startedByUser`): every file on disk first,
 // then — only after a complete file check — the catalog against itself.
-// The Catalog Status window's "Check Now…" opens the same sheet. Never
-// starts on its own; the nightly runs the same job through
-// `--validate-catalog` (or the older `--audit-catalog`).
+// The Catalog Status window's "Check Now…" opens the same sheet. The menu
+// never starts it on its own; the app's daily check (DailyFileCheck, 03:30
+// in the away window) starts the same job, and `--validate-catalog` (or the
+// older `--audit-catalog`) runs it headless.
 
 import SwiftUI
 

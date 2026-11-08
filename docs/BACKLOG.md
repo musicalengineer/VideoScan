@@ -41,6 +41,7 @@
 - Tier 0 nightly headless when the app is closed, plus the reciprocal launch check (#323).
 - Monthly Verify Archive Copies and one ClamAV pass (NDSA Integrity 0 → 1).
 - Nightly adversarial confirm step must build at the reviewed head, not current main (#247).
+- Change-driven staleness for the Files line: a drive mount, or FSEvents under catalogued roots since the last check's event id, marks that drive or folder stale and the worker re-checks only it (Rick 2026-11-07, step 2 of the daily file check; not built).
 - Validate Catalog… tier 5 should run the full `PRAGMA integrity_check` (today only `quick_check` at open); report it as its own stamp; nightly too (Rick's SQLite operations matrix, 2026-11-01).
 
 ## Provenance (top of mind)
