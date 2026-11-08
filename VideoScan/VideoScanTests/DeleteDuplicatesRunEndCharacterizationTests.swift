@@ -171,6 +171,24 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
 
     private func loadPlan(at url: URL) -> DeleteDuplicatesPlan? { try? DeleteDuplicatesPlanStore.load(url: url) }
 
+    // MARK: the ending rule (pure)
+
+    /// A save failure outranks a Stop; the plan's word and the summary word
+    /// differ only for a completed run ("completed" / "done").
+    @Test func theRunEndingRuleAndItsWords() {
+        let table: [(Bool, Bool, DeleteDuplicatesRunEnding, String, String)] = [
+            (false, false, .completed, "completed", "done"),
+            (false, true, .cancelled, "cancelled", "cancelled"),
+            (true, false, .planNotSaved, "stopped (plan not saved)", "stopped (plan not saved)"),
+            (true, true, .planNotSaved, "stopped (plan not saved)", "stopped (plan not saved)"),
+        ]
+        for (saveFailed, stop, ending, outcome, word) in table {
+            let decided = DeleteDuplicatesRunEnding.decide(planSaveFailed: saveFailed, stopRequested: stop)
+            #expect(decided == ending && decided.planOutcome == outcome && decided.summaryWord == word,
+                    "saveFailed \(saveFailed) stop \(stop) → \(decided)")
+        }
+    }
+
     // MARK: completed
 
     @Test func completedRunLogsItsOutcomeFilesThePlanAndEndsFinished() async throws {
