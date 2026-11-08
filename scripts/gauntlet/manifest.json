@@ -13847,6 +13847,25 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesRunEndCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesRunEndCharacterizationTests"
+      ],
+      "tests": [
+        "aMidRunPlanSaveFailureStopsTheRunAndSaysSo",
+        "aStopDuringTheFinalSaveEndsCancelledWhileThePlanSaysCompleted",
+        "completedRunLogsItsOutcomeFilesThePlanAndEndsFinished",
+        "completedRunWithCopiesLeftAloneSaysWhy",
+        "completedWorkingCopyRunLogsTheWorkingCopyLine",
+        "discardCountsTheRestAsNotDoneAndSaysCancelled",
+        "quitSuspendsWithEveryLine",
+        "stopThatKeepsThePlanSuspendsWithEveryLine"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DeleteDuplicatesReviewedPlanTests.swift",
       "stage": "unit",
       "suites": [
@@ -35614,6 +35633,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesResultLineTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesRunEndCharacterizationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
