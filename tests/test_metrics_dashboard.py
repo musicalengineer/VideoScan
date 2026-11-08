@@ -1214,6 +1214,20 @@ def test_an_unsuppressed_ubsan_finding_is_red_and_a_skip_is_amber(tmp_path):
     assert "dot red" not in line and "dot green" not in line and "skipped-busy" in line
 
 
+@needs_node
+def test_findings_only_in_test_code_are_grey_never_red(tmp_path):
+    """Rick 2026-11-08: a finding whose frames of ours are all test code is grey, fix when convenient."""
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([
+        san_row(local_day(1), "address", status="ok", asan=0, ubsan=0),
+        san_row(local_day(0), "thread", status="test-findings", tsan=0, test_only_issues=2)])
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    line = out["sections"]["sum-san"]
+    assert "dot red" not in line and "dot green" in line and "0 sanitizer findings" in line
+    assert 'class="word grey">2 in test code only, fix when convenient</span>' in line
+    assert "test-findings" not in line
+
+
 # ---------------------------------------------------------------- static checks from the M4 lane (2026-11-04)
 # RED 2026-11-04: GitHub's strict-concurrency / lint jobs are off (no Swift 6.4 on the
 # runner), so the card's "Static checks (GitHub nightly)" read whatever the last row held

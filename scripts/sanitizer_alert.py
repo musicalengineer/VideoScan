@@ -20,6 +20,10 @@ never printed, so they are not findings and do not make a line red; a red line
 for some other reason says how many known findings were held back and their
 issues. A run that is ok apart from suppressed findings stays quiet, the same
 rule as the metrics card (red = something new to go and look at).
+
+Findings only in test code (Rick 2026-11-08; status "test-findings": every
+frame of ours is in VideoScanTests/ or a package's Tests/) are a grey ⚪ line,
+"fix when convenient", never red.
 """
 from __future__ import annotations
 
@@ -68,6 +72,12 @@ def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
         if len(findings) > MAX_LISTED:
             out.append(f"     • …and {len(findings) - MAX_LISTED} more")
         return out
+    if status == "test-findings":
+        findings = row.get("test_only_findings") or []
+        count = row.get("test_only_issues") or len(findings) or 1
+        out = [f"⚪ {name} ({when}, {row.get('sha', '?')}): {count} finding(s) in test code only — "
+               f"fix when convenient{suppressed_words(row)} — log {row.get('log', '?')}"]
+        return out + [f"     • {f}" for f in findings[:MAX_LISTED]]
     if status == "skipped-busy":
         return [f"🟡 {name} ({when}) skipped — {row.get('reason', 'M4 busy')}"]
     detail = {"build-failed": "build failed", "tests-failed": "tests failed",
@@ -93,7 +103,8 @@ def from_published(row: dict, now: dt.datetime) -> dict | None:
             "host_restarts": row.get("host_restarts") or 0, "finding_count": sum(v for _, v in counts),
             "unique_findings": [f"{label}: {v} unique finding{'' if v == 1 else 's'}" for label, v in counts if v],
             "failed_tests": [], "log": M4_LOGS,
-            "suppressed": [s for s in (row.get("suppressed") or []) if isinstance(s, dict)]}
+            "suppressed": [s for s in (row.get("suppressed") or []) if isinstance(s, dict)],
+            "test_only_issues": row.get("test_only_issues") if isinstance(row.get("test_only_issues"), int) else None}
 
 
 def published_latest(text: str, now: dt.datetime) -> dict:

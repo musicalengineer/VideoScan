@@ -103,7 +103,7 @@ FAILED_TEST = re.compile(r"✘ Test (\S+?)\(\) (?:failed|recorded an issue)|^Tes
 # that carries it (the ASan+UBSan build reads UBSAN_OPTIONS for its UBSan half).
 SUPPRESSION_FILES: Dict[str, List[tuple]] = {
     "thread": [("TSAN_OPTIONS", "tsan.supp", "print_suppressions=1")],
-    "address": [("UBSAN_OPTIONS", "ubsan.supp", "")],
+    "address": [("UBSAN_OPTIONS", "ubsan.supp", "print_stacktrace=1")],
 }
 KNOWN_HEADER = re.compile(r"^#\s*known:\s*(.*)$")
 REASON_LINE = re.compile(r"^#\s*reason:\s*(.*)$")
@@ -162,10 +162,12 @@ def sanitizer_env(kind: str, base: Dict[str, str], supp_dir: Path = SUPP_DIR) ->
     for var, name, extra in SUPPRESSION_FILES[kind]:
         path = supp_dir / name
         loaded = load_suppressions(path)
-        if not loaded:
-            continue
         entries += loaded
-        ours = ":".join(x for x in (f"suppressions={path}", extra) if x)
+        # The reporting option (hit counts for TSan, a stack for UBSan so its
+        # frames can be classified) applies with or without a suppression file.
+        ours = ":".join(x for x in (f"suppressions={path}" if loaded else "", extra) if x)
+        if not ours:
+            continue
         for key in (var, f"TEST_RUNNER_{var}"):
             env[key] = f"{base[key]}:{ours}" if base.get(key) else ours
     return env, entries
@@ -197,13 +199,95 @@ def suppression_rows(entries: List[dict], hits: Dict[str, int], kind: str) -> Li
             for e in entries]
 
 
+# ── Whose code a report is in (Rick 2026-11-08) ──────────────────────────────
+# A finding whose frames IN OUR CODE are all test code (VideoScanTests/, a
+# package's Tests/, test helpers) is grey: "fix when convenient". One that
+# touches product code (the app, VideoScan Background, VideoScanCore Sources)
+# is red. Third-party and runtime frames are not ours. A report with no frame
+# of ours (a UBSan line in a dependency, an unsymbolised stack) is product:
+# the classifier may only ever make something grey on positive evidence.
+FRAME_LINE = re.compile(r"^\s*#\d+\s+(.*)$")
+SOURCE_PATH = re.compile(r"(/[^\s():]+\.(?:swift|mm?|c|cc|cpp|h|hpp))(?::\d+)")
+TEST_PATH_PARTS = ("/VideoScanTests/", "/VideoScanUITests/", "/Tests/")
+PRODUCT_PATH_PARTS = ("/VideoScan/VideoScan/", "/VideoScanCore/Sources/", "/VideoScanBackground/")
+SWIFT_MODULE = re.compile(r"\b(VideoScanCoreTests|VideoScanTests|VideoScanUITests|VideoScanCore|VideoScan)\.")
+TEST_MODULES = {"VideoScanCoreTests", "VideoScanTests", "VideoScanUITests"}
+BINARY_MODULE = re.compile(r"\(([^()]+?)(?::arm64e?)?\+0x[0-9a-fA-F]+\)\s*$")
+
+
+def frame_side(frame: str) -> Optional[str]:
+    """Pure: "test", "product", or None (not our code / not a frame).
+    Evidence in order of precision: the source path; the module of the Swift
+    function that owns the frame (after the last " in ", so a closure inside a
+    test reads as the test); the binary. VideoScanCoreTests as a BINARY says
+    nothing (swift test links Core into it), so it never decides alone."""
+    m = FRAME_LINE.match(frame)
+    body = m.group(1) if m else (frame if ": runtime error: " in frame else None)
+    if body is None:
+        return None
+    path = SOURCE_PATH.search(body)
+    if path and path.group(1).startswith("/"):
+        p = path.group(1)
+        if any(part in p for part in TEST_PATH_PARTS):
+            return "test"
+        if any(part in p for part in PRODUCT_PATH_PARTS):
+            return "product"
+    symbol = BINARY_MODULE.sub("", body)
+    owner = symbol.rsplit(" in ", 1)[-1]
+    sm = SWIFT_MODULE.search(owner) or SWIFT_MODULE.search(symbol)
+    if sm:
+        return "test" if sm.group(1) in TEST_MODULES else "product"
+    bm = BINARY_MODULE.search(body)
+    if bm:
+        module = bm.group(1)
+        if module in ("VideoScanTests", "VideoScanUITests"):
+            return "test"
+        if module in ("VideoScan", "VideoScan.debug.dylib", "VideoScan Background") or module.startswith("VideoScanCore_"):
+            return "product"
+    return None
+
+
+def classify_report(block: str) -> str:
+    """Pure: "test" when the report has at least one frame of ours and every
+    frame of ours is test code; otherwise "product"."""
+    sides = {frame_side(line) for line in block.splitlines()} - {None}
+    return "test" if sides == {"test"} else "product"
+
+
+def report_blocks(text: str) -> List[tuple]:
+    """(block, summary line or None) per sanitizer report: from the report's
+    first line to its SUMMARY (or to the next report)."""
+    starts = sorted({text.rfind("\n", 0, m.start()) + 1 for m in REPORT_START.finditer(text)})
+    out = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        chunk = text[start:end]
+        sm = SUMMARY.search(chunk)
+        if sm:
+            chunk = chunk[:sm.end()]
+        out.append((chunk, f"{sm.group(1)}: {sm.group(2).strip()}" if sm else None))
+    return out
+
+
 def parse_log(text: str) -> dict:
     """Pure: everything the row needs, from an xcodebuild or swift test log."""
     summaries: list[str] = []
+    test_only: list[str] = []
+    test_only_reports = 0
+    for block, line in report_blocks(text):
+        if classify_report(block) == "test":
+            test_only_reports += 1
+            if line and line not in test_only:
+                test_only.append(line)
+        elif line and line not in summaries:
+            summaries.append(line)
+    # A SUMMARY whose report start was not recognised is product (never hidden).
     for m in SUMMARY.finditer(text):
         line = f"{m.group(1)}: {m.group(2).strip()}"
-        if line not in summaries:
+        if line not in summaries and line not in test_only:
             summaries.append(line)
+    # One line seen both in tests and product is product.
+    test_only = [t for t in test_only if t not in summaries]
     run = RUN_LINE.findall(text)
     tests, suites, outcome = (int(run[-1][0]), int(run[-1][1]), run[-1][2]) if run else (0, 0, None)
     # XCTest prints "Executed N tests, with F failures" per suite and once for
@@ -223,6 +307,8 @@ def parse_log(text: str) -> dict:
         "reports": len(REPORT_START.findall(text)),
         "suppressed_hits": matched_suppressions(text),
         "unique_findings": summaries,
+        "test_only_findings": test_only,
+        "test_only_reports": test_only_reports,
         "tests": tests,
         "suites": suites,
         "tests_outcome": outcome,
@@ -242,8 +328,10 @@ def merge(parsed: List[dict]) -> dict:
     sums of counts, worst outcome)."""
     out = {"host_restarts": 0, "reports": 0, "unique_findings": [], "tests": 0, "suites": 0,
            "tests_outcome": None, "failed_tests": [], "build_failed": False, "test_succeeded": bool(parsed),
-           "suppressed_hits": {}}
+           "suppressed_hits": {}, "test_only_findings": [], "test_only_reports": 0}
     for p in parsed:
+        out["test_only_reports"] += p.get("test_only_reports", 0)
+        out["test_only_findings"] += [f for f in p.get("test_only_findings", []) if f not in out["test_only_findings"]]
         for key, n in p.get("suppressed_hits", {}).items():
             out["suppressed_hits"][key] = out["suppressed_hits"].get(key, 0) + n
         out["host_restarts"] += p["host_restarts"]
@@ -258,14 +346,20 @@ def merge(parsed: List[dict]) -> dict:
         out["failed_tests"] = sorted(set(out["failed_tests"]) | set(p["failed_tests"]))[:20]
         out["build_failed"] = out["build_failed"] or p["build_failed"]
         out["test_succeeded"] = out["test_succeeded"] and p["test_succeeded"]
+    # A finding product code shows in one target is product everywhere.
+    out["test_only_findings"] = [f for f in out["test_only_findings"] if f not in out["unique_findings"]]
     return out
 
 
 def status_for(parsed: dict, timed_out: bool) -> str:
-    """One word for the morning: findings beat everything else."""
-    if parsed["unique_findings"] or parsed["reports"]:
+    """One word for the morning: product findings beat everything else; a
+    finding only in test code (grey, "test-findings") is the last word before
+    ok, and each test-only report may explain one relaunched host (the
+    sanitizer halts the host on a report)."""
+    test_only_reports = parsed.get("test_only_reports", 0)
+    if parsed["unique_findings"] or parsed["reports"] > test_only_reports:
         return "findings"
-    if parsed.get("host_restarts"):
+    if parsed.get("host_restarts", 0) > test_only_reports:
         return "host-crashed"
     if timed_out:
         return "timeout"
@@ -275,6 +369,8 @@ def status_for(parsed: dict, timed_out: bool) -> str:
         return "tests-failed"
     if parsed["tests"] == 0:
         return "no-tests-ran"
+    if parsed.get("test_only_findings") or test_only_reports:
+        return "test-findings"
     return "ok"
 
 

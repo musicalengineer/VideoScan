@@ -315,9 +315,13 @@ def sanitizer(kind: str, row_path: Optional[Path]) -> dict:
     cfg = row.get("configuration", "?")
     targets = ",".join(row.get("targets") or ["app"])
     subset = row.get("subset", "full")
-    line = (f"sanitizer {kind}: {len(findings)} unique finding(s), {tests} tests ({targets}, {cfg}, {subset}) — "
-            f"{'GREEN' if status == 'ok' else 'RED: ' + str(status)} — log {row.get('log', '?')}")
-    return result(stage, "ok" if status == "ok" else "red", len(findings) if tests or findings else None, line, detail,
+    # Findings only in test code (Rick 2026-11-08) are grey, not red: the lane stays ok and says so.
+    in_tests = row.get("test_only_findings") or []
+    green = status in ("ok", "test-findings")
+    tail = f", {len(in_tests)} in test code only" if in_tests else ""
+    line = (f"sanitizer {kind}: {len(findings)} unique finding(s){tail}, {tests} tests ({targets}, {cfg}, {subset}) — "
+            f"{'GREEN' if green else 'RED: ' + str(status)} — log {row.get('log', '?')}")
+    return result(stage, "ok" if green else "red", len(findings) if tests or findings else None, line, detail,
                   {"status": status, "tests": tests, "elapsed": row.get("finished")})
 
 

@@ -68,10 +68,10 @@ def test_the_two_real_runs_become_counts_per_sanitizer(tmp_path):
     assert rows == [
         {"schemaVersion": 1, "date": "2026-10-31", "kind": "address", "source": "weekly", "configuration": "Debug",
          "subset": "full", "status": "findings", "sha": "30e415296", "tests": 4292, "host_restarts": 2, "reports": 2,
-         "asan_issues": 0, "ubsan_issues": 1, "tsan_issues": None, "suppressed": []},
+         "asan_issues": 0, "ubsan_issues": 1, "tsan_issues": None, "suppressed": [], "test_only_issues": 0},
         {"schemaVersion": 1, "date": "2026-11-01", "kind": "thread", "source": "weekly", "configuration": "Debug",
          "subset": "full", "status": "findings", "sha": "4fc66b944", "tests": 10333, "host_restarts": 8, "reports": 8,
-         "asan_issues": None, "ubsan_issues": None, "tsan_issues": 1, "suppressed": []},
+         "asan_issues": None, "ubsan_issues": None, "tsan_issues": 1, "suppressed": [], "test_only_issues": 0},
     ]
     for row in rows:
         pm.validate("sanitizer.jsonl", row)
@@ -239,4 +239,30 @@ def test_rows_published_before_the_field_still_validate_and_config_error_is_a_st
     run = {"kind": "thread", "started": "2026-11-08T05:00:00-05:00", "status": "config-error", "tests": 0, "reports": 0}
     (row,) = pm.sanitizer_rows(write_runs(tmp_path, [run]) / "runs.jsonl")
     assert row["status"] == "config-error" and row["tsan_issues"] is None
+    pm.validate("sanitizer.jsonl", row)
+
+
+# ── 2026-11-08 (Rick): findings only in test code are their own grey count ──
+
+def test_test_code_findings_publish_as_their_own_count_and_never_inflate_the_red_ones(tmp_path):
+    run = dict(THREAD_AFTER, status="test-findings", reports=2, test_only_reports=2, unique_findings=[],
+               test_only_findings=["ThreadSanitizer: data race FooTests.swift:12 in bar",
+                                   "ThreadSanitizer: data race BarTests.swift:3 in baz"])
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [run]) / "runs.jsonl")
+    assert row["status"] == "test-findings" and row["test_only_issues"] == 2
+    assert row["tsan_issues"] == 0, "test-only reports never fall back onto the red count"
+    pm.validate("sanitizer.jsonl", row)
+    assert not [s for s in strings(row) if "FooTests" in s]
+    mixed = dict(run, reports=3, unique_findings=[])           # one unparsed product report
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path / "m", [mixed]) / "runs.jsonl")
+    assert row["tsan_issues"] == 1
+
+
+def test_a_run_before_the_split_has_a_null_test_count(tmp_path):
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [THREAD_1101]) / "runs.jsonl")
+    assert row["test_only_issues"] == 0
+    nothing = {"kind": "thread", "started": "2026-11-08T05:00:00-05:00", "status": "build-failed", "tests": 0, "reports": 0}
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path / "n", [nothing]) / "runs.jsonl")
+    assert row["test_only_issues"] is None
+    row.pop("test_only_issues")
     pm.validate("sanitizer.jsonl", row)

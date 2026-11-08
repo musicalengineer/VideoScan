@@ -331,10 +331,11 @@ def test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process(tmp_path
     assert env["TEST_RUNNER_TSAN_OPTIONS"] == f"suppressions={supp}:print_suppressions=1"
     assert "UBSAN_OPTIONS" not in env and [e["code"] for e in known] == ["grdb-close-read-race"]
     env, known = ws.sanitizer_env("address", {})
-    assert env["UBSAN_OPTIONS"] == env["TEST_RUNNER_UBSAN_OPTIONS"] == f"suppressions={ws.SUPP_DIR / 'ubsan.supp'}"
+    assert env["UBSAN_OPTIONS"] == env["TEST_RUNNER_UBSAN_OPTIONS"] == f"suppressions={ws.SUPP_DIR / 'ubsan.supp'}:print_stacktrace=1"
     assert "TSAN_OPTIONS" not in env
-    # No file -> nothing added, nothing in force.
-    assert ws.sanitizer_env("thread", {"A": "1"}, tmp_path) == ({"A": "1"}, [])
+    # No file -> no suppressions, nothing in force; the reporting options stay.
+    assert ws.sanitizer_env("thread", {"A": "1"}, tmp_path) == (
+        {"A": "1", "TSAN_OPTIONS": "print_suppressions=1", "TEST_RUNNER_TSAN_OPTIONS": "print_suppressions=1"}, [])
 
 
 def test_matched_suppressions_sum_over_every_process_and_ignore_lookalikes():
@@ -414,3 +415,99 @@ def test_a_red_digest_line_says_which_known_findings_were_held_back(tmp_path, ca
     alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
     out = capsys.readouterr().out
     assert "1 finding(s); 1 known finding suppressed (#462)" in out
+
+
+# ── 2026-11-08 (Rick): a finding whose OUR frames are all test code is grey ──
+# "Keep running sanitizers over everything, but a finding whose stack frames (our
+# frames) are entirely in test code shows grey — fix when convenient. Red stays for
+# findings that touch product code." Classification is by frame: source path first
+# (VideoScanTests/, */Tests/ = test; VideoScan/VideoScan/, VideoScanCore/Sources/ =
+# product), then the Swift symbol's module, then the binary module. Third-party and
+# runtime frames are not ours. No frame of ours at all = product (never hide it).
+
+REPO_PATH = "/Users/rickb/dev/VideoScan/VideoScan"
+
+
+@pytest.mark.parametrize("frame, side", [
+    ("    #0 closure #1 in VideoScanTests.FooTests.bar() FooTests.swift:12 (VideoScanTests:arm64+0x10)", "test"),
+    (f"    #1 0x1 in Foo.helper() {REPO_PATH}/VideoScanTests/Support/Helpers.swift:9", "test"),
+    (f"    #1 Foo.bar() {REPO_PATH}/VideoScanCore/Tests/VideoScanCoreTests/Store/X.swift:9 (VideoScanCoreTests:arm64+0x1)", "test"),
+    ("    #6 VideoScanCoreTests.StoreTests.helper() Helpers.swift:3 (VideoScanCoreTests:arm64+0x3)", "test"),
+    (f"    #3 0x104 in VideoScan.CatalogStore.save() {REPO_PATH}/VideoScan/Store/CatalogStore.swift:40", "product"),
+    (f"    #3 0x104 in x() {REPO_PATH}/VideoScanCore/Sources/VideoScanCore/Store/Repo.swift:40", "product"),
+    ("    #2 closure #1 in static VideoScanCore.GRDBCatalogRepository.decideAtClose(GRDB.DatabasePool) <null> "
+     "(VideoScanCore_-7D3187DD9FB04CEE_PackageProduct:arm64+0xf6ec6c)", "product"),
+    ("    #5 VideoScanCore.Store.commit() Store.swift:9 (VideoScanCoreTests:arm64+0x2)", "product"),
+    ("    #7 static VideoScan.CatalogLaunchWait.run() <null> (VideoScan.debug.dylib:arm64+0x2)", "product"),
+    ("    #8 closure #1 () -> () in VideoScanTests.FooTests.testX() <null> (VideoScan.debug.dylib:arm64+0x2)", "test"),
+    ("    #0 $defer #1 () -> () in closure #1 () throws -> () in GRDB.DatabasePool.close() throws -> () <null> "
+     "(GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0)", None),
+    ("    #1 swift::runJobInEstablishedExecutorContext(swift::Job*) <null> (libswift_Concurrency.dylib:arm64e+0x2c4c)", None),
+    ("    #0 0x1 in mlx::core::metal::Device::get_kernel_(std::string) /x/SourcePackages/checkouts/mlx-swift/"
+     "Source/Cmlx/mlx/mlx/backend/metal/device.cpp:717:21", None),
+    ("not a frame at all", None),
+])
+def test_each_frame_is_ours_in_tests_ours_in_product_or_not_ours(frame, side):
+    assert ws.frame_side(frame) == side
+
+
+def _tsan(frames, summary="SUMMARY: ThreadSanitizer: data race FooTests.swift:12 in bar"):
+    return ("WARNING: ThreadSanitizer: data race (pid=1)\n  Write of size 8 at 0x1 by thread T1:\n"
+            + "".join(f"    #{i} {f}\n" for i, f in enumerate(frames)) + summary + "\n==================\n")
+
+
+TEST_FRAME = "closure #1 in VideoScanTests.FooTests.bar() FooTests.swift:12 (VideoScanTests:arm64+0x10)"
+PRODUCT_FRAME = "VideoScan.CatalogStore.save() <null> (VideoScan.debug.dylib:arm64+0x20)"
+GRDB_FRAME = "GRDB.DatabasePool.close() <null> (GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0)"
+
+
+def test_a_report_is_test_only_when_every_frame_of_ours_is_test_code():
+    assert ws.classify_report(_tsan([GRDB_FRAME, TEST_FRAME])) == "test"
+    assert ws.classify_report(_tsan([GRDB_FRAME, TEST_FRAME, PRODUCT_FRAME])) == "product"
+    assert ws.classify_report(_tsan([GRDB_FRAME])) == "product", "no frame of ours: never hidden"
+    ub_no_stack = "/x/checkouts/mlx-swift/device.cpp:717:21: runtime error: member call on null pointer\n"
+    assert ws.classify_report(ub_no_stack) == "product"
+    ub_test = (f"{REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40:9: runtime error: load of misaligned address\n"
+               f"    #0 0x1 in VideoScanTests.MLXSafetyTests.x() {REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40\n")
+    assert ws.classify_report(ub_test) == "test"
+
+
+def test_a_run_with_only_test_code_findings_is_grey_and_its_halted_host_is_explained():
+    p = ws.parse_log("Test Suite 'VideoScanTests.xctest' started at x\n" + _tsan([GRDB_FRAME, TEST_FRAME])
+                     + "Test Suite 'VideoScanTests.xctest' started at y\n" + GREEN_LOG)
+    assert p["unique_findings"] == [] and p["test_only_findings"] == ["ThreadSanitizer: data race FooTests.swift:12 in bar"]
+    assert p["reports"] == 1 and p["test_only_reports"] == 1 and p["host_restarts"] == 1
+    assert ws.status_for(p, timed_out=False) == "test-findings"
+    # A second restart nothing explains is a crash.
+    p2 = ws.parse_log(_tsan([TEST_FRAME]) + "Test Suite 'VideoScanTests.xctest' started at x\n" * 3 + GREEN_LOG)
+    assert ws.status_for(p2, timed_out=False) == "host-crashed"
+    # Red failures still outrank it.
+    p3 = ws.parse_log(_tsan([TEST_FRAME]) + "✘ Test fooBar() failed after 0.1 seconds.\n✘ Test run with 3 tests in 1 suite failed after 1 seconds.\n")
+    assert ws.status_for(p3, timed_out=False) == "tests-failed"
+
+
+def test_a_product_finding_beside_a_test_only_one_is_red():
+    log = _tsan([TEST_FRAME]) + _tsan([TEST_FRAME, PRODUCT_FRAME], "SUMMARY: ThreadSanitizer: data race CatalogStore.swift:40 in save") + GREEN_LOG
+    p = ws.parse_log(log)
+    assert p["unique_findings"] == ["ThreadSanitizer: data race CatalogStore.swift:40 in save"]
+    assert p["test_only_findings"] == ["ThreadSanitizer: data race FooTests.swift:12 in bar"]
+    assert ws.status_for(p, timed_out=False) == "findings"
+    m = ws.merge([p, ws.parse_log(_tsan([TEST_FRAME], "SUMMARY: ThreadSanitizer: data race B.swift:1 in b") + GREEN_LOG)])
+    assert m["test_only_reports"] == 2 and len(m["test_only_findings"]) == 2
+
+
+def test_the_digest_shows_test_code_findings_grey_not_red(tmp_path, capsys):
+    line = alert.lines_for(_row("test-findings", test_only_findings=["ThreadSanitizer: data race FooTests.swift:12"]), NOW, 8)
+    assert line[0].startswith("⚪ Address Sanitizer") and "1 finding(s) in test code only" in line[0]
+    assert "fix when convenient" in line[0] and "🔴" not in "".join(line)
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", status="test-findings", tsan_issues=0,
+                                         reports=1, test_only_issues=1)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    out = capsys.readouterr().out
+    assert out.startswith("⚪ Thread Sanitizer") and "1 finding(s) in test code only" in out
+
+
+def test_ubsan_prints_its_stack_so_its_frames_can_be_classified():
+    env, _ = ws.sanitizer_env("address", {})
+    assert "print_stacktrace=1" in env["UBSAN_OPTIONS"] and "print_stacktrace=1" in env["TEST_RUNNER_UBSAN_OPTIONS"]
