@@ -32,9 +32,20 @@ enum HallieHelperFailure {
         /// it must not read as "unreachable", which is what sent Rick to
         /// check a host that was answering.
         case helperCannotConstrainOutput(host: String)
+        /// Cloud (Anthropic) is chosen in Settings and the Keychain holds no
+        /// key (2026-11-07). Nothing was sent anywhere.
+        case cloudKeyMissing
     }
 
     static func kind(of error: Error) -> Kind {
+        if let brain = error as? HallieBrainError {
+            switch brain {
+            case .noCloudKey: return .cloudKeyMissing
+            // The gate refused a request; the translator lanes never carry
+            // media, so reaching here means a request we would not send.
+            case .familyMediaRefused: return .unusableAnswer
+            }
+        }
         if let nl = error as? NLTranslatorError {
             switch nl {
             case .badResponse: return .unusableAnswer
@@ -65,6 +76,11 @@ enum HallieHelperFailure {
                 + "an answer to a fixed format, and the plain retry didn't come back in a "
                 + "shape I trust. I didn't search the archive or open anything; "
                 + "could you say it another way?"
+        case .cloudKeyMissing:
+            return "Settings say to use my cloud brain, but I couldn't find an Anthropic key "
+                + "in the Keychain, so I didn't send your question anywhere. I didn't search "
+                + "the archive or open anything; add the key (Keychain item "
+                + "\"\(AnthropicKeyLocator.primaryService)\") or switch me back to Local in Settings."
         case .badRequest(let status):
             return "My language helper answered, but refused the request (HTTP \(status)) — "
                 + "that's a setup problem on my side, like the model name or endpoint, not the network. "

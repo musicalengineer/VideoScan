@@ -111,6 +111,13 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// while the sentence that asked it vanished under composition.
     /// `fallbackText` already ends with it. Nil = no offer.
     let trailingOffer: String?
+    /// What the plan's words are made of, for the remote gate (2026-11-07):
+    /// familyMedia when any cited evidence quotes text read out of the media
+    /// (a transcript snippet, a caption). A cloud brain refuses to phrase such
+    /// a plan and the template wording ships instead. Set by `derive(from:)`
+    /// from the Result's citations — the one place every composed plan
+    /// passes — and carried through `offering` / `carrying`.
+    var dataClass: HallieDataClass = .familyText
 
     init(
         route: HallieTurnExecutor.Route,
@@ -148,6 +155,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subjectLifeStatus: subjectLifeStatus,
             provenanceNote: provenanceNote,
             trailingOffer: offer)
+        .classed(dataClass)
     }
 
     /// The same plan carrying `note` as provenance: appended to the
@@ -174,6 +182,14 @@ struct HallieAnswerPlan: Sendable, Equatable {
             subjectLifeStatus: subjectLifeStatus,
             provenanceNote: note,
             trailingOffer: trailingOffer)
+        .classed(dataClass)
+    }
+
+    /// The same plan with `dataClass` set.
+    func classed(_ dataClass: HallieDataClass) -> HallieAnswerPlan {
+        var copy = self
+        copy.dataClass = dataClass
+        return copy
     }
 
     /// Whether a model may phrase this answer at all.
@@ -221,6 +237,12 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// only re-say what the template already said. Fixed-text routes and
     /// every non-answer are `.fixed`.
     static func derive(from result: HallieTurnExecutor.Result) -> HallieAnswerPlan {
+        let plan = derivedPlan(from: result)
+        // Never lowers a class a builder already raised.
+        return plan.classed(max(plan.dataClass, HallieDataClass.of(citations: result.citations)))
+    }
+
+    private static func derivedPlan(from result: HallieTurnExecutor.Result) -> HallieAnswerPlan {
         if let plan = result.answerPlan { return plan }
         let fixed = HallieAnswerPlan(
             route: result.route, shape: .fixed, fallbackText: result.prose)

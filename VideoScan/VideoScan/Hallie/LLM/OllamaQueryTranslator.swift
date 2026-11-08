@@ -431,68 +431,26 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     func translate(_ text: String) async throws -> NLQuerySpec {
         let (content, specData) = try await requestContent(
             text, schema: Self.responseSchema, systemPrompt: Self.systemPrompt)
-        do {
-            return try NLQuerySpec.decodeStrictWire(specData)
-        } catch {
-            throw NLTranslatorError.badResponse(
-                "content is not a strict NLQuerySpec (\(Self.decodeFailureDetail(error))): "
-                    + String(content.prefix(120)))
-        }
+        return try HallieBrainDecoding.spec(content: content, data: specData)
     }
 
     /// Parallel QueryAST-v2 entry point. The established v1 protocol and
     /// `translate(_:)` remain unchanged while the v2 executor stack lands.
+    /// Decoding is shared with every other brain (HallieBrainDecoding).
     func translateAST(_ text: String) async throws -> ArchivistQueryAST {
         let (content, astData) = try await requestContent(
             text, schema: Self.astResponseSchema,
             systemPrompt: Self.astSystemPrompt)
-        do {
-            // Tolerant of benign extras (`limit` on a presence payload,
-            // `confidence`, nulls) — see ArchivistQueryAST.decodeTranslatorOutput.
-            // Genuinely malformed shapes still fail here.
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(astData)
-            if !decoded.notes.isEmpty {
-                let notes = decoded.notes.joined(separator: "; ")
-                translatorLog.notice(
-                    "translator output normalized: \(notes, privacy: .public)")
-            }
-            return Self.repairPossessiveSpeakerPronoun(
-                in: decoded.ast, originalQuestion: text)
-        } catch {
-            throw NLTranslatorError.badResponse(
-                "content is not a strict ArchivistQueryAST "
-                    + "(\(Self.decodeFailureDetail(error))): \(content.prefix(120))")
-        }
+        return try HallieBrainDecoding.ast(content: content, data: astData, question: text)
     }
 
     /// Classify one turn into the archive-only AST lane or the separately
-    /// bounded conversation lane. Archive shapes use the exact established
-    /// decoder and repair path; `conversation` is never an ArchivistQueryAST.
+    /// bounded conversation lane (decoder: HallieBrainDecoding).
     func interpretTurn(_ text: String) async throws -> HallieTurnInterpretation {
         let (content, data) = try await requestContent(
             text, schema: Self.interpretationResponseSchema,
             systemPrompt: Self.interpretationSystemPrompt)
-        do {
-            let object = try JSONSerialization.jsonObject(with: data)
-            let shape = (object as? [String: Any])?["shape"] as? String
-            if shape == "conversation" {
-                return .conversation(
-                    try HallieTurnInterpretation.decodeConversation(data))
-            }
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(data)
-            if !decoded.notes.isEmpty {
-                translatorLog.notice(
-                    "turn interpretation normalized: \(decoded.notes.joined(separator: "; "), privacy: .public)")
-            }
-            return .archive(Self.repairPossessiveSpeakerPronoun(
-                in: decoded.ast, originalQuestion: text))
-        } catch let error as NLTranslatorError {
-            throw error
-        } catch {
-            throw NLTranslatorError.badResponse(
-                "content is not a strict Hallie turn interpretation "
-                    + "(\(Self.decodeFailureDetail(error))): \(content.prefix(120))")
-        }
+        return try HallieBrainDecoding.interpretation(content: content, data: data, question: text)
     }
 
     /// Structured output prevents malformed fields, but it cannot prevent a

@@ -17904,6 +17904,42 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieBrainChoiceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieBrainChoiceLogicTests",
+        "HallieBrainChoiceIsolationTests",
+        "HallieCloudRequestShapeTests"
+      ],
+      "tests": [
+        "citationClasses",
+        "cloudResolves",
+        "composeBody",
+        "defaults",
+        "errors",
+        "garbageIsLocal",
+        "historyPolicy",
+        "interpretConversation",
+        "keyOrder",
+        "keyRedacted",
+        "labels",
+        "localResolves",
+        "loggedLines",
+        "missingKey",
+        "noAutomaticCloud",
+        "nonStringIsLocal",
+        "planClassification",
+        "presenceWithoutSecret",
+        "repairRetry",
+        "roundTrip",
+        "shellFlag",
+        "stringAnswer",
+        "testHostPinsLocal",
+        "translateBody"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieBrotherTimPeopleTabKinshipTests.swift",
@@ -18075,6 +18111,21 @@
         "negatedCompetingAndMismatchedDescriptorsNeverGuess",
         "numbersAndExactNamesStillWork",
         "relativeAgeAndOrdinalsSelect"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieCloudBrainCanarySensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieCloudBrainCanarySensor"
+      ],
+      "tests": [
+        "cleanRequestReachesTheStub",
+        "composeWithFamilyMediaClassSendsNothing",
+        "familyMediaNeverReachesTheTransport",
+        "oneAdapterOneSerializer",
+        "smuggledMediaTextNeverReachesTheTransport"
       ]
     },
     {
@@ -37177,7 +37228,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3397,
+      "expected_floor": 3426,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -37589,6 +37640,10 @@
         "VideoScanTests/GedcomLookupConcurrencyTests",
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
+        "VideoScanTests/HallieBrainChoiceIsolationTests",
+        "VideoScanTests/HallieBrainChoiceLogicTests",
+        "VideoScanTests/HallieCloudBrainCanarySensor",
+        "VideoScanTests/HallieCloudRequestShapeTests",
         "VideoScanTests/HalliePresenceLikeCharacterizationTests",
         "VideoScanTests/HalliePronunciationRespellingCharacterizationTests",
         "VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests",

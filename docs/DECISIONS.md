@@ -126,6 +126,7 @@
 - **2026-10-01 — Hallie truth invariants (HAL-1..7):** abstain over guess; the right person or ask which; dates at their precision; general knowledge labelled, never mixed into a family-fact sentence. `invariants/Hallie.md`
 - ~~2026-08-27 — Remote endpoints never carry private context.~~ Superseded 2026-10-10 (R6): cloud models allowed where much better; never living-family media. **The data-class policy is enforced in the adapter, not the prompt** (`public | familyText | familyMedia`; `RemoteSerializer` is the one serializer; a poisoned-transport canary sensor). `hallie_agent_lane_2026_10_10.md` §5
 - **2026-10-10 — Hallie's shape is judged by a cited read-only eval, not vibes** (E1: today's Hallie 29 % vs tool-using agents 92–94 %). `hallie_e1_experiment.md`
+- **2026-11-07 — Hallie's default brain is local qwen3.8:27b-mlx** (E1, 33 turns: 73% vs llama3.3:70b 3%, p50 10.6 s vs 12.0 s); Cloud (Anthropic) is an opt-in Settings choice, never an automatic failover (Rick, in conversation).
 - **2026-10-16 — Hallie paused** (70K lines for a goal ranked sixth). `October_Design_Retrospective.md` §3.7
 
 ## Process, testing, review

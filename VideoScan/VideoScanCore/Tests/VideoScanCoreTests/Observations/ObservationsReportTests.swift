@@ -27,7 +27,7 @@ struct ObservationsReportTests {
     /// 3 DV era.none; 4 ProRes with a "Tahoe" caption and the "beach" transcript; 5 audio only, not transcribed;
     /// 6 unprobed; 7 in another folder, no observations; 8 removed (not in "everything").
     static func scene() async throws -> (StoreFixture, GRDBCatalogRepository) {
-        var files: [DossierFixture.File] = [
+        let files: [DossierFixture.File] = [
             .init(n: 1, path: "/V/tapes/Christmas_1990.dv", embedded: 1_044_957_600, embeddedSource: "format:creation_time"),
             .init(n: 2, path: "/V/tapes/Easter_1992.dv"),
             .init(n: 3, path: "/V/tapes/Summer_1994.dv"),

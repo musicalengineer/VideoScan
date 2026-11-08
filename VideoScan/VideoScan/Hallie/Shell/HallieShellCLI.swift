@@ -14,6 +14,11 @@ enum HallieShellCLI {
         var catalogURL: URL { catalog.databaseURL }
         var hosts: [String] = OllamaEndpoints.defaultHosts
         var model = HallieBrain.defaultModel
+        /// `--cloud`: ask the Cloud (Anthropic) brain — model from the app's
+        /// `archivist.cloudModel` setting, key from the Keychain. Local
+        /// otherwise; the shell never follows the app's provider setting
+        /// silently, so a scripted eval cannot drift to the cloud.
+        var brain: HallieBrainProvider = .local
         var gedcomURL: URL?
         var once: String?
         /// `--compose`: let the model phrase composable answers (verified,
@@ -355,13 +360,11 @@ enum HallieShellCLI {
                     return try? CyberBrainIndex(
                         archive: CyberBrainLoader(rootURL: root).load())
                 },
+                // One seam for both brains (HallieBrainResolver).
                 translateAST: { question, options in
                     let responder = LockedString()
-                    var template = OllamaQueryTranslator()
-                    template.model = options.model
-                    let translator = OllamaFailoverTranslator(
-                        hosts: options.hosts,
-                        template: template,
+                    let translator = try HallieBrainResolver.shell(options.brain).backend(
+                        hosts: options.hosts, localModel: options.model,
                         onResponder: { responder.set($0) })
                     let ast = try await translator.translateAST(question)
                     return Translation(ast: ast,
@@ -369,30 +372,27 @@ enum HallieShellCLI {
                 },
                 interpretTurn: { question, options in
                     let responder = LockedString()
-                    var template = OllamaQueryTranslator()
-                    template.model = options.model
-                    let translator = OllamaFailoverTranslator(
-                        hosts: options.hosts,
-                        template: template,
+                    let brain = try HallieBrainResolver.shell(options.brain).backend(
+                        hosts: options.hosts, localModel: options.model,
                         onResponder: { responder.set($0) })
-                    let value = try await translator.interpretTurn(question)
+                    let value = try await brain.interpretTurn(question)
                     return TurnInterpretation(
                         value: value,
                         responderHost: responder.value ?? "unknown")
                 },
                 composeConversation: { kind, question, history, options in
                     let responder = LockedString()
-                    var template = OllamaQueryTranslator()
-                    template.model = options.model
-                    let fleet = OllamaFailoverTranslator(
-                        hosts: options.hosts,
-                        template: template,
-                        onResponder: { responder.set($0) })
+                    let brain = Result {
+                        try HallieBrainResolver.shell(options.brain).backend(
+                            hosts: options.hosts, localModel: options.model,
+                            onResponder: { responder.set($0) })
+                    }
                     let reply = await HallieSocialConversation.reply(
-                        kind: kind, question: question, history: history,
+                        kind: kind, question: question,
+                        history: HallieBrainHistoryPolicy.history(history, for: brain),
                         modelCall: { system, user in
-                            try await fleet.composePlainText(
-                                system: system, user: user)
+                            try await brain.get().composePlainText(
+                                system: system, user: user, dataClass: .familyText)
                         })
                     return SocialReply(
                         value: reply,
@@ -438,16 +438,19 @@ enum HallieShellCLI {
                 },
                 speakAnswer: { text in await speakNativeAnswer(text) },
                 composeAnswer: { plan, history, options in
-                    var template = OllamaQueryTranslator()
-                    template.model = options.model
-                    let fleet = OllamaFailoverTranslator(
-                        hosts: options.hosts, template: template)
+                    let brain = Result {
+                        try HallieBrainResolver.shell(options.brain).backend(
+                            hosts: options.hosts, localModel: options.model)
+                    }
                     let composer = HallieGroundedComposer(
                         personaName: HallieCompositionSettings.personaName(),
                         modelCall: { system, user in
-                            try await fleet.composePlainText(system: system, user: user)
+                            try await brain.get().composePlainText(
+                                system: system, user: user, dataClass: plan.dataClass)
                         })
-                    return await composer.compose(plan: plan, history: history)
+                    return await composer.compose(
+                        plan: plan,
+                        history: HallieBrainHistoryPolicy.history(history, for: brain))
                 },
                 recordTestimony: { testimony in
                     guard let root = FileManager.default.urls(
@@ -576,6 +579,7 @@ enum HallieShellCLI {
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
                      [--no-actions] [--log-run-id ID] [--remember] [--diagnostics] [--speech]
+                     [--cloud]
     """
 
     static let help = """
@@ -590,25 +594,28 @@ enum HallieShellCLI {
     (saved to the family CyberBrain only with --remember).
     """
 
+    /// Value-less switches: each sets one option. A table, not an if-chain,
+    /// so a new switch is one row (≈ a C++ map of member-setting lambdas).
+    static let switches: [String: @Sendable (inout Options) -> Void] = [
+        "--hallie": { _ in },
+        "--compose": { $0.compose = true },
+        "--speech": { $0.speech = true },
+        "--diagnostics": { $0.diagnostics = true },
+        "--no-actions": { $0.allowActions = false },
+        "--remember": { $0.remember = true },
+        "--cloud": { $0.brain = .cloud },
+    ]
+
     static func parse(arguments: [String]) throws -> Options {
         var result = Options()
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
-            if argument == "--hallie" { index += 1; continue }
-            if argument == "--compose" { result.compose = true; index += 1; continue }
-            if argument == "--speech" { result.speech = true; index += 1; continue }
-            if argument == "--diagnostics" {
-                result.diagnostics = true
+            if let apply = switches[argument] {
+                apply(&result)
                 index += 1
                 continue
             }
-            if argument == "--no-actions" {
-                result.allowActions = false
-                index += 1
-                continue
-            }
-            if argument == "--remember" { result.remember = true; index += 1; continue }
             guard ["--catalog", "--host", "--model", "--gedcom", "--once",
                    "--log-run-id"]
                 .contains(argument) else { throw ParseError.unknownOption(argument) }
