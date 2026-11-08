@@ -319,6 +319,94 @@ func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int
     ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]
 }
 
+// MARK: Run tidy and retention (Rick 2026-11-08)
+// Each run kept DerivedData (~5 GB), PackageBuild (~1.3 GB) and swift-cache
+// forever; the M4 testbed reached 102 GB and 86% full. The run removes its own
+// regenerable build scratch once result.json and the history row exist (like
+// `make clean`), and finished runs older than 14 days are removed at the start
+// of the next run. history.jsonl, pending-metrics* and unfinished runs are never touched.
+// Memory: O(entries in one directory) for retention; the size walk streams
+// (FileManager's enumerator holds one directory level at a time).
+let buildScratchNames = ["DerivedData", "PackageBuild", "swift-cache"]
+let retentionDays = 14
+
+/// "2026-11-08T20-19-00Z-1A2B3C4D" (prepareRoots' runID) -> its UTC start; nil = not a run dir.
+func runDate(fromName name: String) -> Date? {
+    guard name.count > 21, name[name.index(name.startIndex, offsetBy: 20)] == "-" else { return nil }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "UTC")
+    formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
+    return formatter.date(from: String(name.prefix(20)))
+}
+
+/// Pure retention decision: finished run dirs whose NAME date is more than `days` old (mtime ignored).
+func retentionCandidates(_ entries: [(name: String, finished: Bool)], now: Date, days: Int = retentionDays) -> [String] {
+    entries.filter { entry in
+        guard entry.finished, let started = runDate(fromName: entry.name) else { return false }
+        return now.timeIntervalSince(started) > Double(days) * 86_400
+    }.map(\.name).sorted()
+}
+
+/// Pure tidy decision: which of the run's own build dirs may go now (none before result.json, none with --keep-build).
+func buildScratchToRemove(run: URL, resultExists: Bool, keepBuild: Bool, publishReaped: Bool) -> [URL] {
+    guard resultExists, !keepBuild, publishReaped else { return [] }
+    return buildScratchNames.map { run.appendingPathComponent($0) }
+}
+
+func isSymlink(_ url: URL) -> Bool { (try? fm.destinationOfSymbolicLink(atPath: url.path)) != nil }
+
+func allocatedBytes(_ url: URL) -> Int64 {
+    guard let walk = fm.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: []) else { return 0 }
+    var total: Int64 = 0
+    for case let item as URL in walk { total += Int64((try? item.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0) }
+    return total
+}
+
+/// Removes the run's build scratch when buildScratchToRemove allows it; returns the one line to print.
+func tidyBuildScratch(run: URL, keepBuild: Bool, publishReaped: Bool) -> String {
+    let resultExists = fm.fileExists(atPath: run.appendingPathComponent("result.json").path)
+    let targets = buildScratchToRemove(run: run, resultExists: resultExists, keepBuild: keepBuild, publishReaped: publishReaped)
+    guard !targets.isEmpty else {
+        let why = keepBuild ? "--keep-build" : !resultExists ? "no result.json" : "publisher not reaped"
+        return "GAUNTLET TIDY kept build products (\(why)) in \(run.path)"
+    }
+    var bytes: Int64 = 0
+    var problems: [String] = []
+    for target in targets where fm.fileExists(atPath: target.path) {
+        // A symlink here is not the runner's own output: never follow or remove it.
+        guard !isSymlink(target), (try? guarded(target, under: run)) != nil else { problems.append("skipped \(target.lastPathComponent)"); continue }
+        let size = allocatedBytes(target)
+        do { try fm.removeItem(at: target); bytes += size } catch { problems.append("\(target.lastPathComponent): \(error.localizedDescription)") }
+    }
+    let gb = String(format: "%.2f", Double(bytes) / 1e9)
+    return "GAUNTLET TIDY removed build products (\(gb) GB) from \(run.path)" + (problems.isEmpty ? "" : " warning=\"\(problems.joined(separator: "; "))\"")
+}
+
+/// The results root's real run dirs (no symlinks, no files) and whether each has result.json.
+func runEntries(_ resultsRoot: URL) -> [(name: String, finished: Bool)] {
+    ((try? fm.contentsOfDirectory(atPath: resultsRoot.path)) ?? []).sorted().compactMap { name in
+        let dir = resultsRoot.appendingPathComponent(name)
+        var isDir: ObjCBool = false
+        guard !isSymlink(dir), fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        return (name, fm.fileExists(atPath: dir.appendingPathComponent("result.json").path))
+    }
+}
+
+/// Removes finished runs older than retentionDays (by name); returns one line per run removed.
+/// Rick 2026-11-08: "we don't need them" -- history.jsonl keeps every run's summary row, so these
+/// regenerable run dirs are removed outright rather than moved to .trash (his explicit override,
+/// for gauntlet run dirs only). history.jsonl, pending-metrics* and unfinished runs are never touched.
+func retainFinishedRuns(resultsRoot: URL, now: Date) -> [String] {
+    retentionCandidates(runEntries(resultsRoot), now: now).map { name in
+        let dir = resultsRoot.appendingPathComponent(name)
+        do {
+            _ = try guarded(dir, under: resultsRoot)
+            try fm.removeItem(at: dir)
+            return "GAUNTLET RETENTION removed \(dir.path) (run older than \(retentionDays) days)"
+        } catch { return "GAUNTLET RETENTION warning: could not remove \(dir.path): \(error)" }
+    }
+}
+
 // A value-type run context; mutating methods are like non-const C++ members.
 struct GauntletRunner {
     let repo: URL
@@ -326,6 +414,9 @@ struct GauntletRunner {
     var away = false
     var dry = false
     var queueOnly = false
+    var keepBuild = false
+    /// False while the publisher (which uses <run>/swift-cache) may still be running.
+    var publishReaped = true
     var machine = "m4"
     var only = Set(stageOrder)
     var manifestPath: URL
@@ -364,6 +455,7 @@ struct GauntletRunner {
             case "--away": away = true
             case "--dry-run": dry = true
             case "--queue-only": queueOnly = true
+            case "--keep-build": keepBuild = true
             case "--machine", "--only", "--manifest", "--results-root":
                 guard !arguments.isEmpty else { throw RunError("missing value for \(flag)") }
                 let value = arguments.removeFirst()
@@ -372,7 +464,7 @@ struct GauntletRunner {
                 if flag == "--manifest" { manifestPath = URL(fileURLWithPath: value).standardizedFileURL }
                 if flag == "--results-root" { resultsRoot = URL(fileURLWithPath: value).standardizedFileURL }
             case "--help", "-h":
-                print("run_gauntlet.sh --away [--machine m4|m5|m1] [--dry-run] [--only stage,...] [--manifest PATH] [--results-root PATH] [--queue-only]")
+                print("run_gauntlet.sh --away [--machine m4|m5|m1] [--dry-run] [--only stage,...] [--manifest PATH] [--results-root PATH] [--queue-only] [--keep-build]")
                 return false
             default: throw RunError("unknown argument: \(flag)")
             }
@@ -412,6 +504,7 @@ struct GauntletRunner {
             print("\(name): \(name == "ui" ? "UI not run (phase 2)" : !only.contains(name) ? "not_run (not selected)" : "test-without-building selectors=\(selectors.count) expected_floor=\(entry["expected_floor"] ?? 0)\(package) blocked=\(blocked.count)")")
         }
         print("Results: \(resultsRoot.path)/<run-id>/result.json; history.jsonl; metrics publication queued on failure")
+        print("Tidy: after result.json + history, remove <run>/{\(buildScratchNames.joined(separator: ","))}\(keepBuild ? " (skipped: --keep-build)" : ""); retention: finished runs older than \(retentionDays) days (by run name) are removed")
 
 
     }
@@ -716,6 +809,7 @@ struct GauntletRunner {
         try write(json(result), to: resultPath, root: run)
         let publishCommand = ["/usr/bin/swift", "-module-cache-path", run.appendingPathComponent("swift-cache").path, repo.appendingPathComponent("scripts/gauntlet/publish.swift").path, resultPath.path] + (queueOnly ? ["--queue-only"] : [])
         let published = try? command(publishCommand, log: run.appendingPathComponent("publish.log"), timeout: 180)
+        publishReaped = !(published?.contaminated ?? false)
         result["publish"] = published?.code == 0 ? "published" : published?.code == 1 ? "queued" : "queue_failed"
         if result["publish"] as? String == "queue_failed" { result["status"] = "failed"; result["publish_reason"] = "publisher could not confirm durable queue; retry result.json manually" }
         try write(json(result), to: resultPath, root: run)
@@ -734,6 +828,7 @@ struct GauntletRunner {
         try validateInventory()
         if dry { printPlan(); return validationErrors.isEmpty ? 0 : 1 }
         try prepareRoots()
+        retainFinishedRuns(resultsRoot: resultsRoot, now: Date()).forEach { print($0) }
         try prepareAdapterEnvironment()
         initializeResult()
         signal(SIGINT, onSignal); signal(SIGTERM, onSignal); signal(SIGHUP, onSignal)
@@ -744,7 +839,10 @@ struct GauntletRunner {
             for name in stageOrder { outputs.append(executeStage(name)) }
         } catch { fatalReason = String(describing: error) }
         aggregateResults()
-        return try publishResults()
+        // Tidy only after result.json and the history row exist and the publisher is done with swift-cache.
+        let exitCode = try publishResults()
+        print(tidyBuildScratch(run: run, keepBuild: keepBuild, publishReaped: publishReaped))
+        return exitCode
     }
 }
 
@@ -758,6 +856,21 @@ func main() throws -> Int32 {
                                           filters: Array(arguments.dropFirst(4)))
         print(counts.map { String(data: try! json($0), encoding: .utf8)! } ?? "null")
         return counts == nil ? 1 : 0
+    }
+    // Test seams for run tidy / retention (tests/test_gauntlet_run_tidy.py).
+    let isoNow = { (text: String) in ISO8601DateFormatter().date(from: text) ?? Date() }
+    if arguments.first == "--retention-plan", arguments.count == 3 {
+        let entries = runEntries(URL(fileURLWithPath: arguments[1]))
+        print(String(bytes: try json(retentionCandidates(entries, now: isoNow(arguments[2]))), encoding: .utf8) ?? "null")
+        return 0
+    }
+    if arguments.first == "--retain", arguments.count == 3 {
+        retainFinishedRuns(resultsRoot: URL(fileURLWithPath: arguments[1]), now: isoNow(arguments[2])).forEach { print($0) }
+        return 0
+    }
+    if arguments.first == "--tidy-build", arguments.count >= 2 {
+        print(tidyBuildScratch(run: URL(fileURLWithPath: arguments[1]), keepBuild: arguments.dropFirst(2).contains("--keep-build"), publishReaped: true))
+        return 0
     }
     let script = URL(fileURLWithPath: #filePath).standardizedFileURL
     let repo = script.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
