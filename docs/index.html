@@ -119,8 +119,15 @@
   .hosts > span { font-size: 15px; display: flex; flex-direction: column; gap: 3px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   .hosts .hosthead { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .hosts .hostline { padding-left: 17px; }
-  .fails { display: inline; }
-  .fails[open] { display: inline-block; vertical-align: top; }
+  .tile.wide { grid-column: span 2; }
+  .parts { display: flex; flex-direction: column; gap: 2px; }
+  .parts .ver { margin-top: 10px; letter-spacing: .04em; }
+  .parts .since { color: var(--muted); font-size: 13px; }
+  .grow-up { color: var(--good); }
+  .grow-down { color: var(--bad); }
+  .tile.wide .hosts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .fails, .fails > summary { display: inline; }
+  .fails > summary::-webkit-details-marker { display: none; }
   .fails > summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
   .fails ol { margin: 6px 0 0; padding-left: 22px; font-size: 14px; }
   .hosts > .red { border-color: var(--bad); }
@@ -253,6 +260,7 @@
     .top h1 { font-size: 27px; }
     .top .sub { flex-basis: 100%; order: 2; }
     .head { grid-template-columns: minmax(0, 1fr); }
+    .tile.wide { grid-column: auto; }
     .tile, .block { padding: 18px; }
     details.area summary { padding: 16px 14px; grid-template-columns: 12px 8px minmax(0, 1fr); grid-template-areas: "c d n" ". . v" ". . s" ". . sp"; column-gap: 9px; }
     .num { text-align: left; }
@@ -1080,8 +1088,8 @@ function weeklyBugs(rows, weeks, today = new Date()) {
 }
 
 // ---------------------------------------------------------------- 1. headline strip
-function tile(label, value, words, state = "", graphic = "") {
-  return `<div class="tile"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
+function tile(label, value, words, state = "", graphic = "", wide = false) {
+  return `<div class="tile${wide ? " wide" : ""}"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
 }
 function renderHead(d) {
   const S = d.summary || {};
@@ -1095,16 +1103,26 @@ function renderHead(d) {
   const ci = d.ciRun && d.ciRun.done ? d.ciRun.done : null;
   const ciWords = ci ? `CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
     : (hist.length ? `CI on main: result unknown (Actions API unavailable) · last metrics row ${fmtWhen(last.ts)}` : "CI on main: " + NO_DATA);
-  tiles.push(tile("Version", v ? `${esc(v.marketing)} <small>build ${esc(v.build)}</small>` : `<span class="word grey">${DASH}</span>`,
-    `${g.main_sha ? `main <b>${esc(String(g.main_sha).slice(0, 7))}</b> · ${day(g.main_date)}` : "main: " + DASH} · ${ciWords}`));
-
-  // App source lines: app only. total_swift_lines stays in the chart for continuity.
+  // Application Source and Version in one tile (Rick 2026-11-08): lines of code, one line per
+  // part with its growth since the first row that split app from tests (green up, red down),
+  // then the version, main's tip, and CI on main, each on its own line.
   const first = hist.find(r => isNum(r.app_source_lines));
-  const growth = first && isNum(last.app_source_lines) ? ` · +${n(last.app_source_lines - first.app_source_lines)} since ${day(first.ts)} (new measure)` : "";
-  tiles.push(tile("App source", isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines</small>` : `<span class="word grey">${NO_DATA}</span>`,
-    isNum(last.app_source_lines)
-      ? `Swift ${n(last.app_swift_lines)} · Python ${n(last.app_python_lines)} · <b>app only</b> (tests ${n(last.test_lines)} and tooling ${n(last.tooling_lines)} not counted)${growth}${stale(last.ts)}`
-      : "CI rows before 2026-10-11 did not split app from tests"));
+  const delta = key => {
+    if (!first || !isNum(first[key]) || !isNum(last[key])) return "";
+    const d = last[key] - first[key];
+    return d ? ` <span class="${d > 0 ? "grow-up" : "grow-down"}">${d > 0 ? "+" : "−"}${n(Math.abs(d))}</span>` : "";
+  };
+  const part = (name, key, note = "") => isNum(last[key]) ? `<span class="part">${name} ${n(last[key])}${note}${delta(key)}</span>` : "";
+  const since = first ? `<span class="part since">growth since ${day(first.ts)}${stale(last.ts)}</span>` : "";
+  const sourceValue = isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines of code${delta("app_source_lines")}</small>` : `<span class="word grey">${NO_DATA}</span>`;
+  const parts = isNum(last.app_source_lines)
+    ? part("Swift", "app_swift_lines") + part("Python", "app_python_lines")
+      + part("Tests", "test_lines", " <small>(not counted)</small>") + part("Tooling", "tooling_lines", " <small>(not counted)</small>") + since
+    : `<span class="part">CI rows before 2026-10-11 did not split app from tests</span>`;
+  const version = `<span class="part ver">VERSION <b>${v ? `${esc(v.marketing)}</b> <small>build ${esc(v.build)}</small>` : `${DASH}</b>`}</span>`
+    + `<span class="part">${g.main_sha ? `main <b>${esc(String(g.main_sha).slice(0, 7))}</b> · ${day(g.main_date)}` : "main: " + DASH}</span>`
+    + `<span class="part">${ciWords}</span>`;
+  tiles.push(tile("Application Source", sourceValue, `<span class="parts">${parts}${version}</span>`));
 
   // Test Results <published>: one row per Mac, each its own newest run (see latestRun).
   if (N && N.list.length) {
@@ -1137,14 +1155,14 @@ function renderHead(d) {
     const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
     const published = S.generated ? ` ${whenET(S.generated)}` : "";
     tiles.push(tile(`Test Results${published}`, value,
-      `<div class="hosts">${hosts}</div>`, testState, ladders));
+      `<div class="hosts">${hosts}</div>`, testState, ladders, true));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
     tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
       `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : lastWatch ? "watch" : "amber"));
   } else {
-    tiles.push(tile("Test Results", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
+    tiles.push(tile("Test Results", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)", "", "", true));
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
   }
 
