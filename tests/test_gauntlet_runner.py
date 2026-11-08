@@ -145,7 +145,20 @@ else:
         self.assertIn('UI not run (phase 2)', self.completed.stdout)
         self.assertIn('GAUNTLET AMBER', self.completed.stdout)
         self.assertNotIn('GAUNTLET PASSED', self.completed.stdout)
-        self.assertEqual(len(self.completed.stdout.splitlines()), 1)
+        # One verdict line (SUMMARY / TIDY lines follow it and are not verdicts).
+        verdicts = [l for l in self.completed.stdout.splitlines() if l.split()[1:2] in (['PASSED'], ['AMBER'], ['FAILED'])]
+        self.assertEqual(len(verdicts), 1, self.completed.stdout)
+        # The summary row (Rick 2026-11-08): totals and names, no paths into the run dir;
+        # a queued publish keeps the run (result.json) and says why.
+        row = json.loads((self.root / 'results' / 'history.jsonl').read_text().splitlines()[-1])
+        self.assertEqual(row['run_id'], self.result['run_id'])
+        self.assertEqual(set(row['totals']), {'passed', 'failed', 'skipped', 'known_issues', 'unknown'})
+        self.assertEqual(row['totals']['failed'], 0)
+        self.assertNotIn('roots', row)
+        self.assertEqual(row['new_failures'], [])
+        self.assertTrue(all('failed_tests' in s and 'artifacts' not in s for s in row['stages']))
+        self.assertEqual(self.result['totals'], row['totals'])
+        self.assertIn('GAUNTLET TIDY kept run (publish queued', self.completed.stdout)
 
     def test_dry_run_prints_plan_without_building_or_writing_results(self):
         self.run_runner('--dry-run')
@@ -169,7 +182,8 @@ else:
     def test_poisoned_home_and_roots_replaced_in_child_and_xctestrun(self):
         cache_keys = ['CLANG_MODULE_CACHE_PATH', 'SWIFT_MODULECACHE_PATH',
                       'SWIFTPM_MODULECACHE_OVERRIDE', 'XDG_CACHE_HOME']
-        self.run_runner('--only', 'unit', environment={
+        # --keep-run: the end-of-run tidy would remove DerivedData, whose .xctestrun is checked below.
+        self.run_runner('--only', 'unit', '--keep-run', environment={
             'HOME': '/private/tmp/poison-home', 'CFFIXED_USER_HOME': '/private/tmp/poison-home',
             'VS_GAUNTLET_CATALOG_ROOT': '/private/tmp/poison-catalog', 'VS_UI_TEST': '0',
             **{key: '/private/tmp/poison-cache' for key in cache_keys}})

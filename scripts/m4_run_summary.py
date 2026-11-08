@@ -18,8 +18,8 @@ Usage:
     m4_run_summary.py --gauntlet RESULT_JSON RC SECONDS [--timeout]
 Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only).
 
---gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift)
-and prints ONE line (Rick 2026-11-05, DECISIONS):
+--gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift),
+or that run's history.jsonl row when a published run dir is already gone, and prints ONE line (Rick 2026-11-05, DECISIONS):
 
     deep: GREEN — every stage passed
     deep: AMBER 7 known issues (regression 7); 6 stages blocked (912 unadapted suites); ui not run (phase 2)
@@ -33,6 +33,7 @@ no failure.
 """
 import json
 import argparse
+import os
 import re
 import sys
 
@@ -126,6 +127,32 @@ def gauntlet_verdict(result, rc, timed_out=False):
     return RED, f"unknown status {status!r}"
 
 
+def load_result(path):
+    """The run's result.json, or — once the runner has deleted a published run
+    dir (Rick 2026-11-08: only the summary row is kept) — that run's row in
+    <results-root>/history.jsonl, matched by run_id (the run dir's name). None
+    when neither exists."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        pass
+    run = os.path.dirname(os.path.abspath(path))
+    found = None
+    try:
+        with open(os.path.join(os.path.dirname(run), 'history.jsonl'), encoding='utf-8') as f:
+            for line in f:                                  # streamed: one row in memory at a time
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get('run_id') == os.path.basename(run):
+                    found = row
+    except OSError:
+        return None
+    return found
+
+
 def gauntlet_main(argv):
     ap = argparse.ArgumentParser(prog='m4_run_summary.py --gauntlet')
     ap.add_argument('result')
@@ -136,11 +163,7 @@ def gauntlet_main(argv):
         a = ap.parse_args(argv)
     except SystemExit:
         return 2
-    try:
-        with open(a.result, encoding='utf-8') as f:
-            result = json.load(f)
-    except (OSError, ValueError):
-        result = None
+    result = load_result(a.result)
     verdict, words = gauntlet_verdict(result, a.rc, a.timeout)
     sha = str((result or {}).get('commit') or '')[:9]
     print(f"deep: {verdict} {words} (sha={sha or '?'}, {a.seconds}s, results={a.result})")

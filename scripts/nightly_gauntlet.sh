@@ -126,7 +126,9 @@ if [ "$LOCK_HELD" = 1 ]; then
     (cd "$REPO_ROOT" && bash scripts/run_gauntlet.sh --away --machine "$MACHINE") >"$G_OUT" 2>&1
     rc=$?
     secs=$(( $(date +%s) - t0 ))
-    line="$(grep -E '^GAUNTLET ' "$G_OUT" | tail -1)"
+    # The verdict line only: SUMMARY / TIDY / RETENTION lines also start "GAUNTLET " and
+    # follow it; a published run dir is gone by now (m4_run_summary.py reads history.jsonl).
+    line="$(grep -E '^GAUNTLET (PASSED|AMBER|FAILED) .* results=' "$G_OUT" | tail -1)"
     result="${line##* results=}"; result="${result%% *}"
     [ -n "$line" ] || result=/nonexistent
     G_VERDICT="$(python3 "$REPO_ROOT/scripts/m4_run_summary.py" --gauntlet "$result" "$rc" "$secs")"
