@@ -136,6 +136,23 @@ struct PreviewPaneSurfaceTests {
         #expect(strip(.idle) == "none")
     }
 
+    /// Reviewer guard (2026-11-07): the oracle above compares labels only
+    /// and every strip it builds is empty, so a `frames: []` slip in
+    /// `filmstrip(_:forPath:)` would stay green there. The ready surface
+    /// must carry the strip's frames through untouched.
+    @Test func readyStripFramesReachTheSurface() {
+        let frame = PreviewFilmstrip.Frame(offsetSeconds: 0.5, image: PreviewTestImages.twoTone())
+        let i = Self.inputs(nil, true, .ready(path: Self.path, frames: [frame, frame]),
+                            false, false, false, false, .videoAndAudio)
+        guard case .filmstrip(let path, let frames) = PreviewPaneSurface.decide(i) else {
+            Issue.record("expected .filmstrip, got \(Self.label(PreviewPaneSurface.decide(i)))")
+            return
+        }
+        #expect(path == Self.path)
+        #expect(frames.count == 2)
+        #expect(frames.first?.offsetSeconds == 0.5)
+    }
+
     @Test func playingWithoutAPlayerFallsThroughToThePoster() {
         let i = Self.inputs(nil, true, .idle, true, false, true, false, .videoOnly)
         #expect(Self.label(PreviewPaneSurface.decide(i)) == "poster:true")
