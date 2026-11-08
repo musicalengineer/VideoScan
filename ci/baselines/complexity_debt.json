@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 363,
+ "entry_count": 362,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -1281,10 +1281,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::BirthplaceUnitResolver.apply.asciiKey": {
    "ccn": 21,
    "nloc": 31
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply": {
-   "ccn": 32,
-   "nloc": 238
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply.classify": {
    "ccn": 17,

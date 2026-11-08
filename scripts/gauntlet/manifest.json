@@ -805,6 +805,29 @@
       ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceScanApplyCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BirthplaceScanApplyCharacterizationTests",
+        "BirthplaceScanApplyStepTests"
+      ],
+      "tests": [
+        "aCoarseNameNarrowsOnlyAnOpenSearch",
+        "aEuropeanCountryContradictedByACoarseNameStops",
+        "aForeignCountryStopsOnlyBeforeACountryIsKnown",
+        "aUnitOutsideTheSearchIsSkippedNotStopped",
+        "aUnitWithNoSearchIsTakenUnlessItsNameIsAmbiguous",
+        "acceptUnitFollowsTheSearchSetOrTheAmbiguityRule",
+        "establishCountryKeepsTheFirstAndRefusesAContradiction",
+        "outsideGroundStopsUnlessTheCountryIsExcepted",
+        "resolvePinsEachTokenArm",
+        "theFirstCountryIsKeptWithItsRangeAndSearches",
+        "todayAndAlternativesAreDelegated"
+      ]
+    },
+    {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CaptionTextQualityTests.swift",
       "stage": "unit",
@@ -34760,6 +34783,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceClassifierTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceScanApplyCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
