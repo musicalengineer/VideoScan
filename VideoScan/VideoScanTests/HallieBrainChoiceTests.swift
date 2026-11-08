@@ -125,7 +125,10 @@ struct HallieBrainChoiceLogicTests {
         #expect(AnthropicKeyLocator.locate(in: blank)?.value == "sk-harness")
     }
 
+    // `keyStatus` is a static on a SwiftUI View, so it is main-actor isolated;
+    // the test runs on the main actor to call it synchronously.
     @Test("the Settings key status reads attributes only, never the secret")
+    @MainActor
     func presenceWithoutSecret() {
         let chain = FakeHallieKeychain(items: [
             FakeHallieKeychain.key("hallie-e1", "anthropic"): "sk-harness",
