@@ -26014,6 +26014,7 @@
         "peopleLineConfirmedPlainDetectedStarredNoDoubles",
         "playingWithoutAPlayerFallsThroughToThePoster",
         "posterHasAPlayButtonOnlyWithAPicture",
+        "readyStripFramesReachTheSurface",
         "selectionCountOnlyWhenSomethingIsSelected",
         "stopShowsForThePlayerOrThisRowsStrip",
         "thePreviewPaneSwitchesOnTheDecision"
@@ -37249,7 +37250,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3439,
+      "expected_floor": 3440,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
