@@ -175,6 +175,21 @@ struct HallieBrainChoiceLogicTests {
         #expect(HallieDataClass.of(citations: []) == .familyText)
     }
 
+    @Test("every real media-derived catalog field (presence executor names) is familyMedia")
+    func realFieldNames() {
+        for field in ["transcript", "caption", "ocrDate", "ocrText"] {
+            #expect(ArchivistEvidenceBasis.catalogField(field: field, queryTerm: "x", matchedValue: "x")
+                        .isMediaDerivedText, "\(field)")
+            #expect(ArchivistEvidenceBasis.keywordTokens(field: field, queryTerm: "x", matchedTokens: ["x"],
+                                                         alias: nil, matchedValue: "x", timestamp: nil)
+                        .isMediaDerivedText, "\(field)")
+        }
+        for field in ["tag", "userNotes", "filename", "directory", "volumeName"] {
+            #expect(!ArchivistEvidenceBasis.catalogField(field: field, queryTerm: "x", matchedValue: "x")
+                        .isMediaDerivedText, "\(field)")
+        }
+    }
+
     @Test("derive(from:) classes the plan by its citations, and offering keeps the class")
     func planClassification() {
         let spoken = HallieTurnExecutor.Citation(
@@ -193,6 +208,20 @@ struct HallieBrainChoiceLogicTests {
             route: .presence, outcome: .answered, prose: "I found 3.", basisLine: "",
             queryDescription: nil, citations: [], catalogPersonName: nil)
         #expect(HallieAnswerPlan.derive(from: clean).dataClass == .familyText)
+    }
+
+    @Test("route class is fail-closed: record and event are always familyMedia")
+    func routeClasses() {
+        func result(_ route: HallieTurnExecutor.Route) -> HallieTurnExecutor.Result {
+            .init(route: route, outcome: .answered, prose: "x.", basisLine: "",
+                  queryDescription: nil, citations: [], catalogPersonName: nil)
+        }
+        for route: HallieTurnExecutor.Route in [.record, .event, .followUp, .telling, .conversation] {
+            #expect(HallieDataClass.of(result: result(route)) == .familyMedia, "\(route)")
+        }
+        for route: HallieTurnExecutor.Route in [.presence, .cross, .graph, .temporal, .aggregate] {
+            #expect(HallieDataClass.of(result: result(route)) == .familyText, "\(route)")
+        }
     }
 
     @Test("history: a cloud brain sees none, a local brain sees all")

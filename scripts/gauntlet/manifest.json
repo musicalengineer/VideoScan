@@ -17931,8 +17931,10 @@
         "nonStringIsLocal",
         "planClassification",
         "presenceWithoutSecret",
+        "realFieldNames",
         "repairRetry",
         "roundTrip",
+        "routeClasses",
         "shellFlag",
         "stringAnswer",
         "testHostPinsLocal",
@@ -18125,6 +18127,7 @@
         "composeWithFamilyMediaClassSendsNothing",
         "familyMediaNeverReachesTheTransport",
         "oneAdapterOneSerializer",
+        "recordDossierTranscriptNeverReachesCloud",
         "smuggledMediaTextNeverReachesTheTransport"
       ]
     },
@@ -37228,7 +37231,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3426,
+      "expected_floor": 3429,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [

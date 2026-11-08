@@ -77,6 +77,33 @@ struct HallieCloudBrainCanarySensor {
         #expect(HallieCloudStubLedger.shared.seen(token).isEmpty)
     }
 
+    /// codex #254 P1: the file dossier quotes "The transcript opens: …" in
+    /// its prose with no transcript basis, so a citation-only class let the
+    /// transcript reach Anthropic. Real executor → derive → composer → stub.
+    @Test("a file dossier quoting its transcript never reaches the cloud")
+    func recordDossierTranscriptNeverReachesCloud() async {
+        let canary = "Private family transcript canary."
+        let snapshot = ArchivistRecordDossierSnapshot(presence: ArchivistPresenceRecordSnapshot(
+            fullPath: "/fixture.mov", transcript: canary, transcriptModel: "whisper"))
+        let result = ArchivistRecordExecutor.execute(
+            .init(reference: .currentSelection, operations: [.about]),
+            snapshot: snapshot, ownerName: nil)
+        #expect(result.prose.contains(canary), "fixture must exercise the quoting path")
+        let plan = HallieAnswerPlan.derive(from: result)
+        #expect(plan.dataClass == .familyMedia)
+
+        let (session, token) = hallieCloudStubSession()
+        HallieCloudStubLedger.shared.queue(
+            token, status: 200, body: #"{"content":[{"type":"text","text":"leaked"}]}"#)
+        let brain = hallieStubbedCloudBrain(session)
+        let composer = HallieGroundedComposer(personaName: "Hallie Mae") { system, user in
+            try await brain.composePlainText(system: system, user: user, dataClass: plan.dataClass)
+        }
+        let outcome = await composer.compose(plan: plan, history: [])
+        #expect(outcome.composedBy == .template)
+        #expect(HallieCloudStubLedger.shared.seen(token).isEmpty)
+    }
+
     @Test("positive control: a clean familyText request does reach the stub")
     func cleanRequestReachesTheStub() async throws {
         let (session, token) = hallieCloudStubSession()

@@ -45,6 +45,26 @@ enum HallieDataClass: String, Sendable, Equatable, Comparable {
         citations.contains { $0.bases.contains(where: \.isMediaDerivedText) }
             ? .familyMedia : .familyText
     }
+
+    /// The class of an answered turn, FAIL-CLOSED by route (codex #254 P1).
+    /// Citations alone are not enough: a route may put the media's own text
+    /// into its prose without citing it as a basis — the file dossier quotes
+    /// "The transcript opens: …" with no transcript basis. So only routes
+    /// whose prose is built from cited bases (or from the tree) are judged by
+    /// their citations; a route that reads the media's own words by design
+    /// (record, event) is always familyMedia, and so is any route not vetted
+    /// here. The switch is exhaustive: a new route will not compile until
+    /// someone decides its class.
+    static func of(result: HallieTurnExecutor.Result) -> HallieDataClass {
+        switch result.route {
+        case .presence, .cross, .graph, .temporal, .aggregate:
+            return of(citations: result.citations)
+        case .record, .event:
+            return .familyMedia
+        case .capability, .help, .smalltalk, .conversation, .telling, .reset, .followUp:
+            return .familyMedia
+        }
+    }
 }
 
 extension ArchivistEvidenceBasis {

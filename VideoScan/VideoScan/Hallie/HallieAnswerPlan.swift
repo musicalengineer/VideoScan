@@ -115,7 +115,8 @@ struct HallieAnswerPlan: Sendable, Equatable {
     /// familyMedia when any cited evidence quotes text read out of the media
     /// (a transcript snippet, a caption). A cloud brain refuses to phrase such
     /// a plan and the template wording ships instead. Set by `derive(from:)`
-    /// from the Result's citations — the one place every composed plan
+    /// from the Result (route, then citations; fail-closed — see
+    /// HallieDataClass.of(result:)) — the one place every composed plan
     /// passes — and carried through `offering` / `carrying`.
     var dataClass: HallieDataClass = .familyText
 
@@ -239,7 +240,7 @@ struct HallieAnswerPlan: Sendable, Equatable {
     static func derive(from result: HallieTurnExecutor.Result) -> HallieAnswerPlan {
         let plan = derivedPlan(from: result)
         // Never lowers a class a builder already raised.
-        return plan.classed(max(plan.dataClass, HallieDataClass.of(citations: result.citations)))
+        return plan.classed(max(plan.dataClass, HallieDataClass.of(result: result)))
     }
 
     private static func derivedPlan(from result: HallieTurnExecutor.Result) -> HallieAnswerPlan {
