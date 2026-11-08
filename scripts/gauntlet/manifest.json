@@ -32952,6 +32952,27 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_gauntlet_run_tidy.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_run_tidy.py"
+      ],
+      "tests": [
+        "test_keep_build_flag_keeps_everything",
+        "test_retain_never_follows_a_symlinked_run_dir",
+        "test_retain_removes_old_finished_runs_and_nothing_else",
+        "test_retain_with_nothing_old_prints_nothing_and_removes_nothing",
+        "test_retention_plan_picks_finished_runs_older_than_14_days_by_name",
+        "test_runner_accepts_keep_build_in_its_option_parser",
+        "test_tidy_does_not_follow_a_symlinked_scratch_dir",
+        "test_tidy_of_a_run_without_build_products_is_quiet_and_safe",
+        "test_tidy_refuses_before_result_json_exists",
+        "test_tidy_removes_only_build_scratch_of_a_finished_run"
+      ]
+    },
+    {
       "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
       "kind": "python",
       "path": "tests/test_gauntlet_inventory.py",
@@ -38539,6 +38560,10 @@
         },
         {
           "name": "tests/test_gauntlet_event_stream.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_gauntlet_run_tidy.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
