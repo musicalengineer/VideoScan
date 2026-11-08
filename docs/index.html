@@ -119,7 +119,8 @@
   .hosts > span { font-size: 15px; display: flex; flex-direction: column; gap: 3px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   .hosts .hosthead { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .hosts .hostline { padding-left: 17px; }
-  .fails { display: inline-block; margin-right: 14px; vertical-align: top; }
+  .fails { display: inline; }
+  .fails[open] { display: inline-block; vertical-align: top; }
   .fails > summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
   .fails ol { margin: 6px 0 0; padding-left: 22px; font-size: 14px; }
   .hosts > .red { border-color: var(--bad); }
@@ -971,9 +972,8 @@ function whenET(ts) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return day(ts);
   return new Date(t).toLocaleString("en-US", ET_FMT).replace(/ /g, " ");
 }
-// The row's name and memory (hardware facts, Rick's CLAUDE.md), and the failures link's words.
+// The row's name and memory (hardware facts, Rick's CLAUDE.md).
 const HOST_SPEC = { M4: { name: "M4 Max", ram: "64GB RAM" }, Ultra: { name: "M5 Ultra", ram: "96GB RAM" } };
-const FAIL_LINK = { M4: "M4 failures", Ultra: "M5 failures" };
 const specOf = h => HOST_SPEC[h] || { name: hostName(h), ram: "" };
 // The newest night that holds a cell for `h`: { night, cell, when } or null.
 function latestRun(N, h) {
@@ -989,24 +989,29 @@ function runWords(cell) {
   const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
   return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell)}${cell.state === "red" ? ` — broken${why}` : ""}`;
 }
-// "M4 failures": the failed tests of that Mac's newest run, by name (only names the
-// publisher proved against the repo's test sources), and how many more were not named.
-function failuresList(h, run) {
-  const label = FAIL_LINK[h] || `${hostName(h)} failures`;
-  const cell = run && run.cell;
+// The row's own "N failed" opens the failed tests of that Mac's newest run, by name (only
+// names the publisher proved against the repo's test sources), and how many more were not
+// named (Rick 2026-11-08). A row with nothing failed has nothing to open.
+function failuresBody(cell) {
   const names = cell && Array.isArray(cell.failed_tests) ? cell.failed_tests.filter(x => typeof x === "string") : null;
   const failed = cell ? laneFailed(cell) : 0;
   let body;
-  if (!cell) body = "No run published.";
-  else if (cell.state === "did_not_run") body = "The run did not run any tests.";
-  else if (!failed) body = "No test failed in this run.";
-  else if (!names) body = `${n(failed)} failed; this run's names were not published.`;
+  if (!names) body = `${n(failed)} failed; this run's names were not published.`;
   else {
     const more = failed - names.length;
     body = (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
       + (more > 0 ? `${n(more)} more failed test${more === 1 ? " is" : "s are"} not named.` : "");
   }
-  return `<details class="fails"><summary>${esc(label)}</summary>${body}</details>`;
+  return body;
+}
+function runLine(cell) {
+  const words = esc(runWords(cell));
+  if (cell.state === "did_not_run" || !laneFailed(cell)) return words;
+  // The first nonzero "N failed" (app first, then a lane's) becomes the opener.
+  const m = /(^|[^\d,])([1-9][\d,]*) failed/.exec(words);
+  if (!m) return words;
+  const at = m.index + m[1].length, count = `${m[2]} failed`;
+  return words.slice(0, at) + `<details class="fails"><summary>${count}</summary>${failuresBody(cell)}</details>` + words.slice(at + count.length);
 }
 function stability(N) {
   const L = N.list;
@@ -1112,7 +1117,7 @@ function renderHead(d) {
       const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey";
       const sp = specOf(h);
       return `<span class="${esc(state)}"><span class="hosthead">${dot(state)}<b>${esc(sp.name)}</b>${sp.ram ? ` ${esc(sp.ram)}` : ""} · ${run ? esc(whenET(run.when)) + stale(run.when) : "no run in 90 nights"}</span>`
-        + `<span class="hostline">${c ? esc(runWords(c)) : DASH}</span></span>`;
+        + `<span class="hostline">${c ? runLine(c) : DASH}</span></span>`;
     }).join("");
     // The headline is the most recent run of any Mac, named and dated.
     const newest = runs.filter(x => x.run).sort((a, b) => toTime(b.run.when) - toTime(a.run.when))[0];
@@ -1132,7 +1137,7 @@ function renderHead(d) {
     const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
     const published = S.generated ? ` ${whenET(S.generated)}` : "";
     tiles.push(tile(`Test Results${published}`, value,
-      `<div class="hosts">${hosts}</div>${runs.map(({ h, run }) => failuresList(h, run)).join("")}`, testState, ladders));
+      `<div class="hosts">${hosts}</div>`, testState, ladders));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
