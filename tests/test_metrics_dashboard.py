@@ -1167,6 +1167,53 @@ def test_sanitizer_rows_alone_render_without_static_rows(tmp_path):
     assert "TSan <b>1</b>" in line and "CodeQL off" in line and "<script>" not in line
 
 
+# ---------------------------------------------------------------- known findings (2026-11-08)
+# RED 2026-11-08 (Rick: "make red mean a new finding, go look"): the card was red every week
+# for the same two known reports (GRDB close race #462, mlx-swift null release #463), and a
+# failing test or a failed build never turned it red at all. Now: suppressed known findings
+# are a grey count with their issue; red = an unsuppressed finding or a run that failed.
+
+KNOWN_TSAN = [{"code": "grdb-close-read-race", "issue": 462, "hits": 15}]
+KNOWN_UBSAN = [{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}]
+
+
+@needs_node
+def test_runs_clean_apart_from_known_findings_are_green_with_a_grey_suppressed_count(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([
+        san_row(local_day(1), "address", status="ok", asan=0, ubsan=0, suppressed=KNOWN_UBSAN),
+        san_row(local_day(0), "thread", status="ok", tsan=0, suppressed=KNOWN_TSAN)])
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "dot green" in line and "0 sanitizer findings" in line
+    assert 'class="word grey">1 known suppressed: grdb close read race #462, 15 hits</span>' in line
+    assert 'class="word grey">1 known suppressed: mlx null linked functions #463</span>' in line
+    assert "1 known suppressed" in out["sections"]["body-san"]
+
+
+@needs_node
+@pytest.mark.parametrize("status", ["tests-failed", "build-failed", "host-crashed", "timeout", "no-tests-ran", "config-error"])
+def test_a_failed_run_is_red_even_with_zero_findings(tmp_path, status):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(0), "thread", status=status, tsan=0, suppressed=KNOWN_TSAN)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot red" in line and status in line
+
+
+@needs_node
+def test_an_unsuppressed_ubsan_finding_is_red_and_a_skip_is_amber(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "address", asan=0, ubsan=1),
+                                         san_row(local_day(0), "thread", status="ok", tsan=0)])
+    assert "dot red" in run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "address", status="skipped-busy", tests=0),
+                                         san_row(local_day(0), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot red" not in line and "dot green" not in line and "skipped-busy" in line
+
+
 # ---------------------------------------------------------------- static checks from the M4 lane (2026-11-04)
 # RED 2026-11-04: GitHub's strict-concurrency / lint jobs are off (no Swift 6.4 on the
 # runner), so the card's "Static checks (GitHub nightly)" read whatever the last row held

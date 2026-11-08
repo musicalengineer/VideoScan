@@ -212,7 +212,7 @@ _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "to
 # its two kinds (ASan+UBSan share a build; TSan cannot), who ran it.
 SAN_KINDS = ("address", "thread")
 SAN_STATUS = ("ok", "findings", "host-crashed", "timeout", "build-failed", "tests-failed",
-              "no-tests-ran", "skipped-busy", "other")
+              "no-tests-ran", "skipped-busy", "config-error", "other")
 SAN_SOURCES = ("weekly", "analysis-lane", "unknown")
 ANALYSIS_SOURCE = "m4-analysis-lane"
 ANALYSIS_FIELDS = ("strict_warning_total", "concurrency_warnings", "memory_safety_warnings",
@@ -383,6 +383,10 @@ SCHEMAS: Dict[str, dict] = {
         "asan_issues": "int?",
         "ubsan_issues": "int?",
         "tsan_issues": "int?",
+        # 2026-11-08: the known findings the run suppressed (scripts/sanitizer/*.supp):
+        # their machine code, the issue that tracks each, and hits (null when the
+        # runtime cannot report them — UBSan). Absent on older rows.
+        "suppressed": ("maybe", ("list", ("obj", {"code": "code", "issue": "int", "hits": "int?"}))),
     },
     # The M4 analysis lane's rows on static_analysis.jsonl (2026-11-04), one per
     # night. Only rows with this `source` are ours, validated and replaced by
@@ -854,6 +858,13 @@ def sanitizer_row(run: dict) -> Optional[dict]:
         if reports and not any(counts[k] for k in _SAN_MEASURES[kind]):
             counts[_SAN_PRIMARY[kind]] = reports
     sha = run.get("sha")
+    # Known findings: code, issue and hits only — the pattern and reason stay here.
+    suppressed = [{"code": e["code"], "issue": e["issue"],
+                   "hits": e["hits"] if isinstance(e.get("hits"), int) and not isinstance(e.get("hits"), bool)
+                   and e["hits"] >= 0 else None}
+                  for e in (run.get("suppressed") or [])
+                  if isinstance(e, dict) and isinstance(e.get("code"), str) and CODE_RE.match(e["code"])
+                  and isinstance(e.get("issue"), int) and not isinstance(e.get("issue"), bool) and e["issue"] > 0]
     return dict({
         "schemaVersion": SCHEMA_VERSION, "date": date, "kind": kind,
         "source": run.get("source") if run.get("source") in SAN_SOURCES else "unknown",
@@ -862,6 +873,7 @@ def sanitizer_row(run: dict) -> Optional[dict]:
         "status": status,
         "sha": sha if isinstance(sha, str) and SHA_RE.match(sha) else None,
         "tests": tests, "host_restarts": _int(run.get("host_restarts")), "reports": reports,
+        "suppressed": suppressed,
     }, **counts)
 
 

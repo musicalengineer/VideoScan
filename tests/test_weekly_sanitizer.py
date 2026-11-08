@@ -278,3 +278,139 @@ def test_local_files_win_over_published_rows_on_the_m4(tmp_path, capsys):
 def test_morning_digest_falls_back_to_the_published_rows():
     script = (ROOT / "scripts" / "morning_metrics.sh").read_text()
     assert "metrics/sanitizer.jsonl" in script and "sanitizer_alert.py\" --published -" in script
+
+
+# ── 2026-11-08: known findings are suppressed with a reason; red means NEW ──
+# RED: every weekly run was "findings" for the same two known reports (GRDB close
+# race, #462, 15 reports and 15 host restarts on 11/08; mlx-swift null release,
+# #463, 2 restarts on 11/07). The runner now hands scripts/sanitizer/*.supp to the
+# runtimes, refuses an entry without an issue and a reason, and lists each entry
+# with its hits in the row.
+
+import pytest  # noqa: E402
+
+TSAN_SUPPRESSED_TAIL = ("ThreadSanitizer: Matched 1 suppressions (pid=60898):\n"
+                        "15 race:DatabasePool.close\n")
+
+
+def test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_reason():
+    import re
+    code_re = re.compile(r"^[a-z][a-z0-9-]{0,31}$")         # publishable as a metrics code
+    for kind, files in ws.SUPPRESSION_FILES.items():
+        for _var, name, _extra in files:
+            entries = ws.load_suppressions(ws.SUPP_DIR / name)
+            assert entries, f"{name} is empty: drop it from SUPPRESSION_FILES instead"
+            for e in entries:
+                assert code_re.match(e["code"]) and e["issue"] > 0 and len(e["reason"]) > 40, e
+    tsan = ws.load_suppressions(ws.SUPP_DIR / "tsan.supp")
+    assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 462)]
+    ubsan = ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp")
+    assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "*mlx/backend/metal/device.cpp", 463)]
+
+
+@pytest.mark.parametrize("text, why", [
+    ("race:Anything\n", "no `# known:` header"),
+    ("# known: code=x issue=1\nrace:Anything\n", "no `# reason:`"),
+    ("# known: code=x\n# reason: r\nrace:Anything\n", "needs code"),
+    ("# known: code=x issue=abc\n# reason: r\nrace:Anything\n", "needs code"),
+    ("# known: code=x issue=1\n# reason: r\n", "has no pattern"),
+    ("# known: code=x issue=1\n# reason: r\n# known: code=y issue=2\n# reason: r\nrace:A\n", "before the previous"),
+    ("# known: code=x issue=1\n# reason: r\nAnything\n", "not <check>:<pattern>"),
+])
+def test_an_unexplained_suppression_is_refused(tmp_path, text, why):
+    f = tmp_path / "tsan.supp"
+    f.write_text("# preamble comments are fine\n\n" + text)
+    with pytest.raises(ws.SuppressionError, match=why):
+        ws.load_suppressions(f)
+
+
+def test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process(tmp_path):
+    env, known = ws.sanitizer_env("thread", {"PATH": "/bin", "TSAN_OPTIONS": "halt_on_error=0"})
+    supp = ws.SUPP_DIR / "tsan.supp"
+    assert env["TSAN_OPTIONS"] == f"halt_on_error=0:suppressions={supp}:print_suppressions=1"
+    assert env["TEST_RUNNER_TSAN_OPTIONS"] == f"suppressions={supp}:print_suppressions=1"
+    assert "UBSAN_OPTIONS" not in env and [e["code"] for e in known] == ["grdb-close-read-race"]
+    env, known = ws.sanitizer_env("address", {})
+    assert env["UBSAN_OPTIONS"] == env["TEST_RUNNER_UBSAN_OPTIONS"] == f"suppressions={ws.SUPP_DIR / 'ubsan.supp'}"
+    assert "TSAN_OPTIONS" not in env
+    # No file -> nothing added, nothing in force.
+    assert ws.sanitizer_env("thread", {"A": "1"}, tmp_path) == ({"A": "1"}, [])
+
+
+def test_matched_suppressions_sum_over_every_process_and_ignore_lookalikes():
+    log = ("12 race:NotInABlock\n" + TSAN_SUPPRESSED_TAIL + "Test Suite 'x' started\n"
+           "ThreadSanitizer: Matched 2 suppressions (pid=7):\n  3 race:DatabasePool.close\n  1 race:Other\n\n9 race:After\n")
+    assert ws.matched_suppressions(log) == {"race:DatabasePool.close": 18, "race:Other": 1}
+
+
+def test_a_run_whose_only_race_was_suppressed_is_ok_and_says_what_was_held_back():
+    """Production shape of the 11/08 run after the change: no report printed, no
+    restart, the matched block at exit."""
+    p = ws.parse_log(GREEN_LOG + TSAN_SUPPRESSED_TAIL)
+    assert ws.status_for(p, timed_out=False) == "ok" and p["reports"] == 0
+    rows = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "tsan.supp"), p["suppressed_hits"], "thread")
+    assert [(r["code"], r["issue"], r["hits"]) for r in rows] == [("grdb-close-read-race", 462, 15)]
+    ub = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp"), {}, "address")
+    assert [(r["code"], r["hits"]) for r in ub] == [("mlx-null-linked-functions", None)], "UBSan hits are not observable: null, never 0"
+
+
+def test_a_new_race_beside_a_suppressed_one_is_still_a_finding():
+    log = TSAN_SUPPRESSED_TAIL + "WARNING: ThreadSanitizer: data race (pid=1)\nSUMMARY: ThreadSanitizer: data race Store.swift:9 in commit\n" + GREEN_LOG
+    p = ws.parse_log(log)
+    assert ws.status_for(p, timed_out=False) == "findings" and p["suppressed_hits"] == {"race:DatabasePool.close": 15}
+
+
+def _fake_tools(tmp_path, monkeypatch, app_out):
+    fake = tmp_path / "bin"; fake.mkdir()
+    (fake / "xcodebuild").write_text("#!/bin/sh\nprintf '%s\\n' \"$TEST_RUNNER_TSAN_OPTIONS\" > \"$FAKE_ENV\"\n"
+                                     f"printf '{app_out}'\n")
+    (fake / "xcodebuild").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_ENV", str(tmp_path / "env.txt"))
+
+
+def test_main_passes_the_suppressions_and_records_each_with_its_hits(tmp_path, monkeypatch):
+    _fake_tools(tmp_path, monkeypatch, "✔ Test run with 12 tests in 2 suites passed after 1.0 seconds.\\n"
+                                       "** TEST SUCCEEDED **\\nThreadSanitizer: Matched 1 suppressions (pid=9):\\n4 race:DatabasePool.close\\n")
+    logdir = tmp_path / "logs"
+    assert ws.main(["--sanitizer", "thread", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
+                    "--timeout-hours", "0.01"]) == 0
+    row = json.loads((logdir / "latest-thread.json").read_text())
+    assert row["status"] == "ok" and row["tests"] == 12
+    assert [(s["code"], s["issue"], s["hits"]) for s in row["suppressed"]] == [("grdb-close-read-race", 462, 4)]
+    assert f"suppressions={ws.SUPP_DIR / 'tsan.supp'}" in (tmp_path / "env.txt").read_text()
+
+
+def test_main_with_an_unexplained_suppression_writes_a_config_error_row_and_runs_nothing(tmp_path, monkeypatch):
+    _fake_tools(tmp_path, monkeypatch, "should not run\\n")
+    supp = tmp_path / "supp"; supp.mkdir()
+    (supp / "tsan.supp").write_text("race:Everything\n")
+    logdir = tmp_path / "logs"
+    assert ws.main(["--sanitizer", "thread", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
+                    "--suppressions-dir", str(supp)]) == 0
+    row = json.loads((logdir / "latest-thread.json").read_text())
+    assert row["status"] == "config-error" and "no `# known:` header" in row["reason"] and row["tests"] == 0
+    assert not (tmp_path / "env.txt").exists()
+    line = alert.lines_for(row, dt.datetime.fromisoformat(row["started"]) + dt.timedelta(hours=1), 8)[0]
+    assert line.startswith("🔴 Thread Sanitizer") and "suppression file" in line
+
+
+KNOWN = [{"code": "grdb-close-read-race", "issue": 462, "hits": 15}]
+
+
+def test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings(tmp_path, capsys):
+    assert alert.lines_for(_row("ok", suppressed=KNOWN), NOW, 8) == []
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", status="ok", tsan_issues=0, suppressed=KNOWN)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    assert capsys.readouterr().out == ""
+
+
+def test_a_red_digest_line_says_which_known_findings_were_held_back(tmp_path, capsys):
+    line = alert.lines_for(_row("tests-failed", failed_tests=["x"], suppressed=KNOWN), NOW, 8)[0]
+    assert line.startswith("🔴") and "1 known finding suppressed (#462)" in line
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", tsan_issues=1, reports=1, suppressed=KNOWN)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    out = capsys.readouterr().out
+    assert "1 finding(s); 1 known finding suppressed (#462)" in out
