@@ -173,3 +173,26 @@ extension DeleteDuplicatesBatchRun {
         DeleteDuplicatesOutcomeReport(plans: jobs.compactMap(\.plan) + notStarted)
     }
 }
+
+/// How a Delete Duplicates run that reached its end (not suspended) ends: its
+/// plan could not be saved, it was stopped, or it completed. A save failure
+/// outranks a Stop. The job asks at each step — the plan's outcome before the
+/// final save, the summary word and the row's end after it — so a Stop during
+/// the final save ends the row Cancelled while the settled plan says
+/// "completed" (DeleteDuplicatesRunEndCharacterizationTests). Raw value = the
+/// plan's `outcome` word.
+enum DeleteDuplicatesRunEnding: String, Equatable, Sendable {
+    case planNotSaved = "stopped (plan not saved)"
+    case cancelled
+    case completed
+
+    static func decide(planSaveFailed: Bool, stopRequested: Bool) -> Self {
+        planSaveFailed ? .planNotSaved : (stopRequested ? .cancelled : .completed)
+    }
+
+    /// The plan's `outcome`.
+    var planOutcome: String { rawValue }
+
+    /// The `[dupjob]` summary line's word ("done" for a completed run).
+    var summaryWord: String { self == .completed ? "done" : rawValue }
+}

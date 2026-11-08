@@ -13879,6 +13879,33 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesRunEndCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesRunEndCharacterizationTests"
+      ],
+      "tests": [
+        "aCompletedRunWithAStrandedRowSavesItsEndInPlaceAndIsNotFiled",
+        "aFinishedPlanThatCannotBeFiledStaysInPlaceSaved",
+        "aMidRunPlanSaveFailureStopsTheRunAndSaysSo",
+        "aRecoveredFinalSaveFilesThePlanButTheRunStillEndsFailed",
+        "aStopAfterASaveFailureEndsCancelledWithTheSaveFailureWords",
+        "aStopDuringTheFinalSaveEndsCancelledWhileThePlanSaysCompleted",
+        "aStopWithAStrandedRowSuspendsAndKeepsTheQuarantinePointer",
+        "aSuspensionWhoseSaveFailsLeavesTheLastGoodPlanAndSaysSo",
+        "completedRunLogsItsOutcomeFilesThePlanAndEndsFinished",
+        "completedRunWithCopiesLeftAloneSaysWhy",
+        "completedWorkingCopyRunLogsTheWorkingCopyLine",
+        "discardCountsTheRestAsNotDoneAndSaysCancelled",
+        "quitSuspendsWithEveryLine",
+        "stopThatKeepsThePlanSuspendsWithEveryLine",
+        "theRunEndingRuleAndItsWords",
+        "theTerminalPlanIsPublishedAndTheAuditFinishedBeforeTheFinalSave"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DeleteDuplicatesReviewedPlanTests.swift",
       "stage": "unit",
       "suites": [
@@ -35773,6 +35800,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesResultLineTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesRunEndCharacterizationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 367,
+ "entry_count": 365,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -794,10 +794,6 @@
    "ccn": 19,
    "nloc": 154
   },
-  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.parse": {
-   "ccn": 18,
-   "nloc": 44
-  },
   "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.run": {
    "ccn": 23,
    "nloc": 93
@@ -953,10 +949,6 @@
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.dispatchPairs": {
    "ccn": 25,
    "nloc": 103
-  },
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.finishRun": {
-   "ccn": 31,
-   "nloc": 84
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.revalidateForResume": {
    "ccn": 25,

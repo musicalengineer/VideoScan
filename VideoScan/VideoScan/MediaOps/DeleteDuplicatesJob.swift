@@ -1371,112 +1371,135 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// How the run ended: suspended (Quit / Stop), or completed /
-    /// discarded / stopped-by-save-failure with the summary, the log, the
-    /// plan filed under done/ (unless a row is still stranded in
-    /// quarantine — then the plan stays in place and says so).
+    /// discarded / stopped-by-save-failure. Steps: tell the catalog →
+    /// suspend, or skip the rows never reached → audit → report → publish
+    /// the terminal plan → save and file it → summary → end the row. Each
+    /// flag is read where its step needs it, so a Stop landing during an
+    /// await is seen as before (DeleteDuplicatesRunEndCharacterizationTests).
     private func finishRun(model: VideoScanModel) async {
         if tally.catalogMutated {
             NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         }
         guard var finalPlan = plan else { finish(failed: "The plan went away mid-run."); return }
-
-        // QUIT / STOP: suspend. Nothing is skipped, the plan stays
-        // unfinished in place (never under done/), and it is offered —
-        // at once after a Stop, at the next launch after a Quit (#5).
         if quitRequested || stopKeepingPlan {
-            let remaining = finalPlan.remainingCount
-            let how = quitRequested ? "quit" : "Stop"
-            finalPlan.log.append("Suspended by \(how) with \(remaining) remaining — offered to resume "
-                                 + (quitRequested ? "at the next launch" : "now, or at the next launch"))
-            self.plan = finalPlan
-            result = (tally.removed, tally.failed, finalPlan.skippedBeforePlan + tally.leftAlone, tally.bytesFreed)
-            let moved = DeleteDuplicatesRate.movedText(counts: finalPlan.counts, trashVolumes: finalPlan.trashVolumes)
-            model.log("\nDelete Duplicates on \(volumeName) suspended for \(how): \(tally.removed) moved to the Trash, \(remaining) remaining — "
-                      + (quitRequested ? "the run will be offered to resume at the next launch."
-                         : "kept; Resume in Media File Operations, or at the next launch.")
-                      + (moved.isEmpty ? "" : " (\(moved))"))
-            model.duplicateStatus = "\(tally.removed) moved to the Trash — \(remaining) remaining, resume offered"
-            logSummary(quitRequested ? "suspended for quit" : "stopped")
-            auditRemainingAndFinish(finalPlan)
-            if !(await savePlan(context: "suspended for \(how)")) {
-                model.log("  The suspended plan could not be saved — the last saved plan stays in place and will be offered instead.")
-            }
-            finishSuspended(remaining: remaining, quit: quitRequested)
+            await suspendRun(finalPlan, model: model)
             return
         }
-
-        // Discard / save failure: the rest is counted, not done.
-        let stopped = stopRequested || planSaveFailed
-        if stopped {
-            let reason = planSaveFailed
-                ? "stopped — the plan could not be saved, so the rest was left alone"
-                : "cancelled before verification"
-            let leftBytes = finalPlan.entries.reduce(Int64(0)) { $0 + ($1.status.isSettled ? 0 : $1.sizeBytes) }
-            let left = finalPlan.skipRemaining(reason: reason, kind: planSaveFailed ? .failed : .cancelled)
-            tally.failed += left
-            tally.bytesFailed += leftBytes
-            if !planSaveFailed {
-                model.log("  Duplicate deletion cancelled before verification completed")
-            }
-        }
+        if stopRequested || planSaveFailed { skipRowsNeverReached(in: &finalPlan, model: model) }
 
         auditRemainingAndFinish(finalPlan)
-        let (deleted, trashed, refused, leftAlone) = (tally.deleted, tally.trashed, tally.refused, tally.leftAlone)
+        let moved = tally.deleted + tally.trashed
         // R6/R7: one outcome per requested copy; bytes MOVED TO THE TRASH.
         let report = finalPlan.outcomeReport
         let completion = report.line + " (\(finalPlan.summaryLine))"
-        if finalPlan.crossVolumeMode {
+        reportCompletion(completion, report: report, crossVolume: finalPlan.crossVolumeMode, model: model)
+        // The old verb's tuple: `deleted` = copies that left their place.
+        result = (moved, tally.failed, finalPlan.skippedBeforePlan + tally.leftAlone, tally.bytesFreed)
+
+        finalPlan.finishedAt = Date()
+        finalPlan.outcome = runEnding.planOutcome
+        finalPlan.log.append(completion)
+        self.plan = finalPlan
+        testHookBeforeFinalSave?()
+        await saveAndFileFinishedPlan(finalPlan, model: model)
+
+        // Every requested copy's outcome, then (GH #258) the copies the Angel
+        // is using; the kept markers are added at the terminal line.
+        var summaryParts = [report.line]
+        if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
+        logSummary(runEnding.summaryWord)
+        endRow(summary: summaryParts.joined(separator: " · "), moved: moved)
+    }
+
+    /// Read from the flags at the moment it is asked (DeleteDuplicatesRunEnding).
+    private var runEnding: DeleteDuplicatesRunEnding {
+        .decide(planSaveFailed: planSaveFailed, stopRequested: stopRequested)
+    }
+
+    /// QUIT / STOP: suspend. Nothing is skipped, the plan stays unfinished in
+    /// place (never under done/) and is offered — at once after a Stop, at the
+    /// next launch after a Quit (#5). `quitRequested` is re-read after the save.
+    private func suspendRun(_ plan: DeleteDuplicatesPlan, model: VideoScanModel) async {
+        var finalPlan = plan
+        let remaining = finalPlan.remainingCount
+        let how = quitRequested ? "quit" : "Stop"
+        finalPlan.log.append("Suspended by \(how) with \(remaining) remaining — offered to resume "
+                             + (quitRequested ? "at the next launch" : "now, or at the next launch"))
+        self.plan = finalPlan
+        result = (tally.removed, tally.failed, finalPlan.skippedBeforePlan + tally.leftAlone, tally.bytesFreed)
+        let moved = DeleteDuplicatesRate.movedText(counts: finalPlan.counts, trashVolumes: finalPlan.trashVolumes)
+        model.log("\nDelete Duplicates on \(volumeName) suspended for \(how): \(tally.removed) moved to the Trash, \(remaining) remaining — "
+                  + (quitRequested ? "the run will be offered to resume at the next launch."
+                     : "kept; Resume in Media File Operations, or at the next launch.")
+                  + (moved.isEmpty ? "" : " (\(moved))"))
+        model.duplicateStatus = "\(tally.removed) moved to the Trash — \(remaining) remaining, resume offered"
+        logSummary(quitRequested ? "suspended for quit" : "stopped")
+        auditRemainingAndFinish(finalPlan)
+        if !(await savePlan(context: "suspended for \(how)")) {
+            model.log("  The suspended plan could not be saved — the last saved plan stays in place and will be offered instead.")
+        }
+        finishSuspended(remaining: remaining, quit: quitRequested)
+    }
+
+    /// Discard / save failure: the rows never reached are counted, not done.
+    private func skipRowsNeverReached(in finalPlan: inout DeleteDuplicatesPlan, model: VideoScanModel) {
+        let reason = planSaveFailed
+            ? "stopped — the plan could not be saved, so the rest was left alone"
+            : "cancelled before verification"
+        let leftBytes = finalPlan.entries.reduce(Int64(0)) { $0 + ($1.status.isSettled ? 0 : $1.sizeBytes) }
+        let left = finalPlan.skipRemaining(reason: reason, kind: planSaveFailed ? .failed : .cancelled)
+        tally.failed += left
+        tally.bytesFailed += leftBytes
+        if !planSaveFailed {
+            model.log("  Duplicate deletion cancelled before verification completed")
+        }
+    }
+
+    /// The completion lines, why any copy was refused or left alone, the status.
+    private func reportCompletion(_ completion: String, report: DeleteDuplicatesOutcomeReport, crossVolume: Bool,
+                                  model: VideoScanModel) {
+        if crossVolume {
             model.log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
         } else {
             model.log("\nDelete Duplicates complete: " + completion)
         }
-        if refused > 0 {
-            model.log("  \(refused) file(s) were NOT identical to their keeper despite matching "
+        if tally.refused > 0 {
+            model.log("  \(tally.refused) file(s) were NOT identical to their keeper despite matching "
                 + "on hash/name/duration — they are marked Review and left on disk.")
         }
-        if leftAlone > 0 {
-            model.log("  \(leftAlone) file(s) were left alone because no verified copy would remain — their keeper could not be proven; check it, then run again.")
+        if tally.leftAlone > 0 {
+            model.log("  \(tally.leftAlone) file(s) were left alone because no verified copy would remain — their keeper could not be proven; check it, then run again.")
         }
         model.duplicateStatus = report.line
-        // The old verb's tuple: `deleted` = copies that left their place.
-        result = (deleted + trashed, tally.failed, finalPlan.skippedBeforePlan + leftAlone, tally.bytesFreed)
+    }
 
-        finalPlan.finishedAt = Date()
-        finalPlan.outcome = planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "completed")
-        finalPlan.log.append(completion)
-        self.plan = finalPlan
-        testHookBeforeFinalSave?()
-        // A row whose file could not be put back at resume is still in a
-        // quarantine folder the plan names: such a plan is NEVER filed
-        // under done/ — it stays where the next launch and Rick can find
-        // it (codex follow-up P1 #5).
+    /// The final save, then where the plan goes. A plan naming a row still
+    /// stranded in quarantine is NEVER filed under done/ (codex P1 #5); a plan
+    /// is filed ONLY when its terminal state is on disk (#6) — a failed final
+    /// save leaves the last good plan.json in place and says so.
+    private func saveAndFileFinishedPlan(_ finalPlan: DeleteDuplicatesPlan, model: VideoScanModel) async {
         let stranded = finalPlan.entries.filter { $0.quarantineDirectory != nil }
-        // The plan is filed under done/ ONLY when its terminal state is on
-        // disk (#6). A failed final save leaves the last good plan.json
-        // where it is — still discoverable — and says so.
+        let planFolder = DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path
         if !stranded.isEmpty {
             _ = await savePlan(context: "finished with \(stranded.count) stranded", final: true)
-            model.log("  Delete Duplicates: \(stranded.count) file(s) are still in quarantine and could not be put back — the plan stays under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done; it will be offered with a Put Back action (here, and at the next launch): "
+            model.log("  Delete Duplicates: \(stranded.count) file(s) are still in quarantine and could not be put back — the plan stays under \(planFolder) and is not filed as done; it will be offered with a Put Back action (here, and at the next launch): "
                       + stranded.map { "\($0.filename) in \($0.quarantineDirectory ?? "?")" }.joined(separator: "; "))
         } else if await savePlan(context: "finished", final: true) {
             fileDone(finalPlan)
         } else {
-            model.log("  Delete Duplicates: the finished plan could not be saved — the last saved plan stays in place under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done.")
+            model.log("  Delete Duplicates: the finished plan could not be saved — the last saved plan stays in place under \(planFolder) and is not filed as done.")
         }
+    }
 
-        // The row's one line: every requested copy's outcome; then (GH #258)
-        // the copies never taken because the Archive Angel is using them.
-        var summaryParts = [report.line]
-        if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
-        // The kept markers are rendered at the terminal line (`presented`).
-        let summary = summaryParts.joined(separator: " · ")
-        logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
-        if planSaveFailed {
-            // finish(failed:) appends the kept markers itself.
-            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summary))")
-        } else if state.cancelWasRequested || Task.isCancelled {
+    /// The row's end, read after the final save (`finish(failed:)` turns a
+    /// requested Stop into Cancelled itself and appends the kept markers).
+    private func endRow(summary: String, moved: Int) {
+        switch runEnding {
+        case .planNotSaved:
+            finish(failed: "Stopped after \(moved) moved to the Trash — the plan could not be saved (\(summary))")
+        case .cancelled:
             finishCancelled()
-        } else {
+        case .completed:
             finish(success: summary)
         }
     }
