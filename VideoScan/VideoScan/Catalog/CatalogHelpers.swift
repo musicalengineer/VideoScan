@@ -1408,279 +1408,20 @@ struct CatalogContent: View {
     }
 
     // MARK: - Preview / Player
+    //
+    // Three columns: what the file is (info), what it looks like (the
+    // centre surface PreviewPaneSurface.decide picks), and a balancing
+    // spacer. The decisions live in PreviewPaneSurface.swift (pure, tested);
+    // this code only draws them and performs the play / stop actions.
 
     private var previewPlayer: some View {
         Group {
-            if selectedRecord != nil {
+            if let rec = selectedRecord {
+                // One reachability read per body, shared by both columns.
+                let reachable = VolumeReachability.isReachable(path: rec.fullPath)
                 HStack(spacing: 0) {
-                    // Volume info — lower left
-                    if let rec = selectedRecord {
-                        VStack(alignment: .leading, spacing: 4) {
-                            // Finder-like selection count, above volume name
-                            if !selectedIDs.isEmpty {
-                                Text("\(selectedIDs.count) selected")
-                                    .font(.system(size: 24, weight: .bold))
-                                    .foregroundColor(.primary)
-                                    .monospacedDigit()
-                            }
-                            HStack(spacing: 5) {
-                                Image(systemName: "externaldrive.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.accentColor)
-                                Text(VolumeReachability.displayLabel(forPath: rec.fullPath))
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                                if !VolumeReachability.isReachable(path: rec.fullPath) {
-                                    Text("OFFLINE")
-                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.orange)
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                                }
-                            }
-                            // Full path, codecs (one line), tagged people
-                            // (replaced Volume Size / Media Cataloged,
-                            // Rick 2026-07-31; layout + People line
-                            // 2026-08-01: show what the selected file IS
-                            // and WHO is in it).
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(rec.fullPath)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(3)
-                                    .truncationMode(.middle)
-                                    .textSelection(.enabled)
-                                let codecParts = [
-                                    rec.videoCodec.isEmpty ? nil : "Video: \(rec.videoCodec)",
-                                    rec.audioCodec.isEmpty ? nil : "Audio: \(rec.audioCodec)",
-                                ].compactMap { $0 }
-                                if !codecParts.isEmpty {
-                                    Text(codecParts.joined(separator: "   "))
-                                        .font(.system(size: 13, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                }
-                                // Same notation as the People column:
-                                // plain = confirmed, * = recipe detected.
-                                let confirmed = rec.confirmedByUserPeople.map(\.name)
-                                let confirmedKeys = Set(confirmed.map { $0.lowercased() })
-                                let people = confirmed
-                                    + rec.detectedPeople
-                                        .filter { !confirmedKeys.contains($0.lowercased()) }
-                                        .map { "\($0)*" }
-                                if !people.isEmpty {
-                                    Text("People: \(people.joined(separator: ", "))")
-                                        .font(.system(size: 13, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                            }
-                            if isPlaying || model.filmstripState.isActive(forPath: rec.fullPath) {
-                                Button {
-                                    // Symmetric teardown for BOTH preview
-                                    // modes: the AVPlayer path and the
-                                    // filmstrip path (stopFilmstrip also
-                                    // cancels an in-flight interactive
-                                    // generation; a background prewarm
-                                    // keeps running for the disk cache).
-                                    player?.pause()
-                                    player = nil
-                                    isPlaying = false
-                                    model.stopFilmstrip()
-                                    // Stop also EXITS preview-follows-selection
-                                    // mode (live-preview, 2026-07-28) — Space
-                                    // and Stop are the two symmetric off-switches.
-                                    _ = livePreviewMode.stop()
-                                } label: {
-                                    Label("Stop", systemImage: "stop.fill")
-                                        .font(.system(size: 11))
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .padding(.top, 4)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    // Media preview — center
-                    VStack(spacing: 0) {
-                        if previewOfflineVolumeName != nil
-                            || (selectedRecord.map { !VolumeReachability.isReachable(path: $0.fullPath) } ?? false) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.black)
-                                Text("MEDIA OFFLINE")
-                                    .font(.system(size: 22, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.orange)
-                                    .tracking(2)
-                            }
-                            .frame(maxWidth: 480, maxHeight: 180)
-                            .aspectRatio(16.0/9.0, contentMode: .fit)
-                        } else if case .ready(let stripPath, let stripFrames) = model.filmstripState,
-                                  stripPath == selectedRecord?.fullPath {
-                            // Filmstrip mode (filmstrip preview, 2026-07-27):
-                            // the play-button path for records AVKit can't
-                            // decode (MKV/FFV1 — PreviewFrameRouter said
-                            // .ffmpegDirect). Sits exactly where VideoPlayer
-                            // renders for playable files. `.id` ties the
-                            // view's playback state (frame index) to the
-                            // row — a row switch rebuilds from frame 0.
-                            FilmstripPreviewView(frames: stripFrames,
-                                                 videoCodec: selectedRecord?.videoCodec ?? "",
-                                                 container: selectedRecord?.container ?? "")
-                                .id(stripPath)
-                        } else if case .loading(let stripPath, let done, let total) = model.filmstripState,
-                                  stripPath == selectedRecord?.fullPath {
-                            // Interactive strip generation in flight —
-                            // honest progress, same placeholder family as
-                            // MEDIA OFFLINE / NO PREVIEW.
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.black)
-                                VStack(spacing: 8) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text("Extracting frame \(min(done + 1, max(total, 1))) of \(max(total, 1))…")
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                        .monospacedDigit()
-                                }
-                            }
-                            .frame(maxWidth: 480, maxHeight: 180)
-                            .aspectRatio(16.0/9.0, contentMode: .fit)
-                        } else if isPlaying, let player = player {
-                            let _ = avKitLinkAnchor()
-                            VideoPlayer(player: player)
-                                .cornerRadius(6)
-                                .shadow(radius: 3)
-                                .overlay(alignment: .top) { playbackNoticeOverlay }
-                        } else if let img = previewImage {
-                            ZStack {
-                                Image(nsImage: img)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .cornerRadius(6)
-                                    .shadow(radius: 3)
-
-                                if let rec = selectedRecord,
-                                   rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
-                                    Button {
-                                        // ROUTED (filmstrip preview,
-                                        // 2026-07-27): consult the same pure
-                                        // route decision every other preview
-                                        // path uses BEFORE constructing any
-                                        // AVFoundation object. An MKV/FFV1
-                                        // record must never instantiate
-                                        // AVPlayer — AVKit just shows the
-                                        // crossed-out play glyph. O(1) per
-                                        // click, no I/O.
-                                        // The route→surface mapping is the
-                                        // pure PreviewPlayAction seam so the
-                                        // FilmstripRouteGateSensor can pin it
-                                        // (testing agent, 2026-07-27).
-                                        let route = PreviewFrameRouter.previewRoute(
-                                            container: rec.container,
-                                            videoCodec: rec.videoCodec,
-                                            likelyUnanalyzable: rec.isLikelyUnanalyzable)
-                                        switch PreviewPlayAction.forRoute(route) {
-                                        case .filmstrip:
-                                            model.requestFilmstrip(for: rec)
-                                        case .avPlayer:
-                                            // Remote viewer (Phase 1): the file is
-                                            // on the master — play its stream (or a
-                                            // mapped mount) instead of the master path.
-                                            if ViewerModeCenter.shared.isViewer {
-                                                let resolver = MediaStreamResolver.current(designation: model.masterArchive)
-                                                switch resolver.resolve(rec) {
-                                                case .local(let url):
-                                                    player = AVPlayer(url: url)
-                                                    isPlaying = true
-                                                    player?.play()
-                                                    checkPlaybackAudio(rec, url: url)
-                                                case .stream(let url, let native):
-                                                    if native {
-                                                        player = AVPlayer(url: url)
-                                                        isPlaying = true
-                                                        player?.play()
-                                                        _ = audioChecker.playerStarted()
-                                                    } else {
-                                                        let status = resolver.statusURL(recordID: rec.id)
-                                                        Task { @MainActor in
-                                                            if await MediaStreamClient().prepare(streamURL: url, statusURL: status) == .ready {
-                                                                player = AVPlayer(url: url)
-                                                                isPlaying = true
-                                                                player?.play()
-                                                                _ = audioChecker.playerStarted()
-                                                            }
-                                                        }
-                                                    }
-                                                case .masterOffline:
-                                                    appLog.write("Viewer: preview of \(rec.filename) refused — master offline, volume not mounted")
-                                                }
-                                            } else {
-                                                let url = URL(fileURLWithPath: rec.fullPath)
-                                                player = AVPlayer(url: url)
-                                                isPlaying = true
-                                                player?.play()
-                                                checkPlaybackAudio(rec, url: url)
-                                            }
-                                        }
-                                    } label: {
-                                        Image(systemName: "play.circle.fill")
-                                            .font(.system(size: 48))
-                                            .foregroundColor(.white.opacity(0.85))
-                                            .shadow(radius: 4)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        } else if previewUnavailable {
-                            // Preview generation failed (AVF + ffmpeg both
-                            // struck out, or the negative cache remembered
-                            // it). Same placeholder family as MEDIA OFFLINE /
-                            // AUDIO ONLY — the spinner below is reserved for
-                            // genuinely in-flight generation.
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.black)
-                                VStack(spacing: 6) {
-                                    Image(systemName: "film.slash")
-                                        .font(.system(size: 36))
-                                        .foregroundColor(.gray.opacity(0.8))
-                                    Text("NO PREVIEW")
-                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                            .frame(maxWidth: 480, maxHeight: 180)
-                            .aspectRatio(16.0/9.0, contentMode: .fit)
-                        } else if selectedRecord?.streamType == .audioOnly {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.black)
-                                VStack(spacing: 6) {
-                                    Image(systemName: "waveform")
-                                        .font(.system(size: 36))
-                                        .foregroundColor(.yellow.opacity(0.7))
-                                    Text("AUDIO ONLY")
-                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.yellow)
-                                }
-                            }
-                            .frame(maxWidth: 480, maxHeight: 180)
-                            .aspectRatio(16.0/9.0, contentMode: .fit)
-                        } else {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.gray.opacity(0.1))
-                                    .frame(width: 240, height: 135)
-                                ProgressView()
-                            }
-                        }
-                    }
-
+                    previewInfoColumn(rec, reachable: reachable)
+                    previewCentre(rec, reachable: reachable)
                     // Balance — right side
                     Spacer()
                         .frame(maxWidth: .infinity)
@@ -1700,6 +1441,242 @@ struct CatalogContent: View {
                 .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    /// Lower left: selection count, volume (+ OFFLINE), full path, codecs
+    /// on one line, tagged people (Rick 2026-07-31 / 08-01), and Stop while
+    /// either preview mode is live.
+    private func previewInfoColumn(_ rec: VideoRecord, reachable: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let count = PreviewPaneInfo.selectionCount(selectedIDs.count) {
+                Text(count)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.primary)
+                    .monospacedDigit()
+            }
+            previewVolumeLine(rec, reachable: reachable)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rec.fullPath)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                if let codecs = PreviewPaneInfo.codecLine(videoCodec: rec.videoCodec, audioCodec: rec.audioCodec) {
+                    Text(codecs)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                if let people = PreviewPaneInfo.peopleLine(confirmed: rec.confirmedByUserPeople.map(\.name),
+                                                           detected: rec.detectedPeople) {
+                    Text(people)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            if PreviewPaneInfo.showsStop(isPlaying: isPlaying, filmstrip: model.filmstripState, path: rec.fullPath) {
+                Button {
+                    stopPreview()
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func previewVolumeLine(_ rec: VideoRecord, reachable: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "externaldrive.fill")
+                .font(.system(size: 14))
+                .foregroundColor(.accentColor)
+            Text(VolumeReachability.displayLabel(forPath: rec.fullPath))
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+            if !reachable {
+                Text("OFFLINE")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+            }
+        }
+    }
+
+    /// What the decision reads, gathered from the view's state (O(1)).
+    private func previewSurfaceInputs(_ rec: VideoRecord, reachable: Bool) -> PreviewPaneSurface.Inputs {
+        PreviewPaneSurface.Inputs(
+            path: rec.fullPath, streamType: rec.streamType, volumeReachable: reachable,
+            offlineVolumeName: previewOfflineVolumeName, filmstrip: model.filmstripState,
+            isPlaying: isPlaying, hasPlayer: player != nil, hasPoster: previewImage != nil,
+            previewUnavailable: previewUnavailable)
+    }
+
+    /// Centre: draws the one surface the decision picked.
+    private func previewCentre(_ rec: VideoRecord, reachable: Bool) -> some View {
+        VStack(spacing: 0) {
+            switch PreviewPaneSurface.decide(previewSurfaceInputs(rec, reachable: reachable)) {
+            case .mediaOffline:
+                PreviewPanePlaceholder {
+                    Text("MEDIA OFFLINE")
+                        .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        .foregroundColor(.orange)
+                        .tracking(2)
+                }
+            case .filmstrip(let path, let frames):
+                // Filmstrip mode (2026-07-27): the play-button path for
+                // records AVKit can't decode (MKV/FFV1), sitting exactly
+                // where VideoPlayer renders. `.id` ties the strip's playback
+                // state to the row — a row switch rebuilds from frame 0.
+                FilmstripPreviewView(frames: frames, videoCodec: rec.videoCodec, container: rec.container)
+                    .id(path)
+            case .extracting(let frame, let total):
+                // Interactive strip generation in flight — honest progress.
+                PreviewPanePlaceholder {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Extracting frame \(frame) of \(total)…")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            case .player:
+                previewVideoPlayer
+            case .poster(let showsPlayButton):
+                previewPoster(rec, showsPlayButton: showsPlayButton)
+            case .noPreview:
+                // AVF + ffmpeg both struck out (or the negative cache
+                // remembers it); the spinner is reserved for in-flight work.
+                PreviewPaneBadge(systemImage: "film.slash", title: "NO PREVIEW",
+                                 imageColor: .gray.opacity(0.8), titleColor: .gray)
+            case .audioOnly:
+                PreviewPaneBadge(systemImage: "waveform", title: "AUDIO ONLY",
+                                 imageColor: .yellow.opacity(0.7), titleColor: .yellow)
+            case .generating:
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.gray.opacity(0.1))
+                        .frame(width: 240, height: 135)
+                    ProgressView()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var previewVideoPlayer: some View {
+        if let player {
+            let _ = avKitLinkAnchor()
+            VideoPlayer(player: player)
+                .cornerRadius(6)
+                .shadow(radius: 3)
+                .overlay(alignment: .top) { playbackNoticeOverlay }
+        }
+    }
+
+    @ViewBuilder
+    private func previewPoster(_ rec: VideoRecord, showsPlayButton: Bool) -> some View {
+        if let img = previewImage {
+            ZStack {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .cornerRadius(6)
+                    .shadow(radius: 3)
+                if showsPlayButton {
+                    Button {
+                        playPreview(rec)
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.white.opacity(0.85))
+                            .shadow(radius: 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// The play button. ROUTED (filmstrip preview, 2026-07-27): consult the
+    /// same pure route decision every other preview path uses BEFORE
+    /// constructing any AVFoundation object — an MKV/FFV1 record must never
+    /// instantiate AVPlayer (AVKit just shows the crossed-out glyph). The
+    /// route→surface mapping is the PreviewPlayAction seam the
+    /// FilmstripRouteGateSensor pins. O(1) per click, no I/O.
+    private func playPreview(_ rec: VideoRecord) {
+        let route = PreviewFrameRouter.previewRoute(
+            container: rec.container,
+            videoCodec: rec.videoCodec,
+            likelyUnanalyzable: rec.isLikelyUnanalyzable)
+        switch PreviewPlayAction.forRoute(route) {
+        case .filmstrip:
+            model.requestFilmstrip(for: rec)
+        case .avPlayer:
+            if ViewerModeCenter.shared.isViewer {
+                playFromMaster(rec)
+            } else {
+                let url = URL(fileURLWithPath: rec.fullPath)
+                player = AVPlayer(url: url)
+                isPlaying = true
+                player?.play()
+                checkPlaybackAudio(rec, url: url)
+            }
+        }
+    }
+
+    /// Remote viewer (Phase 1): the file is on the master — play its stream
+    /// (or a mapped mount) instead of the master path.
+    private func playFromMaster(_ rec: VideoRecord) {
+        let resolver = MediaStreamResolver.current(designation: model.masterArchive)
+        switch resolver.resolve(rec) {
+        case .local(let url):
+            player = AVPlayer(url: url)
+            isPlaying = true
+            player?.play()
+            checkPlaybackAudio(rec, url: url)
+        case .stream(let url, let native):
+            if native {
+                player = AVPlayer(url: url)
+                isPlaying = true
+                player?.play()
+                _ = audioChecker.playerStarted()
+            } else {
+                let status = resolver.statusURL(recordID: rec.id)
+                Task { @MainActor in
+                    if await MediaStreamClient().prepare(streamURL: url, statusURL: status) == .ready {
+                        player = AVPlayer(url: url)
+                        isPlaying = true
+                        player?.play()
+                        _ = audioChecker.playerStarted()
+                    }
+                }
+            }
+        case .masterOffline:
+            appLog.write("Viewer: preview of \(rec.filename) refused — master offline, volume not mounted")
+        }
+    }
+
+    /// Symmetric teardown for BOTH preview modes: the AVPlayer and the
+    /// filmstrip (stopFilmstrip also cancels an in-flight interactive
+    /// generation; a background prewarm keeps running for the disk cache).
+    /// Stop also EXITS preview-follows-selection mode (live preview,
+    /// 2026-07-28) — Space and Stop are the two symmetric off-switches.
+    private func stopPreview() {
+        player?.pause()
+        player = nil
+        isPlaying = false
+        model.stopFilmstrip()
+        _ = livePreviewMode.stop()
     }
 
 }

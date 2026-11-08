@@ -22058,6 +22058,55 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/InspectorMetadataTextCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "InspectorMetadataTextCharacterizationTests"
+      ],
+      "tests": [
+        "aviDVCorrelationAndDuplicates",
+        "bareRecordShowsOnlyHeaderAndEmptySections",
+        "dayPreciseInferredDateUsesMediumDate",
+        "mkvFFV1DossierSection",
+        "movProResPartialWithNotes",
+        "mp4H264FullTechnicalAndDates",
+        "mxfAvidHeaderAndAvidSection",
+        "sameFootageAloneOpensDuplicatesWithoutStatus"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/InspectorMetadataTextTests.swift",
+      "stage": "unit",
+      "suites": [
+        "InspectorMetadataTextTests"
+      ],
+      "tests": [
+        "addSkipsEmptyValues",
+        "avidProjectEditRateOnlyWhenPositive",
+        "clockClampsNegativeAndPadsSeconds",
+        "correlationOnlyWhenPairedOrScored",
+        "degenerateOCRDateAloneIsNotDossierContent",
+        "dossierOmittedWhenNothingToShow",
+        "duplicateGroupListsMembersWithOfflineMark",
+        "duplicatesHiddenWithoutFlagOrFootage",
+        "embeddedDateIsUTCWithOptionalSource",
+        "firstSectionHasNoLeadingBlankLaterOnesDo",
+        "headerShowsRatingTagsAndAvidOnlyWhenPresent",
+        "heavyDossierFormatsQuickly",
+        "inferredDateYearOnlyWithConfidence",
+        "locationAlwaysShowsSignatureState",
+        "processedNeedsBothWhoAndWhen",
+        "technicalSectionsAlwaysShowTheirTitle",
+        "timedListFormatsClockAndCount",
+        "transcriptKeepsBlankLines",
+        "videoListsFieldsInInspectorOrder",
+        "yourDateSaysKnownOrBestGuess",
+        "yourNotesComeBeforeMachineNotes"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/InspectorPanelRulesTests.swift",
       "stage": "unit",
       "suites": [
@@ -26031,6 +26080,30 @@
       ],
       "tests": [
         "runningAndNotRunningLabelsAreTruthful"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PreviewPaneSurfaceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PreviewPaneSurfaceTests"
+      ],
+      "tests": [
+        "aStripForAnotherRowIsNeverShown",
+        "codecLineMatchesTheOldExpression",
+        "decideMatchesTheOldChainOnEveryCombination",
+        "extractingCountsFromOneAndNeverPastTheTotal",
+        "mediaMatrixRoutesThePlayButton",
+        "noPreviewOutranksAudioOnlyAndTheSpinner",
+        "offlineWinsOverEverything",
+        "peopleLineConfirmedPlainDetectedStarredNoDoubles",
+        "playingWithoutAPlayerFallsThroughToThePoster",
+        "posterHasAPlayButtonOnlyWithAPicture",
+        "readyStripFramesReachTheSurface",
+        "selectionCountOnlyWhenSomethingIsSelected",
+        "stopShowsForThePlayerOrThisRowsStrip",
+        "thePreviewPaneSwitchesOnTheDecision"
       ]
     },
     {
@@ -37263,7 +37336,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3447,
+      "expected_floor": 3490,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -37702,6 +37775,8 @@
         "VideoScanTests/InferredDateYearOnlyScaleTests",
         "VideoScanTests/InferredDateYearOnlySensorTests",
         "VideoScanTests/InspectorArchivedBannerTests",
+        "VideoScanTests/InspectorMetadataTextCharacterizationTests",
+        "VideoScanTests/InspectorMetadataTextTests",
         "VideoScanTests/InspectorPanelRulesTests",
         "VideoScanTests/InspectorPanelSectionOrderTests",
         "VideoScanTests/JobLifecycleUncoveredPathsTests",
@@ -37792,6 +37867,7 @@
         "VideoScanTests/PreviewFilmstripPlanTests",
         "VideoScanTests/PreviewFrameScorerTests",
         "VideoScanTests/PreviewHelperStatusPresentationTests",
+        "VideoScanTests/PreviewPaneSurfaceTests",
         "VideoScanTests/ProbeEngineErrorPathsTests",
         "VideoScanTests/ProbeExtractionGoldenTests",
         "VideoScanTests/ProbeResultCatalogingTests",

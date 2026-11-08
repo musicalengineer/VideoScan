@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 369,
+ "entry_count": 367,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -246,10 +246,6 @@
    "ccn": 18,
    "nloc": 72
   },
-  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.previewPlayer": {
-   "ccn": 31,
-   "nloc": 233
-  },
   "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfCatalogTokenMatches": {
    "ccn": 20,
    "nloc": 30
@@ -281,10 +277,6 @@
   "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift::InspectorFamilyTagsView.editModeControls": {
    "ccn": 5,
    "nloc": 97
-  },
-  "VideoScan/VideoScan/Catalog/InspectorPanel.swift::InspectorPanel.formatAllMetadata": {
-   "ccn": 32,
-   "nloc": 137
   },
   "VideoScan/VideoScan/Catalog/InspectorWorkflowTagsView.swift::InspectorWorkflowTagsView.body": {
    "ccn": 4,
