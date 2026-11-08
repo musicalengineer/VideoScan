@@ -871,12 +871,12 @@ const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["re
 // The lanes beside the app suite (2026-10-31): the Core package lane and the Hallie
 // replay, each with its own numbers or word. A cell from before a lane existed says
 // nothing about it (null), never "0 passed".
-function laneWords(cell) {
+function laneWords(cell, sep = " · ") {
   const parts = [];
   if (isNum(cell.core_passed) || isNum(cell.core_failed)) parts.push(`Core ${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed`);
   const hallie = hallieReplayWords(cell);
   if (hallie) parts.push(hallie);
-  return parts.length ? " · " + parts.join(" · ") : "";
+  return parts.length ? sep + parts.join(sep) : "";
 }
 // A sanitized reason code as words ("catalog-schema-not-current" -> "catalog schema not current").
 const codeWords = code => String(code || "").replace(/[-:=]+/g, " ").trim();
@@ -993,10 +993,11 @@ function latestRun(N, h) {
   return null;
 }
 // One row's counts: app then every other lane, the same words for green and a few failed.
-function runWords(cell) {
+// `sep` "\n": each lane on its own line on the card (Rick 2026-11-08: no leading dots).
+function runWords(cell, sep = " · ") {
   if (cell.state === "did_not_run") return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
   const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
-  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell)}${cell.state === "red" ? ` — broken${why}` : ""}`;
+  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell, sep)}${cell.state === "red" ? ` — broken${why}` : ""}`;
 }
 // The row's own "N failed" opens the failed tests of that Mac's newest run, by name (only
 // names the publisher proved against the repo's test sources), and how many more were not
@@ -1014,7 +1015,7 @@ function failuresBody(cell) {
   return body;
 }
 function runLine(cell) {
-  const words = esc(runWords(cell));
+  const words = esc(runWords(cell, "\n")).replace(/\n/g, "<br>");
   if (cell.state === "did_not_run" || !laneFailed(cell)) return words;
   // The first nonzero "N failed" (app first, then a lane's) becomes the opener.
   const m = /(^|[^\d,])([1-9][\d,]*) failed/.exec(words);
