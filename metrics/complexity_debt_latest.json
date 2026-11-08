@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-07T11:24:42Z",
- "sha": "c50745cc",
+ "ts": "2026-11-08T11:37:00Z",
+ "sha": "cb085199",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 380,
- "baseline_before": 369,
- "baseline_after": 369,
+ "offenders": 372,
+ "baseline_before": 361,
+ "baseline_after": 361,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
@@ -112,6 +112,16 @@
    "base_nloc": 30
   },
   {
+   "key": "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body",
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "function": "VideoScanApp.body",
+   "ccn": 15,
+   "nloc": 271,
+   "lang": "swift",
+   "base_ccn": 13,
+   "base_nloc": 238
+  },
+  {
    "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::VideoScanModel.resumeTarget",
    "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift",
    "function": "VideoScanModel.resumeTarget",
@@ -132,16 +142,6 @@
    "base_nloc": 108
   },
   {
-   "key": "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body",
-   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
-   "function": "VideoScanApp.body",
-   "ccn": 13,
-   "nloc": 268,
-   "lang": "swift",
-   "base_ccn": 13,
-   "base_nloc": 238
-  },
-  {
    "key": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body",
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
    "function": "CatalogContent.body",
@@ -160,6 +160,16 @@
    "lang": "swift",
    "base_ccn": 9,
    "base_nloc": 185
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::ArchivistChatWindow.body",
+   "file": "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift",
+   "function": "ArchivistChatWindow.body",
+   "ccn": 9,
+   "nloc": 99,
+   "lang": "swift",
+   "base_ccn": 8,
+   "base_nloc": 98
   },
   {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",

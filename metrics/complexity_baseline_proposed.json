@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 369,
+ "entry_count": 361,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -246,10 +246,6 @@
    "ccn": 18,
    "nloc": 72
   },
-  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.previewPlayer": {
-   "ccn": 31,
-   "nloc": 233
-  },
   "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfCatalogTokenMatches": {
    "ccn": 20,
    "nloc": 30
@@ -281,10 +277,6 @@
   "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift::InspectorFamilyTagsView.editModeControls": {
    "ccn": 5,
    "nloc": 97
-  },
-  "VideoScan/VideoScan/Catalog/InspectorPanel.swift::InspectorPanel.formatAllMetadata": {
-   "ccn": 32,
-   "nloc": 137
   },
   "VideoScan/VideoScan/Catalog/InspectorWorkflowTagsView.swift::InspectorWorkflowTagsView.body": {
    "ccn": 4,
@@ -417,10 +409,6 @@
   "VideoScan/VideoScan/FamilyTree/TreeIdentityCenter.swift::TreeIdentityCenter.pin": {
    "ccn": 18,
    "nloc": 61
-  },
-  "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift::TreeIdentityDeriver.deriveWithResolvedPointerPins": {
-   "ccn": 32,
-   "nloc": 91
   },
   "VideoScan/VideoScan/FootageGroups/FootageGrouping.swift::FootageGrouping.text": {
    "ccn": 20,
@@ -802,10 +790,6 @@
    "ccn": 19,
    "nloc": 154
   },
-  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.parse": {
-   "ccn": 18,
-   "nloc": 44
-  },
   "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.run": {
    "ccn": 23,
    "nloc": 93
@@ -962,10 +946,6 @@
    "ccn": 25,
    "nloc": 103
   },
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.finishRun": {
-   "ccn": 31,
-   "nloc": 84
-  },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.revalidateForResume": {
    "ccn": 25,
    "nloc": 95
@@ -1049,10 +1029,6 @@
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.deletionTierCandidates": {
    "ccn": 16,
    "nloc": 40
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.runRelocate scope : [ VideoRecord ] , options : RelocateOptions , jobID : UUID": {
-   "ccn": 31,
-   "nloc": 233
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+RepairLifecycle.swift::VideoScanModel.applyHumanMetadataInheritance": {
    "ccn": 16,
@@ -1298,15 +1274,11 @@
    "ccn": 8,
    "nloc": 84
   },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::BirthplaceUnitResolver.apply.asciiKey": {
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::BirthplaceUnitResolver.asciiKey": {
    "ccn": 21,
    "nloc": 31
   },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply": {
-   "ccn": 32,
-   "nloc": 238
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.apply.classify": {
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::Scan.classify": {
    "ccn": 17,
    "nloc": 24
   },
@@ -1417,10 +1389,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift::LineageTrail.walkAllAncestors": {
    "ccn": 16,
    "nloc": 52
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift::GedcomFamilyGraph.applyingFactOverlay": {
-   "ccn": 33,
-   "nloc": 73
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewSweepEngine.swift::PreviewSweepEngine.run": {
    "ccn": 20,

@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-07T11:25:13Z",
- "sha": "c50745cc",
+ "ts": "2026-11-08T11:37:32Z",
+ "sha": "cb085199",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -217,6 +217,69 @@
    "key": "VideoScan/VideoScan/Analyze/CatalogStatusUpdateQueue.swift::CatalogStatusUpdateQueue.finalCheck",
    "file": "VideoScan/VideoScan/Analyze/CatalogStatusUpdateQueue.swift",
    "name": "CatalogStatusUpdateQueue.finalCheck",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckEnvironment.systemIdleSeconds",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckEnvironment.systemIdleSeconds",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.awayEndHour",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.awayEndHour",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.catchUpAfter",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.catchUpAfter",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.futureSlack",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.futureSlack",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.idleFor",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.idleFor",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.slotHour",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.slotHour",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.slotMinute",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.slotMinute",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckPolicy.tickEvery",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckPolicy.tickEvery",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift::DailyFileCheckScheduler.onWords",
+   "file": "VideoScan/VideoScan/Analyze/DailyFileCheck.swift",
+   "name": "DailyFileCheckScheduler.onWords",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -2538,6 +2601,20 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift::TreeIdentityDeriver.KinshipNarrowing",
+   "file": "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift",
+   "name": "TreeIdentityDeriver.KinshipNarrowing",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift::TreeIdentityDeriver.verdictWithoutNameMatch",
+   "file": "VideoScan/VideoScan/FamilyTree/TreeIdentityDeriver.swift",
+   "name": "TreeIdentityDeriver.verdictWithoutNameMatch",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/FootageGroups/FootageGrouping.swift::FootageGrouping.Edge.isNameBased",
    "file": "VideoScan/VideoScan/FootageGroups/FootageGrouping.swift",
    "name": "FootageGrouping.Edge.isNameBased",
@@ -2751,6 +2828,125 @@
    "key": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift::HallieTurnExecutor.rewritePresencePayload",
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift",
    "name": "HallieTurnExecutor.rewritePresencePayload",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.apiVersion",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.apiVersion",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.structuredRequest",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.structuredRequest",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.textBlocks",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.textBlocks",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolInstruction",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.toolInstruction",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolName",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.toolName",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolSchema",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.toolSchema",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.transientRetries",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
+   "name": "AnthropicBrain.transientRetries",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicKeychain.swift::AnthropicKeyLocator.harnessAccount",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicKeychain.swift",
+   "name": "AnthropicKeyLocator.harnessAccount",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicKeychain.swift::AnthropicKeyLocator.harnessService",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicKeychain.swift",
+   "name": "AnthropicKeyLocator.harnessService",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift::HallieBrainLabel.cloudPrefix",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift",
+   "name": "HallieBrainLabel.cloudPrefix",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift::HallieLoggedBrain.brainLabel",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift",
+   "name": "HallieLoggedBrain.brainLabel",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainProviderSection.swift::HallieBrainProviderSection.cloudCaption",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainProviderSection.swift",
+   "name": "HallieBrainProviderSection.cloudCaption",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainResolver.providerOverride",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift",
+   "name": "HallieBrainResolver.providerOverride",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainSettings.cloudModelKey",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift",
+   "name": "HallieBrainSettings.cloudModelKey",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift::RemotePart.kindName",
+   "file": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift",
+   "name": "RemotePart.kindName",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift::RemoteSerializer.base64RunLimit",
+   "file": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift",
+   "name": "RemoteSerializer.base64RunLimit",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift::RemoteSerializer.smugglingReason",
+   "file": "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift",
+   "name": "RemoteSerializer.smugglingReason",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -4852,13 +5048,6 @@
    "file": "VideoScan/VideoScan/MediaOps/ValidateCatalogJob.swift",
    "name": "ValidateCatalogJob.startWords",
    "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/ValidateCatalogJob.swift::VideoScanModel.validateCatalogNote",
-   "file": "VideoScan/VideoScan/MediaOps/ValidateCatalogJob.swift",
-   "name": "VideoScanModel.validateCatalogNote",
-   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -7123,6 +7312,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift::GedcomFamilyGraph.FactOverlayEdit.setMarriageDate",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift",
+   "name": "GedcomFamilyGraph.FactOverlayEdit.setMarriageDate",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Preflight/LaunchPreflight.swift::PreflightCheck.carriedForward",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Preflight/LaunchPreflight.swift",
    "name": "PreflightCheck.carriedForward",
@@ -7585,8 +7781,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 145,
+ "fixed": 153,
  "baseline_before": 2456,
- "baseline_after": 2311,
+ "baseline_after": 2303,
  "shrink_skipped": false
 }
