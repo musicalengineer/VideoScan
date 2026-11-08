@@ -472,7 +472,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     head = out["sections"]["head"]
     # Headline strip: version, app-only lines, last night per Mac, stability, open bugs, sprint.
     assert "5.1" in head and "build 1" in head and "b07f9da" in head and "CI on main" in head and "success" in head
-    assert "376,166" in head and "app only" in head and "+1,958 since" in head        # app_source_lines, never total_swift_lines
+    assert "376,166" in head and "lines of code" in head and "+1,958" in head and "growth since" in head        # app_source_lines, never total_swift_lines
     assert "546,428" not in head
     # 2026-11-08 (Rick): the headline is the most recent run, named and dated (here every cell is
     # date-only, so the first Mac's), counting every lane of it — never a sum across Macs.
@@ -592,7 +592,7 @@ def test_only_the_two_studios_show_and_an_off_rota_mac_is_never_named(tmp_path):
     assert "the M1 " not in nightly and not re.search(r"the M5(?! Ultra)", nightly)
     head = out["sections"]["head"]
     assert "<b>M4 Max</b>" in head and "<b>M5 Ultra</b>" in head
-    assert '<div class="tile" data-state="green"><div class="label">Test Results ' in head
+    assert '<div class="tile wide" data-state="green"><div class="label">Test Results ' in head
     tests_line = out["sections"]["sum-tests"]
     assert "the M5 Ultra is green" in tests_line
     tl = out["sections"]["tl"]
@@ -1052,7 +1052,7 @@ def row_text(html):
 
 
 def card_tile(head):
-    m = re.search(r'<div class="tile"[^>]*><div class="label">(Test Results[^<]*)</div><div class="value">(.*?)</div>'
+    m = re.search(r'<div class="tile[^"]*"[^>]*><div class="label">(Test Results[^<]*)</div><div class="value">(.*?)</div>'
                   r'(<div class="ladders">.*?</div>)?<div class="words">(.*?)</div></div>', head, re.S)
     assert m, head
     return m.group(1), m.group(2), m.group(4)
@@ -1106,6 +1106,24 @@ def test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale(tmp_path
     m4 = re.search(r'<span class="hosthead">[^<]*<span class="dot[^"]*"></span><b>M4 Max</b>(.*?)</span><span class="hostline">(.*?)</span>', words)
     assert m4, words
     assert et_when(old) in m4.group(1) and "STALE" in m4.group(1) and m4.group(2) == "13,000 passed · 0 failed"
+
+
+@needs_node
+def test_version_and_app_source_share_a_tile_and_test_results_is_wide(tmp_path):
+    """RED 2026-11-08 (Rick, screenshot): the top row wrapped; Version and App source
+    become one tile so Test Results spans two columns, and "N failed" stays on its line."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    head = out["sections"]["head"]
+    labels = re.findall(r'<div class="label">([^<]*)</div>', head)
+    assert "Application Source" in labels and "Version" not in labels and "App source" not in labels, labels
+    tile = re.search(r'<div class="label">Application Source</div>(.*?)</div></div>', head, re.S).group(1)
+    assert "lines of code" in tile and "VERSION <b>" in tile and "CI on main" in tile, tile
+    assert tile.index("Swift") < tile.index("VERSION") < tile.index("main <b>") < tile.index("CI on main"), tile
+    assert re.search(r'class="grow-(up|down)">[+−][\d,]+<', tile), tile
+    assert re.search(r'<div class="tile wide"[^>]*><div class="label">Test Results', head), head
+    assert labels.index("Application Source") < next(i for i, l in enumerate(labels) if l.startswith("Test Results"))
 
 
 @needs_node
