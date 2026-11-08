@@ -13853,14 +13853,21 @@
         "DeleteDuplicatesRunEndCharacterizationTests"
       ],
       "tests": [
+        "aCompletedRunWithAStrandedRowSavesItsEndInPlaceAndIsNotFiled",
+        "aFinishedPlanThatCannotBeFiledStaysInPlaceSaved",
         "aMidRunPlanSaveFailureStopsTheRunAndSaysSo",
+        "aRecoveredFinalSaveFilesThePlanButTheRunStillEndsFailed",
+        "aStopAfterASaveFailureEndsCancelledWithTheSaveFailureWords",
         "aStopDuringTheFinalSaveEndsCancelledWhileThePlanSaysCompleted",
+        "aStopWithAStrandedRowSuspendsAndKeepsTheQuarantinePointer",
+        "aSuspensionWhoseSaveFailsLeavesTheLastGoodPlanAndSaysSo",
         "completedRunLogsItsOutcomeFilesThePlanAndEndsFinished",
         "completedRunWithCopiesLeftAloneSaysWhy",
         "completedWorkingCopyRunLogsTheWorkingCopyLine",
         "discardCountsTheRestAsNotDoneAndSaysCancelled",
         "quitSuspendsWithEveryLine",
-        "stopThatKeepsThePlanSuspendsWithEveryLine"
+        "stopThatKeepsThePlanSuspendsWithEveryLine",
+        "theTerminalPlanIsPublishedAndTheAuditFinishedBeforeTheFinalSave"
       ]
     },
     {

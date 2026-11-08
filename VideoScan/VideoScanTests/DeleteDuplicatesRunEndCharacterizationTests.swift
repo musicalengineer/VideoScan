@@ -160,6 +160,17 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
         sink.lines.filter { $0.contains("delete duplicates ") && $0.contains(" — deleted ") }
     }
 
+    /// The audit receipt's outcome column, one per row (header dropped),
+    /// sorted; nil when no receipt was written.
+    private func receiptOutcomes(_ job: DeleteDuplicatesJob) -> [String]? {
+        guard let url = job.receiptURL, let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n").map(String.init)
+        guard lines.first == DeletionAuditRow.csvHeader else { return nil }
+        return lines.dropFirst().map { String($0.prefix { $0 != "," }) }.sorted()
+    }
+
+    private func loadPlan(at url: URL) -> DeleteDuplicatesPlan? { try? DeleteDuplicatesPlanStore.load(url: url) }
+
     // MARK: completed
 
     @Test func completedRunLogsItsOutcomeFilesThePlanAndEndsFinished() async throws {
@@ -195,6 +206,13 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
         #expect(!text.contains("Working-copy cleanup on"))
         #expect(summaryLines(sink).count == 1 && summaryLines(sink)[0].contains("delete duplicates done: "), "\(sink.lines)")
         #expect(mutated.withLock { $0 } >= 1, "a run that changed rows tells the catalog")
+        #expect(receiptOutcomes(job) == ["held", "moved", "moved"], "\(String(describing: receiptOutcomes(job)))")
+        #expect(job.audit == nil, "the audit is finished")
+        let onDisk = try #require(loadPlan(at: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root)
+            .appendingPathComponent("plan.json")))
+        let filedAt = try #require(onDisk.finishedAt), publishedAt = try #require(plan.finishedAt)
+        #expect(onDisk.outcome == plan.outcome && abs(filedAt.timeIntervalSince(publishedAt)) < 1 && onDisk.log.last == plan.log.last,
+                "the filed plan is the published terminal plan")
         // Never lose media: keeper + look-alike in place, both copies in the (scratch) Trash.
         #expect(FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(FileManager.default.fileExists(atPath: rig.different.fullPath))
@@ -285,6 +303,7 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
                 "\(text)")
         #expect(!text.contains("Delete Duplicates complete:"))
         #expect(summaryLines(sink).count == 1 && summaryLines(sink)[0].contains("delete duplicates stopped: "), "\(sink.lines)")
+        #expect(receiptOutcomes(job) == ["cancelled", "cancelled", "cancelled"], "suspended rows are audited as cancelled")
         for r in rig.copies + [rig.different] { #expect(FileManager.default.fileExists(atPath: r.fullPath)) }
     }
 
@@ -349,6 +368,7 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
         #expect(line.contains("delete duplicates cancelled: "))
         let notDone = ByteCountFormatter.string(fromByteCount: Int64(runEndFileSize * 3), countStyle: .file)
         #expect(line.contains("not done 3 (\(notDone))"), "\(line)")
+        #expect(receiptOutcomes(job) == ["cancelled", "cancelled", "cancelled"], "\(String(describing: receiptOutcomes(job)))")
         for r in rig.copies + [rig.different] { #expect(FileManager.default.fileExists(atPath: r.fullPath)) }
     }
 
@@ -388,6 +408,7 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
         #expect(text.contains("the finished plan could not be saved"), "\(text)")
         let line = try #require(summaryLines(sink).first, "\(sink.lines)")
         #expect(line.contains("delete duplicates stopped (plan not saved): "), "\(line)")
+        #expect(receiptOutcomes(job) == ["failed", "failed", "moved"], "\(String(describing: receiptOutcomes(job)))")
         // Never lose media: the keeper stays; every copy is at its path or in the Trash.
         #expect(FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         let atPath = (rig.copies + [rig.different]).filter { FileManager.default.fileExists(atPath: $0.fullPath) }.count
@@ -417,5 +438,212 @@ struct DeleteDuplicatesRunEndCharacterizationTests {
         let text = await console(rig.model)
         #expect(!text.contains("Duplicate deletion cancelled before verification completed"),
                 "the Stop came after every row settled")
+    }
+
+    // MARK: ordering at the end (codex gap review 2026-11-07, finding 6)
+
+    /// Just before the final save: the catalog was told, the audit is
+    /// finished (receipt written), the terminal plan is published in memory,
+    /// the plan on disk is still the pre-final one, and the row is still live.
+    @Test func theTerminalPlanIsPublishedAndTheAuditFinishedBeforeTheFinalSave() async throws {
+        let rig = makeRig("order"); defer { rig.cleanup() }
+        let mutated = OSAllocatedUnfairLock(initialState: 0)
+        let token = NotificationCenter.default.addObserver(forName: .videoScanCatalogMutated, object: nil, queue: nil) { _ in
+            mutated.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        let job = makeJob(rig, gate: RunEndGate(), sink: InMemoryLogSink())
+        struct Seen { var outcome: String?; var finished: Bool; var lastLog: String?; var receipt: Bool; var auditOpen: Bool
+                      var notified: Int; var diskOutcome: String?; var diskFinished: Bool; var active: Bool }
+        var seen: Seen?
+        let root = rig.root
+        job.testHookBeforeFinalSave = { [weak job] in
+            guard let job, let plan = job.plan else { return }
+            let disk = try? DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: root))
+            seen = Seen(outcome: plan.outcome, finished: plan.finishedAt != nil, lastLog: plan.log.last,
+                        receipt: job.receiptURL != nil, auditOpen: job.audit != nil, notified: mutated.withLock { $0 },
+                        diskOutcome: disk?.outcome, diskFinished: disk?.finishedAt != nil, active: job.state.isActive)
+        }
+        job.start()
+        await job.task?.value
+
+        let s = try #require(seen, "the hook ran")
+        let plan = try #require(job.plan)
+        #expect(s.outcome == "completed" && s.finished && s.lastLog == plan.outcomeReport.line + " (\(plan.summaryLine))")
+        #expect(s.receipt && !s.auditOpen, "the audit finished before the final save")
+        #expect(s.notified >= 1, "the catalog was told before the final save")
+        #expect(s.diskOutcome == nil && !s.diskFinished, "the plan on disk is still the pre-final one")
+        #expect(s.active, "the row is still live until the end")
+    }
+
+    // MARK: stranded rows at the end (finding 1)
+
+    /// A resumed plan with one row stranded in quarantine (its file cannot be
+    /// put back) and one ordinary copy.
+    private func strandedPlan(_ rig: Rig) throws -> (DeleteDuplicatesPlan, URL) {
+        func entry(_ r: VideoRecord) -> DeleteDuplicatesPlan.Entry {
+            DeleteDuplicatesPlan.Entry(id: r.id, path: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
+                                       keeperID: rig.keeper.id, keeperPath: rig.keeper.fullPath, keeperFilename: rig.keeper.filename,
+                                       keeperStamp: FileIdentityStamp.capture(path: rig.keeper.fullPath))
+        }
+        let stranded = rig.copies[1]
+        var plan = DeleteDuplicatesPlan(volumePath: rig.dir.path, catalogLocation: rig.model.catalogStore.fileLocation,
+                                        crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "2 extras",
+                                        entries: [entry(stranded), entry(rig.copies[0])])
+        let qdir = rig.dir.appendingPathComponent(SignatureVerification.quarantineDirectoryPrefix + "recorded", isDirectory: true)
+        try FileManager.default.createDirectory(at: qdir, withIntermediateDirectories: false)
+        try FileManager.default.moveItem(at: URL(fileURLWithPath: stranded.fullPath), to: qdir.appendingPathComponent(stranded.filename))
+        plan.setQuarantined(stranded.id, directory: qdir.path,
+                            stamp: FileIdentityStamp(device: 1, inode: 2, size: Int64(runEndFileSize), mtimeNs: 3, ctimeNs: 4))
+        plan.startedAt = Date().addingTimeInterval(-60)
+        try DeleteDuplicatesPlanStore.save(plan, root: rig.root)
+        return (plan, qdir)
+    }
+
+    @Test func aCompletedRunWithAStrandedRowSavesItsEndInPlaceAndIsNotFiled() async throws {
+        let rig = makeRig("strandeddone"); defer { rig.cleanup() }
+        let (plan, qdir) = try strandedPlan(rig)
+        let sink = InMemoryLogSink()
+        let job = DeleteDuplicatesJob(model: rig.model, resuming: plan, hooks: RunEndGate().hooks(trashIn: rig.dir), planRoot: rig.root)
+        job.appLogSink = sink
+        job.start()
+        await job.task?.value
+
+        let after = try #require(job.plan)
+        let completion = after.outcomeReport.line + " (2 extras)"
+        let onDisk = try #require(loadPlan(at: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root)))
+        #expect(onDisk.outcome == "completed" && onDisk.finishedAt != nil && onDisk.log.last == completion,
+                "the terminal plan is saved IN PLACE: \(String(describing: onDisk.outcome)) \(onDisk.log.last ?? "nil")")
+        #expect(onDisk.entries[0].quarantineDirectory == qdir.path, "the row still names where its file is")
+        #expect(!donePlanExists(plan.id, rig), "never filed as done")
+        #expect(FileManager.default.fileExists(atPath: qdir.appendingPathComponent(rig.copies[1].filename).path))
+        guard case .finished = job.state else { Issue.record("expected .finished, got \(job.state)"); return }
+        #expect(summaryLines(sink).first?.contains("delete duplicates done: ") == true, "\(sink.lines)")
+        let text = await console(rig.model)
+        #expect(text.contains("Delete Duplicates: 1 file(s) are still in quarantine and could not be put back — the plan stays under \(DeleteDuplicatesPlanStore.directory(for: plan.id, root: rig.root).path) and is not filed as done"),
+                "\(text)")
+    }
+
+    @Test func aStopWithAStrandedRowSuspendsAndKeepsTheQuarantinePointer() async throws {
+        let rig = makeRig("strandedstop"); defer { rig.cleanup() }
+        let (plan, qdir) = try strandedPlan(rig)
+        let gate = RunEndGate(); gate.blockFirstDuplicate = true
+        let job = DeleteDuplicatesJob(model: rig.model, resuming: plan, hooks: gate.hooks(trashIn: rig.dir), planRoot: rig.root)
+        job.appLogSink = InMemoryLogSink()
+        job.start()
+        await waitForFirstDuplicateRead(gate)
+        job.cancel()
+        gate.release.signal()
+        await job.task?.value
+
+        #expect(job.state == .cancelled)
+        let onDisk = try #require(loadPlan(at: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root)))
+        #expect(onDisk.outcome == nil && onDisk.finishedAt == nil, "still resumable")
+        #expect(onDisk.entries[0].quarantineDirectory == qdir.path, "the quarantine pointer survives the Stop")
+        #expect(onDisk.entries[1].status == .pending, "\(onDisk.entries.map(\.status))")
+        #expect(onDisk.log.last?.hasPrefix("Suspended by Stop with 1 remaining") == true, "\(onDisk.log.last ?? "nil")")
+        #expect(job.subtitle == "Stopped — 0 moved to the Trash; 1 remaining kept for later (Resume in Media File Operations)",
+                Comment(rawValue: job.subtitle))
+        #expect(!donePlanExists(plan.id, rig))
+    }
+
+    // MARK: save failures around the end (findings 2, 3, 8)
+
+    @Test func aSuspensionWhoseSaveFailsLeavesTheLastGoodPlanAndSaysSo() async throws {
+        let rig = makeRig("suspendsave"); defer { rig.cleanup() }
+        let gate = RunEndGate(); gate.blockFirstDuplicate = true
+        let job = makeJob(rig, gate: gate, sink: InMemoryLogSink())
+        job.start()
+        await waitForFirstDuplicateRead(gate)
+        let id = try #require(job.plan?.id)
+        let before = try #require(loadPlan(at: DeleteDuplicatesPlanStore.planURL(for: id, root: rig.root)))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500],
+                                              ofItemAtPath: DeleteDuplicatesPlanStore.directory(for: id, root: rig.root).path)
+        job.cancel()
+        gate.release.signal()
+        await job.task?.value
+
+        #expect(job.state == .cancelled)
+        #expect(job.subtitle == "Stopped — 0 moved to the Trash; 3 remaining kept for later (Resume in Media File Operations)",
+                Comment(rawValue: job.subtitle))
+        let onDisk = try #require(loadPlan(at: DeleteDuplicatesPlanStore.planURL(for: id, root: rig.root)))
+        #expect(onDisk.log == before.log && onDisk.outcome == nil, "the last good plan stays, unchanged")
+        #expect(!donePlanExists(id, rig))
+        let text = await console(rig.model)
+        #expect(text.contains("The suspended plan could not be saved — the last saved plan stays in place and will be offered instead."),
+                "\(text)")
+        for r in rig.copies + [rig.different] { #expect(FileManager.default.fileExists(atPath: r.fullPath)) }
+    }
+
+    /// The mid-run save failure, then the folder is writable again for the
+    /// final save: the terminal plan is filed, and its words still say the
+    /// run stopped because a save failed.
+    private func saveFailureThenRecovery(_ label: String, cancelLate: Bool) async throws -> (DeleteDuplicatesJob, Rig, InMemoryLogSink) {
+        let rig = makeRig(label)
+        let sink = InMemoryLogSink()
+        let gate = RunEndGate()
+        let root = rig.root
+        gate.onQuarantine = { n in
+            guard n == 2, let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            else { return }
+            for d in dirs where d.lastPathComponent != "done" {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: d.path)
+            }
+        }
+        let job = makeJob(rig, gate: gate, sink: sink)
+        job.testHookBeforeFinalSave = { [weak job] in
+            guard let job, let id = job.plan?.id else { return }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                                   ofItemAtPath: DeleteDuplicatesPlanStore.directory(for: id, root: root).path)
+            if cancelLate { job.cancel() }
+        }
+        job.start()
+        await job.task?.value
+        return (job, rig, sink)
+    }
+
+    @Test func aRecoveredFinalSaveFilesThePlanButTheRunStillEndsFailed() async throws {
+        let (job, rig, sink) = try await saveFailureThenRecovery("recovered", cancelLate: false)
+        defer { rig.cleanup() }
+        let plan = try #require(job.plan)
+        #expect(donePlanExists(plan.id, rig), "the final save worked: filed under done/")
+        let filed = try #require(loadPlan(at: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).appendingPathComponent("plan.json")))
+        #expect(filed.outcome == "stopped (plan not saved)")
+        guard case .failed(let message) = job.state else { Issue.record("expected .failed, got \(job.state)"); return }
+        #expect(message.hasPrefix("Stopped after 1 moved to the Trash — the plan could not be saved ("), "\(message)")
+        #expect(summaryLines(sink).first?.contains("delete duplicates stopped (plan not saved): ") == true)
+    }
+
+    @Test func aStopAfterASaveFailureEndsCancelledWithTheSaveFailureWords() async throws {
+        let (job, rig, sink) = try await saveFailureThenRecovery("recoveredstop", cancelLate: true)
+        defer { rig.cleanup() }
+        let plan = try #require(job.plan)
+        #expect(plan.outcome == "stopped (plan not saved)")
+        #expect(donePlanExists(plan.id, rig))
+        #expect(job.state == .cancelled, "a requested Stop never ends Failed")
+        #expect(job.subtitle == "Stopped — 1 moved to the Trash, the rest left alone", Comment(rawValue: job.subtitle))
+        #expect(summaryLines(sink).first?.contains("delete duplicates stopped (plan not saved): ") == true,
+                "the save failure outranks the Stop in the summary word")
+    }
+
+    @Test func aFinishedPlanThatCannotBeFiledStaysInPlaceSaved() async throws {
+        let rig = makeRig("nodone"); defer { rig.cleanup() }
+        let sink = InMemoryLogSink()
+        let job = makeJob(rig, gate: RunEndGate(), sink: sink)
+        let root = rig.root
+        job.testHookBeforeFinalSave = {
+            // done/ cannot be created: a file sits where the folder would go.
+            FileManager.default.createFile(atPath: root.appendingPathComponent("done").path, contents: Data("x".utf8))
+        }
+        job.start()
+        await job.task?.value
+
+        let plan = try #require(job.plan)
+        let onDisk = try #require(loadPlan(at: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root)))
+        #expect(onDisk.outcome == "completed" && onDisk.finishedAt != nil, "the terminal plan was saved in place")
+        guard case .finished = job.state else { Issue.record("expected .finished, got \(job.state)"); return }
+        #expect(summaryLines(sink).first?.contains("delete duplicates done: ") == true)
+        let text = await console(rig.model)
+        #expect(text.contains("could not file the finished plan under done/"), "\(text)")
     }
 }
