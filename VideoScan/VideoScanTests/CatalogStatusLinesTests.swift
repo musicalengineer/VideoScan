@@ -2,8 +2,8 @@
 // Catalog Status answers three questions (Rick 2026-11-01): Database,
 // Files, Content — one coloured line each; the menu title names the worst.
 //
-//   LOGIC     — the Database colour on the 24-hour boundary (23 h 59 pass →
-//               green, 24 h 01 → yellow, found something → red; stopped,
+//   LOGIC     — the Database colour on the 7-day backstop (6 d 23 h 59 pass →
+//               green, 7 d 01 min → yellow, found something → red; stopped,
 //               never, before the switch → yellow; failed, unreadable → red);
 //               Files (present / missing words, unsettled, large share,
 //               stale, killed); Content (counts per analyzer; Embedded and
@@ -24,6 +24,7 @@ import VideoScanCore
 
 private let now = Date(timeIntervalSince1970: 2_000_000_000)
 private let hour: TimeInterval = 3_600
+private let week: TimeInterval = 7 * 86_400
 private func d(_ date: Date) -> String { "D\(Int(date.timeIntervalSince1970))" }
 
 @Suite("Catalog Status lines — logic")
@@ -33,16 +34,19 @@ struct CatalogStatusLinesLogicTests {
         IntegrityReportFacts(lastCompleted: at, outcome: .ok)
     }
 
-    @Test("Database: a pass 23 h 59 min ago is green; 24 h 01 min is yellow; found something is red")
+    @Test("Database: a pass 23 h 59 min ago and 25 h ago is green; exactly 7 days is green; 7 d 01 min is yellow; found something is red")
     func databaseOnTheBoundary() {
         let green = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-(23 * hour + 59 * 60))), now: now, date: d)
         #expect(green.state == .green)
         #expect(green.words == "Integrity check passed D\(Int(now.timeIntervalSince1970 - 23 * hour - 59 * 60)) (23 h ago)")
-        let exactly = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-24 * hour)), now: now, date: d)
-        #expect(exactly.state == .green, "24 h exactly is still within 24 hours")
-        let late = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-(24 * hour + 60))), now: now, date: d)
+        // The 11/07 regression: 24 h passing alone no longer turns it yellow.
+        let dayOld = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-25 * hour)), now: now, date: d)
+        #expect(dayOld.state == .green, "25 h old is within the 7-day backstop: \(dayOld.words)")
+        let exactly = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-week)), now: now, date: d)
+        #expect(exactly.state == .green, "7 days exactly is still within the backstop")
+        let late = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-(week + 60))), now: now, date: d)
         #expect(late.state == .yellow)
-        #expect(late.words.hasPrefix("Yellow: the last integrity check passed") && late.words.hasSuffix("— older than 24 hours. Fix: Check Now… runs it again"),
+        #expect(late.words.hasPrefix("Yellow: the last integrity check passed") && late.words.hasSuffix("— older than 7 days. Fix: Check Now… runs it again"),
                 Comment(rawValue: late.words))
         // RED 2026-11-02 (flipped): a decision count alone never colours the
         // line — 19 measured-silence files have no clearing verb (DECISIONS
@@ -53,7 +57,7 @@ struct CatalogStatusLinesLogicTests {
         let notRed = CatalogStatusLinesPolicy.database(found, now: now, date: d)
         #expect(notRed.state == .green, "needsDecision > 0 and no break: green when fresh (got \(notRed.state))")
         #expect(!notRed.words.contains("headers") && !notRed.words.contains("to look at") && notRed.detail.isEmpty, Comment(rawValue: notRed.words))
-        found.lastCompleted = now.addingTimeInterval(-(24 * hour + 60))
+        found.lastCompleted = now.addingTimeInterval(-(week + 60))
         #expect(CatalogStatusLinesPolicy.database(found, now: now, date: d).state == .yellow, "…and yellow only when stale")
         var broke = Self.passed(at: now.addingTimeInterval(-hour))
         broke.reality.breaks = [CatalogRealityCount(count: 1, words: "1 duplicate group holds different digests")]
@@ -135,7 +139,10 @@ struct CatalogStatusLinesLogicTests {
         #expect(y.state == .yellow && y.detail.contains { $0.contains("4 files changed size on disk") })
         let offline = CatalogFreshnessFacts(audit: Self.audit(counts: ["planned": 100, "present": 80, "notAsked": 20]))
         #expect(CatalogStatusLinesPolicy.files(offline, missing: missing, now: now, date: d).state == .yellow)
-        let stale = CatalogFreshnessFacts(audit: Self.audit(finished: now.addingTimeInterval(-25 * hour), counts: ["planned": 1, "present": 1]))
+        // The 11/07 regression: a day old is green; only past the 7-day backstop is it stale.
+        let dayOld = CatalogFreshnessFacts(audit: Self.audit(finished: now.addingTimeInterval(-25 * hour), counts: ["planned": 1, "present": 1]))
+        #expect(CatalogStatusLinesPolicy.files(dayOld, missing: missing, now: now, date: d).state == .green)
+        let stale = CatalogFreshnessFacts(audit: Self.audit(finished: now.addingTimeInterval(-(week + 60)), counts: ["planned": 1, "present": 1]))
         #expect(CatalogStatusLinesPolicy.files(stale, missing: missing, now: now, date: d).state == .yellow)
         let killed = CatalogFreshnessFacts(audit: Self.audit(.running, finished: nil, counts: [:]))
         #expect(CatalogStatusLinesPolicy.files(killed, missing: missing, now: now, date: d).state == .red)
@@ -279,8 +286,8 @@ struct CatalogStatusLinesTruthTests {
         #expect(row == "completed \(d(recent)) · nothing to decide")
         #expect(line.words.contains(d(recent)), "the same date in both")
 
-        // A clean pass 24 h 01 min ago.
-        let old = now.addingTimeInterval(-(24 * hour + 60))
+        // A clean pass 7 d 01 min ago (past the backstop).
+        let old = now.addingTimeInterval(-(week + 60))
         try IntegrityReportStore.write(Self.report(.completed, at: old), besideCatalogAt: catalog, now: old)
         (line, row) = Self.both(dir)
         #expect(line.state == .yellow && row == "completed \(d(old)) · nothing to decide")
@@ -396,11 +403,11 @@ struct CatalogStatusLinesTruthTests {
                 == "Catalog Status — Green…")
 
         // Yellow when stale, naming the one verb; the facts still listed.
-        let old = now.addingTimeInterval(-(24 * hour + 60))
+        let old = now.addingTimeInterval(-(week + 60))
         try IntegrityReportStore.write(poisoned(at: old, member: true, removed: true), besideCatalogAt: catalog, now: old)
         (line, _) = Self.both(dir)
         #expect(line.state == .yellow)
-        #expect(line.words == "Yellow: the last integrity check passed \(d(old)) (24 h ago) — older than 24 hours. Fix: Check Now… runs it again",
+        #expect(line.words == "Yellow: the last integrity check passed \(d(old)) (7 days ago) — older than 7 days. Fix: Check Now… runs it again",
                 Comment(rawValue: line.words))
         #expect(line.detail.contains("19 files have a silent audio track (measured)"), Comment(rawValue: line.detail.joined(separator: " | ")))
     }
@@ -542,7 +549,9 @@ struct CatalogStatusWindowSensorTests {
         }
         #expect(count == 1, "one call site in the app")
         let lines = try Self.code("CatalogStatusLines.swift")
-        #expect(lines.contains("CatalogRealityPolicy.freshFor"), "the 24-hour constant is the reality policy's, not a copy")
+        #expect(lines.contains("CatalogRealityPolicy.freshFor"), "the backstop constant is the reality policy's, not a copy")
+        #expect(lines.contains("CatalogRealityPolicy.freshForWords"), "and so are its words")
         #expect(!lines.contains("24 * 3_600") && !lines.contains("86_400 *"))
+        #expect(!lines.contains("older than 24 hours") && !lines.contains("older than 7 days"), "the words come from freshForWords")
     }
 }

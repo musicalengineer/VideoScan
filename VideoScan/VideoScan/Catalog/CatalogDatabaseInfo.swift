@@ -233,7 +233,7 @@ enum CatalogDatabaseInfoLines {
         add("Last commit", map(db.lastCommit) { c in
                 "\(date(c.committedAt)) · generation \(c.generation.formatted()) · via \(c.writer)\(c.kind == "adopt" ? " (adoption)" : "") · \(c.host)"
             }, "from the store: generation_history's newest row (committed_at, writer = the commit door, host)")
-        add("Last backup the app made", backup(s.backup, date: date),
+        add("Last backup the app made", backup(s.backup, date: date, now: s.readAt),
             "VideoScan.lastBackupAt / lastBackupPath in this Mac's defaults (written by Back Up Catalog…); the path is checked now")
         add("This Mac's role", role(s.sources), "the sync engine's mode, decided at launch from this Mac's name and CatalogSyncMasterHostname")
         add("Last sync", lastSync(s, date: date), "last_sync.txt, written by a viewer's successful pull")
@@ -287,10 +287,13 @@ enum CatalogDatabaseInfoLines {
         return "\(b(s.total)) (catalog.sqlite \(b(s.database)) · -wal \(s.wal.map(b) ?? "absent") · -shm \(s.shm.map(b) ?? "absent"))"
     }
 
-    nonisolated static func backup(_ b: CatalogBackupFacts, date: (Date) -> String) -> CatalogDatabaseReading<String> {
+    /// `now` = the read's time: a backup 7 days or more old says so (the
+    /// 7-day reminder, CatalogReminderClock); nil = no reminder (old callers).
+    nonisolated static func backup(_ b: CatalogBackupFacts, date: (Date) -> String, now: Date? = nil) -> CatalogDatabaseReading<String> {
         guard let at = b.at else { return .unknown("no backup recorded on this Mac (VideoScan.lastBackupAt is not set)") }
-        guard let path = b.path else { return .known("\(date(at)) — destination not recorded") }
-        return .known("\(date(at)) → \(path)" + (b.pathExists == false ? " (nothing is at that path now)" : ""))
+        let reminder = now.map { CatalogReminderClock.infoSuffix(last: at, now: $0) } ?? ""
+        guard let path = b.path else { return .known("\(date(at)) — destination not recorded" + reminder) }
+        return .known("\(date(at)) → \(path)" + (b.pathExists == false ? " (nothing is at that path now)" : "") + reminder)
     }
 
     /// The path, and what it is to this session.
@@ -308,7 +311,7 @@ enum CatalogDatabaseInfoLines {
     }
 
     nonisolated static func lastSync(_ s: CatalogDatabaseInfoSnapshot, date: (Date) -> String) -> CatalogDatabaseReading<String> {
-        if case .known(let d) = s.lastSync { return .known(date(d)) }
+        if case .known(let d) = s.lastSync { return .known(date(d) + CatalogReminderClock.infoSuffix(last: d, now: s.readAt)) }
         if s.sources.sessionRole == .master {
             return .known("not applicable — the master publishes; viewers pull")
         }

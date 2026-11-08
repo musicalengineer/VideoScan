@@ -163,7 +163,7 @@ struct CatalogStatusSplitLogicTests {
         #expect(CatalogStatusLinesPolicy.files(unread, missing: MissingCopyCounts(), offline: ["/Volumes/X9": 1], now: now, date: d).state == .yellow)
         // Every coloured Files line names its fix.
         for f in [CatalogFreshnessFacts(), unread, CatalogFreshnessFacts(auditProblem: "damaged"),
-                  CatalogFreshnessFacts(audit: audit(["planned": 1, "present": 1], finished: now.addingTimeInterval(-90_000)))] {
+                  CatalogFreshnessFacts(audit: audit(["planned": 1, "present": 1], finished: now.addingTimeInterval(-(7 * 86_400 + 60))))] {
             let l = CatalogStatusLinesPolicy.files(f, missing: MissingCopyCounts(), now: now, date: d)
             #expect(l.state.needsAttention && l.words.contains("Fix: "), Comment(rawValue: l.words))
         }

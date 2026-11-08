@@ -13220,6 +13220,38 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DailyFileCheckTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DailyFileCheckPolicyTests",
+        "DailyFileCheckSchedulerTests",
+        "DailyFileCheckTruthTests",
+        "CatalogReminderClockTests",
+        "DailyFileCheckSensorTests"
+      ],
+      "tests": [
+        "aStaleRecordNeverShowsGreen",
+        "aStoppedRunIsPartialNotGreen",
+        "boundaries",
+        "busySkips",
+        "futureDatedProvesNothing",
+        "lastFinishedFromTheRows",
+        "noDoubleStart",
+        "notDuringAScan",
+        "notDuringAWriteHold",
+        "oneEngine",
+        "oneStartPerSlot",
+        "refusedStartIsSaid",
+        "relaunchCatchesUp",
+        "snapshotNotLanded",
+        "theAwayWindow",
+        "theCatchUp",
+        "theSlot",
+        "wiredOnTheMasterOnly"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DateInferenceSensorTests.swift",
@@ -37231,7 +37263,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3429,
+      "expected_floor": 3447,
       "name": "unit",
       "package_expected_floor": 804,
       "package_selectors": [
@@ -37478,6 +37510,11 @@
         "VideoScanTests/CatalogSettleRealCopyEvidence",
         "VideoScanTests/CatalogSnapshotVersionTests",
         "VideoScanTests/CatalogStatusBackgroundClaimTests",
+        "VideoScanTests/DailyFileCheckPolicyTests",
+        "VideoScanTests/DailyFileCheckSchedulerTests",
+        "VideoScanTests/DailyFileCheckTruthTests",
+        "VideoScanTests/CatalogReminderClockTests",
+        "VideoScanTests/DailyFileCheckSensorTests",
         "VideoScanTests/CatalogStatusLinesLogicTests",
         "VideoScanTests/CatalogStatusLinesTruthTests",
         "VideoScanTests/CatalogStatusSensorTests",

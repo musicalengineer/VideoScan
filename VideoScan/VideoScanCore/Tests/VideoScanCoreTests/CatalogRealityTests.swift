@@ -28,25 +28,29 @@ struct CatalogRealityTests {
         #expect(v.reasons.isEmpty && v.reviewLine == nil)
     }
 
-    @Test("GREEN still: 23 h 59 min and exactly 24 h are fresh (DECISIONS 2026-11-01); a few rows not checked (under 10 %) is fine")
+    @Test("GREEN still: 25 h, 6 d 23 h 59 min and exactly 7 days are fresh (the 7-day backstop, DECISIONS 2026-11-07); a few rows not checked (under 10 %) is fine")
     func greenBoundaries() {
-        #expect(CatalogRealityPolicy.freshFor == 24 * 3_600)
+        #expect(CatalogRealityPolicy.freshFor == 7 * day)
+        #expect(CatalogRealityPolicy.freshForWords == "7 days")
         var f = green
-        f.validation = .completed(at: now.addingTimeInterval(-(23 * 3_600 + 59 * 60)))
+        // The 11/07 regression: a day passing alone no longer turns it yellow.
+        f.validation = .completed(at: now.addingTimeInterval(-(day + 3_600)))
+        #expect(CatalogRealityPolicy.colour(f, now: now) == .green, "25 h old is fresh under the 7-day backstop")
+        f.validation = .completed(at: now.addingTimeInterval(-(7 * day - 60)))
         f.rowsNotChecked = 1_399                          // 9.99 %
         #expect(CatalogRealityPolicy.colour(f, now: now) == .green)
-        f.validation = .completed(at: now.addingTimeInterval(-day))
+        f.validation = .completed(at: now.addingTimeInterval(-7 * day))
         #expect(CatalogRealityPolicy.colour(f, now: now) == .green)
     }
 
-    @Test("YELLOW: never validated · stopped part way · overdue past 24 hours (24 h 01 min) · a large share not checked · unsettled rows")
+    @Test("YELLOW: never validated · stopped part way · overdue past the 7-day backstop (7 d 01 min) · a large share not checked · unsettled rows")
     func yellowCannotFullyVouch() {
         var never = green; never.validation = .neverRan
         #expect(CatalogRealityPolicy.reasons(never, now: now) == [.neverValidated])
         var partial = green; partial.validation = .partial(at: now)
         #expect(CatalogRealityPolicy.reasons(partial, now: now) == [.validatePartial])
-        var overdue = green; overdue.validation = .completed(at: now.addingTimeInterval(-day - 60))
-        #expect(CatalogRealityPolicy.reasons(overdue, now: now) == [.validateOverdue(lastCompleted: now.addingTimeInterval(-day - 60))])
+        var overdue = green; overdue.validation = .completed(at: now.addingTimeInterval(-7 * day - 60))
+        #expect(CatalogRealityPolicy.reasons(overdue, now: now) == [.validateOverdue(lastCompleted: now.addingTimeInterval(-7 * day - 60))])
         var offline = green; offline.rowsNotChecked = 1_400                     // exactly 10 %
         #expect(CatalogRealityPolicy.reasons(offline, now: now) == [.largeShareNotChecked(notChecked: 1_400, of: 14_000)])
         var unsettled = green; unsettled.unsettled = [CatalogRealityCount(count: 4, words: "4 files changed size on disk")]

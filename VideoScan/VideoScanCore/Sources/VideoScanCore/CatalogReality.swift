@@ -7,8 +7,9 @@
 //           duplicate groups agree, relations / constraints hold, derived
 //           stamps are about the right content) AND the last Validate
 //           Catalog (files on disk, then the catalog) completed and is
-//           fresh (≤ 24 hours — DECISIONS 2026-11-01; was 7 days; the
-//           nightly runs it at 02:00) AND every row's presence state matches the
+//           fresh (≤ 7 days — the backstop; DECISIONS 2026-11-07: the app
+//           runs the check itself daily at 03:30, so the colour follows what
+//           the check found, not the clock) AND every row's presence state matches the
 //           disk. A file marked Missing that IS missing is reality — fine.
 //   YELLOW  the catalog can't fully vouch for reality — Validate overdue or
 //           never run, a large share of rows could not be checked (drives
@@ -251,11 +252,15 @@ public struct CatalogRealityVerdict: Sendable, Equatable {
 
 public enum CatalogRealityPolicy {
 
-    /// A Validate older than this is overdue (DECISIONS 2026-11-01: green
-    /// when the check ran within 24 hours and passed — the nightly runs it
-    /// at 02:00; replaces the 7-day rule). The Catalog Status window's
-    /// Database line reads the same constant.
-    public static let freshFor: TimeInterval = 24 * 3_600
+    /// A Validate older than this is overdue — the BACKSTOP (DECISIONS
+    /// 2026-11-07, amending 11/01's 24 h): the app runs Validate Catalog
+    /// itself every day in the away window (DailyFileCheck), so the lines go
+    /// yellow on what the check found; only a week with no finished check
+    /// turns them yellow by age. The Catalog Status window's Database and
+    /// Files lines and the freshness rows read the same constant.
+    public static let freshFor: TimeInterval = 7 * 86_400
+    /// `freshFor` in the words the lines say ("older than 7 days").
+    public static let freshForWords = "7 days"
     /// A share of rows the file check could not reach at or above this is
     /// "a large share" — yellow. Below it the rows are simply not asked.
     public static let largeShareNotChecked = 0.10
@@ -341,8 +346,8 @@ public enum CatalogRealityPolicy {
         }
     }
 
-    /// "30 hours" under two days, "10 days" after; never under the 24 hours
-    /// that made it overdue.
+    /// "30 hours" under two days, "10 days" after; never under 24 hours.
+    /// (Since the 7-day backstop an overdue reason always says days.)
     public static func age(_ seconds: TimeInterval) -> String {
         let hours = max(24, Int(seconds / 3_600))
         if hours < 48 { return "\(hours) hours" }

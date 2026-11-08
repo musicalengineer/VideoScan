@@ -129,7 +129,7 @@ struct CatalogFreshnessRowsTests {
         // No marker: never ran, 3 waiting.
         let never = row(.filePresence, in: rows(r))
         #expect(never.eligible == 3 && never.offline == 1 && never.covered == 0 && never.lastOutcome == .neverRan)
-        #expect(never.cadence == .seconds(86_400))
+        #expect(never.cadence == .seconds(CatalogRealityPolicy.freshFor), "the 7-day backstop (DECISIONS 2026-11-07)")
         // The policy's precedence: coverage first (the count is the useful
         // number), so "never ran" with eligible rows reads as the rows.
         #expect(FreshnessPolicy.judge(never, now: now, wording: wording).words == "3 files not yet checked")
@@ -171,7 +171,7 @@ struct CatalogFreshnessRowsTests {
         let built = rows(compute([]))
         #expect(built.map(\.kind) == AnalyzeCycler.allCases.map(\.rawValue))
         #expect(Array(built.prefix(3)).map(\.kind) == ["filePresence", "fullHashes", "soundPrints"])
-        #expect(row(.filePresence, in: built).cadence == .seconds(86_400), "presence runs nightly: one day")
+        #expect(row(.filePresence, in: built).cadence == .seconds(7 * 86_400), "the 7-day backstop; the app checks daily (DECISIONS 2026-11-07)")
         #expect(row(.fullHashes, in: built).cadence == nil && row(.soundPrints, in: built).cadence == nil,
                 "hashes and sound prints have no clock — stale only by coverage")
         // The metadata cyclers keep their "current" notion: no clock.

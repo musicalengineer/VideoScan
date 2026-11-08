@@ -381,7 +381,7 @@ struct VerifyCatalogTierTests {
 
     @Test("tier 0 reads the audit's marker: absent → not run; completed with gone rows → needs a decision; completed clean → ok; partial / failed → could not check")
     func presenceFromTheAuditMarker() {
-        #expect(VerifyCatalogTiers.presence(audit: nil).tier.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)"))
+        #expect(VerifyCatalogTiers.presence(audit: nil).tier.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the app also runs it daily at 03:30)"))
         var r = CatalogAuditRunRecord(startedAt: now.addingTimeInterval(-60))
         r.finishedAt = now
         r.outcome = .completed
@@ -894,7 +894,7 @@ struct VerifyCatalogJobTests {
         #expect(summary.contains("report → integrity-latest.json"), Comment(rawValue: summary))
         let report = try #require(job.report)
         #expect(report.tiers.map(\.tier) == [0, 1, 2, 3, 4, 5, 6])
-        #expect(report.tier(0)?.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)"))
+        #expect(report.tier(0)?.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the app also runs it daily at 03:30)"))
         #expect(report.tier(1)?.result == .couldNotCheck(1), "b.mov has no whole-file hash")
         #expect(report.tier(2)?.result == .notRun("weekly deep pass — not built yet"))
         #expect(report.tier(5)?.result == .ok)
@@ -1137,7 +1137,7 @@ struct VerifyCatalogStatusTests {
         #expect(MediaFileOperationKind.verifyCatalog.hasDetailView)
     }
 
-    @Test("never run → yellow 'never run'; a completed clean report → green with its date; decisions → red with the worst tier's words; overdue by a day → yellow; unreadable → red store words")
+    @Test("never run → yellow 'never run'; a completed clean report → green with its date; decisions → red with the worst tier's words; a day old → green, past 7 days → yellow; unreadable → red store words")
     func rowColours() {
         let wording = FreshnessWording(calendar: Calendar(identifier: .gregorian), groupingSeparator: ",")
         let never = FreshnessPolicy.judge(rowFor(IntegrityReportFacts()), now: now, wording: wording)
@@ -1151,9 +1151,12 @@ struct VerifyCatalogStatusTests {
                                         now: now, wording: wording)
         #expect(red.colour == .red)
         #expect(red.words == "522 findings — 3 rows share a path · 519 headers say sound the print never heard")
-        let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts(lastCompleted: now.addingTimeInterval(-25 * 3_600), outcome: .ok)), now: now, wording: wording)
+        // The 7-day backstop (DECISIONS 2026-11-07): a day old is current, a week and a minute is overdue.
+        let dayOld = FreshnessPolicy.judge(rowFor(IntegrityReportFacts(lastCompleted: now.addingTimeInterval(-25 * 3_600), outcome: .ok)), now: now, wording: wording)
+        #expect(dayOld.colour == .green)
+        let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts(lastCompleted: now.addingTimeInterval(-(7 * 86_400 + 60)), outcome: .ok)), now: now, wording: wording)
         #expect(overdue.colour == .yellow)
-        #expect(overdue.reason == .overdue(lastCompleted: now.addingTimeInterval(-25 * 3_600)))
+        #expect(overdue.reason == .overdue(lastCompleted: now.addingTimeInterval(-(7 * 86_400 + 60))))
         let broken = FreshnessPolicy.judge(rowFor(IntegrityReportFacts(problem: "integrity-latest.json can't be read: x")), now: now, wording: wording)
         #expect(broken.colour == .red)
         #expect(broken.reason == .storeUnavailable("integrity-latest.json can't be read: x"))
@@ -1274,7 +1277,7 @@ struct VerifyCatalogStatusTests {
         #expect(poisoned.integrity.needsDecision == 131)
     }
 
-    @Test("the verdict comes from the BUILT tiers (0, 1, 3, 4, 5): a completed run with a tier that could not check is yellow naming the tier; a built tier not run is yellow naming it; a decision in any built tier is red; a built tier older than its day is yellow naming it; green only when every built tier is ok — and tiers 2 and 6 never colour the row but are named as not built")
+    @Test("the verdict comes from the BUILT tiers (0, 1, 3, 4, 5): a completed run with a tier that could not check is yellow naming the tier; a built tier not run is yellow naming it; a decision in any built tier is red; a built tier past the 7-day backstop is yellow naming it; green only when every built tier is ok — and tiers 2 and 6 never colour the row but are named as not built")
     func verdictFromTheBuiltTiers() {
         let wording = FreshnessWording(calendar: Calendar(identifier: .gregorian), groupingSeparator: ",")
         var hashes = okTier(1)
@@ -1313,8 +1316,8 @@ struct VerifyCatalogStatusTests {
         old.result = .needsDecision(19); old.needsDecision = 19; old.summary = "19 headers say sound the print never heard"
         let both = IntegrityReportFacts.from(report: completed([okTier(0), okTier(1), old, okTier(4), relations] + notBuilt))
         #expect(both.needsDecision == 2 && both.decisionWords == "2 paths have more than one live row", "tier 5 counts; tier 3 does not: \(both.needsDecision) / \(both.decisionWords ?? "nil")")
-        let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0, at: now.addingTimeInterval(-3 * 86_400)), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
-        #expect(overdue.colour == .yellow)
+        let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0, at: now.addingTimeInterval(-8 * 86_400)), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
+        #expect(overdue.colour == .yellow, "a built tier past the 7-day backstop")
         #expect(overdue.words.contains("tier 0 File presence"), Comment(rawValue: overdue.words))
         let green = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
         #expect(green.colour == .green)

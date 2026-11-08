@@ -189,7 +189,7 @@ enum VerifyCatalogTiers {
     static func presence(audit record: CatalogAuditRunRecord?, switchedAt: Date? = nil) -> TierOutcome {
         var t = IntegrityTier(tier: 0, name: name(0), result: .notRun(""), summary: "")
         guard let record else {
-            t.result = .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)")
+            t.result = .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the app also runs it daily at 03:30)")
             t.summary = "the files on disk have not been checked"
             return TierOutcome(tier: t)
         }
