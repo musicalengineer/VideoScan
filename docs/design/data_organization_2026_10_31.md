@@ -302,7 +302,7 @@ Since the app is not yet deployed we build and run direct from ~rickb/dev/VideoS
 |---|---|---|
 | the `metrics` branch | GitHub `origin/metrics`; local checkout in the publisher's worktree | `coverage.jsonl`, `adversarial.jsonl`, `codex_reviews.jsonl`, `github_daily.jsonl`, `modules.jsonl`, `testdriver.jsonl`, `summary_latest.json`, `events_latest.json` — sanitized rows, never force-pushed |
 | `docs/index.html` | `repo/`, served by GitHub Pages | the dashboard that reads the `metrics` branch |
-| `gauntlet/<run-id>/`, `history.jsonl`, `pending-metrics.jsonl` | `Logs/gauntlet/` | per-run logs and verdicts; history; rows awaiting publish |
+| `gauntlet/<run-id>/`, `history.jsonl`, `pending-metrics.jsonl` | `Logs/gauntlet/` | per-run logs and verdicts (deleted once the summary row is published, DECISIONS 2026-11-08); history (the summary rows); rows awaiting publish |
 | `/tmp/nightly-*.log`, `/tmp/nightly-results.xcresult` | `/tmp/` | the nightly's scratch |
 | `*.xcresult` | `Caches/videoscan-nightly-dd/TestResults/`, `~/dev/VideoScan-dd/`, `~/Library/Developer/Xcode/DerivedData/VideoScan-*/Logs/Test/` | Xcode result bundles |
 | `scripts/gauntlet/manifest.json` | `repo/` | the gauntlet's test manifest (drift-checked) |

@@ -307,6 +307,25 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertNotIn("--queue-only", args)
         self.assertEqual(args[args.index("--machine") + 1], "m4")
 
+    def test_a_published_run_whose_dir_is_gone_reads_its_history_row_after_the_tidy_lines(self):
+        # The real runner (Rick 2026-11-08) prints its verdict line, then
+        # SUMMARY and TIDY lines that also start "GAUNTLET ", and deletes the
+        # published run dir: only <results-root>/history.jsonl holds the row.
+        run = self.fake / "gauntlet" / "2026-11-08T14-00-00Z-R0000001"
+        (self.fake / "gauntlet").mkdir()
+        row = dict(result_json("amber", known=7), run_id=run.name)
+        (self.fake / "gauntlet" / "history.jsonl").write_text(json.dumps(row) + "\n")
+        (self.repo / "scripts/run_gauntlet.sh").write_text(
+            "#!/bin/sh\n"
+            f"printf 'GAUNTLET RETENTION removed %s (run older than 3 days)\\n' '{self.fake}/gauntlet/old'\n"
+            f"printf 'GAUNTLET SUMMARY passed=9 failed=0 skipped=0 unknown=0 new_failures= fixed=0 history=x\\n'\n"
+            f"printf 'GAUNTLET AMBER sha=abc12345 total=9s results=%s publish=published\\n' '{run}/result.json'\n"
+            f"printf 'GAUNTLET TIDY removed run %s (5.10 GB); summary in history.jsonl\\n' '{run}'\n")
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0, line)
+        self.assertIn("gauntlet AMBER", line)
+        self.assertIn("7 known issues", line)
+
     def test_red_gauntlet_is_red_in_the_line_and_the_exit(self):
         self.plant(g_status="FAILED", g_rc=1,
                    result=result_json("failed", regression="failed"))

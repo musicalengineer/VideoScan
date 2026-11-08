@@ -413,7 +413,9 @@ host_deep() {
     rc=$?
     secs=$(( $(date +%s) - t0 ))
     echo "gauntlet exit=$rc secs=$secs"
-    line="$(grep -E '^GAUNTLET ' "$OUT/gauntlet.log" | tail -1)"
+    # The verdict line only: SUMMARY / TIDY / RETENTION lines also start "GAUNTLET " and
+    # follow it; a published run dir is gone by now (m4_run_summary.py reads history.jsonl).
+    line="$(grep -E '^GAUNTLET (PASSED|AMBER|FAILED) .* results=' "$OUT/gauntlet.log" | tail -1)"
     # The verdict comes from the run's result.json (GREEN / AMBER / RED, Rick
     # 2026-11-05): known issues, unadapted suites and ui-not-run are AMBER.
     local result="${line##* results=}" flag=() vrc

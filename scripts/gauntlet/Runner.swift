@@ -40,12 +40,13 @@ func write(_ data: Data, to path: URL, root: URL) throws {
     let safe = try guarded(path, under: root)
     try data.write(to: safe, options: .atomic)
 }
-func append(_ data: Data, to path: URL, root: URL) throws {
+func append(_ data: Data, to path: URL, root: URL, sync: Bool = false) throws {
     let safe = try guarded(path, under: root)
     if !fm.fileExists(atPath: safe.path) { try write(Data(), to: safe, root: root) }
     let handle = try FileHandle(forWritingTo: safe)
     defer { try? handle.close() }
     try handle.seekToEnd(); try handle.write(contentsOf: data)
+    if sync { try handle.synchronize() }                               // fsync
 }
 struct CommandResult { var code: Int32; var timedOut = false; var contaminated = false; var elapsed: Double }
 // Same ownership protocol as nightly_local_tests.sh: private process group,
@@ -152,6 +153,14 @@ func countsFromPackageRun(eventStream: String, console: String, xctestList: Stri
     return counts
 }
 
+/// Names for the summary row from the same two sources, read leniently (a
+/// killed run still names its failures and the tests left without a verdict).
+func packageNames(eventStream: String, console: String, xctestList: String?, filters: [String]) -> TestNames {
+    var names = SwiftTestingTally(eventStream: eventStream, lenient: true)?.names ?? TestNames()
+    names.merge(XCTestConsoleTally.names(console: console, selected: xctestList.flatMap { selectedXCTests($0, filters: filters) }))
+    return names
+}
+
 /// The XCTest methods in `swift test list` output that the run's `--filter`
 /// regexes select, as the console names them ("Module.Class method"). XCTest
 /// lists as `Module.Class/method`; Swift Testing as `Module.Suite/name()`
@@ -224,17 +233,7 @@ struct XCTestConsoleTally {
         }
         sawBracket = true
         guard let closeAt = lines.lastIndex(where: { Self.match(Self.closes, $0) != nil }), closeAt > openAt else { return nil }
-        var open: String?
-        for line in lines[(openAt + 1)..<closeAt] {
-            if let m = Self.match(Self.started, line) {
-                let id = (line as NSString).substring(with: m.range(at: 1))
-                // The runner starts the next test only after judging the open one.
-                if outcomes[id] == nil, open.map({ outcomes[$0] != nil }) ?? true { open = id }
-            } else if let m = Self.match(Self.result, line) {
-                let id = (line as NSString).substring(with: m.range(at: 1))
-                if id == open { outcomes[id] = (line as NSString).substring(with: m.range(at: 2)) }   // last wins
-            }
-        }
+        outcomes = Self.scan(lines[(openAt + 1)..<closeAt]).outcomes
         guard let summaryLine = lines[(closeAt + 1)...].first(where: { Self.match(Self.summary, $0) != nil }),
               let m = Self.match(Self.summary, summaryLine) else { return nil }
         let total = Int((summaryLine as NSString).substring(with: m.range(at: 1))) ?? -1
@@ -243,6 +242,40 @@ struct XCTestConsoleTally {
         executed = (total, skipped)
         guard Set(outcomes.keys) == selected, total == outcomes.count,
               skipped == outcomes.values.filter({ $0 == "skipped" }).count else { return nil }
+    }
+
+    /// The started/result protocol over `lines`; `open` = a test started and never judged.
+    private static func scan(_ lines: ArraySlice<String>) -> (outcomes: [String: String], open: String?) {
+        var outcomes: [String: String] = [:]
+        var open: String?
+        for line in lines {
+            if let m = match(started, line) {
+                let id = (line as NSString).substring(with: m.range(at: 1))
+                // The runner starts the next test only after judging the open one.
+                if outcomes[id] == nil, open.map({ outcomes[$0] != nil }) ?? true { open = id }
+            } else if let m = match(result, line) {
+                let id = (line as NSString).substring(with: m.range(at: 1))
+                if id == open { outcomes[id] = (line as NSString).substring(with: m.range(at: 2)) }   // last wins
+            }
+        }
+        return (outcomes, open.flatMap { outcomes[$0] == nil ? $0 : nil })
+    }
+
+    /// Names for the summary row, leniently: a killed run (no closing bracket)
+    /// still names what failed, and every selected test without a verdict is
+    /// incomplete. Names only; counts stay with the strict init above.
+    static func names(console: String, selected: Set<String>?) -> TestNames {
+        let lines = console.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let openAt = lines.firstIndex(where: { match(opens, $0) != nil })
+        let scanned = scan(openAt.map { lines[($0 + 1)...] } ?? lines[...])
+        let slash = { (id: String) in id.replacingOccurrences(of: " ", with: "/") }   // "M.X testA" -> "M.X/testA"
+        var names = TestNames()
+        for (id, outcome) in scanned.outcomes where outcome != "passed" {
+            if outcome == "failed" { names.failed.insert(slash(id)) } else { names.skipped.insert(slash(id)) }
+        }
+        let unjudged = (selected ?? []).subtracting(scanned.outcomes.keys).union(scanned.open.map { [$0] } ?? [])
+        names.incomplete.formUnion(unjudged.map(slash))
+        return names
     }
 
     var counts: [String: Int] {
@@ -260,20 +293,38 @@ struct SwiftTestingTally {
     var unattributedFailures = 0
 
     /// nil = unavailable: a torn record, an event for an undeclared id, no runEnded.
-    init?(eventStream: String) {
+    /// `lenient` (names only, never counts): skip what strict refuses, so a
+    /// killed run still names its failures and its unfinished tests.
+    init?(eventStream: String, lenient: Bool = false) {
         var events: [[String: Any]] = []
         for line in eventStream.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let payload = object["payload"] as? [String: Any] else { return nil }
+                  let payload = object["payload"] as? [String: Any] else { if lenient { continue }; return nil }
             if object["kind"] as? String == "test", let id = payload["id"] as? String { kinds[id] = payload["kind"] as? String ?? "" }
             if object["kind"] as? String == "event" { events.append(payload) }
         }
         var sawRunEnded = false
         for payload in events {
             if payload["kind"] as? String == "runEnded" { sawRunEnded = true; continue }
-            guard record(payload) else { return nil }
+            guard record(payload) || lenient else { return nil }
         }
-        guard sawRunEnded else { return nil }
+        guard sawRunEnded || lenient else { return nil }
+    }
+
+    /// The stream declares only the run's selected functions (checked against
+    /// swift 6.4, 2026-11-08), so declared minus judged = incomplete.
+    var names: TestNames {
+        let functions = Set(kinds.filter { $0.value == "function" }.keys)
+        var names = TestNames()
+        names.failed = Set(failed.map(Self.display))
+        names.skipped = Set(skipped.subtracting(failed).map(Self.display))
+        names.incomplete = Set(functions.subtracting(ended).subtracting(skipped).subtracting(failed).map(Self.display))
+        return names
+    }
+
+    /// "M.S/name()/T.swift:12:4" -> "M.S/name()": the source location is noise in a summary.
+    static func display(_ id: String) -> String {
+        id.replacingOccurrences(of: #"/[^/]+\.swift:\d+:\d+$"#, with: "", options: .regularExpression)
     }
 
     /// Fold one event in; false when it names a test the stream never declared.
@@ -316,7 +367,135 @@ struct SwiftTestingTally {
     }
 }
 func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int = 0) -> [String: Any] {
-    ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]
+    let row: [String: Any] = ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]
+    return row.merging(TestNames().fields) { $1 }
+}
+
+// MARK: The summary row (Rick 2026-11-08)
+// "13,000 passed, 12 failed, 2 unknown <list of fails> date/time/machine,
+// nothing else is needed": once the run dir is deleted, the history.jsonl row
+// is the only record. It names failed / unexpectedly skipped / incomplete
+// tests per stage, from the same sources the counts come from (xcresult
+// summary, the package event stream and XCTest protocol), and says what
+// started failing and what was fixed since the previous row for the machine.
+// Memory: each list is capped at `nameCap`; a row is a few KB (was ~140 KB,
+// mostly blocked_details); history.jsonl is streamed one line at a time.
+let nameCap = 200
+
+/// Test names by outcome for one stage (sets, so duplicates never inflate).
+struct TestNames {
+    var failed = Set<String>(), skipped = Set<String>(), incomplete = Set<String>()
+
+    mutating func merge(_ other: TestNames) {
+        failed.formUnion(other.failed); skipped.formUnion(other.skipped); incomplete.formUnion(other.incomplete)
+    }
+
+    /// failed_tests / skipped_tests / incomplete_tests (sorted, first 200) and their `_truncated` counts.
+    var fields: [String: Any] {
+        var out: [String: Any] = [:]
+        for (key, names) in [("failed_tests", failed), ("skipped_tests", skipped), ("incomplete_tests", incomplete)] {
+            let sorted = names.sorted()
+            out[key] = Array(sorted.prefix(nameCap)); out[key + "_truncated"] = max(0, sorted.count - nameCap)
+        }
+        return out
+    }
+}
+
+/// Failed names from the xcresult summary the counts already come from; skipped
+/// names from `xcresulttool get test-results tests` (the summary has none),
+/// read only when the summary says something was skipped.
+func xcodeNames(summary: [String: Any]?, tests: Any?) -> TestNames {
+    var names = TestNames()
+    for failure in summary?["testFailures"] as? [[String: Any]] ?? [] {
+        let target = (failure["targetName"] as? String).map { $0 + "/" } ?? ""
+        if let id = failure["testIdentifierString"] as? String ?? (failure["testName"] as? String).map({ target + $0 }) { names.failed.insert(id) }
+    }
+    func walk(_ node: Any) {
+        if let list = node as? [Any] { list.forEach(walk); return }
+        guard let dict = node as? [String: Any] else { return }
+        if dict["nodeType"] as? String == "Test Case", dict["result"] as? String == "Skipped",
+           let id = dict["nodeIdentifier"] as? String ?? dict["name"] as? String { names.skipped.insert(id) }
+        if let children = dict["testNodes"] ?? dict["children"] { walk(children) }
+    }
+    if let tests { walk(tests) }
+    return names
+}
+
+/// Each history.jsonl row in turn, one line in memory at a time (like a getline loop in C).
+func forEachHistoryRow(_ history: URL, _ body: ([String: Any]) -> Void) {
+    guard let file = fopen(history.path, "r") else { return }
+    defer { fclose(file) }
+    var buffer: UnsafeMutablePointer<CChar>?; var capacity = 0
+    defer { free(buffer) }
+    while getline(&buffer, &capacity, file) > 0 {
+        guard let buffer, let row = try? JSONSerialization.jsonObject(with: Data(String(cString: buffer).utf8)) as? [String: Any] else { continue }
+        body(row)
+    }
+}
+
+/// The last row written for `machine`, or nil (none yet).
+func previousRow(history: URL, machine: String) -> [String: Any]? {
+    var last: [String: Any]?
+    forEachHistoryRow(history) { if $0["machine"] as? String == machine { last = $0 } }
+    return last
+}
+
+func historyHasRun(_ history: URL, runID: String) -> Bool {
+    var found = false
+    forEachHistoryRow(history) { if $0["run_id"] as? String == runID { found = true } }
+    return found
+}
+
+/// Pure: what started failing, what was fixed, and since when each failure has
+/// been failing, against `previous` (the last row for this machine). A test is
+/// "fixed" only when its stage ran with counts this time and it is neither
+/// failing, skipped nor incomplete now: a stage that did not run fixes nothing.
+func failureChanges(current: [String: Any], previous: [String: Any]?) -> [String: Any] {
+    let list = { (stage: [String: Any], key: String) in Set(stage[key] as? [String] ?? []) }
+    let stages = current["stages"] as? [[String: Any]] ?? []
+    let before = Dictionary((previous?["stages"] as? [[String: Any]] ?? []).map { ($0["name"] as? String ?? "", list($0, "failed_tests")) }) { $0.union($1) }
+    let since = previous?["first_failed"] as? [String: String] ?? [:]
+    let ts = current["ts"] as? String ?? ""
+    var newFailures = Set<String>(), fixed = Set<String>(), firstFailed: [String: String] = [:]
+    for stage in stages {
+        let name = stage["name"] as? String ?? ""
+        let failing = list(stage, "failed_tests")
+        let wasFailing = before[name] ?? []
+        for test in failing {
+            if wasFailing.contains(test) { firstFailed[test] = since[test] ?? previous?["ts"] as? String ?? ts } else { newFailures.insert(test); firstFailed[test] = ts }
+        }
+        if stage["passed"] is NSNumber {
+            fixed.formUnion(wasFailing.subtracting(failing).subtracting(list(stage, "skipped_tests")).subtracting(list(stage, "incomplete_tests")))
+        }
+    }
+    return ["compared_to": previous?["run_id"] ?? NSNull(), "new_failures": newFailures.sorted(), "fixed": fixed.sorted(), "first_failed": firstFailed]
+}
+
+/// Pure: run totals over the stage rows; unknown = tests with no verdict (incomplete).
+func runTotals(_ stages: [[String: Any]]) -> [String: Int] {
+    var totals = ["passed": 0, "failed": 0, "skipped": 0, "known_issues": 0, "unknown": 0]
+    for stage in stages {
+        for key in ["passed", "failed", "skipped", "known_issues"] { totals[key, default: 0] += stage[key] as? Int ?? 0 }
+        totals["unknown", default: 0] += (stage["incomplete_tests"] as? [Any] ?? []).count + (stage["incomplete_tests_truncated"] as? Int ?? 0)
+    }
+    return totals
+}
+
+/// Pure: the history row for a finished result: totals, names, changes since
+/// `previous`, and no paths into the run dir (it is about to be deleted).
+func summaryRow(result: [String: Any], previous: [String: Any]?) -> [String: Any] {
+    var row = result
+    row["roots"] = nil
+    let stages = (result["stages"] as? [[String: Any]] ?? []).map { stage -> [String: Any] in
+        var compact = stage
+        compact["artifacts"] = nil
+        compact["blocked_suites"] = (stage["blocked_details"] as? [Any] ?? []).count
+        compact["blocked_details"] = nil
+        return compact
+    }
+    row["stages"] = stages
+    row["totals"] = runTotals(stages)
+    return row.merging(failureChanges(current: row, previous: previous)) { $1 }
 }
 
 // MARK: Run tidy and retention (Rick 2026-11-08)
@@ -328,7 +507,7 @@ func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int
 // Memory: O(entries in one directory) for retention; the size walk streams
 // (FileManager's enumerator holds one directory level at a time).
 let buildScratchNames = ["DerivedData", "PackageBuild", "swift-cache"]
-let retentionDays = 14
+let retentionDays = 3
 
 /// "2026-11-08T20-19-00Z-1A2B3C4D" (prepareRoots' runID) -> its UTC start; nil = not a run dir.
 func runDate(fromName name: String) -> Date? {
@@ -339,18 +518,31 @@ func runDate(fromName name: String) -> Date? {
     return formatter.date(from: String(name.prefix(20)))
 }
 
-/// Pure retention decision: finished run dirs whose NAME date is more than `days` old (mtime ignored).
+/// Pure retention decision: run dirs whose NAME date is more than `days` old (mtime ignored),
+/// finished or not: a run lasts hours (watchdog 4 h), so a 3-day-old one without result.json crashed.
 func retentionCandidates(_ entries: [(name: String, finished: Bool)], now: Date, days: Int = retentionDays) -> [String] {
     entries.filter { entry in
-        guard entry.finished, let started = runDate(fromName: entry.name) else { return false }
+        guard let started = runDate(fromName: entry.name) else { return false }
         return now.timeIntervalSince(started) > Double(days) * 86_400
     }.map(\.name).sorted()
 }
 
-/// Pure tidy decision: which of the run's own build dirs may go now (none before result.json, none with --keep-build).
+/// Pure tidy decision: which of the run's own build dirs may go now (none before result.json, none with --keep-run).
 func buildScratchToRemove(run: URL, resultExists: Bool, keepBuild: Bool, publishReaped: Bool) -> [URL] {
     guard resultExists, !keepBuild, publishReaped else { return [] }
     return buildScratchNames.map { run.appendingPathComponent($0) }
+}
+
+/// Pure tidy decision for the whole run: nil = remove it, else why it stays. It goes only when its
+/// summary row is in history.jsonl and the metrics row was published; a queued publish keeps
+/// result.json for a manual retry (the 3-day retention removes it later).
+func keepRunReason(publish: String, resultExists: Bool, summaryInHistory: Bool, keepRun: Bool, publishReaped: Bool) -> String? {
+    if keepRun { return "--keep-run" }
+    if !publishReaped { return "publisher not reaped" }
+    if !resultExists { return "no result.json" }
+    if publish != "published" { return "publish \(publish); result.json kept for the retry, removed by retention after \(retentionDays) days" }
+    if !summaryInHistory { return "no summary row in history.jsonl" }
+    return nil
 }
 
 func isSymlink(_ url: URL) -> Bool { (try? fm.destinationOfSymbolicLink(atPath: url.path)) != nil }
@@ -362,12 +554,30 @@ func allocatedBytes(_ url: URL) -> Int64 {
     return total
 }
 
+/// The end-of-run tidy: the whole run once its summary is safe (keepRunReason), else just its
+/// build scratch. Returns the lines to print.
+func tidyRun(run: URL, publish: String, keepRun: Bool, publishReaped: Bool) -> [String] {
+    let root = run.deletingLastPathComponent()
+    let inHistory = historyHasRun(root.appendingPathComponent("history.jsonl"), runID: run.lastPathComponent)
+    let resultExists = fm.fileExists(atPath: run.appendingPathComponent("result.json").path)
+    guard let why = keepRunReason(publish: publish, resultExists: resultExists, summaryInHistory: inHistory, keepRun: keepRun, publishReaped: publishReaped) else {
+        do {
+            guard !isSymlink(run) else { throw RunError("run dir is a symlink") }
+            _ = try guarded(run, under: root)
+            let size = allocatedBytes(run)          // the enumerator does not descend symlinks
+            try fm.removeItem(at: run)                 // removes a symlink inside, never its target
+            return ["GAUNTLET TIDY removed run \(run.path) (\(String(format: "%.2f", Double(size) / 1e9)) GB); summary in history.jsonl"]
+        } catch { return ["GAUNTLET TIDY warning: could not remove \(run.path): \(error)"] }
+    }
+    return [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
+}
+
 /// Removes the run's build scratch when buildScratchToRemove allows it; returns the one line to print.
 func tidyBuildScratch(run: URL, keepBuild: Bool, publishReaped: Bool) -> String {
     let resultExists = fm.fileExists(atPath: run.appendingPathComponent("result.json").path)
     let targets = buildScratchToRemove(run: run, resultExists: resultExists, keepBuild: keepBuild, publishReaped: publishReaped)
     guard !targets.isEmpty else {
-        let why = keepBuild ? "--keep-build" : !resultExists ? "no result.json" : "publisher not reaped"
+        let why = keepBuild ? "--keep-run" : !resultExists ? "no result.json" : "publisher not reaped"
         return "GAUNTLET TIDY kept build products (\(why)) in \(run.path)"
     }
     var bytes: Int64 = 0
@@ -392,10 +602,11 @@ func runEntries(_ resultsRoot: URL) -> [(name: String, finished: Bool)] {
     }
 }
 
-/// Removes finished runs older than retentionDays (by name); returns one line per run removed.
-/// Rick 2026-11-08: "we don't need them" -- history.jsonl keeps every run's summary row, so these
-/// regenerable run dirs are removed outright rather than moved to .trash (his explicit override,
-/// for gauntlet run dirs only). history.jsonl, pending-metrics* and unfinished runs are never touched.
+/// Removes runs older than retentionDays (by name); returns one line per run removed. The safety
+/// net for runs the end-of-run tidy kept (queued publish, crash, --keep-run).
+/// Rick 2026-11-08: "delete them all, once we have the summary data" -- history.jsonl keeps every
+/// run's summary row, so these run dirs are removed outright rather than moved to .trash (his
+/// explicit exception, for gauntlet run dirs only; DECISIONS). history.jsonl and pending-metrics* are never touched.
 func retainFinishedRuns(resultsRoot: URL, now: Date) -> [String] {
     retentionCandidates(runEntries(resultsRoot), now: now).map { name in
         let dir = resultsRoot.appendingPathComponent(name)
@@ -414,7 +625,8 @@ struct GauntletRunner {
     var away = false
     var dry = false
     var queueOnly = false
-    var keepBuild = false
+    /// Keep the whole run dir, build products included (debugging).
+    var keepRun = false
     /// False while the publisher (which uses <run>/swift-cache) may still be running.
     var publishReaped = true
     var machine = "m4"
@@ -455,7 +667,7 @@ struct GauntletRunner {
             case "--away": away = true
             case "--dry-run": dry = true
             case "--queue-only": queueOnly = true
-            case "--keep-build": keepBuild = true
+            case "--keep-run", "--keep-build": keepRun = true          // --keep-build: the old name
             case "--machine", "--only", "--manifest", "--results-root":
                 guard !arguments.isEmpty else { throw RunError("missing value for \(flag)") }
                 let value = arguments.removeFirst()
@@ -464,7 +676,7 @@ struct GauntletRunner {
                 if flag == "--manifest" { manifestPath = URL(fileURLWithPath: value).standardizedFileURL }
                 if flag == "--results-root" { resultsRoot = URL(fileURLWithPath: value).standardizedFileURL }
             case "--help", "-h":
-                print("run_gauntlet.sh --away [--machine m4|m5|m1] [--dry-run] [--only stage,...] [--manifest PATH] [--results-root PATH] [--queue-only] [--keep-build]")
+                print("run_gauntlet.sh --away [--machine m4|m5|m1] [--dry-run] [--only stage,...] [--manifest PATH] [--results-root PATH] [--queue-only] [--keep-run]")
                 return false
             default: throw RunError("unknown argument: \(flag)")
             }
@@ -503,9 +715,8 @@ struct GauntletRunner {
             let package = packageSelectors.isEmpty ? "" : " package_selectors=\(packageSelectors.count) package_expected_floor=\(entry["package_expected_floor"] ?? 0)"
             print("\(name): \(name == "ui" ? "UI not run (phase 2)" : !only.contains(name) ? "not_run (not selected)" : "test-without-building selectors=\(selectors.count) expected_floor=\(entry["expected_floor"] ?? 0)\(package) blocked=\(blocked.count)")")
         }
-        print("Results: \(resultsRoot.path)/<run-id>/result.json; history.jsonl; metrics publication queued on failure")
-        print("Tidy: after result.json + history, remove <run>/{\(buildScratchNames.joined(separator: ","))}\(keepBuild ? " (skipped: --keep-build)" : ""); retention: finished runs older than \(retentionDays) days (by run name) are removed")
-
+        print("Results: history.jsonl summary row (totals, failed/skipped/incomplete test names, new_failures, fixed, first_failed); \(resultsRoot.path)/<run-id>/result.json while the run dir lives; metrics publication queued on failure")
+        print("Tidy: after the summary row is in history.jsonl and publish=published, remove the whole run dir\(keepRun ? " (skipped: --keep-run)" : ""); queued: remove only <run>/{\(buildScratchNames.joined(separator: ","))}; retention: runs older than \(retentionDays) days (by run name) are removed")
 
     }
 
@@ -613,12 +824,13 @@ struct GauntletRunner {
     /// One stage's package suites: `swift test --skip-build` on the build
     /// above, one `--filter` per suite (`VideoScanCoreTests.<Suite>/`, the
     /// slash so a suite never matches a longer name), counted from the log.
-    mutating func runPackageSuites(_ name: String, selectors: [String], floor: Int, timeout: Double) -> [String: Any] {
+    mutating func runPackageSuites(_ name: String, selectors: [String], floor: Int, timeout: Double) -> (row: [String: Any], names: TestNames) {
         var output: [String: Any] = ["selectors": selectors.count, "expected": floor, "status": "failed", "reason": NSNull(), "exit_code": NSNull()]
+        var names = TestNames()
         guard packageBuildOK == true else {
             // A package build that failed is RED (Rick 2026-11-05), never "blocked".
             output["status"] = "failed"; output["reason"] = packageBuildReason ?? "package build did not run"
-            return output
+            return (output, names)
         }
         let patterns = selectors.map { NSRegularExpression.escapedPattern(for: $0) + "/" }
         let filters = patterns.flatMap { ["--filter", $0] }
@@ -637,16 +849,17 @@ struct GauntletRunner {
                 // Isolation already failed: launch nothing more (Codex 2026-11-05 re-review 2, P2).
                 contaminated = true
                 output["status"] = "failed"; output["reason"] = "unreaped process contamination (swift test list)"
-                return output
+                return (output, names)
             }
             let listed: String? = listing.code == 0 ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
             let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
             output["exit_code"] = execution.code
             output["elapsed_s"] = execution.elapsed
-            let counts = countsFromPackageRun(eventStream: (try? String(contentsOf: events, encoding: .utf8)) ?? "",
-                                              console: (try? String(contentsOf: log, encoding: .utf8)) ?? "",
-                                              xctestList: listed, filters: patterns)
+            let stream = (try? String(contentsOf: events, encoding: .utf8)) ?? ""
+            let console = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+            let counts = countsFromPackageRun(eventStream: stream, console: console, xctestList: listed, filters: patterns)
+            names = packageNames(eventStream: stream, console: console, xctestList: listed, filters: patterns)
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -654,7 +867,7 @@ struct GauntletRunner {
             if execution.timedOut { output["status"] = "failed"; output["reason"] = "package watchdog timeout" }
             if execution.contaminated { output["status"] = "failed"; output["reason"] = "unreaped process contamination" }
         } catch { output["reason"] = String(describing: error) }
-        return output
+        return (output, names)
     }
 
     func patch(_ object: Any) -> Any {
@@ -718,6 +931,7 @@ struct GauntletRunner {
         if let modes = entry["modes"] { output["modes"] = modes }
         let start = monotonic()
         var artifacts: [String] = []
+        var names = TestNames()
         if !selectors.isEmpty {
             let cmd = ["xcodebuild", "test-without-building", "-xctestrun", xctestrun!.path, "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-resultBundlePath", bundle.path, "-skip-testing:VideoScanUITests"] + selectors.map { "-only-testing:\($0)" }
             do {
@@ -727,13 +941,15 @@ struct GauntletRunner {
                 let summary = run.appendingPathComponent("\(name)-summary.json")
                 let extraction = try command(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", bundle.path], log: summary, timeout: 60)
                 applyVerdict(execution, extraction: extraction, summary: summary, floor: floor, output: &output)
+                names.merge(try stageXcodeNames(name, summary: summary, bundle: bundle))
             } catch { output["reason"] = String(describing: error) }
             artifacts += [bundle.lastPathComponent, "\(name).log", "\(name)-summary.json"]
         }
         if !packageSelectors.isEmpty && !contaminated {
             let package = runPackageSuites(name, selectors: packageSelectors,
                                            floor: entry["package_expected_floor"] as? Int ?? 1, timeout: timeout)
-            mergePackage(package, into: &output, xcodeRan: !selectors.isEmpty)
+            mergePackage(package.row, into: &output, xcodeRan: !selectors.isEmpty)
+            names.merge(package.names)
             artifacts += ["package-build.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
         }
         // Safe subset passed, but the stage still holds unadapted suites
@@ -746,7 +962,20 @@ struct GauntletRunner {
         output["incomplete"] = output["status"] as? String == "passed" ? 0 : 1
         output["elapsed_s"] = monotonic() - start
         output["artifacts"] = artifacts
-        return output
+        return output.merging(names.fields) { $1 }
+    }
+
+    /// The xcode half's names: failures from <stage>-summary.json; skipped names
+    /// from the bundle's tests tree, fetched only when the summary counted skips.
+    func stageXcodeNames(_ name: String, summary: URL, bundle: URL) throws -> TestNames {
+        let object = try? readObject(summary)
+        var tests: Any?
+        if (object?["skippedTests"] as? Int ?? 0) > 0 {
+            let treeLog = run.appendingPathComponent("\(name)-tests.json")
+            let tree = try command(["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", bundle.path], log: treeLog, timeout: 120)
+            if tree.code == 0 { tests = try? JSONSerialization.jsonObject(with: Data(contentsOf: treeLog)) }
+        }
+        return xcodeNames(summary: object, tests: tests)
     }
 
     mutating func applyVerdict(_ execution: CommandResult, extraction: CommandResult, summary: URL, floor: Int, output: inout [String: Any]) {
@@ -768,6 +997,7 @@ struct GauntletRunner {
             if let modes = entry["modes"] { outputs[index]["modes"] = modes }
         }
         result["stages"] = outputs; result["elapsed_s"] = monotonic() - totalStart
+        result["totals"] = runTotals(outputs)
         // Defence in depth (Codex 11/05): a build that did not exit 0, or any
         // contamination, is RED whatever the stage rows say.
         let buildFailed = (result["build_exit_code"] as? Int32).map { $0 != 0 } ?? false
@@ -812,9 +1042,14 @@ struct GauntletRunner {
         publishReaped = !(published?.contaminated ?? false)
         result["publish"] = published?.code == 0 ? "published" : published?.code == 1 ? "queued" : "queue_failed"
         if result["publish"] as? String == "queue_failed" { result["status"] = "failed"; result["publish_reason"] = "publisher could not confirm durable queue; retry result.json manually" }
+        let history = resultsRoot.appendingPathComponent("history.jsonl")
+        let summary = summaryRow(result: result, previous: previousRow(history: history, machine: machine))
+        for key in ["totals", "compared_to", "new_failures", "fixed", "first_failed"] { result[key] = summary[key] }
         try write(json(result), to: resultPath, root: run)
-        var row = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]); row.append(0x0a)
-        try append(row, to: resultsRoot.appendingPathComponent("history.jsonl"), root: resultsRoot)
+        var row = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys]); row.append(0x0a)
+        try append(row, to: history, root: resultsRoot, sync: true)    // durable before the run dir may go
+        let totals = result["totals"] as? [String: Int] ?? [:]
+        print("GAUNTLET SUMMARY passed=\(totals["passed"] ?? 0) failed=\(totals["failed"] ?? 0) skipped=\(totals["skipped"] ?? 0) unknown=\(totals["unknown"] ?? 0) new_failures=\((summary["new_failures"] as? [String] ?? []).joined(separator: ",")) fixed=\((summary["fixed"] as? [String] ?? []).count) history=\(history.path)")
         let labels = outputs.map { "\($0["name"]!)=\(($0["status"] as! String).uppercased())" }.joined(separator: " ")
         let amber = (result["amber_reasons"] as? [String] ?? []).joined(separator: "; ")
         let status = result["status"] as! String
@@ -841,7 +1076,7 @@ struct GauntletRunner {
         aggregateResults()
         // Tidy only after result.json and the history row exist and the publisher is done with swift-cache.
         let exitCode = try publishResults()
-        print(tidyBuildScratch(run: run, keepBuild: keepBuild, publishReaped: publishReaped))
+        tidyRun(run: run, publish: result["publish"] as? String ?? "queued", keepRun: keepRun, publishReaped: publishReaped).forEach { print($0) }
         return exitCode
     }
 }
@@ -868,8 +1103,25 @@ func main() throws -> Int32 {
         retainFinishedRuns(resultsRoot: URL(fileURLWithPath: arguments[1]), now: isoNow(arguments[2])).forEach { print($0) }
         return 0
     }
-    if arguments.first == "--tidy-build", arguments.count >= 2 {
-        print(tidyBuildScratch(run: URL(fileURLWithPath: arguments[1]), keepBuild: arguments.dropFirst(2).contains("--keep-build"), publishReaped: true))
+    if arguments.first == "--tidy-run", arguments.count >= 3 {
+        tidyRun(run: URL(fileURLWithPath: arguments[1]), publish: arguments[2], keepRun: arguments.dropFirst(3).contains("--keep-run"), publishReaped: true).forEach { print($0) }
+        return 0
+    }
+    // Test seams for the summary row: names per source, and the row publishResults appends.
+    let printJSON = { (value: Any) in print(String(bytes: try json(value), encoding: .utf8) ?? "null") }
+    if arguments.first == "--package-names", arguments.count >= 4 {
+        let read = { (path: String) in (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+        try printJSON(packageNames(eventStream: read(arguments[1]), console: read(arguments[2]), xctestList: read(arguments[3]), filters: Array(arguments.dropFirst(4))).fields)
+        return 0
+    }
+    if arguments.first == "--xcode-names", arguments.count >= 2 {
+        let tests = arguments.count > 2 ? try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: arguments[2]))) : nil
+        try printJSON(xcodeNames(summary: try readObject(URL(fileURLWithPath: arguments[1])), tests: tests).fields)
+        return 0
+    }
+    if arguments.first == "--history-row", arguments.count == 3 {
+        let result = try readObject(URL(fileURLWithPath: arguments[1]))
+        try printJSON(summaryRow(result: result, previous: previousRow(history: URL(fileURLWithPath: arguments[2]), machine: result["machine"] as? String ?? "")))
         return 0
     }
     let script = URL(fileURLWithPath: #filePath).standardizedFileURL

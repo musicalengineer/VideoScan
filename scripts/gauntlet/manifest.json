@@ -32960,16 +32960,28 @@
         "test_gauntlet_run_tidy.py"
       ],
       "tests": [
-        "test_keep_build_flag_keeps_everything",
+        "test_a_test_skipped_or_incomplete_now_is_not_fixed",
+        "test_first_row_for_a_machine_compares_to_nothing",
+        "test_keep_run_flag_keeps_everything",
+        "test_name_lists_are_capped_at_200_with_a_truncated_count",
+        "test_new_failures_fixed_and_first_failed_against_the_previous_row_for_this_machine",
+        "test_package_names_failed_skipped_and_incomplete_even_when_the_run_was_killed",
         "test_retain_never_follows_a_symlinked_run_dir",
         "test_retain_removes_old_finished_runs_and_nothing_else",
         "test_retain_with_nothing_old_prints_nothing_and_removes_nothing",
-        "test_retention_plan_picks_finished_runs_older_than_14_days_by_name",
-        "test_runner_accepts_keep_build_in_its_option_parser",
+        "test_retention_plan_picks_runs_older_than_3_days_by_name",
+        "test_row_has_totals_and_names_and_no_links_into_the_run_dir",
+        "test_runner_accepts_keep_run_in_its_option_parser",
+        "test_scale_a_long_history_is_streamed_within_budget",
         "test_tidy_does_not_follow_a_symlinked_scratch_dir",
+        "test_tidy_keeps_a_published_run_whose_summary_row_is_not_in_history",
+        "test_tidy_keeps_a_queued_or_failed_publish_and_says_why",
         "test_tidy_of_a_run_without_build_products_is_quiet_and_safe",
         "test_tidy_refuses_before_result_json_exists",
-        "test_tidy_removes_only_build_scratch_of_a_finished_run"
+        "test_tidy_removes_only_build_scratch_of_a_finished_run",
+        "test_tidy_removes_the_whole_run_after_a_published_summary_row",
+        "test_verdict_comes_from_the_history_row_when_result_json_is_gone",
+        "test_xcode_names_from_the_xcresult_summary_and_tests_tree"
       ]
     },
     {
@@ -33746,6 +33758,7 @@
         "test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done",
         "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
         "test_a_plain_nightly_mac_needs_only_its_green_suite",
+        "test_a_published_run_whose_dir_is_gone_reads_its_history_row_after_the_tidy_lines",
         "test_an_owner_paused_after_claiming_refuses_the_contender",
         "test_cli",
         "test_gauntlet_is_published_never_queue_only_with_the_rota_machine",
