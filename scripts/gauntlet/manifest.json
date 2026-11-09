@@ -376,6 +376,21 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerSweepTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BackgroundQuitMarkerSweepTests"
+      ],
+      "tests": [
+        "clockCorrectionKeepsTheQuit",
+        "directoryIsNeverRemovedRecursively",
+        "failedRemovalIsSaid",
+        "realBootSession",
+        "symlinkAndOversizeAreRefused"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerTests.swift",
       "stage": "unit",
       "suites": [
@@ -383,6 +398,7 @@
       ],
       "tests": [
         "clearRemovesAndReturns",
+        "legacyMarkerUsesBootSeconds",
         "noBootTime",
         "noFileReadsNone",
         "otherBootIsStaleAndRemoved",
@@ -8957,6 +8973,7 @@
       "tests": [
         "checkboxOnClears",
         "disabledIgnoresMarker",
+        "failedClearIsSaid",
         "pollAsksWithoutMarker",
         "pollDoesNotAskWhileQuit",
         "presentation",
@@ -37602,9 +37619,9 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3542,
+      "expected_floor": 3543,
       "name": "unit",
-      "package_expected_floor": 813,
+      "package_expected_floor": 814,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -38636,7 +38653,7 @@
       ],
       "expected_floor": 509,
       "name": "regression",
-      "package_expected_floor": 325,
+      "package_expected_floor": 330,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -38689,7 +38706,8 @@
         "VideoScanCoreTests.EraJobFailFastTests",
         "VideoScanCoreTests.EraJobConvergenceTests",
         "VideoScanCoreTests.EraJobMediaMatrixTests",
-        "VideoScanCoreTests.EraJobRetryReviewTests"
+        "VideoScanCoreTests.EraJobRetryReviewTests",
+        "VideoScanCoreTests.BackgroundQuitMarkerSweepTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
