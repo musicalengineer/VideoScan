@@ -33562,11 +33562,14 @@
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
+        "test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
         "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
+        "test_each_mac_row_keeps_its_newest_run_with_its_own_date",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
+        "test_failures_links_list_each_macs_failed_test_names",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
         "test_gedcom_line_compares_the_pulls_each_mac_replayed",
         "test_gedcom_line_never_shows_a_name_or_markup_from_the_row",
@@ -33597,6 +33600,7 @@
         "test_summary_first_page_renders_every_line_and_twist",
         "test_summary_sparkline_does_not_join_across_missing_sample",
         "test_theme_defaults_dark_and_respects_saved_choice",
+        "test_version_and_app_source_share_a_tile_and_test_results_is_wide",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
         "test_without_a_summary_the_page_says_so_and_still_renders",
         "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone"
@@ -34160,7 +34164,9 @@
         "test_summary_object_validates_and_leaks_nothing",
         "test_summary_with_everything_failing_is_still_valid",
         "test_the_cell_carries_how_much_of_each_hallie_lane_ran_and_why_it_did_not",
-        "test_the_real_rota_runs_the_nightly_on_mac_studios_only"
+        "test_the_cell_says_when_the_run_finished_and_names_only_tests_found_in_the_sources",
+        "test_the_real_rota_runs_the_nightly_on_mac_studios_only",
+        "test_the_real_test_sources_prove_the_names_the_nightly_prints"
       ]
     },
     {
