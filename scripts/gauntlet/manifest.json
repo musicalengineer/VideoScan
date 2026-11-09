@@ -6548,6 +6548,29 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelFloorFiresCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelFloorFiresCharacterizationTests"
+      ],
+      "tests": [
+        "appCacheByFolderAndAPersonsNameIsNot",
+        "archivedCopyPrefersTheByteCopyReason",
+        "cleanCandidatePassesEveryKind",
+        "eachFloorFiresAloneWithItsOwnReason",
+        "junkScoreFiresAtTheFloor",
+        "noSoundReadsTheVerifyAudioNote",
+        "notPlayableReadsTheProbeWordsCaseInsensitively",
+        "proxyStreamNeedsADurationAndASizeAndIsStrictlyUnderTheRate",
+        "recentPhoneClipNeedsAPhoneAndARecentOrUnknownDate",
+        "restingNeedsEnoughRecentPasses",
+        "signalKindsAndMatchNeverRejectEvenWhenEveryFloorWould",
+        "thresholdsAndSwitchesComeFromThePolicyPassedIn",
+        "tooShortIsStrictlyUnderTheMinimum"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelLifecycleCompanionTests.swift",
@@ -37602,7 +37625,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3542,
+      "expected_floor": 3555,
       "name": "unit",
       "package_expected_floor": 813,
       "package_selectors": [
@@ -37724,6 +37747,7 @@
         "VideoScanTests/ArchiveAngelDownloadCapTests",
         "VideoScanTests/ArchiveAngelEvidenceTests",
         "VideoScanTests/ArchiveAngelExplicitPickTests",
+        "VideoScanTests/ArchiveAngelFloorFiresCharacterizationTests",
         "VideoScanTests/ArchiveAngelFloorTests",
         "VideoScanTests/ArchiveAngelPhoneClipTests",
         "VideoScanTests/ArchiveAngelReadinessExplanationTests",
