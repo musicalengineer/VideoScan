@@ -44,6 +44,10 @@ final class BackgroundServiceStore: ObservableObject {
     @Published private(set) var serviceProblem: String?
     /// The last refusal of the checkbox, for the job line.
     @Published private(set) var lastNote: String?
+    /// Quit from the helper's menu bar in this boot (BackgroundQuitMarker):
+    /// while set, the status poll does not ask the helper (asking would make
+    /// launchd start it, only for it to exit again).
+    @Published private(set) var quit: BackgroundQuitMarker?
     private(set) var refreshCount = 0
 
     // MARK: Seams (production in `production(...)`; tests inject)
@@ -58,6 +62,10 @@ final class BackgroundServiceStore: ObservableObject {
     /// its executable). Compared with the running helper's `ServiceStatus.build`:
     /// a rebuild leaves the old helper running until a re-tick (Fable 11/04).
     var bundledHelperBuild: () -> String? = { nil }
+    /// The helper's quit marker for this boot (nil: none, stale or torn).
+    var readQuit: () -> BackgroundQuitMarker? = { nil }
+    /// Removes the marker; returns it when there was a readable one.
+    var clearQuit: () -> BackgroundQuitMarker? = { nil }
     var log: (String) -> Void
 
     /// Why the checkbox may not turn the helper on here — nil when it may.
@@ -110,6 +118,9 @@ final class BackgroundServiceStore: ObservableObject {
         let bundled = FileManager.default.fileExists(atPath: helper.path) ? JobSchedule.buildID(executable: helper) : nil
         // Only the Release build registers the helper, so only it can call the running one older.
         store.bundledHelperBuild = { BackgroundServiceRegistrar.isReleaseBuild ? bundled : nil }
+        let quitStore = BackgroundQuitStore.production()
+        store.readQuit = { quitStore.active() }
+        store.clearQuit = { quitStore.clear() }
         return store
     }
 
@@ -131,6 +142,7 @@ final class BackgroundServiceStore: ObservableObject {
         lastNote = nil
         let a = agent()
         if on {
+            clearQuitMarker(reason: "the checkbox was turned on")
             BackgroundServiceRegistrar.registerIfEnabled(enabled: true, service: { a }, log: log)
             launchdStatus = a.status
             Task { await refresh() }
@@ -150,7 +162,11 @@ final class BackgroundServiceStore: ObservableObject {
     func refresh() async {
         refreshCount += 1
         launchdStatus = agent().status
-        if enabled, launchdStatus == .enabled {
+        quit = enabled ? readQuit() : nil
+        if quit != nil {
+            service = nil
+            serviceProblem = nil
+        } else if enabled, launchdStatus == .enabled {
             switch await askStatus() {
             case .success(let s): service = s; serviceProblem = nil
             case .failure(let r): service = nil; serviceProblem = r.words
@@ -191,9 +207,19 @@ final class BackgroundServiceStore: ObservableObject {
 
     // MARK: Cycles
 
-    /// At launch: one refresh now, then every 10 minutes.
+    /// Opening VideoScan starts the helper again (Rick 2026-11-08): the
+    /// marker goes, and the next status ask lets launchd start it.
+    private func clearQuitMarker(reason: String) {
+        if let was = clearQuit() {
+            log("background service: quit from its menu bar at \(was.quitWords()) — cleared (\(reason)); the helper starts again")
+        }
+        quit = nil
+    }
+
+    /// At launch: clear a menu bar Quit, one refresh now, then every 10 minutes.
     func start() {
         guard cycle == nil else { return }
+        clearQuitMarker(reason: "VideoScan opened")
         cycle = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -252,13 +278,25 @@ enum BackgroundServicePresentation {
     /// `refusal`: why this build may not turn the helper on (the gate) — the
     /// "Fix:" then names a verb this build CAN do (reviewer 11/03).
     static func lines(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, serviceProblem: String?,
-                      lastNote: String?, viewer: Bool = false, refusal: String? = nil, bundledBuild: String? = nil) -> Lines {
-        Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem, refusal: refusal,
-                             bundledBuild: bundledBuild),
-              helperIsUp: service != nil,
-              needsApproval: enabled && launchd == .requiresApproval,
-              job: job(enabled: enabled, service: service, lastNote: lastNote, viewer: viewer))
+                      lastNote: String?, viewer: Bool = false, refusal: String? = nil, bundledBuild: String? = nil,
+                      quit: BackgroundQuitMarker? = nil) -> Lines {
+        if enabled, let quit, !viewer {
+            return Lines(helper: quitHelperLine(quit), helperIsUp: false, needsApproval: false, job: quitJobLine)
+        }
+        return Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem, refusal: refusal,
+                                    bundledBuild: bundledBuild),
+                     helperIsUp: service != nil,
+                     needsApproval: enabled && launchd == .requiresApproval,
+                     job: job(enabled: enabled, service: service, lastNote: lastNote, viewer: viewer))
     }
+
+    /// Quit from the helper's own menu bar: Rick's choice, not a problem.
+    static func quitHelperLine(_ quit: BackgroundQuitMarker, now: Date = Date()) -> String {
+        "VideoScan Background: quit from its menu bar at \(quit.quitWords(now: now)) — starts again when VideoScan next opens "
+            + "or the Mac restarts (to start it now: turn the checkbox off and on)"
+    }
+
+    static let quitJobLine = "Content analysis: stopped — VideoScan Background was quit; work resumes where it stopped"
 
     /// The helper line when it shows a problem — nil when it is healthy or
     /// plainly off, or still asking (transient). The store logs exactly these

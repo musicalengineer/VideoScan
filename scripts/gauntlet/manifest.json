@@ -376,6 +376,25 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundQuitMarkerTests"
+      ],
+      "tests": [
+        "clearRemovesAndReturns",
+        "noBootTime",
+        "noFileReadsNone",
+        "otherBootIsStaleAndRemoved",
+        "quitWords",
+        "realBootTimeSensor",
+        "sameBootIsActive",
+        "tornFileReadsUnreadableAndClears",
+        "writeCreatesTheStateRoot"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundPayloadCodecTests.swift",
       "stage": "unit",
       "suites": [
@@ -8926,6 +8945,25 @@
         "toggleOff",
         "toggleOn",
         "viewerRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceQuitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceQuitTests"
+      ],
+      "tests": [
+        "checkboxOnClears",
+        "disabledIgnoresMarker",
+        "pollAsksWithoutMarker",
+        "pollDoesNotAskWhileQuit",
+        "presentation",
+        "realStore",
+        "startClears",
+        "startWithoutMarkerIsSilent",
+        "viewerIgnoresQuit"
       ]
     },
     {
@@ -37558,9 +37596,9 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3533,
+      "expected_floor": 3542,
       "name": "unit",
-      "package_expected_floor": 804,
+      "package_expected_floor": 813,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -37570,6 +37608,7 @@
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
         "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
         "VideoScanCoreTests.BackgroundMenuPresentationTests",
+        "VideoScanCoreTests.BackgroundQuitMarkerTests",
         "VideoScanCoreTests.BackgroundPayloadCodecTests",
         "VideoScanCoreTests.BackoffPolicyTests",
         "VideoScanCoreTests.CaptionTextQualityTests",
@@ -37740,6 +37779,7 @@
         "VideoScanTests/BackgroundServiceRegistrarTests",
         "VideoScanTests/BackgroundServiceSensorTests",
         "VideoScanTests/BackgroundServiceStoreTests",
+        "VideoScanTests/BackgroundServiceQuitTests",
         "VideoScanTests/BackgroundSettingsSensorTests",
         "VideoScanTests/BalanceAudioClassifierTests",
         "VideoScanTests/BalanceFromDiagnosisTests",

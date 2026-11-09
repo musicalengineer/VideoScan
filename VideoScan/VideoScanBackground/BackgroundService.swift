@@ -65,6 +65,39 @@ final class BackgroundService: @unchecked Sendable {
                            buildID: JobSchedule.buildID(), holds: ScheduleHoldStore.beside(stateRoot: stateRoot))
     }
 
+    /// Quit from the menu bar in this boot (Rick 2026-11-08): log one line and
+    /// return true — main.swift then exits 0 and launchd leaves it down. Called
+    /// before `init`, so a held-down launch takes no state-root lock and starts
+    /// no listener. A stale or torn marker is logged and the service runs.
+    static func quitHoldsUsDown() -> Bool {
+        let log = BackgroundFileLog.production()
+        let store = BackgroundQuitStore.production()
+        switch store.read() {
+        case .none:
+            return false
+        case .active(let m):
+            log.start()
+            log.write("service not starting — quit from the menu bar at \(m.quitWords()) (pid \(ProcessInfo.processInfo.processIdentifier)); it starts again when VideoScan opens or the Mac restarts")
+            log.close()
+            return true
+        case .stale(let m):
+            log.start()
+            log.write("quit marker from an earlier boot (quit at \(m.quitWords())) removed — starting")
+            log.close()
+            return false
+        case .unreadable(let why):
+            log.start()
+            log.write("quit marker unreadable (\(why)) — starting anyway")
+            log.close()
+            return false
+        case .noBootTime:
+            log.start()
+            log.write("quit marker present but the boot time could not be read — starting anyway")
+            log.close()
+            return false
+        }
+    }
+
     func start() {
         log.start()
         log.write("service started — \(Self.bundleIdentifier) pid \(ProcessInfo.processInfo.processIdentifier), mach service \(Self.machServiceName), state in \(Self.stateRoot.path), schema \(BackgroundProtocolVersion.current), build \(JobSchedule.buildID())")
@@ -99,9 +132,29 @@ final class BackgroundService: @unchecked Sendable {
     }
     private var termSource: DispatchSourceSignal?
 
+    /// The menu bar's Quit (Rick 2026-11-08): write the marker that keeps the
+    /// helper down for this boot, then the same clean exit as SIGTERM. A
+    /// marker that cannot be written still quits, and says the helper may come
+    /// back at VideoScan's next status check.
+    func quit() {
+        let store = BackgroundQuitStore.production()
+        do {
+            let m = try store.write()
+            log.write("menu bar: Quit — quit at \(m.quitWords()); exiting 0, stays down until VideoScan opens or the Mac restarts; work resumes from its checkpoints")
+        } catch {
+            log.write("menu bar: Quit — the quit marker was not written (\(error.localizedDescription)); exiting 0, but VideoScan's next status check may start it again")
+        }
+        Task { [supervisor, log] in
+            await supervisor.prepareForExit()
+            log.close()
+            exit(0)
+        }
+    }
+
     /// The menu bar item (Rick 2026-11-03). Main thread, after `start()`.
     @MainActor func installMenuBar() {
-        let controller = StatusMenuController(supervisor: supervisor, startedAt: startedAt, log: log)
+        let controller = StatusMenuController(supervisor: supervisor, startedAt: startedAt, log: log,
+                                              quit: { [weak self] in self?.quit() })
         controller.start()
         menuBar = controller
     }
