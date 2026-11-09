@@ -671,12 +671,25 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     // MARK: Preparation of one entry
 
+    /// The job's two concrete collaborators, as `prepare` holds them for
+    /// one file's whole run (strong, unwrapped once from the job's weak
+    /// references) and hands them to each step. Named once here rather
+    /// than spelled out in every step's signature (≈ a `std::pair` of
+    /// references passed by value).
+    typealias PrepareTools = (model: VideoScanModel, center: MediaFileOperationsCenter)
+
+    /// One file's four steps, each saved before the next and each a place a
+    /// Stop or a Skip of this row ends the file: verify audio → balanced
+    /// audio (only on a fixable problem) → access copy (always; from the
+    /// balanced companion when there is one) → lossless copy (only when
+    /// enabled and the format is at risk).
     private func prepare(index idx: Int, record rec: VideoRecord, entryDir: URL, position: Int, total: Int) async {
         guard let model, let center else {
             note("Archive Angel [\(position)/\(total)] \(rec.filename) — cannot prepare: the operations center or catalog went away")
             return
         }
         let stem = (rec.filename as NSString).deletingPathExtension
+        let tools: PrepareTools = (model, center)
         func progress(_ step: String, _ n: Int) {
             stepStartedAt = Date()   // every step's clock starts with its progress line
             subtitleText = "\(position) of \(total) — \(rec.filename): \(step)"
@@ -685,47 +698,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
         // a. Verify audio
         progress("verifying audio", 0)
-        var diagnosis: AudioVerifyDiagnosis?
-        if rec.streamType == .videoOnly {
-            step(idx, .verifyAudio, .skipped, note: "No audio track")
-        } else if !rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id) {
-            // Only with the diagnosis in hand (audit #6): it lives in an
-            // in-memory cache, so after a restart it is gone and the file
-            // is verified again below rather than assumed fine.
-            step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
-            diagnosis = cached
-        } else if let waited = await waitForRunningVerify(of: rec, index: idx, center: center) {
-            // QA 2026-09-25 MAJOR-1: an Angel Check (or Rick) was already
-            // verifying this file. Its verdict is ours; starting a second
-            // one would be refused as a duplicate, and without a diagnosis
-            // the balance step used to be skipped and the access copy cut
-            // from unbalanced sound.
-            switch waited {
-            case .diagnosis(let d):
-                diagnosis = d
-                step(idx, .verifyAudio, .done,
-                     note: ArchiveAngelAudioOutcome.from(d).headline + " (waited for the sound check in progress)")
-            case .stopped:
-                step(idx, .verifyAudio, .skipped,
-                     note: wasSkipped(idx) ? skipStepNote : "Stopped while waiting for the sound check in progress")
-            }
-        } else if let vj = center.startVerifyAudio(record: rec, model: model) {
-            currentSubJob = vj
-            await vj.task?.value
-            currentSubJob = nil
-            if wasSkipped(idx) {
-                step(idx, .verifyAudio, .skipped, note: skipStepNote)
-            } else if let d = vj.diagnosis {
-                diagnosis = d
-                step(idx, .verifyAudio, .done, note: ArchiveAngelAudioOutcome.from(d).headline)
-            } else if case .failed(let m) = vj.state {
-                step(idx, .verifyAudio, .failed, note: m)
-            } else {
-                step(idx, .verifyAudio, .skipped, note: "Verify did not finish")
-            }
-        } else {
-            step(idx, .verifyAudio, .skipped, note: "A verify job for this file is already running")
-        }
+        let diagnosis = await verifyAudioStep(idx, rec, tools)
         _ = await savePlan()
         if stopRequested || wasSkipped(idx) { return }
 
@@ -733,71 +706,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // an original already balanced reuses its catalogued `_balanced`
         // copy (S4 fix — the retired Helper's 2026-08-19 rule).
         progress("balancing audio", 1)
-        var balancedRecord: VideoRecord?
-        let found = await existingBalancedCopy(of: rec, catalog: model)
-        if let nominated = found.nomination {
-            plan.entries[idx].balancedNomination = nominated.fullPath
-            note("Archive Angel: \(rec.filename) — an existing balanced copy may exist: \(nominated.filename) — "
-                 + "not used (no Balance Audio link to this original)")
-        }
-        if let existing = found.reuse {
-            balancedRecord = existing
-            note("Archive Angel: \(rec.filename) — using existing balanced copy \(existing.filename)")
-            if (model as any AngelCatalog).isRecommendableNow(existing) {
-                step(idx, .balanceAudio, .done, note: "Using existing balanced copy \(existing.filename)")
-                if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
-                    plan.entries[idx].steps[i].recordID = existing.id
-                    plan.entries[idx].steps[i].existingPath = existing.fullPath
-                }
-            } else {
-                step(idx, .balanceAudio, .skipped,
-                     note: "Using existing balanced copy \(existing.filename) (already in the Master Archive — not promoted again)")
-            }
-        } else if let d = diagnosis, let analysis = d.balanceAnalysis {
-            // TODO(S4 finding 3, for Rick): "fixable" is decided here by
-            // BalanceAudioFix.refusalReason(for: analysis) alone, while
-            // ArchiveAngelAudioOutcome.from(_:) (the verify note above)
-            // requires a channel-imbalance finding first. The two can
-            // disagree on an analysis without that finding. Left as-is in
-            // S4 (behaviour-preserving); pick one predicate later.
-            if let reason = BalanceAudioFix.refusalReason(for: analysis) {
-                step(idx, .balanceAudio, .skipped, note: reason)
-            } else {
-                let ext = BalanceAudioFix.balancedOutputURL(forSourcePath: rec.fullPath,
-                                                            containerFormat: analysis.shape.containerFormat,
-                                                            fileExists: { _ in false }).pathExtension
-                let planned = entryDir.appendingPathComponent("\(stem)_balanced.\(ext)")
-                await Self.removeIfPresentOffMain(planned)
-                if let bj = center.startBalanceAudio(record: rec, fromDiagnosis: d, model: model, plannedOutput: planned) {
-                    currentSubJob = bj
-                    await bj.task?.value
-                    currentSubJob = nil
-                    if wasSkipped(idx) {
-                        step(idx, .balanceAudio, .skipped, note: skipStepNote)
-                    } else if case .finished = bj.state, let out = bj.publishedURL,
-                       await Self.fileSizeOffMain(out) > 0 {
-                        // O(1) (AngelCatalog.record(forPath:) — the indexed
-                        // lookup; was an O(records) `records.first` scan).
-                        let companion = (model as any AngelCatalog).record(forPath: out.path)
-                        balancedRecord = companion
-                        step(idx, .balanceAudio, .done, note: "Audio balanced (\(analysis.classification.rawValue))",
-                                              output: Self.relPath(out, in: plan.batchDir))
-                        if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
-                            plan.entries[idx].steps[i].recordID = companion?.id
-                        }
-                    } else if case .failed(let m) = bj.state {
-                        step(idx, .balanceAudio, .failed, note: "Balance failed: \(m)")
-                    } else {
-                        step(idx, .balanceAudio, .failed, note: "Balance did not finish")
-                    }
-                } else {
-                    step(idx, .balanceAudio, .skipped, note: "A balance job for this file is already running")
-                }
-            }
-        } else {
-            step(idx, .balanceAudio, .skipped,
-                 note: Self.balanceSkipNote(hasDiagnosis: diagnosis != nil, videoOnly: rec.streamType == .videoOnly))
-        }
+        let balancedRecord = await balancedAudioStep(idx, rec, diagnosis: diagnosis, entryDir: entryDir, stem: stem,
+                                                     tools)
         _ = await savePlan()
         if stopRequested || wasSkipped(idx) { return }
 
@@ -807,13 +717,166 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let accessOut = entryDir.appendingPathComponent("\(stem).vs.archive.mov")
         await Self.removeIfPresentOffMain(accessOut)
         await runTranscode(index: idx, kind: .accessCopy, record: accessSource, preset: .archival,
-                           outputURL: accessOut, model: model, center: center,
+                           outputURL: accessOut, tools: tools,
                            doneNote: balancedRecord == nil ? "HEVC access copy" : "HEVC access copy (from balanced audio)")
         _ = await savePlan()
         if stopRequested || wasSkipped(idx) { return }
 
         // d. Lossless — only when enabled AND the format is at risk.
         progress("lossless copy", 3)
+        await losslessCopyStep(idx, rec, entryDir: entryDir, stem: stem, tools)
+        _ = await savePlan()
+    }
+
+    /// Step a: the file's sound checked — or why not. Returns the
+    /// diagnosis the balance step decides on (nil = none in hand).
+    private func verifyAudioStep(_ idx: Int, _ rec: VideoRecord, _ tools: PrepareTools) async -> AudioVerifyDiagnosis? {
+        let (model, center) = tools
+        if rec.streamType == .videoOnly {
+            step(idx, .verifyAudio, .skipped, note: "No audio track")
+            return nil
+        }
+        if !rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id) {
+            // Only with the diagnosis in hand (audit #6): it lives in an
+            // in-memory cache, so after a restart it is gone and the file
+            // is verified again below rather than assumed fine.
+            step(idx, .verifyAudio, .skipped, note: "Already verified: \(rec.audioVerifyStatus)")
+            return cached
+        }
+        if let waited = await waitForRunningVerify(of: rec, index: idx, center: center) {
+            // QA 2026-09-25 MAJOR-1: an Angel Check (or Rick) was already
+            // verifying this file. Its verdict is ours; starting a second
+            // one would be refused as a duplicate, and without a diagnosis
+            // the balance step used to be skipped and the access copy cut
+            // from unbalanced sound.
+            switch waited {
+            case .diagnosis(let d):
+                step(idx, .verifyAudio, .done,
+                     note: ArchiveAngelAudioOutcome.from(d).headline + " (waited for the sound check in progress)")
+                return d
+            case .stopped:
+                step(idx, .verifyAudio, .skipped,
+                     note: wasSkipped(idx) ? skipStepNote : "Stopped while waiting for the sound check in progress")
+                return nil
+            }
+        }
+        guard let vj = center.startVerifyAudio(record: rec, model: model) else {
+            step(idx, .verifyAudio, .skipped, note: "A verify job for this file is already running")
+            return nil
+        }
+        currentSubJob = vj
+        await vj.task?.value
+        currentSubJob = nil
+        if wasSkipped(idx) {
+            step(idx, .verifyAudio, .skipped, note: skipStepNote)
+        } else if let d = vj.diagnosis {
+            step(idx, .verifyAudio, .done, note: ArchiveAngelAudioOutcome.from(d).headline)
+            return d
+        } else if case .failed(let m) = vj.state {
+            step(idx, .verifyAudio, .failed, note: m)
+        } else {
+            step(idx, .verifyAudio, .skipped, note: "Verify did not finish")
+        }
+        return nil
+    }
+
+    /// Step b: an existing linked `_balanced` copy is reused (a same-name
+    /// one that is NOT linked is only nominated, never used); else, on a
+    /// fixable problem, Balance Audio makes one into the entry folder.
+    /// Returns the balanced record the access copy is cut from (nil = cut
+    /// from the original).
+    private func balancedAudioStep(_ idx: Int, _ rec: VideoRecord, diagnosis: AudioVerifyDiagnosis?, entryDir: URL,
+                                   stem: String, _ tools: PrepareTools) async -> VideoRecord? {
+        let found = await existingBalancedCopy(of: rec, catalog: tools.model)
+        if let nominated = found.nomination {
+            plan.entries[idx].balancedNomination = nominated.fullPath
+            note("Archive Angel: \(rec.filename) — an existing balanced copy may exist: \(nominated.filename) — "
+                 + "not used (no Balance Audio link to this original)")
+        }
+        if let existing = found.reuse {
+            useExistingBalancedCopy(idx, rec, existing, catalog: tools.model)
+            return existing
+        }
+        guard let d = diagnosis, let analysis = d.balanceAnalysis else {
+            step(idx, .balanceAudio, .skipped,
+                 note: Self.balanceSkipNote(hasDiagnosis: diagnosis != nil, videoOnly: rec.streamType == .videoOnly))
+            return nil
+        }
+        // TODO(S4 finding 3, for Rick): "fixable" is decided here by
+        // BalanceAudioFix.refusalReason(for: analysis) alone, while
+        // ArchiveAngelAudioOutcome.from(_:) (the verify note above)
+        // requires a channel-imbalance finding first. The two can
+        // disagree on an analysis without that finding. Left as-is in
+        // S4 (behaviour-preserving); pick one predicate later.
+        if let reason = BalanceAudioFix.refusalReason(for: analysis) {
+            step(idx, .balanceAudio, .skipped, note: reason)
+            return nil
+        }
+        return await runBalanceAudio(idx, rec, diagnosis: d, analysis: analysis, entryDir: entryDir, stem: stem,
+                                     tools)
+    }
+
+    /// The reused balanced copy is the step's outcome — a companion to
+    /// promote unless it is already in the Master Archive.
+    private func useExistingBalancedCopy(_ idx: Int, _ rec: VideoRecord, _ existing: VideoRecord,
+                                         catalog: any AngelCatalog) {
+        note("Archive Angel: \(rec.filename) — using existing balanced copy \(existing.filename)")
+        if catalog.isRecommendableNow(existing) {
+            step(idx, .balanceAudio, .done, note: "Using existing balanced copy \(existing.filename)")
+            if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
+                plan.entries[idx].steps[i].recordID = existing.id
+                plan.entries[idx].steps[i].existingPath = existing.fullPath
+            }
+        } else {
+            step(idx, .balanceAudio, .skipped,
+                 note: "Using existing balanced copy \(existing.filename) (already in the Master Archive — not promoted again)")
+        }
+    }
+
+    /// Balance Audio into `<stem>_balanced.<ext>` in the entry folder. The
+    /// companion record (when the output landed and is catalogued) is
+    /// returned and linked to the step; nil otherwise.
+    private func runBalanceAudio(_ idx: Int, _ rec: VideoRecord, diagnosis d: AudioVerifyDiagnosis,
+                                 analysis: AudioBalanceAnalysis, entryDir: URL, stem: String,
+                                 _ tools: PrepareTools) async -> VideoRecord? {
+        let (model, center) = tools
+        let ext = BalanceAudioFix.balancedOutputURL(forSourcePath: rec.fullPath,
+                                                    containerFormat: analysis.shape.containerFormat,
+                                                    fileExists: { _ in false }).pathExtension
+        let planned = entryDir.appendingPathComponent("\(stem)_balanced.\(ext)")
+        await Self.removeIfPresentOffMain(planned)
+        guard let bj = center.startBalanceAudio(record: rec, fromDiagnosis: d, model: model, plannedOutput: planned) else {
+            step(idx, .balanceAudio, .skipped, note: "A balance job for this file is already running")
+            return nil
+        }
+        currentSubJob = bj
+        await bj.task?.value
+        currentSubJob = nil
+        if wasSkipped(idx) {
+            step(idx, .balanceAudio, .skipped, note: skipStepNote)
+        } else if case .finished = bj.state, let out = bj.publishedURL,
+           await Self.fileSizeOffMain(out) > 0 {
+            // O(1) (AngelCatalog.record(forPath:) — the indexed
+            // lookup; was an O(records) `records.first` scan).
+            let companion = (model as any AngelCatalog).record(forPath: out.path)
+            step(idx, .balanceAudio, .done, note: "Audio balanced (\(analysis.classification.rawValue))",
+                                  output: Self.relPath(out, in: plan.batchDir))
+            if let i = plan.entries[idx].steps.firstIndex(where: { $0.kind == .balanceAudio }) {
+                plan.entries[idx].steps[i].recordID = companion?.id
+            }
+            return companion
+        } else if case .failed(let m) = bj.state {
+            step(idx, .balanceAudio, .failed, note: "Balance failed: \(m)")
+        } else {
+            step(idx, .balanceAudio, .failed, note: "Balance did not finish")
+        }
+        return nil
+    }
+
+    /// Step d: an FFV1 preservation copy — only when lossless is on and the
+    /// original's format is at risk.
+    private func losslessCopyStep(_ idx: Int, _ rec: VideoRecord, entryDir: URL, stem: String,
+                                  _ tools: PrepareTools) async {
         let readiness = ArchiveReadiness.assess(record: rec)
         if !makeLossless {
             step(idx, .losslessCopy, .skipped, note: "Lossless off (alpha default)")
@@ -821,12 +884,11 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             let out = entryDir.appendingPathComponent("\(stem).vs.preserve.mkv")
             await Self.removeIfPresentOffMain(out)
             await runTranscode(index: idx, kind: .losslessCopy, record: rec, preset: .preservation,
-                               outputURL: out, model: model, center: center, doneNote: "FFV1 preservation copy")
+                               outputURL: out, tools: tools, doneNote: "FFV1 preservation copy")
         } else {
             let codec = rec.videoCodec.isEmpty ? "the" : rec.videoCodec
             step(idx, .losslessCopy, .skipped, note: "Lossless copy not needed — \(codec) original is the preservation master")
         }
-        _ = await savePlan()
     }
 
     enum RunningVerify { case diagnosis(AudioVerifyDiagnosis), stopped }
@@ -881,8 +943,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     private func runTranscode(index idx: Int, kind: ArchiveAngelPlan.StepKind, record: VideoRecord,
                               preset: TranscodePreset, outputURL: URL,
-                              model: VideoScanModel, center: MediaFileOperationsCenter,
-                              doneNote: String) async {
+                              tools: PrepareTools, doneNote: String) async {
+        let (model, center) = tools
         let startedAt = Date()
         note("Archive Angel [\(idx + 1)/\(plan.entries.count)] \(plan.entries[idx].filename) — "
              + "\(kind.label.lowercased()): starting \(preset.rawValue) → \(outputURL.lastPathComponent)")
