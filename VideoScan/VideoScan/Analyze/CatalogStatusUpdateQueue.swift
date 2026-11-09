@@ -234,6 +234,9 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             saidWaiting = false
             return false
         }
+        // An audit writes marks, and a writer may be running beside it: the
+        // save is flushed before our check either way (Codex final #272 #5).
+        waitedOnWriter = true
         if !saidWaiting {
             runner.note("\(Self.logPrefix) — waiting: \(elsewhere.title) is already running; the next step starts when it ends")
             saidWaiting = true

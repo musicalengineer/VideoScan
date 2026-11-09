@@ -263,3 +263,23 @@ struct CatalogSweepWaitLineTests {
         await waitWhile { queue.isActive }
     }
 }
+
+@Suite("Catalog Status — Codex sweep 11/09 final pass (#272 #5)", .serialized)
+@MainActor
+struct CatalogSweepFinalTests {
+    @Test("RED: after waiting behind an audit (and a writer) that both ended before the next poll, the save is flushed before the check")
+    func waitingBehindAnAuditFlushes() {
+        let queue = CatalogStatusUpdateQueue()
+        queue.graceSeconds = 0
+        let runner = ScriptedUpdateRunner()
+        runner.runningElsewhere = [.filePresence, .duplicates]
+        runner.flushAcknowledged = false
+        runner.steps[.integrity] = { }
+        queue.enqueue([.integrity], runner: runner, source: "test")
+        queue.advanceIfIdle()
+        runner.runningElsewhere = []
+        queue.advanceIfIdle()
+        #expect(!runner.flushes.isEmpty, "no flush was asked")
+        #expect(!runner.started.contains(.integrity), "the check ran without the writers' save acknowledged: \(runner.started)")
+    }
+}
