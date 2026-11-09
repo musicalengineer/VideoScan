@@ -33,7 +33,7 @@ GROUPS = [
      ["content", "files", "volumes", "tombstones", "pending_rows", "pending_purges", "supersessions", "av_pairs", "legacy_pair_ids"]),
     ("B. Rick's decisions — human facts, the highest rank (user_*, stars, people, places, events, archive)",
      ["user_dates", "user_places", "user_notes", "stars", "people_tags", "workflow_tags", "dispositions", "family_music",
-      "backup_attestations", "events", "event_members", "event_decisions", "footage_decisions", "provenance_roles",
+      "backup_attestations", "events", "event_members", "event_decisions", "footage_decisions", "provenance_roles", "public_marks",
       "ignored_content", "ignored_content_put_back", "archive_copies", "backup_destinations"]),
     ("C. Machine observations — what engines and models found (by = engine@version, with provenance)",
      ["captions", "caption_runs", "transcripts", "inferred_dates", "dossiers", "sound_prints", "perceptual_prints",

@@ -1802,6 +1802,14 @@ final class VideoScanModel: ObservableObject {
     /// authority; a viewer or a JSON session leaves it unattached (refuses).
     let provenanceRoles = ProvenanceRoleStore()
 
+    /// The public bit in catalog.sqlite (schema v1.15): which contents the
+    /// whole family may watch, set by Rick through Make Public / Make
+    /// Private — the feature's store (PublicMarkStore.swift; rule 12: state
+    /// behind a seam, no model extension). Attached to the committer when
+    /// catalog.sqlite becomes the authority; a viewer or a JSON session
+    /// leaves it unattached (refuses, and everything reads as private).
+    let publicMarks = PublicMarkStore()
+
     /// The background helper's journal into catalog.sqlite (schema v1.13,
     /// JournalApplier.swift; rule 12: state behind a seam). Attached to the
     /// committer when catalog.sqlite becomes the authority; its journal is

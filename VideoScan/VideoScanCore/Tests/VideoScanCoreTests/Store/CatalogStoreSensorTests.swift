@@ -61,7 +61,8 @@ struct CatalogStoreSensorTests {
         (CatalogBookkeepingSchema.statements + CatalogDataSchema.statements + CatalogLiveWritesSchema.statements
          + CatalogPendingRowsSchema.statements + CatalogCommitB22Schema.statements
          + CatalogDecisionTablesSchema.statements + CatalogProvenanceRolesSchema.statements
-         + CatalogProvenanceAssertionsSchema.statements + CatalogSoundAttemptsSchema.statements).joined(separator: "\n")
+         + CatalogProvenanceAssertionsSchema.statements + CatalogSoundAttemptsSchema.statements
+         + CatalogPublicMarksSchema.statements).joined(separator: "\n")
     }
 
     @Test func onlyStoreFoldersImportGRDB() {
@@ -133,7 +134,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTableOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().tableNames
-        #expect(documented.count == 59)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13) + sound_attempts (v1.14)
+        #expect(documented.count == 60)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13) + sound_attempts (v1.14) + public_marks (v1.15)
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TABLE \(name) ") || swift.contains("CREATE VIRTUAL TABLE \(name) ")
@@ -143,7 +144,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTriggerOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().triggerNames
-        #expect(documented.count == 83)                        // 12 bookkeeping + 58 data + 3 live (v1.7) + 1 pending (v1.8) + 4 append-only (v1.11) + 2 append-only (v1.12) + veto + 2 append-only (v1.13)
+        #expect(documented.count == 85)                        // 12 bookkeeping + 58 data + 3 live (v1.7) + 1 pending (v1.8) + 4 append-only (v1.11) + 2 append-only (v1.12) + veto + 2 append-only (v1.13) + 2 append-only (v1.15)
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TRIGGER \(name) ") || swift.contains("CREATE TRIGGER \(name)\n")

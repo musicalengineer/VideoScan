@@ -373,6 +373,15 @@ extension VideoScanModel {
         }
         provenanceRoles.attach(ProvenanceRoleCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.provenanceRoles.load() }
+        // The public bit (schema v1.15): every Make Public / Make Private
+        // through this committer; the Archive tab's globe reads the store's
+        // projection. Until the load lands everything reads as private.
+        publicMarks.note = { [weak self] line in
+            self?.log("Public: " + line)
+            appLog.write("[public] " + line)
+        }
+        publicMarks.attach(PublicMarkCatalogBacking(committer: committer))
+        Task { [weak self] in _ = await self?.publicMarks.load() }
         // The background helper's observations (schema v1.13): its journal
         // beside catalog.json, applied through this committer at launch and
         // every 5 minutes; Catalog Status hears the waiting / refused counts.

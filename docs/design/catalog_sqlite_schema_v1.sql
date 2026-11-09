@@ -81,6 +81,11 @@
 -- (VideoScanCore/Store/CatalogSoundAttemptsSchema.swift, migration `v10_sound_attempts`, which raises
 -- catalog_state.schema_version to 15). ADDITIVE: one new table; no earlier table, trigger, index or
 -- CHECK changed.
+-- Revision 16 (v1.15, 2026-11-09, Make Public; Rick approved the table 2026-11-09): §20 —
+-- `public_marks`, the one bit "the whole family may watch this", per digest, append-only, the newest
+-- row per digest current, no row = private (VideoScanCore/Store/CatalogPublicMarksSchema.swift,
+-- migration `v11_public_marks`, which raises catalog_state.schema_version to 16). ADDITIVE: one new
+-- table, one index, two append-only triggers; no earlier table, trigger, index or CHECK changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1826,3 +1831,26 @@ CREATE TABLE sound_attempts (              -- v1.14: tries that gave no sound pr
   last_at         INTEGER NOT NULL,
   detail          TEXT
 ) STRICT;
+
+-- ---------------------------------------------------------------------------------------------
+-- 20. PUBLIC MARKS (v1.15, 2026-11-09, migration `v11_public_marks`; Rick approved 2026-11-09).
+--     The ONE bit "the whole family may watch this" (Rick: "kind of a unix-like bit, if the bit is
+--     off, it is presumed private"). It belongs to the CONTENT (whole-file SHA-256): byte-identical
+--     copies share it. PRIVATE IS THE DEFAULT AND NEEDS NO ROW: a digest with no row is private; so
+--     is one whose newest row holds 0, and one whose newest row a reader cannot read (fail closed —
+--     only an exact 1 is public). Only Rick sets it (Make Public / Make Private, through the commit
+--     door); background jobs never write here. APPEND-ONLY: each choice is a new row; the CURRENT
+--     bit of a digest is its row with the highest mark_id (insertion order, never decided_at).
+--     The migration then runs: UPDATE catalog_state SET schema_version = 16; PRAGMA user_version = 16.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE public_marks (                -- v1.15: family-wide viewing, set by Rick; the newest row per digest is current; no row = private
+  mark_id        INTEGER PRIMARY KEY,
+  digest         TEXT    NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  is_public      INTEGER NOT NULL CHECK (is_public IN (0,1)),
+  decided_at     INTEGER NOT NULL
+) STRICT;
+CREATE INDEX public_marks_by_digest ON public_marks(digest, mark_id);
+CREATE TRIGGER public_marks_no_update BEFORE UPDATE ON public_marks
+BEGIN SELECT RAISE(ABORT, 'public_marks is append-only history'); END;
+CREATE TRIGGER public_marks_no_delete BEFORE DELETE ON public_marks
+BEGIN SELECT RAISE(ABORT, 'public_marks is append-only history'); END;
