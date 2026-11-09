@@ -79,4 +79,16 @@ struct BackgroundQuitMarkerSweepTests {
     func realBootSession() {
         #expect((BackgroundQuitStore.currentBootSession()?.count ?? 0) >= 32)
     }
+
+    @Test("RED closing B1: a STALE marker (other boot) that cannot be removed is reported as failed, never cleared")
+    func staleMarkerFailedRemovalIsSaid() throws {
+        let dir = try root()
+        let url = dir.appendingPathComponent("quit.json")
+        try BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "SESSION-A" }).write()
+        #expect(chmod(dir.path, 0o555) == 0)
+        defer { _ = chmod(dir.path, 0o755) }
+        let outcome = BackgroundQuitStore(url: url, bootSeconds: { 200 }, bootSession: { "SESSION-B" }).clear()
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        guard case .failed = outcome else { Issue.record("expected .failed, got \(outcome)"); return }
+    }
 }

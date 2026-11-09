@@ -193,7 +193,10 @@ public final class BackgroundQuitStore: @unchecked Sendable {
         let was: BackgroundQuitMarker?
         switch read() {
         case .none: return .nothing
-        case .stale(let m): return .cleared(m)     // read() already removed it
+        case .stale(let m):
+            // read() tried to remove it; a removal that failed is said (closing pass B1).
+            if let why = removeMarkerFile() { return .failed(why) }
+            return .cleared(m)
         case .active(let m): was = m
         case .unreadable, .noBootTime: was = nil
         }

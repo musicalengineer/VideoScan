@@ -386,6 +386,7 @@
         "directoryIsNeverRemovedRecursively",
         "failedRemovalIsSaid",
         "realBootSession",
+        "staleMarkerFailedRemovalIsSaid",
         "symlinkAndOversizeAreRefused"
       ]
     },
@@ -38653,7 +38654,7 @@
       ],
       "expected_floor": 509,
       "name": "regression",
-      "package_expected_floor": 330,
+      "package_expected_floor": 331,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
