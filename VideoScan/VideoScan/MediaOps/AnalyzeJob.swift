@@ -274,32 +274,11 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
     /// stale note can't outlive the run), is the failure (2026-11-06).
     private func settle(model: VideoScanModel, orchestrator: CaptionOrchestrator) async {
         let decoderReason = orchestrator.fileFailureNotes.take(path: record.fullPath)
-        if model.records.first(where: { $0.id == record.id })?.dossierProcessedAt != nil {
-            await finish(success: successMessage)
-        } else if let decoderReason {
-            await finish(failed: "\(displayBadge) could not read this file — \(decoderReason)")
-        } else {
-            // Could be: candidate-filter excluded (DRM/junk), VLM bailed
-            // (0 scenes in <1s), or no eligible candidates. The batch
-            // summary line in the log has more detail; the row keeps it short.
-            await finish(failed: emptyResultMessage)
+        let facts = model.records.first(where: { $0.id == record.id }).map(AnalyzeJobEvidence.Facts.init)
+        switch AnalyzeJobEvidence.verdict(stages: stages, startedAt: startedAt, facts: facts, decoderReason: decoderReason) {
+        case .success(let words): await finish(success: words)
+        case .failed(let words): await finish(failed: words)
         }
-    }
-
-    /// Terminal-success string. Single-stage runs name the artifact
-    /// they actually banked; the both-stage form is unchanged.
-    private var successMessage: String {
-        switch stages {
-        case [.transcript]: return "Transcribe complete — transcript banked."
-        case [.captions]:   return "Captions complete — scene captions banked."
-        default:            return "Analyze complete — captions and transcript banked."
-        }
-    }
-
-    /// "Orchestrator returned without banking anything" string (no decoder
-    /// reason was recorded — the batch line in the log says which gate).
-    private var emptyResultMessage: String {
-        "\(displayBadge) finished but no dossier was banked — see the log for why."
     }
 
     /// Translate orchestrator's @Published state to our row's

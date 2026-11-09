@@ -5640,6 +5640,21 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzeJobEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AnalyzeJobEvidenceTests"
+      ],
+      "tests": [
+        "failedTranscriptionIsNotBanked",
+        "failuresKeepTheirWords",
+        "skippedCaptionsAreNotBanked",
+        "skippedTranscribeIsNotBanked",
+        "successNeedsThisRunsWrites"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzeJobWaitLoopTests.swift",
@@ -38634,7 +38649,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 509,
+      "expected_floor": 514,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -38817,7 +38832,8 @@
         "VideoScanTests/AnalyzeLeftPlanTests",
         "VideoScanTests/AnalyzeLeftScaleTests",
         "VideoScanTests/AnalyzeLeftStoreTests",
-        "VideoScanTests/AnalyzeLeftSensorTests"
+        "VideoScanTests/AnalyzeLeftSensorTests",
+        "VideoScanTests/AnalyzeJobEvidenceTests"
       ]
     },
     {
