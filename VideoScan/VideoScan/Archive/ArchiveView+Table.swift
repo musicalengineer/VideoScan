@@ -280,6 +280,7 @@ extension ArchiveView {
                 Text(status.label).foregroundColor(.secondary)
             }
             soundMark(rec)
+            PublicMarkBadge(store: model.publicMarks, record: rec, size: 14)
         }
         .font(.system(size: 14))
         .help(statusHelp(status))
@@ -375,6 +376,13 @@ extension ArchiveView {
             .help("Change this archived file's name or date. The archive moves it to the folder its date says — you never pick a folder.")
             .accessibilityIdentifier("archive.row.update")
         }
+
+        // Make Public / Make Private (Rick 2026-11-09): the one bit "the
+        // whole family may watch this", on one video or the selection. The
+        // engine is PublicMarkStore; private is the default. Only a PROVEN
+        // archived video qualifies (GH #327: never the sampled leg).
+        PublicMarkMenuItems(store: model.publicMarks,
+                            targets: PublicMarkTargets(records: recs) { model.isProvenArchived($0) })
 
         // File Journey (Rick 2026-08-19): in the archive the journey IS
         // the provenance — origin, repairs, promote, rename — so the

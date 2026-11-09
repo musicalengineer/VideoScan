@@ -59,7 +59,7 @@ struct CatalogDatabaseInfoReaderTests {
 
     @Test func theExpectedTablesComeFromThisBuildsMigrations() throws {
         let expected = try #require(GRDBCatalogRepository.expectedTableNames)
-        for name in ["catalog_state", "generations", "generation_history", "files", "content", "provenance_assertions", "provenance_roles", "sound_attempts"] {
+        for name in ["catalog_state", "generations", "generation_history", "files", "content", "provenance_assertions", "provenance_roles", "public_marks", "sound_attempts"] {
             #expect(expected.contains(name), "\(name)")
         }
         #expect(!expected.contains { $0.hasPrefix("sqlite_") })
@@ -99,7 +99,7 @@ struct CatalogDatabaseInfoReaderTests {
         #expect(before.schemaVersion == .known(13))
         #expect(before.userVersion == .known(13))
         let oldLayout = try #require(before.schemaLayout.value)
-        #expect(oldLayout.missing.sorted() == ["provenance_assertions", "sound_attempts"])
+        #expect(oldLayout.missing.sorted() == ["provenance_assertions", "public_marks", "sound_attempts"])
         #expect(oldLayout.extra.isEmpty)
 
         let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
@@ -108,9 +108,9 @@ struct CatalogDatabaseInfoReaderTests {
 
         let after = CatalogDatabaseInfoReader.read(at: fixture.url)
         let (pragma, state) = try Self.pragmaAndState(fixture.url)
-        #expect(pragma == 15 && state == 15)   // 13 → v9 (14) → v10_sound_attempts (15)
-        #expect(after.schemaVersion == .known(15))
-        #expect(after.userVersion == .known(15))
+        #expect(pragma == 16 && state == 16)   // 13 → v9 (14) → v10_sound_attempts (15) → v11_public_marks (16)
+        #expect(after.schemaVersion == .known(16))
+        #expect(after.userVersion == .known(16))
         #expect(after.schemaLayout.value?.matches == true)
     }
 

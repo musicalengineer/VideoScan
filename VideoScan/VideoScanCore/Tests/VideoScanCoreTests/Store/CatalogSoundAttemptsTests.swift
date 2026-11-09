@@ -273,8 +273,8 @@ struct CatalogSoundAttemptsTests {
              try Int.fetchOne(db, sql: "SELECT count(*) FROM sound_attempts"),
              try String.fetchAll(db, sql: "PRAGMA integrity_check"))
         }
-        #expect(after.0 == 15)
-        #expect(after.1 == 15)
+        #expect(after.0 == GRDBCatalogRepository.currentSchemaVersion)   // 15, then v11_public_marks → 16
+        #expect(after.1 == GRDBCatalogRepository.currentSchemaVersion)
         #expect(after.2 == 3)
         #expect(after.3 == 1, "the sound print is untouched")
         #expect(after.4 == 1)
@@ -293,7 +293,7 @@ struct CatalogSoundAttemptsTests {
                 return String(describing: error)
             }
         }
-        #expect(words?.contains("schema version 15 is newer than this build understands (14) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
+        #expect(words?.contains("schema version \(GRDBCatalogRepository.currentSchemaVersion) is newer than this build understands (14) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
     }
 }
 

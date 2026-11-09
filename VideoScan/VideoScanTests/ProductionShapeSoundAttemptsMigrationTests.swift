@@ -7,14 +7,18 @@
 // version asserted `sound_attempts` empty after the open, a one-time fact of
 // the v14 catalog it was written against — the live catalog has been at 15
 // with attempts recorded since, and the nightly went red on the Ultra):
-//   (a) the catalog AS IT IS opens on this build: schema at 15, every table
+//   (a) the catalog AS IT IS opens on this build: schema at this build's
+//       version (16 since `v11_public_marks`, 2026-11-09), every table
 //       keeps its row count, every `sound_attempts` row that was there is
 //       there unchanged (a re-open never re-runs or rewrites the migration),
 //       integrity and foreign keys ok, the loader reads every files row;
-//   (b) the same copy REWOUND to 14 (sound_attempts dropped, the migration
-//       unrecorded, both version stamps 14) migrates to 15 with every other
-//       table's rows kept and `sound_attempts` new and empty — so the step
-//       itself keeps production-shape teeth after every catalog is past it.
+//   (b) the same copy REWOUND to 14 (sound_attempts and every later
+//       migration's table dropped, those migrations unrecorded, both version
+//       stamps 14) migrates to this build's version with every other table's
+//       rows kept and `sound_attempts` new and empty — so the step itself
+//       keeps production-shape teeth after every catalog is past it.
+// The step after this one has its own file:
+// ProductionShapePublicMarksMigrationTests.swift.
 //
 // ISOLATION / real global state: reads the live catalog, so it is NOT a
 // sensor-lane test; anywhere without the live catalog + latch it is SKIPPED
@@ -29,6 +33,10 @@ import VideoScanCore
        .serialized, .enabled(if: LiveCatalogCopy.present, LiveCatalogCopy.skipWords))
 @MainActor
 struct ProductionShapeSoundAttemptsMigrationTests {
+
+    /// The schema this build's store leaves a catalog at (Core's
+    /// `GRDBCatalogRepository.currentSchemaVersion`, internal to Core).
+    static let buildSchema = 16
 
     static let attemptsColumns = "digest, engine_version, outcome, attempts, last_at, coalesce(detail, '<null>')"
 
@@ -87,7 +95,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         return load.records.count
     }
 
-    @Test("a .backup copy of the live catalog AS IT IS opens at 15: every table keeps its rows, every sound_attempts row is kept unchanged, integrity ok, the loader reads every row")
+    @Test("a .backup copy of the live catalog AS IT IS opens at this build's schema: every table keeps its rows, every sound_attempts row is kept unchanged, integrity ok, the loader reads every row")
     func theLiveCatalogMigratesWithEveryRowKept() async throws {
         let scene = try Self.copy("prodshape_v15"); defer { scene.cleanup() }
         let db = scene.databaseURL
@@ -103,7 +111,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         #expect(opened == .readWrite, "\(opened)")
 
         let after = try Self.schema(db)
-        #expect(after.state == 15 && after.pragma == 15, "schema \(after.state), user_version \(after.pragma)")
+        #expect(after.state == Self.buildSchema && after.pragma == Self.buildSchema, "schema \(after.state), user_version \(after.pragma)")
         let rowsAfter = try Self.counts(db, tables)
         let changed = rowsBefore.filter { rowsAfter[$0.key] != $0.value }.keys.sorted()
         #expect(changed.isEmpty, "row counts moved in: \(changed)")
@@ -113,20 +121,24 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         let loaded = try await Self.expectWhole(db, "as it is")
         // Never silent about which path ran: the step, or a re-open of a catalog already past it.
         print("v15 production shape (as it is): schema \(before.state) → \(after.state) "
-              + (before.state < 15 ? "(the migration ran)" : "(already 15: re-open, the migration did not run again)")
+              + (before.state < 15 ? "(the sound_attempts migration ran)" : "(already past 14: the sound_attempts migration did not run again)")
               + "; \(tables.count) tables, \(rowsBefore.values.reduce(0, +)) rows unchanged; \(attemptsBefore.count) sound_attempts row(s) kept; "
               + "\(loaded) records loaded")
     }
 
-    @Test("the copy rewound to 14 (sound_attempts dropped, the step unrecorded) migrates to 15: every other table keeps its rows, sound_attempts is new and empty, integrity ok")
+    @Test("the copy rewound to 14 (sound_attempts and every later table dropped, those steps unrecorded) migrates to this build's schema: every other table keeps its rows, sound_attempts is new and empty, integrity ok")
     func theRewoundCopyMigratesWithEveryRowKept() async throws {
         let scene = try Self.copy("prodshape_v15_rewound"); defer { scene.cleanup() }
         let db = scene.databaseURL
         let live = try Self.schema(db)
-        try #require(live.state == 14 || live.state == 15,
-                     "the copy is at schema \(live.state): this build migrates 14 → 15; a later schema means this test is due for its successor")
-        if live.state == 15 {
+        try #require(live.state >= 14 && live.state <= Self.buildSchema,
+                     "the copy is at schema \(live.state): this build understands 14…\(Self.buildSchema); a later schema means the rewind below is due for the new table")
+        if live.state >= 15 {
+            // Later steps first (schema 16, `public_marks`), then this one.
+            // DROP TABLE takes the table's index and its append-only triggers with it.
             try sqliteExecute(db, [
+                "DROP TABLE IF EXISTS public_marks",
+                "DELETE FROM grdb_migrations WHERE identifier = 'v11_public_marks'",     // CatalogPublicMarksSchema.migrationID (Core-internal)
                 "DROP TABLE sound_attempts",
                 "DELETE FROM grdb_migrations WHERE identifier = 'v10_sound_attempts'",   // CatalogSoundAttemptsSchema.migrationID (Core-internal)
                 "UPDATE catalog_state SET schema_version = 14 WHERE singleton = 1",
@@ -137,6 +149,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         try #require(before.state == 14 && before.pragma == 14, "rewound to \(before.state) / user_version \(before.pragma)")
         let tables = try Self.tables(db)
         try #require(!tables.contains("sound_attempts"), "the rewound copy still has sound_attempts")
+        try #require(!tables.contains("public_marks"), "the rewound copy still has public_marks")
         let rowsBefore = try Self.counts(db, tables)
         try Self.witnessGeneration(scene, host: "prodshape-v15-rewound")
 
@@ -144,7 +157,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         #expect(opened == .readWrite, "\(opened)")
 
         let after = try Self.schema(db)
-        #expect(after.state == 15 && after.pragma == 15, "schema \(after.state), user_version \(after.pragma)")
+        #expect(after.state == Self.buildSchema && after.pragma == Self.buildSchema, "schema \(after.state), user_version \(after.pragma)")
         let rowsAfter = try Self.counts(db, tables)
         let changed = rowsBefore.filter { rowsAfter[$0.key] != $0.value }.keys.sorted()
         #expect(changed.isEmpty, "row counts moved in: \(changed)")

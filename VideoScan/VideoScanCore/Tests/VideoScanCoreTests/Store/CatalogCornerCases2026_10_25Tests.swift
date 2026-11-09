@@ -238,8 +238,8 @@ struct CatalogCornerCases2026_10_25Tests {
 
     // MARK: - 3. Every migration path lands at the current version with both versions agreeing
 
-    @Test("a file as an older build left it (schema 7, 7+data, 8, 9, 10, 11, 12, 13, 14) opens read-write, lands at 15, and PRAGMA user_version == catalog_state.schema_version == 15 with all ten migrations recorded",
-          arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9])
+    @Test("a file as an older build left it (schema 7, 7+data, 8, 9, 10, 11, 12, 13, 14, 15) opens read-write, lands at 16, and PRAGMA user_version == catalog_state.schema_version == 16 with all eleven migrations recorded",
+          arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     func everyOlderSchemaVersionMigratesToCurrentWithBothVersionsAgreeing(_ migrations: Int) async throws {
         let fixture = try Self.olderBuildFixture(migrations: migrations)
         defer { fixture.remove() }
@@ -265,8 +265,8 @@ struct CatalogCornerCases2026_10_25Tests {
                              CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID,
                              CatalogFolderKindSchema.migrationID, CatalogDecisionTablesSchema.migrationID,
                              CatalogProvenanceRolesSchema.migrationID, CatalogProvenanceAssertionsSchema.migrationID,
-                             CatalogSoundAttemptsSchema.migrationID], "from \(startVersion): \(recorded)")
-        #expect(try Self.count(fixture.url, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('files', 'row_knowledge', 'pending_rows', 'pending_purges', 'footage_likeness', 'ignored_content_put_back', 'provenance_roles', 'provenance_assertions', 'sound_attempts')") == 9)
+                             CatalogSoundAttemptsSchema.migrationID, CatalogPublicMarksSchema.migrationID], "from \(startVersion): \(recorded)")
+        #expect(try Self.count(fixture.url, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('files', 'row_knowledge', 'pending_rows', 'pending_purges', 'footage_likeness', 'ignored_content_put_back', 'provenance_roles', 'provenance_assertions', 'sound_attempts', 'public_marks')") == 10)
         #expect(try CatalogHardKillTests.integrityCheck(fixture.url) == ["ok"])
     }
 
@@ -279,7 +279,7 @@ struct CatalogCornerCases2026_10_25Tests {
     /// identical is everything logical: no migration runs, every schema row
     /// (type, name, tbl_name, rootpage, sql) is the same, both versions and
     /// the generation are unchanged, and integrity holds.
-    @Test("a file already at the current schema (15) — a second open and close runs no migration: grdb_migrations, every sqlite_master row, user_version, schema_version and the generation are unchanged (GRDB's own open probe is the only write)")
+    @Test("a file already at the current schema (16) — a second open and close runs no migration: grdb_migrations, every sqlite_master row, user_version, schema_version and the generation are unchanged (GRDB's own open probe is the only write)")
     func reopeningACurrentFileRunsNoMigrationAndChangesNothingLogical() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 3)
         defer { fixture.remove() }
@@ -294,7 +294,7 @@ struct CatalogCornerCases2026_10_25Tests {
             }
         }
         let before = try logicalState()
-        try #require(before.migrations.count == 10)
+        try #require(before.migrations.count == 11)
         try #require(before.versions == [GRDBCatalogRepository.currentSchemaVersion, GRDBCatalogRepository.currentSchemaVersion])
 
         let repository = Self.repository()
@@ -735,6 +735,7 @@ extension CatalogCornerCases2026_10_25Tests {
             (CatalogProvenanceRolesSchema.migrationID, CatalogProvenanceRolesSchema.statements + CatalogProvenanceRolesSchema.versionBump),
             (CatalogProvenanceAssertionsSchema.migrationID, CatalogProvenanceAssertionsSchema.statements + CatalogProvenanceAssertionsSchema.versionBump),
             (CatalogSoundAttemptsSchema.migrationID, CatalogSoundAttemptsSchema.statements + CatalogSoundAttemptsSchema.versionBump),
+            (CatalogPublicMarksSchema.migrationID, CatalogPublicMarksSchema.statements + CatalogPublicMarksSchema.versionBump),
         ]
         for (identifier, statements) in steps.prefix(count) {
             migrator.registerMigration(identifier, foreignKeyChecks: .immediate) { db in
@@ -744,7 +745,7 @@ extension CatalogCornerCases2026_10_25Tests {
         return migrator
     }
 
-    /// A WAL-mode catalog.sqlite as a build with `migrations` of the ten
+    /// A WAL-mode catalog.sqlite as a build with `migrations` of the eleven
     /// would have left it after a quit: closed, checkpointed, and — as the
     /// store's own close leaves it — a 0-byte -wal beside it (GRDB closes
     /// the writer before its read-only readers, so SQLite never deletes the
@@ -760,9 +761,9 @@ extension CatalogCornerCases2026_10_25Tests {
         return fixture
     }
 
-    /// The schema_version a prefix of `count` migrations leaves (7, 7, 8, 9, 10, 11, 12, 13, 14, 15).
+    /// The schema_version a prefix of `count` migrations leaves (7, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16).
     private static func schemaVersion(afterMigrations count: Int) -> Int {
-        [0, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15][count]
+        [0, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16][count]
     }
 
     // MARK: - The rows the door tests write

@@ -34878,6 +34878,78 @@
         "thinkingBlockIgnored",
         "truncated"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPublicMarksTests"
+      ],
+      "tests": [
+        "aDigestInAnyCaseIsTheSameContent",
+        "aDigestThatIsNotContentWritesNothing",
+        "aFileHoldingAPoisonedFlagIsRefusedAtOpenWithWords",
+        "aPoisonedFlagReadsAsUnreadableAndPrivateAndNeverThrows",
+        "aReadOnlyOpenRefusesAMark",
+        "aSchemaFifteenDatabaseOpensAsSixteenWithEveryContentRowIntactAndEverythingPrivate",
+        "aSixteenFileIsRefusedInWordsByTheGateAFifteenBuildRan",
+        "makePrivateAppendsAZeroRowAndNeverDeletes",
+        "noRowIsPrivateAndTheNewestRowIsCurrent",
+        "oneHundredThousandContentsCurrentBitInsideBudgets",
+        "onlyAnExactOneIsPublic",
+        "theTableIsAppendOnlyAndItsChecksHold",
+        "theWholeTableReadingGivesOneCurrentRowPerDigest"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PublicMarkTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PublicMarkLogicTests",
+        "PublicMarkTruthTests",
+        "PublicMarkScaleTests",
+        "PublicMarkSensorTests"
+      ],
+      "tests": [
+        "acrossAViewerMasterFlip",
+        "already",
+        "anOlderLoadSnapshotNeverWins",
+        "archiveRowMenuCarriesTheItems",
+        "duringAWriteHold",
+        "everythingPrivate",
+        "hundredThousandSelected",
+        "insideTheDebounceWindow",
+        "menuRefusal",
+        "missingContentRollsBack",
+        "noSQLNoCommitInTheViews",
+        "offer",
+        "poisonedRow",
+        "privateAgainAndMultiSelection",
+        "publicShowsOnCopiesAndSurvivesRelaunch",
+        "staleProjectionDoesNotSkipARealChange",
+        "targets",
+        "theGlobeReadsTheStore",
+        "theProjectionTakesOnlyAnExactOne",
+        "unattachedIsPrivateAndRefuses",
+        "words"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapePublicMarksMigrationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapePublicMarksMigrationTests"
+      ],
+      "tests": [
+        "theDoorMarksARealContentOnTheMigratedCopy",
+        "theLiveCatalogOpensWithEveryRowKept",
+        "theRewoundCopyMigratesWithEveryRowKeptAndEverythingPrivate"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -37600,9 +37672,13 @@
         {
           "name": "VideoScan/VideoScanTests/FrameIndexRealRunTests.swift",
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3542,
+      "expected_floor": 3563,
       "name": "unit",
       "package_expected_floor": 813,
       "package_selectors": [
@@ -38292,7 +38368,11 @@
         "VideoScanTests/WorkspaceImportTests",
         "VideoScanTests/HallieCloudStructuredOutputShapeTests",
         "VideoScanTests/HallieCloudStructuredOutputDecodeTests",
-        "VideoScanTests/AnthropicSchemaSanitizerTests"
+        "VideoScanTests/AnthropicSchemaSanitizerTests",
+        "VideoScanTests/PublicMarkLogicTests",
+        "VideoScanTests/PublicMarkScaleTests",
+        "VideoScanTests/PublicMarkSensorTests",
+        "VideoScanTests/PublicMarkTruthTests"
       ]
     },
     {
@@ -38631,6 +38711,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeContentLeftTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapePublicMarksMigrationTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],

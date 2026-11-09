@@ -204,7 +204,8 @@ public protocol CatalogLiveReading {
 /// The handle a `read` body receives.
 public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading,
                                CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading,
-                               CatalogAnalysisResultsReading, CatalogObservationsReading, CatalogFrameIndexReading {
+                               CatalogAnalysisResultsReading, CatalogObservationsReading, CatalogFrameIndexReading,
+                               CatalogPublicMarkReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -215,10 +216,11 @@ public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, Catalog
 /// the thrown error carries the engine's words and the write rolls back.
 /// Catalog folders (v1.10, CatalogFolderRows.swift) and Rick's decision
 /// tables (v1.11, CatalogDecisionRows.swift) and provenance roles (v1.12,
-/// CatalogProvenanceRoleRows.swift): their readings and doors ride on the
+/// CatalogProvenanceRoleRows.swift) and the public bit (v1.15,
+/// CatalogPublicMarkRows.swift): their readings and doors ride on the
 /// same transaction.
 public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, CatalogFolderWriting, CatalogDecisionWriting,
-                                    CatalogProvenanceRoleWriting, CatalogProvenanceAssertionWriting {
+                                    CatalogProvenanceRoleWriting, CatalogProvenanceAssertionWriting, CatalogPublicMarkWriting {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }
