@@ -5665,7 +5665,8 @@
       "tests": [
         "cancelOwnBatchStillCancelsOrchestrator",
         "cancelWaitingJobDoesNotKillForeignBatch",
-        "waitingJobDoesNotHammerBusyOrchestrator"
+        "waitingJobDoesNotHammerBusyOrchestrator",
+        "writesWhileWaitingAreNotThisRuns"
       ]
     },
     {
