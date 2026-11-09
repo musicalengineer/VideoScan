@@ -57,6 +57,7 @@ def make_run(root, name, finished=True, build=True):
     """A run dir as the runner leaves it (result.json once finished)."""
     run = root / name
     (run / 'logs').mkdir(parents=True)
+    (run / '.gauntlet-run').write_text(name)          # prepareRoots' ownership marker (Codex sweep 11/09 F1)
     (run / 'logs' / 'build.log').write_text('log')
     (run / 'unit.xcresult').mkdir()
     (run / 'caches').mkdir()
@@ -187,6 +188,7 @@ class GauntletRunTidyTests(unittest.TestCase):
         make_run(root, '2026-09-01T14-00-00Z-UNFIN001', finished=False)   # crashed long ago: removed
         make_run(root, '2026-11-08T19-00-00Z-LIVE0001', finished=False)   # a live run: stays
         (root / 'history.jsonl').write_text('{}\n')
+        write_history(root, '2026-10-20T14-00-00Z-OLD00001', '2026-11-05T19-59-59Z-OLD00002')   # their summary rows
         (root / 'pending-metrics.jsonl').write_text('{}\n')
         (root / 'pending-metrics.lock').write_text('')
         (root / 'not-a-run').mkdir()
@@ -206,13 +208,20 @@ class GauntletRunTidyTests(unittest.TestCase):
     def test_retain_removes_old_finished_runs_and_nothing_else(self):
         root = self.results_root()
         before = sorted(p.name for p in root.iterdir())
+        history = (root / 'history.jsonl').read_text()
         out = self.seam('--retain', root, NOW)
-        removed = self.OLD
+        # Codex sweep 11/09 F2: the crashed run has no summary row — kept (its
+        # logs are its only record), its build products removed.
+        removed = [n for n in self.OLD if n != '2026-09-01T14-00-00Z-UNFIN001']
         self.assertEqual(sorted(p.name for p in root.iterdir()), sorted(set(before) - set(removed)))
         for name in removed:
             self.assertIn(f'GAUNTLET RETENTION removed {root / name}', out)
+        crashed = root / '2026-09-01T14-00-00Z-UNFIN001'
+        self.assertIn(f'GAUNTLET RETENTION kept {crashed} (no summary row in history.jsonl', out)
+        self.assertTrue((crashed / 'logs' / 'build.log').exists())
+        self.assertFalse((crashed / 'DerivedData').exists())
         self.assertEqual(len(out.strip().splitlines()), 3, out)
-        self.assertEqual((root / 'history.jsonl').read_text(), '{}\n')
+        self.assertEqual((root / 'history.jsonl').read_text(), history)
         self.assertEqual((root / 'pending-metrics.jsonl').read_text(), '{}\n')
         self.assertTrue((root / '2026-11-08T19-00-00Z-LIVE0001' / 'logs' / 'build.log').exists())
 
