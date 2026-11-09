@@ -6961,6 +6961,27 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelSweepPerformCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelSweepPerformCharacterizationTests"
+      ],
+      "tests": [
+        "aPolicyWithoutSafetyFloorsStillNeverRecommendsAnOfflineFile",
+        "anUnsavableFileIsSaidInTheStatusAndTheLog",
+        "disabledWhileParkedTakesNoSnapshotAndWritesNothing",
+        "eachRecordsEvidenceByPath",
+        "interactionParksWithItsOwnReason",
+        "playHistoryIsNotAskedWhenNothingClearsTheFloors",
+        "theClassifiersVerdictsAreWrittenOntoEveryRecord",
+        "theEvidenceFileIsStampedWithTheSnapshotsState",
+        "theMigrationLineIsLoggedOnceAfterARulesChange",
+        "thePartialFileIsSavedOnADoublingSchedule"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelSweepTests.swift",
       "stage": "unit",
       "suites": [
@@ -35535,6 +35556,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ArchiveAngelSkipEntryTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelSweepPerformCharacterizationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
