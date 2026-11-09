@@ -46,7 +46,7 @@ struct AnalyzeRunner {
     let model: VideoScanModel
     /// Set by `refuse` during one `runNow` — a class box because the runner
     /// is a struct (≈ a pointer member a const C++ method may write through).
-    private let refusal = RefusalFlag()
+    let refusal = RefusalFlag()
     /// nil in windows that have no orchestrator (tests); the dossier rows
     /// then refuse out loud.
     let orchestrator: CaptionOrchestrator?
@@ -167,7 +167,9 @@ struct AnalyzeRunner {
                 // Validate Catalog (Rick 2026-10-20, one verb): the files on
                 // disk first, then the catalog — never Verify on its own,
                 // which would grade the catalog against an old disk picture.
-                if c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker).wasRefused { refusal.value = true }
+                let job = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)
+                refusal.lastValidate = job
+                if job.wasRefused { refusal.value = true }
             default:
                 break
             }
@@ -341,4 +343,7 @@ struct AnalyzeRunner {
 @MainActor
 final class RefusalFlag {
     var value = false
+    /// The last Validate Catalog job this runner started: it may refuse
+    /// inside its own task, after `runNow` returned (Codex sweep re-review F5).
+    weak var lastValidate: ValidateCatalogJob?
 }

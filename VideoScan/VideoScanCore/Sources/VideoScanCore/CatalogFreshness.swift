@@ -352,6 +352,9 @@ public enum FreshnessPolicy {
 
     static func isOverdue(_ lastCompleted: Date?, cadence: Duration, now: Date) -> Bool {
         guard let lastCompleted else { return true }
+        // Dated in the future (beyond the skew allowance) is no proof of a
+        // run: never "current" (Codex sweep 11/09 re-review F1).
+        if CatalogRealityPolicy.age(of: lastCompleted, now: now) == .future { return true }
         return now.timeIntervalSince(lastCompleted) > cadence.timeInterval
     }
 

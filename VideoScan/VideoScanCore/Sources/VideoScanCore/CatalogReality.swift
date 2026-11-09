@@ -273,6 +273,14 @@ public enum CatalogRealityPolicy {
     /// (Codex sweep 11/09 F1: a negative age used to read as fresh).
     public enum Age: Equatable, Sendable { case fresh, stale, future }
 
+    /// The one date a check made of several steps / tiers may claim: the
+    /// oldest — unless any of them is dated in the future, then the newest,
+    /// so `age(of:)` reads it as future (no proof) instead of letting one
+    /// future date hide behind an older one (Codex sweep 11/09 re-review F1).
+    public static func claimedCompletion(_ dates: [Date], now: Date) -> Date? {
+        dates.contains { age(of: $0, now: now) == .future } ? dates.max() : dates.min()
+    }
+
     public static func age(of completed: Date, now: Date) -> Age {
         let seconds = now.timeIntervalSince(completed)
         if seconds < -futureSlack { return .future }

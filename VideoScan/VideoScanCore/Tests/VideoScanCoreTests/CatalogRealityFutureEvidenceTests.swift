@@ -23,4 +23,14 @@ struct CatalogRealityFutureEvidenceTests {
         let skew = CatalogRealityFacts(validation: .completed(at: now.addingTimeInterval(240)), rowsToCheck: 10, rowsNotChecked: 0)
         #expect(CatalogRealityPolicy.colour(skew, now: now) == .green)
     }
+
+    @Test("RED (re-review F1): a fully covered freshness row dated tomorrow is not current")
+    func freshnessRowFutureIsNotCurrent() {
+        var row = FreshnessRow(kind: "integrity", title: "Integrity", eligible: 10, covered: 10, offline: 0,
+                               lastCompleted: now.addingTimeInterval(86_400), lastOutcome: .ok)
+        row.cadence = .seconds(CatalogRealityPolicy.freshFor)
+        #expect(FreshnessPolicy.staleness(row, now: now) != nil, "a row dated tomorrow judged current")
+        row.lastCompleted = now.addingTimeInterval(-3_600)
+        #expect(FreshnessPolicy.staleness(row, now: now) == nil, "an hour ago is current")
+    }
 }

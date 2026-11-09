@@ -80,3 +80,114 @@ struct CatalogUpdateQueueSweepTests {
         #expect(outcome.contains("did not run") && outcome.contains("could not be saved"), Comment(rawValue: outcome))
     }
 }
+
+// MARK: - Re-review (Codex sweep 11/09, cycle #267): F1 readers, F5 late refusal, N1, N2
+
+@Suite("Update everything stale — Codex sweep 11/09 re-review (F5, N1, N2)", .serialized)
+@MainActor
+struct CatalogUpdateQueueSweepReReviewTests {
+
+    @Test("RED F5: a check that starts, then refuses inside its own task, is never claimed as run")
+    func lateRefusalIsNotClaimed() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.steps[.integrity] = { }
+        runner.refusedLater = [.integrity]
+        queue.enqueue([.integrity], runner: runner, source: "test")
+        await waitWhile { queue.isActive }
+        let outcome = runner.lines.last { $0.contains("OUTCOME") } ?? ""
+        #expect(!outcome.contains("ran last") && outcome.contains("did not run"), Comment(rawValue: outcome))
+    }
+
+    @Test("RED F5: a re-added check that is refused is not covered by the earlier one that ran")
+    func reAddedCheckRefusedIsSaid() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.steps[.duplicates] = { }                            // .ocr has no step: it refuses too
+        runner.steps[.integrity] = { [unowned runner, unowned queue] in
+            runner.steps[.integrity] = nil                         // the next start refuses
+            queue.enqueue([.ocr], runner: runner, source: "added during the check")
+        }
+        queue.enqueue([.duplicates], runner: runner, source: "test")
+        await waitWhile { queue.isActive }
+        #expect(runner.started.filter { $0 == .integrity }.count == 2, "\(runner.started)")
+        let outcome = runner.lines.last { $0.contains("OUTCOME") } ?? ""
+        #expect(!outcome.contains("ran last") && outcome.contains("did not run"), Comment(rawValue: outcome))
+    }
+
+    @Test("RED N1: a writer refused because it is ALREADY running holds the queue until it ends — the check never starts beside it")
+    func busyWriterIsWaitedFor() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.runningElsewhere = [.duplicates]                  // started from the panel; the queue's start refuses
+        runner.steps[.integrity] = { }
+        queue.enqueue([.duplicates], runner: runner, source: "test")
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!runner.started.contains(.integrity), "the check started while Detect Duplicates still ran: \(runner.started)")
+        runner.runningElsewhere = []
+        await waitWhile { queue.isActive }
+        #expect(runner.started.last == .integrity)
+        #expect(runner.runningAtStart[.integrity]?.contains(.duplicates) != true)
+    }
+
+    @Test("RED N2: a refused step is named in the OUTCOME")
+    func refusedStepIsNamed() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.steps[.integrity] = { }                            // .ocr has no step: refused
+        queue.enqueue([.ocr], runner: runner, source: "test")
+        await waitWhile { queue.isActive }
+        let outcome = runner.lines.last { $0.contains("OUTCOME") } ?? ""
+        #expect(outcome.contains("refused") && outcome.contains(AnalyzeCycler.ocr.title), Comment(rawValue: outcome))
+    }
+}
+
+@Suite("Catalog Status — every reader of a check date: future-dated is no proof (Codex sweep 11/09 re-review F1)")
+struct CatalogFutureEvidenceReadersTests {
+
+    private static let now = Date()
+    private static let hour: TimeInterval = 3_600
+
+    private static func tier(_ n: Int, at date: Date) -> IntegrityTier {
+        IntegrityTier(tier: n, name: VerifyCatalogTiers.name(n), verifiedAt: date, result: .ok, checked: 10, passed: 10, needsDecision: 0, summary: "ok")
+    }
+
+    @Test("RED: a report whose tier 0 is 04:00 and other tiers + completion are tomorrow claims tomorrow (future), not 04:00")
+    func integrityFactsClaimTheFuture() {
+        let id = UUID()
+        let early = Self.now.addingTimeInterval(-Self.hour)
+        let tomorrow = Self.now.addingTimeInterval(24 * Self.hour)
+        var tiers = [Self.tier(0, at: early)] + [1, 3, 4, 5].map { Self.tier($0, at: tomorrow) }
+        tiers = tiers.map { var t = $0; t.runID = t.tier == 0 ? nil : id; return t }
+        let report = IntegrityReport(runID: id, startedAt: tomorrow.addingTimeInterval(-5), verifiedAt: tomorrow, outcome: .completed,
+                                     catalogFile: "/x/catalog.json", rowsTotal: 10, rowsLive: 10, elapsedSeconds: 5,
+                                     tiers: tiers, findings: [], findingsTotal: 0)
+        let facts = IntegrityReportFacts.from(report: report, now: Self.now)
+        let claimed = facts.lastCompleted ?? .distantPast
+        #expect(CatalogRealityPolicy.age(of: claimed, now: Self.now) == .future, "claimed \(claimed)")
+        #expect(CatalogStatusLinesPolicy.database(facts, now: Self.now, date: { _ in "D" }).state != .green)
+    }
+
+    @Test("RED: the band's one Validate outcome with one step dated tomorrow is future, not the older step's date")
+    func builderValidationClaimsTheFuture() {
+        let early = Self.now.addingTimeInterval(-Self.hour)
+        let tomorrow = Self.now.addingTimeInterval(24 * Self.hour)
+        let audit = CatalogAuditRunRecord(startedAt: early.addingTimeInterval(-60), finishedAt: early, outcome: .completed,
+                                          partial: false, counts: ["planned": 10, "present": 10])
+        let v = CatalogRealityFactsBuilder.validation(audit: audit, integrity: IntegrityReportFacts(lastCompleted: tomorrow, outcome: .ok),
+                                                      switchedAt: nil, now: Self.now)
+        let facts = CatalogRealityFacts(validation: v, rowsToCheck: 10, rowsNotChecked: 0)
+        #expect(CatalogRealityPolicy.colour(facts, now: Self.now) != .green, "\(v)")
+    }
+
+    @Test("RED: Catalog Database Info never says 'completed … nothing to decide' for a report dated in the future")
+    func databaseInfoQualifiesTheFuture() {
+        let tomorrow = Self.now.addingTimeInterval(24 * Self.hour)
+        let v = CatalogIntegrityVerdict(facts: IntegrityReportFacts(lastCompleted: tomorrow, outcome: .ok),
+                                        startedAt: tomorrow, verifiedAt: tomorrow, outcome: .completed, missing: false)
+        guard case .known(let words) = CatalogDatabaseInfoLines.validate(v, date: { _ in "D" }, now: Self.now) else {
+            Issue.record("expected known words"); return
+        }
+        #expect(words.contains("dated in the future"), Comment(rawValue: words))
+    }
+}

@@ -57,7 +57,8 @@ enum CatalogRealityFactsBuilder {
     }
 
     /// The file check and the catalog check, as ONE Validate outcome.
-    static func validation(audit: CatalogAuditRunRecord?, integrity: IntegrityReportFacts, switchedAt: Date?) -> CatalogValidation {
+    static func validation(audit: CatalogAuditRunRecord?, integrity: IntegrityReportFacts, switchedAt: Date?,
+                           now: Date = Date()) -> CatalogValidation {
         let presence = CatalogAuditPresenceFacts.from(audit, switchedAt: switchedAt)
         if presence.outcome == .failed {
             return .failed(audit?.outcome == .running ? "did not finish checking files on disk (quit or crash)"
@@ -69,7 +70,7 @@ enum CatalogRealityFactsBuilder {
             return .partial(at: [presence.lastCompleted, integrity.lastCompleted].compactMap { $0 }.min())
         }
         guard let files = presence.lastCompleted, let catalog = integrity.lastCompleted else { return .neverRan }
-        return .completed(at: min(files, catalog))
+        return .completed(at: CatalogRealityPolicy.claimedCompletion([files, catalog], now: now) ?? min(files, catalog))
     }
 
     /// Review items: the report's buckets, then the two Missing counts.

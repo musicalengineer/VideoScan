@@ -72,6 +72,9 @@ final class ScriptedUpdateRunner: CatalogUpdateStepRunning {
     func isRunning(_ cycler: AnalyzeCycler) -> Bool { inFlight.contains(cycler) || runningElsewhere.contains(cycler) }
     func note(_ line: String) { lines.append(line) }
     func flushCatalog() -> Bool { flushes.append(started.count); return flushAcknowledged }
+    /// Steps that start, then refuse inside their own task (re-review F5).
+    var refusedLater: Set<AnalyzeCycler> = []
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool { !refusedLater.contains(cycler) }
 }
 
 @MainActor

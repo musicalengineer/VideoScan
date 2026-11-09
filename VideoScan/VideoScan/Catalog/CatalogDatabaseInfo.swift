@@ -318,7 +318,7 @@ enum CatalogDatabaseInfoLines {
         return map(s.lastSync) { date($0) }
     }
 
-    nonisolated static func validate(_ v: CatalogIntegrityVerdict, date: (Date) -> String) -> CatalogDatabaseReading<String> {
+    nonisolated static func validate(_ v: CatalogIntegrityVerdict, date: (Date) -> String, now: Date = Date()) -> CatalogDatabaseReading<String> {
         let f = v.facts
         if v.missing { return .unknown("no \(IntegrityReportStore.latestFileName) beside the catalog — Validate Catalog has not run here") }
         if let problem = f.problem { return .unknown(problem) }
@@ -330,7 +330,12 @@ enum CatalogDatabaseInfoLines {
         let rest = tail.isEmpty ? "" : " · " + tail.joined(separator: " · ")
         switch outcome {
         case .completed:
-            return .known("completed \(date(v.verifiedAt ?? v.startedAt ?? .distantPast))" + (tail.isEmpty ? " · nothing to decide" : rest))
+            let at = v.verifiedAt ?? v.startedAt ?? .distantPast
+            if CatalogRealityPolicy.age(of: at, now: now) == .future {
+                // Codex sweep 11/09 re-review F1: never "nothing to decide" on a date that proves nothing.
+                return .known("completed \(date(at)) — dated in the future; no proof (a clock change or a copied record) — run Validate Catalog again" + rest)
+            }
+            return .known("completed \(date(at))" + (tail.isEmpty ? " · nothing to decide" : rest))
         case .stopped:
             return .known("stopped — started \(v.startedAt.map(date) ?? "at an unknown time"); not a full check" + rest)
         case .failed:

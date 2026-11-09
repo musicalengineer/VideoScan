@@ -138,7 +138,7 @@ struct CatalogRealityBuilderTests {
     @Test("ONE Validate outcome: both completed → completed at the older; a killed or failed step → failed; none → never; a stopped step → partial; a report from before the switch → never")
     func validation() {
         let older = now.addingTimeInterval(-3_600)
-        #expect(CatalogRealityFactsBuilder.validation(audit: audit(.completed, finished: older), integrity: integrity(.ok), switchedAt: nil)
+        #expect(CatalogRealityFactsBuilder.validation(audit: audit(.completed, finished: older), integrity: integrity(.ok), switchedAt: nil, now: now)
                 == .completed(at: older))
         #expect(CatalogRealityFactsBuilder.validation(audit: audit(.running, finished: nil), integrity: integrity(.ok), switchedAt: nil)
                 == .failed("did not finish checking files on disk (quit or crash)"))

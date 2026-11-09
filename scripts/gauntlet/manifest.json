@@ -953,6 +953,7 @@
         "CatalogRealityFutureEvidenceTests"
       ],
       "tests": [
+        "freshnessRowFutureIsNotCurrent",
         "futureValidate"
       ]
     },
@@ -11976,11 +11977,20 @@
       "path": "VideoScan/VideoScanTests/CatalogUpdateQueueSweepTests.swift",
       "stage": "regression",
       "suites": [
-        "CatalogUpdateQueueSweepTests"
+        "CatalogUpdateQueueSweepTests",
+        "CatalogUpdateQueueSweepReReviewTests",
+        "CatalogFutureEvidenceReadersTests"
       ],
       "tests": [
+        "builderValidationClaimsTheFuture",
+        "busyWriterIsWaitedFor",
         "checkWaitsForTheSave",
+        "databaseInfoQualifiesTheFuture",
+        "integrityFactsClaimTheFuture",
+        "lateRefusalIsNotClaimed",
+        "reAddedCheckRefusedIsSaid",
         "refusedCheckIsNotClaimed",
+        "refusedStepIsNamed",
         "waitsForACheckRunningElsewhere"
       ]
     },
@@ -38682,9 +38692,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 515,
+      "expected_floor": 522,
       "name": "regression",
-      "package_expected_floor": 327,
+      "package_expected_floor": 328,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -38869,7 +38879,9 @@
         "VideoScanTests/AnalyzeLeftStoreTests",
         "VideoScanTests/AnalyzeLeftSensorTests",
         "VideoScanTests/CatalogFutureEvidenceTests",
-        "VideoScanTests/CatalogUpdateQueueSweepTests"
+        "VideoScanTests/CatalogUpdateQueueSweepTests",
+        "VideoScanTests/CatalogUpdateQueueSweepReReviewTests",
+        "VideoScanTests/CatalogFutureEvidenceReadersTests"
       ]
     },
     {

@@ -56,6 +56,10 @@ protocol CatalogUpdateStepRunning {
     /// commit door and return its acknowledgment — called before the
     /// catalog check, so the check judges what the earlier steps wrote.
     func flushCatalog() -> Bool
+    /// After a started step ends: did it actually run? An engine may refuse
+    /// inside its own task after `runNow` returned (Validate Catalog on a
+    /// read-only catalog) — Codex sweep 11/09 re-review F5.
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool
 }
 
 extension AnalyzeRunner: CatalogUpdateStepRunning {
@@ -65,6 +69,11 @@ extension AnalyzeRunner: CatalogUpdateStepRunning {
     }
 
     func flushCatalog() -> Bool { model.saveCatalogNow() }
+
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool {
+        guard cycler == .integrity, let job = refusal.lastValidate else { return true }
+        return !job.wasRefused
+    }
 }
 
 @MainActor
@@ -85,8 +94,16 @@ final class CatalogStatusUpdateQueue: ObservableObject {
     private var started: [AnalyzeCycler] = []
     /// True when Stop cleared steps that had not started.
     private var cleared = false
-    /// Why the final check did not start, when it was refused (F3, F5).
-    private var checkNotRun: String?
+    /// What became of the LAST catalog check this run asked for — the
+    /// OUTCOME's claim comes from here only (F3, F5; re-review: a later
+    /// refused check is never covered by an earlier one that ran).
+    private enum CheckState: Equatable { case started, ran, notRun(String) }
+    private var lastCheck: CheckState?
+    /// Steps that were refused (not started, not already running) — named in the OUTCOME (re-review N2).
+    private var refused: [AnalyzeCycler] = []
+    /// `current` is a step the queue did NOT start: it was already running
+    /// when its turn came (re-review N1) — waited for, never "started".
+    private var currentIsElsewhere = false
     /// The "waiting for a check started elsewhere" line, said once per wait.
     private var saidWaiting = false
 
@@ -168,50 +185,89 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             let inGrace = now.timeIntervalSince(startedAt) < graceSeconds
             guard !inGrace, !runner.isRunning(c) else { return }
             current = nil
+            stepEnded(c, runner: runner)
         }
         guard !pending.isEmpty else {
-            if !started.isEmpty || cleared || checkNotRun != nil { finish() }
+            if hasSomethingToReport { finish() }
             return
         }
-        // A catalog check (or file audit) this queue did not start — the
-        // 03:30 daily check, a menu item — is running: no step starts beside
-        // it; the queue waits for it (Codex sweep 11/09 F2).
-        if let elsewhere = [Self.finalCheck, AnalyzeCycler.filePresence].first(where: runner.isRunning) {
-            if !saidWaiting {
-                runner.note("\(Self.logPrefix) — waiting: \(elsewhere.title) is already running; the next step starts when it ends")
-                saidWaiting = true
-            }
-            return
-        }
-        saidWaiting = false
+        guard !waitsForACheckElsewhere(runner) else { return }
         let next = pending.removeFirst()
         // The check judges what the earlier steps wrote: their debounced
         // save lands first, acknowledged, or the check does not run (F3).
         if next == Self.finalCheck, !started.isEmpty, !runner.flushCatalog() {
-            checkNotRun = "the catalog could not be saved first"
-            if pending.isEmpty { finish() }
+            notStarted(next, why: "the catalog could not be saved first")
             return
         }
         startedAt = now
-        // A refused start did not run: never counted as started (F5).
-        guard runner.runNow(next, volume: nil, source: Self.source) else {
-            if next == Self.finalCheck { checkNotRun = "it was refused — see its line above" }
-            if pending.isEmpty { finish() }
-            return
-        }
+        guard runner.runNow(next, volume: nil, source: Self.source) else { return startRefused(next, runner: runner) }
         current = next
         started.append(next)
+        if next == Self.finalCheck { lastCheck = .started }
+    }
+
+    private var hasSomethingToReport: Bool { !started.isEmpty || cleared || lastCheck != nil || !refused.isEmpty }
+
+    /// What the end of a step proves: for the catalog check, ask the engine
+    /// whether it actually ran — it may refuse inside its own task after
+    /// runNow returned (re-review F5). A step the queue only waited for
+    /// (already running elsewhere) proves nothing about this run.
+    private func stepEnded(_ c: AnalyzeCycler, runner: any CatalogUpdateStepRunning) {
+        if c == Self.finalCheck, !currentIsElsewhere, lastCheck == .started {
+            lastCheck = runner.stepRan(c) ? .ran : .notRun("it was refused — see its line above")
+        }
+        currentIsElsewhere = false
+    }
+
+    /// The barrier against a catalog check (or file audit) this queue did
+    /// not start — the 03:30 daily check, a menu item: no step starts beside
+    /// it (Codex sweep 11/09 F2). Said once per wait.
+    private func waitsForACheckElsewhere(_ runner: any CatalogUpdateStepRunning) -> Bool {
+        guard let elsewhere = [Self.finalCheck, AnalyzeCycler.filePresence].first(where: runner.isRunning) else {
+            saidWaiting = false
+            return false
+        }
+        if !saidWaiting {
+            runner.note("\(Self.logPrefix) — waiting: \(elsewhere.title) is already running; the next step starts when it ends")
+            saidWaiting = true
+        }
+        return true
+    }
+
+    /// runNow refused. Already running (started from the panel): its run is
+    /// still the barrier — wait for it, never counted as started (re-review
+    /// N1, #441's order). Otherwise it did not run (F5) and is named (N2).
+    private func startRefused(_ next: AnalyzeCycler, runner: any CatalogUpdateStepRunning) {
+        if runner.isRunning(next) {
+            current = next
+            currentIsElsewhere = true
+            runner.note("\(Self.logPrefix) — \(next.title) is already running; waiting for it before the next step")
+            return
+        }
+        refused.append(next)
+        notStarted(next, why: "it was refused — see its line above")
+    }
+
+    /// A step that will not run: the check's claim records why; the run
+    /// ends when nothing is left.
+    private func notStarted(_ next: AnalyzeCycler, why: String) {
+        if next == Self.finalCheck { lastCheck = .notRun(why) }
+        if pending.isEmpty { finish() }
     }
 
     /// The one OUTCOME line; resets the run's bookkeeping.
     private func finish() {
-        defer { started = []; cleared = false; checkNotRun = nil; saidWaiting = false }
-        guard let runner, !started.isEmpty || cleared || checkNotRun != nil else { return }
-        let checked = started.last == Self.finalCheck
-        let why = checkNotRun.map { " — \($0)" } ?? (cleared ? " (the steps left were cleared)" : "")
-        let tail = checked ? "the catalog check ran last — its verdict is Catalog's colour"
+        defer { started = []; cleared = false; lastCheck = nil; refused = []; saidWaiting = false; currentIsElsewhere = false }
+        guard let runner, hasSomethingToReport else { return }
+        // "Ran last" only on evidence: the last check asked for started,
+        // ended, and the engine says it ran — and nothing started after it.
+        let ranLast = lastCheck == .ran && started.last == Self.finalCheck
+        let why: String
+        if case .notRun(let reason) = lastCheck { why = " — \(reason)" } else { why = cleared ? " (the steps left were cleared)" : "" }
+        let tail = ranLast ? "the catalog check ran last — its verdict is Catalog's colour"
                            : "the catalog check did not run\(why)"
-        runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started)); \(tail)")
+        let refusedWords = refused.isEmpty ? "" : "; refused (not started): \(Self.titles(refused))"
+        runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started))\(refusedWords); \(tail)")
     }
 
     private static func titles(_ kinds: [AnalyzeCycler]) -> String {
