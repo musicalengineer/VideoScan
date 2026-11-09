@@ -74,7 +74,7 @@ enum DailyFileCheckPolicy {
     /// How often the scheduler looks.
     static let tickEvery: TimeInterval = 5 * 60
     /// A finished check dated more than this after now is no proof.
-    static let futureSlack: TimeInterval = 5 * 60
+    static let futureSlack: TimeInterval = CatalogRealityPolicy.futureSlack
 
     struct Inputs: Equatable {
         var now: Date
@@ -144,10 +144,15 @@ enum DailyFileCheckPolicy {
 
     /// The last finished check from the two freshness rows (evidence read
     /// from catalog-audit.json and integrity-latest.json): the OLDER of the
-    /// two dates when both steps finished `.ok`; nil otherwise.
-    static func lastFinished(files: FreshnessRow?, integrity: FreshnessRow?) -> Date? {
+    /// two dates when both steps finished `.ok`; nil otherwise. Either step
+    /// dated in the future is no proof — judged per step BEFORE the older
+    /// date is taken, so one future date cannot hide behind the other
+    /// (Codex sweep 11/09 F1).
+    static func lastFinished(files: FreshnessRow?, integrity: FreshnessRow?, now: Date) -> Date? {
         guard let files, let integrity, files.lastOutcome == .ok, integrity.lastOutcome == .ok,
               let a = files.lastCompleted, let b = integrity.lastCompleted else { return nil }
+        guard CatalogRealityPolicy.age(of: a, now: now) != .future,
+              CatalogRealityPolicy.age(of: b, now: now) != .future else { return nil }
         return min(a, b)
     }
 }
@@ -183,7 +188,7 @@ extension DailyFileCheckEnvironment {
         var env = DailyFileCheckEnvironment()
         env.lastFinished = { [weak model] in
             guard let state = model?.catalogFreshness.state, state.isComputed else { return nil }
-            return .some(DailyFileCheckPolicy.lastFinished(files: state.row(.filePresence), integrity: state.row(.integrity)))
+            return .some(DailyFileCheckPolicy.lastFinished(files: state.row(.filePresence), integrity: state.row(.integrity), now: Date()))
         }
         env.busy = { [weak model, weak center] in
             guard let model, let center else { return "the app is shutting down" }

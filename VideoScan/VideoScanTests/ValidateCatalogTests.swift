@@ -338,7 +338,7 @@ struct ValidateCatalogMenuSensorTests {
         #expect(CatalogStatusDoor.verifyAgainHelp.hasPrefix("Run Validate Catalog again"))
         #expect(!AnalyzeCycler.integrity.help.contains("Verify Catalog"))
         let runner = try Self.code("AnalyzeRunner.swift")
-        #expect(runner.contains("_ = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)"))
+        #expect(runner.contains("c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker).wasRefused"))
         #expect(!runner.contains("startVerifyCatalog("))
         #expect(MediaFileOperationKind.all.contains(.validateCatalog))
         #expect(MediaFileOperationKind.validateCatalog.badgeText == "Validate Catalog")

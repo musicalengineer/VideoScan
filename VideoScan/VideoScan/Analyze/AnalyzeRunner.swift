@@ -44,6 +44,9 @@ import Foundation
 @MainActor
 struct AnalyzeRunner {
     let model: VideoScanModel
+    /// Set by `refuse` during one `runNow` — a class box because the runner
+    /// is a struct (≈ a pointer member a const C++ method may write through).
+    private let refusal = RefusalFlag()
     /// nil in windows that have no orchestrator (tests); the dossier rows
     /// then refuse out loud.
     let orchestrator: CaptionOrchestrator?
@@ -54,7 +57,17 @@ struct AnalyzeRunner {
 
     /// `volume`: a scan-target root to scope the pass, or nil for "all
     /// reachable". `source`: who clicked ("panel", "menu", "storage card").
-    func runNow(_ cycler: AnalyzeCycler, volume: String? = nil, source: String) {
+    /// Returns false when the step was refused (logged "not started: …",
+    /// or the center refused the integrity job) — the Update queue's
+    /// evidence that a step did not run (Codex sweep 11/09 F5).
+    @discardableResult
+    func runNow(_ cycler: AnalyzeCycler, volume: String? = nil, source: String) -> Bool {
+        refusal.value = false
+        startRun(cycler, volume: volume, source: source)
+        return !refusal.value
+    }
+
+    private func startRun(_ cycler: AnalyzeCycler, volume: String?, source: String) {
         guard engineIsFree(for: cycler) else { return }
         let scopeText = volume.map { VolumeReachability.displayLabel(forPath: $0) } ?? "all reachable"
         start(cycler, "START — \(scopeText) (\(source))")
@@ -154,7 +167,7 @@ struct AnalyzeRunner {
                 // Validate Catalog (Rick 2026-10-20, one verb): the files on
                 // disk first, then the catalog — never Verify on its own,
                 // which would grade the catalog against an old disk picture.
-                _ = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)
+                if c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker).wasRefused { refusal.value = true }
             default:
                 break
             }
@@ -317,8 +330,15 @@ struct AnalyzeRunner {
     }
 
     private func refuse(_ cycler: AnalyzeCycler, _ why: String) {
+        refusal.value = true
         let line = "Analyze: \(cycler.title) — not started: \(why)"
         model.log(line)
         appLog.write(line)
     }
+}
+
+/// One bool behind a reference, for `AnalyzeRunner.runNow`'s refusal.
+@MainActor
+final class RefusalFlag {
+    var value = false
 }

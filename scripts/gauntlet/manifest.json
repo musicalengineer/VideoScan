@@ -698,6 +698,17 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/LateMeasurementAfterFinishTests.swift",
+      "stage": "regression",
+      "suites": [
+        "LateMeasurementAfterFinishTests"
+      ],
+      "tests": [
+        "lateMeasurementIsNotPublished"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/MachineEraResolverTests.swift",
       "stage": "unit",
       "suites": [
@@ -932,6 +943,17 @@
         "withinCadenceIsGreen",
         "worstOfOrderIsRedYellowGreenGrey",
         "yellowRowsCountTheThingsThatNeedARun"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogRealityFutureEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRealityFutureEvidenceTests"
+      ],
+      "tests": [
+        "futureValidate"
       ]
     },
     {
@@ -10167,6 +10189,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogFutureEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFutureEvidenceTests"
+      ],
+      "tests": [
+        "databaseFutureDated",
+        "filesFutureDated",
+        "schedulerSeesEachStep"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogGenerationProbeTests.swift",
@@ -11934,6 +11969,19 @@
         "planPinsTheCheckLast",
         "snapshotFollowsTheQueue",
         "theQueueStartsTheCheckAfterEverythingElse"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogUpdateQueueSweepTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogUpdateQueueSweepTests"
+      ],
+      "tests": [
+        "checkWaitsForTheSave",
+        "refusedCheckIsNotClaimed",
+        "waitsForACheckRunningElsewhere"
       ]
     },
     {
@@ -38634,9 +38682,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 509,
+      "expected_floor": 515,
       "name": "regression",
-      "package_expected_floor": 325,
+      "package_expected_floor": 327,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -38689,7 +38737,9 @@
         "VideoScanCoreTests.EraJobFailFastTests",
         "VideoScanCoreTests.EraJobConvergenceTests",
         "VideoScanCoreTests.EraJobMediaMatrixTests",
-        "VideoScanCoreTests.EraJobRetryReviewTests"
+        "VideoScanCoreTests.EraJobRetryReviewTests",
+        "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
+        "VideoScanCoreTests.LateMeasurementAfterFinishTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -38817,7 +38867,9 @@
         "VideoScanTests/AnalyzeLeftPlanTests",
         "VideoScanTests/AnalyzeLeftScaleTests",
         "VideoScanTests/AnalyzeLeftStoreTests",
-        "VideoScanTests/AnalyzeLeftSensorTests"
+        "VideoScanTests/AnalyzeLeftSensorTests",
+        "VideoScanTests/CatalogFutureEvidenceTests",
+        "VideoScanTests/CatalogUpdateQueueSweepTests"
       ]
     },
     {

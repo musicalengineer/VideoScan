@@ -46,9 +46,16 @@ import Foundation
 /// is still running, and write a line to the one log sink.
 @MainActor
 protocol CatalogUpdateStepRunning {
-    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String)
+    /// Start the step; false when it was refused (busy, unavailable) — it
+    /// did not start, and the refusal was logged by the engine.
+    @discardableResult
+    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String) -> Bool
     func isRunning(_ cycler: AnalyzeCycler) -> Bool
     func note(_ line: String)
+    /// Land every pending catalog write (the debounced save) through the one
+    /// commit door and return its acknowledgment — called before the
+    /// catalog check, so the check judges what the earlier steps wrote.
+    func flushCatalog() -> Bool
 }
 
 extension AnalyzeRunner: CatalogUpdateStepRunning {
@@ -56,6 +63,8 @@ extension AnalyzeRunner: CatalogUpdateStepRunning {
         model.log(line)
         appLog.write(line)
     }
+
+    func flushCatalog() -> Bool { model.saveCatalogNow() }
 }
 
 @MainActor
@@ -76,6 +85,10 @@ final class CatalogStatusUpdateQueue: ObservableObject {
     private var started: [AnalyzeCycler] = []
     /// True when Stop cleared steps that had not started.
     private var cleared = false
+    /// Why the final check did not start, when it was refused (F3, F5).
+    private var checkNotRun: String?
+    /// The "waiting for a check started elsewhere" line, said once per wait.
+    private var saidWaiting = false
 
     static let source = "update everything stale"
     static let logPrefix = "Catalog status: update everything stale"
@@ -157,23 +170,47 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             current = nil
         }
         guard !pending.isEmpty else {
-            if !started.isEmpty || cleared { finish() }
+            if !started.isEmpty || cleared || checkNotRun != nil { finish() }
             return
         }
+        // A catalog check (or file audit) this queue did not start — the
+        // 03:30 daily check, a menu item — is running: no step starts beside
+        // it; the queue waits for it (Codex sweep 11/09 F2).
+        if let elsewhere = [Self.finalCheck, AnalyzeCycler.filePresence].first(where: runner.isRunning) {
+            if !saidWaiting {
+                runner.note("\(Self.logPrefix) — waiting: \(elsewhere.title) is already running; the next step starts when it ends")
+                saidWaiting = true
+            }
+            return
+        }
+        saidWaiting = false
         let next = pending.removeFirst()
-        current = next
+        // The check judges what the earlier steps wrote: their debounced
+        // save lands first, acknowledged, or the check does not run (F3).
+        if next == Self.finalCheck, !started.isEmpty, !runner.flushCatalog() {
+            checkNotRun = "the catalog could not be saved first"
+            if pending.isEmpty { finish() }
+            return
+        }
         startedAt = now
+        // A refused start did not run: never counted as started (F5).
+        guard runner.runNow(next, volume: nil, source: Self.source) else {
+            if next == Self.finalCheck { checkNotRun = "it was refused — see its line above" }
+            if pending.isEmpty { finish() }
+            return
+        }
+        current = next
         started.append(next)
-        runner.runNow(next, volume: nil, source: Self.source)
     }
 
     /// The one OUTCOME line; resets the run's bookkeeping.
     private func finish() {
-        defer { started = []; cleared = false }
-        guard let runner, !started.isEmpty || cleared else { return }
+        defer { started = []; cleared = false; checkNotRun = nil; saidWaiting = false }
+        guard let runner, !started.isEmpty || cleared || checkNotRun != nil else { return }
         let checked = started.last == Self.finalCheck
+        let why = checkNotRun.map { " — \($0)" } ?? (cleared ? " (the steps left were cleared)" : "")
         let tail = checked ? "the catalog check ran last — its verdict is Catalog's colour"
-                           : "the catalog check did not run\(cleared ? " (the steps left were cleared)" : "")"
+                           : "the catalog check did not run\(why)"
         runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started)); \(tail)")
     }
 

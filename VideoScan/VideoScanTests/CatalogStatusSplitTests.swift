@@ -52,6 +52,15 @@ struct CatalogStatusSplitLogicTests {
                               integrity: IntegrityReportFacts(lastCompleted: now.addingTimeInterval(-3_600), outcome: .ok))
     }
 
+    /// The same, an hour before the REAL clock — for the snapshot, which
+    /// judges against `Date()`: the fixed `now` (2033) is in the future there,
+    /// and a future-dated check is no proof (Codex sweep 11/09 F1).
+    static var freshFactsNow: CatalogFreshnessFacts {
+        let hourAgo = Date().addingTimeInterval(-3_600)
+        return CatalogFreshnessFacts(audit: audit(["planned": 3, "present": 3], finished: hourAgo),
+                                     integrity: IntegrityReportFacts(lastCompleted: hourAgo, outcome: .ok))
+    }
+
     @Test("RED 2026-11-03: work left and nothing running it is NOT yellow — Content is never yellow or red")
     func contentIsNeverYellow() {
         var report = AnalyzeCoverageReport()
@@ -342,7 +351,7 @@ struct CatalogStatusBackgroundClaimTests {
     @Test("RED 11/03 F2: an era job running, queued or user-paused never lights 'Analyzing'; its own line rides under Content")
     func eraOnlyThroughTheSnapshot() {
         let snapshot = CatalogFreshnessSnapshot()
-        snapshot.publish(report: CatalogStatusSplitTruthTests.report(), facts: CatalogStatusSplitLogicTests.freshFacts)
+        snapshot.publish(report: CatalogStatusSplitTruthTests.report(), facts: CatalogStatusSplitLogicTests.freshFactsNow)
         let cases: [(JobRunState, String?, String)] = [
             (.running, nil, "Machine era: 120 of 4,709 files (VideoScan Background — running)"),
             (.queued, nil, "Machine era: 120 of 4,709 files (VideoScan Background — queued)"),
@@ -383,7 +392,7 @@ struct CatalogStatusBackgroundClaimTests {
         snapshot.observeDossier(dossier)
         var r = CatalogStatusSplitTruthTests.report()
         r.byCycler[.ocr] = AnalyzeCoverageCounts(eligible: 3, covered: 1)
-        snapshot.publish(report: r, facts: CatalogStatusSplitLogicTests.freshFacts)
+        snapshot.publish(report: r, facts: CatalogStatusSplitLogicTests.freshFactsNow)
         var active = DossierDashboardState()
         active.statusIsActive = true
         dossier.publish(active)
@@ -421,7 +430,7 @@ struct CatalogStatusTransitionLogTests {
         snapshot.publish(report: report, facts: bad)
         snapshot.publish(report: report, facts: bad)
         snapshot.setRunning([.duplicates]); snapshot.setRunning([])     // recomputes, same verdict
-        snapshot.publish(report: report, facts: CatalogStatusSplitLogicTests.freshFacts)
+        snapshot.publish(report: report, facts: CatalogStatusSplitLogicTests.freshFactsNow)
         let database = said.filter { $0.hasPrefix("Database:") }
         #expect(database.count == 2, "\(said)")
         #expect(database.first?.hasPrefix("Database: Unhealthy (Red: the last integrity check's report can't be read") == true, "\(said)")
@@ -454,7 +463,7 @@ struct CatalogStatusTransitionLogTests {
             snapshot.note = { said.append($0) }
             let report = computed { $0.activeRecords = 3 }
             let audit = audit(["planned": 3, "present": 3])
-            if startHealthy { snapshot.publish(report: report, facts: CatalogStatusSplitLogicTests.freshFacts) }
+            if startHealthy { snapshot.publish(report: report, facts: CatalogStatusSplitLogicTests.freshFactsNow) }
             snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, soundStoreProblem: "disk I/O error",
                                                                           integrity: IntegrityReportFacts(problem: "damaged report")))
             let database = said.filter { $0.hasPrefix("Database:") }.joined(separator: "\n")
