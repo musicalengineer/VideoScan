@@ -6907,6 +6907,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelSelectFromEvidenceCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelSelectFromEvidenceCharacterizationTests"
+      ],
+      "tests": [
+        "everyScenarioAnswersAsRecorded",
+        "theScenariosReachDeclinesPicksAndRefusals"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelShowCopiesTests.swift",
@@ -37602,7 +37614,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3542,
+      "expected_floor": 3544,
       "name": "unit",
       "package_expected_floor": 813,
       "package_selectors": [
@@ -37729,6 +37741,7 @@
         "VideoScanTests/ArchiveAngelReadinessExplanationTests",
         "VideoScanTests/ArchiveAngelReadinessSoundFactTests",
         "VideoScanTests/ArchiveAngelReviewDatesTests",
+        "VideoScanTests/ArchiveAngelSelectFromEvidenceCharacterizationTests",
         "VideoScanTests/ArchiveAngelSelectionTests",
         "VideoScanTests/ArchiveAngelTableCellTests",
         "VideoScanTests/ArchiveAuditStoreTests",
