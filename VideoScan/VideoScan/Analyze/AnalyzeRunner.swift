@@ -345,5 +345,7 @@ final class RefusalFlag {
     var value = false
     /// The last Validate Catalog job this runner started: it may refuse
     /// inside its own task, after `runNow` returned (Codex sweep re-review F5).
-    weak var lastValidate: ValidateCatalogJob?
+    /// Held strongly so clearing finished MFO rows cannot erase the evidence
+    /// (closing pass C3); one job, replaced by the next start.
+    var lastValidate: ValidateCatalogJob?
 }

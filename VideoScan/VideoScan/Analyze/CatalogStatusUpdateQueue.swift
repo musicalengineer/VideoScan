@@ -71,7 +71,9 @@ extension AnalyzeRunner: CatalogUpdateStepRunning {
     func flushCatalog() -> Bool { model.saveCatalogNow() }
 
     func stepRan(_ cycler: AnalyzeCycler) -> Bool {
-        guard cycler == .integrity, let job = refusal.lastValidate else { return true }
+        guard cycler == .integrity else { return true }
+        // No evidence is not proof: fail closed (closing pass C3).
+        guard let job = refusal.lastValidate else { return false }
         return !job.wasRefused
     }
 }
@@ -104,6 +106,10 @@ final class CatalogStatusUpdateQueue: ObservableObject {
     /// `current` is a step the queue did NOT start: it was already running
     /// when its turn came (re-review N1) — waited for, never "started".
     private var currentIsElsewhere = false
+    /// The queue waited for a writer it did not start: its save must be
+    /// flushed before the check too (closing pass C5).
+    private var waitedOnWriter = false
+    private var saidWaitingForWriter = false
     /// The "waiting for a check started elsewhere" line, said once per wait.
     private var saidWaiting = false
 
@@ -191,11 +197,12 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             if hasSomethingToReport { finish() }
             return
         }
-        guard !waitsForACheckElsewhere(runner) else { return }
+        guard !waitsForACheckElsewhere(runner), !checkWaitsForAWriter(runner) else { return }
         let next = pending.removeFirst()
-        // The check judges what the earlier steps wrote: their debounced
-        // save lands first, acknowledged, or the check does not run (F3).
-        if next == Self.finalCheck, !started.isEmpty, !runner.flushCatalog() {
+        // The check judges what the earlier steps wrote — this queue's or a
+        // writer it waited for (closing pass C5): their debounced save lands
+        // first, acknowledged, or the check does not run (F3).
+        if next == Self.finalCheck, !started.isEmpty || waitedOnWriter, !runner.flushCatalog() {
             notStarted(next, why: "the catalog could not be saved first")
             return
         }
@@ -234,6 +241,23 @@ final class CatalogStatusUpdateQueue: ObservableObject {
         return true
     }
 
+    /// The check never starts beside a writer running elsewhere, whether or
+    /// not this Update asked for it (closing pass C4: a running kind is not
+    /// "stale", so it is not in the plan). Said once per wait.
+    private func checkWaitsForAWriter(_ runner: any CatalogUpdateStepRunning) -> Bool {
+        guard pending.first == Self.finalCheck,
+              let writer = AnalyzeCycler.allCases.first(where: { $0 != Self.finalCheck && runner.isRunning($0) }) else {
+            saidWaitingForWriter = false
+            return false
+        }
+        waitedOnWriter = true
+        if !saidWaitingForWriter {
+            runner.note("\(Self.logPrefix) — waiting: \(writer.title) is running; the catalog check starts when it ends")
+            saidWaitingForWriter = true
+        }
+        return true
+    }
+
     /// runNow refused. Already running (started from the panel): its run is
     /// still the barrier — wait for it, never counted as started (re-review
     /// N1, #441's order). Otherwise it did not run (F5) and is named (N2).
@@ -241,6 +265,7 @@ final class CatalogStatusUpdateQueue: ObservableObject {
         if runner.isRunning(next) {
             current = next
             currentIsElsewhere = true
+            waitedOnWriter = true
             runner.note("\(Self.logPrefix) — \(next.title) is already running; waiting for it before the next step")
             return
         }
@@ -257,7 +282,7 @@ final class CatalogStatusUpdateQueue: ObservableObject {
 
     /// The one OUTCOME line; resets the run's bookkeeping.
     private func finish() {
-        defer { started = []; cleared = false; lastCheck = nil; refused = []; saidWaiting = false; currentIsElsewhere = false }
+        defer { started = []; cleared = false; lastCheck = nil; refused = []; saidWaiting = false; currentIsElsewhere = false; waitedOnWriter = false; saidWaitingForWriter = false }
         guard let runner, hasSomethingToReport else { return }
         // "Ran last" only on evidence: the last check asked for started,
         // ended, and the engine says it ran — and nothing started after it.

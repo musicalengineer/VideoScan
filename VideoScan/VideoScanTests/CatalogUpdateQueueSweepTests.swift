@@ -191,3 +191,75 @@ struct CatalogFutureEvidenceReadersTests {
         #expect(words.contains("dated in the future"), Comment(rawValue: words))
     }
 }
+
+// MARK: - Closing pass (Codex sweep 11/09, cycle #271): C2, C3, C4, C5
+
+@Suite("Catalog Status — Codex sweep 11/09 closing pass (C2–C5)", .serialized)
+@MainActor
+struct CatalogSweepClosingTests {
+
+    @Test("RED C2: Database Info qualifies a report whose facts claim a future date even when its completion is older")
+    func databaseInfoReadsTheFacts() {
+        let now = Date()
+        let v = CatalogIntegrityVerdict(facts: IntegrityReportFacts(lastCompleted: now.addingTimeInterval(86_400), outcome: .ok),
+                                        startedAt: now.addingTimeInterval(-3_700), verifiedAt: now.addingTimeInterval(-3_600),
+                                        outcome: .completed, missing: false)
+        guard case .known(let words) = CatalogDatabaseInfoLines.validate(v, date: { _ in "D" }, now: now) else {
+            Issue.record("expected known words"); return
+        }
+        #expect(words.contains("dated in the future"), Comment(rawValue: words))
+    }
+
+    @Test("RED C3: no evidence that the started Validate ran is not proof that it ran (fail closed)")
+    func missingEvidenceFailsClosed() {
+        let runner = AnalyzeRunner(model: VideoScanModel(), orchestrator: nil, center: nil)
+        #expect(runner.stepRan(.integrity) == false)
+        #expect(runner.stepRan(.duplicates) == true, "other steps carry no such evidence; their own OUTCOME lines speak")
+    }
+
+    @Test("RED C4: a writer already running elsewhere holds the check even when the Update did not ask for that writer")
+    func checkWaitsForAnyRunningWriter() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.runningElsewhere = [.duplicates]
+        runner.steps[.integrity] = { }
+        queue.enqueue([.integrity], runner: runner, source: "test")
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(!runner.started.contains(.integrity), "the check started beside a running Detect Duplicates: \(runner.started)")
+        runner.runningElsewhere = []
+        await waitWhile { queue.isActive }
+        #expect(runner.started == [.integrity])
+    }
+
+    @Test("RED C5: after waiting for a writer that ran elsewhere, its save is flushed (acknowledged) before the check")
+    func waitedWriterIsFlushedToo() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.runningElsewhere = [.duplicates]
+        runner.flushAcknowledged = false
+        runner.steps[.integrity] = { }
+        queue.enqueue([.duplicates], runner: runner, source: "test")
+        try? await Task.sleep(for: .milliseconds(100))
+        runner.runningElsewhere = []
+        await waitWhile { queue.isActive }
+        #expect(!runner.started.contains(.integrity), "the check ran without the writer's save acknowledged: \(runner.started)")
+        #expect(!runner.flushes.isEmpty)
+    }
+}
+
+@Suite("Catalog Status — the waiting lines are said once (closing pass C4)", .serialized)
+@MainActor
+struct CatalogSweepWaitLineTests {
+    @Test("waiting for a running writer is logged once, not once per poll")
+    func waitLineOnce() async {
+        let queue = sweepQueue()
+        let runner = ScriptedUpdateRunner()
+        runner.runningElsewhere = [.duplicates]
+        runner.steps[.integrity] = { }
+        queue.enqueue([.integrity], runner: runner, source: "test")
+        try? await Task.sleep(for: .milliseconds(200))           // ~20 polls
+        #expect(runner.lines.filter { $0.contains("waiting:") }.count == 1, "\(runner.lines)")
+        runner.runningElsewhere = []
+        await waitWhile { queue.isActive }
+    }
+}

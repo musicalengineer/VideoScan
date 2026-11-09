@@ -331,7 +331,9 @@ enum CatalogDatabaseInfoLines {
         switch outcome {
         case .completed:
             let at = v.verifiedAt ?? v.startedAt ?? .distantPast
-            if CatalogRealityPolicy.age(of: at, now: now) == .future {
+            // The report's own date, or the date its facts claim (a future tier — closing pass C2).
+            let claims = [at] + [f.lastCompleted].compactMap { $0 }
+            if claims.contains(where: { CatalogRealityPolicy.age(of: $0, now: now) == .future }) {
                 // Codex sweep 11/09 re-review F1: never "nothing to decide" on a date that proves nothing.
                 return .known("completed \(date(at)) — dated in the future; no proof (a clock change or a copied record) — run Validate Catalog again" + rest)
             }
