@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-08T11:37:32Z",
- "sha": "cb085199",
+ "ts": "2026-11-09T13:29:56Z",
+ "sha": "0d87f46f",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -417,6 +417,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServicePresentation.quitHelperLine",
+   "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
+   "name": "BackgroundServicePresentation.quitHelperLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServicePresentation.reregisterFix",
    "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
    "name": "BackgroundServicePresentation.reregisterFix",
@@ -505,13 +512,6 @@
    "file": "VideoScan/VideoScan/App/CatalogQuitRecovery.swift",
    "name": "CatalogQuitRecovery.useWords",
    "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/App/CatalogQuitRecovery.swift::TimeInterval.quitWords",
-   "file": "VideoScan/VideoScan/App/CatalogQuitRecovery.swift",
-   "name": "TimeInterval.quitWords",
-   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -2853,27 +2853,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolInstruction",
-   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
-   "name": "AnthropicBrain.toolInstruction",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolName",
-   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
-   "name": "AnthropicBrain.toolName",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.toolSchema",
-   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
-   "name": "AnthropicBrain.toolSchema",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift::AnthropicBrain.transientRetries",
    "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift",
    "name": "AnthropicBrain.transientRetries",
@@ -2892,6 +2871,27 @@
    "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicKeychain.swift",
    "name": "AnthropicKeyLocator.harnessService",
    "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift::AnthropicSchemaSanitizer.droppedKeywords",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift",
+   "name": "AnthropicSchemaSanitizer.droppedKeywords",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift::AnthropicSchemaSanitizer.isObjectSchema",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift",
+   "name": "AnthropicSchemaSanitizer.isObjectSchema",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift::AnthropicSchemaSanitizer.mergeEnumSiblings",
+   "file": "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift",
+   "name": "AnthropicSchemaSanitizer.mergeEnumSiblings",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {

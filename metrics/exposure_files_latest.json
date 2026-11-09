@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-08T11:37:32Z",
- "sha": "cb085199",
+ "ts": "2026-11-09T13:29:56Z",
+ "sha": "0d87f46f",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -250,12 +250,13 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/BackgroundServiceStore.swift": {
-   "lines": 344,
-   "decls": 35,
+   "lines": 382,
+   "decls": 40,
    "could_be_private": [
     "BackgroundServiceStore.statusInterval",
     "BackgroundServiceStore.visiblePollInterval",
     "BackgroundServicePresentation.loginItems",
+    "BackgroundServicePresentation.quitHelperLine",
     "BackgroundServicePresentation.reregisterFix",
     "BackgroundServicePresentation.isOlder"
    ],
@@ -316,7 +317,6 @@
    "could_be_private": [
     "CatalogQuitRecovery.SaveOutcome",
     "CatalogQuitRecovery.useWords",
-    "TimeInterval.quitWords",
     "VideoScanModel.catalogQuitNote"
    ],
    "widened_for_split": []
@@ -4236,7 +4236,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift": {
-   "lines": 2680,
+   "lines": 2682,
    "decls": 57,
    "could_be_private": [
     "ArchivistDiagnosticLine.FailureOperation",
@@ -4873,7 +4873,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/HallieHelperFailure.swift": {
-   "lines": 92,
+   "lines": 94,
    "decls": 3,
    "could_be_private": [],
    "widened_for_split": []
@@ -5612,14 +5612,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/AnthropicBrain.swift": {
-   "lines": 243,
-   "decls": 19,
+   "lines": 230,
+   "decls": 17,
    "could_be_private": [
     "AnthropicBrain.apiVersion",
-    "AnthropicBrain.toolName",
     "AnthropicBrain.transientRetries",
-    "AnthropicBrain.toolInstruction",
-    "AnthropicBrain.toolSchema",
     "AnthropicBrain.structuredRequest",
     "AnthropicBrain.textBlocks"
    ],
@@ -5634,6 +5631,16 @@
    ],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/Hallie/LLM/AnthropicSchemaSanitizer.swift": {
+   "lines": 150,
+   "decls": 4,
+   "could_be_private": [
+    "AnthropicSchemaSanitizer.droppedKeywords",
+    "AnthropicSchemaSanitizer.isObjectSchema",
+    "AnthropicSchemaSanitizer.mergeEnumSiblings"
+   ],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/Hallie/LLM/ArchivistEndpointSettings.swift": {
    "lines": 759,
    "decls": 10,
@@ -5641,7 +5648,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift": {
-   "lines": 249,
+   "lines": 258,
    "decls": 9,
    "could_be_private": [
     "HallieBrainLabel.cloudPrefix",
@@ -5749,7 +5756,7 @@
   },
   "VideoScan/VideoScan/Hallie/LLM/RemoteSerializer.swift": {
    "lines": 133,
-   "decls": 12,
+   "decls": 11,
    "could_be_private": [
     "RemotePart.kindName",
     "RemoteSerializer.base64RunLimit",
@@ -10585,6 +10592,12 @@
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundProtocolVersion.swift": {
    "lines": 86,
+   "decls": 0,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundQuitMarker.swift": {
+   "lines": 144,
    "decls": 0,
    "could_be_private": [],
    "widened_for_split": []
