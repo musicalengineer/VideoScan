@@ -140,3 +140,57 @@ class GauntletSweep1109Tests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swiftc")
+class GauntletSweep1109ReReviewTests(unittest.TestCase):
+    """Codex re-review (cycle #268): N3 an unterminated history tail is not a
+    durable summary; N4 concurrent large rows never interleave."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workspace = tempfile.TemporaryDirectory(prefix='gauntlet-sweep2-', dir='/private/tmp')
+        cls.binary = runner_binary(Path(cls.workspace.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.workspace.cleanup()
+
+    def case_dir(self):
+        case = tempfile.TemporaryDirectory(dir=self.workspace.name)
+        self.addCleanup(case.cleanup)
+        return Path(case.name)
+
+    def seam(self, *args):
+        done = subprocess.run([str(self.binary), *map(str, args)], text=True, capture_output=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout
+
+    def test_n3_an_unterminated_summary_row_does_not_authorize_deletion_and_survives_the_next_append(self):
+        root = self.case_dir() / 'gauntlet'
+        root.mkdir()
+        run = make_run(root, '2026-10-20T14-00-00Z-TAIL0001')
+        (root / 'history.jsonl').write_text(json.dumps(dict(run_id=run.name, machine='m4', status='passed')))  # no newline
+        out = self.seam('--retain', root, NOW)
+        self.assertTrue((run / 'logs' / 'build.log').exists(), out)
+        self.seam('--append-lines', root / 'history.jsonl', 'next', 1)
+        rows = [json.loads(line) for line in (root / 'history.jsonl').read_text().splitlines() if line.strip()]
+        self.assertEqual([r.get('run_id') or r.get('tag') for r in rows], [run.name, 'next'])
+
+    def test_n4_concurrent_large_rows_never_interleave(self):
+        case = self.case_dir()
+        history = case / 'history.jsonl'
+        history.write_text('')
+        procs = [subprocess.Popen([str(self.binary), '--append-lines', str(history), tag * 200_000, '40'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) for tag in ('A', 'B', 'C', 'D')]
+        for p in procs:
+            self.assertEqual(p.wait(timeout=120), 0, p.stderr.read())
+        lines = history.read_text().splitlines()
+        good = 0
+        for line in lines:
+            try:
+                json.loads(line)
+                good += 1
+            except ValueError:
+                pass
+        self.assertEqual(good, 160, f'{len(lines)} lines, {good} intact of 160')

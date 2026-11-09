@@ -46,9 +46,21 @@ func write(_ data: Data, to path: URL, root: URL) throws {
 /// old seek-to-end + write let a second writer land on the first's bytes).
 func append(_ data: Data, to path: URL, root: URL, sync: Bool = false) throws {
     let safe = try guarded(path, under: root)
-    let fd = open(safe.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+    let fd = open(safe.path, O_RDWR | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
     guard fd >= 0 else { throw RunError("cannot open \(safe.path) for append: \(String(cString: strerror(errno)))") }
     defer { close(fd) }
+    // One writer at a time for the whole record, so a short write can never
+    // let another runner's row land inside this one (re-review N4); the lock
+    // is released when fd closes (≈ a scoped std::lock_guard on the file).
+    guard flock(fd, LOCK_EX) == 0 else { throw RunError("lock \(safe.path): \(String(cString: strerror(errno)))") }
+    // A torn last line (a crash mid-append) is sealed with a newline first,
+    // so this row is never glued onto it (re-review N3).
+    var data = data
+    var st = stat()
+    if fstat(fd, &st) == 0, st.st_size > 0 {
+        var last: UInt8 = 0
+        if pread(fd, &last, 1, st.st_size - 1) == 1, last != 0x0A { data.insert(0x0A, at: 0) }
+    }
     try data.withUnsafeBytes { raw in
         var offset = 0
         while offset < raw.count {
@@ -433,13 +445,18 @@ func xcodeNames(summary: [String: Any]?, tests: Any?) -> TestNames {
 }
 
 /// Each history.jsonl row in turn, one line in memory at a time (like a getline loop in C).
-func forEachHistoryRow(_ history: URL, _ body: ([String: Any]) -> Void) {
+/// `terminatedOnly`: skip a last line with no newline — an append that never
+/// finished is not a durable row (Codex sweep 11/09 re-review N3).
+func forEachHistoryRow(_ history: URL, terminatedOnly: Bool = false, _ body: ([String: Any]) -> Void) {
     guard let file = fopen(history.path, "r") else { return }
     defer { fclose(file) }
     var buffer: UnsafeMutablePointer<CChar>?; var capacity = 0
     defer { free(buffer) }
-    while getline(&buffer, &capacity, file) > 0 {
-        guard let buffer, let row = try? JSONSerialization.jsonObject(with: Data(String(cString: buffer).utf8)) as? [String: Any] else { continue }
+    while true {
+        let n = getline(&buffer, &capacity, file)
+        guard n > 0, let buffer else { break }
+        if terminatedOnly, buffer[n - 1] != 0x0A { continue }
+        guard let row = try? JSONSerialization.jsonObject(with: Data(String(cString: buffer).utf8)) as? [String: Any] else { continue }
         body(row)
     }
 }
@@ -453,7 +470,7 @@ func previousRow(history: URL, machine: String) -> [String: Any]? {
 
 func historyHasRun(_ history: URL, runID: String) -> Bool {
     var found = false
-    forEachHistoryRow(history) { if $0["run_id"] as? String == runID { found = true } }
+    forEachHistoryRow(history, terminatedOnly: true) { if $0["run_id"] as? String == runID { found = true } }
     return found
 }
 
