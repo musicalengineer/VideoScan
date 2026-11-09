@@ -7831,6 +7831,32 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveVolumeProtectionMakeCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveVolumeProtectionMakeCharacterizationTests"
+      ],
+      "tests": [
+        "aCustomMountPointIsAnAliasRootLabelledByTheMount",
+        "aDanglingAliasWithAnExternalUUIDIsAnExternalVolume",
+        "aLeftoverDirectoryOfAnUnmountedVolumeIsNotTheArchive",
+        "aMountedVolumeWithAnotherUUIDIsNotTheArchiveAndTheSearchProvesTheOthers",
+        "aRenamedArchiveIsFoundByUUIDAmongTheMountedVolumes",
+        "aSymlinkIntoTheVolumeProtectsBothSpellings",
+        "anOfflineArchiveIsUnresolvedAndReadsNoScanTarget",
+        "anUnmountedCustomMountsLeftoverDirectoryWithAnExternalUUIDIsExternal",
+        "anUnreadableBootUUIDTrustsTheMount",
+        "noDesignationIsNoSnapshotAndNoDiskRead",
+        "noRecordedUUIDReadsTheMountsAndIsResolvedByPath",
+        "noUUIDAndNothingThereIsUnknownAndProtectsTheSpelling",
+        "noUUIDOnTheBootDiskIsAFolderArchive",
+        "theBootDisksOwnUUIDMakesAFolderArchive",
+        "theFirmlinkSpellingIsTheCanonicalVolume",
+        "theUsualCaseCostsOneUUIDReadAndResolvesScanTargetAliases"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveVolumeProtectionTests.swift",
@@ -37602,7 +37628,7 @@
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
         }
       ],
-      "expected_floor": 3542,
+      "expected_floor": 3558,
       "name": "unit",
       "package_expected_floor": 813,
       "package_selectors": [
@@ -37750,6 +37776,7 @@
         "VideoScanTests/ArchiveSoundMarkTruthTests",
         "VideoScanTests/ArchiveTimelineBuildTests",
         "VideoScanTests/ArchiveTimelinePathTests",
+        "VideoScanTests/ArchiveVolumeProtectionMakeCharacterizationTests",
         "VideoScanTests/ArchivedAtBackfillTests",
         "VideoScanTests/ArchivedAtTests",
         "VideoScanTests/ArchivistBirthplaceRoutingTests",
