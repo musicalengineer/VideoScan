@@ -1,8 +1,8 @@
 // StatusMenuController.swift — VideoScan Background
 //
 // The menu bar item (Rick 2026-11-03): Apple's place for a background agent.
-// Shows the helper is alive and what it is doing, and offers Pause / Resume
-// and Open VideoScan. Words come from BackgroundMenuPresentation (Core, pure,
+// Shows the helper is alive and what it is doing, and offers Pause / Resume,
+// Open VideoScan and Quit VideoScan Background (Rick 2026-11-08). Words come from BackgroundMenuPresentation (Core, pure,
 // tested); this file only draws them and forwards clicks to the supervisor
 // in this process. It never contacts the app: "Open VideoScan" asks
 // Launch Services to open the app bundle this helper lives in.
@@ -23,8 +23,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var presentation: BackgroundMenuPresentation?
     private var timer: Timer?
     private var saidNoApp = false
+    private let quit: () -> Void
 
-    init(supervisor: JobSupervisor, startedAt: Date, log: BackgroundFileLog) {
+    init(supervisor: JobSupervisor, startedAt: Date, log: BackgroundFileLog, quit: @escaping () -> Void) {
+        self.quit = quit
         self.supervisor = supervisor
         self.startedAt = startedAt
         self.log = log
@@ -88,7 +90,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             log.write("menu bar: Open VideoScan disabled — this helper is not inside VideoScan.app (\(Bundle.main.bundleURL.path))")
         }
         menu.addItem(open)
+        menu.addItem(.separator())
+        let q = NSMenuItem(title: Self.quitTitle, action: #selector(quitHelper), keyEquivalent: "q")
+        q.target = self
+        q.toolTip = "Stops background analysis until VideoScan opens or the Mac restarts. Work resumes where it stopped."
+        q.setAccessibilityIdentifier("background.menuBar.quit")
+        menu.addItem(q)
     }
+
+    static let quitTitle = "Quit VideoScan Background"
 
     private func disabled(_ title: String) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -132,6 +142,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         return app.pathExtension == "app" ? app : nil
+    }
+
+    @objc private func quitHelper() {
+        quit()
     }
 
     @objc private func openApp() {

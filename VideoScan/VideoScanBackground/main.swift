@@ -13,6 +13,8 @@
 //     and restarts it after a crash; it owns its schedule (JobSchedule) and
 //     never exits on idle. Unregistering sends SIGTERM → exit 0, and
 //     `KeepAlive {SuccessfulExit false}` leaves it down (off = not running).
+//     The menu bar's Quit (Rick 2026-11-08) exits 0 the same way and writes
+//     a marker so an on-demand launch (an XPC client) exits again at once.
 //
 //   • `--status | --pause <id> | --resume <id> | --stop <id> | --enqueue noop`
 //     → the CLIENT: this is the design's `videoscan-bg` CLI folded into the
@@ -40,6 +42,10 @@ if let verb = BackgroundCLI.verb(in: arguments) {
         exit(code)
     }
     RunLoop.main.run()
+} else if BackgroundService.quitHoldsUsDown() {
+    // Quit from the menu bar in this boot (BackgroundQuitMarker): exit 0,
+    // launchd leaves it down until VideoScan clears the marker or a reboot.
+    exit(0)
 } else {
     let serviceApp = NSApplication.shared
     // `.accessory` (was `.prohibited`, Rick 2026-11-03): still no Dock icon

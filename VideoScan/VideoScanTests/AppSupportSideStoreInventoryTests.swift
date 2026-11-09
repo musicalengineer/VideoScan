@@ -67,6 +67,7 @@ struct AppSupportSideStoreInventoryTests {
         "background.log": .logOrReport,                       // ~/Library/Logs/VideoScan: VideoScan Background's own log (step 0, 2026-10-30)
         "paused.json": .logOrReport,                          // background/: kinds paused from the menu bar, kept across a restart (2026-11-04)
         "holds.json": .logOrReport,                           // background/: the helper's job memory — kinds held after a failure (2026-11-04, JobSchedule.swift)
+        "quit.json": .logOrReport,                            // background/: the menu bar's Quit for this boot — the helper stays down until VideoScan opens (2026-11-08, BackgroundQuitMarker.swift)
         "refused.jsonl": .logOrReport,                        // background/journal/: the lines catalog.sqlite refused, with the rule (JournalApplier, step 1)
         "previewsweepd.log": .logOrReport,
         "ollama.log": .logOrReport,

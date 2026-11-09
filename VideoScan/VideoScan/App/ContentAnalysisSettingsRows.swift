@@ -49,7 +49,7 @@ struct ContentAnalysisSettingsRows: View {
             let lines = BackgroundServicePresentation.lines(
                 enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
                 serviceProblem: store.serviceProblem, lastNote: store.lastNote, viewer: store.isViewer(),
-                refusal: store.registrationRefusal, bundledBuild: store.bundledHelperBuild())
+                refusal: store.registrationRefusal, bundledBuild: store.bundledHelperBuild(), quit: store.quit)
 
             HStack(spacing: 6) {
                 Image(systemName: lines.helperIsUp ? "circle.fill" : "circle")
