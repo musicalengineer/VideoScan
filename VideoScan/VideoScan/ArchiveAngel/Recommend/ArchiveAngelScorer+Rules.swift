@@ -81,6 +81,10 @@ extension ArchiveAngelScorer {
     /// One built-in floor's verdict on `c` (nil = passes); thresholds come
     /// from `weights` and `tables`. A `match` floor is decided by its `when`
     /// in `floorHit` (never here — an empty `when` matches nothing).
+    /// Each family of floors asks one kind of question, so each has its own
+    /// interpreter below: the file's own media, where it lives (the safety
+    /// floors), whether it is original material, and what a person, the
+    /// machine or the attention memory has already said about it.
     static func floorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate,
                            policy p: AngelRecommendationPolicy, now: Date) -> ArchiveAngelRejection? {
         switch kind {
@@ -88,6 +92,23 @@ extension ArchiveAngelScorer {
             return nil
         case .notVideo, .notPlayable, .pairedHalf, .noSound:
             return mediaFloorFires(kind, c)
+        case .onMasterArchive, .angelWorkingCopy, .archivedCopy, .volumeOffline:
+            return custodyFloorFires(kind, c)
+        case .livePhotoMotion, .recentPhoneClip, .appCache, .derivativeOfOriginal, .tooShort, .proxyStream:
+            return materialFloorFires(kind, c, policy: p, now: now)
+        case .markedJunk, .suspectedJunk, .junkScore, .resting:
+            return judgementFloorFires(kind, c, weights: p.weights, now: now)
+        default:
+            return nil   // a signal kind in the floors list — validation refuses it
+        }
+    }
+
+    /// The floors about where the file lives and whether the archive
+    /// already holds it: on the Master Archive, inside the Angel's own
+    /// buffer, a copy (or the footage's original) already archived, on a
+    /// drive that is not connected. Pure.
+    static func custodyFloorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate) -> ArchiveAngelRejection? {
+        switch kind {
         case .onMasterArchive:
             return c.isOnMasterArchive ? .alreadyArchived : nil
         case .angelWorkingCopy:
@@ -100,6 +121,22 @@ extension ArchiveAngelScorer {
             // footage is archived (QA v12 #6).
             if c.hasArchivedDuplicate { return .duplicateArchived }
             return c.archivedFootageOriginal ? .footageOriginalArchived : nil
+        case .volumeOffline:
+            return c.volumeOnline ? nil : .volumeOffline
+        default:
+            return nil
+        }
+    }
+
+    /// The floors that ask "is this original family material, or a piece
+    /// or by-product of something else?" — a Live Photo's motion half, a
+    /// recent phone clip, an app's cache or render file, a derivative
+    /// export, a clip too short to be more than a piece, a proxy-rate
+    /// stream. Thresholds and switches from the policy's `weights` /
+    /// `tables`. Pure over `now`.
+    static func materialFloorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate,
+                                   policy p: AngelRecommendationPolicy, now: Date) -> ArchiveAngelRejection? {
+        switch kind {
         case .livePhotoMotion:
             // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo
             // half is counted as what it is, not as a short clip.
@@ -118,25 +155,34 @@ extension ArchiveAngelScorer {
             guard c.durationSeconds > 0, c.sizeBytes > 0,
                   Double(c.sizeBytes) * 8 / c.durationSeconds / 1000 < p.weights.minimumAverageKilobitsPerSecond else { return nil }
             return .proxyStream
+        default:
+            return nil
+        }
+    }
+
+    /// The floors that carry a verdict already given: a person marked it
+    /// junk, the machine suspects junk (by disposition or by score), or the
+    /// person has passed on it often enough that it is resting. Pure over
+    /// `now`.
+    static func judgementFloorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate,
+                                    weights w: ArchiveAngelWeights, now: Date) -> ArchiveAngelRejection? {
+        switch kind {
         case .markedJunk:
             return c.mediaDisposition == .confirmedJunk ? .junk : nil
         case .suspectedJunk:
             return c.mediaDisposition == .suspectedJunk ? .suspectedJunk : nil
         case .junkScore:
-            return c.junkScore >= p.weights.junkFloor ? .suspectedJunk : nil
-        case .volumeOffline:
-            return c.volumeOnline ? nil : .volumeOffline
+            return c.junkScore >= w.junkFloor ? .suspectedJunk : nil
         case .resting:
-            return c.attention.restingUntil(now: now, weights: p.weights) != nil ? .resting : nil
+            return c.attention.restingUntil(now: now, weights: w) != nil ? .resting : nil
         default:
-            return nil   // a signal kind in the floors list — validation refuses it
+            return nil
         }
     }
 
     /// The floors about the file's own media — is it a video, can it be
     /// played, is it half of an A/V pair, does it have usable sound (rules
-    /// v15 `noSound`: ArchiveReadiness.lacksUsableSound). Split out of
-    /// `floorFires` (complexity gate). Pure.
+    /// v15 `noSound`: ArchiveReadiness.lacksUsableSound). Pure.
     static func mediaFloorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate) -> ArchiveAngelRejection? {
         switch kind {
         case .notVideo:

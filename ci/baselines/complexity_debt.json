@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 361,
+ "entry_count": 360,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -209,10 +209,6 @@
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelRecommendations.swift::ArchiveAngelRecommendations.verdict": {
    "ccn": 24,
    "nloc": 65
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.floorFires": {
-   "ccn": 33,
-   "nloc": 44
   },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.signal": {
    "ccn": 28,
