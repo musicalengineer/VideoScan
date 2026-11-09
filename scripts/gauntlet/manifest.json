@@ -33149,6 +33149,7 @@
         "test_f3_two_concurrent_history_writers_lose_no_line",
         "test_f5_a_failed_package_build_fixes_nothing",
         "test_f5_a_failure_beyond_the_name_cap_is_not_fixed",
+        "test_g1_a_row_whose_fsync_failed_is_rolled_back_and_authorizes_nothing",
         "test_n3_an_unterminated_summary_row_does_not_authorize_deletion_and_survives_the_next_append",
         "test_n4_concurrent_large_rows_never_interleave"
       ]

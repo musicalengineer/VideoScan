@@ -44,7 +44,7 @@ func write(_ data: Data, to path: URL, root: URL) throws {
 /// file at the moment of the write, so two runners appending to one
 /// history.jsonl never overwrite each other's row (Codex sweep 11/09 F3; the
 /// old seek-to-end + write let a second writer land on the first's bytes).
-func append(_ data: Data, to path: URL, root: URL, sync: Bool = false) throws {
+func append(_ data: Data, to path: URL, root: URL, sync: Bool = false, syncer: (Int32) -> Int32 = { fsync($0) }) throws {
     let safe = try guarded(path, under: root)
     let fd = open(safe.path, O_RDWR | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
     guard fd >= 0 else { throw RunError("cannot open \(safe.path) for append: \(String(cString: strerror(errno)))") }
@@ -55,21 +55,34 @@ func append(_ data: Data, to path: URL, root: URL, sync: Bool = false) throws {
     guard flock(fd, LOCK_EX) == 0 else { throw RunError("lock \(safe.path): \(String(cString: strerror(errno)))") }
     // A torn last line (a crash mid-append) is sealed with a newline first,
     // so this row is never glued onto it (re-review N3).
+    // The tail must be known: a tail that cannot be read is refused rather
+    // than risk gluing this row onto a torn one (closing pass G2).
     var data = data
     var st = stat()
-    if fstat(fd, &st) == 0, st.st_size > 0 {
+    guard fstat(fd, &st) == 0 else { throw RunError("stat \(safe.path): \(String(cString: strerror(errno)))") }
+    let sizeBefore = st.st_size
+    if sizeBefore > 0 {
         var last: UInt8 = 0
-        if pread(fd, &last, 1, st.st_size - 1) == 1, last != 0x0A { data.insert(0x0A, at: 0) }
+        guard pread(fd, &last, 1, sizeBefore - 1) == 1 else { throw RunError("read the tail of \(safe.path): \(String(cString: strerror(errno)))") }
+        if last != 0x0A { data.insert(0x0A, at: 0) }
     }
-    try data.withUnsafeBytes { raw in
-        var offset = 0
-        while offset < raw.count {
-            let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
-            if n < 0 { if errno == EINTR { continue }; throw RunError("append \(safe.path): \(String(cString: strerror(errno)))") }
-            offset += n
+    do {
+        try data.withUnsafeBytes { raw in
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if n < 0 { if errno == EINTR { continue }; throw RunError("append \(safe.path): \(String(cString: strerror(errno)))") }
+                offset += n
+            }
         }
+        if sync, syncer(fd) != 0 { throw RunError("fsync \(safe.path): \(String(cString: strerror(errno)))") }
+    } catch {
+        // A row that is not durable must not stay visible — a retention
+        // reader would take it as the run's summary (closing pass G1). Roll
+        // the file back to its size before this append (still under the lock).
+        _ = ftruncate(fd, sizeBefore)
+        throw error
     }
-    if sync, fsync(fd) != 0 { throw RunError("fsync \(safe.path): \(String(cString: strerror(errno)))") }
 }
 struct CommandResult { var code: Int32; var timedOut = false; var contaminated = false; var elapsed: Double }
 // Same ownership protocol as nightly_local_tests.sh: private process group,
@@ -1184,6 +1197,16 @@ func main() throws -> Int32 {
     if arguments.first == "--append-lines", arguments.count == 4, let n = Int(arguments[3]) {
         let file = URL(fileURLWithPath: arguments[1])
         for i in 0..<n { try append(Data("{\"tag\": \"\(arguments[2])\", \"i\": \(i)}\n".utf8), to: file, root: file.deletingLastPathComponent(), sync: false) }
+        return 0
+    }
+    // Test seam (closing pass G1): one append whose fsync fails (EIO) — the row must not stay.
+    if arguments.first == "--append-fail-sync", arguments.count == 3 {
+        let file = URL(fileURLWithPath: arguments[1])
+        do {
+            try append(Data("{\"tag\": \"\(arguments[2])\"}\n".utf8), to: file, root: file.deletingLastPathComponent(), sync: true,
+                       syncer: { _ in errno = EIO; return -1 })
+            print("APPENDED")
+        } catch { print("THREW \(error)") }
         return 0
     }
     if arguments.first == "--tidy-run", arguments.count >= 3 {

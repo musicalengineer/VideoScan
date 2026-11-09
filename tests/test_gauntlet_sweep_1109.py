@@ -194,3 +194,27 @@ class GauntletSweep1109ReReviewTests(unittest.TestCase):
             except ValueError:
                 pass
         self.assertEqual(good, 160, f'{len(lines)} lines, {good} intact of 160')
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: builds with /usr/bin/swiftc")
+class GauntletSweep1109ClosingTests(unittest.TestCase):
+    """Codex closing pass (cycle #271) G1: a row whose fsync failed is not
+    durable and must not stay visible to retention."""
+
+    def test_g1_a_row_whose_fsync_failed_is_rolled_back_and_authorizes_nothing(self):
+        workspace = tempfile.TemporaryDirectory(prefix='gauntlet-sweep3-', dir='/private/tmp')
+        self.addCleanup(workspace.cleanup)
+        binary = runner_binary(Path(workspace.name))
+        root = Path(workspace.name) / 'gauntlet'
+        root.mkdir()
+        run = make_run(root, '2026-10-20T14-00-00Z-SYNC0001')
+        history = root / 'history.jsonl'
+        history.write_text('{"run_id": "older", "machine": "m4"}\n')
+        before = history.read_text()
+        out = subprocess.run([str(binary), '--append-fail-sync', str(history), run.name], text=True,
+                             capture_output=True, timeout=60)
+        self.assertIn('THREW', out.stdout, out.stdout + out.stderr)
+        self.assertEqual(history.read_text(), before, 'the non-durable row stayed in history.jsonl')
+        # Even a row naming the run (the tag field is not run_id) must not let retention remove it.
+        done = subprocess.run([str(binary), '--retain', str(root), NOW], text=True, capture_output=True, timeout=60)
+        self.assertTrue((run / 'logs' / 'build.log').exists(), done.stdout)
