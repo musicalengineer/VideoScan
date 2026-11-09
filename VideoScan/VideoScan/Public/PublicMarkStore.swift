@@ -6,8 +6,10 @@
 // it — or clear that mark; everything else is private."
 //
 // What this is NOT (cut, on purpose): no audiences, no guest view, no web
-// filtering, no segments, nothing Hallie reads. Today the bit is shown (the
-// globe in the Archive tab) and nothing else acts on it.
+// filtering, no segments, nothing Hallie reads, no "make everything private"
+// (Rick 2026-11-09: private is the default; a panic button belongs with the
+// guest view). Today the bit is shown (the globe in the Archive tab) and
+// nothing else acts on it.
 //
 // Shape: a feature store behind a seam (rule 12, #337) — the model holds ONE
 // (`VideoScanModel.publicMarks`, like `provenanceRoles`); nothing here
@@ -51,7 +53,6 @@ import VideoScanCore
 enum PublicMarkWords {
     static let makePublic = "Make Public"
     static let makePrivate = "Make Private"
-    static let makeEverythingPrivate = "Make Everything Private…"
     static func makePublicTitle(_ count: Int) -> String { count > 1 ? "Make \(count) Public" : makePublic }
     static func makePrivateTitle(_ count: Int) -> String { count > 1 ? "Make \(count) Private" : makePrivate }
 
@@ -74,13 +75,6 @@ enum PublicMarkWords {
     static func writeRefusalHelp(_ why: String) -> String { "The mark cannot be changed now: \(why)." }
 
     static let refusedTitle = "The public mark was not changed"
-    static func everythingPrivateQuestion(_ count: Int) -> String {
-        count == 1 ? "Make the 1 public video private?" : "Make all \(count) public videos private?"
-    }
-    static let everythingPrivateExplanation = "Every video goes back to private — only you. Nothing is deleted, and the history of what was public is kept. "
-        + "To make a video public again, mark it again."
-    static let everythingPrivateConfirm = "Make Everything Private"
-    static let cancelButton = "Cancel"
 
     static func stateWord(_ isPublic: Bool) -> String { isPublic ? "public" : "private" }
 }
@@ -258,50 +252,37 @@ final class PublicMarkStore: ObservableObject {
 
     /// Set the bit on every content in `digests` (a selection's distinct
     /// whole-file digests). `files` = how many selected rows that is (the
-    /// log's words).
+    /// log's words). ALL or nothing: every selected content must be one the
+    /// catalog holds, checked inside the transaction BEFORE anything is
+    /// skipped or appended — in both directions (Codex #273 F2).
     func set(_ isPublic: Bool, digests: Set<String>, files: Int? = nil, now: Date = Date()) -> SetOutcome {
         let keys = digests.map { $0.lowercased() }.sorted()
+        let words = PublicMarkWords.stateWord(isPublic)
         let scope = "\(keys.count) content\(keys.count == 1 ? "" : "s")" + (files.map { " (\($0) file\($0 == 1 ? "" : "s"))" } ?? "")
         guard !keys.isEmpty else { return .refused("nothing selected has a full SHA-256") }
-        return write(isPublic, scope: scope, now: now) { _ in keys }
-    }
-
-    /// The kill switch: every content whose CURRENT row says public gets a
-    /// private row, in one transaction. Which contents those are is read
-    /// from the table inside the transaction, never from the projection.
-    func makeEverythingPrivate(now: Date = Date()) -> SetOutcome {
-        write(false, scope: "every public content", now: now) { tx in
-            var keys: [String] = []
-            try tx.currentPublicMarks { if $0.isPublic { keys.append($0.digest) } }
-            return keys
-        }
-    }
-
-    /// The one transaction both doors share. `keysIn` names the contents,
-    /// inside the transaction.
-    private func write(_ isPublic: Bool, scope: String, now: Date,
-                       keysIn: @escaping (any CatalogTransaction) throws -> [String]) -> SetOutcome {
-        let words = PublicMarkWords.stateWord(isPublic)
         note("START make \(words): \(scope)")
         guard let backing else { return refuse("the catalog is not open for writing in this session", words, scope) }
         if let why = backing.writeRefusal() { return refuse(why, words, scope) }
+        // The projection is DISPLAY ONLY. Which contents change is decided
+        // inside the transaction, from the table, for EVERY selected digest —
+        // a cleared or stale projection can never skip a change.
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
-        var keys: [String] = []
         var changed: [String] = []
         var after: [String: CatalogRow.PublicMarkReading] = [:]
         let refusal = backing.write("make \(words): \(scope)") { tx in
             changed = []
-            keys = try keysIn(tx)
+            let held = try tx.publicMarkContentHeld(digests: keys)
+            if let stranger = keys.first(where: { !held.contains($0) }) { throw PublicMarkContentMissing(digest: stranger) }
             let before = try tx.currentPublicMarks(digests: keys)
             for digest in keys where !Self.isAlready(isPublic, before[digest]) {
                 let decision = CatalogRow.PublicMarkDecision(digest: digest, isPublic: isPublic, decidedAt: seconds)
                 guard try tx.appendPublicMark(decision) == .recorded else { throw PublicMarkContentMissing(digest: digest) }
                 changed.append(digest)
             }
-            after = try tx.currentPublicMarks(digests: keys)   // the read-back of every named content, inside the commit
+            after = try tx.currentPublicMarks(digests: keys)   // the read-back of every selected content, inside the commit
         }
         if let refusal { return refuse(refusal, words, scope) }
-        // Every named content's entry now says what the table said at
+        // Every selected content's entry now says what the table said at
         // commit, and any load snapshot taken before this commit is stale.
         for digest in keys {
             if after[digest]?.isPublic == true { publicDigests.insert(digest) } else { publicDigests.remove(digest) }

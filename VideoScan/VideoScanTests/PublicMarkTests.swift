@@ -10,8 +10,7 @@
 //              public → the byte copy (same digest, another row) is public →
 //              relaunch (a NEW model on the same files) shows it again; make
 //              private appends a row and clears it; a multi-selection is one
-//              transaction; Make Everything Private clears every one, from
-//              the table and not from the projection.
+//              transaction.
 //   WRITER     a mark inside the 2 s debounce window of a record edit (both
 //              survive the relaunch); during a job's write hold (REFUSED,
 //              nothing written, then it lands after release); across a role
@@ -20,7 +19,9 @@
 //   ISOLATION  FAIL CLOSED — an unattached or unloaded store, a poisoned row
 //              (a flag this version cannot read), and a refused write all
 //              read as PRIVATE; a content the store does not hold rolls the
-//              whole change back; a stale projection never skips a change;
+//              whole change back in BOTH directions (Codex #273 F2); there is
+//              no "make everything private" (Rick 11/09; sensor); a stale
+//              projection never skips a change;
 //              an older load snapshot never replaces newer committed state.
 //   SCALE      100k selected records → targets and the offer inside a budget
 //              (the menu's work at right-click); SQL scale is Core's
@@ -129,9 +130,7 @@ struct PublicMarkLogicTests {
         #expect(PublicMarkWords.makePrivateTitle(1) == "Make Private")
         #expect(PublicMarkWords.makePrivateTitle(2) == "Make 2 Private")
         #expect(PublicMarkWords.publicHelp.contains("Nothing is shared yet"))
-        #expect(PublicMarkWords.everythingPrivateQuestion(1) == "Make the 1 public video private?")
-        #expect(PublicMarkWords.everythingPrivateQuestion(7) == "Make all 7 public videos private?")
-        #expect(PublicMarkWords.everythingPrivateExplanation.contains("Nothing is deleted"))
+        #expect(PublicMarkWords.privateHelp.contains("private unless you make it public"))
     }
 
     @Test("FAIL CLOSED: an unattached store (a viewer launch, a JSON session) shows everything private, refuses and says why")
@@ -147,7 +146,6 @@ struct PublicMarkLogicTests {
         #expect(!store.isPublic(hex(1)), "a refused write never shows as public")
         #expect(lines.contains { $0.hasPrefix("REFUSED make public: 1 content") })
         #expect(store.set(true, digests: []) == .refused("nothing selected has a full SHA-256"))
-        #expect(store.makeEverythingPrivate() == .refused("the catalog is not open for writing in this session"))
     }
 
     @Test("FAIL CLOSED: the projection takes only an exact 1 — a 0 and an unreadable flag are private, and the unreadable one is counted and said once")
@@ -255,27 +253,6 @@ struct PublicMarkTruthTests {
         #expect(store.publicCount(in: [a, b]) == 2)
     }
 
-    @Test("Make Everything Private clears every public content in one transaction, reading the TABLE (a cleared projection hides nothing from it), and survives the relaunch")
-    func everythingPrivate() async throws {
-        let scene = try CutoverScene.make("public_killswitch"); defer { scene.cleanup() }
-        try await launch(scene)
-        let store = scene.model.publicMarks
-        let a = try digest(scene, .healthy), b = try digest(scene, .curatedConflictA)
-        #expect(store.set(true, digests: [a, b], now: markNow) == .set(changed: 2, unchanged: 0))
-        store.attach(try #require(store.backing))                 // the projection is now empty: it shows nothing public
-        #expect(store.publicDigests.isEmpty)
-        let generation = try #require(scene.model.catalogCutover.committer?.knownGeneration)
-        #expect(store.makeEverythingPrivate(now: markNow) == .set(changed: 2, unchanged: 0))
-        #expect(scene.model.catalogCutover.committer?.knownGeneration == generation + 1, "one transaction")
-        #expect(try await history(scene.model, a).map(\.isPublic) == [true, false])
-        #expect(try await history(scene.model, b).map(\.isPublic) == [true, false])
-        #expect(store.makeEverythingPrivate(now: markNow) == .set(changed: 0, unchanged: 0), "nothing public is nothing to do")
-        #expect(scene.sandbox.catalogLogText().contains("Public: OUTCOME make private: every public content — 2 changed, 0 already private; 0 public now."))
-        let fresh = try await relaunch(scene, from: scene.model)
-        #expect(fresh.publicMarks.publicDigests.isEmpty)
-        if let c = fresh.catalogCutover.committer { await c.repository.close() }
-    }
-
     @Test("WRITER: a mark set inside the 2 s debounce window of a record edit — both land, both survive the relaunch")
     func insideTheDebounceWindow() async throws {
         let scene = try CutoverScene.make("public_debounce"); defer { scene.cleanup() }
@@ -329,7 +306,6 @@ struct PublicMarkTruthTests {
         #expect(words.contains("viewer"))
         let targets = PublicMarkTargets(records: [try scene.record(.healthy)]) { _ in true }
         #expect(PublicMarkMenuItems.refusal(targets: targets, writeRefusal: store.writeRefusal) != nil)
-        if case .set = store.makeEverythingPrivate(now: markNow) { Issue.record("the kill switch must be refused for a viewer too") }
         #expect(try await history(scene.model, d).map(\.isPublic) == [true], "the viewer wrote nothing")
         #expect(store.isPublic(d), "and the mark still shows what the table holds")
         scene.model.updateReadOnlyFacts { $0.viewerRole = false }
@@ -399,6 +375,27 @@ struct PublicMarkTruthTests {
         #expect(!scene.model.publicMarks.isPublic(d))
         #expect(scene.model.catalogCutover.committer?.blockedReason == nil, "a refused mark never blocks the catalog")
     }
+
+    // MARK: Codex cycle #273
+
+    @Test("Codex #273 F2: Make Private on a selection holding a content catalog.sqlite does not have is refused WHOLE — the stored one stays public, nothing is written")
+    func missingContentRollsBackMakePrivateToo() async throws {
+        let scene = try CutoverScene.make("public_c273_f2"); defer { scene.cleanup() }
+        try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let store = scene.model.publicMarks
+        #expect(store.set(true, digests: [d], now: markNow) == .set(changed: 1, unchanged: 0))
+        let generation = try #require(scene.model.catalogCutover.committer?.knownGeneration)
+        let outcome = store.set(false, digests: [d, hex(0xdead)], now: markNow)
+        guard case .refused(let words) = outcome else { Issue.record("expected a refusal, got \(outcome)"); return }
+        #expect(words.contains("is not in catalog.sqlite yet"))
+        #expect(try await history(scene.model, d).map(\.isPublic) == [true], "the stored content was not half-written")
+        #expect(scene.model.catalogCutover.committer?.knownGeneration == generation, "no commit")
+        #expect(store.isPublic(d), "the mark still shows what the table holds")
+        // The same rule for a no-op: "already private" never hides a content the catalog does not hold.
+        let noop = store.set(false, digests: [hex(0xbeef)], now: markNow)
+        guard case .refused = noop else { Issue.record("expected a refusal, got \(noop)"); return }
+    }
 }
 
 // MARK: - SCALE
@@ -449,6 +446,11 @@ struct PublicMarkSensorTests {
         #expect(store.contains("commitSideTables(what, via: .publicMarks, body)"), "the one door")
         #expect(!store.contains("INSERT"), "no SQL in the app; the Core door appends")
         #expect(store.components(separatedBy: "appendPublicMark(").count - 1 == 1, "one place appends a mark")
+        #expect(store.contains("tx.publicMarkContentHeld(digests: keys)"), "the whole selection is checked before anything is written (Codex #273 F2)")
+        // Rick 2026-11-09: private is the default; there is no bulk "make everything private" (Codex #273 F1 went with it).
+        for code in [store, menu] {
+            #expect(!code.lowercased().contains("everythingprivate"))
+        }
     }
 
     @Test("the Archive row menu carries the items and asks the PROVEN archived predicate, never the sampled one")

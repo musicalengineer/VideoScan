@@ -14,9 +14,9 @@
 //       unrecorded, both version stamps 15) migrates to 16 with every other
 //       table's rows kept and `public_marks` new and EMPTY — after the step
 //       every video is private;
-//   (c) on the migrated copy the door marks one real content public and
-//       private again: the current bit follows, history holds both rows, no
-//       other table's row count moves.
+//   (c) on the migrated copy the door flips one real content's bit and flips
+//       it back: the current bit follows, both rows are appended after its
+//       earlier history, no other table's row count moves.
 //
 // ISOLATION / real global state: reads the live catalog, so it is NOT a
 // sensor-lane test; anywhere without the live catalog + latch it is SKIPPED
@@ -111,36 +111,40 @@ struct ProductionShapePublicMarksMigrationTests {
               + "\(rowsBefore.values.reduce(0, +)) rows unchanged; \(loaded) records loaded")
     }
 
-    @Test("on the migrated copy the door marks one real content public, then private: the current bit follows, history holds both rows, no other table's row count moves")
+    @Test("on the migrated copy the door flips one real content's bit and flips it back: the current bit follows, both rows are appended after its earlier history, no other table's row count moves")
     func theDoorMarksARealContentOnTheMigratedCopy() async throws {
         let scene = try Shape.copy("prodshape_v16_mark"); defer { scene.cleanup() }
         let db = scene.databaseURL
         try Shape.witnessGeneration(scene, host: "prodshape-v16-mark")
         #expect(await Shape.open(db, host: "prodshape-v16-mark") == .readWrite)
-        // A content with no mark yet (so this is true before and after Rick uses the feature).
-        let digest = try #require(try sqliteTable(db, """
-            SELECT digest FROM content WHERE digest NOT IN (SELECT digest FROM public_marks) ORDER BY digest LIMIT 1
-            """).first?.first, "the copy has no unmarked content")
+        // ANY stored content (Codex #273 F3: a catalog where every content
+        // already has mark history is valid too). The test flips its bit
+        // and flips it back, so the copy ends where it began.
+        let digest = try #require(try sqliteTable(db, "SELECT digest FROM content ORDER BY digest LIMIT 1").first?.first,
+                                  "the copy has no content")
         let tables = try Shape.tables(db).filter { $0 != "public_marks" && $0 != "generation_history" && $0 != "generations" }
         let rowsBefore = try Shape.counts(db, tables)
         let marksBefore = try Self.marks(db).count
 
         let repository = GRDBCatalogRepository(host: "prodshape-v16-mark")
         try #require(await repository.open(at: db) == .readWrite)
-        let makePublic = await repository.write(as: .ui) { tx in
-            _ = try tx.appendPublicMark(CatalogRow.PublicMarkDecision(digest: digest, isPublic: true, decidedAt: 1_794_200_000))
+        let historyBefore = try await repository.read { try $0.publicMarkHistory(digest: digest) }
+        let was = historyBefore.last?.isPublic ?? false
+        let flip = await repository.write(as: .ui) { tx in
+            _ = try tx.appendPublicMark(CatalogRow.PublicMarkDecision(digest: digest, isPublic: !was, decidedAt: 1_794_200_000))
         }
-        guard case .committed = makePublic else { Issue.record("make public: \(makePublic)"); await repository.close(); return }
-        let nowPublic = try await repository.read { try $0.currentPublicMarks(digests: [digest]) }
-        #expect(nowPublic[digest]?.isPublic == true)
-        let makePrivate = await repository.write(as: .ui) { tx in
-            _ = try tx.appendPublicMark(CatalogRow.PublicMarkDecision(digest: digest, isPublic: false, decidedAt: 1_794_200_001))
+        guard case .committed = flip else { Issue.record("flip: \(flip)"); await repository.close(); return }
+        let flipped = try await repository.read { try $0.currentPublicMarks(digests: [digest]) }
+        #expect(flipped[digest]?.isPublic == !was)
+        let flipBack = await repository.write(as: .ui) { tx in
+            _ = try tx.appendPublicMark(CatalogRow.PublicMarkDecision(digest: digest, isPublic: was, decidedAt: 1_794_200_001))
         }
-        guard case .committed = makePrivate else { Issue.record("make private: \(makePrivate)"); await repository.close(); return }
-        let nowPrivate = try await repository.read { try $0.currentPublicMarks(digests: [digest]) }
-        #expect(nowPrivate[digest]?.isPublic == false)
+        guard case .committed = flipBack else { Issue.record("flip back: \(flipBack)"); await repository.close(); return }
+        let restored = try await repository.read { try $0.currentPublicMarks(digests: [digest]) }
+        #expect(restored[digest]?.isPublic == was)
         let history = try await repository.read { try $0.publicMarkHistory(digest: digest) }
-        #expect(history.map(\.isPublic) == [true, false])
+        #expect(Array(history.prefix(historyBefore.count)) == historyBefore, "the earlier history is untouched")
+        #expect(history.dropFirst(historyBefore.count).map(\.isPublic) == [!was, was])
         await repository.close()
 
         #expect(try Self.marks(db).count == marksBefore + 2, "two rows appended, none rewritten")
@@ -149,7 +153,7 @@ struct ProductionShapePublicMarksMigrationTests {
         #expect(changed.isEmpty, "row counts moved in: \(changed)")
         #expect(try sqliteTable(db, "PRAGMA integrity_check").map { $0[0] } == ["ok"])
         #expect(try sqliteTable(db, "PRAGMA foreign_key_check").isEmpty)
-        print("v16 production shape (mark): one content public → private on the copy; \(tables.count) other tables, "
+        print("v16 production shape (mark): one content's bit flipped and flipped back on the copy; \(tables.count) other tables, "
               + "\(rowsBefore.values.reduce(0, +)) rows unchanged")
     }
 }

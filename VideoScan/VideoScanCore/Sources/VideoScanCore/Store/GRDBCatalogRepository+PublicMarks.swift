@@ -13,7 +13,7 @@
 // lookup returns one row per asked digest (the caller bounds k — a
 // selection). The whole-table visit holds nothing.
 //
-// (For Rick: three small DAO reads and one INSERT; `?` placeholders are
+// (For Rick: four small DAO reads and one INSERT; `?` placeholders are
 // bound parameters, never string-spliced values.)
 
 import Foundation
@@ -57,6 +57,18 @@ extension GRDBRecordHandle {
         try Row.fetchAll(db, sql: """
             SELECT \(Self.publicMarkColumns) FROM public_marks m WHERE m.digest = ? ORDER BY m.mark_id
             """, arguments: [digest.lowercased()]).map(Self.publicMarkReading)
+    }
+}
+
+extension GRDBRecordHandle {
+
+    func publicMarkContentHeld(digests: [String]) throws -> Set<String> {
+        var held: Set<String> = []
+        let statement = try db.cachedStatement(sql: "SELECT 1 FROM content WHERE digest = ?")
+        for digest in Set(digests.map { $0.lowercased() }) where try Row.fetchOne(statement, arguments: [digest]) != nil {
+            held.insert(digest)
+        }
+        return held
     }
 }
 

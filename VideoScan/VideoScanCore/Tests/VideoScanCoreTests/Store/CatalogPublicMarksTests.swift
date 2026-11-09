@@ -144,6 +144,19 @@ struct CatalogPublicMarksTests {
         await repository.close()
     }
 
+    @Test func contentHeldNamesOnlyTheStoredDigestsInAnyCase() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        try seedContent(fixture, count: 2)
+        let repository = try await open(fixture)
+        let asked = [Self.hex(1), Self.hex(2).uppercased(), Self.hex(99)]
+        let held = try await repository.read { try $0.publicMarkContentHeld(digests: asked) }
+        #expect(held == [Self.hex(1), Self.hex(2)])
+        let none = try await repository.read { try $0.publicMarkContentHeld(digests: []) }
+        #expect(none.isEmpty)
+        await repository.close()
+    }
+
     @Test func aDigestInAnyCaseIsTheSameContent() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }

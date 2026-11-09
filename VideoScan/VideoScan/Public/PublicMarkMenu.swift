@@ -10,7 +10,6 @@
 //   every one private   → Make Public            (Make N Public for several)
 //   every one public    → Make Private
 //   some of each        → both, each with its own count
-//   anything public anywhere → Make Everything Private… (asks once)
 // A selection holding a file that is not archived or has no full SHA-256, or
 // a session that may not write (viewer, read-only, a job's hold), gets the
 // items disabled with the reason as their tooltip.
@@ -75,23 +74,10 @@ struct PublicMarkMenuItems: View {
                 .accessibilityIdentifier("archive.row.makePrivate")
             }
         }
-        if !store.publicDigests.isEmpty {
-            Button(PublicMarkWords.makeEverythingPrivate) { everythingPrivate() }
-                .disabled(store.writeRefusal != nil)
-                .help(store.writeRefusal.map(PublicMarkWords.writeRefusalHelp) ?? PublicMarkWords.everythingPrivateExplanation)
-                .accessibilityIdentifier("archive.row.makeEverythingPrivate")
-        }
     }
 
     private func change(to isPublic: Bool) {
         if case .refused(let words) = store.set(isPublic, digests: targets.digests, files: targets.total) {
-            PublicMarkDialogs.refused(words)
-        }
-    }
-
-    private func everythingPrivate() {
-        guard PublicMarkDialogs.confirmEverythingPrivate(count: store.publicDigests.count) else { return }
-        if case .refused(let words) = store.makeEverythingPrivate() {
             PublicMarkDialogs.refused(words)
         }
     }
@@ -117,19 +103,9 @@ struct PublicMarkBadge: View {
     }
 }
 
-/// The two small native dialogs the public mark may show.
+/// The one small native dialog the public mark may show.
 @MainActor
 enum PublicMarkDialogs {
-
-    /// false = cancelled.
-    static func confirmEverythingPrivate(count: Int) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = PublicMarkWords.everythingPrivateQuestion(count)
-        alert.informativeText = PublicMarkWords.everythingPrivateExplanation
-        alert.addButton(withTitle: PublicMarkWords.everythingPrivateConfirm)
-        alert.addButton(withTitle: PublicMarkWords.cancelButton)
-        return alert.runModal() == .alertFirstButtonReturn
-    }
 
     static func refused(_ words: String) {
         let alert = NSAlert()

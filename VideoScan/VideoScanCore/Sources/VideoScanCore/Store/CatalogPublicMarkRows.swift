@@ -71,6 +71,11 @@ public protocol CatalogPublicMarkReading {
     func currentPublicMarks(_ visit: (CatalogRow.PublicMarkReading) throws -> Void) throws
     /// Every row of `digest`, oldest first (the history).
     func publicMarkHistory(digest: String) throws -> [CatalogRow.PublicMarkReading]
+    /// Which of `digests` are stored `content` rows (lowercased). A mark —
+    /// in either direction — is only ever decided for a content the catalog
+    /// holds; the writer asks this for the WHOLE selection before it skips
+    /// or appends anything (Codex #273 F2). O(k log n).
+    func publicMarkContentHeld(digests: [String]) throws -> Set<String>
 }
 
 /// The one writer: Make Public / Make Private, inside one `write` / `writeBlocking`.
