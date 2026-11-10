@@ -17,6 +17,7 @@
 //                256-line pages inside a budget.
 // Synthetic digests only.
 
+import Darwin
 import Foundation
 import Testing
 @testable import VideoScanCore
@@ -187,6 +188,83 @@ struct ObservationJournalTests {
         try journal.append([Self.line(1), Self.line(2), Self.line(3, by: "machine:other/era-v1/window-60s@r1")])
         #expect(journal.subjects(by: Self.by) == [Self.hex(1), Self.hex(2)])
         #expect(journal.subjects(by: "machine:none@r1").isEmpty)
+    }
+
+    // MARK: - #422: a unit's lines land all or nothing (red first)
+
+    /// A write(2) that lands `allow` bytes in total and then fails with ENOSPC —
+    /// a disk filling up in the middle of one unit's lines.
+    final class FillingDisk: @unchecked Sendable {
+        var allow: Int
+        var calls = 0
+        init(allow: Int) { self.allow = allow }
+        func write(_ fd: Int32, _ bytes: UnsafeRawPointer?, _ count: Int) -> Int {
+            calls += 1
+            guard allow > 0 else { errno = ENOSPC; return -1 }
+            let n = Darwin.write(fd, bytes, min(count, allow))
+            if n > 0 { allow -= n }
+            return n
+        }
+    }
+
+    @Test("#422 RED→GREEN: a unit whose write lands partly and then fails leaves NO line — the file is not marked analyzed, and the retry lands the whole unit")
+    func aPartlyWrittenUnitLeavesNothing() throws {
+        let (journal, dir) = try Self.journal()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let unit = [try Self.line(7, field: "era.yearRange"), try Self.line(7, field: "era.decade", value: "1990s")]
+        // The first line lands whole; the disk is full before the second.
+        let disk = FillingDisk(allow: unit[0].encoded.count)
+        journal.writeBytes = { disk.write($0, $1, $2) }
+        #expect(throws: JournalIOError.self) { try journal.append(unit) }
+        #expect(disk.calls >= 2, "the write landed partly, then failed")
+        let file = ObservationJournal.fileName(for: Date(timeIntervalSince1970: 1_762_000_000))
+        #expect(journal.size(of: file) == 0, "no line of the failed unit stays in the journal")
+        #expect(journal.subjects(by: Self.by).isEmpty, "the planner must still see this content as not analyzed")
+        // Space returns: the job re-runs the unit and it lands whole, once.
+        journal.writeBytes = { Darwin.write($0, $1, $2) }
+        try journal.append(unit)
+        let lines = try Self.readAll(journal, file)
+        #expect(lines.count == 2 && lines.allSatisfy { (try? $0.result.get()) != nil })
+        #expect(journal.subjects(by: Self.by) == [Self.hex(7)])
+    }
+
+    @Test("#422: the failed unit is removed without touching the units before it — and a torn tail it sealed stays as it was")
+    func theUnitsBeforeAFailedOneAreUntouched() throws {
+        let (journal, dir) = try Self.journal()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try journal.append([Self.line(1), Self.line(2)])
+        let file = ObservationJournal.fileName(for: Date(timeIntervalSince1970: 1_762_000_000))
+        let before = try Data(contentsOf: dir.appendingPathComponent(file))
+        let unit = [try Self.line(3), try Self.line(4), try Self.line(5)]
+        let disk = FillingDisk(allow: unit[0].encoded.count + 10)      // one whole line and a torn piece of the next
+        journal.writeBytes = { disk.write($0, $1, $2) }
+        #expect(throws: JournalIOError.self) { try journal.append(unit) }
+        #expect(try Data(contentsOf: dir.appendingPathComponent(file)) == before, "byte for byte what it was before the failed unit")
+        #expect(journal.subjects(by: Self.by) == [Self.hex(1), Self.hex(2)])
+        // A torn tail from an earlier crash: the failed unit's seal goes with it, so the file is again exactly the torn file.
+        let torn = before + Data(#"{"at":1,"by":"x"#.utf8)
+        try torn.write(to: dir.appendingPathComponent(file))
+        let disk2 = FillingDisk(allow: 1 + unit[0].encoded.count)      // the sealing newline and one line
+        journal.writeBytes = { disk2.write($0, $1, $2) }
+        #expect(throws: JournalIOError.self) { try journal.append(unit) }
+        #expect(try Data(contentsOf: dir.appendingPathComponent(file)) == torn)
+        journal.writeBytes = { Darwin.write($0, $1, $2) }
+        let report = try journal.append(unit)
+        #expect(report.sealedTornTail && report.lines == 3)
+        #expect(journal.subjects(by: Self.by) == [Self.hex(1), Self.hex(2), Self.hex(3), Self.hex(4), Self.hex(5)])
+    }
+
+    @Test("#422: a write that fails before any byte lands leaves the file as it was (no truncate needed, none harmful)")
+    func aWriteThatFailsAtOnceChangesNothing() throws {
+        let (journal, dir) = try Self.journal()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try journal.append([Self.line(1)])
+        let file = ObservationJournal.fileName(for: Date(timeIntervalSince1970: 1_762_000_000))
+        let before = try Data(contentsOf: dir.appendingPathComponent(file))
+        let disk = FillingDisk(allow: 0)
+        journal.writeBytes = { disk.write($0, $1, $2) }
+        #expect(throws: JournalIOError.self) { try journal.append([Self.line(2)]) }
+        #expect(try Data(contentsOf: dir.appendingPathComponent(file)) == before)
     }
 
     // MARK: - Codex #187 (red first)
