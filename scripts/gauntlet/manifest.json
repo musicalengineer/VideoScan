@@ -35001,30 +35001,6 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
-      "path": "tests/test_nightly_run_marker.py",
-      "stage": "regression",
-      "suites": [
-        "test_nightly_run_marker.py"
-      ],
-      "tests": [
-        "test_a_phase_or_commit_that_is_not_code_shaped_is_never_recorded",
-        "test_a_push_that_returns_zero_without_the_row_is_not_a_publish",
-        "test_a_queued_row_that_did_not_land_keeps_the_whole_queue",
-        "test_a_real_publish_is_read_back_then_the_queue_is_cleared_and_the_marker_removed",
-        "test_a_run_whose_result_is_published_or_queued_is_accounted_never_interrupted",
-        "test_a_torn_marker_is_never_a_run_and_is_removed",
-        "test_an_interrupted_row_is_a_did_not_run_night_with_a_publishable_reason",
-        "test_an_interrupted_row_never_replaces_a_later_result_of_the_same_night",
-        "test_cli_round_trip",
-        "test_sensor_the_lock_comes_first_and_the_marker_goes_only_when_a_row_is_durable",
-        "test_the_marker_keeps_when_the_run_started_how_far_it_got_and_its_commit",
-        "test_the_script_blocks_end_to_end_with_real_bash",
-        "test_two_launches_at_once_only_one_runs"
-      ]
-    },
-    {
-      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
-      "kind": "python",
       "path": "tests/test_nightly_shell_selftests.py",
       "stage": "regression",
       "suites": [
@@ -35057,6 +35033,21 @@
         "test_green_needs_exit_zero_and_at_least_one_passed_test",
         "test_only_pytests_final_summary_line_counts",
         "test_sensor_the_testbed_runs_the_lane_and_its_red_fails_the_run"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_nightly_publish_and_summary.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_publish_and_summary.py"
+      ],
+      "tests": [
+        "test_a_commit_that_fails_is_not_pushed_and_nothing_is_lost",
+        "test_a_good_publish_lands_the_queued_rows_first_and_clears_the_queue",
+        "test_sensor_the_summary_is_rebuilt_from_an_exit_trap_after_every_run",
+        "test_the_exit_trap_keeps_the_runs_own_exit_code"
       ]
     }
   ],
@@ -38827,15 +38818,15 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         },
         {
-          "name": "tests/test_nightly_run_marker.py",
-          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
-        },
-        {
           "name": "tests/test_nightly_shell_selftests.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
           "name": "tests/test_script_tests_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_nightly_publish_and_summary.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         }
       ],
