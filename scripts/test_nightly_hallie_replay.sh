@@ -29,8 +29,21 @@ PYEOF
     echo $!
 }
 PORT=$(( 20000 + RANDOM % 10000 ))
-PID=$(stub "$PORT" "qwen3.8:27b-mlx,devstral:24b"); sleep 0.5
+PID=$(stub "$PORT" "qwen3.8:27b-mlx,devstral:24b")
 STUB="http://127.0.0.1:$PORT"
+# Wait until the stub answers, up to 15 s. A fixed half second was not enough on
+# a busy M4 (2026-11-10: the first four cases ran before python had bound the
+# port and read as "host did not answer"). A stub that never comes up is said so.
+STUB_WAIT=${STUB_WAIT_TENTHS:-150}; up=0
+for _ in $(seq 1 "$STUB_WAIT"); do
+    if curl -s -m 1 -o /dev/null "$STUB/api/tags" 2>/dev/null; then up=1; break; fi
+    sleep 0.1
+done
+if [ "$up" != 1 ]; then
+    echo "  FAIL the stub server on $STUB never answered: $(head -c 300 "$T/stub.log" 2>/dev/null)"
+    kill "$PID" 2>/dev/null; rm -rf "$T"
+    echo "passed 0, failed 1"; exit 1
+fi
 
 # The app's Settings > Archivist Brain, stood in for by a plist file so the
 # tests never read (or depend on) Rick's real preference. UNSET points at a
