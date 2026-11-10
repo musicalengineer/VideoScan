@@ -173,8 +173,9 @@ struct BackgroundServiceControlTests {
         await store.perform(.restart)
         #expect(agent.unregisterCalls == 1 && agent.registerCalls == 1)
         #expect(r.persisted == [false, true] && store.enabled)
-        let unregistered = try? #require(r.lines.firstIndex { $0.contains("unregistered") })
-        let registered = try? #require(r.lines.firstIndex { $0.contains(": registered") })
+        let unregistered = r.lines.firstIndex { $0.contains("unregistered") }
+        let registered = r.lines.firstIndex { $0.contains(": registered") }
+        #expect(unregistered != nil && registered != nil, "\(r.lines)")
         if let unregistered, let registered { #expect(unregistered < registered, "\(r.lines)") }
         #expect(r.lines.contains("background service: Restart pressed in Settings"))
     }
