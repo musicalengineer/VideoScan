@@ -74,14 +74,14 @@ struct BackgroundServiceQuitTests {
         #expect(!r.lines.contains { $0.contains("quit") }, "\(r.lines)")
     }
 
-    @Test("turning the checkbox on clears the marker")
+    @Test("turning it on (Start) clears the marker")
     func checkboxOnClears() {
         let (store, r) = S.make(enabled: false, agent: S.FakeAgent(.notRegistered))
         var markerOnDisk: BackgroundQuitMarker? = Self.marker
         store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk }
         store.setEnabled(true)
         #expect(markerOnDisk == nil)
-        #expect(r.lines.contains { $0.contains("the checkbox was turned on") }, "\(r.lines)")
+        #expect(r.lines.contains { $0.contains("Start was pressed") }, "\(r.lines)")
     }
 
     @Test("TRUTH: the line says quit, with the time and how to start it; no green dot, never 'running'")

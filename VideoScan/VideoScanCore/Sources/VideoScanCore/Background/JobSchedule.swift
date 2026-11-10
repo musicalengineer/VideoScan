@@ -69,6 +69,14 @@ public struct JobSchedule: Sendable {
         let mtime = (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
         return "\(executable.lastPathComponent) \(size) \(Int64(mtime))"
     }
+
+    /// When a build id's executable was written — its last field (the
+    /// modification time above). Nil for "unknown" or any other shape.
+    public static func buildDate(of buildID: String) -> Date? {
+        let fields = buildID.split(separator: " ")
+        guard fields.count >= 3, let seconds = Int64(fields[fields.count - 1]), seconds > 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(seconds))
+    }
 }
 
 /// A scheduled kind that failed and is not planned again until released.

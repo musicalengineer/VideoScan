@@ -62,20 +62,23 @@ struct BackgroundRegistrationGateTests {
         #expect(launch.contains("BackgroundServiceRegistrar.registerIfEnabled(refusal: BackgroundServiceRegistrar.launchRefusal())"))
         let rows = try String(contentsOf: app.appendingPathComponent("ContentAnalysisSettingsRows.swift"), encoding: .utf8)
         #expect(!rows.contains(".disabled(store.registrationRefusal != nil)"), "Codex 11/03 F4: OFF was unreachable")
-        #expect(rows.contains(".disabled(store.checkboxDisabled)"))
+        #expect(rows.contains(".disabled(control.actionDisabled || store.busy)"), "only Start is ever disabled by the gate")
         #expect(rows.contains("Self.footnoteWords(refusal: store.registrationRefusal)"), "the refusal adds to the how-to")
         #expect(rows.contains("refusal: store.registrationRefusal)"), "the helper line's Fix knows the gate")
     }
 
     @Test("F4 LOGIC: disabled only for OFF + refused")
     func checkboxRule() {
-        typealias S = BackgroundServiceStore
-        #expect(S.checkboxDisabled(enabled: false, refusal: R.debugBuildRefusal))
-        #expect(S.checkboxDisabled(enabled: false, refusal: R.viewerRefusal))
-        #expect(!S.checkboxDisabled(enabled: true, refusal: R.debugBuildRefusal), "ON in Debug: unchecking must work")
-        #expect(!S.checkboxDisabled(enabled: true, refusal: R.viewerRefusal), "ON on a viewer: unchecking must work")
-        #expect(!S.checkboxDisabled(enabled: false, refusal: nil))
-        #expect(!S.checkboxDisabled(enabled: true, refusal: nil))
+        func disabled(_ enabled: Bool, _ refusal: String?) -> Bool {
+            BackgroundServicePresentation.control(enabled: enabled, launchd: enabled ? .enabled : .notRegistered, service: nil,
+                                                  serviceProblem: nil, refusal: refusal, bundledBuild: nil).actionDisabled
+        }
+        #expect(disabled(false, R.debugBuildRefusal))
+        #expect(disabled(false, R.viewerRefusal))
+        #expect(!disabled(true, R.debugBuildRefusal), "ON in Debug: Stop must work")
+        #expect(!disabled(true, R.viewerRefusal), "ON on a viewer: Stop must work")
+        #expect(!disabled(false, nil))
+        #expect(!disabled(true, nil))
     }
 
     @Test("RED 11/03 F4: enabled from Release, then a Debug build or a viewer — the control allows OFF and unregister is called")
@@ -85,13 +88,13 @@ struct BackgroundRegistrationGateTests {
             let (store, r) = BackgroundServiceStoreTests.make(enabled: true, agent: agent, readOnly: viewer)
             store.isReleaseBuild = { !debug }
             #expect(store.registrationRefusal != nil, "turning ON is refused here")
-            #expect(!store.checkboxDisabled, "debug \(debug) viewer \(viewer): the ON box can be unchecked")
+            #expect(store.control.action == .stop && !store.control.actionDisabled, "debug \(debug) viewer \(viewer): Stop is offered")
             store.setEnabled(false)
             #expect(agent.unregisterCalls == 1)
             #expect(!store.enabled && r.persisted == [false])
             store.setEnabled(true)
             #expect(agent.registerCalls == 0, "and it cannot be turned back on here")
-            #expect(store.checkboxDisabled)
+            #expect(store.control.action == .start && store.control.actionDisabled)
         }
     }
 
@@ -123,7 +126,7 @@ struct BackgroundRegistrationGateReviewTests {
                                                         serviceProblem: store.serviceProblem, lastNote: store.lastNote,
                                                         refusal: store.registrationRefusal)
         // Turning it back ON is what re-registers, and ON is refused in Debug.
-        #expect(!lines.helper.contains("turn the checkbox off and on"), "\(lines.helper)")
+        #expect(!lines.helper.contains("Fix: press Start"), "\(lines.helper)")
         #expect(lines.helper.contains("in the Release build"), "\(lines.helper)")
     }
 
