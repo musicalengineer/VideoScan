@@ -35007,22 +35007,19 @@
         "test_nightly_run_marker.py"
       ],
       "tests": [
-        "test_a_marker_whose_process_is_gone_is_stale_with_its_start_phase_and_commit",
         "test_a_phase_or_commit_that_is_not_code_shaped_is_never_recorded",
-        "test_a_pid_reused_after_a_reboot_is_not_the_same_run",
         "test_a_push_that_returns_zero_without_the_row_is_not_a_publish",
+        "test_a_queued_row_that_did_not_land_keeps_the_whole_queue",
         "test_a_real_publish_is_read_back_then_the_queue_is_cleared_and_the_marker_removed",
-        "test_a_run_that_is_still_going_is_not_stale",
         "test_a_run_whose_result_is_published_or_queued_is_accounted_never_interrupted",
+        "test_a_torn_marker_is_never_a_run_and_is_removed",
         "test_an_interrupted_row_is_a_did_not_run_night_with_a_publishable_reason",
         "test_an_interrupted_row_never_replaces_a_later_result_of_the_same_night",
-        "test_cli_a_live_process_is_not_stale",
-        "test_cli_begin_refuses_a_live_owner_with_exit_3",
-        "test_cli_round_trip_with_a_real_dead_process",
-        "test_no_marker_and_a_torn_marker_are_never_stale_and_the_torn_one_is_removed",
-        "test_only_the_owner_changes_or_removes_the_marker_and_a_live_run_is_never_replaced",
-        "test_sensor_the_nightly_records_reports_and_clears_the_marker",
-        "test_the_nightly_block_end_to_end_with_real_bash"
+        "test_cli_round_trip",
+        "test_sensor_the_lock_comes_first_and_the_marker_goes_only_when_a_row_is_durable",
+        "test_the_marker_keeps_when_the_run_started_how_far_it_got_and_its_commit",
+        "test_the_script_blocks_end_to_end_with_real_bash",
+        "test_two_launches_at_once_only_one_runs"
       ]
     },
     {

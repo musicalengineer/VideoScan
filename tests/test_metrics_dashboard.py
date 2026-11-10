@@ -1225,6 +1225,11 @@ def test_a_mac_the_summary_has_never_seen_is_behind_too(tmp_path):
     _, _, words = card_tile(out["sections"]["head"])
     m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
     assert m and "M5 Ultra" in m.group(1) and et_when(now) in m.group(1), words
+    # A Mac whose only run is older than the nights the summary covers is not "behind" (Codex #277).
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now - timedelta(days=200))])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now)])
     # A Mac the summary names as off the rota is never "behind".
     s["off_rota"] = ["Ultra"]
     out = run_page(tmp_path, fx, {"hash": "#all"})

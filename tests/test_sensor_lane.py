@@ -142,6 +142,12 @@ def test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way():
         "✘ Test run with 2 tests in 2 suites failed after 0.5 seconds with 1 issue.",
     ])
     assert sl.count(both) == (1, 1, ["Suite/alsoBroken()"])
+    # The XCTest form beside a torn parallel pass (Codex #277).
+    xc = "\n".join([
+        "Test Case '-[VideoScanTests.Suite testBroken]' failed (0.01 seconds).",
+        "case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+    ])
+    assert sl.count(xc) == (1, 1, ["VideoScanTests.Suite.testBroken"])
 
 
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):

@@ -125,8 +125,13 @@
 #       durably published or queued; the NEXT launch publishes a leftover
 #       marker as reason "interrupted:<phase>", dated when that run started
 #       (the page: "did not run · interrupted:<phase>") — unless that run's
-#       result is already on the branch or in the queue. Only the run whose
-#       pid is in the marker changes or removes it.
+#       result is already on the branch or in the queue.
+#     - One nightly run per Mac: a kernel lock (fd 8, scripts/testbed_lock.py)
+#       held from before the pull until the run's last process exits. A second
+#       launch logs FATAL and exits 3 having touched nothing. The marker is
+#       trusted only under that lock.
+#     - publish_row: a failed commit is not pushed; after a push every row (the
+#       new one and the queued ones) is read back before the queue is cleared.
 #     - The page's summary (summary_latest.json) is rebuilt when the run ends,
 #       on every Mac (tools/publish_metrics.py --summary-only). Until now only
 #       the M4's jobs rebuilt it, so the M5 Ultra's 02:00 result waited for
@@ -908,6 +913,32 @@ log "Host: $(scutil --get ComputerName 2>/dev/null || hostname -s)"
 # ── Pre-conditions ──────────────────────────────────────────────────
 cd "$REPO" || { log "FATAL: cannot cd to $REPO"; exit 1; }
 
+# ── One nightly run per Mac: the run lock (2026-11-10) ───────────────
+# A kernel lock on fd 8 (scripts/testbed_lock.py — the helper behind the
+# testbed lock), taken BEFORE the pull, the build or any shared file is
+# touched, and held by every process of this run until the last one exits:
+# atomic, no stale lock, nothing to clean up after a crash. Two runs at once
+# would share the DerivedData and /tmp/nightly-results.xcresult and spoil each
+# other. It is also what makes a leftover run marker mean "that run is dead"
+# (Codex #275–#277: every pid-based protocol had a check-then-act window).
+RUN_LOCK="$LOGDIR/nightly-run.lock"
+LOCK_TOOL="$REPO/scripts/testbed_lock.py"
+RUN_LOCK_HELD=0
+if [ -f "$LOCK_TOOL" ] && mkdir -p "$RUN_LOCK" 2>/dev/null && [ -w "$RUN_LOCK" ]; then
+    exec 8>>"$RUN_LOCK/flock"
+    RUN_LOCK_ANSWER="$(python3 "$LOCK_TOOL" hold 8 "$RUN_LOCK" "nightly run since $(date '+%F %T')" 2>/dev/null)"
+    case "$RUN_LOCK_ANSWER" in
+        HELD) RUN_LOCK_HELD=1 ;;
+        BUSY*)
+            log "FATAL: another nightly run is live on this Mac (${RUN_LOCK_ANSWER#BUSY }) — this one is not starting."
+            exit 3 ;;
+        *)  log "  (the run lock helper gave no answer — running without the lock; no run marker will be kept)"
+            exec 8>&- ;;
+    esac
+else
+    log "  (no run lock: $LOCK_TOOL or $RUN_LOCK is not usable — no run marker will be kept)"
+fi
+
 # ── Host detection (used by every published row) ────────────────────
 HOSTNAME=$(scutil --get ComputerName 2>/dev/null || hostname -s)
 case "$HOSTNAME" in
@@ -1003,9 +1034,18 @@ except Exception:
         commit_msg="$commit_msg (+ $((appended_count - 1)) backlogged)"
     fi
 
-    git -C "$METRICS_WT" \
+    if ! git -C "$METRICS_WT" \
         -c user.email="nightly@videoscan" -c user.name="Nightly Tests" \
-        commit -m "$commit_msg" --quiet 2>/dev/null
+        commit -m "$commit_msg" --quiet 2>/dev/null; then
+        # No commit, nothing to push: a push now would "succeed" as a no-op and
+        # the rows would be gone at the next reset (Codex #276 F2, #277 F1).
+        log "ERROR: could not commit the row(s) in the metrics worktree — not pushing"
+        git -C "$METRICS_WT" reset --hard origin/metrics --quiet 2>/dev/null || true
+        if queue_pending "$new_row"; then
+            return 1
+        fi
+        return 2
+    fi
 
     # ── Push with retry-on-conflict ─────────────────────────────────
     # Up to PUSH_MAX_ATTEMPTS tries. Between attempts, pull --rebase to
@@ -1051,12 +1091,25 @@ except Exception:
     done
 
     if $pushed; then
-        # "push returned 0" is not "the row is on the branch": when the commit
-        # before it failed, the push is a no-op that succeeds (Codex #276 F2 — the
-        # row was then lost at the next reset, and the queue cleared). Read it back.
-        git -C "$METRICS_WT" fetch origin metrics --quiet 2>/dev/null || true
-        if ! git -C "$METRICS_WT" show origin/metrics:metrics/testdriver.jsonl 2>/dev/null | grep -qxF -- "$new_row"; then
-            log "ERROR: the push returned 0 but the row is NOT on origin/metrics (did the commit fail?) — treating it as not published"
+        # "push returned 0" is not "the rows are on the branch". Read them back —
+        # the new row AND every queued row — from origin/metrics as the push left
+        # it (the push itself moved that ref: no second network call to hang on),
+        # before the queue is cleared (Codex #276 F2, #277 F1 and F3).
+        if ! git -C "$METRICS_WT" show origin/metrics:metrics/testdriver.jsonl 2>/dev/null \
+                | NEW_ROW="$new_row" python3 -c '
+import os, sys
+want = {os.environ["NEW_ROW"]}
+try:
+    with open(sys.argv[1], errors="replace") as f:
+        want.update(line.rstrip("\n") for line in f if line.strip())
+except OSError:
+    pass
+for line in sys.stdin:
+    want.discard(line.rstrip("\n"))
+    if not want:
+        break
+sys.exit(1 if want else 0)' "$PENDING_QUEUE"; then
+            log "ERROR: the push returned 0 but not every row is on origin/metrics — treating it as not published"
             pushed=false
         fi
     fi
@@ -1079,12 +1132,12 @@ except Exception:
 }
 
 # The run marker goes ONLY when a row is durable (on the branch, or in the
-# pending queue), and only the marker of the run being published — RUN_MARKER_PID
-# when an interrupted run is being reported, else this shell. Safe standalone
-# (the self-test extracts publish_row / queue_pending without the main flow).
+# pending queue). This run holds the run lock, so the marker is its own — or
+# the dead run's it is reporting. Safe standalone (the self-test extracts
+# publish_row / queue_pending without the main flow).
 end_run_marker() {
     [ -n "${MARKER_TOOL:-}" ] && [ -f "${MARKER_TOOL:-}" ] || return 0
-    python3 "$MARKER_TOOL" end "${RUN_MARKER:-/nonexistent}" "${RUN_MARKER_PID:-$$}" 2>/dev/null || true
+    python3 "$MARKER_TOOL" end "${RUN_MARKER:-/nonexistent}" 2>/dev/null || true
 }
 
 # Append a row to the local pending-rows queue. The next successful
@@ -1158,9 +1211,11 @@ log "Commit: $COMMIT ($COMMIT_DATE)"
 # See the 2026-11-10 note at the top. Best effort throughout: the marker and
 # the summary never change this run's verdict or exit code.
 MARKER_TOOL="$REPO/scripts/nightly_run_marker.py"
+# The marker means something only under the run lock: without it, keep none.
+[ "$RUN_LOCK_HELD" = 1 ] || MARKER_TOOL=""
 mark_phase() {
-    [ -f "$MARKER_TOOL" ] || return 0
-    python3 "$MARKER_TOOL" phase "$RUN_MARKER" "$1" $$ 2>/dev/null || true
+    [ -n "$MARKER_TOOL" ] && [ -f "$MARKER_TOOL" ] || return 0
+    python3 "$MARKER_TOOL" phase "$RUN_MARKER" "$1" 2>/dev/null || true
 }
 rebuild_page_summary() {
     local tool="$REPO/tools/publish_metrics.py" out
@@ -1169,14 +1224,14 @@ rebuild_page_summary() {
     out="$(python3 "$tool" --summary-only 2>&1 | tail -1)"
     log "Page summary: ${out:-no output}"
 }
-if [ -f "$MARKER_TOOL" ]; then
-    if STALE_RUN="$(python3 "$MARKER_TOOL" stale "$RUN_MARKER" 2>/dev/null)" && [ -n "$STALE_RUN" ]; then
-        IFS=$'\t' read -r STALE_STARTED STALE_PHASE STALE_COMMIT STALE_PID <<<"$STALE_RUN"
-        RUN_MARKER_PID="$STALE_PID"
-        # A run whose result is already on the branch or in the queue is NOT
-        # interrupted, whatever its marker says (killed between its publish and
-        # its marker's removal; Codex #275 F2/F3). Ask before reporting it.
-        git fetch origin metrics --quiet 2>/dev/null || true
+if [ -n "$MARKER_TOOL" ] && [ -f "$MARKER_TOOL" ]; then
+    # This run holds the run lock, so a marker here was left by a run that is
+    # dead and never removed it.
+    if STALE_RUN="$(python3 "$MARKER_TOOL" read "$RUN_MARKER" 2>/dev/null)" && [ -n "$STALE_RUN" ]; then
+        IFS=$'\t' read -r STALE_STARTED STALE_PHASE STALE_COMMIT <<<"$STALE_RUN"
+        # Killed between its publish and its marker's removal? Then its row is on
+        # the branch (origin/metrics as that run's own push left it — no network
+        # call here) or in the queue, and it is NOT interrupted.
         if git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null \
                 | python3 "$MARKER_TOOL" accounted "$STALE_STARTED" "$HOST" - "$PENDING_QUEUE" 2>/dev/null; then
             log "A leftover run marker (started $STALE_STARTED) — that run's result is already published or queued; marker removed, nothing reported."
@@ -1188,19 +1243,8 @@ if [ -f "$MARKER_TOOL" ]; then
             unset NIGHTLY_ROW_TS
             publish_row "$STALE_ROW"
         fi
-        unset RUN_MARKER_PID
     fi
-    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null
-    BEGIN_RC=$?
-    if [ "$BEGIN_RC" = 3 ]; then
-        # ONE nightly run per Mac at a time (Codex #276 F3). Two at once share the
-        # DerivedData and /tmp/nightly-results.xcresult and would spoil each other's
-        # result as well as each other's marker. The live run is left alone.
-        log "FATAL: another nightly run is live on this Mac ($(cat "$RUN_MARKER" 2>/dev/null | tr -d '\n')) — this one is not starting."
-        exit 3
-    elif [ "$BEGIN_RC" != 0 ]; then
-        log "  (could not write $RUN_MARKER — this run keeps no marker)"
-    fi
+    python3 "$MARKER_TOOL" begin "$RUN_MARKER" "$COMMIT" 2>/dev/null || log "  (could not write $RUN_MARKER — this run keeps no marker)"
 fi
 trap rebuild_page_summary EXIT
 

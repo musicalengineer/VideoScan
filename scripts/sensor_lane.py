@@ -468,6 +468,8 @@ def count(log: str) -> Tuple[int, int, List[str]]:
             if m and not re.search(r"Test run with \d+ test", line) \
                     and not any(n == m.group(1) or n.endswith("/" + m.group(1)) for n in par_fail):
                 names.add(m.group(1))
+        for m in XC_FAIL_RE.finditer(log):                    # the XCTest form, likewise (#277)
+            names.add(f"{m.group(1)}.{m.group(2)}")
         passed, failed = par_pass, len(names)
     else:
         passed = len(PASS_RE.findall(log)) - len(re.findall(r"Test run with \d+ tests?.* passed after", log))

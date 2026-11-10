@@ -1127,6 +1127,8 @@ function summaryBehind(d, N) {
     const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string" && rowLabel(r.host) === h)
       .map(r => r.ts).filter(ts => !Number.isNaN(toTime(ts))).sort((a, b) => toTime(a) - toTime(b)).pop();
     if (!newest) continue;
+    // A run older than the nights the summary covers is not something it is missing (#277).
+    if (N.list.length && newest.slice(0, 10) < N.list[0].date) continue;
     const run = latestRun(N, h);
     const shown = !run ? null : typeof run.cell.finished === "string" ? run.cell.finished : null;
     const behind = !run ? true
