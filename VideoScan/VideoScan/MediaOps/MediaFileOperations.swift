@@ -492,6 +492,18 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let indexFrames = Self("indexFrames", hasDetailView: false,
         style: .init(badge: "Frames Index", logVerb: "index frames", fill: .init(0.55, 0.45, 0.00)))
 
+    // Estimate Provenance (2026-11-10) — deep teal-green: a catalog-only verb
+    // (no media is opened) whose only writes are inferred assertion rows.
+    // Δ ≥ 0.12 from every other fill (nearest: Check Copies' deep teal),
+    // contrast vs white ≈ 8.7.
+    /// "Estimate Provenance…" (Rick 2026-11-10, docs/design/provenance.md §C2):
+    /// reads what the catalog already holds about each archived video and
+    /// records, as PROVISIONAL assertions with their evidence, which are
+    /// capture masters of a tape. Nothing is confirmed; no name or date is
+    /// touched. ProvenanceEstimateJob.
+    static let estimateProvenance = Self("estimateProvenance", hasDetailView: false,
+        style: .init(badge: "Provenance", logVerb: "estimate provenance", fill: .init(0.00, 0.30, 0.20)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -501,7 +513,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog, .validateCatalog, .findMaster, .indexFrames,
+        .verifyCatalog, .validateCatalog, .findMaster, .indexFrames, .estimateProvenance,
     ]
 
     /// Badge text — rendered in small caps by the row view.

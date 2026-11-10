@@ -26,6 +26,7 @@ extension MediaFileOperationKind {
         .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies, .findSimilarFootage,
         .bindFixity, .lockArchive, .fingerprintBackfill, .showAgain, .checkCopies, .fillFullHashes,
         .cleanupTrash, .fingerprintSound, .auditCatalog, .verifyCatalog, .validateCatalog,
+        .estimateProvenance,
     ]
 
     /// Kinds that read media, or add one derivative when they finish.

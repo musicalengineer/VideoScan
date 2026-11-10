@@ -173,6 +173,11 @@ enum JourneyEventKind: String, Equatable {
     /// we may not read, an I/O error): grey, a question — never the
     /// orange of "gone" nor the green of "here" (codex 2026-10-16).
     case presenceUnknown
+    /// What the content IS (DECISIONS 2026-11-10): "Estimated: original
+    /// capture of a VHS tape … — not confirmed", or the same with
+    /// "Provenance confirmed by Rick." — dated at the capture. Teal: its
+    /// own family, never the yellow of Promote or the green of "here".
+    case provenance
 
     var color: Color {
         switch self {
@@ -187,6 +192,7 @@ enum JourneyEventKind: String, Equatable {
         case .promote:      return .yellow
         case .notAtPath:    return .orange
         case .presenceUnknown: return .secondary
+        case .provenance:   return .teal
         }
     }
 
@@ -203,8 +209,18 @@ enum JourneyEventKind: String, Equatable {
         case .promote:      return "star.circle"
         case .notAtPath:    return "mappin.slash"
         case .presenceUnknown: return "questionmark.circle"
+        case .provenance:   return ProvenanceEstimateMark.journeyIcon
         }
     }
+}
+
+/// What the File Journey says the content IS — built by the caller from the
+/// provenance store's O(1) projection; the journey builder reads no catalog.
+struct JourneyProvenance: Equatable {
+    /// With its standing: "Estimated: … — not confirmed" / "…. Provenance confirmed by Rick."
+    let sentence: String
+    /// The capture date (the file's embedded creation date); nil = unknown, the event is undated.
+    let captured: Date?
 }
 
 /// One known copy of this file at some other location. Renders in the

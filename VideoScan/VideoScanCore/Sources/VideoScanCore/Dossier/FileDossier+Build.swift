@@ -27,10 +27,12 @@ extension FileDossier {
     /// The dossier of `record` (as the loader rebuilt it from catalog.sqlite)
     /// and its content's assertion rows. `unreadable` = why the stored
     /// analysis values could not be decoded (the record was rebuilt without them).
+    /// `rickRole`: the content's current Provenance ▸ Set Role (Unknown when
+    /// there is none) — an estimated provenance yields to it.
     public static func build(record r: VideoRecord, digest: String?, assertions: [CatalogRow.ProvenanceAssertionReading],
-                             unreadable: String? = nil, now: Date) -> FileDossier {
+                             rickRole: ProvenanceRole = .unknown, unreadable: String? = nil, now: Date) -> FileDossier {
         let technical = technicalSection(r, now: now)
-        let patterns = patternsSection(r, assertions: assertions, unreadable: unreadable)
+        let patterns = patternsSection(r, assertions: assertions, rickRole: rickRole, unreadable: unreadable)
         return FileDossier(fileID: r.id.uuidString, filename: r.filename, path: r.fullPath, digest: digest,
                            removed: r.removal != nil, technical: technical, patterns: patterns,
                            collection: Section(layer: .collection, summary: collectionComingNext, lines: []))
@@ -127,12 +129,14 @@ extension FileDossier {
         var noSound: String { streamsUnknown ?? "no audio track" }
     }
 
-    static func patternsSection(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading], unreadable: String?) -> Section {
+    static func patternsSection(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading],
+                                rickRole: ProvenanceRole = .unknown, unreadable: String?) -> Section {
         let ran = Ran(r)
         let verdict = EraVerdict(assertions)
         var lines: [Line] = [eraLine(verdict, userDate: r.userDate, ran: ran)]
         if let mine = userDateLine(r) { lines.append(mine) }
         lines.append(inferredDateLine(r))
+        if let provenance = provenanceLine(r, assertions: assertions, rickRole: rickRole) { lines.append(provenance) }
         lines.append(sceneLine(r, ran: ran))
         lines.append(speechLine(r, ran: ran))
         lines.append(peopleLine(r))
@@ -275,6 +279,32 @@ extension FileDossier {
     static func confidenceWords(_ value: Float) -> String {
         let label = value >= 0.85 ? "strong" : (value >= 0.5 ? "fair" : "weak")
         return String(format: "%.0f %% confidence (%@)", value * 100, label)
+    }
+
+    // MARK: Provenance (estimated or confirmed; DECISIONS 2026-11-10)
+
+    /// What this content is, as ProvenanceResolver reads its rows: an
+    /// `.observation` ("estimated, unconfirmed") until Rick confirms, then his
+    /// `.fact`. No estimate, or one he rejected → no line; and Rick's own
+    /// Set Role wins here as on every surface (`ProvenanceResolver.visible`):
+    /// another role → no line, Unknown → provisional again. The year is the
+    /// year folder the archive filed THIS row's file under (a row outside
+    /// the archive has none) and the capture month its embedded creation
+    /// date — each omitted when unknown, never invented. An alternate
+    /// capture does not name its master here: this builder reads one file.
+    static func provenanceLine(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading],
+                               rickRole: ProvenanceRole = .unknown) -> Line? {
+        guard let stands = ProvenanceResolver.estimate(fromRowsOfOneSubject: assertions),
+              let estimate = ProvenanceResolver.visible(stands, rickRole: rickRole),
+              let sentence = ProvenanceResolver.sentence(
+                estimate, year: ProvenanceResolver.tapeYear(archivePath: r.fullPath, captured: r.embeddedCreationDate),
+                captured: r.embeddedCreationDate,
+                technical: .init(videoCodec: r.videoCodec, resolution: r.resolution, bitDepth: r.bitDepth)) else { return nil }
+        return Line(label: "Provenance", value: sentence,
+                    reading: estimate.isConfirmed ? "confirmed by you" : "estimated, unconfirmed",
+                    source: estimate.isConfirmed ? "Rick" : "catalog rule, unconfirmed",
+                    evidence: ProvenanceResolver.evidenceWords(fromRowsOfOneSubject: assertions),
+                    standing: estimate.isConfirmed ? .fact : .observation)
     }
 
     // MARK: Captions, OCR, transcript

@@ -62,6 +62,9 @@ struct InspectorPanel: View {
     /// digest (resolved by the CALLER, O(1)). nil store = no line (previews).
     var provenanceRoles: ProvenanceRoleStore?
     var contentDigest: String?
+    /// Estimated provenance (2026-11-10): the store the "Provenance
+    /// (estimated): …" line reads catalog.sqlite through. nil = no line.
+    var provenanceEstimates: ProvenanceEstimateStore?
     /// The file dossier's one door (FileDossierLoader.production), passed by
     /// the host; nil = no Dossier section (previews).
     var fileDossiers: FileDossierLoader?
@@ -79,6 +82,12 @@ struct InspectorPanel: View {
 
                     if let provenanceRoles {
                         InspectorProvenanceRoleLine(digest: contentDigest, store: provenanceRoles)
+                        if let provenanceEstimates {
+                            // The archived file: this row's master copy, else the row itself (an archive copy).
+                            InspectorProvenanceEstimateLine(record: rec, digest: contentDigest,
+                                                            archivePath: (masterCopy ?? rec).fullPath,
+                                                            store: provenanceEstimates, roles: provenanceRoles)
+                        }
                     }
 
                     Divider().padding(.horizontal, 16)
