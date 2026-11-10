@@ -1445,7 +1445,7 @@ def _set_output(name: str, value) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--root", default=".")
-    parser.add_argument("--baseline", default=DEFAULT_SEED,
+    parser.add_argument("--baseline", default=None,
                         help="the committed baseline (default ci/baselines/complexity_debt.json)")
     parser.add_argument("--baseline-out", default="",
                         help="also write the proposed shrunk baseline here (the nightly publishes it)")
@@ -1457,7 +1457,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="drop fixed entries from --baseline and lower improved ones; never adds")
     parser.add_argument("--overrides", default=DEFAULT_OVERRIDES,
                         help="gate override log (repo-relative), reported by the nightly")
-    parser.add_argument("--ccn15-excess", default=DEFAULT_CCN15_EXCESS,
+    parser.add_argument("--ccn15-excess", default=None,
                         help="the CCN 15 excess baseline CI checks (default ci/baselines/complexity_ccn15_excess.json)")
     parser.add_argument("--update-ccn15-excess", action="store_true",
                         help="rewrite --ccn15-excess from today's tree (deliberate; may raise it)")
@@ -1465,6 +1465,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="print morning-digest lines for a debt report ('-' = stdin) and exit")
     parser.add_argument("--sha", default=os.environ.get("GITHUB_SHA", ""))
     args = parser.parse_args(argv)
+    # The default baselines are the ones in the tree being measured (#456): they were
+    # cwd-relative, so `--root <worktree> --shrink-baseline` from another checkout read
+    # and rewrote that checkout's files. A path the caller names is used as given.
+    if args.baseline is None:
+        args.baseline = os.path.join(args.root, DEFAULT_SEED)
+    if args.ccn15_excess is None:
+        args.ccn15_excess = os.path.join(args.root, DEFAULT_CCN15_EXCESS)
 
     if args.alert:
         try:
