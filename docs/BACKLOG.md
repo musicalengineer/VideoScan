@@ -94,6 +94,7 @@
 - (ruling) Clear the 959 legacy "manually deleted" labels.
 - #259 duplicate detector over-claims same-size re-exports; remember refusals; Reclaim numbers inflated.
 - Archive-internal cleanup of redundant versions (keep: original + preservation + access + edit), per-item OK; the invariants need amending to match (DECISIONS contradiction 4).
+- Archive browsing by title, not by file (Rick 2026-11-10, thinking out loud): one title holds its versions (original, access, improved, editable, v2), best shown first, the rest one click away; and one source tape holds its clips — 1984 is ONE VHS tape (about 1 h 33 min) showing as 12 archive videos: the whole transfer plus clips of five occasions, each with versions, while 1985–1987 are empty. Two relationships, not one: a VERSION is the same footage treated differently; a CLIP is part of a longer transfer (containment with a range, DECISIONS 9/23). The 11/10 originals ruling says which versions may be retired.
 - Only-copy badge in Triage/Catalog; codec ladder table; DRM movies suggested "not family media".
 - "Interesting family video" score for Triage ranking (duration, people present, not a transition/test pattern) — a RANKING, never a scan gate: measured 2026-10-25, 7,506 of 11,468 live rows are under 30 s and 649 of those Rick marked Important, so duration alone is not junk evidence.
 - Run MediaAnalyzer scoring on scan (today it runs only from Triage's Analyze button) — policy change, Rick's call.
