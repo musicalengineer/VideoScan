@@ -730,7 +730,9 @@
         "ObservationJournalTests"
       ],
       "tests": [
+        "aPartlyWrittenUnitLeavesNothing",
         "aTornLastLineIsIgnoredReportedAndSealedByTheNextAppend",
+        "aWriteThatFailsAtOnceChangesNothing",
         "anEditedLineIsCaughtByItsId",
         "codex187F1UnwritableRefusalThrows",
         "codex187F2TornRefusalTailIsSealed",
@@ -746,7 +748,8 @@
         "subjectsByOneSignerAreFoundAndOthersAreNot",
         "theAppliedCursorRoundTripsAndAnUnreadableOneIsZero",
         "theIdIsTheIdempotenceKey",
-        "theLineIsCanonicalAndRoundTrips"
+        "theLineIsCanonicalAndRoundTrips",
+        "theUnitsBeforeAFailedOneAreUntouched"
       ]
     },
     {
@@ -37707,7 +37710,7 @@
       ],
       "expected_floor": 3579,
       "name": "unit",
-      "package_expected_floor": 813,
+      "package_expected_floor": 816,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",

@@ -25,7 +25,13 @@
 //     reported (`torn`), and the next `append` first seals it with "\n" so
 //     it becomes one invalid line the applier refuses ("invalid") instead of
 //     a prefix glued onto the next good line; the unit it belonged to is not
-//     checkpointed, so the job re-runs it and its lines are appended whole.
+//     checkpointed, so the job re-runs it and its lines are appended whole;
+//   * a unit is ALL OR NOTHING (#422): when its write or fsync fails after some
+//     bytes landed, the file is truncated back to its size before the unit, so
+//     no complete line of a failed unit stays to mark its content analyzed.
+//     (A reader that runs between the partial write and the truncate can still
+//     see those lines; its cursor then points past the file's end and reads as
+//     0, and re-applying is a no-op. A crash in that window leaves them.)
 //
 // Sidecars: `<file>.applied` holds the byte offset up to which the APP has
 // applied that file (written atomically by the app); `refused.jsonl` holds
@@ -231,6 +237,9 @@ public final class ObservationJournal: @unchecked Sendable {
     /// at its first append (only today's file is ever appended to, so an
     /// earlier day's tail with no newline is a crash's, never a write in flight).
     private var earlierDaysSealed = false
+    /// write(2) for a unit's lines — a seam so a test can make a write land
+    /// partly and then fail (a disk filling up mid-unit, #422). Set before use.
+    var writeBytes: @Sendable (Int32, UnsafeRawPointer?, Int) -> Int = { Darwin.write($0, $1, $2) }
 
     /// ~/Library/Application Support/VideoScan/background/journal
     public static var productionDirectory: URL {
@@ -282,8 +291,22 @@ public final class ObservationJournal: @unchecked Sendable {
         let sealed = try Self.endsTorn(fd: fd)
         if sealed { buffer.append(0x0A) }
         for line in lines { buffer.append(line.encoded) }
-        try Self.writeAll(fd: fd, buffer, path: url.path)
-        try Self.fullSync(fd, path: url.path)
+        // All or nothing (#422): a write that lands partly and then fails (a disk
+        // filling up) used to leave the unit's first lines complete in the file.
+        // The planner reads any valid line as "this content is analyzed", so the
+        // rest of the unit was never produced. On any failure the file goes back
+        // to the size it had before this unit, and the error is thrown as before.
+        let sizeBefore = try Self.size(fd: fd)
+        do {
+            try Self.writeAll(fd: fd, buffer, path: url.path, write: writeBytes)
+            try Self.fullSync(fd, path: url.path)
+        } catch {
+            guard ftruncate(fd, sizeBefore) == 0 else {
+                throw JournalIOError("\(error) — and the partly written unit could not be removed: truncate \(url.path)", errno)
+            }
+            _ = fcntl(fd, F_FULLFSYNC)      // best effort: the truncate itself is what matters to the next reader
+            throw error
+        }
         return AppendReport(file: name, lines: lines.count, bytes: buffer.count, sealedTornTail: sealed)
     }
 
@@ -302,6 +325,12 @@ public final class ObservationJournal: @unchecked Sendable {
         if fcntl(fd, F_FULLFSYNC) != 0, fsync(fd) != 0 { throw JournalIOError("fsync \(path)", errno) }
     }
 
+    private static func size(fd: Int32) throws -> off_t {
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { throw JournalIOError("fstat", errno) }
+        return st.st_size
+    }
+
     /// True when the file is non-empty and its last byte is not "\n".
     private static func endsTorn(fd: Int32) throws -> Bool {
         var st = stat()
@@ -312,11 +341,12 @@ public final class ObservationJournal: @unchecked Sendable {
         return last != 0x0A
     }
 
-    private static func writeAll(fd: Int32, _ data: Data, path: String) throws {
+    private static func writeAll(fd: Int32, _ data: Data, path: String,
+                                 write: (Int32, UnsafeRawPointer?, Int) -> Int = { Darwin.write($0, $1, $2) }) throws {
         try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var offset = 0
             while offset < raw.count {
-                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if n < 0 {
                     if errno == EINTR { continue }
                     throw JournalIOError("write \(path)", errno)
