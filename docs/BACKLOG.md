@@ -200,6 +200,7 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
   sampler, perceptual video hash and SigLIP embeddings as dedup tiers 2–3, constraint propagation from birthdates; events stay rulings
   (not DBSCAN); cloud offload stays a §9 ruling and never carries family pixels (rule 13).
 - Analyze tab: a row/button to start the era job (today: `--enqueue era` / `--run era` from the helper binary only).
+- A stable home for the installed app and its helper (Rick 2026-11-09: "keep the BG process executable somewhere so I don't keep accidentally cleaning & rebuilding it"): today launchd resolves `VideoScan Background` inside whichever build product holds bundle id `Rick-Breen.VideoScan`, so Clean Build Folder pulls the running helper's binary out from under it (seen 11/09: it ran from `CleanBuildFolderInProgress`). Proposal: an install step that copies a Release build to `/Applications/VideoScan.app`, and only that copy registers the helper; dev builds talk to it and never re-register. Needs Rick's ruling on the install workflow.
 - Content Analysis ▸ a read-only **results sheet** for the helper's work (Rick 2026-11-04, "how can we see what it produced?"): counts by outcome (era found · no usable era · given up after 3 tries, with the reason · still to do), a clickable file list per outcome, and the "agrees with your confirmed date within 5 y" number — today the only per-file view is the inspector's Machine era line, and era.none / give-ups show nowhere.
 
 ## To file as issues (found 2026-10-31 → 2026-11-01)
