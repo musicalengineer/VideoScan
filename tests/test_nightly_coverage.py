@@ -93,7 +93,7 @@ def test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none(tmp
         {"filename": "/r/VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ATests.swift", "summary": {"lines": {"count": 5, "covered": 5}}}]}]})
     scratch = _scratch(tmp_path)
     tool = _Tool(report)
-    out = nc.export_core_coverage(scratch, run=tool)
+    out = nc.export_core_coverage(scratch, since=0, run=tool)
     assert out is not None and out.name == "fallback.json"
     assert nc.core_files(out) == [("/r/VideoScan/VideoScanCore/Sources/VideoScanCore/Store/A.swift", 7, 10)]
     merge, export = tool.calls
@@ -104,16 +104,41 @@ def test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none(tmp
 
 def test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess(tmp_path):
     good = json.dumps({"data": []})
-    assert nc.export_core_coverage(_scratch(tmp_path / "a", profiles=0), run=_Tool(good)) is None
-    assert nc.export_core_coverage(_scratch(tmp_path / "b", binary=False), run=_Tool(good)) is None
-    assert nc.export_core_coverage(_scratch(tmp_path / "c"), run=_Tool(good, merge_rc=1)) is None
-    assert nc.export_core_coverage(_scratch(tmp_path / "d"), run=_Tool(good, export_rc=1)) is None
-    assert nc.export_core_coverage(_scratch(tmp_path / "e"), run=_Tool("{ torn")) is None
-    assert nc.export_core_coverage(_scratch(tmp_path / "f"), run=_Tool("")) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "a", profiles=0), since=0, run=_Tool(good)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "b", binary=False), since=0, run=_Tool(good)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "c"), since=0, run=_Tool(good, merge_rc=1)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "d"), since=0, run=_Tool(good, export_rc=1)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "e"), since=0, run=_Tool("{ torn")) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "f"), since=0, run=_Tool("")) is None
     assert not (tmp_path / "e" / "core-build" / "debug" / "codecov" / "fallback.json").exists()
+
+
+def test_profiles_from_before_todays_run_are_not_todays_coverage(tmp_path):
+    """Codex #275 F7 (RED first): yesterday's failed run left profiles and a binary in
+    the cache; today's build failed before replacing them; the fallback published
+    yesterday's 90 % under today's date and commit."""
+    import os
+    import time
+    report = json.dumps({"data": [{"files": [
+        {"filename": "/r/VideoScan/VideoScanCore/Sources/VideoScanCore/A.swift", "summary": {"lines": {"count": 10, "covered": 9}}}]}]})
+    scratch = _scratch(tmp_path)
+    yesterday = time.time() - 86_400
+    for profile in (scratch / "debug" / "codecov").glob("*.profraw"):
+        os.utime(profile, (yesterday, yesterday))
+    started = time.time() - 60
+    tool = _Tool(report)
+    assert nc.export_core_coverage(scratch, since=started, run=tool) is None
+    assert tool.calls == [], "no tool is run over stale profiles"
+    # One profile written by today's run: only it is merged.
+    todays = scratch / "debug" / "codecov" / "today.profraw"
+    todays.write_bytes(b"raw")
+    out = nc.export_core_coverage(scratch, since=started, run=tool)
+    assert out is not None
+    merged = [a for a in tool.calls[0] if a.endswith(".profraw")]
+    assert merged == [str(todays)]
 
 
 def test_sensor_a_night_without_core_coverage_says_missing_in_capitals():
     text = (ROOT / "tools" / "nightly_coverage.py").read_text()
-    assert "export_core_coverage(DD / \"core-build\")" in text
+    assert "export_core_coverage(DD / \"core-build\", since=core_started)" in text
     assert "core coverage MISSING" in text and 'meta["core_coverage"] = "missing"' in text

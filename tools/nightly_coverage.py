@@ -152,17 +152,27 @@ def app_files(xcresult: Path) -> list[tuple[str, int, int]]:
     return out
 
 
-def export_core_coverage(scratch: Path, run=subprocess.run) -> "Path | None":
+def export_core_coverage(scratch: Path, since: float, run=subprocess.run) -> "Path | None":
     """The Core package's coverage JSON built from the raw profiles, for the nights
     SwiftPM exports none. `swift test --enable-code-coverage` writes its JSON only
     when every test passed; one failed test (2026-11-05 … 11-09: a timing budget
     missed under the instrumented Debug build) and Core vanished from the page's
     coverage number, with one easily missed log line. The .profraw files are
     written whatever the verdict, so merge them and export the same llvm-cov JSON
-    SwiftPM would have. None when there is no profile or no test binary, or a
-    tool fails. Memory: llvm-cov's summary-only JSON (a few hundred KB)."""
+    SwiftPM would have. Only profiles written at or after `since` (when TODAY's
+    Core test run started) count: yesterday's profiles left in the cache after a
+    build that failed today are not today's coverage (Codex #275 F7). None when
+    there is no such profile or no test binary, or a tool fails. Memory:
+    llvm-cov's summary-only JSON (a few hundred KB)."""
     debug = scratch / "debug"
-    profiles = sorted((debug / "codecov").glob("*.profraw"))
+
+    def fresh(path: Path) -> bool:
+        try:
+            return path.stat().st_mtime >= since
+        except OSError:
+            return False
+
+    profiles = [p for p in sorted((debug / "codecov").glob("*.profraw")) if fresh(p)]
     binaries = sorted(debug.glob("*.xctest/Contents/MacOS/*"))
     if not profiles or not binaries:
         return None
@@ -268,6 +278,7 @@ def main() -> int:
     meta["app_status"] = "ok" if app_rc == 0 else f"exit {app_rc} (tests may have failed; coverage still read)"
     log(f"app tests finished: {meta['app_status']}")
 
+    core_started = time.time() - 2          # the profiles this run writes are newer than this
     core_rc = run(["swift", "test", "--package-path", str(CORE), "--enable-code-coverage",
                    "--scratch-path", str(DD / "core-build")],
                   REPO, BUILD_TIMEOUT_S, OUT / f"core-{day}.log")
@@ -286,7 +297,7 @@ def main() -> int:
     if cov_path and Path(cov_path).exists():
         files += core_files(Path(cov_path))
     else:
-        fallback = export_core_coverage(DD / "core-build")
+        fallback = export_core_coverage(DD / "core-build", since=core_started)
         core = core_files(fallback) if fallback else []
         if core:
             files += core

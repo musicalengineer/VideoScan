@@ -42,6 +42,25 @@ def test_a_run_that_proves_nothing_is_red_never_green():
     assert lane.verdict("1803 passed in 60s\n", 1, False, 1500)[0] is False
 
 
+def test_only_pytests_final_summary_line_counts():
+    """Codex #275 F6 (RED first): "preflight: 1 passed prerequisite" + "no tests ran"
+    with exit 0 read GREEN (1 passed)."""
+    text = "preflight: 1 passed prerequisite\nno tests ran in 0.01s\n"
+    assert lane.verdict(text, 0, False, 1500) == (False, "script tests RED (exit 0, 0 passed)")
+    # A count line followed by a later "no tests ran" is not a result either.
+    assert lane.verdict("3 passed in 0.1s\n===== no tests ran in 0.01s =====\n", 0, False, 1500)[0] is False
+    # Prose that mentions a count is never the summary.
+    assert lane.verdict("note: 12 passed last week\n", 0, False, 1500)[0] is False
+    # The real shapes: quiet and ruled, with the extra kinds pytest prints.
+    assert lane.verdict("1987 passed, 4 skipped, 1 warning, 104 subtests passed in 781.25s (0:13:01)\n", 0, False, 1500) == (
+        True, "script tests GREEN (1987 passed)")
+    assert lane.verdict("======= 12 passed in 0.50s =======\n", 0, False, 1500) == (True, "script tests GREEN (12 passed)")
+    assert lane.verdict("== 1 failed, 11 passed in 0.5s ==\nFAILED tests/a.py::t\n", 1, False, 1500) == (
+        False, "script tests RED (1 failed: a.py::t)")
+    assert lane.verdict("2 errors in 0.5s\nERROR tests/a.py::t\nERROR tests/b.py::u\n", 1, False, 1500) == (
+        False, "script tests RED (2 failed: a.py::t, b.py::u)")
+
+
 def test_a_timeout_is_red_whatever_the_log_says():
     assert lane.verdict("1803 passed in 60s\n", 0, True, 1500) == (False, "script tests RED (timed out after 1500s)")
 
@@ -69,6 +88,30 @@ def test_cli_a_hung_runner_is_stopped_at_its_budget_with_its_children(tmp_path):
     assert proc.returncode == 1 and proc.stdout.strip() == "script tests RED (timed out after 1s)"
     subprocess.run(["sleep", "5"], check=True)
     assert not marker.exists(), "the runner's child outlived the watchdog"
+
+
+def test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits(tmp_path):
+    """Codex #275 F4 (RED first): bash exits on TERM at once, the lane returned, and a
+    child ignoring TERM printed SURVIVED afterwards."""
+    runner = tmp_path / "runner.sh"
+    marker = tmp_path / "survived"
+    ready = tmp_path / "ready"
+    child = tmp_path / "child.py"
+    child.write_text("import signal, time, pathlib, sys\n"
+                     "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                     "pathlib.Path(sys.argv[2]).write_text('up')\n"
+                     "time.sleep(4)\npathlib.Path(sys.argv[1]).write_text('SURVIVED')\n")
+    runner.write_text(f"'{sys.executable}' '{child}' '{marker}' '{ready}' &\nwait\n")
+    import script_tests_lane
+    p = subprocess.Popen(["bash", str(runner)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        if ready.exists():
+            break
+        subprocess.run(["sleep", "0.05"])
+    assert ready.exists(), "the child never started"
+    script_tests_lane.stop_group(p, grace=1.0)
+    subprocess.run(["sleep", "5"], check=True)
+    assert not marker.exists(), "a TERM-ignoring child outlived the watchdog"
 
 
 def test_cli_bad_arguments_and_a_missing_runner_are_red_in_one_line(tmp_path):

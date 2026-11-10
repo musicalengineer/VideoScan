@@ -33122,6 +33122,7 @@
       ],
       "tests": [
         "test_a_failed_stage_publishes_why_and_which_tests",
+        "test_a_path_or_a_name_the_repo_does_not_declare_is_never_published",
         "test_a_queued_row_keeps_its_names_and_counts_when_published_later",
         "test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published",
         "test_dashboard_names_the_run_green_amber_red",
@@ -33700,7 +33701,11 @@
       "tests": [
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
         "test_core_codecov_json_keeps_only_core_sources",
+        "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",
         "test_folders_split_logic_from_views_and_core_from_app",
+        "test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess",
+        "test_profiles_from_before_todays_run_are_not_todays_coverage",
+        "test_sensor_a_night_without_core_coverage_says_missing_in_capitals",
         "test_zero_coverage_logic_files_are_flagged_but_small_ones_are_not"
       ]
     },
@@ -34391,6 +34396,7 @@
         "test_sensor_lane.py"
       ],
       "tests": [
+        "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
         "test_counting_the_log_names_every_failure",
@@ -35001,11 +35007,16 @@
         "test_a_phase_or_commit_that_is_not_code_shaped_is_never_recorded",
         "test_a_pid_reused_after_a_reboot_is_not_the_same_run",
         "test_a_run_that_is_still_going_is_not_stale",
+        "test_a_run_whose_result_is_published_or_queued_is_accounted_never_interrupted",
         "test_an_interrupted_row_is_a_did_not_run_night_with_a_publishable_reason",
+        "test_an_interrupted_row_never_replaces_a_later_result_of_the_same_night",
         "test_cli_a_live_process_is_not_stale",
+        "test_cli_begin_refuses_a_live_owner_with_exit_3",
         "test_cli_round_trip_with_a_real_dead_process",
         "test_no_marker_and_a_torn_marker_are_never_stale_and_the_torn_one_is_removed",
-        "test_sensor_the_nightly_records_reports_and_clears_the_marker"
+        "test_only_the_owner_changes_or_removes_the_marker_and_a_live_run_is_never_replaced",
+        "test_sensor_the_nightly_records_reports_and_clears_the_marker",
+        "test_the_nightly_block_end_to_end_with_real_bash"
       ]
     },
     {
@@ -35034,11 +35045,13 @@
       "tests": [
         "test_a_run_that_proves_nothing_is_red_never_green",
         "test_a_timeout_is_red_whatever_the_log_says",
+        "test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits",
         "test_cli_a_hung_runner_is_stopped_at_its_budget_with_its_children",
         "test_cli_bad_arguments_and_a_missing_runner_are_red_in_one_line",
         "test_cli_runs_a_real_runner_and_writes_its_log",
         "test_failures_are_named_and_counted",
         "test_green_needs_exit_zero_and_at_least_one_passed_test",
+        "test_only_pytests_final_summary_line_counts",
         "test_sensor_the_testbed_runs_the_lane_and_its_red_fails_the_run"
       ]
     }

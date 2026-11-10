@@ -1166,29 +1166,47 @@ def test_failures_links_list_each_macs_failed_test_names(tmp_path):
 def test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind(tmp_path):
     """RED 2026-11-09: two failed publishes left the summary a day old; the M5 Ultra's
     green 02:00 run was on the branch and the card still showed the day before, with no
-    cue. A nightly row newer than the summary's build time is said on the card."""
+    cue. Compared by content (Codex #275 F5): each Mac's newest published run against the
+    run its row shows — the summary's build time decides nothing."""
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    fx, _, _ = two_studio_fixture(now)
-    built = now - timedelta(hours=30)
-    fx["summary_latest.json"]["generated"] = iso(built)
-    newest = now - timedelta(hours=1)          # newer than every nightly row the fixture holds
-    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
-        ts=iso(newest), source="nightly-local", host="RicksUltra", status="ok", passed=13358, failed=0, total=13423)])
-    out = run_page(tmp_path, fx, {"hash": "#all"})
-    assert out["errors"] == []
-    _, _, words = card_tile(out["sections"]["head"])
-    m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
-    assert m, words
-    assert et_when(newest) in m.group(1) and f"built {et_when(built)}" in m.group(1), m.group(1)
-    # A summary built after the newest run (the normal case, within the grace): no cue.
-    fx["summary_latest.json"]["generated"] = iso(newest + timedelta(minutes=5))
-    out = run_page(tmp_path, fx, {"hash": "#all"})
-    assert "BEHIND" not in out["sections"]["head"]
-    # A scoped (gauntlet) run is not a nightly run and never makes the card "behind".
-    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
-        ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", stages=[])])
-    out = run_page(tmp_path, fx, {"hash": "#all"})
-    assert "BEHIND" not in out["sections"]["head"]
+    fx, m4_done, ultra_done = two_studio_fixture(now)
+    base = fx["testdriver.jsonl"]
+    row = lambda host, ts: dict(ts=iso(ts), source="nightly-local", host=host, status="ok", passed=13358, failed=0, total=13423)
+    shown = jsonl([row("RicksM4", m4_done), row("RicksUltra", ultra_done)])
+
+    def behind(rows, generated=None):
+        fx["testdriver.jsonl"] = rows
+        if generated is not None:
+            fx["summary_latest.json"]["generated"] = iso(generated)
+        out = run_page(tmp_path, fx, {"hash": "#all"})
+        assert out["errors"] == []
+        _, _, words = card_tile(out["sections"]["head"])
+        m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
+        return m.group(1) if m else None
+
+    # The summary shows exactly each Mac's newest run: not behind, whenever it was built
+    # (a build time captured BEFORE the rows' times must not cry BEHIND).
+    assert behind(shown, generated=ultra_done - timedelta(minutes=30)) is None
+    # A newer Ultra run than the one its row shows: behind, naming the Mac and the run —
+    # even when the summary was built only ten minutes before it (the old 20-minute grace hid this).
+    newer = ultra_done + timedelta(minutes=10)
+    words = behind(shown + jsonl([row("RicksUltra", newer)]), generated=ultra_done)
+    assert words and "M5 Ultra" in words and et_when(newer) in words and f"built {et_when(ultra_done)}" in words, words
+    # A newer M4 run only: the M4 is named.
+    words = behind(shown + jsonl([row("RicksM4", now)]))
+    assert words and "M4 Max" in words and et_when(now) in words, words
+    # A scoped (gauntlet) run, an off-rota Mac's row and a row with a bad time never make it behind.
+    extra = jsonl([dict(ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", stages=[]),
+                   row("RicksM1", now), dict(row("RicksM4", now), ts="soon")])
+    assert behind(shown + extra) is None
+    # A cell from an older summary (no finish time) is compared by its night.
+    for night in fx["summary_latest.json"]["nightly"]["nights"]:
+        for cell in night["hosts"].values():
+            cell.pop("finished", None)
+    assert behind(shown) is None
+    words = behind(shown + jsonl([row("RicksUltra", now + timedelta(days=2))]))
+    assert words and "M5 Ultra" in words, words
+    fx["testdriver.jsonl"] = base
 
 
 @needs_node

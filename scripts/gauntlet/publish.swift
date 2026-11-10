@@ -80,24 +80,78 @@ func runStatus(_ result: [String: Any], _ stages: [[String: Any]]) -> String {
 // runner's reason, kept ONLY where each part is one of the runner's own fixed
 // phrases — anything else, e.g. an error's description with a path in it,
 // becomes "other") and up to `publishedNames` test identifiers per kind. A name
-// is published only when it is shaped like a test identifier (Module/Suite/test());
-// a display title or anything else is counted in `<kind>_more`, never shown.
+// is published only when it is PROVEN to be a test of this repository: shaped
+// Suite/function() (optionally Module.Suite/…), every type component declared
+// in the repo's test sources (or a test module's name) and the function
+// declared there too — the rule tools/publish_metrics.py uses for the nightly's
+// names. Shape alone is not enough (Codex #275 F1: "Users/<family>/Movies/
+// Wedding.mov" is identifier-shaped). A display title, a path or anything else
+// is counted in `<kind>_more`, never shown. No test sources found: nothing is
+// named (fail closed). Every pattern must match the WHOLE string (`$` alone
+// also matches before a trailing newline).
 let publishedNames = 20
+let testModules: Set<String> = ["VideoScanTests", "VideoScanCoreTests", "VideoScanUITests"]
+let testSourceRoots = ["VideoScan/VideoScanTests", "VideoScan/VideoScanUITests", "VideoScan/VideoScanCore/Tests"]
+
+func matchesWhole(_ text: String, _ pattern: String) -> Bool {
+    guard let range = text.range(of: pattern, options: .regularExpression) else { return false }
+    return range.lowerBound == text.startIndex && range.upperBound == text.endIndex
+}
+
+/// Every `func` name and every type name declared under the repo's test roots.
+/// Worst case memory: one source file's text at a time plus two sets of short
+/// names (~40k strings for ~17k tests, a few MB). Read once per publish.
+struct RepoTestNames {
+    var functions = Set<String>()
+    var types = Set<String>()
+
+    init(repo: URL) {
+        guard let function = try? NSRegularExpression(pattern: #"\bfunc\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\s*[(<]"#),
+              let type = try? NSRegularExpression(pattern: #"\b(?:struct|class|enum|actor|extension)\s+([A-Za-z_][A-Za-z0-9_]*)"#) else { return }
+        for root in testSourceRoots {
+            let base = repo.appendingPathComponent(root)
+            guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil) else { continue }
+            for case let url as URL in walker where url.pathExtension == "swift" {
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let whole = NSRange(text.startIndex..., in: text)
+                for match in function.matches(in: text, range: whole) {
+                    if let r = Range(match.range(at: 1), in: text) { functions.insert(String(text[r])) }
+                }
+                for match in type.matches(in: text, range: whole) {
+                    if let r = Range(match.range(at: 1), in: text) { types.insert(String(text[r])) }
+                }
+            }
+        }
+    }
+
+    static let shape = #"(?:[A-Za-z_][A-Za-z0-9_]*[./])+`?[A-Za-z_][A-Za-z0-9_]*`?\((?:[A-Za-z_][A-Za-z0-9_]*:)*\)"#
+
+    /// True only for Suite/function() whose every part this repository's tests declare.
+    func proves(_ name: String) -> Bool {
+        guard name.count <= 200, matchesWhole(name, Self.shape), let slash = name.lastIndex(of: "/") else { return false }
+        let call = name[name.index(after: slash)...]
+        let function = call.prefix { $0 != "(" }.replacingOccurrences(of: "`", with: "")
+        guard functions.contains(function) else { return false }
+        let owners = name[..<slash].split(whereSeparator: { $0 == "/" || $0 == "." }).map(String.init)
+        return !owners.isEmpty && owners.allSatisfy { types.contains($0) || testModules.contains($0) }
+    }
+}
+let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+let repoTestNames = RepoTestNames(repo: repoRoot)
 let reasonPhrases = [
-    #"^command exit \d{1,4}$"#, #"^structured test counts unavailable$"#, #"^test failures$"#,
-    #"^unexpected skipped tests$"#, #"^executed count below expected floor \d{1,7}$"#,
-    #"^\d{1,6} known issues? \(withKnownIssue\) — tracked, not a pass$"#, #"^safe subset passed$"#,
-    #"^unsafe or unadapted suites: \d{1,6}$"#, #"^(package|stage) watchdog timeout$"#,
-    #"^unreaped process contamination( \(swift test list\))?$"#, #"^package build did not run$"#, #"^amber$"#,
+    #"command exit \d{1,4}"#, #"structured test counts unavailable"#, #"test failures"#,
+    #"unexpected skipped tests"#, #"executed count below expected floor \d{1,7}"#,
+    #"\d{1,6} known issues? \(withKnownIssue\) — tracked, not a pass"#, #"safe subset passed"#,
+    #"unsafe or unadapted suites: \d{1,6}"#, #"(package|stage) watchdog timeout"#,
+    #"unreaped process contamination( \(swift test list\))?"#, #"package build did not run"#, #"amber"#,
 ]
-let testIdentifier = #"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_`][A-Za-z0-9_.`:()]{0,119}){0,4}$"#
 
 func publishableReason(_ value: Any?) -> String? {
     guard let text = value as? String, !text.isEmpty else { return nil }
     let parts = text.components(separatedBy: "; ").map { part -> String in
         let package = part.hasPrefix("package: ")
         let body = package ? String(part.dropFirst("package: ".count)) : part
-        let known = reasonPhrases.contains { body.range(of: $0, options: .regularExpression) != nil }
+        let known = reasonPhrases.contains { matchesWhole(body, $0) }
         return known ? part : (package ? "package: other" : "other")
     }
     return parts.prefix(8).joined(separator: "; ")
@@ -106,7 +160,7 @@ func publishableReason(_ value: Any?) -> String? {
 /// (names to publish, how many more exist that are not shown)
 func publishableNames(_ stage: [String: Any], _ key: String) -> ([String], Int) {
     let all = (stage[key] as? [Any] ?? []).compactMap { $0 as? String }
-    let shaped = all.filter { $0.count <= 200 && $0.range(of: testIdentifier, options: .regularExpression) != nil }
+    let shaped = all.filter(repoTestNames.proves)
     let truncated = Int(number(stage[key + "_truncated"]))
     return (Array(shaped.prefix(publishedNames)), (all.count - min(shaped.count, publishedNames)) + truncated)
 }

@@ -31,7 +31,11 @@ import sys
 from typing import List, Tuple
 
 NAMES_SHOWN = 3
-_COUNT_LINE = re.compile(r"\b\d+ (?:passed|failed|errors?)\b")
+# pytest's FINAL summary line, whole: "1987 passed, 4 skipped, 1 warning in 781.25s (0:13:01)",
+# with or without the "=====" rule around it. Only this line is counted (Codex #275 F6: any
+# line saying "1 passed" — a preflight note — used to make a zero-test run GREEN).
+_SUMMARY = re.compile(r"^=*\s*((?:\d+ [a-z]+(?: [a-z]+)?, )*\d+ [a-z]+(?: [a-z]+)?) in \d+(?:\.\d+)?s(?: \([\d:]+\))?\s*=*$")
+_NO_TESTS = re.compile(r"^=*\s*no tests ran\b")
 _FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
 
 
@@ -39,11 +43,17 @@ def verdict(text: str, rc: int, timed_out: bool, budget: int) -> Tuple[bool, str
     """(green, line) from the runner's whole output, its exit code and the watchdog."""
     if timed_out:
         return False, f"script tests RED (timed out after {budget}s)"
-    lines = [line for line in text.splitlines() if _COUNT_LINE.search(line)]
-    last = lines[-1] if lines else ""
+    # The LAST summary-shaped line decides; a later "no tests ran" cancels an earlier count.
+    last = ""
+    for line in text.splitlines():
+        m = _SUMMARY.match(line.strip())
+        if m:
+            last = m.group(1)
+        elif _NO_TESTS.match(line.strip()):
+            last = ""
 
     def count(word: str) -> int:
-        m = re.search(r"(\d+) " + word, last)
+        m = re.search(r"(?:^|, )(\d+) " + word + r"(?:,|$)", last)
         return int(m.group(1)) if m else 0
 
     passed, failed, errors = count("passed"), count("failed"), count("errors?")
@@ -70,15 +80,31 @@ def run(runner: str, log: str, budget: int, cwd: str) -> Tuple[int, bool]:
         try:
             return p.wait(timeout=budget), False
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-                p.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-                p.wait()
-            except ProcessLookupError:
-                pass
+            stop_group(p)
             return 124, True
+
+
+def stop_group(p: subprocess.Popen, grace: float = 20.0) -> None:
+    """TERM the runner's process group, give it `grace` seconds, then KILL the GROUP —
+    always, even when the leader has already exited: bash dies on TERM at once and a
+    child that ignores TERM would be left running (Codex #275 F4). The group id is the
+    leader's pid (start_new_session) and stays valid while any member lives."""
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        p.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass                                # nobody left in the group
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def main(argv: List[str]) -> int:

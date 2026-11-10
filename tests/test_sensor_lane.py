@@ -110,6 +110,21 @@ def test_counting_the_log_names_every_failure():
     assert "VideoScanCoreTests.CatalogStoreSensorTests.testOnlyTheStoreOpensTheDB" in names
 
 
+def test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named():
+    """RED 2026-11-09: the same tree counted 716 passed on one run and 717 on the next.
+    One "Test case … passed on" line had lost its "Test " to another host's output."""
+    log = "\n".join([
+        "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test ",
+        "case 'HallieShellCLITests/eileensChildren()' passed on 'My Mac - VideoScan (1)' (0.150 seconds)",
+        "case 'B/two()' failed on 'My Mac - VideoScan (2)' (0.010 seconds)",
+        "Test case 'C/three(_:)' passed on 'My Mac - VideoScan (2)' (0.002 seconds)",
+        "a line that only mentions case 'D/four()' passed on something is not at the start",
+    ])
+    passed, failed, names = sl.count(log)
+    assert (passed, failed, names) == (3, 1, ["B/two()"])
+
+
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     # The app half "ran" zero tests (a filter that matched nothing): red.
     monkeypatch.setattr(sl, "run_app", lambda *a, **k: (0, 0, [], 0, 1.0))

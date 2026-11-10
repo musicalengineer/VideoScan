@@ -20,6 +20,17 @@ class GauntletPublishTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         source = scripts / 'publish.swift'
         shutil.copy2(REPO / 'scripts/gauntlet/publish.swift', source)
+        # The publisher names a test only when the repo's test sources declare it.
+        tests = cls.repo / 'VideoScan/VideoScanTests'
+        tests.mkdir(parents=True)
+        (tests / 'FakeTests.swift').write_text(
+            'struct SoundSuite { @Test func needsFixture() {} }\n'
+            'final class OtherTests: XCTestCase { func testB() {} }\n'
+            'struct Good { @Test func test() {} }\n'
+            'struct Suite {\n' + ''.join(f'    @Test func test{i}() {{}}\n' for i in range(25)) + '}\n')
+        core = cls.repo / 'VideoScan/VideoScanCore/Tests/VideoScanCoreTests'
+        core.mkdir(parents=True)
+        (core / 'CatalogSuiteTests.swift').write_text('@Suite struct CatalogSuite { @Test func roundTrip() {} }\n')
         cls.binary = cls.repo / 'publisher'
         subprocess.run(['/usr/bin/swiftc', '-module-cache-path', str(cls.repo / 'swift-cache'),
                         str(source), '-o', str(cls.binary)], capture_output=True, check=True)
@@ -117,12 +128,12 @@ class GauntletPublishTests(unittest.TestCase):
         self.result['status'] = 'failed'
         self.result['stages'][0].update(
             status='failed', reason='unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass',
-            failed=0, skipped=2, skipped_tests=['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB'],
+            failed=0, skipped=2, skipped_tests=['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'],
             failed_tests=['VideoScanCoreTests.CatalogSuite/roundTrip()'], incomplete_tests=[], skipped_tests_truncated=0)
         row = json.loads(self.publish('--dry-run').stdout)
         unit = row['stages'][0]
         self.assertEqual(unit['why'], 'unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass')
-        self.assertEqual(unit['skipped_tests'], ['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB'])
+        self.assertEqual(unit['skipped_tests'], ['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'])
         self.assertEqual(unit['failed_tests'], ['VideoScanCoreTests.CatalogSuite/roundTrip()'])
         self.assertNotIn('incomplete_tests', unit)
         self.assertNotIn('skipped_tests_more', unit)
@@ -144,6 +155,25 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertEqual(unit['failed_tests_more'], 2)
         self.assertEqual(unit['skipped_tests'], many[:20])
         self.assertEqual(unit['skipped_tests_more'], 5 + 7)
+
+    def test_a_path_or_a_name_the_repo_does_not_declare_is_never_published(self):
+        """Codex #275 F1 (RED first): "Users/<family>/Movies/Wedding.mov" and "Wedding.mov"
+        passed the shape-only filter and were published. A name must be PROVEN: every type
+        component and the function declared in the repo's test sources."""
+        leaks = ['Users/SECRET_FAMILY/Movies/Wedding.mov', 'Wedding.mov', 'SECRET_FAMILY/Movies/clip()',
+                 'VideoScanTests/SECRET_FAMILY/needsFixture()', 'VideoScanTests/SoundSuite/SECRET_title()',
+                 'SoundSuite/needsFixture', 'SoundSuite/needsFixture()\n', 'Movies.SECRET/needsFixture()',
+                 'SoundSuite/needsFixture() SECRET', 'x' * 150 + '/' + 'needsFixture()' * 5]
+        proven = ['SoundSuite/needsFixture()', 'VideoScanTests/SoundSuite/needsFixture()',
+                  'VideoScanCoreTests.CatalogSuite/roundTrip()', 'OtherTests/testB()']
+        self.result['stages'][0].update(status='failed', reason='test failures\n', failed_tests=leaks + proven)
+        completed = self.publish('--dry-run')
+        self.assertNotIn('SECRET', completed.stdout)
+        self.assertNotIn('Wedding', completed.stdout)
+        unit = json.loads(completed.stdout)['stages'][0]
+        self.assertEqual(unit['failed_tests'], proven)
+        self.assertEqual(unit['failed_tests_more'], len(leaks))
+        self.assertEqual(unit['why'], 'other', 'a reason with a trailing newline is not one of the fixed phrases')
 
     def test_a_queued_row_keeps_its_names_and_counts_when_published_later(self):
         """The queue holds SANITIZED rows; publishing one later sanitizes it again."""

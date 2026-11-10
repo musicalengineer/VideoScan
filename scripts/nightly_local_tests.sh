@@ -122,9 +122,11 @@
 #       the M4's 14:00 run off 41 minutes in; no row, no log line, and the page
 #       kept showing the day before. scripts/nightly_run_marker.py holds a
 #       marker from the start of the run (with its phase) until a row is
-#       published or queued; the NEXT launch publishes a leftover marker as
-#       reason "interrupted:<phase>", dated when that run started (the page:
-#       "did not run · interrupted:<phase>").
+#       durably published or queued; the NEXT launch publishes a leftover
+#       marker as reason "interrupted:<phase>", dated when that run started
+#       (the page: "did not run · interrupted:<phase>") — unless that run's
+#       result is already on the branch or in the queue. Only the run whose
+#       pid is in the marker changes or removes it.
 #     - The page's summary (summary_latest.json) is rebuilt when the run ends,
 #       on every Mac (tools/publish_metrics.py --summary-only). Until now only
 #       the M4's jobs rebuilt it, so the M5 Ultra's 02:00 result waited for
@@ -927,9 +929,6 @@ esac
 publish_row() {
     local new_row="$1"
     log "Publishing row: $new_row"
-    # This run (or the interrupted one being reported) now has its row: from
-    # here a kill must not be read as "never finished" by the next launch.
-    rm -f "${RUN_MARKER:-/nonexistent}"
 
     # Always fetch with prune so stale ref state can't block worktree-add.
     git fetch origin metrics --prune --quiet 2>/dev/null || true
@@ -1055,6 +1054,9 @@ except Exception:
         # Backlog landed — clear the queue.
         : > "$PENDING_QUEUE"
         log "Published successfully ($appended_count row(s))."
+        # The row is on the branch: only now is the run accounted for (Codex #275
+        # F2 — removing the marker before the push lost a run killed mid-publish).
+        if declare -F end_run_marker >/dev/null; then end_run_marker; fi
         return 0
     else
         log "ERROR: push to metrics branch failed after $((push_attempt - 1)) attempts"
@@ -1063,6 +1065,15 @@ except Exception:
         fi
         return 2
     fi
+}
+
+# The run marker goes ONLY when a row is durable (on the branch, or in the
+# pending queue), and only the marker of the run being published — RUN_MARKER_PID
+# when an interrupted run is being reported, else this shell. Safe standalone
+# (the self-test extracts publish_row / queue_pending without the main flow).
+end_run_marker() {
+    [ -n "${MARKER_TOOL:-}" ] && [ -f "${MARKER_TOOL:-}" ] || return 0
+    python3 "$MARKER_TOOL" end "${RUN_MARKER:-/nonexistent}" "${RUN_MARKER_PID:-$$}" 2>/dev/null || true
 }
 
 # Append a row to the local pending-rows queue. The next successful
@@ -1074,6 +1085,8 @@ queue_pending() {
         return 1
     fi
     log "  queued row to $PENDING_QUEUE (size now $(wc -l < "$PENDING_QUEUE" | tr -d ' ') rows)"
+    # Durably queued: the next successful publish carries it.
+    if declare -F end_run_marker >/dev/null; then end_run_marker; fi
     return 0
 }
 
@@ -1136,7 +1149,7 @@ log "Commit: $COMMIT ($COMMIT_DATE)"
 MARKER_TOOL="$REPO/scripts/nightly_run_marker.py"
 mark_phase() {
     [ -f "$MARKER_TOOL" ] || return 0
-    python3 "$MARKER_TOOL" phase "$RUN_MARKER" "$1" 2>/dev/null || true
+    python3 "$MARKER_TOOL" phase "$RUN_MARKER" "$1" $$ 2>/dev/null || true
 }
 rebuild_page_summary() {
     local tool="$REPO/tools/publish_metrics.py" out
@@ -1147,14 +1160,27 @@ rebuild_page_summary() {
 }
 if [ -f "$MARKER_TOOL" ]; then
     if STALE_RUN="$(python3 "$MARKER_TOOL" stale "$RUN_MARKER" 2>/dev/null)" && [ -n "$STALE_RUN" ]; then
-        IFS=$'\t' read -r STALE_STARTED STALE_PHASE STALE_COMMIT <<<"$STALE_RUN"
-        log "The previous run (started $STALE_STARTED, commit $STALE_COMMIT) never finished — it stopped in phase '$STALE_PHASE'. Publishing it as interrupted."
-        NIGHTLY_ROW_TS="$STALE_STARTED"
-        STALE_ROW="$(with_person_metrics "$(make_status_row failed "interrupted:$STALE_PHASE" false "$STALE_COMMIT" unknown "$BRANCH")")"
-        unset NIGHTLY_ROW_TS
-        publish_row "$STALE_ROW"
+        IFS=$'\t' read -r STALE_STARTED STALE_PHASE STALE_COMMIT STALE_PID <<<"$STALE_RUN"
+        RUN_MARKER_PID="$STALE_PID"
+        # A run whose result is already on the branch or in the queue is NOT
+        # interrupted, whatever its marker says (killed between its publish and
+        # its marker's removal; Codex #275 F2/F3). Ask before reporting it.
+        git fetch origin metrics --quiet 2>/dev/null || true
+        if git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null \
+                | python3 "$MARKER_TOOL" accounted "$STALE_STARTED" "$HOST" - "$PENDING_QUEUE" 2>/dev/null; then
+            log "A leftover run marker (started $STALE_STARTED) — that run's result is already published or queued; marker removed, nothing reported."
+            end_run_marker
+        else
+            log "The previous run (started $STALE_STARTED, commit $STALE_COMMIT) never finished — it stopped in phase '$STALE_PHASE'. Publishing it as interrupted."
+            NIGHTLY_ROW_TS="$STALE_STARTED"
+            STALE_ROW="$(with_person_metrics "$(make_status_row failed "interrupted:$STALE_PHASE" false "$STALE_COMMIT" unknown "$BRANCH")")"
+            unset NIGHTLY_ROW_TS
+            publish_row "$STALE_ROW"
+        fi
+        unset RUN_MARKER_PID
     fi
-    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null || log "  (could not write $RUN_MARKER)"
+    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null \
+        || log "  (no run marker for this run: another live run owns $RUN_MARKER, or it could not be written)"
 fi
 trap rebuild_page_summary EXIT
 

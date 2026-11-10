@@ -1133,8 +1133,9 @@ def failed_test_names(row: dict, names: TestNames) -> List[str]:
 def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
                     rota: Optional[dict] = None, test_names: Optional[TestNames] = None) -> dict:
     """The last `days` nights (ending `today`, a UTC date) of the 2 AM nightly,
-    one cell per Mac, from the published testdriver rows. The last row a host
-    published on a UTC date wins for that night (a rerun is newer evidence).
+    one cell per Mac, from the published testdriver rows. The row with the latest
+    `ts` a host published on a UTC date wins for that night (a rerun is newer
+    evidence; of two rows with one `ts`, the later in the file).
 
     A Mac that is OFF the rotation (nightly_rota.json; GH #360: the M1) has no
     column and no cells — not even its old nights — so its absence can never
@@ -1158,6 +1159,12 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
         if date is None or date not in wanted or label is None or label in off:
             continue
         seen_hosts.add(label)
+        # The NEWEST run of the night wins, by its own time, not by its place in the file:
+        # an interrupted run is published later but dated when it started (2026-11-10), and
+        # must never replace the result of a run that finished after it.
+        shown = cells.get(date, {}).get(label)
+        if shown is not None and isinstance(shown.get("finished"), str) and shown["finished"] > ts:
+            continue
         cells.setdefault(date, {})[label] = {
             "state": classify_nightly_row(row), "passed": _int(row.get("passed")),
             "failed": _int(row.get("failed")), "total": _int(row.get("total")),

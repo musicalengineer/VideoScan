@@ -1109,17 +1109,28 @@ function weeklyBugs(rows, weeks, today = new Date()) {
 }
 
 // ---------------------------------------------------------------- 1. headline strip
-// The card reads the summary; the runs themselves are published separately. When a run
-// finished AFTER the summary was built, the card is behind the truth and says so
-// (2026-11-09: a failed publish left the summary a day old and nothing on the page said it).
-const BEHIND_GRACE_MS = 20 * 60 * 1000;   // the summary is rebuilt within minutes of a run's row
-function summaryBehind(d) {
-  const built = toTime(d.summary && d.summary.generated);
-  if (Number.isNaN(built)) return "";
-  const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string")
-    .map(r => r.ts).sort((a, b) => toTime(a) - toTime(b)).pop();
-  if (!newest || !(toTime(newest) - built > BEHIND_GRACE_MS)) return "";
-  return `<span class="behind"><span class="stale">BEHIND</span> a run finished ${esc(whenET(newest))} and is not in this summary yet (built ${esc(whenET(d.summary.generated))})</span>`;
+// The card reads the summary; the runs themselves are published separately. When a Mac's
+// newest published run is NOT the one the summary shows for it, the card is behind the
+// truth and says so (2026-11-09: a failed publish left the summary a day old and nothing
+// on the page said it). Compared by CONTENT — each Mac's newest row against the run its
+// row on the card shows — never by the summary's build time, which says nothing about
+// what the summary holds (Codex #275 F5). A cell without its finish time (an older
+// summary) is compared by its night: a row dated after that night is newer.
+const rowLabel = host => typeof host === "string" ? host.replace(/^ricks/i, "") : "";
+function summaryBehind(d, N) {
+  if (!d.summary || !N) return "";
+  for (const h of N.hosts) {
+    const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string" && rowLabel(r.host) === h)
+      .map(r => r.ts).filter(ts => !Number.isNaN(toTime(ts))).sort((a, b) => toTime(a) - toTime(b)).pop();
+    if (!newest) continue;
+    const run = latestRun(N, h);
+    const shown = !run ? null : typeof run.cell.finished === "string" ? run.cell.finished : null;
+    const behind = !run ? true
+      : shown ? toTime(newest) > toTime(shown)
+      : newest.slice(0, 10) > run.night.date;
+    if (behind) return `<span class="behind"><span class="stale">BEHIND</span> ${esc(specOf(h).name)} finished a run ${esc(whenET(newest))} that is not in this summary yet (built ${esc(whenET(d.summary.generated))})</span>`;
+  }
+  return "";
 }
 function tile(label, value, words, state = "", graphic = "", wide = false) {
   return `<div class="tile${wide ? " wide" : ""}"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
@@ -1195,7 +1206,7 @@ function renderHead(d) {
     const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
     const published = S.generated ? ` ${whenET(S.generated)}` : "";
     tiles.push(tile(`Test Results${published}`, value,
-      `<div class="hosts">${hosts}${summaryBehind(d)}</div>`, testState, ladders, true));
+      `<div class="hosts">${hosts}${summaryBehind(d, N)}</div>`, testState, ladders, true));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");

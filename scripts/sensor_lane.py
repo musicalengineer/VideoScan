@@ -437,10 +437,14 @@ XC_FAIL_RE = re.compile(r"^Test Case '-\[(\S+) (\S+)\]' failed", re.M)
 FAILING_BLOCK_RE = re.compile(r"^Failing tests:\n((?:[ \t]+.+\n)+)", re.M)
 PASS_RE = re.compile(r"(✔ Test .* passed after |━ Test .* passed after |^Test Case .* passed)", re.M)
 FAILCOUNT_RE = re.compile(r"(✘ Test .* failed after |^Test Case .* failed)", re.M)
-PAR_FAIL_RE = re.compile(r"^Test case '(.+?)' failed on ", re.M)
+# "(?:Test )?": parallel test hosts write to one log and now and then a line is torn
+# after "Test " (2026-11-09: "case 'HallieShellCLITests/…' passed on …" alone on its
+# line). The test ran; the anchored pattern missed it, so the same tree counted 716
+# on one run and 717 on the next — and a torn FAILED line would not have been named.
+PAR_FAIL_RE = re.compile(r"^(?:Test )?case '(.+?)' failed on ", re.M)
 
 
-PAR_PASS_RE = re.compile(r"^Test case '.+?' passed on ", re.M)
+PAR_PASS_RE = re.compile(r"^(?:Test )?case '.+?' passed on ", re.M)
 
 
 def count(log: str) -> Tuple[int, int, List[str]]:
