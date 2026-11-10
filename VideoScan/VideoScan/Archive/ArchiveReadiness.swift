@@ -3,10 +3,10 @@
 // PRESERVE – ASSESS – RECORD, never alter bytes. Computed from fields the
 // catalog already holds; nothing here re-probes a file. Principles:
 //   • warn / observe helpfully, never block — EXCEPT an un-probeable file
-//     (no streams / ffprobe failed), and even that the user can override
-//     ("Archive anyway (I know this file)"). Since 2026-11-10 the Promote
-//     JOB also refuses missing, silent or damaged sound (PromoteSoundGate):
-//     that is a measurement taken in the job, not a field read here;
+//     (no streams / ffprobe failed). Since 2026-11-10 that has no override,
+//     and the Promote JOB also refuses missing, silent or damaged sound
+//     (PromoteSoundGate): a measurement taken in the job, not a field read
+//     here;
 //   • AUDIO first: "a person can handle wiggly lines in a video, but bad,
 //     out-of-sync or missing audio is torture" — audio findings lead the
 //     warning list, then format, then date.

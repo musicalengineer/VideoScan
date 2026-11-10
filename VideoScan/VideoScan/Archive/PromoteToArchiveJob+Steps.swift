@@ -219,10 +219,11 @@ extension PromoteToArchiveJob {
         guard let source = model.record(forID: entry.recordID) else {
             return .skipped("record no longer in the catalog")
         }
-        // ---- Readiness gate (Rick: never block except un-probeable, and
-        // even that the user can override with "Archive anyway").
-        if entry.readiness.blocking && !plan.allowUnprobeable {
-            return .skipped("un-probeable (no decodable streams) — tick \"Archive anyway (I know this file)\" to promote it regardless")
+        // ---- Readiness gate: a file nothing can probe is not promoted. Its
+        // sound cannot be checked, and "could not check" is not a pass
+        // (Rick 2026-11-10; the "Archive anyway" override is gone).
+        if entry.readiness.blocking {
+            return .skipped("un-probeable (no decodable streams) — nothing can read this file, so its sound cannot be checked; not promoted")
         }
         // ---- Idempotency by SOURCE IDENTITY (catalog leg).
         if model.masterArchiveCopy(of: source) != nil {

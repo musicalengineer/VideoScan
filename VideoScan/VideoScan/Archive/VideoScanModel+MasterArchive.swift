@@ -126,11 +126,6 @@ struct ArchivePromotePlan: Sendable {
     let skipped: [(id: UUID, filename: String, reason: Skip)]
     let totalBytes: Int64
     let freeBytesAtRoot: Int64?
-    /// "Archive anyway (I know this file)" — the user's explicit override
-    /// that lets un-probeable entries through (Rick: never block except
-    /// un-probeable, and even that within reason). Set by the sheet.
-    var allowUnprobeable: Bool = false
-
     // MARK: Readiness counters (O(selection))
     var audioNotVerifiedCount: Int { entries.filter { $0.readiness.audio == .notVerified }.count }
     var audioProblemCount: Int { entries.filter { if case .verifiedProblem = $0.readiness.audio { return true }; return false }.count }

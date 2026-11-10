@@ -233,7 +233,7 @@ struct ArchiveReadinessPromoteTests {
         #expect(MasterArchiveTestSupport.sha256(ofFile: copy.fullPath) == MasterArchiveTestSupport.sha256(ofFile: src.path))
     }
 
-    @Test("an un-probeable file is refused without the override and promoted with it (probed record; token says unprobeable)")
+    @Test("an un-probeable file is refused — there is no override: its sound cannot be checked (2026-11-10)")
     func unprobeableNeedsOverride() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("rdyunp")
         defer { sb.cleanup() }
@@ -242,33 +242,31 @@ struct ArchiveReadinessPromoteTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let rec = MasterArchiveTestSupport.makeRecord(path: src.path, streamType: .ffprobeFailed)
         rec.isPlayable = "ffprobe failed"
+        rec.tags = [WorkflowTags.silentChecked]          // not even the owner's tag: it accepts silence, not "unreadable"
         model.records = [rec]
-        var plan = try #require(model.buildPromotePlan(recordIDs: [rec.id]))
+        let plan = try #require(model.buildPromotePlan(recordIDs: [rec.id]))
         #expect(plan.unprobeableCount == 1)
         #expect(plan.entries[0].readiness.blocking)
 
         let refused = PromoteToArchiveJob(plan: plan, model: model)
-        refused.soundMeasure = MasterArchiveTestSupport.soundPresent
+        refused.soundMeasure = MasterArchiveTestSupport.soundPresent   // even a measurement that would say "sound present"
         refused.start(); await refused.task?.value
         guard case .finished(let s1) = refused.state else { Issue.record("\(refused.state)"); return }
         #expect(s1.contains("skipped 1"), "\(s1)")
-        #expect(refused.outcomes.first?.detail.contains("Archive anyway") == true)
+        #expect(refused.outcomes.first?.detail.contains("its sound cannot be checked; not promoted") == true)
+        #expect(refused.outcomes.first?.detail.contains("Archive anyway") == false, "the override is gone")
         #expect(MasterArchiveTestSupport.archivedFiles(sb).isEmpty)
+        #expect(MasterArchiveTestSupport.manifestRows(sb).isEmpty)
         #expect(model.masterArchiveCopy(of: rec) == nil)
-
-        plan.allowUnprobeable = true
-        let allowed = PromoteToArchiveJob(plan: plan, model: model)
-        allowed.soundMeasure = MasterArchiveTestSupport.soundPresent
-        allowed.start(); await allowed.task?.value
-        guard case .finished(let s2) = allowed.state else { Issue.record("\(allowed.state)"); return }
-        #expect(s2.hasPrefix("Promoted 1"), "\(s2)")
-        #expect(MasterArchiveTestSupport.archivedFiles(sb).count == 1)
-        let rows = MasterArchiveTestSupport.manifestRows(sb)
-        #expect(rows.first?[ArchiveManifestCSV.readinessColumn].hasPrefix("unprobeable;") == true)
-        let copy = try #require(model.masterArchiveCopy(of: rec))
-        #expect(copy.notes.contains("un-probeable (archived on your say-so)"))
-        // ISOLATION: everything landed in the sandbox only.
-        #expect(copy.fullPath.hasPrefix(sb.archiveRoot.path))
+        // The sheet no longer offers the tick, and the plan has no such switch.
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/Archive", isDirectory: true)
+        for file in ["PromoteToArchiveSheet.swift", "PromoteToArchiveSheet+Readiness.swift", "VideoScanModel+MasterArchive.swift",
+                     "PromoteToArchiveJob+Steps.swift", "PromoteToArchiveJob+Guards.swift"] {
+            let text = try String(contentsOf: app.appendingPathComponent(file), encoding: .utf8)
+            #expect(!text.contains("allowUnprobeable") && !text.contains("overrideUnprobeable"), "\(file) still carries the override")
+            #expect(!text.contains("Text(\"Archive anyway"), "\(file) still shows the tick")
+        }
     }
 }
 
