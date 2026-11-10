@@ -108,12 +108,19 @@ func classify(exitCode: Int32, counts: [String: Int]?, floor: Int) -> (String, S
     if exitCode != 0 { return ("failed", "command exit \(exitCode)") }
     guard let counts else { return ("failed", "structured test counts unavailable") }
     if counts["failed", default: 0] > 0 { return ("failed", "test failures") }
-    if counts["skipped", default: 0] > 0 { return ("failed", "unexpected skipped tests") }
+    let skipped = counts["skipped", default: 0]
     let known = counts["known_issues", default: 0]
     if counts["passed", default: 0] + counts["failed", default: 0] + known < max(1, floor) { return ("failed", "executed count below expected floor \(max(1, floor))") }
     // A withKnownIssue is a tracked bug, never a pass — and never a failure
     // either: AMBER (Rick 2026-11-05, DECISIONS). Said by name and count.
-    if known > 0 { return ("amber", "\(known) known issue\(known == 1 ? "" : "s") (withKnownIssue) — tracked, not a pass") }
+    // A skipped test is the same (Rick 2026-11-10, DECISIONS): AMBER, with the
+    // test named (skipped_tests on the stage row) — it was RED until then. A
+    // skip never counts toward the floor above, so a stage that skips its way
+    // under the floor is still RED.
+    var amber: [String] = []
+    if skipped > 0 { amber.append("\(skipped) skipped test\(skipped == 1 ? "" : "s") — named, not a pass") }
+    if known > 0 { amber.append("\(known) known issue\(known == 1 ? "" : "s") (withKnownIssue) — tracked, not a pass") }
+    if !amber.isEmpty { return ("amber", amber.joined(separator: "; ")) }
     return ("passed", nil)
 }
 func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
@@ -1023,6 +1030,13 @@ struct GauntletRunner {
         }
         let total = known.reduce(0) { $0 + $1.1 }
         if total > 0 { reasons.append("\(total) known issue\(total == 1 ? "" : "s") (\(known.map { "\($0.0) \($0.1)" }.joined(separator: ", ")))") }
+        for stage in stages where (stage["skipped"] as? Int ?? 0) > 0 {
+            let n = stage["skipped"] as? Int ?? 0
+            let names = (stage["skipped_tests"] as? [Any] ?? []).compactMap { $0 as? String }
+            let more = n - min(names.count, 5)
+            let shown = names.prefix(5).joined(separator: ", ") + (more > 0 && !names.isEmpty ? " +\(more) more" : "")
+            reasons.append("\(n) skipped in \(stage["name"] as? String ?? "?")" + (names.isEmpty ? "" : ": \(shown)"))
+        }
         let held = stages.filter { ["blocked", "amber"].contains($0["status"] as? String ?? "") && !($0["blocked_details"] as? [Any] ?? []).isEmpty }
         let suites = held.reduce(0) { $0 + ($1["blocked_details"] as? [Any] ?? []).count }
         if !held.isEmpty { reasons.append("\(held.count) stage\(held.count == 1 ? "" : "s") blocked (\(suites) unadapted suites)") }

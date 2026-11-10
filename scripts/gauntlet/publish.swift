@@ -147,7 +147,7 @@ let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().delet
 let repoTestNames = RepoTestNames(repo: repoRoot)
 let reasonPhrases = [
     #"command exit \d{1,4}"#, #"structured test counts unavailable"#, #"test failures"#,
-    #"unexpected skipped tests"#, #"executed count below expected floor \d{1,7}"#,
+    #"unexpected skipped tests"#, #"\d{1,6} skipped tests? — named, not a pass"#, #"executed count below expected floor \d{1,7}"#,
     #"\d{1,6} known issues? \(withKnownIssue\) — tracked, not a pass"#, #"safe subset passed"#,
     #"unsafe or unadapted suites: \d{1,6}"#, #"(package|stage) watchdog timeout"#,
     #"unreaped process contamination( \(swift test list\))?"#, #"package build did not run"#, #"amber"#,

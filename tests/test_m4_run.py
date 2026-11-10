@@ -106,6 +106,18 @@ class ArgumentTests(unittest.TestCase):
         r['amber_reasons'] = ['6 stages blocked (912 unadapted suites)']
         self.assertEqual(ms.gauntlet_verdict(r, 0), ('AMBER', '6 stages blocked (912 unadapted suites)'))
 
+    def test_gauntlet_skips_are_amber_and_named(self):
+        """Rick 2026-11-10: a skipped test is AMBER with the test named, not RED."""
+        r = self._result('amber', unit=dict(status='amber', skipped=2, reason='2 skipped tests — named, not a pass',
+                                            skipped_tests=['VideoScanTests/A/one()', 'VideoScanTests/B/two()']))
+        self.assertEqual(ms.gauntlet_verdict(r, 0),
+                         ('AMBER', '2 skipped in unit: VideoScanTests/A/one(), VideoScanTests/B/two()'))
+        r['stages'][0].update(skipped=9, skipped_tests=[f'T/s/t{i}()' for i in range(7)])
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[1],
+                         '9 skipped in unit: T/s/t0(), T/s/t1(), T/s/t2(), T/s/t3(), T/s/t4() +4 more')
+        r['stages'][0].update(skipped=1, skipped_tests=[])
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[1], '1 skipped in unit')
+
     def test_gauntlet_failure_beside_known_issues_is_red(self):
         r = self._result('failed', unit=dict(status='failed', reason='test failures'),
                          regression=dict(status='amber', known_issues=7))
