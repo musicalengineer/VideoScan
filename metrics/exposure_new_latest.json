@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-09T13:29:56Z",
- "sha": "0d87f46f",
+ "ts": "2026-11-10T13:08:43Z",
+ "sha": "74980ac2",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -400,6 +400,13 @@
    "file": "VideoScan/VideoScan/App/BackgroundServiceRegistrar.swift",
    "name": "BackgroundServiceClient.replyDeadline",
    "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServicePresentation.buildWords",
+   "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
+   "name": "BackgroundServicePresentation.buildWords",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -5688,13 +5695,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift::ProvenanceRoleStore.SetOutcome",
-   "file": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift",
-   "name": "ProvenanceRoleStore.SetOutcome",
-   "kind": "enum",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift::ProvenanceRoleWords.decider",
    "file": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift",
    "name": "ProvenanceRoleWords.decider",
@@ -5712,6 +5712,13 @@
    "key": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift::ProvenanceRoleWords.unreadableNote",
    "file": "VideoScan/VideoScan/Provenance/ProvenanceRoleStore.swift",
    "name": "ProvenanceRoleWords.unreadableNote",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Public/PublicMarkStore.swift::PublicMarkWords.stateWord",
+   "file": "VideoScan/VideoScan/Public/PublicMarkStore.swift",
+   "name": "PublicMarkWords.stateWord",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -7781,8 +7788,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 153,
+ "fixed": 155,
  "baseline_before": 2456,
- "baseline_after": 2303,
+ "baseline_after": 2301,
  "shrink_skipped": false
 }
