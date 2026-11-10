@@ -73,6 +73,9 @@ if s is not None:
 s = latest("hallie-voice")
 if s and s.get("date") == today and s.get("alert"):
     out.append(f"🔴 {s.get('headline')}")
+s = latest("repo-traffic")          # scripts/repo_traffic.py, from the 02:00 nightly
+if s and s.get("headline"):
+    out.append(("🔴 " if s.get("alert") else "") + f"GitHub repo ({s.get('date')}): {s.get('headline')}")
 if out:
     print("\n".join(out))
 PY

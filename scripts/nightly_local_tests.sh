@@ -1332,6 +1332,11 @@ CX_PY="$REPO/venv/bin/python3"
 [ -x "$CX_PY" ] || CX_PY=python3
 log "Complexity baseline: $("$CX_PY" "$REPO/scripts/complexity_baseline_nightly.py" --repo "$REPO" 2>&1 | tail -1)"
 
+# ── Repo traffic: who looked at / cloned the public repo (Rick 2026-11-10) ──
+# GitHub keeps 14 days; this saves each day and names a new fork, star or
+# referring site. Always exits 0; the session-start banner reads latest.json.
+log "Repo traffic: $(python3 "$REPO/scripts/repo_traffic.py" 2>&1 | tail -1)"
+
 # ── Cleanup ─────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
 log "=== Nightly test run complete (publish rc=$PUBLISH_RC, status=$STATUS) ==="
