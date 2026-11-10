@@ -11,7 +11,8 @@
 //       (a re-open never re-runs or rewrites the migration), integrity and
 //       foreign keys ok, the loader reads every files row;
 //   (b) the same copy REWOUND to 15 (public_marks dropped, the migration
-//       unrecorded, both version stamps 15) migrates to 16 with every other
+//       unrecorded, both version stamps 15; a copy older than 15 is first
+//       brought to 16 by this build's store) migrates to 16 with every other
 //       table's rows kept and `public_marks` new and EMPTY — after the step
 //       every video is private;
 //   (c) on the migrated copy the door flips one real content's bit and flips
@@ -87,9 +88,17 @@ struct ProductionShapePublicMarksMigrationTests {
         let scene = try Shape.copy("prodshape_v16_rewound"); defer { scene.cleanup() }
         let db = scene.databaseURL
         let live = try Shape.schema(db)
-        try #require(live.state == 15 || live.state == 16,
-                     "the copy is at schema \(live.state): this build migrates 15 → 16; a later schema means this test is due for its successor")
-        if live.state == 16 { try Self.rewindToFifteen(db) }
+        try #require(live.state >= 14 && live.state <= 16,
+                     "the copy is at schema \(live.state): this build understands 14…16; a later schema means this test is due for its successor")
+        // A catalog this build has not opened yet (the M4's viewer copy sat at 14
+        // on 2026-11-09 and this test failed there for it): bring the COPY to 16
+        // with this build's own store first, then rewind the one step under test.
+        if live.state < 15 {
+            try Shape.witnessGeneration(scene, host: "prodshape-v16-rewound")
+            let forward = await Shape.open(db, host: "prodshape-v16-rewound")
+            try #require(forward == .readWrite, "the copy at \(live.state) did not open on this build: \(forward)")
+        }
+        if try Shape.schema(db).state == 16 { try Self.rewindToFifteen(db) }
         let before = try Shape.schema(db)
         try #require(before.state == 15 && before.pragma == 15, "rewound to \(before.state) / user_version \(before.pragma)")
         let tables = try Shape.tables(db)

@@ -151,7 +151,16 @@ struct HallieShellAnswerSnapshotTests {
             try await HallieTurnExecutor.execute(request, context: context)
         }
         if failing { harness.translationError = CocoaError(.featureUnsupported) }
-        let options = try HallieShellCLI.parse(arguments: arguments)
+        var options = try HallieShellCLI.parse(arguments: arguments)
+        if !arguments.contains("--catalog") {
+            // The default catalog follows THIS Mac's sync role (a viewer reads the
+            // master's synced copy and says so). The snapshot is a master's: pin the
+            // role, or the test fails on every viewer Mac (the M4, 2026-11-07 … 11-09:
+            // "…/viewer-catalog/catalog.sqlite — this Mac is a viewer; the synced copy from …").
+            options.catalog = CatalogAuthority.headlessSource(
+                role: .master, master: "",
+                folder: SQLiteCatalogReader.defaultDatabaseURL().deletingLastPathComponent())
+        }
         let code = await HallieShellCLI.run(
             options: options, input: harness.nextInput,
             output: { harness.output.append($0) },
