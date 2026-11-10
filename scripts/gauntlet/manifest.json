@@ -17628,20 +17628,30 @@
       "path": "VideoScan/VideoScanTests/FrameSearchTests.swift",
       "stage": "unit",
       "suites": [
-        "SigLIPEmbedderTests",
         "FrameSearchStoreTests",
         "FrameIndexJobTests",
         "FrameSearchSensorTests",
         "FrameSearchMockupTests"
       ],
       "tests": [
-        "tokensAndVectorsMatchTheReferenceImplementation",
-        "aRedImageRanksTheRedClipFirst",
         "aHitNamesTheFileAndTimeOfTheRowThatProducedItAndStaysInScope",
         "noIndexOrAnUnreadableOneIsIndexNotBuiltAndNoHits",
         "indexesPicturesSkipsOfflineRecordsUndecodableAndResumes",
         "noModelExtensionAndNothingWritesTheCatalog",
         "framesDark"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigLIPEmbedderTests"
+      ],
+      "tests": [
+        "tokensAndVectorsMatchTheReferenceImplementation",
+        "aRedImageRanksTheRedClipFirst"
       ]
     },
     {
@@ -37706,9 +37716,13 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
+          "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3579,
+      "expected_floor": 3577,
       "name": "unit",
       "package_expected_floor": 816,
       "package_selectors": [
@@ -38309,7 +38323,6 @@
         "VideoScanTests/SetAsideVisibilityTests",
         "VideoScanTests/ShortClipTests",
         "VideoScanTests/SideStoreAuthorityTests",
-        "VideoScanTests/SigLIPEmbedderTests",
         "VideoScanTests/SigningIdentitySensorTests",
         "VideoScanTests/SoundCopyFinderDecideTests",
         "VideoScanTests/SoundCopyFinderScaleTests",
