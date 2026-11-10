@@ -74,7 +74,9 @@ enum PromoteIntegrityHarness {
                     edit: (inout ArchivePromotePlan) -> Void = { _ in }) throws -> PromoteToArchiveJob {
         var plan = try #require(model.buildPromotePlan(recordIDs: ids))
         edit(&plan)
-        return PromoteToArchiveJob(plan: plan, model: model)
+        let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
+        return job
     }
 
     static func run(_ model: VideoScanModel, ids: [UUID],
@@ -356,7 +358,7 @@ struct PromoteDuplicateBytesTests {
         _ = try await H.run(model, ids: recs.enumerated().filter { $0.offset % 2 == 0 }.map(\.element.id))
         _ = try await H.run(model, ids: recs.map(\.id))
         if let plan = model.buildPromotePlan(recordIDs: recs.map(\.id)), !plan.entries.isEmpty {
-            let j = PromoteToArchiveJob(plan: plan, model: model); j.start(); await j.task?.value
+            let j = PromoteToArchiveJob(plan: plan, model: model); j.soundMeasure = MasterArchiveTestSupport.soundPresent; j.start(); await j.task?.value
         }
         let digests = H.archivedDigests(sb)
         #expect(digests.count == 5, "5 distinct sources → 5 files, got \(digests.count): \(MasterArchiveTestSupport.archivedFiles(sb))")

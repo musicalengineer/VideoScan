@@ -4,7 +4,9 @@
 // catalog already holds; nothing here re-probes a file. Principles:
 //   • warn / observe helpfully, never block — EXCEPT an un-probeable file
 //     (no streams / ffprobe failed), and even that the user can override
-//     ("Archive anyway (I know this file)");
+//     ("Archive anyway (I know this file)"). Since 2026-11-10 the Promote
+//     JOB also refuses missing, silent or damaged sound (PromoteSoundGate):
+//     that is a measurement taken in the job, not a field read here;
 //   • AUDIO first: "a person can handle wiggly lines in a video, but bad,
 //     out-of-sync or missing audio is torture" — audio findings lead the
 //     warning list, then format, then date.
@@ -211,8 +213,8 @@ struct ArchiveReadiness: Equatable, Sendable {
         }
         switch audio {
         case .verifiedProblem(let note): warnings.append("Audio problem — \(note)")
-        case .notVerified where hasAudio: warnings.append("Audio not verified — run Verify Audio first if you can (bad or out-of-sync audio is the one thing that ruins a keeper)")
-        case .noAudioTrack where stream == .videoOnly: warnings.append("No audio track (video-only) — pair its audio before or after promoting")
+        case .notVerified where hasAudio: warnings.append("Sound not checked yet — Promote checks it before copying (missing, silent or damaged sound is refused)")
+        case .noAudioTrack where stream == .videoOnly: warnings.append("No audio track (video-only) — Promote refuses it unless it is tagged “\(WorkflowTags.silentChecked)”; combine it with its sound first")
         default: break
         }
         if hasAudio, !i.audioCodec.isEmpty, let risk = atRiskAudioCodecs[i.audioCodec.lowercased()] {

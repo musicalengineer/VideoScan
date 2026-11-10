@@ -524,6 +524,7 @@ struct ArchiveAngelUncheckedAtPromoteTests {
         for _ in 0..<3 {
             notedPerClick.append(ArchiveAngelReviewSheet.noteUncheckedAtPromote(plan: &plan, model: model).count)
             let job = promoter.promote(plan: &plan, model: model, center: center) { _ in }
+            job?.soundMeasure = MasterArchiveTestSupport.soundPresent
             #expect(job == nil, "the retry keeps failing")
         }
         #expect(notedPerClick == [1, 0, 0])

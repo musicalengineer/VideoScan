@@ -120,12 +120,71 @@ enum MasterArchiveTestSupport {
 
     /// Run ONE promote job for `ids` to completion; returns the job.
     @MainActor
-    static func promote(_ model: VideoScanModel, ids: [UUID]) async -> PromoteToArchiveJob? {
+    /// `measure`: the sound gate's measurement. These suites promote random
+    /// bytes, which no decoder can read, so the default is a canned "sound
+    /// present"; the sound-gate suites pass `.live` or their own answer.
+    static func promote(_ model: VideoScanModel, ids: [UUID],
+                        measure: PromoteSoundGate.Measure = soundPresent) async -> PromoteToArchiveJob? {
         guard let plan = model.buildPromotePlan(recordIDs: ids) else { return nil }
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = measure
         job.start()
         await job.task?.value
         return job
+    }
+
+    // MARK: Sound gate fixtures (PromoteSoundGate)
+
+    /// The canned measurement for suites whose fixtures are random bytes:
+    /// healthy stereo, both channels well above the −60 dBFS line.
+    static let soundPresent = PromoteSoundGate.Measure { _ in soundDiagnosis(channels: [-18, -20]) }
+
+    /// A measurement that always answers `diagnosis`.
+    static func measure(_ diagnosis: AudioVerifyDiagnosis) -> PromoteSoundGate.Measure {
+        PromoteSoundGate.Measure { _ in diagnosis }
+    }
+
+    /// A measurement that always throws `error` ("could not check").
+    static func measure(throwing error: any Error & Sendable) -> PromoteSoundGate.Measure {
+        PromoteSoundGate.Measure { _ in throw error }
+    }
+
+    /// A complete Verify Audio diagnosis built the way the probe builds it:
+    /// `channels` are the program stream's per-channel RMS in dBFS (nil = a
+    /// channel the levels pass could not read); the classification, the
+    /// program-stream count and the findings follow from the real rules.
+    /// `audioStreams: 0` = no audio track.
+    static func soundDiagnosis(channels: [Double?], audioStreams: Int = 1,
+                               levelsComplete: Bool = true,
+                               extraFindings: [AudioVerifyFinding] = [],
+                               programStreamCount: Int? = nil) -> AudioVerifyDiagnosis {
+        var vshape = AudioVerifyShape()
+        vshape.videoCodec = "h264"
+        vshape.audioStreams = audioStreams
+        guard audioStreams > 0 else {
+            return AudioVerifyDiagnosis(findings: [.noAudioStream], shape: vshape, balanceAnalysis: nil)
+        }
+        vshape.audioCodec = "pcm_s16le"
+        vshape.audioChannels = channels.count
+        let levels = channels.map { rms -> AudioChannelLevels in
+            guard let rms else { return AudioChannelLevels(rmsDBFS: -.infinity, peakDBFS: -.infinity, rmsMeasured: false) }
+            return AudioChannelLevels(rmsDBFS: rms, peakDBFS: rms == -.infinity ? -.infinity : rms + 6)
+        }
+        let measurements = AudioBalanceMeasurements(channels: levels, differenceRMSDBFS: nil)
+        let shape = AudioBalanceStreamShape(
+            videoCodec: "h264", totalStreams: 1 + audioStreams, videoStreams: 1, audioStreams: audioStreams,
+            audioCodec: "pcm_s16le", audioChannels: channels.count, audioBitRate: nil, durationSeconds: 60,
+            audioStreamInfos: (0..<audioStreams).map {
+                AudioBalanceStreamInfo(absoluteIndex: 1 + $0, codec: "pcm_s16le", channels: channels.count, bitRate: nil)
+            })
+        let live = levels.contains(where: AudioBalanceClassifier.carriesProgram)
+        var analysis = AudioBalanceAnalysis(
+            classification: AudioBalanceClassifier.classify(measurements), measurements: measurements, shape: shape,
+            programStreamCount: programStreamCount ?? (live ? 1 : 0), programStreamIndex: 1, droppedStreamIndices: [])
+        analysis.levelsComplete = levelsComplete
+        let findings = extraFindings + VerifyAudioRules.findings(shape: vshape, referencedPaths: [],
+                                                                 analysis: analysis, analyzeFailed: false)
+        return AudioVerifyDiagnosis(findings: findings, shape: vshape, balanceAnalysis: analysis)
     }
 
     /// Manifest data rows (header excluded), parsed into fields.
