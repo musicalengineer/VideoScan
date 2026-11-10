@@ -35104,7 +35104,9 @@
         "ProvenanceResolverMediaMatrixTests",
         "ProvenanceResolverScaleTests",
         "ProvenanceResolverTruthTests",
-        "ProvenanceResolverDoorTests"
+        "ProvenanceResolverDoorTests",
+        "ProvenanceResolverReviewTests",
+        "ProvenanceResolverReviewFixTests"
       ],
       "tests": [
         "aCaptureShorterThanTwentyMinutesProposesNothing",
@@ -35112,9 +35114,13 @@
         "aContainerOtherThanMatroskaProposesNothing",
         "aDigestThatIsNotAWholeFileSHA256ProposesNothing",
         "aDurationThatIsNotALengthProposesNothing",
+        "aFileDatedInAnotherYearGetsRoleAndCarrierButNoSetup",
         "aFileThatDoesNotQualifyNeverJoinsAGroup",
+        "aFileWithNoEmbeddedDateGetsRoleAndCarrierButNoSetup",
         "aHumanInferredRowIsNotAnEstimate",
+        "aNameIsRelatedByWholeTokensOnly",
         "aNameRelatedShorterFileIsUnclassifiedAndTheLongerIsStillAMaster",
+        "aNameThatOnlyStartsAnotherIsNotTheSameTape",
         "aPathThatIsNotEvidenceProposesNothing",
         "aPathWithNoYearFolderHasNoFilingYear",
         "aPathWithoutTheFolderComponentProposesNothing",
@@ -35124,6 +35130,7 @@
         "aRejectedRoleShowsNothing",
         "aRoleKeyThisBuildCannotReadShowsNothing",
         "aSecondRunReusesTheStandingRowsTimeButNeverARejectedOnes",
+        "aWithdrawalRowLeavesNothingStandingAndASecondOneIsNotNeeded",
         "anAlternateCaptureNamesItsMaster",
         "anAlternateNamesItsMasterInItsEvidence",
         "anAlternateWhoseMasterNoLongerStandsDropsThePointer",
@@ -35135,6 +35142,7 @@
         "byteCopiesAreOneContent",
         "capturesWithinOnePercentAreOneTapeWithExactlyOneMaster",
         "estimateThenRejectThenReEstimateIsVetoedAndASecondRunIsADuplicate",
+        "everyOrderOfTheSameFactsGivesTheSameProposals",
         "filesInDifferentFoldersAreDifferentTapes",
         "fiveThousandUnrelatedNamesInOneFolder",
         "hundredThousandFacts",
@@ -35146,13 +35154,20 @@
         "noFactsIsNoProposals",
         "noRowsIsNoEstimate",
         "noSentenceEverCarriesAConfidence",
+        "numberedTapesOfEqualLengthAreNotCapturesOfOneTape",
         "onePoisonedFactDoesNotStopTheOthers",
         "onlyMkvFFV1FromTheVHSFolderQualifies",
         "onlyRicksConfirmedRowsOnEveryFieldMakeItConfirmed",
+        "rejectingTheNewestProposalDoesNotResurrectAnOlderOne",
+        "ricksConfirmationOutlivesAWithdrawal",
         "ricksConfirmedRowsLandAndReadBackAsConfirmed",
+        "ricksOwnRoleWinsOnEverySurface",
         "technicalWordsComeFromTheFilesOwnProbeValues",
+        "theCaptureSetupIsClaimedOnlyWithTheFilesOwn2026Date",
         "theComponentMustBeADirectoryNotPartOfAName",
+        "theCountsAddUpToExamined",
         "theDossierLineIsAnObservationUntilConfirmedAndAbsentWithoutAnEstimate",
+        "theDossierLineYieldsToRicksRole",
         "theEvidenceCarriesTheNameRelationAndTheDurations",
         "theEvidenceNamesTheRuleAndTheFactsItUsed",
         "theExampleFileIsProposedAsAVHSMasterWithThreeDrafts",
@@ -35163,7 +35178,9 @@
         "theSameNameInAnotherFolderIsAnotherTape",
         "theTapeYearIsTheArchivesFilingFolderAndNeverTheCapturesOwnYear",
         "theWholeMatrixInOneFolderYieldsOneMasterAndNothingElse",
-        "twoUnrelatedNamesOfEqualLengthAreTwoTapes"
+        "theWithdrawalRowPassesTheDoorAndIsNotVetoed",
+        "twoUnrelatedNamesOfEqualLengthAreTwoTapes",
+        "whatMayBeWithdrawn"
       ]
     },
     {
@@ -35174,9 +35191,12 @@
         "ProvenanceEstimateLogicTests",
         "ProvenanceEstimateStoreTests",
         "ProvenanceEstimateScaleTests",
-        "ProvenanceEstimateSensorTests"
+        "ProvenanceEstimateSensorTests",
+        "ProvenanceEstimateReviewTests",
+        "ProvenanceEstimateReviewFixTests"
       ],
       "tests": [
+        "aChangedRefusalRefreshesWhatIsShown",
         "aContentTheCatalogDoesNotHold",
         "aMasterRickRoledOtherwiseIsNotPointedAt",
         "aShorterCaptureIsReportedNotClassified",
@@ -35184,8 +35204,13 @@
         "acrossAViewerMasterFlip",
         "anAlternateNamesItsMasterByTheArchiveNameUntilTheMasterIsRejected",
         "anEstimateNeverClaimsConfirmation",
+        "anEstimateTheRuleWithdrewIsNotShown",
+        "anOpenDossierHearsEveryProvenanceChange",
         "confirmAListWithASkip",
+        "confirmComparesEveryField",
+        "confirmNeverWritesAValueThatWasNotShown",
         "confirmWritesRowsAndTheRoleInOneTransaction",
+        "confirmsLogNamesTheRows",
         "duringAWriteHold",
         "estimateLandsAndASecondRunWritesNothing",
         "factsProjection",
@@ -35199,19 +35224,26 @@
         "mediaMatrixThroughTheProjection",
         "noNameOrDateFieldIsWritten",
         "noSQLNoCommitInTheViews",
+        "noSetupWithoutTheFilesOwnDate",
+        "notRightSeesWhatIsShown",
         "nothingStartsAnEstimateAtLaunch",
         "offer",
         "olderSnapshotNeverWins",
         "rejectThenEstimateAgainIsVetoedAndReported",
         "ricksOwnRoleWins",
         "ricksSetRoleWinsOverAnEstimate",
+        "setRoleUnknownAfterAConfirmMakesItProvisionalAgain",
         "summaryWords",
         "theArchiveTabHoldsNoGlyphLogic",
+        "theDossierYieldsToRicksOwnRole",
+        "theInspectorBodyDoesNoArchiveLookup",
         "theInspectorReadsTheCatalog",
         "theJob",
+        "theRunsCountsAddUp",
         "theSymbolResolves",
         "unattachedShowsNothingAndRefuses",
-        "wiring"
+        "wiring",
+        "withdrawalIsIdempotentReversibleAndNeverTouchesRicksWord"
       ]
     }
   ],
@@ -37945,9 +37977,9 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3612,
+      "expected_floor": 3625,
       "name": "unit",
-      "package_expected_floor": 873,
+      "package_expected_floor": 888,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -38049,7 +38081,9 @@
         "VideoScanCoreTests.ProvenanceResolverScaleTests",
         "VideoScanCoreTests.ProvenanceResolverTruthTests",
         "VideoScanCoreTests.ProvenanceResolverDoorTests",
-        "VideoScanCoreTests.ProvenanceResolverGroupingTests"
+        "VideoScanCoreTests.ProvenanceResolverGroupingTests",
+        "VideoScanCoreTests.ProvenanceResolverReviewTests",
+        "VideoScanCoreTests.ProvenanceResolverReviewFixTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -38650,7 +38684,9 @@
         "VideoScanTests/ProvenanceEstimateLogicTests",
         "VideoScanTests/ProvenanceEstimateStoreTests",
         "VideoScanTests/ProvenanceEstimateScaleTests",
-        "VideoScanTests/ProvenanceEstimateSensorTests"
+        "VideoScanTests/ProvenanceEstimateSensorTests",
+        "VideoScanTests/ProvenanceEstimateReviewTests",
+        "VideoScanTests/ProvenanceEstimateReviewFixTests"
       ]
     },
     {

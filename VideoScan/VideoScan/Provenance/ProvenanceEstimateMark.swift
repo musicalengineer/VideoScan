@@ -11,7 +11,8 @@
 // The glyph: a capture MASTER of a VHS tape gets a tape symbol. Estimated =
 // secondary colour, help "Estimated: … — not confirmed". Confirmed = the same
 // symbol with a small green check, help "…. Provenance confirmed by Rick."
-// Never yellow (that is "no sound") and never red. Rick's own role
+// Never yellow (that is "no sound") and never red; and no stand-in symbol:
+// without `recordingtape` there is no glyph (film means film). Rick's own role
 // (Provenance ▸ Set Role) wins: when he has set a different role, the
 // estimate is not shown at all.
 //
@@ -38,29 +39,34 @@ enum ProvenanceEstimateMark {
         let label: String
     }
 
-    static let preferredSymbol = "recordingtape"
-    static let fallbackSymbol = "film"
+    /// The tape symbol. There is NO fallback: the ruling keeps `film` for
+    /// film masters, so a macOS without this symbol shows no glyph at all.
+    static let tapeSymbol = "recordingtape"
 
-    /// `preferredSymbol` when this macOS has it, else `fallbackSymbol`.
+    /// `tapeSymbol` when this macOS has it, else nil (no glyph).
     /// Resolved once (a lazy global — C++: a function-local static).
-    static let symbolName: String = resolveSymbol { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil }
+    static let symbolName: String? = resolveSymbol { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil }
 
-    static func resolveSymbol(exists: (String) -> Bool) -> String {
-        exists(preferredSymbol) ? preferredSymbol : fallbackSymbol
+    static func resolveSymbol(exists: (String) -> Bool) -> String? {
+        exists(tapeSymbol) ? tapeSymbol : nil
     }
 
-    /// The estimate, unless Rick's own role says something else.
+    /// The File Journey's icon for a provenance event: the tape, else a
+    /// neutral tag — never a symbol that means another carrier.
+    static let journeyIcon = symbolName ?? "tag"
+
+    /// The one visibility rule (Core): Rick's own role wins.
     static func visible(_ estimate: ProvenanceEstimate, rickRole: ProvenanceRole) -> ProvenanceEstimate? {
-        rickRole == .unknown || rickRole == estimate.role ? estimate : nil
+        ProvenanceResolver.visible(estimate, rickRole: rickRole)
     }
 
     /// The glyph for one content: only a VHS capture master (estimated or
     /// confirmed) that Rick's own role does not contradict.
     static func judged(_ estimate: ProvenanceEstimate?, rickRole: ProvenanceRole, captured: Date?,
-                       timeZone: TimeZone = .current) -> Shown? {
-        guard let estimate, let seen = visible(estimate, rickRole: rickRole), seen.isVHSMaster,
+                       symbol: String? = symbolName, timeZone: TimeZone = .current) -> Shown? {
+        guard let symbol, let estimate, let seen = visible(estimate, rickRole: rickRole), seen.isVHSMaster,
               let help = ProvenanceResolver.shortLine(seen, captured: captured, timeZone: timeZone) else { return nil }
-        return Shown(symbol: symbolName, isConfirmed: seen.isConfirmed, help: help,
+        return Shown(symbol: symbol, isConfirmed: seen.isConfirmed, help: help,
                      label: seen.isConfirmed ? ProvenanceEstimateWords.glyphLabelConfirmed : ProvenanceEstimateWords.glyphLabelEstimated)
     }
 
@@ -143,10 +149,11 @@ struct ProvenanceEstimateMenuItems: View {
 
     var body: some View {
         if targets.total > 0 {
-            let provisional = targets.digests.filter { store.shown(of: $0, roles: roles).map { !$0.isConfirmed } ?? false }
+            // What the menu SHOWS when it opens is what Confirm may write — nothing else (compare-and-swap in the store).
+            let provisional = store.shownProvisional(in: targets.digests, roles: roles)
             let offer = ProvenanceEstimateMark.Offer(provisional: provisional.count, writeRefusal: store.writeRefusal ?? roles.writeRefusal)
             Button {
-                if case .refused(let words) = store.confirm(digests: targets.digests, files: targets.total) {
+                if case .refused(let words) = store.confirm(shown: provisional, selected: targets.digests.count, files: targets.total) {
                     ProvenanceEstimateDialogs.refused(words)
                 }
             } label: {
@@ -157,7 +164,7 @@ struct ProvenanceEstimateMenuItems: View {
             .accessibilityIdentifier("archive.row.confirmProvenance")
 
             Button {
-                guard let digest = provisional.first else { return }
+                guard let digest = provisional.keys.first else { return }
                 if case .refused(let words) = store.reject(digest: digest) {
                     ProvenanceEstimateDialogs.refused(words)
                 }
@@ -188,22 +195,28 @@ struct InspectorProvenanceEstimateLine: View {
     struct ReadKey: Equatable {
         let digest: String?
         let revision: Int
+        /// Rick's Set Role can hide a master an alternate points at.
+        let rolesRevision: Int
     }
 
     private struct Completed: Equatable {
         let key: ReadKey
         let reading: ProvenanceEstimateStore.CurrentReading
+        /// An alternate's master, as the archive names it — looked up in the
+        /// read task (the archive index may rebuild; never from `body`).
+        let masterName: String?
     }
 
     var body: some View {
-        let key = ReadKey(digest: digest, revision: store.revision)
+        let key = ReadKey(digest: digest, revision: store.revision, rolesRevision: roles.revision)
+        let pointer = completed?.key == key ? completed?.masterName : nil
         let reading = completed?.key == key ? completed?.reading : nil
         let line = ProvenanceEstimateMark.inspectorLine(
             digest: digest, reading: reading, rickRole: digest.map { roles.role(of: $0) } ?? .unknown,
             year: ProvenanceResolver.tapeYear(archivePath: archivePath, captured: record.embeddedCreationDate),
             captured: record.embeddedCreationDate,
             technical: .init(videoCodec: record.videoCodec, resolution: record.resolution, bitDepth: record.bitDepth),
-            masterName: { store.masterName(of: $0, roles: roles) })
+            masterName: { _ in pointer })
         VStack(alignment: .leading, spacing: 0) {
             if let line {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -225,7 +238,9 @@ struct InspectorProvenanceEstimateLine: View {
         .task(id: key) {
             guard let digest = key.digest else { return }
             let now = await store.readCurrent(digest: digest)
-            if !Task.isCancelled { completed = Completed(key: key, reading: now) }
+            var name: String?
+            if case .estimate(_, let estimate) = now { name = store.masterName(of: estimate, roles: roles) }
+            if !Task.isCancelled { completed = Completed(key: key, reading: now, masterName: name) }
         }
     }
 }

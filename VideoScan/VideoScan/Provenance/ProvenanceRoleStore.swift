@@ -302,9 +302,11 @@ final class ProvenanceRoleStore: ObservableObject {
     /// `alongside` (Confirm Provenance, 2026-11-10): more rows of the SAME
     /// decision, written first in this one transaction — so the role and
     /// what it confirms land together or not at all. If it throws, nothing
-    /// is written and the set is refused with its words.
+    /// is written and the set is refused with its words. `alongsideWhat`
+    /// names those rows in the commit's log line.
     func set(_ role: ProvenanceRole, digests: Set<String>, sourceMissing: Bool = false, files: Int? = nil,
-             now: Date = Date(), alongside: ((any CatalogTransaction) throws -> Void)? = nil) -> SetOutcome {
+             now: Date = Date(), alongsideWhat: String? = nil,
+             alongside: ((any CatalogTransaction) throws -> Void)? = nil) -> SetOutcome {
         let keys = digests.map { $0.lowercased() }.sorted()
         let flag = role == .master && sourceMissing
         let words = ProvenanceRoleWords.roleWords(role, sourceMissing: flag)
@@ -319,7 +321,7 @@ final class ProvenanceRoleStore: ObservableObject {
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
         var changes: [(digest: String, from: CatalogRow.ProvenanceRoleReading?)] = []
         var after: [String: CatalogRow.ProvenanceRoleReading] = [:]
-        let refusal = backing.write("set role \(words) on \(keys.count) content(s)") { tx in
+        let refusal = backing.write("set role \(words) on \(keys.count) content(s)" + (alongsideWhat.map { ", \($0)" } ?? "")) { tx in
             changes = []
             try alongside?(tx)
             let before = try tx.currentProvenanceRoles(digests: keys)

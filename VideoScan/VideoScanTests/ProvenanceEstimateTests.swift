@@ -35,12 +35,22 @@
 //   MEDIA      the rule's matrix is Core's; here the projection's stream
 //              filter over the same five shapes.
 //
+//   REVIEW     the independent review of 2026-11-10 (its red tests, kept)
+//              and the fixes' own rules: a withdrawn estimate is taken back
+//              with a row; Confirm is a compare-and-swap on what was shown;
+//              a refusal corrects what is shown; Rick's Set Role wins on the
+//              dossier too, and Unknown after a Confirm makes it provisional
+//              again; an open dossier hears every change; the run's counts
+//              add up; the commit line names the confirmed rows.
+//
 // Suites (filter by SUITE): ProvenanceEstimateLogicTests ·
 // ProvenanceEstimateStoreTests · ProvenanceEstimateScaleTests ·
-// ProvenanceEstimateSensorTests
+// ProvenanceEstimateSensorTests · ProvenanceEstimateReviewTests ·
+// ProvenanceEstimateReviewFixTests
 // Synthetic names only.
 
 import AppKit
+import Combine
 import Foundation
 import Testing
 @testable import VideoScan
@@ -76,10 +86,14 @@ private func record(digest: String?, original: String? = "\(vhsFolder)/1984/test
 }
 
 private func fact(_ digest: String, _ name: String, folder: String = "1984", seconds: Double = 3_660,
-                  resolution: String = "1280x720") -> ProvenanceFact {
+                  resolution: String = "1280x720", codec: String = "ffv1", created: Date? = captured) -> ProvenanceFact {
     ProvenanceFact(digest: digest, originalPath: "\(vhsFolder)/\(folder)/\(name)", filename: name, container: "matroska,webm",
-                   videoCodec: "ffv1", audioCodec: "pcm_s16le", durationSeconds: seconds, embeddedCreatedAt: captured,
+                   videoCodec: codec, durationSeconds: seconds, embeddedCreatedAt: created,
                    resolution: resolution, bitDepth: "8", frameRate: "30", originEncoder: "Lavf61.7.100")
+}
+
+private func roleRow(_ digest: String, _ role: String, id: Int64 = 1) -> CatalogRow.ProvenanceRoleReading {
+    CatalogRow.ProvenanceRoleReading(roleID: id, digest: digest, storedRole: role, decidedAt: 1, storedSourceMissing: false, note: nil)
 }
 
 private func estimate(_ role: ProvenanceRole = .master, confirmed: Bool = false, carrier: String? = "VHS") -> ProvenanceEstimate {
@@ -190,15 +204,18 @@ struct ProvenanceEstimateLogicTests {
         #expect(ProvenanceEstimateMark.inspectorLine(digest: nil, reading: nil, rickRole: .unknown, year: nil, captured: nil, technical: nil) == nil)
     }
 
-    @Test("the SF Symbol resolves on this macOS (recordingtape, else film)")
-    func theSymbolResolves() {
-        let name = ProvenanceEstimateMark.symbolName
+    @Test("the SF Symbol resolves on this macOS as recordingtape; there is NO fallback — without it no glyph is drawn (film means film)")
+    func theSymbolResolves() throws {
+        let name = try #require(ProvenanceEstimateMark.symbolName, "recordingtape is not a system symbol on this macOS")
         print("[provenance-estimate] glyph symbol in use: \(name)")
-        #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil, "\(name) is not a system symbol here")
-        #expect(name == ProvenanceEstimateMark.preferredSymbol || name == ProvenanceEstimateMark.fallbackSymbol)
+        #expect(name == "recordingtape")
+        #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil)
         #expect(ProvenanceEstimateMark.resolveSymbol { _ in true } == "recordingtape")
-        #expect(ProvenanceEstimateMark.resolveSymbol { $0 != "recordingtape" } == "film")
-        #expect(NSImage(systemSymbolName: ProvenanceEstimateMark.fallbackSymbol, accessibilityDescription: nil) != nil)
+        #expect(ProvenanceEstimateMark.resolveSymbol { _ in false } == nil, "never film, never any stand-in")
+        #expect(ProvenanceEstimateMark.judged(estimate(), rickRole: .unknown, captured: captured, symbol: nil) == nil, "no symbol: no glyph")
+        #expect(ProvenanceEstimateMark.judged(estimate(), rickRole: .unknown, captured: captured, symbol: "recordingtape")?.symbol == "recordingtape")
+        let mark = try SourceTree.appCode(named: "Provenance/ProvenanceEstimateMark.swift")
+        #expect(!mark.contains("\"film\""), "the tape glyph has no film fallback")
     }
 
     @Test("the offer: Confirm needs ≥ 1 estimate waiting; Not Right needs exactly one; the session's refusal disables both, with words")
@@ -263,7 +280,15 @@ struct ProvenanceEstimateLogicTests {
         #expect(store.apply([:], takenAt: takenAt - 1) == false)
         #expect(store.estimate(of: hex(1)) != nil, "a stale snapshot changed nothing")
         #expect(store.apply([hex(1): estimate(confirmed: true)], takenAt: store.commitEpoch))
-        #expect(store.provisionalCount(in: [hex(1)], roles: nil) == 0, "a confirmed estimate is not waiting")
+        let roles = ProvenanceRoleStore()
+        roles.apply([roleRow(hex(1), "master")], takenAt: roles.commitEpoch)
+        #expect(store.provisionalCount(in: [hex(1)], roles: roles) == 0, "confirmed, and Rick's role agrees: not waiting")
+        #expect(store.shown(of: hex(1), roles: roles)?.isConfirmed == true)
+        // Set Role ▸ Unknown (or no role at all) after a Confirm takes his word back: provisional again.
+        #expect(store.provisionalCount(in: [hex(1)], roles: nil) == 1)
+        roles.apply([roleRow(hex(1), "unknown", id: 2)], takenAt: roles.commitEpoch)
+        #expect(store.shown(of: hex(1), roles: roles)?.isConfirmed == false)
+        #expect(store.shownProvisional(in: [hex(1).uppercased(), hex(2)], roles: roles) == [hex(1): estimate()])
     }
 
     @Test("the File Journey: one provenance event with the sentence, dated at the capture; none when nothing is passed in")
@@ -281,7 +306,7 @@ struct ProvenanceEstimateLogicTests {
         #expect(events.count == 1)
         #expect(events.first?.sentence == "Estimated: original capture of a VHS tape, captured July 2026 — not confirmed")
         #expect(events.first?.timestamp == captured)
-        #expect(events.first?.icon == ProvenanceEstimateMark.symbolName)
+        #expect(events.first?.icon == ProvenanceEstimateMark.journeyIcon)
         #expect(told.events.count == plain.events.count + 1)
         #expect(told.events.last?.kind == .currentState, "the current state is still last")
         let undated = VideoScanModel.buildFileJourney(for: rec, allRecords: [rec], resolveVolumeSafety: safe,
@@ -540,7 +565,7 @@ struct ProvenanceEstimateStoreTests {
         let count = try await rowCount(scene.model)
         let outcome = store.confirm(digests: [ids.master], now: estimateNow)
         guard case .refused(let words) = outcome else { Issue.record("expected a refusal, got \(outcome)"); return }
-        #expect(words.contains("changed while it was being confirmed"))
+        #expect(words.contains("the estimate changed for 1 content — look again"))
         #expect(try await rowCount(scene.model) == count, "no confirmed row")
         #expect(try await roleHistory(scene.model, ids.master).isEmpty, "and no role: the transaction rolled back whole")
         #expect(scene.model.catalogCutover.committer?.blockedReason == nil, "a refused confirm never blocks the catalog")
@@ -809,7 +834,7 @@ struct ProvenanceEstimateSensorTests {
         #expect(store.contains("commitSideTables(what, via: .provenanceEstimates, body)"), "the one door")
         #expect(!store.contains("INSERT"), "no SQL in the app; the Core door appends")
         #expect(!store.contains("import " + "GRDB"))
-        #expect(store.contains("roles.set(group.role, digests: Set(members)"), "Confirm sets the role through ProvenanceRoleStore — the one writer of provenance_roles")
+        #expect(store.contains("roles.set(estimate.role, digests: [digest]"), "Confirm sets the role through ProvenanceRoleStore — the one writer of provenance_roles")
         #expect(!store.contains("appendProvenanceRole"), "this store never writes provenance_roles itself")
     }
 
@@ -887,5 +912,319 @@ struct ProvenanceEstimateSensorTests {
         for token in ["provenanceEstimates", "repository", "catalogCutover"] {
             #expect(!builder.contains(token), "the journey builder reads the catalog (\(token))")
         }
+    }
+}
+
+// MARK: - Review 2026-11-10 (independent reviewer): written RED on 5cebfd5e6, green since the review fixes
+
+@Suite("Estimated provenance — review 2026-11-10", .serialized)
+@MainActor
+struct ProvenanceEstimateReviewTests {
+
+    /// Pins ProvenanceEstimateStore.swift:373-408 (`run` lands proposals only):
+    /// when the rule STOPS proposing a content (a longer capture of the same
+    /// name turned up, so it "may be a trim — cannot tell"), the old inferred
+    /// rows keep standing and every surface still says "Estimated: original
+    /// capture…" — an estimate the rule no longer makes, one click from confirmed.
+    @Test("TRUTH: an estimate the rule no longer makes is not shown after the next run")
+    func anEstimateTheRuleWithdrewIsNotShown() async throws {
+        let scene = try CutoverScene.make("prov_review_stale"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates
+        _ = await store.run(now: estimateNow)
+        #expect(store.estimate(of: ids.other)?.role == .master)
+        let longer = try #require(CatalogCommit.digest(of: try scene.record(.tombstonedWithDigest)))
+        attachFacts(scene.model, ids, extra: [fact(longer, "test_other_tape_full.mkv", folder: "1991", seconds: 7_200)])
+        #expect(await store.load() == nil)
+        guard case .finished(let tally) = await store.run(now: estimateNow.addingTimeInterval(60)) else { Issue.record("expected a finished run"); return }
+        #expect(tally.shorter == 1, "the rule now leaves test_other_tape.mkv unclassified")
+        #expect(store.estimate(of: ids.other) == nil, "what the rule no longer says is no longer shown")
+        #expect(await store.readCurrent(digest: ids.other) == .none(digest: ids.other), "nor by the Inspector's own read")
+    }
+
+    /// Pins ProvenanceEstimateStore.swift:529-533 (`confirmRows` checks the role
+    /// only): Rick was shown carrier VHS; the table's newest carrier is another
+    /// value; Confirm writes HIS confirmed row for the value he never saw.
+    @Test("CONFIRM: a carrier the table changed after it was shown is never confirmed in Rick's name")
+    func confirmNeverWritesAValueThatWasNotShown() async throws {
+        let scene = try CutoverScene.make("prov_review_unseen"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates
+        _ = await store.run(now: estimateNow)
+        #expect(store.estimate(of: ids.master)?.carrier == "VHS", "what the glyph and the menu show")
+        try scene.execSQL("""
+            INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+            VALUES ('content', '\(ids.master)', 'carrier', 'Betamax', 'inferred', 'machine:test/other/rule@r1', 1794300100, 0.5, '{}');
+            """)
+        _ = store.confirm(digests: [ids.master], now: estimateNow.addingTimeInterval(120))
+        let mine = try await rows(scene.model, ids.master).filter { $0.by == "rick" }
+        #expect(!mine.contains { $0.value == "Betamax" }, "Rick confirmed VHS, or nothing — never a value he was not shown")
+    }
+
+    /// Pins ProvenanceEstimateStore.swift:499-505: the refusal says "look
+    /// again, then confirm", but the projection (glyph, menu count) is left
+    /// exactly as stale as it was — looking again shows the same thing.
+    @Test("CONFIRM: after an 'estimate changed' refusal the projection shows what the table holds")
+    func aChangedRefusalRefreshesWhatIsShown() async throws {
+        let scene = try CutoverScene.make("prov_review_refresh"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates
+        _ = await store.run(now: estimateNow)
+        try scene.execSQL("""
+            INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+            VALUES ('content', '\(ids.master)', 'role', 'master', 'rejected', 'rick', 1794300100, NULL, '{}');
+            """)
+        guard case .refused = store.confirm(digests: [ids.master], now: estimateNow) else { Issue.record("expected a refusal"); return }
+        #expect(store.estimate(of: ids.master) == nil, "the glyph no longer shows the estimate the table rejected")
+        #expect(store.provisionalCount(in: [ids.master], roles: scene.model.provenanceRoles) == 0, "and the menu no longer offers it")
+    }
+
+    /// Pins FileDossier+Build.swift:290-301 (`provenanceLine` never hears Rick's
+    /// role): the glyph, Inspector and journey hide an estimate his Set Role
+    /// contradicts; the dossier still states it — and as his own `.fact` once
+    /// confirmed, after he has since said the file is something else.
+    @Test("TRUTH: the dossier does not state a provenance Rick's own Set Role contradicts")
+    func theDossierYieldsToRicksOwnRole() async throws {
+        let scene = try CutoverScene.make("prov_review_dossier"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        #expect(roles.set(.editCopy, digests: [ids.master], now: estimateNow.addingTimeInterval(60)) == .set(changed: 1, unchanged: 0))
+        #expect(store.shown(of: ids.master, roles: roles) == nil, "the glyph, Inspector and journey show nothing")
+        let fileID = try scene.record(.healthy).id.uuidString
+        let repository = try #require(scene.model.catalogCutover.committer?.repository)
+        let dossier = try #require(try await repository.read { try FileDossier.read(reader: $0, fileID: fileID, now: estimateNow) })
+        #expect(dossier.patterns.line("Provenance") == nil, "got: \(dossier.patterns.line("Provenance")?.value ?? "") [\(dossier.patterns.line("Provenance")?.reading ?? "")]")
+    }
+}
+
+// MARK: - The review's fixes: their own rules (each seen red by breaking the rule)
+
+@Suite("Estimated provenance — review fixes 2026-11-10", .serialized)
+@MainActor
+struct ProvenanceEstimateReviewFixTests {
+
+    @Test("WITHDRAWAL: a second identical run writes nothing; the OUTCOME counts it; the rule proposing it again brings it back; Rick's confirmed estimate survives")
+    func withdrawalIsIdempotentReversibleAndNeverTouchesRicksWord() async throws {
+        let scene = try CutoverScene.make("prov_fix_withdraw"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        #expect(store.confirm(digests: [ids.alternate], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        let longer = try #require(CatalogCommit.digest(of: try scene.record(.tombstonedWithDigest)))
+        // Longer captures of the same names turn up: `other` and the confirmed `alternate`... stay as the rule says.
+        attachFacts(scene.model, ids, extra: [fact(longer, "test_other_tape_full.mkv", folder: "1991", seconds: 7_200)])
+        #expect(await store.load() == nil)
+        guard case .finished(let first) = await store.run(now: estimateNow.addingTimeInterval(60)) else { Issue.record("expected a finished run"); return }
+        #expect(first.withdrawn == 1)
+        #expect(first.accounted == first.examined)
+        let withdrawnRow = try #require(try await rows(scene.model, ids.other).last)
+        #expect(withdrawnRow.field == "role")
+        #expect(withdrawnRow.value == "unknown")
+        #expect(withdrawnRow.state == "inferred")
+        #expect(withdrawnRow.by == ProvenanceEstimateRule.signer)
+        #expect(withdrawnRow.evidenceJSON.contains("\"rule\":\"withdrawn\""))
+        #expect(withdrawnRow.evidenceJSON.contains("may be a trim"))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("estimated Master → WITHDRAWN — it is now clearly shorter than a capture of the same name in its folder"), "\(log.suffix(900))")
+        #expect(log.contains("; 1 earlier estimate withdrawn"))
+        #expect(store.provisionalCount(in: [ids.other], roles: roles) == 0, "nothing to confirm any more")
+        #expect(store.confirm(digests: [ids.other], now: estimateNow) == .confirmed(contents: 0, skipped: 1))
+        // The same run again: nothing is written.
+        let count = try await rowCount(scene.model)
+        guard case .finished(let second) = await store.run(now: estimateNow.addingTimeInterval(120)) else { Issue.record("expected a finished run"); return }
+        #expect(second.withdrawn == 0)
+        #expect(second.estimated == 0)
+        #expect(try await rowCount(scene.model) == count)
+        // The longer file goes away again: the rule proposes `other` again, and it is shown again.
+        attachFacts(scene.model, ids)
+        #expect(await store.load() == nil)
+        guard case .finished(let third) = await store.run(now: estimateNow.addingTimeInterval(180)) else { Issue.record("expected a finished run"); return }
+        #expect(third.estimated == 1)
+        #expect(store.estimate(of: ids.other)?.role == .master)
+        #expect(store.estimate(of: longer)?.role == .master, "a content this run did not examine keeps its estimate — not examined is not withdrawn")
+        // Rick's confirmed alternate: the rule stops proposing it (its file no longer qualifies) — his word stands.
+        let withoutAlternate = [fact(ids.master, "test_tape.mkv"), fact(ids.alternate, "test_tape_sd.mkv", codec: "h264"),
+                                fact(ids.other, "test_other_tape.mkv", folder: "1991")]
+        let backing = try #require(store.backing)
+        store.attach(backing, roles: roles, facts: { withoutAlternate })
+        #expect(await store.load() == nil)
+        guard case .finished(let fourth) = await store.run(now: estimateNow.addingTimeInterval(240)) else { Issue.record("expected a finished run"); return }
+        #expect(fourth.withdrawn == 1)
+        #expect(fourth.notQualifying == 1)
+        #expect(store.estimate(of: ids.alternate)?.isConfirmed == true, "the machine took back only its own row")
+        #expect(store.shown(of: ids.alternate, roles: roles)?.isConfirmed == true)
+        let fresh = try await relaunch(scene, from: scene.model)
+        #expect(fresh.provenanceEstimates.estimate(of: ids.alternate)?.isConfirmed == true)
+        if let c = fresh.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("TRUTH: Set Role ▸ Unknown after a Confirm takes Rick's word back — every surface shows it provisional again; confirming again makes it his")
+    func setRoleUnknownAfterAConfirmMakesItProvisionalAgain() async throws {
+        let scene = try CutoverScene.make("prov_fix_unknown"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        #expect(store.shown(of: ids.master, roles: roles)?.isConfirmed == true)
+        #expect(roles.set(.unknown, digests: [ids.master], now: estimateNow.addingTimeInterval(60)) == .set(changed: 1, unchanged: 0))
+        let shown = try #require(store.shown(of: ids.master, roles: roles))
+        #expect(!shown.isConfirmed)
+        let glyph = try #require(ProvenanceEstimateMark.judged(store.estimate(of: ids.master), rickRole: roles.role(of: ids.master),
+                                                              captured: captured, timeZone: utc))
+        #expect(glyph.help == "Estimated: original capture of a VHS tape, captured July 2026 — not confirmed")
+        let line = ProvenanceEstimateMark.inspectorLine(digest: ids.master, reading: await store.readCurrent(digest: ids.master),
+                                                        rickRole: roles.role(of: ids.master), year: nil, captured: captured, technical: nil, timeZone: utc)
+        #expect(line?.text.hasPrefix("Provenance (estimated): ") == true)
+        #expect(store.journey(for: try scene.record(.healthy), roles: roles)?.sentence.hasPrefix("Estimated: ") == true)
+        let fileID = try scene.record(.healthy).id.uuidString
+        let repository = try #require(scene.model.catalogCutover.committer?.repository)
+        let dossier = try #require(try await repository.read { try FileDossier.read(reader: $0, fileID: fileID, now: estimateNow) })
+        #expect(dossier.patterns.line("Provenance")?.standing == .observation)
+        #expect(dossier.patterns.line("Provenance")?.reading == "estimated, unconfirmed")
+        // It is waiting again, and can be confirmed again.
+        #expect(store.provisionalCount(in: [ids.master], roles: roles) == 1)
+        #expect(store.confirm(digests: [ids.master], now: estimateNow.addingTimeInterval(120)) == .confirmed(contents: 1, skipped: 0))
+        #expect(store.shown(of: ids.master, roles: roles)?.isConfirmed == true)
+        #expect(try await roleHistory(scene.model, ids.master).map(\.storedRole) == ["master", "unknown", "master"])
+        let again = try #require(try await repository.read { try FileDossier.read(reader: $0, fileID: fileID, now: estimateNow) })
+        #expect(again.patterns.line("Provenance")?.standing == .fact)
+    }
+
+    @Test("CONFIRM is a compare-and-swap on ALL three fields: a shown estimate that differs from the table in role, carrier or setup is refused, nothing is written, the others still land")
+    func confirmComparesEveryField() async throws {
+        let scene = try CutoverScene.make("prov_fix_cas"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates
+        _ = await store.run(now: estimateNow)
+        let truth = try #require(store.estimate(of: ids.master))
+        let count = try await rowCount(scene.model)
+        var wrongSetup = truth; wrongSetup.captureSetupID = "another-rig"
+        var wrongRole = truth; wrongRole.role = .cameraOriginal
+        var wrongCarrier = truth; wrongCarrier.carrier = "Hi8"
+        for doctored in [wrongSetup, wrongRole, wrongCarrier] {
+            guard case .refused(let words) = store.confirm(shown: [ids.master: doctored], selected: 1, now: estimateNow) else {
+                Issue.record("expected a refusal for \(doctored)"); continue
+            }
+            #expect(words.contains("the estimate changed"))
+        }
+        #expect(try await rowCount(scene.model) == count)
+        #expect(try await roleHistory(scene.model, ids.master).isEmpty, "no role either: each content is one transaction")
+        // One changed, one true: the true one is confirmed, the outcome still says look again.
+        let other = try #require(store.estimate(of: ids.other))
+        guard case .refused(let words) = store.confirm(shown: [ids.master: wrongCarrier, ids.other: other], selected: 2, now: estimateNow) else {
+            Issue.record("expected a refusal"); return
+        }
+        #expect(words == "the estimate changed for 1 content — look again, then confirm (1 confirmed)")
+        #expect(store.estimate(of: ids.other)?.isConfirmed == true)
+        #expect(try await roleHistory(scene.model, ids.master).isEmpty)
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("… NOT confirmed — "))
+        #expect(log.contains("the estimate changed for content \(ids.master.prefix(12))… — look again, then confirm. Nothing of it was written"))
+        // What was truly shown confirms.
+        #expect(store.confirm(shown: [ids.master: truth], selected: 1, now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+    }
+
+    @Test("LOGGING: Confirm's commit line and its own line name the confirmed assertion rows, not only the role")
+    func confirmsLogNamesTheRows() async throws {
+        let scene = try CutoverScene.make("prov_fix_log"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates
+        _ = await store.run(now: estimateNow)
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("via provenance roles — set role Master on 1 content(s), with Rick's confirmed role, carrier, captureSetup rows (Confirm Provenance)"),
+                "\(log.suffix(900))")
+        #expect(log.contains("(confirmed rows: role, carrier, captureSetup; role set through Set Role)"))
+    }
+
+    @Test("the capture setup needs the file's own 2026 date: another year (or none) is estimated and confirmed WITHOUT a setup")
+    func noSetupWithoutTheFilesOwnDate() async throws {
+        let scene = try CutoverScene.make("prov_fix_setup"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        let facts = [fact(ids.master, "test_tape.mkv", created: Date(timeIntervalSince1970: 1_560_000_000)),
+                     fact(ids.other, "test_other_tape.mkv", folder: "1991", created: nil)]
+        store.attach(try #require(store.backing), roles: roles, facts: { facts })
+        #expect(await store.run(now: estimateNow) == .finished(.init(examined: 2, estimated: 2, already: 0, vetoed: 0)))
+        #expect(try await rows(scene.model, ids.master).map(\.field) == ["role", "carrier"])
+        #expect(try await rows(scene.model, ids.other).map(\.field) == ["role", "carrier"])
+        #expect(store.estimate(of: ids.master) == ProvenanceEstimate(role: .master, carrier: "VHS", captureSetupID: nil, isConfirmed: false))
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        #expect(try await rows(scene.model, ids.master).filter { $0.by == "rick" }.map(\.field) == ["role", "carrier"])
+        #expect(store.estimate(of: ids.master)?.isConfirmed == true)
+        let line = ProvenanceEstimateMark.inspectorLine(digest: ids.master, reading: await store.readCurrent(digest: ids.master),
+                                                        rickRole: roles.role(of: ids.master), year: 1984, captured: nil, technical: nil, timeZone: utc)
+        #expect(line?.text == "Provenance (confirmed by Rick): Original capture of a VHS tape from 1984", "no rig is named")
+    }
+
+    @Test("the run's counts add up to 'examined': files that do not qualify and byte copies are counted as such")
+    func theRunsCountsAddUp() async throws {
+        let scene = try CutoverScene.make("prov_fix_counts"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let trim = try #require(CatalogCommit.digest(of: try scene.record(.tombstonedWithDigest)))
+        attachFacts(scene.model, ids, extra: [fact(trim, "test_tape_trim.mkv", seconds: 1_500),
+                                              fact(hex(0xbeef), "test_h264.mkv", folder: "2001", codec: "h264"),
+                                              fact(ids.other, "test_other_tape_copy.mkv", folder: "1991"),
+                                              fact(hex(0xdead), "test_unsaved.mkv", folder: "2002")])
+        guard case .finished(let tally) = await scene.model.provenanceEstimates.run(now: estimateNow) else { Issue.record("expected a finished run"); return }
+        #expect(tally.examined == 7)
+        #expect(tally == .init(examined: 7, estimated: 3, already: 0, vetoed: 0, shorter: 1, notStored: 1, notQualifying: 1, byteCopies: 1, withdrawn: 0))
+        #expect(tally.accounted == tally.examined)
+        #expect(ProvenanceEstimateStore.summary(tally) == "7 archived videos examined, 3 estimated, 0 already estimated, 0 vetoed, "
+                + "1 left unclassified (shorter than a capture of the same name in its folder), 1 not a capture this rule knows, "
+                + "1 byte copy of those, 1 not in catalog.sqlite yet (run again)")
+    }
+
+    @Test("an OPEN dossier is told at once about Estimate, Confirm, Not Right and Set Role")
+    func anOpenDossierHearsEveryProvenanceChange() async throws {
+        let scene = try CutoverScene.make("prov_fix_dossier"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        let loader = FileDossierLoader.production(model: scene.model)
+        var heard = 0
+        let listening = loader.changes.sink { heard += 1 }
+        defer { listening.cancel() }
+        _ = await store.run(now: estimateNow)
+        #expect(heard >= 1, "the estimate run")
+        var before = heard
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        #expect(heard > before, "Confirm")
+        before = heard
+        #expect(store.reject(digest: ids.other, now: estimateNow) == .rejected(.master))
+        #expect(heard > before, "Not Right")
+        before = heard
+        #expect(roles.set(.editCopy, digests: [ids.master], now: estimateNow) == .set(changed: 1, unchanged: 0))
+        #expect(heard > before, "Set Role")
+    }
+
+    @Test("SENSOR: the Inspector line's body never asks for the master's name (the archive index may rebuild) — only its read task does")
+    func theInspectorBodyDoesNoArchiveLookup() throws {
+        let mark = try SourceTree.appCode(named: "Provenance/ProvenanceEstimateMark.swift")
+        let start = try #require(mark.range(of: "struct InspectorProvenanceEstimateLine"))
+        let view = mark[start.lowerBound...]
+        let body = try #require(view.range(of: "var body: some View"))
+        let task = try #require(view.range(of: ".task(id: key)"))
+        #expect(body.lowerBound < task.lowerBound)
+        #expect(!view[body.lowerBound..<task.lowerBound].contains("masterName(of"), "an O(records) rebuild is reachable from a view body")
+        #expect(view[task.lowerBound...].contains("store.masterName(of: estimate, roles: roles)"))
+        let badge = try #require(mark.range(of: "struct ProvenanceEstimateBadge"))
+        #expect(!mark[badge.lowerBound..<start.lowerBound].contains("masterName"), "the glyph and the menu never need it")
+    }
+
+    @Test("Not Right uses the same visibility rule in its transaction: Unknown after a Confirm can be rejected; a role Rick set otherwise cannot")
+    func notRightSeesWhatIsShown() async throws {
+        let scene = try CutoverScene.make("prov_fix_reject"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        #expect(roles.set(.editCopy, digests: [ids.other], now: estimateNow) == .set(changed: 1, unchanged: 0))
+        #expect(store.reject(digest: ids.other, now: estimateNow) == .nothingToReject, "nothing is shown for it, so there is nothing to reject")
+        #expect(store.confirm(digests: [ids.master], now: estimateNow) == .confirmed(contents: 1, skipped: 0))
+        #expect(store.reject(digest: ids.master, now: estimateNow) == .nothingToReject, "a confirmed provenance is changed with Set Role")
+        #expect(roles.set(.unknown, digests: [ids.master], now: estimateNow.addingTimeInterval(60)) == .set(changed: 1, unchanged: 0))
+        #expect(store.reject(digest: ids.master, now: estimateNow.addingTimeInterval(120)) == .rejected(.master))
+        #expect(store.shown(of: ids.master, roles: roles) == nil)
     }
 }

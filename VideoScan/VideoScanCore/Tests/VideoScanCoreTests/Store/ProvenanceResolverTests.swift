@@ -18,6 +18,12 @@
 //                when unknown, never invented; the year is the archive's
 //                filing folder, never the capture's own year; an alternate
 //                names its master only when given the archive's name for it.
+//   REVIEW     — the independent review of 2026-11-10 (its red tests, kept):
+//                Not Right never resurrects an older proposal; a name is
+//                related by whole tokens, never a raw prefix; and the fixes'
+//                own rules — the capture setup needs the file's own 2026
+//                date, a withdrawal row takes an estimate back, Rick's Set
+//                Role wins on every surface, the counts add up.
 //   DOOR       — the three drafts land through `appendProvenanceAssertion`
 //                (none is a name or a date, so the archived refusal never
 //                applies); Rick's reject vetoes the role's re-proposal;
@@ -35,11 +41,10 @@ private let vhsFolder = "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026/1984
 
 private func fact(_ n: Int, path: String? = nil, container: String = "matroska,webm", codec: String = "ffv1",
                   seconds: Double = 3_660, resolution: String = "1280x720", bits: String = "8",
-                  encoder: String? = "Lavf61.7.100") -> ProvenanceFact {
+                  encoder: String? = "Lavf61.7.100", created: Date? = Date(timeIntervalSince1970: 1_783_000_000)) -> ProvenanceFact {
     let p = path ?? "\(vhsFolder)/test_tape_\(n).mkv"
     return ProvenanceFact(digest: hex(n), originalPath: p, filename: (p as NSString).lastPathComponent, container: container,
-                          videoCodec: codec, audioCodec: "pcm_s16le", durationSeconds: seconds,
-                          embeddedCreatedAt: Date(timeIntervalSince1970: 1_783_000_000), resolution: resolution, bitDepth: bits,
+                          videoCodec: codec, durationSeconds: seconds, embeddedCreatedAt: created, resolution: resolution, bitDepth: bits,
                           frameRate: "30", originEncoder: encoder)
 }
 
@@ -598,7 +603,8 @@ struct ProvenanceResolverTruthTests {
         for (i, field) in ProvenanceEstimateRule.fields.enumerated() {
             rows.append(row(Int64(10 + i), field, rows[i].value, state: "confirmed", by: "rick"))
         }
-        let confirmed = try #require(FileDossier.provenanceLine(r, assertions: rows))
+        // A real Confirm also sets Rick's role (one transaction); the line is his fact while that role stands.
+        let confirmed = try #require(FileDossier.provenanceLine(r, assertions: rows, rickRole: .master))
         #expect(confirmed.standing == .fact)
         #expect(confirmed.source == "Rick")
         rows.append(row(20, "role", "master", state: "rejected", by: "rick"))
@@ -713,4 +719,223 @@ private final class Landings: @unchecked Sendable {
     private var storage: [CatalogRow.ProvenanceAssertionLanding] = []
     func append(_ l: CatalogRow.ProvenanceAssertionLanding) { lock.lock(); storage.append(l); lock.unlock() }
     var items: [CatalogRow.ProvenanceAssertionLanding] { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
+// MARK: - Review 2026-11-10 (independent reviewer): written RED on 5cebfd5e6, green since the review fixes
+
+@Suite("ProvenanceResolver — review 2026-11-10")
+struct ProvenanceResolverReviewTests {
+
+    private func capture(_ n: Int, _ relative: String, minutes: Double) -> ProvenanceFact {
+        fact(n, path: "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026/\(relative)", seconds: minutes * 60)
+    }
+
+    /// Pins ProvenanceResolver.swift:401-404 (`standing`): after Rick rejects the
+    /// rule's NEWEST role, an OLDER role value the rule itself had replaced comes
+    /// back as the estimate. "Not Right — it disappears" must leave nothing.
+    @Test func rejectingTheNewestProposalDoesNotResurrectAnOlderOne() {
+        var rows = inferred(role: "alternateCapture")                  // run 1: seq 1-3
+        rows.append(row(4, "role", "master"))                          // run 2: the rule changed its mind
+        rows.append(row(5, "role", "master", state: "rejected", by: "rick"))
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows) == nil,
+                "a superseded machine value is not what the rule says now, and Rick said the current one is wrong")
+    }
+
+    /// Pins ProvenanceResolver.swift:308 (`hasPrefix`): numbered tapes of equal
+    /// length are DIFFERENT tapes; "montana_tape_1" is a string prefix of
+    /// "montana_tape_10", so tapes 10-12 are claimed as alternate captures of tape 1.
+    @Test func numberedTapesOfEqualLengthAreNotCapturesOfOneTape() {
+        let resolved = ProvenanceResolver.resolve([
+            capture(1, "Montana/Montana_Tape_1.mkv", minutes: 120.0),
+            capture(2, "Montana/Montana_Tape_10.mkv", minutes: 120.3),
+            capture(3, "Montana/Montana_Tape_11.mkv", minutes: 119.8),
+            capture(4, "Montana/Montana_Tape_12.mkv", minutes: 62.0),
+        ])
+        let roles = Dictionary(uniqueKeysWithValues: resolved.proposals.map { ($0.digest, $0.role) })
+        #expect(roles == [hex(1): .master, hex(2): .master, hex(3): .master, hex(4): .master])
+        #expect(resolved.shorterUnclassified == 0, "tape 12 is not a trim of tape 1")
+    }
+
+    /// Same line: a word that merely starts another word (`Cape` / `Cape_1993`, `Dan` / `Dance_recital`).
+    @Test func aNameThatOnlyStartsAnotherIsNotTheSameTape() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1993/Dan.mkv", minutes: 120), capture(2, "1993/Dance_recital.mkv", minutes: 120)])
+        #expect(resolved.proposals.map(\.role) == [.master, .master])
+    }
+
+    /// PROBE (determinism): every order of the same facts gives the same proposals.
+    @Test func everyOrderOfTheSameFactsGivesTheSameProposals() {
+        let facts = [capture(1, "a/x.mkv", minutes: 100), capture(2, "a/x_2.mkv", minutes: 100.9), capture(3, "a/x_2_b.mkv", minutes: 101.8),
+                     capture(4, "a/x_3.mkv", minutes: 50), capture(5, "a/y.mkv", minutes: 100), capture(6, "b/x.mkv", minutes: 100),
+                     fact(1, path: "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026/a/w.mkv", seconds: 6000)]
+        let reference = ProvenanceResolver.resolve(facts)
+        var rng = SystemRandomNumberGenerator()
+        for _ in 0..<200 { #expect(ProvenanceResolver.resolve(facts.shuffled(using: &rng)) == reference) }
+    }
+}
+
+// MARK: - The review's fixes: their own rules (each seen red by breaking the rule)
+
+@Suite("ProvenanceResolver — review fixes 2026-11-10")
+struct ProvenanceResolverReviewFixTests {
+
+    private let other2019 = Date(timeIntervalSince1970: 1_560_000_000)      // 2019-06-08
+
+    @Test func aNameIsRelatedByWholeTokensOnly() {
+        #expect(ProvenanceResolver.nameRelated("franklin_1990_p216", "franklin_1990_p216_2"))
+        #expect(ProvenanceResolver.nameRelated("franklin_1990_p216_2", "franklin_1990_p216"))
+        #expect(ProvenanceResolver.nameRelated("test_x", "test_x"))
+        #expect(ProvenanceResolver.nameRelated("test_x", "test_x-b"))
+        #expect(ProvenanceResolver.nameRelated("test_x", "test_x copy"))
+        #expect(ProvenanceResolver.nameRelated("test_x", "test_x.v2"))
+        #expect(!ProvenanceResolver.nameRelated("montana_tape_1", "montana_tape_10"))
+        #expect(!ProvenanceResolver.nameRelated("dan", "dance_recital"))
+        #expect(!ProvenanceResolver.nameRelated("test_x", "test_y"))
+        #expect(!ProvenanceResolver.nameRelated("test_x2", "test_x"))
+    }
+
+    @Test func theCaptureSetupIsClaimedOnlyWithTheFilesOwn2026Date() throws {
+        let dated = try #require(ProvenanceResolver.resolve([fact(1)]).proposals.first)
+        #expect(dated.captureSetupID == CaptureSetup.july2026.id)
+        #expect(dated.drafts(at: 1).map(\.field) == ["role", "carrier", "captureSetup"])
+        let evidence = try #require(try JSONSerialization.jsonObject(with: Data(dated.evidenceJSON.utf8)) as? [String: Any])
+        #expect(evidence["embeddedCreatedMonth"] as? String == "2026-07")
+        #expect(evidence["setupStatement"] as? String == CaptureSetup.july2026.statement)
+    }
+
+    @Test func aFileDatedInAnotherYearGetsRoleAndCarrierButNoSetup() throws {
+        let proposal = try #require(ProvenanceResolver.resolve([fact(1, created: other2019)]).proposals.first)
+        #expect(proposal.role == .master)
+        #expect(proposal.carrier == "VHS")
+        #expect(proposal.captureSetupID == nil)
+        #expect(proposal.drafts(at: 1).map(\.field) == ["role", "carrier"])
+        let evidence = try #require(try JSONSerialization.jsonObject(with: Data(proposal.evidenceJSON.utf8)) as? [String: Any])
+        #expect(evidence["captureSetup"] as? String == "not claimed: the file's embedded creation date is not in 2026")
+        #expect(evidence["setupStatement"] == nil)
+        #expect(evidence["embeddedCreatedMonth"] == nil)
+    }
+
+    @Test func aFileWithNoEmbeddedDateGetsRoleAndCarrierButNoSetup() throws {
+        let proposal = try #require(ProvenanceResolver.resolve([fact(1, created: nil)]).proposals.first)
+        #expect(proposal.captureSetupID == nil)
+        #expect(proposal.drafts(at: 1).map(\.field) == ["role", "carrier"])
+        let evidence = try #require(try JSONSerialization.jsonObject(with: Data(proposal.evidenceJSON.utf8)) as? [String: Any])
+        #expect(evidence["captureSetup"] as? String == "not claimed: the file carries no embedded creation date")
+        // And the sentence then names no rig.
+        let rows = [row(1, "role", "master"), row(2, "carrier", "VHS")]
+        let estimate = try #require(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows))
+        #expect(ProvenanceResolver.sentence(estimate, year: 1984, captured: nil, technical: nil, timeZone: utc) == "Original capture of a VHS tape from 1984")
+    }
+
+    @Test func theCountsAddUpToExamined() {
+        var copy = fact(1, path: "\(vhsFolder)/test_zz_copy.mkv")
+        copy.digest = hex(1)
+        let resolved = ProvenanceResolver.resolve([
+            fact(1, path: "\(vhsFolder)/test_x.mkv"), copy,                                   // one content, a byte copy
+            fact(2, path: "\(vhsFolder)/test_x_trim.mkv", seconds: 1_500),                    // shorter, name-related
+            fact(3, codec: "h264"), fact(4, path: "/Volumes/Fixture/Elsewhere/test.mkv"),     // do not qualify
+            fact(5, path: "\(vhsFolder)/test_y.mkv"),
+        ])
+        #expect(resolved.examined == 6)
+        #expect(resolved.notQualifying == 2)
+        #expect(resolved.byteCopies == 1)
+        #expect(resolved.qualified == 3)
+        #expect(resolved.shorterDigests == [hex(2)])
+        #expect(resolved.examined == resolved.notQualifying + resolved.byteCopies + resolved.qualified)
+        #expect(resolved.qualified == resolved.proposals.count + resolved.shorterUnclassified)
+    }
+
+    @Test func ricksOwnRoleWinsOnEverySurface() throws {
+        let confirmed = ProvenanceEstimate(role: .master, carrier: "VHS", captureSetupID: nil, isConfirmed: true)
+        #expect(ProvenanceResolver.visible(confirmed, rickRole: .master) == confirmed)
+        #expect(ProvenanceResolver.visible(confirmed, rickRole: .editCopy) == nil)
+        // Unknown after a Confirm takes his word back: shown, but provisional again.
+        let withdrawn = try #require(ProvenanceResolver.visible(confirmed, rickRole: .unknown))
+        #expect(!withdrawn.isConfirmed)
+        #expect(withdrawn.role == .master)
+        let provisional = ProvenanceEstimate(role: .master, carrier: "VHS", captureSetupID: nil, isConfirmed: false)
+        #expect(ProvenanceResolver.visible(provisional, rickRole: .unknown) == provisional)
+        #expect(ProvenanceResolver.visible(provisional, rickRole: .alternateCapture) == nil)
+    }
+
+    @Test func theDossierLineYieldsToRicksRole() throws {
+        let r = VideoRecord()
+        r.streamTypeRaw = "Video+Audio"
+        var rows = inferred()
+        for (i, field) in ProvenanceEstimateRule.fields.enumerated() {
+            rows.append(row(Int64(10 + i), field, rows[i].value, state: "confirmed", by: "rick"))
+        }
+        #expect(FileDossier.provenanceLine(r, assertions: rows, rickRole: .master)?.standing == .fact)
+        #expect(FileDossier.provenanceLine(r, assertions: rows, rickRole: .editCopy) == nil)
+        let again = try #require(FileDossier.provenanceLine(r, assertions: rows, rickRole: .unknown))
+        #expect(again.standing == .observation, "Set Role ▸ Unknown after a Confirm: provisional again")
+        #expect(again.reading == "estimated, unconfirmed")
+        #expect(FileDossier.build(record: r, digest: hex(1), assertions: rows, rickRole: .editCopy, now: july2026).patterns.line("Provenance") == nil)
+    }
+
+    @Test func aWithdrawalRowLeavesNothingStandingAndASecondOneIsNotNeeded() throws {
+        var rows = inferred()
+        #expect(ProvenanceResolver.withdrawable(rows) == .master)
+        let draft = ProvenanceProposal.withdrawal(digest: hex(1), why: "test: it may be a trim", at: 9)
+        #expect(draft.field == "role")
+        #expect(draft.value == "unknown")
+        #expect(draft.state == "inferred")
+        #expect(draft.by == ProvenanceEstimateRule.signer)
+        let evidence = try #require(try JSONSerialization.jsonObject(with: Data(draft.evidenceJSON.utf8)) as? [String: Any])
+        #expect(evidence["rule"] as? String == "withdrawn")
+        #expect(evidence["why"] as? String == "test: it may be a trim")
+        rows.append(row(4, "role", "unknown", evidence: draft.evidenceJSON))
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows) == nil)
+        #expect(ProvenanceResolver.withdrawable(rows) == nil, "already withdrawn: a second run writes nothing")
+        #expect(ProvenanceResolver.evidenceWords(fromRowsOfOneSubject: rows)?.contains("withdrawn") == false)
+        // The rule proposing it again is written as a NEW newest row, never called a duplicate of the old one.
+        let again = CatalogRow.ProvenanceAssertionDraft(subjectKind: "content", subjectID: hex(1), field: "role", value: "master",
+                                                        state: "inferred", by: ProvenanceEstimateRule.signer, at: 50, confidence: 0.9,
+                                                        evidenceJSON: "{}")
+        #expect(ProvenanceResolver.standingAt(of: again, among: rows) == nil)
+        rows.append(row(5, "role", "master"))
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows)?.role == .master)
+        #expect(ProvenanceResolver.standingAt(of: again, among: rows) == rows[4].at)
+    }
+
+    @Test func whatMayBeWithdrawn() {
+        #expect(ProvenanceResolver.withdrawable([]) == nil)
+        #expect(ProvenanceResolver.withdrawable([row(1, "role", "master", by: "machine:test/other/rule@r1")]) == nil, "another signer's role is not ours to take back")
+        #expect(ProvenanceResolver.withdrawable([row(1, "role", "master"), row(2, "role", "master", state: "rejected", by: "rick")]) == nil,
+                "Rick rejected it: nothing stands already")
+        #expect(ProvenanceResolver.withdrawable([row(1, "role", "zzz")]) == nil)
+        #expect(ProvenanceResolver.withdrawable([row(1, "role", "alternateCapture")]) == .alternateCapture)
+    }
+
+    @Test func ricksConfirmationOutlivesAWithdrawal() throws {
+        var rows = inferred()
+        for (i, field) in ProvenanceEstimateRule.fields.enumerated() {
+            rows.append(row(Int64(10 + i), field, rows[i].value, state: "confirmed", by: "rick"))
+        }
+        rows.append(row(20, "role", "unknown", evidence: ProvenanceProposal.withdrawal(digest: hex(1), why: "test", at: 1).evidenceJSON))
+        let estimate = try #require(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows))
+        #expect(estimate.isConfirmed, "his word stands; the machine took back only its own")
+        #expect(estimate.role == .master)
+    }
+
+    @Test func theWithdrawalRowPassesTheDoorAndIsNotVetoed() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
+            try db.execute(sql: "INSERT INTO content (digest, byte_count, first_seen_at, first_seen_how) VALUES (?, 100, 1700000000, 'rescan')",
+                           arguments: [hex(1)])
+        }
+        let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let proposal = try #require(ProvenanceResolver.resolve([fact(1)]).proposals.first)
+        let box = Landings()
+        _ = await repository.write(as: .ui) { tx in
+            for d in proposal.drafts(at: 100) { box.append(try tx.appendProvenanceAssertion(d)) }
+            box.append(try tx.appendProvenanceAssertion(ProvenanceProposal.withdrawal(digest: hex(1), why: "test", at: 200)))
+        }
+        #expect(box.items.count == 4)
+        #expect(box.items.allSatisfy { if case .recorded = $0 { return true } else { return false } }, "\(box.items)")
+        let rows = try await repository.read { try $0.provenanceAssertions(subjectKind: "content", subjectID: hex(1)) }
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows) == nil)
+        await repository.close()
+    }
 }

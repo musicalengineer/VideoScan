@@ -209,7 +209,7 @@ enum JourneyEventKind: String, Equatable {
         case .promote:      return "star.circle"
         case .notAtPath:    return "mappin.slash"
         case .presenceUnknown: return "questionmark.circle"
-        case .provenance:   return ProvenanceEstimateMark.symbolName
+        case .provenance:   return ProvenanceEstimateMark.journeyIcon
         }
     }
 }

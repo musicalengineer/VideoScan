@@ -12,6 +12,10 @@
 // Shape: a feature store behind a seam (rule 12, #337) — the model holds ONE
 // (`VideoScanModel.provenanceEstimates`, like `publicMarks`); nothing here
 // extends the model. Three verbs, each one code path (rule 4):
+//            A content the rule examined and no longer proposes, whose
+//            earlier estimate still stands, gets a WITHDRAWAL row (inferred
+//            role `unknown`, with why) — the table is append-only, so taking
+//            an estimate back is a row too.
 //   run      the Estimate job's engine. Facts are projected from the records
 //            once (main actor), resolved OFF the main actor, and landed in
 //            chunks through the committer's side-table door
@@ -23,10 +27,14 @@
 //   confirm  Rick's action only. For each selected content with a
 //            provisional estimate: `confirmed` rows by 'rick' for role,
 //            carrier and capture setup AND the role itself, in ONE
-//            transaction — through ProvenanceRoleStore.set (the one writer of
-//            `provenance_roles`), which carries this store's rows `alongside`.
-//            All or nothing per role group; a content with no provisional
-//            estimate is skipped and counted.
+//            transaction per content — through ProvenanceRoleStore.set (the
+//            one writer of `provenance_roles`), which carries this store's
+//            rows `alongside`. A compare-and-swap: the caller hands in each
+//            estimate exactly as it was SHOWN, and inside the transaction
+//            role, carrier and setup are compared with what the table holds;
+//            a difference refuses that content ("the estimate changed — look
+//            again") and corrects what is shown. All or nothing per content;
+//            a content with no provisional estimate is skipped and counted.
 //   reject   Rick's "Not Right": one `rejected` row by 'rick' for the
 //            estimated role value.
 // No name and no date is ever written (rule 3: archived means fixed) — the
@@ -132,7 +140,7 @@ private struct ProvenanceRowNotLanded: Error, CustomStringConvertible {
 private struct ProvenanceEstimateChanged: Error, CustomStringConvertible {
     let digest: String
     var description: String {
-        "the estimate for content \(digest.prefix(12))… changed while it was being confirmed — look again, then confirm"
+        "the estimate changed for content \(digest.prefix(12))… — look again, then confirm"
     }
 }
 
@@ -153,6 +161,16 @@ final class ProvenanceEstimateStore: ObservableObject {
         var shorter = 0
         /// Contents catalog.sqlite does not hold yet (their row is still being saved).
         var notStored = 0
+        /// Files some clause of the rule failed for.
+        var notQualifying = 0
+        /// Byte-identical files of a qualifying content beyond the first.
+        var byteCopies = 0
+        /// Earlier estimates the rule no longer makes, taken back this run.
+        /// (They are among `shorter` / `notQualifying`, not a count of their own.)
+        var withdrawn = 0
+
+        /// Every examined file is in exactly one of these: a finished run's sum is `examined`.
+        var accounted: Int { estimated + already + vetoed + shorter + notStored + notQualifying + byteCopies }
     }
 
     enum RunOutcome: Equatable {
@@ -257,10 +275,11 @@ final class ProvenanceEstimateStore: ObservableObject {
     }
 
     /// What may be SHOWN for `digest`: the estimate, unless Rick's own role
-    /// (Provenance ▸ Set Role) says something else — his typed value wins.
+    /// (Provenance ▸ Set Role) says something else — his typed value wins
+    /// (ProvenanceResolver.visible, the one rule every surface uses).
     func shown(of digest: String?, roles: ProvenanceRoleStore?) -> ProvenanceEstimate? {
         guard let digest, let estimate = estimate(of: digest) else { return nil }
-        return ProvenanceEstimateMark.visible(estimate, rickRole: roles?.role(of: digest) ?? .unknown)
+        return ProvenanceResolver.visible(estimate, rickRole: roles?.role(of: digest) ?? .unknown)
     }
 
     /// How many of `digests` show a provisional (unconfirmed) estimate.
@@ -332,7 +351,7 @@ final class ProvenanceEstimateStore: ObservableObject {
             guard record.streamTypeRaw.hasPrefix("Video"), isArchived(record),
                   let digest = CatalogCommit.digest(of: record), let original = record.originalFullPath else { continue }
             out.append(ProvenanceFact(digest: digest, originalPath: original, filename: record.filename, container: record.container,
-                                      videoCodec: record.videoCodec, audioCodec: record.audioCodec,
+                                      videoCodec: record.videoCodec,
                                       durationSeconds: record.durationSeconds, embeddedCreatedAt: record.embeddedCreationDate,
                                       resolution: record.resolution, bitDepth: record.bitDepth, frameRate: record.frameRate,
                                       originEncoder: record.originEncoder))
@@ -346,12 +365,16 @@ final class ProvenanceEstimateStore: ObservableObject {
         "START estimate provenance — \(examined) archived video\(examined == 1 ? "" : "s") to examine (rule \(ProvenanceEstimateRule.ruleName), \(ProvenanceEstimateRule.signer))"
     }
 
-    /// "12 archived videos examined, 3 estimated, 0 already estimated, 1 vetoed" (+ what was left out).
+    /// "12 archived videos examined, 3 estimated, 0 already estimated, 1 vetoed" + every other
+    /// non-zero count, so the numbers after "examined" add up to it; then the withdrawals.
     static func summary(_ t: Tally) -> String {
         var text = "\(t.examined) archived video\(t.examined == 1 ? "" : "s") examined, \(t.estimated) estimated, "
             + "\(t.already) already estimated, \(t.vetoed) vetoed"
         if t.shorter > 0 { text += ", \(t.shorter) left unclassified (shorter than a capture of the same name in its folder)" }
+        if t.notQualifying > 0 { text += ", \(t.notQualifying) not a capture this rule knows" }
+        if t.byteCopies > 0 { text += ", \(t.byteCopies) byte cop\(t.byteCopies == 1 ? "y" : "ies") of those" }
         if t.notStored > 0 { text += ", \(t.notStored) not in catalog.sqlite yet (run again)" }
+        if t.withdrawn > 0 { text += "; \(t.withdrawn) earlier estimate\(t.withdrawn == 1 ? "" : "s") withdrawn" }
         return text
     }
 
@@ -365,50 +388,100 @@ final class ProvenanceEstimateStore: ObservableObject {
         let facts = self.facts()
         note(Self.startLine(examined: facts.count))
         let resolved = await Task.detached(priority: .userInitiated) { ProvenanceResolver.resolve(facts) }.value
-        var tally = Tally(examined: resolved.examined, shorter: resolved.shorterUnclassified)
+        var tally = Tally(examined: resolved.examined, shorter: resolved.shorterUnclassified,
+                          notQualifying: resolved.notQualifying, byteCopies: resolved.byteCopies)
+        // Estimates to take back: contents this run EXAMINED and does not
+        // propose, whose rule-signed role still stands in the table. (A
+        // content the run did not examine is left alone — refuse rather than
+        // guess.) Read before anything is written; decided again in the transaction.
+        let withdrawals: [(digest: String, why: String)]
+        do {
+            withdrawals = try await Self.withdrawals(resolved: resolved, facts: facts, repository: backing.repository)
+        } catch {
+            return refuseRun("the standing estimates could not be read (\(error))")
+        }
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
+        let total = resolved.proposals.count + withdrawals.count
         var done = 0
         var said = 0
-        progress(0, resolved.proposals.count)
-        while done < resolved.proposals.count {
+        progress(0, total)
+        while done < total {
             if await checkpoint() {
-                note("OUTCOME estimate provenance — stopped at \(done) of \(resolved.proposals.count) proposals: " + Self.summary(tally))
+                note("OUTCOME estimate provenance — stopped at \(done) of \(total): " + Self.summary(tally))
                 return .stopped(tally)
             }
-            let chunk = Array(resolved.proposals[done..<min(done + Self.chunkSize, resolved.proposals.count)])
+            let propose = Array(resolved.proposals.dropFirst(done).prefix(Self.chunkSize))
+            let withdraw = propose.isEmpty
+                ? Array(withdrawals.dropFirst(done - resolved.proposals.count).prefix(Self.chunkSize)) : []
             var landed: [Landed] = []
-            let refusal = backing.write("estimate provenance: \(chunk.count) content(s)") { tx in
-                landed = try chunk.map { try Self.land($0, at: seconds, in: tx) }
+            let refusal = backing.write("estimate provenance: \(propose.count) content(s), \(withdraw.count) withdrawn") { tx in
+                landed = try propose.map { try Self.land($0, at: seconds, in: tx) }
+                    + withdraw.map { try Self.landWithdrawal($0.digest, why: $0.why, at: seconds, in: tx) }
             }
             if let refusal {
                 note("REFUSED estimate provenance — \(refusal). \(Self.summary(tally)) before that; this chunk was not written.")
                 return .refused(refusal)
             }
-            for item in landed {
-                if let estimate = item.after { byDigest[item.digest] = estimate } else { byDigest.removeValue(forKey: item.digest) }
-                switch item.kind {
-                case .estimated:
-                    tally.estimated += 1
-                    if said < 20, let estimate = item.after {
-                        note("  content \(item.digest.prefix(12))… \(item.before.map(ProvenanceEstimateWords.summary) ?? "no estimate") → estimated \(ProvenanceEstimateWords.summary(estimate))")
-                        said += 1
-                    }
-                case .already: tally.already += 1
-                case .vetoed:
-                    tally.vetoed += 1
-                    note("  content \(item.digest.prefix(12))… VETOED — you rejected \(item.proposedRole.title) for it; not written, not proposed again")
-                case .notStored: tally.notStored += 1
-                }
-            }
-            commitEpoch &+= 1
-            revision &+= 1
-            done += chunk.count
-            progress(done, resolved.proposals.count)
+            adopt(landed, into: &tally, said: &said)
+            done += propose.count + withdraw.count
+            progress(done, total)
             await Task.yield()
         }
         if tally.estimated > 20 { note("  … and \(tally.estimated - 20) more estimated") }
         note("OUTCOME estimate provenance — " + Self.summary(tally) + ". Estimates are provisional until you confirm them.")
         return .finished(tally)
+    }
+
+    /// After a chunk committed: the projection follows each content's
+    /// read-back, the tally counts it, the log names it.
+    private func adopt(_ landed: [Landed], into tally: inout Tally, said: inout Int) {
+        for item in landed {
+            if let estimate = item.after { byDigest[item.digest] = estimate } else { byDigest.removeValue(forKey: item.digest) }
+            switch item.kind {
+            case .estimated:
+                tally.estimated += 1
+                if said < 20, let estimate = item.after {
+                    note("  content \(item.digest.prefix(12))… \(item.before.map(ProvenanceEstimateWords.summary) ?? "no estimate") → estimated \(ProvenanceEstimateWords.summary(estimate))")
+                    said += 1
+                }
+            case .already: tally.already += 1
+            case .vetoed:
+                tally.vetoed += 1
+                note("  content \(item.digest.prefix(12))… VETOED — you rejected \(item.proposedRole.title) for it; not written, not proposed again")
+            case .notStored: tally.notStored += 1
+            case .withdrawn:
+                tally.withdrawn += 1
+                note("  content \(item.digest.prefix(12))… estimated \(item.proposedRole.title) → WITHDRAWN — \(item.why)")
+            case .nothingToWithdraw: break
+            }
+        }
+        commitEpoch &+= 1
+        revision &+= 1
+    }
+
+    nonisolated static let withdrawnShorterWhy = "it is now clearly shorter than a capture of the same name in its folder — it may be a trim"
+    nonisolated static let withdrawnNotQualifyingWhy = "the rule's clauses no longer hold for it"
+
+    /// The contents whose standing rule-signed role this run takes back, with
+    /// why: one streamed read of the role rows (a subject's rows in flight),
+    /// off the main actor.
+    nonisolated static func withdrawals(resolved: ProvenanceResolver.Resolution, facts: [ProvenanceFact],
+                                        repository: any CatalogRepository) async throws -> [(digest: String, why: String)] {
+        let live = try await repository.read { reader -> [String] in
+            var out: [String] = []
+            try reader.forEachProvenanceAssertionSubject(subjectKind: ProvenanceAssertionSubject.content,
+                                                         fields: [ProvenanceEstimateRule.roleField]) { subject, rows in
+                if ProvenanceResolver.withdrawable(rows) != nil { out.append(subject) }
+            }
+            return out
+        }
+        guard !live.isEmpty else { return [] }
+        let examined = Set(facts.compactMap { ProvenanceAssertionSubject.contentID($0.digest) })
+        let proposed = Set(resolved.proposals.map(\.digest))
+        let shorter = Set(resolved.shorterDigests)
+        return live.filter { examined.contains($0) && !proposed.contains($0) }.sorted().map {
+            ($0, shorter.contains($0) ? withdrawnShorterWhy : withdrawnNotQualifyingWhy)
+        }
     }
 
     private func refuseRun(_ why: String) -> RunOutcome {
@@ -418,17 +491,36 @@ final class ProvenanceEstimateStore: ObservableObject {
 
     /// What landing one proposal did, with the content's read-back.
     struct Landed {
-        enum Kind: Equatable { case estimated, already, vetoed, notStored }
+        enum Kind: Equatable { case estimated, already, vetoed, notStored, withdrawn, nothingToWithdraw }
         var digest: String
         var kind: Kind
+        /// The role proposed — or, for a withdrawal, the role taken back.
         var proposedRole: ProvenanceRole
         var before: ProvenanceEstimate?
         var after: ProvenanceEstimate?
+        var why = ""
     }
 
-    /// One content, inside the transaction: its rows, its three drafts
-    /// through the door, its rows again. The ONLY place an inferred row is
-    /// appended by the app.
+    /// One withdrawal, inside the transaction: the table must STILL hold the
+    /// rule's live role for the content; then one inferred `role` = `unknown`
+    /// row. A second run finds that row newest and writes nothing.
+    nonisolated static func landWithdrawal(_ digest: String, why: String, at seconds: Int64, in tx: any CatalogTransaction) throws -> Landed {
+        let kind = ProvenanceAssertionSubject.content
+        let rows = try tx.provenanceAssertions(subjectKind: kind, subjectID: digest)
+        let before = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows)
+        guard let role = ProvenanceResolver.withdrawable(rows) else {
+            return Landed(digest: digest, kind: .nothingToWithdraw, proposedRole: .unknown, before: before, after: before)
+        }
+        let draft = ProvenanceProposal.withdrawal(digest: digest, why: why, at: seconds)
+        let landing = try tx.appendProvenanceAssertion(draft)
+        guard case .recorded = landing else { throw ProvenanceRowNotLanded(digest: digest, field: draft.field, landing: landing) }
+        let after = ProvenanceResolver.estimate(fromRowsOfOneSubject: try tx.provenanceAssertions(subjectKind: kind, subjectID: digest))
+        return Landed(digest: digest, kind: .withdrawn, proposedRole: role, before: before, after: after, why: why)
+    }
+
+    /// One content, inside the transaction: its rows, its drafts through the
+    /// door, its rows again. With `landWithdrawal`, the ONLY places an
+    /// inferred row is appended by the app.
     nonisolated static func land(_ proposal: ProvenanceProposal, at seconds: Int64, in tx: any CatalogTransaction) throws -> Landed {
         let kind = ProvenanceAssertionSubject.content
         let rows = try tx.provenanceAssertions(subjectKind: kind, subjectID: proposal.digest)
@@ -466,83 +558,123 @@ final class ProvenanceEstimateStore: ObservableObject {
                                                    confidence: nil, evidenceJSON: evidence)
     }
 
+    /// What stands for `digest` in the table as a SURFACE would show it:
+    /// the one visibility rule, with Rick's current role row read in the
+    /// same transaction.
+    nonisolated static func visibleStanding(_ digest: String, in tx: any CatalogTransaction) throws
+        -> (table: ProvenanceEstimate?, visible: ProvenanceEstimate?) {
+        let rows = try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: digest)
+        guard let table = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows) else { return (nil, nil) }
+        let rick = try tx.currentProvenanceRoles(digests: [digest])[digest]?.role ?? .unknown
+        return (table, ProvenanceResolver.visible(table, rickRole: rick))
+    }
+
+    /// The provisional estimates `digests` SHOW right now (the menu builds
+    /// this when it opens; Confirm then writes exactly these or nothing).
+    func shownProvisional(in digests: Set<String>, roles: ProvenanceRoleStore?) -> [String: ProvenanceEstimate] {
+        var out: [String: ProvenanceEstimate] = [:]
+        for digest in digests {
+            if let estimate = shown(of: digest, roles: roles), !estimate.isConfirmed { out[digest.lowercased()] = estimate }
+        }
+        return out
+    }
+
     /// Confirm the provisional estimate of every content in `digests` that
-    /// shows one. `files` = how many selected rows that is (the log's words).
+    /// shows one NOW. `files` = how many selected rows that is (the log's words).
     func confirm(digests: Set<String>, files: Int? = nil, now: Date = Date()) -> ConfirmOutcome {
-        let keys = digests.map { $0.lowercased() }.sorted()
-        let scope = "\(keys.count) content\(keys.count == 1 ? "" : "s")" + (files.map { " (\($0) file\($0 == 1 ? "" : "s"))" } ?? "")
-        guard !keys.isEmpty else { return .refused("nothing selected has a full SHA-256") }
+        confirm(shown: shownProvisional(in: digests, roles: roles), selected: digests.count, files: files, now: now)
+    }
+
+    /// Confirm exactly what was SHOWN: `shown` maps each content to the
+    /// estimate as displayed when Rick chose Confirm. One transaction per
+    /// content (rows + role, all or nothing); inside it the table's role,
+    /// carrier and capture setup must equal what was shown, else that content
+    /// is refused, nothing of it is written, and what is shown is corrected
+    /// from the table. `selected` = how many contents were selected (the
+    /// rest are counted as skipped).
+    func confirm(shown: [String: ProvenanceEstimate], selected: Int, files: Int? = nil, now: Date = Date()) -> ConfirmOutcome {
+        let scope = "\(selected) content\(selected == 1 ? "" : "s")" + (files.map { " (\($0) file\($0 == 1 ? "" : "s"))" } ?? "")
+        guard selected > 0 else { return .refused("nothing selected has a full SHA-256") }
         note("START confirm provenance: \(scope)")
         guard backing != nil, let roles else { return refuseConfirm("the catalog is not open for writing in this session", scope) }
         if let why = writeRefusal ?? roles.writeRefusal { return refuseConfirm(why, scope) }
-        // The PLAN comes from what is shown (the projection); the table
-        // decides inside each transaction — a content whose rows no longer
-        // say what was shown refuses its group, it is never written on a guess.
-        struct Group: Hashable { let role: ProvenanceRole; let sourceMissing: Bool }
-        var plan: [Group: [String]] = [:]
-        for key in keys {
-            guard let estimate = shown(of: key, roles: roles), !estimate.isConfirmed else { continue }
-            // Rick's own "source not in the catalog" flag on a Master is kept as he set it.
-            let flag = roles.byDigest[key]?.sourceNotInCatalog ?? false
-            plan[Group(role: estimate.role, sourceMissing: flag), default: []].append(key)
-        }
-        let planned = plan.values.reduce(0) { $0 + $1.count }
-        let skipped = keys.count - planned
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
+        let skipped = max(0, selected - shown.count)
         var confirmed = 0
-        for group in plan.keys.sorted(by: { ($0.role.rawValue, $0.sourceMissing ? 1 : 0) < ($1.role.rawValue, $1.sourceMissing ? 1 : 0) }) {
-            let members = plan[group] ?? []
-            var readBack: [String: ProvenanceEstimate] = [:]
-            let outcome = roles.set(group.role, digests: Set(members), sourceMissing: group.sourceMissing, now: now) { tx in
-                readBack = try Self.confirmRows(members, role: group.role, at: seconds, in: tx)
+        var changed: [String] = []
+        for (digest, estimate) in shown.sorted(by: { $0.key < $1.key }) where !estimate.isConfirmed {
+            // Rick's own "source not in the catalog" flag on a Master is kept as he set it.
+            let flag = roles.byDigest[digest]?.sourceNotInCatalog ?? false
+            let fields = Self.confirmedFields(estimate).map(\.field).joined(separator: ", ")
+            var table: ProvenanceEstimate?
+            var wasRead = false
+            var after: ProvenanceEstimate?
+            let outcome = roles.set(estimate.role, digests: [digest], sourceMissing: flag, now: now,
+                                    alongsideWhat: "with Rick's confirmed \(fields) rows (Confirm Provenance)") { tx in
+                wasRead = false
+                let standing = try Self.visibleStanding(digest, in: tx)
+                table = standing.table
+                wasRead = true
+                after = try Self.confirmRows(digest, shown: estimate, visible: standing.visible, at: seconds, in: tx)
             }
             if case .refused(let why) = outcome {
-                let rest = planned - confirmed
-                note("REFUSED confirm provenance: \(scope) — \(why). \(confirmed) confirmed before that; \(rest) not confirmed, nothing of theirs was written.")
-                // A refusal after an earlier role group committed is still a
-                // refusal the caller must show: the words say what did land.
-                return .refused(confirmed == 0 ? why : "\(confirmed) of \(planned) confirmed, then: \(why)")
+                guard wasRead else {
+                    // The session refused before the table was read (a hold, a viewer, a blocked store): the same for every content.
+                    note("REFUSED confirm provenance: \(scope) — \(why). \(confirmed) confirmed before that; nothing else was written.")
+                    return .refused(confirmed == 0 ? why : "\(confirmed) confirmed, then: \(why)")
+                }
+                // Nothing of this content was written. What is SHOWN is corrected from the table's own rows.
+                if let table { byDigest[digest] = table } else { byDigest.removeValue(forKey: digest) }
+                commitEpoch &+= 1
+                revision &+= 1
+                changed.append(digest)
+                note("  content \(digest.prefix(12))… NOT confirmed — \(why). Nothing of it was written; what is shown now is what the catalog holds.")
+                continue
             }
-            for digest in members {
-                byDigest[digest] = readBack[digest]
-                note("  content \(digest.prefix(12))… estimated → confirmed by Rick: "
-                     + (readBack[digest].map(ProvenanceEstimateWords.summary) ?? group.role.title))
-            }
-            confirmed += members.count
+            if let after { byDigest[digest] = after } else { byDigest.removeValue(forKey: digest) }
+            confirmed += 1
             commitEpoch &+= 1
             revision &+= 1
+            note("  content \(digest.prefix(12))… estimated → confirmed by Rick: \(ProvenanceEstimateWords.summary(estimate)) "
+                 + "(confirmed rows: \(fields); role set through Set Role)")
+        }
+        guard changed.isEmpty else {
+            let words = "the estimate changed for \(changed.count) content\(changed.count == 1 ? "" : "s") — look again, then confirm"
+                + (confirmed > 0 ? " (\(confirmed) confirmed)" : "")
+            note("REFUSED confirm provenance: \(scope) — \(words).")
+            return .refused(words)
         }
         note("OUTCOME confirm provenance: \(scope) — \(confirmed) confirmed, \(skipped) skipped (no estimate waiting). "
              + "History is kept; to change a role later use Provenance ▸ Set Role.")
         return .confirmed(contents: confirmed, skipped: skipped)
     }
 
-    /// Inside Set Role's transaction: for each content the table must still
-    /// hold a PROVISIONAL estimate of `role`; then Rick's `confirmed` row for
-    /// every field it shows. Returns each content's read-back.
-    nonisolated static func confirmRows(_ digests: [String], role: ProvenanceRole, at seconds: Int64,
-                                        in tx: any CatalogTransaction) throws -> [String: ProvenanceEstimate] {
-        let kind = ProvenanceAssertionSubject.content
-        var out: [String: ProvenanceEstimate] = [:]
-        for digest in digests {
-            let rows = try tx.provenanceAssertions(subjectKind: kind, subjectID: digest)
-            guard let standing = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows), !standing.isConfirmed,
-                  standing.role == role else { throw ProvenanceEstimateChanged(digest: digest) }
-            let values: [(String, String?)] = [(ProvenanceEstimateRule.roleField, standing.role.rawValue),
-                                               (ProvenanceEstimateRule.carrierField, standing.carrier),
-                                               (ProvenanceEstimateRule.captureSetupField, standing.captureSetupID)]
-            for (field, value) in values {
-                guard let value else { continue }
-                let landing = try tx.appendProvenanceAssertion(decision("confirmed", digest: digest, field: field, value: value,
-                                                                        at: seconds, via: ProvenanceEstimateWords.confirmTitle))
-                switch landing {
-                case .recorded, .duplicate: break
-                default: throw ProvenanceRowNotLanded(digest: digest, field: field, landing: landing)
-                }
+    /// The fields Confirm writes for an estimate, with their values.
+    nonisolated static func confirmedFields(_ estimate: ProvenanceEstimate) -> [(field: String, value: String)] {
+        var out = [(ProvenanceEstimateRule.roleField, estimate.role.rawValue)]
+        if let carrier = estimate.carrier { out.append((ProvenanceEstimateRule.carrierField, carrier)) }
+        if let setup = estimate.captureSetupID { out.append((ProvenanceEstimateRule.captureSetupField, setup)) }
+        return out.map { (field: $0.0, value: $0.1) }
+    }
+
+    /// Inside Set Role's transaction — the compare-and-swap: what the table
+    /// would show (`visible`) must be a PROVISIONAL estimate with the same
+    /// role, carrier and capture setup as `shown`; then Rick's `confirmed`
+    /// row for each. Returns the content's read-back.
+    nonisolated static func confirmRows(_ digest: String, shown: ProvenanceEstimate, visible: ProvenanceEstimate?, at seconds: Int64,
+                                        in tx: any CatalogTransaction) throws -> ProvenanceEstimate? {
+        guard let visible, !visible.isConfirmed, visible.role == shown.role, visible.carrier == shown.carrier,
+              visible.captureSetupID == shown.captureSetupID else { throw ProvenanceEstimateChanged(digest: digest) }
+        for (field, value) in confirmedFields(shown) {
+            let landing = try tx.appendProvenanceAssertion(decision("confirmed", digest: digest, field: field, value: value,
+                                                                    at: seconds, via: ProvenanceEstimateWords.confirmTitle))
+            switch landing {
+            case .recorded, .duplicate: break
+            default: throw ProvenanceRowNotLanded(digest: digest, field: field, landing: landing)
             }
-            out[digest] = ProvenanceResolver.estimate(fromRowsOfOneSubject: try tx.provenanceAssertions(subjectKind: kind, subjectID: digest))
         }
-        return out
+        return ProvenanceResolver.estimate(fromRowsOfOneSubject: try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content,
+                                                                                               subjectID: digest))
     }
 
     private func refuseConfirm(_ why: String, _ scope: String) -> ConfirmOutcome {
@@ -566,9 +698,9 @@ final class ProvenanceEstimateStore: ObservableObject {
         let refusal = backing.write("provenance not right: content \(key.prefix(12))…") { tx in
             rejected = nil
             let kind = ProvenanceAssertionSubject.content
-            let rows = try tx.provenanceAssertions(subjectKind: kind, subjectID: key)
-            after = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows)
-            guard let standing = after, !standing.isConfirmed else { return }
+            let seen = try Self.visibleStanding(key, in: tx)
+            after = seen.table
+            guard let standing = seen.visible, !standing.isConfirmed else { return }
             let draft = Self.decision("rejected", digest: key, field: ProvenanceEstimateRule.roleField, value: standing.role.rawValue,
                                       at: seconds, via: ProvenanceEstimateWords.notRightTitle)
             let landing = try tx.appendProvenanceAssertion(draft)

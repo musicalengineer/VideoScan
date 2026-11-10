@@ -24,8 +24,11 @@
 // TAPE GROUPING (2026-11-10, after the real folders: a source directory is
 // NOT one tape — `Misc1990/` holds four). Within one source directory files
 // are related by NAME first, then duration. A stem is the file name,
-// lowercased, without its extension; two files are NAME-RELATED when one stem
-// is a prefix of the other (`franklin_1990_p216` / `franklin_1990_p216_2`).
+// lowercased, without its extension; two files are NAME-RELATED when their
+// stems are equal or the longer one CONTINUES the shorter at a separator
+// (`_`, `-`, space, `.`) — whole tokens, never a raw string prefix:
+// `franklin_1990_p216` / `franklin_1990_p216_2` are related;
+// `montana_tape_1` / `montana_tape_10` and `dan` / `dance_recital` are not.
 //   * related to no other qualifying file → its own tape → `master`,
 //     whatever its length;
 //   * name-related AND durations within 1 % → captures of ONE tape: one
@@ -34,6 +37,20 @@
 //   * name-related to a clearly LONGER file → not classified at all: it may
 //     be a trim of that file, and the facts here cannot tell. The longer one
 //     is still a master.
+//
+// THE CAPTURE SETUP is claimed only on the file's own evidence: the rule
+// names Rick's July 2026 rig, so `captureSetup` is proposed only when the
+// file carries an embedded creation date IN 2026 (its year-month goes into
+// the evidence). No embedded date, or one in another year → role and carrier
+// only, and the evidence says why the setup is not claimed.
+//
+// WHAT STANDS (reading the rows back): per field, Rick's newest decision if
+// it is `confirmed` / `corrected`; otherwise ONLY the newest machine row —
+// and nothing if he rejected that value. An older machine value the rule
+// itself replaced never comes back. A run that stops proposing a content
+// WITHDRAWS its estimate with a new inferred `role` = `unknown` row (the
+// table is append-only), which then is that newest row: nothing is shown.
+// Rick's own Set Role always wins over all of it (`visible`).
 //
 // NOT asserted, by ruling (rule 3: archived means fixed): no name and no date
 // field — `tapeYear` and `digitizedOn` are refused by the door on archived
@@ -91,6 +108,11 @@ public enum ProvenanceEstimateRule {
     public static let fields = [roleField, carrierField, captureSetupField]
 
     public static let carrierVHS = "VHS"
+    /// The year the rule's capture setup was in use: a file's embedded
+    /// creation date must fall in it for the setup to be claimed.
+    public static let setupYear = 2026
+    /// The `rule` a withdrawal row's evidence names.
+    public static let withdrawnRule = "withdrawn"
     /// The only human who decides (the table's CHECK literal; DECISIONS 2026-11-01).
     public static let owner = "rick"
 }
@@ -125,8 +147,8 @@ public struct ProvenanceFact: Sendable, Equatable {
     public var filename: String
     public var container: String
     public var videoCodec: String
-    public var audioCodec: String
     public var durationSeconds: Double
+    /// The file's own embedded creation date: decides whether the capture setup is claimed.
     public var embeddedCreatedAt: Date?
     /// "1280x720" (probe_extra).
     public var resolution: String
@@ -136,14 +158,13 @@ public struct ProvenanceFact: Sendable, Equatable {
     public var originEncoder: String?
 
     public init(digest: String, originalPath: String, filename: String, container: String, videoCodec: String,
-                audioCodec: String = "", durationSeconds: Double, embeddedCreatedAt: Date? = nil, resolution: String,
+                durationSeconds: Double, embeddedCreatedAt: Date? = nil, resolution: String,
                 bitDepth: String, frameRate: String = "", originEncoder: String? = nil) {
         self.digest = digest
         self.originalPath = originalPath
         self.filename = filename
         self.container = container
         self.videoCodec = videoCodec
-        self.audioCodec = audioCodec
         self.durationSeconds = durationSeconds
         self.embeddedCreatedAt = embeddedCreatedAt
         self.resolution = resolution
@@ -153,24 +174,41 @@ public struct ProvenanceFact: Sendable, Equatable {
     }
 }
 
-/// One content's proposal: three fields, one evidence text.
+/// One content's proposal: role and carrier, the capture setup when the
+/// file's own date supports it, and one evidence text.
 public struct ProvenanceProposal: Sendable, Equatable {
     /// `content.digest`'s spelling.
     public var digest: String
     public var role: ProvenanceRole
     public var carrier: String
-    public var captureSetupID: String
+    /// nil = not claimed (no embedded creation date in the setup's year).
+    public var captureSetupID: String?
     /// Sorted-key JSON: the same facts give the same bytes, run after run.
     public var evidenceJSON: String
 
     /// The rows a writer appends, signed by the rule. `at` is the writer's.
     public func drafts(at: Int64) -> [CatalogRow.ProvenanceAssertionDraft] {
-        [(ProvenanceEstimateRule.roleField, role.rawValue), (ProvenanceEstimateRule.carrierField, carrier),
-         (ProvenanceEstimateRule.captureSetupField, captureSetupID)].map { field, value in
+        var values = [(ProvenanceEstimateRule.roleField, role.rawValue), (ProvenanceEstimateRule.carrierField, carrier)]
+        if let captureSetupID { values.append((ProvenanceEstimateRule.captureSetupField, captureSetupID)) }
+        return values.map { field, value in
             CatalogRow.ProvenanceAssertionDraft(subjectKind: ProvenanceAssertionSubject.content, subjectID: digest, field: field,
                                                 value: value, state: "inferred", by: ProvenanceEstimateRule.signer, at: at,
                                                 confidence: ProvenanceEstimateRule.confidence, evidenceJSON: evidenceJSON)
         }
+    }
+
+    /// The row that takes an estimate BACK: an inferred `role` = `unknown`,
+    /// signed by the rule, saying why. Appended (the table has no delete);
+    /// being the newest machine row for the field, it leaves nothing standing.
+    public static func withdrawal(digest: String, why: String, at: Int64) -> CatalogRow.ProvenanceAssertionDraft {
+        let object: [String: Any] = ["rule": ProvenanceEstimateRule.withdrawnRule, "of": ProvenanceEstimateRule.ruleName, "why": why,
+                                     "confidenceIs": ProvenanceEstimateRule.confidenceIs]
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+        return CatalogRow.ProvenanceAssertionDraft(subjectKind: ProvenanceAssertionSubject.content, subjectID: digest,
+                                                   field: ProvenanceEstimateRule.roleField, value: ProvenanceRole.unknown.rawValue,
+                                                   state: "inferred", by: ProvenanceEstimateRule.signer, at: at,
+                                                   confidence: ProvenanceEstimateRule.confidence,
+                                                   evidenceJSON: String(bytes: data, encoding: .utf8) ?? "{}")
     }
 }
 
@@ -209,11 +247,19 @@ public enum ProvenanceResolver {
     public struct Resolution: Sendable, Equatable {
         /// One per classified content, in digest order.
         public var proposals: [ProvenanceProposal] = []
+        /// Every fact handed in. Always notQualifying + byteCopies + qualified,
+        /// and qualified = proposals.count + shorterUnclassified.
         public var examined = 0
-        /// Facts every clause of the rule held for (before grouping; byte copies counted once).
+        /// CONTENTS every clause of the rule held for (byte copies counted once).
         public var qualified = 0
+        /// Facts some clause of the rule failed for.
+        public var notQualifying = 0
+        /// Qualifying facts beyond the first of one content (byte-identical files).
+        public var byteCopies = 0
         /// Qualifying contents left unclassified: clearly shorter than a NAME-RELATED capture in their folder (maybe a trim).
         public var shorterUnclassified = 0
+        /// Those contents, in digest order (a run withdraws an earlier estimate of one).
+        public var shorterDigests: [String] = []
 
         public var masters: Int { proposals.lazy.filter { $0.role == .master }.count }
         public var alternates: Int { proposals.lazy.filter { $0.role == .alternateCapture }.count }
@@ -239,8 +285,11 @@ public enum ProvenanceResolver {
         // Byte copies are one content: the smallest original path speaks for it.
         var byDigest: [String: Candidate] = [:]
         for fact in facts {
-            guard let c = candidate(fact) else { continue }
-            if let held = byDigest[c.digest], held.path <= c.path { continue }
+            guard let c = candidate(fact) else { out.notQualifying += 1; continue }
+            if let held = byDigest[c.digest] {
+                out.byteCopies += 1
+                if held.path <= c.path { continue }
+            }
             byDigest[c.digest] = c
         }
         out.qualified = byDigest.count
@@ -248,18 +297,21 @@ public enum ProvenanceResolver {
         for c in byDigest.values { byDirectory[c.directory, default: []].append(c) }
         for (_, members) in byDirectory {
             let (tapes, shorter) = tapes(in: members)
-            out.shorterUnclassified += shorter
+            out.shorterUnclassified += shorter.count
+            out.shorterDigests += shorter
             for tape in tapes {
                 guard let master = tape.min(by: outranks) else { continue }
                 for c in tape {
                     let role: ProvenanceRole = c.digest == master.digest ? .master : .alternateCapture
+                    let month = setupMonth(c.fact.embeddedCreatedAt)
                     out.proposals.append(ProvenanceProposal(digest: c.digest, role: role, carrier: ProvenanceEstimateRule.carrierVHS,
-                                                            captureSetupID: CaptureSetup.july2026.id,
-                                                            evidenceJSON: evidence(c, master: master, tape: tape)))
+                                                            captureSetupID: month == nil ? nil : CaptureSetup.july2026.id,
+                                                            evidenceJSON: evidence(c, master: master, tape: tape, setupMonth: month)))
                 }
             }
         }
         out.proposals.sort { $0.digest < $1.digest }
+        out.shorterDigests.sort()
         return out
     }
 
@@ -289,23 +341,49 @@ public enum ProvenanceResolver {
         return String(lower[..<dot])
     }
 
+    /// "2026-07" when the file's embedded creation date falls in the setup's
+    /// year (UTC — the rule is pure and the same on every Mac); nil when the
+    /// file has no such date or it is in another year: the setup is not claimed.
+    static func setupMonth(_ created: Date?) -> String? {
+        guard let created else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let parts = calendar.dateComponents([.year, .month], from: created)
+        guard let year = parts.year, let month = parts.month, year == ProvenanceEstimateRule.setupYear else { return nil }
+        return String(format: "%04d-%02d", year, month)
+    }
+
+    /// Where a stem may be continued by a suffix that still names the same tape.
+    static func isSeparator(_ c: Character) -> Bool { c == "_" || c == "-" || c == " " || c == "." }
+
+    /// Whole tokens: the stems are equal, or the longer one continues the
+    /// shorter at a separator. `x` / `x_2` yes; `tape_1` / `tape_10` no.
+    static func nameRelated(_ a: String, _ b: String) -> Bool {
+        let (short, long) = a.count <= b.count ? (a, b) : (b, a)
+        guard long.hasPrefix(short) else { return false }
+        if long.count == short.count { return true }
+        return isSeparator(long[long.index(long.startIndex, offsetBy: short.count)])
+    }
+
     /// Durations within the tolerance of the longer one.
     static func sameLength(_ a: Double, _ b: Double) -> Bool {
         abs(a - b) <= ProvenanceEstimateRule.durationTolerance * max(a, b)
     }
 
     /// One directory's candidates → its tapes (each a list of captures) and
-    /// how many candidates were left out as clearly shorter than a
-    /// name-related file. Stems are sorted, so every stem that EXTENDS stem i
-    /// sits in the run right after it: the inner loop stops at the first
-    /// stem that does not, and unrelated files are never compared.
-    static func tapes(in members: [Candidate]) -> (tapes: [[Candidate]], shorter: Int) {
+    /// the digests left out as clearly shorter than a name-related file.
+    /// Stems are sorted, so every stem that EXTENDS stem i sits in the run
+    /// right after it: the inner loop stops at the first stem that does not
+    /// start with it, and files with unrelated names are never compared.
+    static func tapes(in members: [Candidate]) -> (tapes: [[Candidate]], shorter: [String]) {
         let sorted = members.sorted { ($0.stem, $0.path, $0.digest) < ($1.stem, $1.path, $1.digest) }
         var related: [(Int, Int)] = []
         var dropped = Set<Int>()
         for i in sorted.indices {
             var j = i + 1
             while j < sorted.count, sorted[j].stem.hasPrefix(sorted[i].stem) {
+                // A raw prefix is not a relation (`tape_1` / `tape_10`): whole tokens only.
+                guard nameRelated(sorted[i].stem, sorted[j].stem) else { j += 1; continue }
                 if sameLength(sorted[i].seconds, sorted[j].seconds) {
                     related.append((i, j))
                 } else {
@@ -327,7 +405,7 @@ public enum ProvenanceResolver {
         }
         var groups: [Int: [Candidate]] = [:]
         for i in sorted.indices where !dropped.contains(i) { groups[root(i), default: []].append(sorted[i]) }
-        return (groups.keys.sorted().compactMap { groups[$0] }, dropped.count)
+        return (groups.keys.sorted().compactMap { groups[$0] }, dropped.map { sorted[$0].digest })
     }
 
     /// "1280x720" → 921600; nil unless both sides are positive integers.
@@ -349,7 +427,7 @@ public enum ProvenanceResolver {
     }
 
     /// The facts the rule used, as sorted-key JSON (stable bytes).
-    static func evidence(_ c: Candidate, master: Candidate, tape: [Candidate]) -> String {
+    static func evidence(_ c: Candidate, master: Candidate, tape: [Candidate], setupMonth: String?) -> String {
         // The other captures of this tape, by name (capped: evidence is a note, not a list of a folder).
         let others = tape.filter { $0.digest != c.digest }.map(\.filename).sorted()
         var object: [String: Any] = [
@@ -366,8 +444,15 @@ public enum ProvenanceResolver {
             "groupSize": tape.count,
             "nameRelation": tape.count > 1 ? "prefix" : "none",
             "groupDurationsMs": Array(tape.map { Int(($0.seconds * 1000).rounded()) }.sorted().prefix(8)),
-            "setupStatement": CaptureSetup.july2026.statement,
         ]
+        if let setupMonth {
+            object["embeddedCreatedMonth"] = setupMonth
+            object["setupStatement"] = CaptureSetup.july2026.statement
+        } else {
+            object["captureSetup"] = c.fact.embeddedCreatedAt == nil
+                ? "not claimed: the file carries no embedded creation date"
+                : "not claimed: the file's embedded creation date is not in \(ProvenanceEstimateRule.setupYear)"
+        }
         if !c.fact.frameRate.isEmpty { object["frameRate"] = c.fact.frameRate }
         if let encoder = c.fact.originEncoder, !encoder.isEmpty { object["originEncoder"] = encoder }
         if !others.isEmpty { object["relatedNames"] = Array(others.prefix(8)) }
@@ -389,19 +474,49 @@ public enum ProvenanceResolver {
         var row: CatalogRow.ProvenanceAssertionReading
     }
 
-    /// Rick's newest decision on `field` wins: `confirmed` / `corrected` is
-    /// the value; a `rejected` leaves only machine rows whose value he has
-    /// not rejected since. No human row → the newest live machine row.
+    /// The newest machine row of `field` — what the machine says NOW.
+    static func newestMachineRow(_ rows: [CatalogRow.ProvenanceAssertionReading], field: String) -> CatalogRow.ProvenanceAssertionReading? {
+        rows.filter { $0.field == field && $0.state == "inferred" && MachineEraResolver.isMachine($0.by) }.max { $0.seq < $1.seq }
+    }
+
+    /// Rick's newest decision on `field` wins when it is `confirmed` /
+    /// `corrected`. Otherwise ONLY the newest machine row can stand, and it
+    /// does not if Rick rejected its value: an older value the machine itself
+    /// replaced is never brought back (review 2026-11-10).
     static func standing(_ rows: [CatalogRow.ProvenanceAssertionReading], field: String) -> FieldStanding? {
         let mine = rows.filter { $0.field == field }
         if let decided = mine.filter({ $0.by == ProvenanceEstimateRule.owner }).max(by: { $0.seq < $1.seq }),
            decided.state == "confirmed" || decided.state == "corrected" {
             return FieldStanding(value: decided.value, confirmed: true, row: decided)
         }
-        let live = mine.filter { row in
-            row.state == "inferred" && MachineEraResolver.isMachine(row.by) && !MachineEraResolver.isRejected(row, among: mine)
-        }
-        return live.max { $0.seq < $1.seq }.map { FieldStanding(value: $0.value, confirmed: false, row: $0) }
+        guard let newest = newestMachineRow(mine, field: field), !MachineEraResolver.isRejected(newest, among: mine) else { return nil }
+        return FieldStanding(value: newest.value, confirmed: false, row: newest)
+    }
+
+    /// THE ONE VISIBILITY RULE, for every surface (glyph, menu, Inspector,
+    /// File Journey, dossier, Confirm): Rick's own role (Provenance ▸ Set
+    /// Role) wins.
+    ///   * his role is the estimate's → shown as it stands;
+    ///   * he has no role, or set Unknown → shown as PROVISIONAL, even if he
+    ///     once confirmed it (Unknown after a Confirm takes his word back);
+    ///   * he set any other role → nothing is shown.
+    public static func visible(_ estimate: ProvenanceEstimate, rickRole: ProvenanceRole) -> ProvenanceEstimate? {
+        if rickRole == estimate.role { return estimate }
+        guard rickRole == .unknown else { return nil }
+        var provisional = estimate
+        provisional.isConfirmed = false
+        return provisional
+    }
+
+    /// Whether `rows` hold a live role from `signer` that a run may withdraw:
+    /// the newest machine role row is that signer's, names a real role, and
+    /// Rick has not rejected it (then nothing stands already).
+    public static func withdrawable(_ rows: [CatalogRow.ProvenanceAssertionReading],
+                                    signer: String = ProvenanceEstimateRule.signer) -> ProvenanceRole? {
+        guard let newest = newestMachineRow(rows, field: ProvenanceEstimateRule.roleField), newest.by == signer,
+              let role = ProvenanceRole(rawValue: newest.value), role != .unknown,
+              !MachineEraResolver.isRejected(newest, among: rows) else { return nil }
+        return role
     }
 
     /// The estimate that stands for a content, from ALL its assertion rows
@@ -428,7 +543,8 @@ public enum ProvenanceResolver {
     /// The rule's evidence in words, for an ⓘ pop-over: what the rule saw.
     /// Never the confidence (it is not read here at all). nil = no machine row.
     public static func evidenceWords(fromRowsOfOneSubject rows: [CatalogRow.ProvenanceAssertionReading]) -> String? {
-        guard let row = rows.filter({ $0.field == ProvenanceEstimateRule.roleField && $0.state == "inferred" })
+        guard let row = rows.filter({ $0.field == ProvenanceEstimateRule.roleField && $0.state == "inferred"
+                                          && $0.value != ProvenanceRole.unknown.rawValue })
             .max(by: { $0.seq < $1.seq }) else { return nil }
         let e = MachineEraResolver.object(row.evidenceJSON)
         var parts: [String] = []
@@ -443,21 +559,24 @@ public enum ProvenanceResolver {
                             : "\(group) captures in that folder share its name and length" + (names.isEmpty ? "" : " (with \(names))"))
         }
         var text = "Rule \(e["rule"] as? String ?? "unknown") (\(row.by)): " + parts.joined(separator: "; ") + "."
+        if let month = e["embeddedCreatedMonth"] as? String { text += " The file's embedded creation date is in \(month)." }
         if let statement = e["setupStatement"] as? String { text += " Capture setup as stated: \(statement)." }
+        if let not = e["captureSetup"] as? String { text += " Capture setup \(not)." }
         return text
     }
 
-    /// The `at` of a stored machine row that already says exactly `draft`
-    /// (field, value, signer, evidence) and that Rick has not rejected since;
-    /// nil when there is none. A writer re-uses it so the door answers
-    /// `.duplicate` — a second run writes nothing — while a REJECTED value is
-    /// offered afresh, so the table's veto trigger answers (and is reported).
+    /// The `at` of the NEWEST machine row of the draft's field when that row
+    /// already says exactly `draft` (value, signer, evidence) and Rick has not
+    /// rejected it since; nil otherwise. A writer re-uses it so the door
+    /// answers `.duplicate` — a second run writes nothing — while a REJECTED
+    /// value is offered afresh, so the table's veto trigger answers (and is
+    /// reported), and a value the rule had withdrawn or replaced is written
+    /// again as a new newest row.
     public static func standingAt(of draft: CatalogRow.ProvenanceAssertionDraft,
                                   among rows: [CatalogRow.ProvenanceAssertionReading]) -> Int64? {
-        rows.filter { row in
-            row.field == draft.field && row.value == draft.value && row.state == draft.state && row.by == draft.by
-                && row.evidenceJSON == draft.evidenceJSON && !MachineEraResolver.isRejected(row, among: rows)
-        }.max { $0.seq < $1.seq }?.at
+        guard let newest = newestMachineRow(rows, field: draft.field), newest.value == draft.value, newest.by == draft.by,
+              newest.evidenceJSON == draft.evidenceJSON, !MachineEraResolver.isRejected(newest, among: rows) else { return nil }
+        return newest.at
     }
 
     // MARK: 3. The words

@@ -404,10 +404,14 @@ resolve < 1 s.
 
 **C2, first slice built 2026-11-10 (DECISIONS 2026-11-10, "estimated provenance is shown as PROVISIONAL").** One rule
 (`vhsCapture2026`: original path under `Converted_VHS_Tapes_2026`, FFV1 in Matroska, ≥ 20 min; within a source folder
-files are related by NAME first — one lowercased stem a prefix of the other — then duration: unrelated → its own
+files are related by NAME first — equal lowercased stems, or one continuing the other at a separator (whole tokens:
+`tape_1` / `tape_10` are not related) — then duration: unrelated → its own
 tape, a master; related and within 1 % → one tape, one master, the rest alternate captures; related to a clearly
 longer file → left unclassified, it may be a trim)
-writes `inferred` `role` / `carrier` / `captureSetup` rows. Core `Provenance/ProvenanceResolver.swift` (the rule, what
+writes `inferred` `role` / `carrier` rows, and `captureSetup` only when the file's own embedded creation date is in
+2026. What stands is the NEWEST machine row per field (never an older one after a reject); a run withdraws an
+estimate it no longer makes with an inferred `role` = `unknown` row; Confirm is a compare-and-swap on what was shown;
+Rick's Set Role wins on every surface, and Unknown after a Confirm makes it provisional again (review 2026-11-10). Core `Provenance/ProvenanceResolver.swift` (the rule, what
 stands, the words); app `Provenance/ProvenanceEstimateStore.swift` (Estimate, Confirm, Not Right),
 `ProvenanceEstimateJob.swift` (MFO), `ProvenanceEstimateMark.swift` (the Archive glyph, the row menu, the Inspector
 line). Differences from the text above: the store is `ProvenanceEstimateStore` and the job `ProvenanceEstimateJob`;
