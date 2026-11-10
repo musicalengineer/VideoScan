@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-10 (Tuesday ~04:30, after the testbed night). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-10 (Tuesday, after the testbed night and Rick's two rulings). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -15,7 +15,8 @@
    gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min).
 2. **State of `main` on the testbed, 11/10 (commit `4dc4eb2a6`):**
    - M4 app suite **GREEN**: 13,393 passed, 0 failed. Gauntlet **AMBER** (7 known issues, 894 unadapted suites, ui not
-     run) — AMBER is the expected state until those are adapted; it had been RED four days for two SigLIP tests that
+     run) — AMBER is the expected state until those are adapted. A skipped test now makes its stage AMBER with the
+     test named, not RED (Rick 11/10); it had been RED four days for two SigLIP tests that
      cannot run in its sandbox (now listed as blocked, with the reason).
    - M5 Ultra nightly: 13,397 passed, **1 failed** — `persistVerdictPathNeverWritesTheRealCatalog()`. A false alarm: the
      only file that moved was `catalog.sqlite-shm`, which the Background helper touches by reading. Fixed in
@@ -49,10 +50,6 @@
    #439, #418, #408; the worker records its exit signal; `CaptionRunnerError` on Avid MXF.
 
 ## Waiting on Rick
-- **Gauntlet policy:** should a skipped test make the gauntlet RED (today's rule), or AMBER with the skip named?
-- **Interrupted runs:** a testbed run killed mid-way (the 11/09 macOS update) leaves no row, so the page shows the
-  older run with no sign one was lost. A record for it was built and cut after four Codex rounds; wanted, or is
-  "BEHIND" enough?
 - **Triage:** close #327, #354, #353, #342, #345 after a look; #332.
 - **Realtime viewer questions:** (1) should Stop confirm first? (2) helper counts: today, last 24 h, or since start?
 - **"Gone" tile wording/icon** (Realtime Catalog Scan).

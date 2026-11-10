@@ -139,6 +139,18 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertNotIn('skipped_tests_more', unit)
         self.assertNotIn('why', {k: v for k, v in row['stages'][1].items() if v is not None})   # ui stays "phase 2"
 
+    def test_an_amber_skip_publishes_its_phrase_and_the_test_names(self):
+        """Rick 2026-11-10: a skipped test is AMBER with the test named."""
+        self.result['status'] = 'amber'
+        self.result['stages'][0].update(
+            status='amber', reason='2 skipped tests — named, not a pass', failed=0, skipped=2,
+            skipped_tests=['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'],
+            failed_tests=[], incomplete_tests=[], skipped_tests_truncated=0)
+        unit = json.loads(self.publish('--dry-run').stdout)['stages'][0]
+        self.assertEqual(unit['status'], 'amber')
+        self.assertEqual(unit['why'], '2 skipped tests — named, not a pass')
+        self.assertEqual(unit['skipped_tests'], ['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'])
+
     def test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published(self):
         """Privacy: an error description (a path) becomes "other"; a display title or a
         path among the names is counted, never shown; the lists are capped."""

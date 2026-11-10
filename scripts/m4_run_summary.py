@@ -86,6 +86,13 @@ def _amber_reasons(result):
         total = sum(n for _, n in known)
         reasons.append(f"{total} known issue{'s' if total != 1 else ''} ("
                        + ", ".join(f"{name} {n}" for name, n in known) + ")")
+    for s in stages:
+        if int(s.get('skipped') or 0) > 0:                  # AMBER with the test named (Rick 2026-11-10)
+            n = int(s['skipped'])
+            names = [t for t in (s.get('skipped_tests') or []) if isinstance(t, str)]
+            more = n - min(len(names), NAMES_SHOWN)
+            shown = ', '.join(names[:NAMES_SHOWN]) + (f" +{more} more" if more > 0 and names else '')
+            reasons.append(f"{n} skipped in {s.get('name', '?')}" + (f": {shown}" if names else ''))
     held = [s for s in stages if s.get('status') in ('blocked', 'amber', 'incomplete') and s.get('blocked_details')]
     if held:
         reasons.append(f"{len(held)} stage{'s' if len(held) != 1 else ''} blocked "

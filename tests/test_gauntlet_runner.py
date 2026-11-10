@@ -205,13 +205,44 @@ else:
         self.assertEqual(env['HOME'], self.result['roots']['home'])
         self.assertEqual(env['VS_UI_TEST'], '1')
 
-    def test_missing_structured_counts_and_skips_fail(self):
-        self.config.update(unit={'malformed': True}, regression={'skipped': 1})
+    def test_missing_structured_counts_fail(self):
+        self.config.update(unit={'malformed': True})
         self.run_runner()
         self.assertEqual(self.stage('unit')['status'], 'failed')
         self.assertIn('counts unavailable', self.stage('unit')['reason'])
-        self.assertEqual(self.stage('regression')['status'], 'failed')
-        self.assertIn('skipped', self.stage('regression')['reason'])
+
+    def test_a_skipped_test_is_amber_and_said_not_red(self):
+        # Rick 2026-11-10: "amber with test name". Until then one skip was RED
+        # ("unexpected skipped tests"): two SigLIP skips held the gauntlet RED 11/06-11/09.
+        self.config.update(regression={'passed': 2, 'skipped': 1})
+        self.run_runner()
+        regression = self.stage('regression')
+        self.assertEqual(regression['status'], 'amber')
+        self.assertEqual(regression['reason'], '1 skipped test — named, not a pass')
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.completed.returncode, 0)
+        self.assertIn('1 skipped in regression', self.result['amber_reasons'])
+        self.assertIn('GAUNTLET AMBER', self.completed.stdout)
+
+    def test_a_skip_beside_a_known_issue_says_both(self):
+        self.config.update(unit={'passed': 5, 'skipped': 2, 'known': 1})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'amber')
+        self.assertEqual(self.stage('unit')['reason'],
+                         '2 skipped tests — named, not a pass; 1 known issue (withKnownIssue) — tracked, not a pass')
+
+    def test_a_failure_beside_a_skip_is_red(self):
+        self.config.update(unit={'passed': 5, 'skipped': 2, 'failed': 1})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertEqual(self.stage('unit')['reason'], 'test failures')
+        self.assertEqual(self.result['status'], 'failed')
+
+    def test_skipping_under_the_floor_is_still_red(self):
+        self.config.update(unit={'passed': 1, 'skipped': 4})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertIn('below expected floor', self.stage('unit')['reason'])
 
     def test_known_issue_is_counted_and_named_not_a_pass(self):
         # 2026-09-28 baseline: one withKnownIssue (#567) made the Hallie stage
