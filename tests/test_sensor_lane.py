@@ -148,6 +148,13 @@ def test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way():
         "case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
     ])
     assert sl.count(xc) == (1, 1, ["VideoScanTests.Suite.testBroken"])
+    # One XCTest failure printed in both forms is one failure (Codex #279).
+    twice = "\n".join([
+        "Test Case '-[VideoScanTests.Suite testBroken]' failed (0.01 seconds).",
+        "Test case 'Suite/testBroken()' failed on 'My Mac (1)' (0.010 seconds)",
+        "Test case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+    ])
+    assert sl.count(twice) == (1, 1, ["Suite/testBroken()"])
 
 
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
