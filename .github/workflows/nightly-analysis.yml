@@ -1359,7 +1359,13 @@ jobs:
   findings-to-issues:
     name: Findings → GitHub issues
     needs: [strict-concurrency, codeql, thread-sanitizer, sanitizers, lint-strict]
-    if: always()
+    # OFF 2026-11-10 (Rick: "switch it off, since the M4 runs all that and
+    # reports it in metrics"): every tool this job reads has been off since
+    # 11/04, so it filed one empty "Nightly findings" ticket a day. The
+    # aggregate job below already tolerates a missing summary, and the morning
+    # alert (scripts/nightly_findings_alert.py) is quiet for a stale one.
+    # Restore `if: always()` together with the tool jobs above.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Two overlapping runs (a manual dispatch during the nightly, or a
