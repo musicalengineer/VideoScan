@@ -1163,6 +1163,112 @@ def test_failures_links_list_each_macs_failed_test_names(tmp_path):
 
 
 @needs_node
+def test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind(tmp_path):
+    """RED 2026-11-09: two failed publishes left the summary a day old; the M5 Ultra's
+    green 02:00 run was on the branch and the card still showed the day before, with no
+    cue. Compared by content (Codex #275 F5): each Mac's newest published run against the
+    run its row shows — the summary's build time decides nothing."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, m4_done, ultra_done = two_studio_fixture(now)
+    base = fx["testdriver.jsonl"]
+    row = lambda host, ts: dict(ts=iso(ts), source="nightly-local", host=host, status="ok", passed=13358, failed=0, total=13423)
+    shown = jsonl([row("RicksM4", m4_done), row("RicksUltra", ultra_done)])
+
+    def behind(rows, generated=None):
+        fx["testdriver.jsonl"] = rows
+        if generated is not None:
+            fx["summary_latest.json"]["generated"] = iso(generated)
+        out = run_page(tmp_path, fx, {"hash": "#all"})
+        assert out["errors"] == []
+        _, _, words = card_tile(out["sections"]["head"])
+        m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
+        return m.group(1) if m else None
+
+    # The summary shows exactly each Mac's newest run: not behind, whenever it was built
+    # (a build time captured BEFORE the rows' times must not cry BEHIND).
+    assert behind(shown, generated=ultra_done - timedelta(minutes=30)) is None
+    # A newer Ultra run than the one its row shows: behind, naming the Mac and the run —
+    # even when the summary was built only ten minutes before it (the old 20-minute grace hid this).
+    newer = ultra_done + timedelta(minutes=10)
+    words = behind(shown + jsonl([row("RicksUltra", newer)]), generated=ultra_done)
+    assert words and "M5 Ultra" in words and et_when(newer) in words and f"built {et_when(ultra_done)}" in words, words
+    # A newer M4 run only: the M4 is named.
+    words = behind(shown + jsonl([row("RicksM4", now)]))
+    assert words and "M4 Max" in words and et_when(now) in words, words
+    # A scoped (gauntlet) run, an off-rota Mac's row and a row with a bad time never make it behind.
+    extra = jsonl([dict(ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", stages=[]),
+                   row("RicksM1", now), dict(row("RicksM4", now), ts="soon")])
+    assert behind(shown + extra) is None
+    # A cell from an older summary (no finish time) is compared by its night.
+    for night in fx["summary_latest.json"]["nightly"]["nights"]:
+        for cell in night["hosts"].values():
+            cell.pop("finished", None)
+    assert behind(shown) is None
+    words = behind(shown + jsonl([row("RicksUltra", now + timedelta(days=2))]))
+    assert words and "M5 Ultra" in words, words
+    fx["testdriver.jsonl"] = base
+
+
+@needs_node
+def test_a_mac_the_summary_has_never_seen_is_behind_too(tmp_path):
+    """Codex #276 F5 (RED first): the summary lists only the M4; the M5 Ultra then
+    publishes its first run. Only Macs already in the summary were compared."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, m4_done, _ = two_studio_fixture(now)
+    s = fx["summary_latest.json"]["nightly"]
+    s["hosts"] = ["M4"]
+    for night in s["nights"]:
+        night["hosts"].pop("Ultra", None)
+    row = lambda host, ts: dict(ts=iso(ts), source="nightly-local", host=host, status="ok", passed=1, failed=0, total=1)
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now)])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
+    assert m and "M5 Ultra" in m.group(1) and et_when(now) in m.group(1), words
+    # A Mac whose only run is older than the nights the summary covers is not "behind" (Codex #277).
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now - timedelta(days=200))])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now)])
+    # A Mac the summary names as off the rota is never "behind".
+    s["off_rota"] = ["Ultra"]
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+
+
+@needs_node
+def test_a_scoped_run_says_why_a_stage_failed_and_which_tests(tmp_path):
+    """RED 2026-11-10 (Rick: "it says failures exist but when I click I cannot see what
+    tests failed"): the gauntlet table showed "unit: failed · 0 failed · 2 skipped" and
+    nothing else. Each stage now shows the runner's reason and opens its test names."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx = full_fixtures(now)
+    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
+        ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", commit="a" * 40, stages=[
+            dict(name="unit", status="failed", passed=4316, failed=0, skipped=2, why="unexpected skipped tests",
+                 skipped_tests=["VideoScanTests/SoundSuite/needsFixture()", "<b>x</b>"], skipped_tests_more=3),
+            dict(name="regression", status="amber", passed=827, failed=0, skipped=0,
+                 why="2 known issues (withKnownIssue) — tracked, not a pass"),
+            dict(name="integration", status="passed", passed=6, failed=0, skipped=0)])])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    page = json.dumps(out["sections"])
+    html = next(v for v in out["sections"].values() if isinstance(v, str) and "Scoped test runs" in v)
+    assert "Why, and which tests" in html
+    unit = re.search(r"<tr><td>unit</td>(.*?)</tr>", html, re.S).group(1)
+    assert "unexpected skipped tests" in unit
+    opener = re.search(r'<details class="fails"><summary>5 skipped</summary>(.*?)</details>', unit, re.S)
+    assert opener, unit
+    assert re.findall(r"<li>(.*?)</li>", opener.group(1)) == ["VideoScanTests/SoundSuite/needsFixture()", "&lt;b&gt;x&lt;/b&gt;"]
+    assert "3 more are not named" in opener.group(1)
+    regression = re.search(r"<tr><td>regression</td>(.*?)</tr>", html, re.S).group(1)
+    assert "2 known issues (withKnownIssue) — tracked, not a pass" in regression and "<details" not in regression
+    integration = re.search(r"<tr><td>integration</td>(.*?)</tr>", html, re.S).group(1)
+    assert integration.endswith(f"<td>{chr(0x2014)}</td>"), integration
+    assert "<b>x</b>" not in page.replace("\\", "")
+
+
+@needs_node
 def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)

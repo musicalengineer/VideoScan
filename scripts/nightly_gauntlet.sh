@@ -15,6 +15,11 @@
 #      its row) — unless --gauntlet-only (below);
 #   3. runs scripts/run_gauntlet.sh --away (published: no --queue-only, so the
 #      row lands on the page's Speed & safety section);
+#   3a. runs scripts/run_python_tests.sh through scripts/script_tests_lane.py:
+#      the tests of the testbed's own scripts, the publishers and the metrics
+#      page (2026-11-10: nothing ran them on a Mac; GitHub's Linux job skips
+#      the macOS-only ones, and the nightly's shell self-test sat red for five
+#      days unseen). RED fails the run and the done line names the tests;
 #   3b. runs tools/publish_metrics.py --no-events, so the page's summary
 #      (Last night's tests) shows this run before the done line points at it;
 #   4. writes the done line to ~/Library/Logs/VideoScan/testbed_latest.txt,
@@ -27,7 +32,8 @@
 # the testbed was busy, or never ran). The suite is not re-run; the done line
 # says so; the exit code is the gauntlet's.
 #
-# Exit: the nightly suite's exit code, or 1 when the gauntlet is RED.
+# Exit: the nightly suite's exit code, or 1 when the gauntlet or the script
+# tests are RED.
 # Tests: tests/test_nightly_gauntlet.py (fake suite, fake gauntlet, fake ssh).
 
 set -u
@@ -146,6 +152,30 @@ else
 fi
 drop_lock
 
+# ── 2a. the testbed's own script tests ──────────────────────────────
+# One phrase for the done line (scripts/script_tests_lane.py): "script tests
+# GREEN (1803 passed)" / "script tests RED (2 failed: test_x.py::test_a, …)".
+# No runner in this checkout: nothing is said.
+S_TEXT=""
+S_RC=0
+SCRIPT_TESTS="$REPO_ROOT/scripts/run_python_tests.sh"
+SCRIPT_TESTS_BUDGET="${VIDEOSCAN_SCRIPT_TESTS_BUDGET:-1500}"
+if [ "${VIDEOSCAN_SCRIPT_TESTS:-1}" = 0 ]; then
+    log "script tests: skipped (VIDEOSCAN_SCRIPT_TESTS=0)"
+elif [ ! -f "$SCRIPT_TESTS" ] || [ ! -f "$REPO_ROOT/scripts/script_tests_lane.py" ]; then
+    log "script tests: skipped (no runner in $REPO_ROOT/scripts)"
+else
+    S_OUT="$LOGDIR/nightly_script_tests.log"
+    log "script tests: start"
+    S_TEXT="$(python3 "$REPO_ROOT/scripts/script_tests_lane.py" "$SCRIPT_TESTS" "$S_OUT" "$SCRIPT_TESTS_BUDGET" "$REPO_ROOT" 2>/dev/null | tail -1)"
+    case "$S_TEXT" in
+        "script tests GREEN"*) ;;
+        "") S_TEXT="script tests RED (no result)"; S_RC=1 ;;
+        *) S_RC=1 ;;
+    esac
+    log "script tests: $S_TEXT (log $S_OUT)"
+fi
+
 # ── 2b. rebuild the page's summary ──────────────────────────────────
 # "Last night's tests" reads summary_latest.json, which the 04:00 / 05:30 jobs
 # rebuild — right after the old 02:00 nightly, ~14 h after this 14:00 run. So
@@ -164,7 +194,7 @@ fi
 
 # ── 3. the done line ────────────────────────────────────────────────
 SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-DONE="${LAB:-$HOST} full testbed done $(date '+%Y-%m-%d %H:%M') (main ${SHA}): nightly suite ${SUITE_WORD}${SUITE_TOTAL:+ ${SUITE_TOTAL}} · ${G_TEXT} · results ${PAGE_URL}"
+DONE="${LAB:-$HOST} full testbed done $(date '+%Y-%m-%d %H:%M') (main ${SHA}): nightly suite ${SUITE_WORD}${SUITE_TOTAL:+ ${SUITE_TOTAL}} · ${G_TEXT}${S_TEXT:+ · $S_TEXT} · results ${PAGE_URL}"
 printf '%s\n' "$DONE" >"$LOGDIR/testbed_latest.txt"
 printf '%s\n' "$DONE" >>"$LOGDIR/testbed_history.log"
 log "$DONE"
@@ -178,4 +208,5 @@ if [ -n "$NOTIFY_HOST" ]; then
 fi
 
 [ "$SUITE_RC" = 0 ] || exit "$SUITE_RC"
-exit "$G_RC"
+[ "$G_RC" = 0 ] || exit "$G_RC"
+exit "$S_RC"

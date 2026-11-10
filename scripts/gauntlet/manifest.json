@@ -33134,6 +33134,11 @@
         "test_gauntlet_publish.py"
       ],
       "tests": [
+        "test_a_failed_stage_publishes_why_and_which_tests",
+        "test_a_path_or_a_name_the_repo_does_not_declare_is_never_published",
+        "test_a_queued_row_keeps_its_names_and_counts_when_published_later",
+        "test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published",
+        "test_argument_labels_are_dropped_so_only_declared_identifiers_leave",
         "test_dashboard_names_the_run_green_amber_red",
         "test_dashboard_separates_nightly_and_keeps_blocked_stage_duration",
         "test_dry_run_sanitizes_private_fields_and_forces_honest_ui",
@@ -33560,6 +33565,7 @@
         "test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red",
         "test_gauntlet_known_issues_only_is_amber_with_counts",
         "test_gauntlet_pre_amber_result_reads_as_amber",
+        "test_gauntlet_red_names_the_tests_behind_it",
         "test_green_needs_rc_zero_no_failures_and_a_pass",
         "test_live_holder_refuses_and_latest_is_untouched",
         "test_status_dry_run_prints_the_probe",
@@ -33600,8 +33606,11 @@
         "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
+        "test_a_mac_the_summary_has_never_seen_is_behind_too",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
+        "test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind",
         "test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale",
+        "test_a_scoped_run_says_why_a_stage_failed_and_which_tests",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
         "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
@@ -33707,7 +33716,12 @@
       "tests": [
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
         "test_core_codecov_json_keeps_only_core_sources",
+        "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",
         "test_folders_split_logic_from_views_and_core_from_app",
+        "test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess",
+        "test_profiles_from_before_todays_run_are_not_todays_coverage",
+        "test_sensor_a_night_without_core_coverage_says_missing_in_capitals",
+        "test_yesterdays_swiftpm_export_is_not_todays_coverage",
         "test_zero_coverage_logic_files_are_flagged_but_small_ones_are_not"
       ]
     },
@@ -34094,6 +34108,8 @@
       ],
       "tests": [
         "test_a_deleted_transcript_never_lowers_a_published_codex_day",
+        "test_a_failed_fetch_is_retried_with_a_wait_and_then_publishes",
+        "test_a_fetch_that_never_works_fails_in_one_line_with_gits_own_words",
         "test_a_folder_deleted_since_it_was_published_does_not_wedge_the_publish",
         "test_adversarial_rows_are_per_night_counts",
         "test_cli_codex_dir_repeats_and_reads_every_folder",
@@ -34107,6 +34123,7 @@
         "test_events_stream_is_the_prototypes_counts_and_absent_on_any_failure",
         "test_existing_published_rows_are_revalidated",
         "test_folder_names_must_be_plain_source_folders",
+        "test_git_errors_are_one_line",
         "test_merge_keeps_branch_only_days_and_fresh_wins",
         "test_missing_sources_are_none_not_empty",
         "test_no_free_text_leaks_from_any_source",
@@ -34120,6 +34137,7 @@
         "test_refuses_the_main_checkout_as_its_worktree",
         "test_rejected_push_refetches_resets_and_keeps_the_other_publishers_rows",
         "test_second_publish_with_nothing_new_commits_nothing",
+        "test_summary_only_publishes_the_summary_and_reads_no_local_stream",
         "test_the_publisher_reads_live_and_archived_codex_transcripts",
         "test_unknown_stream_is_refused",
         "test_validator_rejects_anything_off_the_allowlist"
@@ -34394,6 +34412,8 @@
         "test_sensor_lane.py"
       ],
       "tests": [
+        "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
         "test_counting_the_log_names_every_failure",
@@ -34989,6 +35009,58 @@
         "theDoorMarksARealContentOnTheMigratedCopy",
         "theLiveCatalogOpensWithEveryRowKept",
         "theRewoundCopyMigratesWithEveryRowKeptAndEverythingPrivate"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_nightly_shell_selftests.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_shell_selftests.py"
+      ],
+      "tests": [
+        "test_every_nightly_shell_selftest_has_a_seat_here",
+        "test_nightly_analysis_lane_selftest_passes",
+        "test_nightly_failure_modes_selftest_passes",
+        "test_nightly_hallie_replay_selftest_passes"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_script_tests_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_script_tests_lane.py"
+      ],
+      "tests": [
+        "test_a_child_in_its_own_session_is_killed_too",
+        "test_a_run_that_proves_nothing_is_red_never_green",
+        "test_a_timeout_is_red_whatever_the_log_says",
+        "test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits",
+        "test_cli_a_hung_runner_is_stopped_at_its_budget_with_its_children",
+        "test_cli_bad_arguments_and_a_missing_runner_are_red_in_one_line",
+        "test_cli_runs_a_real_runner_and_writes_its_log",
+        "test_failures_are_named_and_counted",
+        "test_green_needs_exit_zero_and_at_least_one_passed_test",
+        "test_only_pytests_final_summary_line_counts",
+        "test_sensor_the_testbed_runs_the_lane_and_its_red_fails_the_run"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_nightly_publish_and_summary.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_publish_and_summary.py"
+      ],
+      "tests": [
+        "test_a_commit_that_fails_is_not_pushed_and_nothing_is_lost",
+        "test_a_good_publish_lands_the_queued_rows_first_and_clears_the_queue",
+        "test_sensor_the_summary_is_rebuilt_from_an_exit_trap_after_every_run",
+        "test_the_exit_trap_keeps_the_runs_own_exit_code"
       ]
     }
   ],
@@ -38760,6 +38832,18 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapePublicMarksMigrationTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "tests/test_nightly_shell_selftests.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_script_tests_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_nightly_publish_and_summary.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         }
       ],
       "expected_floor": 509,

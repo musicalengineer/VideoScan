@@ -324,7 +324,8 @@ class FakeGit:
     worktree on disk. Records every (path, args) call."""
 
     def __init__(self, repo: Path, remote: dict | None = None, reject_pushes: int = 0,
-                 main_checkout: bool = False):
+                 main_checkout: bool = False, fail_fetches: int = 0):
+        self.fail_fetches = fail_fetches
         self.repo = repo.resolve()
         self.remote = dict(remote or {})
         self.reject_pushes = reject_pushes
@@ -335,8 +336,13 @@ class FakeGit:
     def __call__(self, path, *args, check=True):
         path = Path(path).resolve()
         self.calls.append((path, args))
-        rc, out = 0, ""
-        if args[:2] == ("worktree", "add"):
+        rc, out, err = 0, "", ""
+        if args[0] == "fetch" and self.fail_fetches:
+            self.fail_fetches -= 1
+            rc = 128
+            err = ("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\n"
+                   "Please make sure you have the correct access rights\nand the repository exists.\n")
+        elif args[:2] == ("worktree", "add"):
             wt = Path(args[-1])
             wt.mkdir(parents=True, exist_ok=True)
             (wt / ".git").write_text("gitdir: fake")
@@ -362,7 +368,7 @@ class FakeGit:
                     self.remote[f.name] = f.read_text()
         if check and rc:
             raise pm.PublishError("fake failure")
-        return SimpleNamespace(returncode=rc, stdout=out + "\n", stderr="")
+        return SimpleNamespace(returncode=rc, stdout=out + "\n", stderr=err)
 
     def args_for(self, path):
         return [a for p, a in self.calls if p == Path(path).resolve()]
@@ -418,6 +424,62 @@ def test_push_rejected_every_time_raises(sources, repo, tmp_path):
     with pytest.raises(pm.PublishError):
         pm.publish(fresh_streams(sources), repo=repo, wt=tmp_path / "wt", git=git, folders=FOLDERS, say=lambda m: None)
     assert git.pushes == 0
+
+
+def test_a_failed_fetch_is_retried_with_a_wait_and_then_publishes(sources, repo, tmp_path):
+    """RED 2026-11-09: one "Could not read from remote repository" at 04:47 and again at
+    05:30 on the M4 ended both publishes; the page's summary stayed a day old."""
+    git = FakeGit(repo, fail_fetches=2)
+    said, waits = [], []
+    assert pm.publish(fresh_streams(sources), repo=repo, wt=tmp_path / "wt", git=git, folders=FOLDERS,
+                      say=said.append, sleep=waits.append) == "pushed"
+    assert waits == list(pm.FETCH_BACKOFF_S[:2])
+    assert [a[0] for a in git.args_for(tmp_path / "wt")].count("fetch") == 3
+    assert sum("fetch attempt" in line and "retrying in" in line for line in said) == 2
+
+
+def test_a_fetch_that_never_works_fails_in_one_line_with_gits_own_words(sources, repo, tmp_path):
+    """The caller logs the LAST line of this tool's output: the error must be one line
+    (11/09's log said only "publish: and the repository exists.")."""
+    git = FakeGit(repo, fail_fetches=99)
+    waits = []
+    with pytest.raises(pm.PublishError) as err:
+        pm.publish(fresh_streams(sources), repo=repo, wt=tmp_path / "wt", git=git, folders=FOLDERS,
+                   say=lambda m: None, sleep=waits.append)
+    words = str(err.value)
+    assert "\n" not in words and "Could not read from remote repository" in words and "and the repository exists." in words
+    assert f"failed {len(pm.FETCH_BACKOFF_S) + 1} times" in words
+    assert waits == list(pm.FETCH_BACKOFF_S) and git.pushes == 0
+
+
+def test_git_errors_are_one_line():
+    assert pm.one_line("a\n\n  b\tc \n") == "a b c"
+    assert pm.one_line(None) == "" and len(pm.one_line("x" * 900)) == 300
+
+
+def test_summary_only_publishes_the_summary_and_reads_no_local_stream(tmp_path, monkeypatch, capsys):
+    """The M5 Ultra's nightly rebuilds the page's summary after its own row without
+    touching the streams only the M4 measures (coverage, reviews, sanitizer)."""
+    seen = {}
+
+    def fake_publish(fresh, **kw):
+        seen["fresh"] = dict(fresh)
+        seen["summary"] = kw.get("summary")
+        return "pushed"
+
+    def boom(*a, **k):
+        raise AssertionError("--summary-only must not read a local stream")
+
+    monkeypatch.setattr(pm, "publish", fake_publish)
+    monkeypatch.setattr(pm, "build_streams", boom)
+    monkeypatch.setattr(pm, "events_stats", boom)
+    monkeypatch.setattr(pm, "summary_builder", lambda **kw: SimpleNamespace(daily_rows=lambda: None))
+    monkeypatch.delenv("VIDEOSCAN_PUBLISH_METRICS", raising=False)
+    assert pm.main(["--summary-only", "--worktree", str(tmp_path / "wt")]) == 0
+    assert seen["fresh"] == {} and seen["summary"] is not None
+    assert capsys.readouterr().out.strip().endswith("OUTCOME ok: pushed; streams summary_latest.json")
+    with pytest.raises(SystemExit):
+        pm.main(["--summary-only", "--no-summary"])
 
 
 def test_privacy_failure_stops_before_any_write_or_commit(sources, repo, tmp_path):

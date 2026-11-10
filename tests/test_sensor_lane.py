@@ -110,6 +110,53 @@ def test_counting_the_log_names_every_failure():
     assert "VideoScanCoreTests.CatalogStoreSensorTests.testOnlyTheStoreOpensTheDB" in names
 
 
+def test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named():
+    """RED 2026-11-09: the same tree counted 716 passed on one run and 717 on the next.
+    One "Test case … passed on" line had lost its "Test " to another host's output."""
+    log = "\n".join([
+        "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test ",
+        "case 'HallieShellCLITests/eileensChildren()' passed on 'My Mac - VideoScan (1)' (0.150 seconds)",
+        "case 'B/two()' failed on 'My Mac - VideoScan (2)' (0.010 seconds)",
+        "Test case 'C/three(_:)' passed on 'My Mac - VideoScan (2)' (0.002 seconds)",
+        "a line that only mentions case 'D/four()' passed on something is not at the start",
+    ])
+    passed, failed, names = sl.count(log)
+    assert (passed, failed, names) == (3, 1, ["B/two()"])
+
+
+def test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way():
+    """Codex #276 F8 (RED first): once a torn parallel PASS line was recognised, a
+    "✘ Test broken() failed after" line in the same log was no longer counted."""
+    log = "\n".join([
+        "✘ Test broken() failed after 0.01 seconds.",
+        "Test ",
+        "case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+    ])
+    assert sl.count(log) == (1, 1, ["broken()"])
+    # The same failure printed both ways is one failure, named once by its fuller name.
+    both = "\n".join([
+        "✘ Test alsoBroken() failed after 0.01 seconds with 1 issue.",
+        "Test case 'Suite/alsoBroken()' failed on 'My Mac (1)' (0.010 seconds)",
+        "Test case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+        "✘ Test run with 2 tests in 2 suites failed after 0.5 seconds with 1 issue.",
+    ])
+    assert sl.count(both) == (1, 1, ["Suite/alsoBroken()"])
+    # The XCTest form beside a torn parallel pass (Codex #277).
+    xc = "\n".join([
+        "Test Case '-[VideoScanTests.Suite testBroken]' failed (0.01 seconds).",
+        "case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+    ])
+    assert sl.count(xc) == (1, 1, ["VideoScanTests.Suite.testBroken"])
+    # One XCTest failure printed in both forms is one failure (Codex #279).
+    twice = "\n".join([
+        "Test Case '-[VideoScanTests.Suite testBroken]' failed (0.01 seconds).",
+        "Test case 'Suite/testBroken()' failed on 'My Mac (1)' (0.010 seconds)",
+        "Test case 'Good/ok()' passed on 'My Mac (1)' (0.001 seconds)",
+    ])
+    assert sl.count(twice) == (1, 1, ["Suite/testBroken()"])
+
+
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     # The app half "ran" zero tests (a filter that matched nothing): red.
     monkeypatch.setattr(sl, "run_app", lambda *a, **k: (0, 0, [], 0, 1.0))

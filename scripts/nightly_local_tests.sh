@@ -116,10 +116,24 @@
 #       week without the Whisper weights and every test used a fake. Additive
 #       model_smoke_* row fields; a missing model or a red smoke turns a green
 #       row red with reason model-smoke-<why>.
+#
+#   2026-11-10 (summary-r1):
+#     - The page's summary (summary_latest.json) is rebuilt when the run ends,
+#       on every Mac (tools/publish_metrics.py --summary-only, from an EXIT
+#       trap; best effort, never the run's exit code). Until now only the M4's
+#       jobs rebuilt it, so the M5 Ultra's 02:00 result waited for the M4's
+#       04:00 job and was missing from the page whenever that publish failed
+#       (11/09: both failed, and the page showed a day-old summary).
+#     - publish_row: a `git commit` that fails is no longer followed by a push.
+#       That push "succeeded" as a no-op, the function logged "Published
+#       successfully" and cleared the pending queue, and the row was gone at
+#       the next reset (Codex #276 F2). The row is queued instead.
+#     - NOT here (cut after four Codex rounds, #275–#278; parked in
+#       docs/BACKLOG.md): a record for a run that is cut off part-way.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-11-05-model-smoke-r1"
+NIGHTLY_SCRIPT_VERSION="2026-11-10-summary-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -986,9 +1000,19 @@ except Exception:
         commit_msg="$commit_msg (+ $((appended_count - 1)) backlogged)"
     fi
 
-    git -C "$METRICS_WT" \
+    if ! git -C "$METRICS_WT" \
         -c user.email="nightly@videoscan" -c user.name="Nightly Tests" \
-        commit -m "$commit_msg" --quiet 2>/dev/null
+        commit -m "$commit_msg" --quiet 2>/dev/null; then
+        # No commit, nothing to push: a push now would "succeed" as a no-op, the
+        # queue would be cleared below and the rows would be gone at the next
+        # reset (Codex #276 F2). Queue the new row; the queued ones stay queued.
+        log "ERROR: could not commit the row(s) in the metrics worktree — not pushing"
+        git -C "$METRICS_WT" reset --hard origin/metrics --quiet 2>/dev/null || true
+        if queue_pending "$new_row"; then
+            return 1
+        fi
+        return 2
+    fi
 
     # ── Push with retry-on-conflict ─────────────────────────────────
     # Up to PUSH_MAX_ATTEMPTS tries. Between attempts, pull --rebase to
@@ -1110,6 +1134,18 @@ fi
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 COMMIT_DATE=$(git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
 log "Commit: $COMMIT ($COMMIT_DATE)"
+
+# ── The page summary follows every run (2026-11-10) ──────────────────
+# See the 2026-11-10 note at the top. Best effort: it never changes this
+# run's verdict or exit code (an EXIT trap's return value is not the exit code).
+rebuild_page_summary() {
+    local tool="$REPO/tools/publish_metrics.py" out
+    [ "${VIDEOSCAN_NIGHTLY_SUMMARY:-1}" = 0 ] && return 0
+    if [ ! -f "$tool" ]; then log "Page summary: skipped ($tool not found)"; return 0; fi
+    out="$(python3 "$tool" --summary-only 2>&1 | tail -1)"
+    log "Page summary: ${out:-no output}"
+}
+trap rebuild_page_summary EXIT
 
 # Establish the pre-build readiness state. This guarantees even a build
 # failure publishes the desired red 0 when no quality benchmark is configured.

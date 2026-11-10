@@ -20,6 +20,17 @@ class GauntletPublishTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         source = scripts / 'publish.swift'
         shutil.copy2(REPO / 'scripts/gauntlet/publish.swift', source)
+        # The publisher names a test only when the repo's test sources declare it.
+        tests = cls.repo / 'VideoScan/VideoScanTests'
+        tests.mkdir(parents=True)
+        (tests / 'FakeTests.swift').write_text(
+            'struct SoundSuite { @Test func needsFixture() {} }\n'
+            'final class OtherTests: XCTestCase { func testB() {} }\n'
+            'struct Good { @Test func test() {} }\n'
+            'struct Suite {\n' + ''.join(f'    @Test func test{i}() {{}}\n' for i in range(25)) + '}\n')
+        core = cls.repo / 'VideoScan/VideoScanCore/Tests/VideoScanCoreTests'
+        core.mkdir(parents=True)
+        (core / 'CatalogSuiteTests.swift').write_text('@Suite struct CatalogSuite { @Test func roundTrip() {} }\n')
         cls.binary = cls.repo / 'publisher'
         subprocess.run(['/usr/bin/swiftc', '-module-cache-path', str(cls.repo / 'swift-cache'),
                         str(source), '-o', str(cls.binary)], capture_output=True, check=True)
@@ -110,6 +121,81 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(target.read_text(), 'sentinel')
         self.assertFalse((self.root / 'pending-metrics.jsonl').exists())
+
+    def test_a_failed_stage_publishes_why_and_which_tests(self):
+        """RED 2026-11-10: "unit: failed" with 0 failed and 2 skipped, and no way to see
+        which tests or why. The row now carries the runner's reason and the names."""
+        self.result['status'] = 'failed'
+        self.result['stages'][0].update(
+            status='failed', reason='unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass',
+            failed=0, skipped=2, skipped_tests=['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'],
+            failed_tests=['VideoScanCoreTests.CatalogSuite/roundTrip()'], incomplete_tests=[], skipped_tests_truncated=0)
+        row = json.loads(self.publish('--dry-run').stdout)
+        unit = row['stages'][0]
+        self.assertEqual(unit['why'], 'unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass')
+        self.assertEqual(unit['skipped_tests'], ['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB()'])
+        self.assertEqual(unit['failed_tests'], ['VideoScanCoreTests.CatalogSuite/roundTrip()'])
+        self.assertNotIn('incomplete_tests', unit)
+        self.assertNotIn('skipped_tests_more', unit)
+        self.assertNotIn('why', {k: v for k, v in row['stages'][1].items() if v is not None})   # ui stays "phase 2"
+
+    def test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published(self):
+        """Privacy: an error description (a path) becomes "other"; a display title or a
+        path among the names is counted, never shown; the lists are capped."""
+        many = [f'VideoScanTests/Suite/test{i}()' for i in range(25)]
+        self.result['stages'][0].update(
+            status='failed', reason='Error Domain=NSCocoa "/Users/SECRET/Movies/SECRET.mov"; test failures; package: SECRET thing',
+            failed_tests=['SECRET family title with spaces', '/Users/SECRET/x.swift', 'VideoScanTests/Good/test()'],
+            skipped_tests=many, skipped_tests_truncated=7)
+        completed = self.publish('--dry-run')
+        self.assertNotIn('SECRET', completed.stdout)
+        unit = json.loads(completed.stdout)['stages'][0]
+        self.assertEqual(unit['why'], 'other; test failures; package: other')
+        self.assertEqual(unit['failed_tests'], ['VideoScanTests/Good/test()'])
+        self.assertEqual(unit['failed_tests_more'], 2)
+        self.assertEqual(unit['skipped_tests'], many[:20])
+        self.assertEqual(unit['skipped_tests_more'], 5 + 7)
+
+    def test_a_path_or_a_name_the_repo_does_not_declare_is_never_published(self):
+        """Codex #275 F1 (RED first): "Users/<family>/Movies/Wedding.mov" and "Wedding.mov"
+        passed the shape-only filter and were published. A name must be PROVEN: every type
+        component and the function declared in the repo's test sources."""
+        leaks = ['Users/SECRET_FAMILY/Movies/Wedding.mov', 'Wedding.mov', 'SECRET_FAMILY/Movies/clip()',
+                 'VideoScanTests/SECRET_FAMILY/needsFixture()', 'VideoScanTests/SoundSuite/SECRET_title()',
+                 'SoundSuite/needsFixture', 'SoundSuite/needsFixture()\n', 'Movies.SECRET/needsFixture()',
+                 'SoundSuite/needsFixture() SECRET', 'x' * 150 + '/' + 'needsFixture()' * 5,
+                 # Codex #276 F1: a declared test with an invented argument label kept the label.
+                 'SoundSuite/needsFixture(SECRET_FAMILY:)', 'VideoScanTests/SoundSuite/needsFixture(a:SECRET_b:)']
+        proven = ['SoundSuite/needsFixture()', 'VideoScanTests/SoundSuite/needsFixture()',
+                  'VideoScanCoreTests.CatalogSuite/roundTrip()', 'OtherTests/testB()']
+        self.result['stages'][0].update(status='failed', reason='test failures\n', failed_tests=leaks + proven)
+        completed = self.publish('--dry-run')
+        self.assertNotIn('SECRET', completed.stdout)
+        self.assertNotIn('Wedding', completed.stdout)
+        unit = json.loads(completed.stdout)['stages'][0]
+        self.assertEqual(unit['failed_tests'], proven)
+        self.assertEqual(unit['failed_tests_more'], len(leaks))
+        self.assertEqual(unit['why'], 'other', 'a reason with a trailing newline is not one of the fixed phrases')
+
+    def test_argument_labels_are_dropped_so_only_declared_identifiers_leave(self):
+        """A parameterized test reports as name(_:) or name(question:ast:): it is published
+        as name(), once, and nothing after the parenthesis is ever copied out."""
+        self.result['stages'][0].update(status='failed', reason='test failures', failed_tests=[
+            'Suite/test1(_:)', 'Suite/test1(question:ast:)', 'Suite/test1()', 'VideoScanTests/Suite/test2(_:)'])
+        unit = json.loads(self.publish('--dry-run').stdout)['stages'][0]
+        self.assertEqual(unit['failed_tests'], ['Suite/test1()', 'VideoScanTests/Suite/test2()'])
+        self.assertEqual(unit['failed_tests_more'], 2)
+
+    def test_a_queued_row_keeps_its_names_and_counts_when_published_later(self):
+        """The queue holds SANITIZED rows; publishing one later sanitizes it again."""
+        self.result['stages'][0].update(status='failed', reason='test failures',
+                                        failed_tests=['VideoScanTests/Good/test()', 'not a test id'])
+        first = json.loads(self.publish('--dry-run').stdout)
+        self.result = first                                   # what the queue would hold
+        again = json.loads(self.publish('--dry-run').stdout)
+        self.assertEqual(again['stages'][0]['why'], 'test failures')
+        self.assertEqual(again['stages'][0]['failed_tests'], ['VideoScanTests/Good/test()'])
+        self.assertEqual(again['stages'][0]['failed_tests_more'], 1)
 
     def test_untrusted_machine_commit_and_negative_times_are_sanitized(self):
         self.result.update(machine='SECRET-host', commit='SECRET-commit', elapsed_s=-1)
