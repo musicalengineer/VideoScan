@@ -60,6 +60,8 @@
 - `provenance_assertions.by = 'rick'` is really "the admin user" (Rick, 2026-11-01, on approving v14): one day replace the literal with the owner's identity (a `users`/owner row or a constant the app sets), by an additive migration that keeps old rows readable; nothing until a second user exists.
 
 ## Events, Compare Media, segments
+- Multi-signal file signature: tell SAME footage from RELATED footage by several signals together, not one. Detail: closed GH #225.
+- Event folders: a representative photo as the folder icon, and Finder-style colour tags. Detail: closed GH #331.
 - Events page gets the Compare Media verdict band + two spools per suggested group ("same occasion or different years?" pre-answered); constellation view.
 - Fold the Streams table and Compare Footage into Compare Media.
 - New evidence lines, no new rungs: video barcode for silent footage, SigLIP 2 scene words, speaker similarity.
@@ -98,6 +100,8 @@
 - (ruling) Delete `ArchiveRefile` (predecessor of Update…).
 
 ## Catalog UI and folders
+- Open an audio-only file in an audio editor the user picks. Detail: closed GH #127.
+- Right-click a folder ▸ Validate Folder: every file present, hashed, with sound (Verify for a whole folder). Detail: closed GH #352.
 - Folders, next in order: drag files onto a folder, rename, remove (ungroup, files stay), person folders (green), other (grey); relax exclusive events for person folders.
 - Sound relation `⊂` clip-of within an event; pairwise audio match cached per event.
 - Promote from a folder member offers archive-original / retire-original / remove-other-copies through Cleanup lanes.
@@ -108,6 +112,8 @@
 - Proposed rename (Rick to rule): Catalog ▸ "Update Catalog…" → "Relink Moved Files…" — the verb rescans and relinks after files moved outside the app; "Update" reads as a schema migration, which is automatic at open and never a menu verb (2026-11-01).
 
 ## Archive
+- Misfiled filter in the Archive tab, and a Catalog badge "filed under X · dated Y" (deferred from Update…, 2026-09-27). Detail: closed GH #213.
+- Archive health: verify first, then a reversible remove. Detail: closed GH #223.
 - Off-site copy, verifiable: "Export critical set" (BagIt + checksums), off-site/cloud tracked per archive file (#249, target 2026-11-01).
 - #294 identity drift (17 archived rows read Not Yet Archived, 60 dangling lineage, stale manifest ids) · #286 promote/refile hardening · #221 inspector date edit on an archived record opens Update… · #280 access copies for archived originals · #170 archive portability / Adopt on the Ultra.
 - Portable archive a family can read without VideoScan: `Provenance_README` / Living Will stewardship page.
@@ -128,9 +134,11 @@
 - Pin `.claude/scripts/session_start.sh`'s lane lines with a test (the retired morning-line tests covered the old hook).
 
 ## Archive Angel (all hang on Q8)
+- RAM scratch tier (Off / 8 / 16 / 32 GB): read the original once into RAM and run every step from it. Detail: closed GH #174.
 - Consolidate to one rule set and façade; wise-design stages 4–7; curation phases (fatigue, "New to you", the wings-and-bell reward); `default:` arms that swallow new floors (C07 plan); #231 Angel Checks gates stale across an await.
 
 ## People (Q9), Family Tree, Hallie (Q7)
+- Parked: face recognition research (closed GH #6); person-finder engine follow-ups, engine demoted 2026-09-26, fix only when the People tab needs it (closed GH #148).
 - Hallie's brain placement (Rick 2026-10-27, investigating): bigger model on the M4 served to the Ultra over the Thunderbolt Bridge, vs. a huge model on the Ultra (96 GB) as an experiment. Today: Ultra local first (`archivist.ollamaHosts`); code `OllamaEndpoints.defaultHosts` still M4-first.
 - Hallie presence (reviewer 2026-10-25, pinned as-is by `HalliePresenceLikeCharacterizationTests.treeOnlyKinshipRebindsThePersonButKeepsTheKinWord`): a GEDCOM-only resolution of "my dad" keeps `dad` as a content word so the answer relaxes instead of listing Dad's videos; the People-tab path marks the kin word spent. Intended or a gap? Also: `retryUntaggedNamesAsWords` takes 8 parameters — a request struct; and the Hallie characterization file sits in the gauntlet unit stage while its siblings are in `hallie` (a manifest move).
 - People: move clip compilation to a future "Create" window; #84 merge two profiles; #133 People column/tags reliability; a rejected tag must never be re-proposed (the FamilyTagging bug the provenance trigger fixes for its own tables).
@@ -151,6 +159,7 @@
 - Improve (Nov–Dec): QTGMC/VapourSynth restoration, local upscale/interpolation (#299); Trim (#154); A/V sync check on improved versions (#309).
 
 ## Process and tooling
+- Concurrency stress tester: Compare Footage + Hallie Q&A + captions at once, with a memory red/green. Detail: closed GH #270.
 - Mutation testing, incremental (Rick 11/08): start with a LIVE walkthrough Rick can follow (one existing, appropriately small test; show it green, mutate the code under test — flip a `<`, drop a line, return early — rerun, watch it go red or survive); then mutation passes on data-risk modules (Archive, delete/prune) as an overnight theme. A surviving mutant = a test that doesn't check what we think. Not a lane until it proves its worth.
 - Validate the gauntlet manifest (`swift scripts/gauntlet/inventory.swift --validate`) in the sensor lane or the pre-push hook: a stale manifest reached main three times (11/06, 11/08, 11/10) and turns the M4 gauntlet RED for bookkeeping, not for a failing test (the pre-commit `manifest_drift.py` sees only newly ADDED test files, not a changed test list).
 - UPS wattage menu-bar app (Rick 2026-10-27, just for fun): live watts from the CyberPower UPS over HID, logged to SQLite for weekly/monthly kWh. Detail: `docs/archive/backlog_detail_2026_11_01.md` §"UPS wattage menu-bar app".
