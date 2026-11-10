@@ -96,6 +96,23 @@ def _amber_reasons(result):
     return reasons
 
 
+NAMES_SHOWN = 5
+
+
+def stage_names(stage):
+    """" [skipped: A, B; failed: C +2 more]" — the tests behind a stage's verdict, from the
+    names the runner recorded (failed_tests / skipped_tests / incomplete_tests and their
+    `_truncated` counts). Empty when the stage carries none. 2026-11-10: the done line said
+    "unit failed: unexpected skipped tests" for four days and never said which tests."""
+    parts = []
+    for word, key in (('failed', 'failed_tests'), ('skipped', 'skipped_tests'), ('did not finish', 'incomplete_tests')):
+        names = [n for n in (stage.get(key) or []) if isinstance(n, str)]
+        more = len(names) - NAMES_SHOWN + int(stage.get(key + '_truncated') or 0)
+        if names:
+            parts.append(f"{word}: {', '.join(names[:NAMES_SHOWN])}" + (f" +{more} more" if more > 0 else ''))
+    return f" [{'; '.join(parts)}]" if parts else ''
+
+
 def gauntlet_verdict(result, rc, timed_out=False):
     """(GREEN|AMBER|RED, words) for one deep run's result.json (dict or None)."""
     if timed_out:
@@ -112,7 +129,7 @@ def gauntlet_verdict(result, rc, timed_out=False):
     failed = [s for s in stages if s.get('status') == 'failed']
     status = result.get('status')
     if status == 'failed' or failed or result.get('inventory_errors') or rc not in (0,):
-        words = [f"{s.get('name', '?')} failed: {s.get('reason') or '?'}" for s in failed]
+        words = [f"{s.get('name', '?')} failed: {s.get('reason') or '?'}{stage_names(s)}" for s in failed]
         if result.get('inventory_errors'):
             words.append(f"inventory: {len(result['inventory_errors'])} error(s)")
         if result.get('reason') and not failed:

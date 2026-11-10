@@ -152,6 +152,38 @@ def app_files(xcresult: Path) -> list[tuple[str, int, int]]:
     return out
 
 
+def export_core_coverage(scratch: Path, run=subprocess.run) -> "Path | None":
+    """The Core package's coverage JSON built from the raw profiles, for the nights
+    SwiftPM exports none. `swift test --enable-code-coverage` writes its JSON only
+    when every test passed; one failed test (2026-11-05 … 11-09: a timing budget
+    missed under the instrumented Debug build) and Core vanished from the page's
+    coverage number, with one easily missed log line. The .profraw files are
+    written whatever the verdict, so merge them and export the same llvm-cov JSON
+    SwiftPM would have. None when there is no profile or no test binary, or a
+    tool fails. Memory: llvm-cov's summary-only JSON (a few hundred KB)."""
+    debug = scratch / "debug"
+    profiles = sorted((debug / "codecov").glob("*.profraw"))
+    binaries = sorted(debug.glob("*.xctest/Contents/MacOS/*"))
+    if not profiles or not binaries:
+        return None
+    merged = debug / "codecov" / "fallback.profdata"
+    out = debug / "codecov" / "fallback.json"
+    try:
+        merge = run(["xcrun", "llvm-profdata", "merge", "-sparse", *map(str, profiles), "-o", str(merged)],
+                    capture_output=True, text=True, timeout=600)
+        if merge.returncode != 0:
+            return None
+        export = run(["xcrun", "llvm-cov", "export", "-summary-only", "-format=text",
+                      f"-instr-profile={merged}", str(binaries[0])], capture_output=True, text=True, timeout=600)
+        if export.returncode != 0 or not export.stdout.strip():
+            return None
+        json.loads(export.stdout)                      # a torn export is no export
+        out.write_text(export.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return out
+
+
 def core_files(codecov_json: Path) -> list[tuple[str, int, int]]:
     data = json.loads(codecov_json.read_text())
     out = []
@@ -254,7 +286,14 @@ def main() -> int:
     if cov_path and Path(cov_path).exists():
         files += core_files(Path(cov_path))
     else:
-        log("core coverage JSON not found")
+        fallback = export_core_coverage(DD / "core-build")
+        core = core_files(fallback) if fallback else []
+        if core:
+            files += core
+            log(f"core coverage: SwiftPM exported none ({meta['core_status']}); built from the raw profiles — {len(core)} Core files")
+        else:
+            meta["core_coverage"] = "missing"
+            log("core coverage MISSING: no SwiftPM export and no usable raw profiles — the Core folders are NOT in today's numbers")
 
     if not files:
         log("OUTCOME failed: no coverage data produced")

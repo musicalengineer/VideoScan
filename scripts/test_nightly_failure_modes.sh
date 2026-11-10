@@ -1366,11 +1366,12 @@ rota_run() {
     HOME="$RT/home" FAKE_HOST="$1" FAKE_LAUNCHCTL_LOG="$RT/launchctl.log" FAKE_GIT_LOG="$RT/git.log" \
         PATH="$RT/bin:$PATH" bash "$RT/scripts/$2" > "$RT/out.log" 2>&1
 }
-[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM4)" = "on 2 0" ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM4)" = "on 14 0" ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksUltra)" = "on 2 0" ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM1 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot SomeoneElse)" = "unknown" ] \
-    && pass "the rotation: M4 02:00, M5 and M1 off (laptops), anyone else unknown" \
+    && pass "the rotation: M4 14:00, M5 Ultra 02:00 (DECISIONS 2026-11-05), M5 and M1 off (laptops), anyone else unknown" \
     || fail "nightly_rota.py slots changed"
 rota_run RicksM1 nightly_guarded.sh
 GUARD_RC=$?
@@ -1396,9 +1397,9 @@ rota_run RicksM4 install_nightly.sh
 INST_RC=$?
 M4_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
 if [ "$INST_RC" -eq 0 ] && [ -f "$M4_PLIST" ] &&
-   [ "$(plutil -extract StartCalendarInterval.Hour raw "$M4_PLIST" 2>/dev/null)" = "2" ] &&
+   [ "$(plutil -extract StartCalendarInterval.Hour raw "$M4_PLIST" 2>/dev/null)" = "14" ] &&
    [ "$(plutil -extract StartCalendarInterval.Minute raw "$M4_PLIST" 2>/dev/null)" = "0" ]; then
-    pass "an on-rota Mac (M4) is installed at its rota slot, 02:00"
+    pass "an on-rota Mac (M4) is installed at its rota slot, 14:00"
 else
     fail "on-rota installer: rc=$INST_RC out='$(tr '\n' ' ' < "$RT/out.log")'"
 fi
@@ -1502,10 +1503,10 @@ HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUN
 rmdir "$LOCKDIR"
 rota_run RicksM4 install_toolchain_update.sh
 TC_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.toolchain-update.plist"
-[ "$(plutil -extract StartCalendarInterval.Hour raw "$TC_PLIST" 2>/dev/null)" = "1" ] &&
+[ "$(plutil -extract StartCalendarInterval.Hour raw "$TC_PLIST" 2>/dev/null)" = "13" ] &&
 [ "$(plutil -extract StartCalendarInterval.Minute raw "$TC_PLIST" 2>/dev/null)" = "0" ] &&
 grep -q '^bootstrap gui/' "$RT/launchctl.log" \
-    && pass "the installer schedules the update one hour before the M4's 02:00 slot (01:00)" \
+    && pass "the installer schedules the update one hour before the M4's 14:00 slot (13:00)" \
     || fail "toolchain installer: out='$(tr '\n' ' ' < "$RT/out.log")'"
 
 # ───────────────────────────────────────────────────────────────────

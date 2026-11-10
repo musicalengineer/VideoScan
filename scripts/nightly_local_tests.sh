@@ -116,10 +116,23 @@
 #       week without the Whisper weights and every test used a fake. Additive
 #       model_smoke_* row fields; a missing model or a red smoke turns a green
 #       row red with reason model-smoke-<why>.
+#
+#   2026-11-10 (interrupted-r1):
+#     - A run that never finished leaves a record. 11/09: a macOS update cut
+#       the M4's 14:00 run off 41 minutes in; no row, no log line, and the page
+#       kept showing the day before. scripts/nightly_run_marker.py holds a
+#       marker from the start of the run (with its phase) until a row is
+#       published or queued; the NEXT launch publishes a leftover marker as
+#       reason "interrupted:<phase>", dated when that run started (the page:
+#       "did not run · interrupted:<phase>").
+#     - The page's summary (summary_latest.json) is rebuilt when the run ends,
+#       on every Mac (tools/publish_metrics.py --summary-only). Until now only
+#       the M4's jobs rebuilt it, so the M5 Ultra's 02:00 result waited for
+#       the M4's 04:00 job and was missing whenever that publish failed.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-11-05-model-smoke-r1"
+NIGHTLY_SCRIPT_VERSION="2026-11-10-interrupted-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -138,6 +151,8 @@ REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
 PENDING_QUEUE="$LOGDIR/nightly-pending.jsonl"
+# The record of a run that is still going (scripts/nightly_run_marker.py).
+RUN_MARKER="$LOGDIR/nightly-running.json"
 METRICS_WT="/tmp/nightly-metrics-wt"
 PERSON_EVAL_MANIFEST="${VIDEOSCAN_PERSON_EVAL_MANIFEST:-$REPO/output/person-eval-private/nightly/manifest.json}"
 PERSON_EVAL_REPORT="${VIDEOSCAN_PERSON_EVAL_REPORT:-$REPO/output/person-eval-private/nightly/latest-report.json}"
@@ -912,6 +927,9 @@ esac
 publish_row() {
     local new_row="$1"
     log "Publishing row: $new_row"
+    # This run (or the interrupted one being reported) now has its row: from
+    # here a kill must not be read as "never finished" by the next launch.
+    rm -f "${RUN_MARKER:-/nonexistent}"
 
     # Always fetch with prune so stale ref state can't block worktree-add.
     git fetch origin metrics --prune --quiet 2>/dev/null || true
@@ -1069,7 +1087,8 @@ make_status_row() {
     local commit_date="${5:-unknown}"
     local branch="${6:-main}"
     local ts
-    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    # NIGHTLY_ROW_TS: an interrupted run's row is dated when THAT run started.
+    ts="${NIGHTLY_ROW_TS:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
     printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":0,"failed":0,"skipped":0,"total":0,"elapsed_s":0,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s"}' \
         "$ts" "$HOST" "$branch" "$commit" "$commit_date" "$dirty" "$status" "$reason" "$NIGHTLY_SCRIPT_VERSION" \
         "${NIGHTLY_CONFIGURATION:-unknown}"
@@ -1111,6 +1130,34 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 COMMIT_DATE=$(git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
 log "Commit: $COMMIT ($COMMIT_DATE)"
 
+# ── A run that never finished, and the page summary (2026-11-10) ─────
+# See the 2026-11-10 note at the top. Best effort throughout: the marker and
+# the summary never change this run's verdict or exit code.
+MARKER_TOOL="$REPO/scripts/nightly_run_marker.py"
+mark_phase() {
+    [ -f "$MARKER_TOOL" ] || return 0
+    python3 "$MARKER_TOOL" phase "$RUN_MARKER" "$1" 2>/dev/null || true
+}
+rebuild_page_summary() {
+    local tool="$REPO/tools/publish_metrics.py" out
+    [ "${VIDEOSCAN_NIGHTLY_SUMMARY:-1}" = 0 ] && return 0
+    if [ ! -f "$tool" ]; then log "Page summary: skipped ($tool not found)"; return 0; fi
+    out="$(python3 "$tool" --summary-only 2>&1 | tail -1)"
+    log "Page summary: ${out:-no output}"
+}
+if [ -f "$MARKER_TOOL" ]; then
+    if STALE_RUN="$(python3 "$MARKER_TOOL" stale "$RUN_MARKER" 2>/dev/null)" && [ -n "$STALE_RUN" ]; then
+        IFS=$'\t' read -r STALE_STARTED STALE_PHASE STALE_COMMIT <<<"$STALE_RUN"
+        log "The previous run (started $STALE_STARTED, commit $STALE_COMMIT) never finished — it stopped in phase '$STALE_PHASE'. Publishing it as interrupted."
+        NIGHTLY_ROW_TS="$STALE_STARTED"
+        STALE_ROW="$(with_person_metrics "$(make_status_row failed "interrupted:$STALE_PHASE" false "$STALE_COMMIT" unknown "$BRANCH")")"
+        unset NIGHTLY_ROW_TS
+        publish_row "$STALE_ROW"
+    fi
+    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null || log "  (could not write $RUN_MARKER)"
+fi
+trap rebuild_page_summary EXIT
+
 # Establish the pre-build readiness state. This guarantees even a build
 # failure publishes the desired red 0 when no quality benchmark is configured.
 refresh_person_metrics
@@ -1125,10 +1172,12 @@ if [ -n "$MACHINE_SETUP_REASON" ]; then
 fi
 
 # ── VideoScanCore package tests (before the app build; see the lane note) ──
+mark_phase core
 run_core_package_tests "$REPO/VideoScan/VideoScanCore" \
     "$HOME/Library/Caches/videoscan-nightly-core-build"
 
 # ── Model lane: required weights + real-model audio smoke (2026-11-05) ──
+mark_phase model
 run_model_smoke_lane "$REPO"
 
 # ── Build ───────────────────────────────────────────────────────────
@@ -1175,6 +1224,7 @@ run_nightly_build() {
     return "$rc"
 }
 
+mark_phase build
 log "Building ($NIGHTLY_CONFIGURATION, ENABLE_TESTABILITY=YES, arm64, coverage on)..."
 BUILD_START=$(date +%s)
 run_nightly_build
@@ -1212,6 +1262,7 @@ rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
 log "Running ALL tests ($NIGHTLY_CONFIGURATION) with coverage..."
 log "  (VideoScanUITests target skipped: all its tests are plan-skipped, and the"
 log "   locked-screen launchd session can't enable automation mode — see 2026-07-07-r1)"
+mark_phase test
 TEST_START=$(date +%s)
 # A private-process-group watchdog guarantees this call returns to the
 # publication path even if xcodebuild or a test blocks in a kernel read.
@@ -1265,6 +1316,7 @@ classify_nightly_test_result \
 apply_core_package_verdict
 apply_model_smoke_verdict
 
+mark_phase post-test
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?
 if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then

@@ -74,6 +74,43 @@ func runStatus(_ result: [String: Any], _ stages: [[String: Any]]) -> String {
     return stages.allSatisfy { $0["status"] as? String == "passed" } ? "passed" : "amber"
 }
 
+// ── What a stage's verdict rests on (2026-11-10) ──────────────────────
+// The page said "unit: failed" for four days and could not say why or which
+// tests: the row carried counts only. A stage now also publishes `why` (the
+// runner's reason, kept ONLY where each part is one of the runner's own fixed
+// phrases — anything else, e.g. an error's description with a path in it,
+// becomes "other") and up to `publishedNames` test identifiers per kind. A name
+// is published only when it is shaped like a test identifier (Module/Suite/test());
+// a display title or anything else is counted in `<kind>_more`, never shown.
+let publishedNames = 20
+let reasonPhrases = [
+    #"^command exit \d{1,4}$"#, #"^structured test counts unavailable$"#, #"^test failures$"#,
+    #"^unexpected skipped tests$"#, #"^executed count below expected floor \d{1,7}$"#,
+    #"^\d{1,6} known issues? \(withKnownIssue\) — tracked, not a pass$"#, #"^safe subset passed$"#,
+    #"^unsafe or unadapted suites: \d{1,6}$"#, #"^(package|stage) watchdog timeout$"#,
+    #"^unreaped process contamination( \(swift test list\))?$"#, #"^package build did not run$"#, #"^amber$"#,
+]
+let testIdentifier = #"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_`][A-Za-z0-9_.`:()]{0,119}){0,4}$"#
+
+func publishableReason(_ value: Any?) -> String? {
+    guard let text = value as? String, !text.isEmpty else { return nil }
+    let parts = text.components(separatedBy: "; ").map { part -> String in
+        let package = part.hasPrefix("package: ")
+        let body = package ? String(part.dropFirst("package: ".count)) : part
+        let known = reasonPhrases.contains { body.range(of: $0, options: .regularExpression) != nil }
+        return known ? part : (package ? "package: other" : "other")
+    }
+    return parts.prefix(8).joined(separator: "; ")
+}
+
+/// (names to publish, how many more exist that are not shown)
+func publishableNames(_ stage: [String: Any], _ key: String) -> ([String], Int) {
+    let all = (stage[key] as? [Any] ?? []).compactMap { $0 as? String }
+    let shaped = all.filter { $0.count <= 200 && $0.range(of: testIdentifier, options: .regularExpression) != nil }
+    let truncated = Int(number(stage[key + "_truncated"]))
+    return (Array(shaped.prefix(publishedNames)), (all.count - min(shaped.count, publishedNames)) + truncated)
+}
+
 func sanitized(_ result: [String: Any]) throws -> [String: Any] {
     let names = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"]
     let statuses = ["passed", "failed", "not_run", "blocked", "amber", "incomplete"]
@@ -94,7 +131,15 @@ func sanitized(_ result: [String: Any]) throws -> [String: Any] {
         for key in ["expected", "passed", "failed", "skipped", "incomplete"] {
             row[key] = stage[key] is NSNumber ? number(stage[key]) : NSNull()
         }
-        if name == "ui" { row["status"] = "not_run"; row["reason"] = "phase 2" }
+        if let why = publishableReason(stage["why"] ?? stage["reason"]) { row["why"] = why }
+        for key in ["failed_tests", "skipped_tests", "incomplete_tests"] {
+            let (names, more) = publishableNames(stage, key)
+            // A row re-sanitized from the queue keeps its own "_more" count.
+            let already = Int(number(stage[key + "_more"]))
+            if !names.isEmpty { row[key] = names }
+            if more + already > 0 { row[key + "_more"] = more + already }
+        }
+        if name == "ui" { row["status"] = "not_run"; row["reason"] = "phase 2"; row["why"] = NSNull() }
         return row
     }
     var row: [String: Any] = ["schemaVersion": 1, "source": "gauntlet", "run_id": id, "ts": ts,

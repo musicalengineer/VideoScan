@@ -131,6 +131,7 @@
   .fails > summary::-webkit-details-marker { display: none; }
   .fails > summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
   .fails ol { margin: 6px 0 0; padding-left: 22px; font-size: 14px; }
+  .behind { display: block; margin-top: 6px; font-size: 13px; }
   .hosts > .red { border-color: var(--bad); }
   .hosts > .green { border-color: var(--good); }
   .hosts > .amber { border-color: var(--amber); }
@@ -826,6 +827,24 @@ function renderEvidence(d) {
   };
   for (const [area, streams] of Object.entries(pairs)) document.getElementById(`evidence-${area}`).textContent = streams.map(([label, row]) => evidenceText(label, row, area === "hallie" && row ? row.hallie_replay_git_sha : undefined)).join(" · ");
 }
+// Why a stage has its outcome and which tests are behind it (2026-11-10): the runner's own
+// fixed phrases (`why`) and the test identifiers the publisher let through, each list
+// behind its own opener, with how many more are not shown. Nothing to say -> a dash.
+const STAGE_NAME_LISTS = [["failed_tests", "failed"], ["skipped_tests", "skipped"], ["incomplete_tests", "did not finish"]];
+function stageWhy(stage) {
+  const parts = [];
+  if (typeof stage.why === "string" && stage.why) parts.push(esc(stage.why));
+  for (const [key, word] of STAGE_NAME_LISTS) {
+    const names = Array.isArray(stage[key]) ? stage[key].filter(x => typeof x === "string") : [];
+    const more = isNum(stage[key + "_more"]) ? stage[key + "_more"] : 0;
+    if (!names.length && !more) continue;
+    const total = names.length + more;
+    parts.push(`<details class="fails"><summary>${n(total)} ${word}</summary>`
+      + (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
+      + (more ? `${n(more)} more ${more === 1 ? "is" : "are"} not named.` : "") + `</details>`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
 function manualTestResults(d) {
   const rows = d.allTdRows.filter(r => r.source === "gauntlet" && r.schemaVersion === 1);
   const latest = new Map();
@@ -835,9 +854,9 @@ function manualTestResults(d) {
   const body = [...latest.values()].map(row => {
     const machine = REFRESH_MACHINES[row.machine] || (row.machine === "m1" ? "M1" : "Unknown system");
     const stages = Array.isArray(row.stages) ? row.stages : [];
-    return `<p><b>${machine}</b> · ${esc(evidenceText("Stage run", row))}</p>` + table(["Stage", "Outcome", "Passed", "Failed", "Skipped"], knownStages.map(name => {
+    return `<p><b>${machine}</b> · ${esc(evidenceText("Stage run", row))}</p>` + table(["Stage", "Outcome", "Passed", "Failed", "Skipped", "Why, and which tests"], knownStages.map(name => {
       const stage = stages.find(s => s.name === name);
-      return [esc(name), stage ? esc(states[stage.status] || "unknown") : "not run", stage && isNum(stage.passed) ? n(stage.passed) : null, stage && isNum(stage.failed) ? n(stage.failed) : null, stage && isNum(stage.skipped) ? n(stage.skipped) : null];
+      return [esc(name), stage ? esc(states[stage.status] || "unknown") : "not run", stage && isNum(stage.passed) ? n(stage.passed) : null, stage && isNum(stage.failed) ? n(stage.failed) : null, stage && isNum(stage.skipped) ? n(stage.skipped) : null, stage ? stageWhy(stage) : null];
     }));
   }).join("");
   return `<section class="manual-results"><h3>Scoped test runs</h3><p class="refresh-help">These stage results are separate from the nightly trend. A passing subset does not verify the whole repository. UI tests are not run by the current gauntlet.</p>${body || `<p class="refresh-help">No scoped test run has been published yet.</p>`}</section>`;
@@ -1006,7 +1025,7 @@ function failuresBody(cell) {
   const names = cell && Array.isArray(cell.failed_tests) ? cell.failed_tests.filter(x => typeof x === "string") : null;
   const failed = cell ? laneFailed(cell) : 0;
   let body;
-  if (!names) body = `${n(failed)} failed; this run's names were not published.`;
+  if (!names) body = `${n(failed)} failed; this summary was built before failed tests were listed by name. It is rebuilt after every run.`;
   else {
     const more = failed - names.length;
     body = (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
@@ -1090,6 +1109,18 @@ function weeklyBugs(rows, weeks, today = new Date()) {
 }
 
 // ---------------------------------------------------------------- 1. headline strip
+// The card reads the summary; the runs themselves are published separately. When a run
+// finished AFTER the summary was built, the card is behind the truth and says so
+// (2026-11-09: a failed publish left the summary a day old and nothing on the page said it).
+const BEHIND_GRACE_MS = 20 * 60 * 1000;   // the summary is rebuilt within minutes of a run's row
+function summaryBehind(d) {
+  const built = toTime(d.summary && d.summary.generated);
+  if (Number.isNaN(built)) return "";
+  const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string")
+    .map(r => r.ts).sort((a, b) => toTime(a) - toTime(b)).pop();
+  if (!newest || !(toTime(newest) - built > BEHIND_GRACE_MS)) return "";
+  return `<span class="behind"><span class="stale">BEHIND</span> a run finished ${esc(whenET(newest))} and is not in this summary yet (built ${esc(whenET(d.summary.generated))})</span>`;
+}
 function tile(label, value, words, state = "", graphic = "", wide = false) {
   return `<div class="tile${wide ? " wide" : ""}"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
 }
@@ -1164,7 +1195,7 @@ function renderHead(d) {
     const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
     const published = S.generated ? ` ${whenET(S.generated)}` : "";
     tiles.push(tile(`Test Results${published}`, value,
-      `<div class="hosts">${hosts}</div>`, testState, ladders, true));
+      `<div class="hosts">${hosts}${summaryBehind(d)}</div>`, testState, ladders, true));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
@@ -1268,7 +1299,11 @@ function sanitizerRuns(d) {
     const rows = d.sanRows.filter(r => r.kind === k.kind);
     const row = rows.length ? rows[rows.length - 1] : null;
     const t = row ? toTime(row.date) : NaN;
-    const age = Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+    // Calendar days, not elapsed milliseconds: across the end of daylight saving time a run
+    // "12 days ago" is 12 days and 25 hours old late in the evening, and floor() said 13
+    // (2026-11-09, 23:00–24:00: two tests of this card failed for that hour every night).
+    const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const age = Number.isNaN(t) ? null : Math.max(0, Math.round((today - t) / 86400000));
     return { ...k, row, age, fresh: age != null && age <= SAN_STALE_DAYS };
   });
 }

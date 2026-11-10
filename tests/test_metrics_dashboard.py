@@ -1163,6 +1163,67 @@ def test_failures_links_list_each_macs_failed_test_names(tmp_path):
 
 
 @needs_node
+def test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind(tmp_path):
+    """RED 2026-11-09: two failed publishes left the summary a day old; the M5 Ultra's
+    green 02:00 run was on the branch and the card still showed the day before, with no
+    cue. A nightly row newer than the summary's build time is said on the card."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    built = now - timedelta(hours=30)
+    fx["summary_latest.json"]["generated"] = iso(built)
+    newest = now - timedelta(hours=1)          # newer than every nightly row the fixture holds
+    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
+        ts=iso(newest), source="nightly-local", host="RicksUltra", status="ok", passed=13358, failed=0, total=13423)])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    _, _, words = card_tile(out["sections"]["head"])
+    m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
+    assert m, words
+    assert et_when(newest) in m.group(1) and f"built {et_when(built)}" in m.group(1), m.group(1)
+    # A summary built after the newest run (the normal case, within the grace): no cue.
+    fx["summary_latest.json"]["generated"] = iso(newest + timedelta(minutes=5))
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+    # A scoped (gauntlet) run is not a nightly run and never makes the card "behind".
+    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
+        ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", stages=[])])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+
+
+@needs_node
+def test_a_scoped_run_says_why_a_stage_failed_and_which_tests(tmp_path):
+    """RED 2026-11-10 (Rick: "it says failures exist but when I click I cannot see what
+    tests failed"): the gauntlet table showed "unit: failed · 0 failed · 2 skipped" and
+    nothing else. Each stage now shows the runner's reason and opens its test names."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx = full_fixtures(now)
+    fx["testdriver.jsonl"] = fx["testdriver.jsonl"] + jsonl([dict(
+        ts=iso(now), source="gauntlet", schemaVersion=1, machine="m4", status="failed", commit="a" * 40, stages=[
+            dict(name="unit", status="failed", passed=4316, failed=0, skipped=2, why="unexpected skipped tests",
+                 skipped_tests=["VideoScanTests/SoundSuite/needsFixture()", "<b>x</b>"], skipped_tests_more=3),
+            dict(name="regression", status="amber", passed=827, failed=0, skipped=0,
+                 why="2 known issues (withKnownIssue) — tracked, not a pass"),
+            dict(name="integration", status="passed", passed=6, failed=0, skipped=0)])])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    page = json.dumps(out["sections"])
+    html = next(v for v in out["sections"].values() if isinstance(v, str) and "Scoped test runs" in v)
+    assert "Why, and which tests" in html
+    unit = re.search(r"<tr><td>unit</td>(.*?)</tr>", html, re.S).group(1)
+    assert "unexpected skipped tests" in unit
+    opener = re.search(r'<details class="fails"><summary>5 skipped</summary>(.*?)</details>', unit, re.S)
+    assert opener, unit
+    assert re.findall(r"<li>(.*?)</li>", opener.group(1)) == ["VideoScanTests/SoundSuite/needsFixture()", "&lt;b&gt;x&lt;/b&gt;"]
+    assert "3 more are not named" in opener.group(1)
+    regression = re.search(r"<tr><td>regression</td>(.*?)</tr>", html, re.S).group(1)
+    assert "2 known issues (withKnownIssue) — tracked, not a pass" in regression and "<details" not in regression
+    integration = re.search(r"<tr><td>integration</td>(.*?)</tr>", html, re.S).group(1)
+    assert integration.endswith(f"<td>{chr(0x2014)}</td>"), integration
+    assert "<b>x</b>" not in page.replace("\\", "")
+
+
+@needs_node
 def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)

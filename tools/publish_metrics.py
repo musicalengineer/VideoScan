@@ -101,6 +101,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -125,6 +126,10 @@ REMOTE_REF = "refs/remotes/origin/metrics"
 FETCH_SPEC = "+refs/heads/metrics:" + REMOTE_REF
 PUSH_SPEC = "HEAD:refs/heads/metrics"
 PUSH_ATTEMPTS = 4
+# A fetch that fails is usually the network or GitHub for a few seconds (2026-11-09:
+# both early-morning publishes on the M4 died on one "Could not read from remote
+# repository" and the page's summary stayed a day old). Retried with these waits.
+FETCH_BACKOFF_S = (5, 20, 60)
 SCHEMA_VERSION = 1
 
 
@@ -1483,6 +1488,30 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
 
 # ---------------------------------------------------------------- git (seam)
 
+def one_line(text, limit: int = 300) -> str:
+    """Git's stderr as ONE line: callers log the last line of this tool's output,
+    and a multi-line error used to leave only its tail ("and the repository exists.")."""
+    return " ".join(str(text or "").split())[:limit]
+
+
+def fetch_metrics(git, wt: Path, say: Callable[[str], None], sleep: Callable[[float], None] = time.sleep) -> None:
+    """Fetch origin/metrics, retrying a failure after each FETCH_BACKOFF_S wait.
+    Raises PublishError (one line, with git's own words) when every try failed."""
+    waits = list(FETCH_BACKOFF_S)
+    attempt = 0
+    while True:
+        attempt += 1
+        proc = git(wt, "fetch", "--quiet", "origin", FETCH_SPEC, check=False)
+        if proc.returncode == 0:
+            return
+        why = one_line(getattr(proc, "stderr", "")) or f"exit {proc.returncode}"
+        if not waits:
+            raise PublishError(f"git fetch failed {attempt} times: {why}")
+        wait = waits.pop(0)
+        say(f"fetch attempt {attempt} failed ({why}); retrying in {wait}s")
+        sleep(wait)
+
+
 class Git:
     """`git -C <path> <args>`; the test suite swaps in a fake. Returns stdout;
     raises PublishError on a non-zero exit unless check=False."""
@@ -1491,7 +1520,7 @@ class Git:
         proc = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=180)
         if check and proc.returncode != 0:
-            raise PublishError(f"git {' '.join(args[:2])} failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+            raise PublishError(f"git {' '.join(args[:2])} failed ({proc.returncode}): {one_line(proc.stderr)}")
         return proc
 
 
@@ -1520,7 +1549,8 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
             git: Optional[Git] = None, folders: Optional[set] = None,
             say: Callable[[str], None] = print,
             summary: Optional[Callable[[Path], dict]] = None,
-            daily: Optional[Callable[[], Optional[List[dict]]]] = None) -> str:
+            daily: Optional[Callable[[], Optional[List[dict]]]] = None,
+            sleep: Callable[[float], None] = time.sleep) -> str:
     """Merge, validate, commit and push. Returns "pushed" or "unchanged".
     `summary(metrics_dir)` (see SummaryBuilder) runs after each fetch, so the
     nights it summarizes are the ones just pulled from the branch. `daily()`
@@ -1530,7 +1560,7 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
     wt = wt.expanduser().resolve()
     ensure_worktree(repo, wt, git)
     for attempt in range(1, PUSH_ATTEMPTS + 1):
-        git(wt, "fetch", "--quiet", "origin", FETCH_SPEC)
+        fetch_metrics(git, wt, say, sleep)
         git(wt, "reset", "--hard", "--quiet", REMOTE_REF)
         if summary is not None:
             fresh = dict(fresh, **{"summary_latest.json": summary(wt / "metrics")})
@@ -1601,6 +1631,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--metrics-dir", help="with --dry-run / --out-dir: build the summary from the "
                                           "published streams in this directory (e.g. the publish "
                                           "worktree's metrics/); without it no summary is produced")
+    ap.add_argument("--summary-only", action="store_true",
+                    help="rebuild and publish ONLY metrics/summary_latest.json (and today's github_daily row) from the "
+                         "published rows; no local stream is read. For a Mac that just published a test row and "
+                         "holds none of the M4's coverage / review / sanitizer logs (the M5 Ultra's 02:00 nightly)")
     ap.add_argument("--no-events", action="store_true",
                     help="do not run scripts/events_prototype.py for metrics/events_latest.json")
     ap.add_argument("--events-script", default=str(EVENTS_SCRIPT),
@@ -1613,11 +1647,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if os.environ.get("VIDEOSCAN_PUBLISH_METRICS") == "0":
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
         return 0
-    fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
-                          [Path(d).expanduser() for d in a.codex_dir] if a.codex_dir else CODEX_DIRS,
-                          Path(a.sanitizer_dir).expanduser(),
-                          Path(a.analysis_dir).expanduser())
-    fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
+    if a.summary_only and a.no_summary:
+        ap.error("--summary-only and --no-summary contradict each other")
+    if a.summary_only:
+        fresh: Dict[str, Optional[List[dict]]] = {}
+    else:
+        fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
+                              [Path(d).expanduser() for d in a.codex_dir] if a.codex_dir else CODEX_DIRS,
+                              Path(a.sanitizer_dir).expanduser(),
+                              Path(a.analysis_dir).expanduser())
+        fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()
     try:

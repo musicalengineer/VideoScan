@@ -57,3 +57,63 @@ def test_a_file_declaring_a_swiftui_view_counts_as_a_view(tmp_path):
     g.write_text("struct Logic { func f() -> Int { 1 } }\n")
     assert nc.is_view(str(f))
     assert not nc.is_view(str(g))
+
+
+class _Tool:
+    """Stands in for xcrun: records the calls, answers like llvm-profdata / llvm-cov."""
+
+    def __init__(self, export_stdout, merge_rc=0, export_rc=0):
+        self.calls, self.export_stdout, self.merge_rc, self.export_rc = [], export_stdout, merge_rc, export_rc
+
+    def __call__(self, argv, **kw):
+        from types import SimpleNamespace
+        self.calls.append(argv)
+        if argv[1] == "llvm-profdata":
+            return SimpleNamespace(returncode=self.merge_rc, stdout="", stderr="")
+        return SimpleNamespace(returncode=self.export_rc, stdout=self.export_stdout, stderr="")
+
+
+def _scratch(tmp_path, profiles=2, binary=True):
+    debug = tmp_path / "core-build" / "debug"
+    (debug / "codecov").mkdir(parents=True)
+    for i in range(profiles):
+        (debug / "codecov" / f"run{i}.profraw").write_bytes(b"raw")
+    if binary:
+        exe = debug / "VideoScanCorePackageTests.xctest" / "Contents" / "MacOS"
+        exe.mkdir(parents=True)
+        (exe / "VideoScanCorePackageTests").write_bytes(b"bin")
+    return tmp_path / "core-build"
+
+
+def test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none(tmp_path):
+    """RED 2026-11-09: five nights running, one failed Core test meant no codecov JSON,
+    so the Core folders were silently missing from the page's coverage number."""
+    report = json.dumps({"data": [{"files": [
+        {"filename": "/r/VideoScan/VideoScanCore/Sources/VideoScanCore/Store/A.swift", "summary": {"lines": {"count": 10, "covered": 7}}},
+        {"filename": "/r/VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ATests.swift", "summary": {"lines": {"count": 5, "covered": 5}}}]}]})
+    scratch = _scratch(tmp_path)
+    tool = _Tool(report)
+    out = nc.export_core_coverage(scratch, run=tool)
+    assert out is not None and out.name == "fallback.json"
+    assert nc.core_files(out) == [("/r/VideoScan/VideoScanCore/Sources/VideoScanCore/Store/A.swift", 7, 10)]
+    merge, export = tool.calls
+    assert merge[:4] == ["xcrun", "llvm-profdata", "merge", "-sparse"] and sum(a.endswith(".profraw") for a in merge) == 2
+    assert export[:3] == ["xcrun", "llvm-cov", "export"] and export[-1].endswith("MacOS/VideoScanCorePackageTests")
+    assert any(a.startswith("-instr-profile=") and a.endswith("fallback.profdata") for a in export)
+
+
+def test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess(tmp_path):
+    good = json.dumps({"data": []})
+    assert nc.export_core_coverage(_scratch(tmp_path / "a", profiles=0), run=_Tool(good)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "b", binary=False), run=_Tool(good)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "c"), run=_Tool(good, merge_rc=1)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "d"), run=_Tool(good, export_rc=1)) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "e"), run=_Tool("{ torn")) is None
+    assert nc.export_core_coverage(_scratch(tmp_path / "f"), run=_Tool("")) is None
+    assert not (tmp_path / "e" / "core-build" / "debug" / "codecov" / "fallback.json").exists()
+
+
+def test_sensor_a_night_without_core_coverage_says_missing_in_capitals():
+    text = (ROOT / "tools" / "nightly_coverage.py").read_text()
+    assert "export_core_coverage(DD / \"core-build\")" in text
+    assert "core coverage MISSING" in text and 'meta["core_coverage"] = "missing"' in text

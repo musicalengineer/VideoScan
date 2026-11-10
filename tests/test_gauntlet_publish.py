@@ -111,6 +111,51 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertEqual(target.read_text(), 'sentinel')
         self.assertFalse((self.root / 'pending-metrics.jsonl').exists())
 
+    def test_a_failed_stage_publishes_why_and_which_tests(self):
+        """RED 2026-11-10: "unit: failed" with 0 failed and 2 skipped, and no way to see
+        which tests or why. The row now carries the runner's reason and the names."""
+        self.result['status'] = 'failed'
+        self.result['stages'][0].update(
+            status='failed', reason='unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass',
+            failed=0, skipped=2, skipped_tests=['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB'],
+            failed_tests=['VideoScanCoreTests.CatalogSuite/roundTrip()'], incomplete_tests=[], skipped_tests_truncated=0)
+        row = json.loads(self.publish('--dry-run').stdout)
+        unit = row['stages'][0]
+        self.assertEqual(unit['why'], 'unexpected skipped tests; package: 5 known issues (withKnownIssue) — tracked, not a pass')
+        self.assertEqual(unit['skipped_tests'], ['VideoScanTests/SoundSuite/needsFixture()', 'VideoScanTests/OtherTests/testB'])
+        self.assertEqual(unit['failed_tests'], ['VideoScanCoreTests.CatalogSuite/roundTrip()'])
+        self.assertNotIn('incomplete_tests', unit)
+        self.assertNotIn('skipped_tests_more', unit)
+        self.assertNotIn('why', {k: v for k, v in row['stages'][1].items() if v is not None})   # ui stays "phase 2"
+
+    def test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published(self):
+        """Privacy: an error description (a path) becomes "other"; a display title or a
+        path among the names is counted, never shown; the lists are capped."""
+        many = [f'VideoScanTests/Suite/test{i}()' for i in range(25)]
+        self.result['stages'][0].update(
+            status='failed', reason='Error Domain=NSCocoa "/Users/SECRET/Movies/SECRET.mov"; test failures; package: SECRET thing',
+            failed_tests=['SECRET family title with spaces', '/Users/SECRET/x.swift', 'VideoScanTests/Good/test()'],
+            skipped_tests=many, skipped_tests_truncated=7)
+        completed = self.publish('--dry-run')
+        self.assertNotIn('SECRET', completed.stdout)
+        unit = json.loads(completed.stdout)['stages'][0]
+        self.assertEqual(unit['why'], 'other; test failures; package: other')
+        self.assertEqual(unit['failed_tests'], ['VideoScanTests/Good/test()'])
+        self.assertEqual(unit['failed_tests_more'], 2)
+        self.assertEqual(unit['skipped_tests'], many[:20])
+        self.assertEqual(unit['skipped_tests_more'], 5 + 7)
+
+    def test_a_queued_row_keeps_its_names_and_counts_when_published_later(self):
+        """The queue holds SANITIZED rows; publishing one later sanitizes it again."""
+        self.result['stages'][0].update(status='failed', reason='test failures',
+                                        failed_tests=['VideoScanTests/Good/test()', 'not a test id'])
+        first = json.loads(self.publish('--dry-run').stdout)
+        self.result = first                                   # what the queue would hold
+        again = json.loads(self.publish('--dry-run').stdout)
+        self.assertEqual(again['stages'][0]['why'], 'test failures')
+        self.assertEqual(again['stages'][0]['failed_tests'], ['VideoScanTests/Good/test()'])
+        self.assertEqual(again['stages'][0]['failed_tests_more'], 1)
+
     def test_untrusted_machine_commit_and_negative_times_are_sanitized(self):
         self.result.update(machine='SECRET-host', commit='SECRET-commit', elapsed_s=-1)
         row = json.loads(self.publish('--dry-run').stdout)
