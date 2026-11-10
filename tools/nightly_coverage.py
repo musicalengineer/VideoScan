@@ -194,6 +194,14 @@ def export_core_coverage(scratch: Path, since: float, run=subprocess.run) -> "Pa
     return out
 
 
+def written_since(path: str, since: float) -> bool:
+    """`path` names a file written at or after `since` (today's run), not a leftover."""
+    try:
+        return bool(path) and Path(path).stat().st_mtime >= since
+    except OSError:
+        return False
+
+
 def core_files(codecov_json: Path) -> list[tuple[str, int, int]]:
     data = json.loads(codecov_json.read_text())
     out = []
@@ -294,7 +302,9 @@ def main() -> int:
     cov_path = subprocess.run(["swift", "test", "--package-path", str(CORE), "--show-codecov-path",
                                "--scratch-path", str(DD / "core-build")],
                               capture_output=True, text=True).stdout.strip()
-    if cov_path and Path(cov_path).exists():
+    # Today's export only: SwiftPM names the same path every day, and a build that
+    # fails today leaves yesterday's JSON there (Codex #276 F7).
+    if written_since(cov_path, core_started):
         files += core_files(Path(cov_path))
     else:
         fallback = export_core_coverage(DD / "core-build", since=core_started)

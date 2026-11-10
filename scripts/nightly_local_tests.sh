@@ -1051,6 +1051,17 @@ except Exception:
     done
 
     if $pushed; then
+        # "push returned 0" is not "the row is on the branch": when the commit
+        # before it failed, the push is a no-op that succeeds (Codex #276 F2 — the
+        # row was then lost at the next reset, and the queue cleared). Read it back.
+        git -C "$METRICS_WT" fetch origin metrics --quiet 2>/dev/null || true
+        if ! git -C "$METRICS_WT" show origin/metrics:metrics/testdriver.jsonl 2>/dev/null | grep -qxF -- "$new_row"; then
+            log "ERROR: the push returned 0 but the row is NOT on origin/metrics (did the commit fail?) — treating it as not published"
+            pushed=false
+        fi
+    fi
+
+    if $pushed; then
         # Backlog landed — clear the queue.
         : > "$PENDING_QUEUE"
         log "Published successfully ($appended_count row(s))."
@@ -1179,8 +1190,17 @@ if [ -f "$MARKER_TOOL" ]; then
         fi
         unset RUN_MARKER_PID
     fi
-    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null \
-        || log "  (no run marker for this run: another live run owns $RUN_MARKER, or it could not be written)"
+    python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ "$COMMIT" 2>/dev/null
+    BEGIN_RC=$?
+    if [ "$BEGIN_RC" = 3 ]; then
+        # ONE nightly run per Mac at a time (Codex #276 F3). Two at once share the
+        # DerivedData and /tmp/nightly-results.xcresult and would spoil each other's
+        # result as well as each other's marker. The live run is left alone.
+        log "FATAL: another nightly run is live on this Mac ($(cat "$RUN_MARKER" 2>/dev/null | tr -d '\n')) — this one is not starting."
+        exit 3
+    elif [ "$BEGIN_RC" != 0 ]; then
+        log "  (could not write $RUN_MARKER — this run keeps no marker)"
+    fi
 fi
 trap rebuild_page_summary EXIT
 

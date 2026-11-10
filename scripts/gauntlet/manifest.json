@@ -33125,6 +33125,7 @@
         "test_a_path_or_a_name_the_repo_does_not_declare_is_never_published",
         "test_a_queued_row_keeps_its_names_and_counts_when_published_later",
         "test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published",
+        "test_argument_labels_are_dropped_so_only_declared_identifiers_leave",
         "test_dashboard_names_the_run_green_amber_red",
         "test_dashboard_separates_nightly_and_keeps_blocked_stage_duration",
         "test_dry_run_sanitizes_private_fields_and_forces_honest_ui",
@@ -33592,6 +33593,7 @@
         "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
+        "test_a_mac_the_summary_has_never_seen_is_behind_too",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
         "test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind",
         "test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale",
@@ -33706,6 +33708,7 @@
         "test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess",
         "test_profiles_from_before_todays_run_are_not_todays_coverage",
         "test_sensor_a_night_without_core_coverage_says_missing_in_capitals",
+        "test_yesterdays_swiftpm_export_is_not_todays_coverage",
         "test_zero_coverage_logic_files_are_flagged_but_small_ones_are_not"
       ]
     },
@@ -34397,6 +34400,7 @@
       ],
       "tests": [
         "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
         "test_counting_the_log_names_every_failure",
@@ -35006,6 +35010,8 @@
         "test_a_marker_whose_process_is_gone_is_stale_with_its_start_phase_and_commit",
         "test_a_phase_or_commit_that_is_not_code_shaped_is_never_recorded",
         "test_a_pid_reused_after_a_reboot_is_not_the_same_run",
+        "test_a_push_that_returns_zero_without_the_row_is_not_a_publish",
+        "test_a_real_publish_is_read_back_then_the_queue_is_cleared_and_the_marker_removed",
         "test_a_run_that_is_still_going_is_not_stale",
         "test_a_run_whose_result_is_published_or_queued_is_accounted_never_interrupted",
         "test_an_interrupted_row_is_a_did_not_run_night_with_a_publishable_reason",
@@ -35043,6 +35049,7 @@
         "test_script_tests_lane.py"
       ],
       "tests": [
+        "test_a_child_in_its_own_session_is_killed_too",
         "test_a_run_that_proves_nothing_is_red_never_green",
         "test_a_timeout_is_red_whatever_the_log_says",
         "test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits",

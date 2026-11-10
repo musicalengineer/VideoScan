@@ -126,14 +126,21 @@ struct RepoTestNames {
 
     static let shape = #"(?:[A-Za-z_][A-Za-z0-9_]*[./])+`?[A-Za-z_][A-Za-z0-9_]*`?\((?:[A-Za-z_][A-Za-z0-9_]*:)*\)"#
 
-    /// True only for Suite/function() whose every part this repository's tests declare.
-    func proves(_ name: String) -> Bool {
-        guard name.count <= 200, matchesWhole(name, Self.shape), let slash = name.lastIndex(of: "/") else { return false }
+    /// The name as it may be published — "Owner/…/function()" — or nil. Only for
+    /// Suite/function(…) whose every type part and whose function this repository's
+    /// tests declare. The argument labels are DROPPED, never checked or shown
+    /// (Codex #276 F1: "known(SECRET_FAMILY:)" kept its label): every character
+    /// that leaves is one of those declared identifiers, a separator or "()".
+    /// (A declared type paired with a declared function of another type would
+    /// pass; both are still identifiers from this public repository.)
+    func publishable(_ name: String) -> String? {
+        guard name.count <= 200, matchesWhole(name, Self.shape), let slash = name.lastIndex(of: "/") else { return nil }
         let call = name[name.index(after: slash)...]
         let function = call.prefix { $0 != "(" }.replacingOccurrences(of: "`", with: "")
-        guard functions.contains(function) else { return false }
+        guard functions.contains(function) else { return nil }
         let owners = name[..<slash].split(whereSeparator: { $0 == "/" || $0 == "." }).map(String.init)
-        return !owners.isEmpty && owners.allSatisfy { types.contains($0) || testModules.contains($0) }
+        guard !owners.isEmpty, owners.allSatisfy({ types.contains($0) || testModules.contains($0) }) else { return nil }
+        return String(name[...slash]) + function + "()"
     }
 }
 let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -160,9 +167,12 @@ func publishableReason(_ value: Any?) -> String? {
 /// (names to publish, how many more exist that are not shown)
 func publishableNames(_ stage: [String: Any], _ key: String) -> ([String], Int) {
     let all = (stage[key] as? [Any] ?? []).compactMap { $0 as? String }
-    let shaped = all.filter(repoTestNames.proves)
+    var shaped: [String] = []
+    for name in all {
+        if let safe = repoTestNames.publishable(name), !shaped.contains(safe) { shaped.append(safe) }
+    }
     let truncated = Int(number(stage[key + "_truncated"]))
-    return (Array(shaped.prefix(publishedNames)), (all.count - min(shaped.count, publishedNames)) + truncated)
+    return (Array(shaped.prefix(publishedNames)), max(0, all.count - min(shaped.count, publishedNames)) + truncated)
 }
 
 func sanitized(_ result: [String: Any]) throws -> [String: Any] {

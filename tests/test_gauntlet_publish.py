@@ -163,7 +163,9 @@ class GauntletPublishTests(unittest.TestCase):
         leaks = ['Users/SECRET_FAMILY/Movies/Wedding.mov', 'Wedding.mov', 'SECRET_FAMILY/Movies/clip()',
                  'VideoScanTests/SECRET_FAMILY/needsFixture()', 'VideoScanTests/SoundSuite/SECRET_title()',
                  'SoundSuite/needsFixture', 'SoundSuite/needsFixture()\n', 'Movies.SECRET/needsFixture()',
-                 'SoundSuite/needsFixture() SECRET', 'x' * 150 + '/' + 'needsFixture()' * 5]
+                 'SoundSuite/needsFixture() SECRET', 'x' * 150 + '/' + 'needsFixture()' * 5,
+                 # Codex #276 F1: a declared test with an invented argument label kept the label.
+                 'SoundSuite/needsFixture(SECRET_FAMILY:)', 'VideoScanTests/SoundSuite/needsFixture(a:SECRET_b:)']
         proven = ['SoundSuite/needsFixture()', 'VideoScanTests/SoundSuite/needsFixture()',
                   'VideoScanCoreTests.CatalogSuite/roundTrip()', 'OtherTests/testB()']
         self.result['stages'][0].update(status='failed', reason='test failures\n', failed_tests=leaks + proven)
@@ -174,6 +176,15 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertEqual(unit['failed_tests'], proven)
         self.assertEqual(unit['failed_tests_more'], len(leaks))
         self.assertEqual(unit['why'], 'other', 'a reason with a trailing newline is not one of the fixed phrases')
+
+    def test_argument_labels_are_dropped_so_only_declared_identifiers_leave(self):
+        """A parameterized test reports as name(_:) or name(question:ast:): it is published
+        as name(), once, and nothing after the parenthesis is ever copied out."""
+        self.result['stages'][0].update(status='failed', reason='test failures', failed_tests=[
+            'Suite/test1(_:)', 'Suite/test1(question:ast:)', 'Suite/test1()', 'VideoScanTests/Suite/test2(_:)'])
+        unit = json.loads(self.publish('--dry-run').stdout)['stages'][0]
+        self.assertEqual(unit['failed_tests'], ['Suite/test1()', 'VideoScanTests/Suite/test2()'])
+        self.assertEqual(unit['failed_tests_more'], 2)
 
     def test_a_queued_row_keeps_its_names_and_counts_when_published_later(self):
         """The queue holds SANITIZED rows; publishing one later sanitizes it again."""

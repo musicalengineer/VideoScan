@@ -59,6 +59,12 @@ def test_only_pytests_final_summary_line_counts():
         False, "script tests RED (1 failed: a.py::t)")
     assert lane.verdict("2 errors in 0.5s\nERROR tests/a.py::t\nERROR tests/b.py::u\n", 1, False, 1500) == (
         False, "script tests RED (2 failed: a.py::t, b.py::u)")
+    # Codex #276 F6: a summary that says a kind twice, or uses a word pytest does not, is no result.
+    for malformed in ("1 passed, 0 failed, 2 failed in 0.1s", "1 passed, 2 failed tests in 0.1s",
+                      "1 passed, 3 exploded in 0.1s", "1 passed, 1 passed in 0.1s"):
+        assert lane.verdict(malformed + "\n", 0, False, 1500)[0] is False, malformed
+    assert lane.summary_counts("3 passed, 1 skipped, 2 subtests passed") == {"passed": 3, "skipped": 1, "subtests passed": 2}
+    assert lane.summary_counts("1 passed, 2 failed tests") is None
 
 
 def test_a_timeout_is_red_whatever_the_log_says():
@@ -112,6 +118,31 @@ def test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits(tmp_path
     script_tests_lane.stop_group(p, grace=1.0)
     subprocess.run(["sleep", "5"], check=True)
     assert not marker.exists(), "a TERM-ignoring child outlived the watchdog"
+
+
+def test_a_child_in_its_own_session_is_killed_too(tmp_path):
+    """Codex #276 F4 (RED first): a descendant that called setsid() is not in the runner's
+    process group; killing the group left it running."""
+    marker = tmp_path / "survived"
+    ready = tmp_path / "ready"
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text("import time, pathlib, sys\npathlib.Path(sys.argv[2]).write_text('up')\n"
+                          "time.sleep(4)\npathlib.Path(sys.argv[1]).write_text('SURVIVED')\n")
+    parent = tmp_path / "parent.py"
+    parent.write_text("import subprocess, sys, time\n"
+                      f"subprocess.Popen([sys.executable, {str(grandchild)!r}, {str(marker)!r}, {str(ready)!r}], start_new_session=True)\n"
+                      "time.sleep(60)\n")
+    p = subprocess.Popen([sys.executable, str(parent)], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        if ready.exists():
+            break
+        subprocess.run(["sleep", "0.05"])
+    assert ready.exists(), "the grandchild never started"
+    assert len(lane.descendants(p.pid)) == 1
+    lane.stop_group(p, grace=1.0)
+    subprocess.run(["sleep", "5"], check=True)
+    assert not marker.exists(), "a descendant in its own session outlived the watchdog"
 
 
 def test_cli_bad_arguments_and_a_missing_runner_are_red_in_one_line(tmp_path):

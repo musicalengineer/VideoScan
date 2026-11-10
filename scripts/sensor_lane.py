@@ -459,8 +459,16 @@ def count(log: str) -> Tuple[int, int, List[str]]:
     par_pass = len(PAR_PASS_RE.findall(log))
     par_fail = PAR_FAIL_RE.findall(log)
     if par_pass or par_fail:
-        passed, failed = par_pass, len(par_fail)
         names.update(par_fail)
+        # A "✘ Test x() failed after" line counts here too: recognising a torn parallel
+        # PASS line must never hide a failure printed in the other form (Codex #276 F8).
+        # The same failure printed both ways ("Suite/x()" and "x()") is one failure.
+        for line in log.splitlines():
+            m = re.search(r"✘ Test (.+?) failed after", line)
+            if m and not re.search(r"Test run with \d+ test", line) \
+                    and not any(n == m.group(1) or n.endswith("/" + m.group(1)) for n in par_fail):
+                names.add(m.group(1))
+        passed, failed = par_pass, len(names)
     else:
         passed = len(PASS_RE.findall(log)) - len(re.findall(r"Test run with \d+ tests?.* passed after", log))
         failed_lines = [l for l in log.splitlines() if FAILCOUNT_RE.search(l) and " recorded an issue " not in l

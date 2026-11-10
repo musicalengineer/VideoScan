@@ -158,6 +158,11 @@ def test_an_interrupted_row_never_replaces_a_later_result_of_the_same_night():
     for rows in ([real, late], [late, real]):
         cell = pm.nightly_summary(rows, "2026-11-09", **kw)["nights"][0]["hosts"]["M4"]
         assert cell["state"] == "green" and cell["passed"] == 100 and cell["finished"] == real["ts"], rows
+    # The same instant (Codex #276 F3): a result beats "interrupted", in either order.
+    tie = dict(late, ts=real["ts"])
+    for rows in ([real, tie], [tie, real]):
+        cell = pm.nightly_summary(rows, "2026-11-09", **kw)["nights"][0]["hosts"]["M4"]
+        assert cell["state"] == "green" and cell["passed"] == 100, rows
     # A genuine rerun (later time) still replaces the earlier result.
     rerun = dict(real, ts="2026-11-09T23:00:00Z", passed=99, failed=1, status="failed", reason="failed-tests:1")
     cell = pm.nightly_summary([real, rerun], "2026-11-09", **kw)["nights"][0]["hosts"]["M4"]
@@ -250,6 +255,16 @@ exit 7
     assert "PUBLISH" not in out.stdout and "already published or queued" in out.stdout, out.stdout
     queue.unlink()
 
+    # 2b. ONE run per Mac (Codex #276 F3): a live run owns the marker — this launch
+    #     refuses to start (exit 3), reports nothing and leaves the marker as it was.
+    marker.unlink(missing_ok=True)
+    assert subprocess.run([sys.executable, str(SCRIPT), "begin", str(marker), str(os.getpid()), "25bcbab2e"]).returncode == 0
+    owned = marker.read_text()
+    out = run_block('echo "PUBLISH $1"; end_run_marker;')
+    assert out.returncode == 3, (out.returncode, out.stdout, out.stderr)
+    assert "another nightly run is live" in out.stdout and "PUBLISH" not in out.stdout and "OWNER" not in out.stdout
+    assert marker.read_text() == owned
+
     # 3. Killed mid-publish (publish_row returns without making the row durable): the
     #    stale marker is NOT consumed by the attempt — but this run then takes the marker,
     #    and the log line above is the record. The run's own marker stays until durable.
@@ -272,3 +287,73 @@ def test_an_interrupted_row_is_a_did_not_run_night_with_a_publishable_reason():
     night = pm.nightly_summary([row], "2026-11-09", days=1, rota={"on": ["M4"], "off": []},
                                test_names=pm.TestNames(roots=()))["nights"][0]
     assert night["hosts"]["M4"]["state"] == "did_not_run" and night["hosts"]["M4"]["reason"] == "interrupted:post-test"
+
+
+FAKE_GIT = r"""#!/bin/bash
+# A stand-in for git: `git [-C dir] [-c k=v]… <verb> …`. The "remote" is one file.
+while [ $# -gt 0 ]; do
+  case "$1" in -C) shift 2 ;; -c) shift 2 ;; *) break ;; esac
+done
+verb="$1"; shift
+case "$verb" in
+  rev-parse) echo metrics ;;
+  commit) [ "${FAKE_COMMIT_RC:-0}" = 0 ] && cp "$METRICS_WT/metrics/testdriver.jsonl" "$FAKE_COMMITTED"; exit "${FAKE_COMMIT_RC:-0}" ;;
+  push) [ -f "$FAKE_COMMITTED" ] && cp "$FAKE_COMMITTED" "$FAKE_REMOTE"; exit 0 ;;
+  show) cat "$FAKE_REMOTE" 2>/dev/null ;;
+  reset) mkdir -p "$METRICS_WT/metrics"; cp "$FAKE_REMOTE" "$METRICS_WT/metrics/testdriver.jsonl" 2>/dev/null; rm -f "$FAKE_COMMITTED" ;;
+esac
+exit 0
+"""
+
+
+def _publish(tmp_path, commit_rc):
+    """publish_row / queue_pending / end_run_marker as they are in the script, run for
+    real against the fake git. Returns (rc, stdout, remote text, queue text, marker exists)."""
+    text = NIGHTLY.read_text()
+    functions = text[text.index("\npublish_row() {"):text.index("\n# Build a status/skipped/failed row")]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "git").write_text(FAKE_GIT)
+    (bin_dir / "git").chmod(0o755)
+    wt = tmp_path / "wt"
+    (wt / ".git").mkdir(parents=True, exist_ok=True)
+    remote, queue, marker = tmp_path / "remote.jsonl", tmp_path / "nightly-pending.jsonl", tmp_path / "nightly-running.json"
+    remote.write_text('{"old":1}\n')
+    queue.write_text("")
+    row = '{"ts":"2026-11-10T07:07:07Z","source":"nightly-local","host":"RicksUltra","status":"ok"}'
+    script = f"""set -u
+export PATH="{bin_dir}:$PATH" METRICS_WT="{wt}" FAKE_REMOTE="{remote}" FAKE_COMMITTED="{tmp_path / 'committed'}" FAKE_COMMIT_RC={commit_rc}
+PENDING_QUEUE="{queue}"
+RUN_MARKER="{marker}"
+MARKER_TOOL="{SCRIPT}"
+log() {{ echo "LOG $*"; }}
+sleep() {{ :; }}
+python3 "$MARKER_TOOL" begin "$RUN_MARKER" $$ 25bcbab2e
+{functions}
+publish_row '{row}'
+echo "RC $?"
+"""
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=120)
+    rc = int(next(l for l in out.stdout.splitlines() if l.startswith("RC ")).split()[1])
+    return rc, out.stdout, remote.read_text(), queue.read_text(), marker.exists(), row
+
+
+def test_a_push_that_returns_zero_without_the_row_is_not_a_publish(tmp_path):
+    """Codex #276 F2 (RED first, a bug older than the marker): `git commit` fails, the
+    push then "succeeds" as a no-op; publish_row logged "Published successfully",
+    cleared the pending queue and (new) removed the run marker. The row was gone."""
+    rc, out, remote, queue, marker_exists, row = _publish(tmp_path, commit_rc=128)
+    assert rc == 1, out                                  # not published; durably queued
+    assert row not in remote
+    assert queue.strip() == row, "the row waits in the pending queue for the next run"
+    assert "NOT on origin/metrics" in out and "Published successfully" not in out
+    # Queued is durable too, so the marker has gone — by the queue, not by the false success.
+    assert not marker_exists
+
+
+def test_a_real_publish_is_read_back_then_the_queue_is_cleared_and_the_marker_removed(tmp_path):
+    rc, out, remote, queue, marker_exists, row = _publish(tmp_path, commit_rc=0)
+    assert rc == 0, out
+    assert remote.splitlines() == ['{"old":1}', row]
+    assert queue == "" and not marker_exists
+    assert "Published successfully" in out

@@ -1163,8 +1163,10 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
         # an interrupted run is published later but dated when it started (2026-11-10), and
         # must never replace the result of a run that finished after it.
         shown = cells.get(date, {}).get(label)
-        if shown is not None and isinstance(shown.get("finished"), str) and shown["finished"] > ts:
-            continue
+        if shown is not None and isinstance(shown.get("finished"), str) and (
+                shown["finished"] > ts
+                or (shown["finished"] == ts and str(row.get("reason") or "").startswith("interrupted:"))):
+            continue                         # same instant: a result beats "interrupted"
         cells.setdefault(date, {})[label] = {
             "state": classify_nightly_row(row), "passed": _int(row.get("passed")),
             "failed": _int(row.get("failed")), "total": _int(row.get("total")),

@@ -35,6 +35,22 @@ NAMES_SHOWN = 3
 # with or without the "=====" rule around it. Only this line is counted (Codex #275 F6: any
 # line saying "1 passed" — a preflight note — used to make a zero-test run GREEN).
 _SUMMARY = re.compile(r"^=*\s*((?:\d+ [a-z]+(?: [a-z]+)?, )*\d+ [a-z]+(?: [a-z]+)?) in \d+(?:\.\d+)?s(?: \([\d:]+\))?\s*=*$")
+# The only outcome words pytest's summary uses. A term with any other word, or a word
+# said twice ("1 passed, 0 failed, 2 failed"), is not a summary this lane will trust
+# (Codex #276 F6).
+_KINDS = {"passed", "failed", "error", "errors", "skipped", "warning", "warnings", "xfailed", "xpassed",
+          "deselected", "rerun", "subtests passed", "subtests failed", "subtests skipped"}
+
+
+def summary_counts(line: str):
+    """{kind: n} for a well-formed summary body ("3 passed, 1 skipped"), else None."""
+    counts = {}
+    for term in line.split(", "):
+        m = re.fullmatch(r"(\d+) ([a-z]+(?: [a-z]+)?)", term)
+        if not m or m.group(2) not in _KINDS or m.group(2) in counts:
+            return None
+        counts[m.group(2)] = int(m.group(1))
+    return counts
 _NO_TESTS = re.compile(r"^=*\s*no tests ran\b")
 _FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
 
@@ -44,19 +60,16 @@ def verdict(text: str, rc: int, timed_out: bool, budget: int) -> Tuple[bool, str
     if timed_out:
         return False, f"script tests RED (timed out after {budget}s)"
     # The LAST summary-shaped line decides; a later "no tests ran" cancels an earlier count.
-    last = ""
+    counts = {}
     for line in text.splitlines():
         m = _SUMMARY.match(line.strip())
         if m:
-            last = m.group(1)
+            counts = summary_counts(m.group(1)) or {}      # malformed: no result
         elif _NO_TESTS.match(line.strip()):
-            last = ""
-
-    def count(word: str) -> int:
-        m = re.search(r"(?:^|, )(\d+) " + word + r"(?:,|$)", last)
-        return int(m.group(1)) if m else 0
-
-    passed, failed, errors = count("passed"), count("failed"), count("errors?")
+            counts = {}
+    passed = counts.get("passed", 0)
+    failed = counts.get("failed", 0) + counts.get("subtests failed", 0)
+    errors = counts.get("error", 0) + counts.get("errors", 0)
     if rc == 0 and passed > 0 and not failed and not errors:
         return True, f"script tests GREEN ({passed} passed)"
     if failed or errors:
@@ -84,11 +97,36 @@ def run(runner: str, log: str, budget: int, cwd: str) -> Tuple[int, bool]:
             return 124, True
 
 
+def descendants(root: int) -> List[int]:
+    """Every live process below `root` in the process tree (children, their children…),
+    from one `ps` listing. A process that has already been re-parented to launchd is
+    not found — nothing short of a job object could find it."""
+    try:
+        listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict = {}
+    for row in listing.splitlines():
+        parts = row.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, queue = [], [root]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            if child not in found:
+                found.append(child)
+                queue.append(child)
+    return found
+
+
 def stop_group(p: subprocess.Popen, grace: float = 20.0) -> None:
-    """TERM the runner's process group, give it `grace` seconds, then KILL the GROUP —
-    always, even when the leader has already exited: bash dies on TERM at once and a
-    child that ignores TERM would be left running (Codex #275 F4). The group id is the
-    leader's pid (start_new_session) and stays valid while any member lives."""
+    """Stop the runner and everything it started. The tree below it is listed FIRST
+    (while the parent links still exist), then: TERM the process group, give it
+    `grace` seconds, KILL the group — always, even when the leader has already exited
+    (bash dies on TERM at once; a child ignoring TERM stayed, Codex #275 F4) — and
+    KILL every listed descendant, which reaches a child that moved to its own
+    session or group (Codex #276 F4)."""
+    tree = descendants(p.pid)
     try:
         os.killpg(p.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -97,10 +135,16 @@ def stop_group(p: subprocess.Popen, grace: float = 20.0) -> None:
         p.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
+    tree += [pid for pid in descendants(p.pid) if pid not in tree]
     try:
         os.killpg(p.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass                                # nobody left in the group
+    for pid in tree:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     try:
         p.wait(timeout=10)
     except subprocess.TimeoutExpired:

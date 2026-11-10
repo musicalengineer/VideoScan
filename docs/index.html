@@ -1119,7 +1119,11 @@ function weeklyBugs(rows, weeks, today = new Date()) {
 const rowLabel = host => typeof host === "string" ? host.replace(/^ricks/i, "") : "";
 function summaryBehind(d, N) {
   if (!d.summary || !N) return "";
-  for (const h of N.hosts) {
+  // Every Mac the page knows (HOST_SPEC), not only those the summary already lists: a
+  // Mac whose first row the summary has not seen yet is behind too (Codex #276 F5).
+  const off = Array.isArray(d.summary.nightly && d.summary.nightly.off_rota) ? d.summary.nightly.off_rota : [];
+  const candidates = [...new Set([...N.hosts, ...Object.keys(HOST_SPEC)])].filter(h => !off.includes(h));
+  for (const h of candidates) {
     const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string" && rowLabel(r.host) === h)
       .map(r => r.ts).filter(ts => !Number.isNaN(toTime(ts))).sort((a, b) => toTime(a) - toTime(b)).pop();
     if (!newest) continue;

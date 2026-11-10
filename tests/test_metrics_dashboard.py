@@ -1210,6 +1210,28 @@ def test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind(tmp_path):
 
 
 @needs_node
+def test_a_mac_the_summary_has_never_seen_is_behind_too(tmp_path):
+    """Codex #276 F5 (RED first): the summary lists only the M4; the M5 Ultra then
+    publishes its first run. Only Macs already in the summary were compared."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, m4_done, _ = two_studio_fixture(now)
+    s = fx["summary_latest.json"]["nightly"]
+    s["hosts"] = ["M4"]
+    for night in s["nights"]:
+        night["hosts"].pop("Ultra", None)
+    row = lambda host, ts: dict(ts=iso(ts), source="nightly-local", host=host, status="ok", passed=1, failed=0, total=1)
+    fx["testdriver.jsonl"] = jsonl([row("RicksM4", m4_done), row("RicksUltra", now)])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    m = re.search(r'<span class="behind"><span class="stale">BEHIND</span>(.*?)</span>', words)
+    assert m and "M5 Ultra" in m.group(1) and et_when(now) in m.group(1), words
+    # A Mac the summary names as off the rota is never "behind".
+    s["off_rota"] = ["Ultra"]
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert "BEHIND" not in out["sections"]["head"]
+
+
+@needs_node
 def test_a_scoped_run_says_why_a_stage_failed_and_which_tests(tmp_path):
     """RED 2026-11-10 (Rick: "it says failures exist but when I click I cannot see what
     tests failed"): the gauntlet table showed "unit: failed · 0 failed · 2 skipped" and

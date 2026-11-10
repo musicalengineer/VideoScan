@@ -138,6 +138,24 @@ def test_profiles_from_before_todays_run_are_not_todays_coverage(tmp_path):
     assert merged == [str(todays)]
 
 
+def test_yesterdays_swiftpm_export_is_not_todays_coverage(tmp_path):
+    """Codex #276 F7 (RED first): SwiftPM names the same JSON path every day; a build
+    that failed today left yesterday's file there and it was read as today's 90 %."""
+    import os
+    import time
+    export = tmp_path / "VideoScanCore.json"
+    export.write_text("{}")
+    started = time.time() - 60
+    assert nc.written_since(str(export), started)
+    yesterday = time.time() - 86_400
+    os.utime(export, (yesterday, yesterday))
+    assert not nc.written_since(str(export), started)
+    assert not nc.written_since("", started) and not nc.written_since(str(tmp_path / "absent.json"), started)
+    text = (ROOT / "tools" / "nightly_coverage.py").read_text()
+    assert "if written_since(cov_path, core_started):" in text
+    assert "if cov_path and Path(cov_path).exists():" not in text
+
+
 def test_sensor_a_night_without_core_coverage_says_missing_in_capitals():
     text = (ROOT / "tools" / "nightly_coverage.py").read_text()
     assert "export_core_coverage(DD / \"core-build\", since=core_started)" in text
