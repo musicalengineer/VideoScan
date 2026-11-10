@@ -403,8 +403,10 @@ survives relaunch; an assertion row shows its evidence and confidence (truth); w
 resolve < 1 s.
 
 **C2, first slice built 2026-11-10 (DECISIONS 2026-11-10, "estimated provenance is shown as PROVISIONAL").** One rule
-(`vhsCapture2026`: original path under `Converted_VHS_Tapes_2026`, FFV1 in Matroska, ≥ 20 min; captures within 1 % of
-the longest in a folder are one tape, one master, the rest alternate captures; a shorter file is left unclassified)
+(`vhsCapture2026`: original path under `Converted_VHS_Tapes_2026`, FFV1 in Matroska, ≥ 20 min; within a source folder
+files are related by NAME first — one lowercased stem a prefix of the other — then duration: unrelated → its own
+tape, a master; related and within 1 % → one tape, one master, the rest alternate captures; related to a clearly
+longer file → left unclassified, it may be a trim)
 writes `inferred` `role` / `carrier` / `captureSetup` rows. Core `Provenance/ProvenanceResolver.swift` (the rule, what
 stands, the words); app `Provenance/ProvenanceEstimateStore.swift` (Estimate, Confirm, Not Right),
 `ProvenanceEstimateJob.swift` (MFO), `ProvenanceEstimateMark.swift` (the Archive glyph, the row menu, the Inspector
@@ -412,7 +414,10 @@ line). Differences from the text above: the store is `ProvenanceEstimateStore` a
 `ProvenanceResolver` also holds the rule, not only the display reduction; no sheet and no Triage filter (the Archive
 row menu confirms a selection); no typed carrier tables and no ledger `provenanceConfirmed` event (Confirm writes
 `confirmed` assertions and the `provenance_roles` row in one commit); no date or name field is asserted (the door
-refuses `tapeYear` / `digitizedOn` on archived content — the capture month and tape year are read at display time);
+refuses `tapeYear` / `digitizedOn` on archived content — the capture month is read at display time from the embedded
+creation date, the tape year from the year folder the archive filed the copy under, omitted when that is only the
+capture's own year); an alternate capture names its master by the archive's file name, and not at all once the
+master's estimate no longer stands;
 evidence is shown, confidence never is (2026-11-01 ruling, over "shows its evidence and confidence" above). Not
 built: the born-digital, name-pattern and `excerptOf` rules.
 

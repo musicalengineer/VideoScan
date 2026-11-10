@@ -67,12 +67,17 @@ enum ProvenanceEstimateMark {
     /// The Inspector's labelled line for `digest` from a reading of
     /// catalog.sqlite; nil = nothing to show (no estimate, a rejected one, a
     /// reading for another content, Rick's own role says otherwise).
+    /// `year`: the archive's filing year (ProvenanceResolver.tapeYear).
+    /// `masterName`: an alternate's master as the archive names it, or nil
+    /// to drop the pointer (ProvenanceEstimateStore.masterName).
     static func inspectorLine(digest: String?, reading: ProvenanceEstimateStore.CurrentReading?, rickRole: ProvenanceRole,
                               year: Int?, captured: Date?, technical: ProvenanceResolver.Technical?,
+                              masterName: (ProvenanceEstimate) -> String? = { _ in nil },
                               timeZone: TimeZone = .current) -> (text: String, isConfirmed: Bool)? {
         guard let digest, case .estimate(let readFor, let estimate)? = reading, readFor == digest.lowercased(),
               let seen = visible(estimate, rickRole: rickRole),
-              let sentence = ProvenanceResolver.sentence(seen, year: year, captured: captured, technical: technical, timeZone: timeZone)
+              let sentence = ProvenanceResolver.sentence(seen, year: year, captured: captured, technical: technical,
+                                                         masterName: masterName(seen), timeZone: timeZone)
         else { return nil }
         return (ProvenanceResolver.labelledLine(seen, sentence: sentence), seen.isConfirmed)
     }
@@ -172,6 +177,9 @@ struct InspectorProvenanceEstimateLine: View {
     let record: VideoRecord
     /// The selected file's whole-file digest (CatalogCommit.digest(of:)); nil = none yet.
     let digest: String?
+    /// Where the archive holds this content (the row's "Archived To" file);
+    /// nil = not archived. Its year folder is the sentence's "from <year>".
+    let archivePath: String?
     @ObservedObject var store: ProvenanceEstimateStore
     @ObservedObject var roles: ProvenanceRoleStore
     /// The last finished read and the key it answered.
@@ -192,9 +200,10 @@ struct InspectorProvenanceEstimateLine: View {
         let reading = completed?.key == key ? completed?.reading : nil
         let line = ProvenanceEstimateMark.inspectorLine(
             digest: digest, reading: reading, rickRole: digest.map { roles.role(of: $0) } ?? .unknown,
-            year: pfRecordHasConfirmedDate(record) ? MachineEraResolver.rickYear(record.userDate) : nil,
+            year: ProvenanceResolver.tapeYear(archivePath: archivePath, captured: record.embeddedCreationDate),
             captured: record.embeddedCreationDate,
-            technical: .init(videoCodec: record.videoCodec, resolution: record.resolution, bitDepth: record.bitDepth))
+            technical: .init(videoCodec: record.videoCodec, resolution: record.resolution, bitDepth: record.bitDepth),
+            masterName: { store.masterName(of: $0, roles: roles) })
         VStack(alignment: .leading, spacing: 0) {
             if let line {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {

@@ -6,7 +6,9 @@
 //   LOGIC      the facts projection (archived videos with a digest and an
 //              original path), the glyph's seam (VHS master only; Rick's own
 //              role wins), the menu's offer, the Inspector's line, the words,
-//              the File Journey event.
+//              the File Journey event; an alternate capture names its master
+//              by the archive's file name, and drops the pointer once the
+//              master's estimate no longer stands.
 //   TRUTH      a display string never claims confirmation while only inferred
 //              rows exist; never shows a confidence; nothing without an
 //              estimate; nothing after a reject; the Inspector line is for
@@ -48,6 +50,8 @@ private let estimateNow = Date(timeIntervalSince1970: 1_794_300_000)     // 2026
 private let captured = Date(timeIntervalSince1970: 1_783_944_000)        // 2026-07-13T12:00:00Z
 private let utc = TimeZone(identifier: "UTC") ?? .current
 private let vhsFolder = "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026"
+/// What the archive calls the master (never its original name, test_tape.mkv).
+private let archivedMasterName = "1984_test-tape.mkv"
 
 private func hex(_ n: Int) -> String { String(format: "%064x", n) }
 
@@ -170,7 +174,11 @@ struct ProvenanceEstimateLogicTests {
         let alternate = try #require(ProvenanceEstimateMark.inspectorLine(
             digest: hex(1), reading: .estimate(digest: hex(1), estimate(.alternateCapture)), rickRole: .unknown, year: 1984,
             captured: captured, technical: nil, timeZone: utc))
-        #expect(alternate.text == "Provenance (estimated): Alternate capture of the same tape as test_a.mkv")
+        #expect(alternate.text == "Provenance (estimated): Alternate capture of a VHS tape", "no archive name given: no pointer, never the original name")
+        let named = try #require(ProvenanceEstimateMark.inspectorLine(
+            digest: hex(1), reading: .estimate(digest: hex(1), estimate(.alternateCapture)), rickRole: .unknown, year: 1984,
+            captured: captured, technical: nil, masterName: { $0.masterDigest == hex(9) ? "1984_test-a.mkv" : nil }, timeZone: utc))
+        #expect(named.text == "Provenance (estimated): Alternate capture of the same tape as 1984_test-a.mkv")
         #expect(ProvenanceEstimateMark.inspectorLine(digest: hex(1), reading: .none(digest: hex(1)), rickRole: .unknown, year: 1984,
                                                      captured: captured, technical: nil) == nil)
         #expect(ProvenanceEstimateMark.inspectorLine(digest: hex(1), reading: nil, rickRole: .unknown, year: 1984, captured: captured,
@@ -219,7 +227,7 @@ struct ProvenanceEstimateLogicTests {
         #expect(ProvenanceEstimateStore.summary(plain) == "12 archived videos examined, 3 estimated, 2 already estimated, 1 vetoed")
         let more = ProvenanceEstimateStore.Tally(examined: 1, estimated: 0, already: 0, vetoed: 0, shorter: 2, notStored: 1)
         #expect(ProvenanceEstimateStore.summary(more) == "1 archived video examined, 0 estimated, 0 already estimated, 0 vetoed, "
-                + "2 left unclassified (shorter than another capture in the same folder), 1 not in catalog.sqlite yet (run again)")
+                + "2 left unclassified (shorter than a capture of the same name in its folder), 1 not in catalog.sqlite yet (run again)")
         #expect(ProvenanceEstimateStore.startLine(examined: 2).hasPrefix("START estimate provenance — 2 archived videos to examine"))
         #expect(ProvenanceEstimateWords.summary(estimate()) == "Master · VHS · ClearClick into OBS")
     }
@@ -282,6 +290,17 @@ struct ProvenanceEstimateLogicTests {
         #expect(undated.events.first { $0.kind == .provenance }?.displayStamp.isEmpty == true, "no capture date: no stamp, never an invented one")
     }
 
+    @Test("the master-name seam: an unattached store knows no archive name, so an alternate never points anywhere")
+    func masterNameSeamWithoutAnArchive() {
+        let store = ProvenanceEstimateStore()
+        store.apply([hex(1): estimate(.alternateCapture), hex(9): estimate()], takenAt: store.commitEpoch)
+        #expect(store.masterName(of: estimate(.alternateCapture), roles: nil) == nil)
+        #expect(store.masterName(of: estimate(), roles: nil) == nil)
+        #expect(store.journey(for: record(digest: hex(1)), roles: nil)?.sentence
+                == ProvenanceResolver.shortLine(estimate(.alternateCapture), captured: captured))
+        #expect(store.journey(for: record(digest: hex(1)), roles: nil)?.sentence.contains("test_a.mkv") == false)
+    }
+
     @Test("the store's journey seam: provisional, confirmed, and nothing when Rick's role says otherwise or there is no estimate")
     func journeySeam() throws {
         let store = ProvenanceEstimateStore()
@@ -323,11 +342,14 @@ private func launch(_ scene: CutoverScene) async throws -> Contents {
 
 @MainActor
 private func attachFacts(_ model: VideoScanModel, _ ids: Contents, extra: [ProvenanceFact] = []) {
-    let facts = [fact(ids.master, "test_tape_hd.mkv"), fact(ids.alternate, "test_tape_sd.mkv", seconds: 3_650, resolution: "720x480"),
+    // "test_tape" / "test_tape_sd": name-related (one stem is a prefix of the other) and within 1 % → one tape.
+    let facts = [fact(ids.master, "test_tape.mkv"), fact(ids.alternate, "test_tape_sd.mkv", seconds: 3_650, resolution: "720x480"),
                  fact(ids.other, "test_other_tape.mkv", folder: "1991")] + extra
     let store = model.provenanceEstimates
     guard let backing = store.backing else { Issue.record("the store has no backing"); return }
-    store.attach(backing, roles: model.provenanceRoles, facts: { facts })
+    let master = ids.master
+    store.attach(backing, roles: model.provenanceRoles, facts: { facts },
+                 archiveName: { $0 == master ? archivedMasterName : nil })
 }
 
 /// Quit and launch again: a NEW model on the same folder.
@@ -383,7 +405,7 @@ struct ProvenanceEstimateStoreTests {
         #expect(try await rows(scene.model, ids.alternate).first?.value == "alternateCapture")
         #expect(store.estimate(of: ids.master) == ProvenanceEstimate(role: .master, carrier: "VHS",
                                                                      captureSetupID: CaptureSetup.july2026.id, isConfirmed: false))
-        #expect(store.estimate(of: ids.alternate)?.masterFilename == "test_tape_hd.mkv")
+        #expect(store.estimate(of: ids.alternate)?.masterFilename == "test_tape.mkv")
         #expect(store.estimate(of: ids.other)?.role == .master)
         #expect(store.provisionalCount(in: [ids.master, ids.alternate, ids.other], roles: scene.model.provenanceRoles) == 3)
         #expect(try await roleHistory(scene.model, ids.master).isEmpty, "an estimate never sets a role")
@@ -496,7 +518,7 @@ struct ProvenanceEstimateStoreTests {
         #expect(try await roleHistory(scene.model, stranger).isEmpty, "a content with no estimate gets no role")
         #expect(try await rows(scene.model, stranger).isEmpty)
         #expect(store.estimate(of: ids.alternate)?.isConfirmed == true)
-        #expect(store.estimate(of: ids.alternate)?.masterFilename == "test_tape_hd.mkv", "the confirmed alternate still names its master")
+        #expect(store.estimate(of: ids.alternate)?.masterDigest == ids.master, "the confirmed alternate still knows its master")
         #expect(scene.sandbox.catalogLogText().contains("OUTCOME confirm provenance: 3 contents (3 files) — 2 confirmed, 1 skipped"))
         // Nothing estimated at all → every one skipped, nothing written, no role set.
         #expect(store.confirm(digests: [stranger], now: estimateNow) == .confirmed(contents: 0, skipped: 1))
@@ -526,6 +548,46 @@ struct ProvenanceEstimateStoreTests {
         #expect(store.estimate(of: ids.master) == nil, "a load shows what the table holds")
     }
 
+    @Test("an alternate capture names its master by the ARCHIVE's file name; once Rick rejects the master's estimate the pointer is dropped; a relaunch agrees")
+    func anAlternateNamesItsMasterByTheArchiveNameUntilTheMasterIsRejected() async throws {
+        let scene = try CutoverScene.make("prov_alternate"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        let alternate = try #require(store.estimate(of: ids.alternate))
+        #expect(alternate.masterFilename == "test_tape.mkv", "the evidence keeps the original name")
+        #expect(store.masterName(of: alternate, roles: roles) == archivedMasterName)
+        func line() async -> String? {
+            ProvenanceEstimateMark.inspectorLine(digest: ids.alternate, reading: await store.readCurrent(digest: ids.alternate),
+                                                 rickRole: roles.role(of: ids.alternate), year: nil, captured: captured, technical: nil,
+                                                 masterName: { store.masterName(of: $0, roles: roles) }, timeZone: utc)?.text
+        }
+        #expect(await line() == "Provenance (estimated): Alternate capture of the same tape as \(archivedMasterName)")
+        #expect(await line()?.contains("test_tape.mkv") == false, "never the original file name")
+        #expect(store.masterName(of: try #require(store.estimate(of: ids.master)), roles: roles) == nil, "a master points at nothing")
+        // Rick says the master's estimate is not right: the alternate stays provisional, without the pointer.
+        #expect(store.reject(digest: ids.master, now: estimateNow) == .rejected(.master))
+        #expect(store.masterName(of: alternate, roles: roles) == nil)
+        #expect(await line() == "Provenance (estimated): Alternate capture of a VHS tape")
+        #expect(store.estimate(of: ids.alternate)?.isConfirmed == false)
+        let fresh = try await relaunch(scene, from: scene.model)
+        let again = try #require(fresh.provenanceEstimates.estimate(of: ids.alternate))
+        #expect(fresh.provenanceEstimates.masterName(of: again, roles: fresh.provenanceRoles) == nil)
+        if let c = fresh.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("Rick's Set Role on the MASTER to something else also drops the alternate's pointer")
+    func aMasterRickRoledOtherwiseIsNotPointedAt() async throws {
+        let scene = try CutoverScene.make("prov_alt_role"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let store = scene.model.provenanceEstimates, roles = scene.model.provenanceRoles
+        _ = await store.run(now: estimateNow)
+        let alternate = try #require(store.estimate(of: ids.alternate))
+        #expect(store.masterName(of: alternate, roles: roles) == archivedMasterName)
+        #expect(roles.set(.editCopy, digests: [ids.master], now: estimateNow) == .set(changed: 1, unchanged: 0))
+        #expect(store.masterName(of: alternate, roles: roles) == nil)
+    }
+
     @Test("Rick's own Set Role wins: an estimate that disagrees with it is not shown and not confirmed")
     func ricksSetRoleWinsOverAnEstimate() async throws {
         let scene = try CutoverScene.make("prov_setrole"); defer { scene.cleanup() }
@@ -552,7 +614,7 @@ struct ProvenanceEstimateStoreTests {
         #expect(scene.sandbox.catalogLogText().contains("1 not in catalog.sqlite yet (run again)"))
     }
 
-    @Test("a shorter capture in the same folder is left unclassified and the run says how many")
+    @Test("a shorter capture of the same NAME in the folder is left unclassified and the run says how many")
     func aShorterCaptureIsReportedNotClassified() async throws {
         let scene = try CutoverScene.make("prov_shorter"); defer { scene.cleanup() }
         let ids = try await launch(scene)
@@ -561,7 +623,7 @@ struct ProvenanceEstimateStoreTests {
         let outcome = await scene.model.provenanceEstimates.run(now: estimateNow)
         #expect(outcome == .finished(.init(examined: 4, estimated: 3, already: 0, vetoed: 0, shorter: 1, notStored: 0)))
         #expect(try await rows(scene.model, trim).isEmpty)
-        #expect(scene.sandbox.catalogLogText().contains("1 left unclassified (shorter than another capture in the same folder)"))
+        #expect(scene.sandbox.catalogLogText().contains("1 left unclassified (shorter than a capture of the same name in its folder)"))
     }
 
     @Test("WRITER: an estimate and a confirm inside the 2 s debounce window of a record edit — all land, all survive the relaunch")
@@ -811,7 +873,12 @@ struct ProvenanceEstimateSensorTests {
         let mark = try SourceTree.appCode(named: "Provenance/ProvenanceEstimateMark.swift")
         #expect(mark.contains("await store.readCurrent(digest: digest)"))
         let panel = try SourceTree.appCode(named: "Catalog/InspectorPanel.swift")
-        #expect(panel.contains("InspectorProvenanceEstimateLine(record: rec, digest: contentDigest, store: provenanceEstimates"))
+        #expect(panel.contains("InspectorProvenanceEstimateLine(record: rec, digest: contentDigest,"))
+        #expect(panel.contains("archivePath: (masterCopy ?? rec).fullPath"), "the year comes from where the archive filed the copy")
+        #expect(mark.contains("ProvenanceResolver.tapeYear(archivePath: archivePath, captured: record.embeddedCreationDate)"))
+        #expect(!mark.contains("userDate") && !mark.contains("resolvedArchivedAt"), "never Rick's date field, never the promote stamp")
+        let flip = try SourceTree.appCode(named: "Catalog/CatalogAuthorityFlip.swift")
+        #expect(flip.contains("archivePromotionIndex.copy(withDigest: digest"), "the master's name is the archive copy's")
         let journey = try SourceTree.appCode(named: "Catalog/VideoScanModel+Provenance.swift")
         #expect(journey.contains("provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles)"))
         let start = try #require(journey.range(of: "static func buildFileJourney("))

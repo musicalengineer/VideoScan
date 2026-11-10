@@ -283,12 +283,15 @@ extension FileDossier {
     /// What this content is, as ProvenanceResolver reads its rows: an
     /// `.observation` ("estimated, unconfirmed") until Rick confirms, then his
     /// `.fact`. No estimate, or one he rejected → no line. The year is the
-    /// record's own date and the capture month its embedded creation date —
-    /// each omitted when unknown, never invented.
+    /// year folder the archive filed THIS row's file under (a row outside
+    /// the archive has none) and the capture month its embedded creation
+    /// date — each omitted when unknown, never invented. An alternate
+    /// capture does not name its master here: this builder reads one file.
     static func provenanceLine(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading]) -> Line? {
         guard let estimate = ProvenanceResolver.estimate(fromRowsOfOneSubject: assertions),
               let sentence = ProvenanceResolver.sentence(
-                estimate, year: MachineEraResolver.rickYear(r.userDate), captured: r.embeddedCreationDate,
+                estimate, year: ProvenanceResolver.tapeYear(archivePath: r.fullPath, captured: r.embeddedCreationDate),
+                captured: r.embeddedCreationDate,
                 technical: .init(videoCodec: r.videoCodec, resolution: r.resolution, bitDepth: r.bitDepth)) else { return nil }
         return Line(label: "Provenance", value: sentence,
                     reading: estimate.isConfirmed ? "confirmed by you" : "estimated, unconfirmed",

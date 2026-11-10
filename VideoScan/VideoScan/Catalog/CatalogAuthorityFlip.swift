@@ -428,6 +428,12 @@ extension VideoScanModel {
                                    facts: { [weak self] in
                                        guard let self else { return [] }
                                        return ProvenanceEstimateStore.facts(records: self.records) { self.isArchiveElement($0) }
+                                   },
+                                   // The archive copy that holds a digest (the memoized index, O(1)): its name is the one Rick sees.
+                                   archiveName: { [weak self] digest in
+                                       guard let self else { return nil }
+                                       let version = RecordsVersion(count: self.records.count, revision: self.volumeAggregatesRevision)
+                                       return self.archivePromotionIndex.copy(withDigest: digest, in: self.records, version: version)?.filename
                                    })
         Task { [weak self] in _ = await self?.provenanceEstimates.load() }
     }

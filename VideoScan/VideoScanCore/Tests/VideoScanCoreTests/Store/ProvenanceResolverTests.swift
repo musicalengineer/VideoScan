@@ -1,9 +1,11 @@
 // ProvenanceResolverTests.swift
 // Machine-estimated provenance (ProvenanceResolver.swift; DECISIONS 2026-11-10).
 //   LOGIC      — every clause of the evidence rule (remove one → no proposal);
-//                tape grouping within 1 %; the master tie-breaks (pixels, bits,
-//                path); a shorter same-folder file is left unclassified; byte
-//                copies are one content; the three drafts and their signer.
+//                tapes told apart by NAME first, then duration within 1 %
+//                (the real folder shapes of 2026-11-10); the master
+//                tie-breaks (pixels, bits, the shorter stem, path); a
+//                name-related shorter file is left unclassified; byte copies
+//                are one content; the three drafts and their signer.
 //   ISOLATION  — poisoned / missing probe values, an empty path, a zero or
 //                non-finite duration, a path that lost bytes in decoding, a
 //                bad digest: no proposal and no crash.
@@ -13,7 +15,9 @@
 //   TRUTH      — what stands is read from the rows: inferred alone is never
 //                "confirmed"; a rejected role shows nothing; a confidence
 //                never appears in any sentence; year and month are omitted
-//                when unknown, never invented.
+//                when unknown, never invented; the year is the archive's
+//                filing folder, never the capture's own year; an alternate
+//                names its master only when given the archive's name for it.
 //   DOOR       — the three drafts land through `appendProvenanceAssertion`
 //                (none is a name or a date, so the archived refusal never
 //                applies); Rick's reject vetoes the role's re-proposal;
@@ -129,7 +133,9 @@ struct ProvenanceResolverLogicTests {
     }
 
     @Test func capturesWithinOnePercentAreOneTapeWithExactlyOneMaster() {
-        let resolved = ProvenanceResolver.resolve([fact(1, seconds: 3_660), fact(2, seconds: 3_640), fact(3, seconds: 3_625)])
+        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_x.mkv", seconds: 3_660),
+                                                   fact(2, path: "\(vhsFolder)/test_x_2.mkv", seconds: 3_640),
+                                                   fact(3, path: "\(vhsFolder)/test_x_3.mkv", seconds: 3_625)])
         #expect(resolved.proposals.count == 3)
         #expect(resolved.masters == 1)
         #expect(resolved.alternates == 2)
@@ -137,36 +143,32 @@ struct ProvenanceResolverLogicTests {
     }
 
     @Test func theMasterIsTheLargerPicture() {
-        let resolved = ProvenanceResolver.resolve([fact(1, resolution: "720x480"), fact(2, resolution: "1280x720")])
+        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_x.mkv", resolution: "720x480"),
+                                                   fact(2, path: "\(vhsFolder)/test_x_2.mkv", resolution: "1280x720")])
         #expect(resolved.proposals.first { $0.role == .master }?.digest == hex(2))
         #expect(resolved.proposals.first { $0.role == .alternateCapture }?.digest == hex(1))
     }
 
     @Test func atEqualPictureTheMasterIsTheDeeperOne() {
-        let resolved = ProvenanceResolver.resolve([fact(1, bits: "8"), fact(2, bits: "10")])
+        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_x.mkv", bits: "8"),
+                                                   fact(2, path: "\(vhsFolder)/test_x_2.mkv", bits: "10")])
         #expect(resolved.proposals.first { $0.role == .master }?.digest == hex(2))
     }
 
-    @Test func atEqualPictureAndDepthTheMasterIsTheSmallestOriginalPath() {
-        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_b.mkv"), fact(2, path: "\(vhsFolder)/test_a.mkv")])
+    @Test func atEqualPictureDepthAndStemLengthTheMasterIsTheSmallestOriginalPath() {
+        // Equal stems (the names differ only in case): the smaller path wins.
+        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_x.mkv"), fact(2, path: "\(vhsFolder)/Test_X.mkv")])
         #expect(resolved.proposals.first { $0.role == .master }?.digest == hex(2))
+        #expect(resolved.proposals.first { $0.role == .alternateCapture }?.digest == hex(1))
     }
 
     @Test func anAlternateNamesItsMasterInItsEvidence() throws {
-        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_b.mkv"), fact(2, path: "\(vhsFolder)/test_a.mkv")])
+        let resolved = ProvenanceResolver.resolve([fact(1, path: "\(vhsFolder)/test_a_2.mkv"), fact(2, path: "\(vhsFolder)/test_a.mkv")])
         let alternate = try #require(resolved.proposals.first { $0.role == .alternateCapture })
         let evidence = try #require(try JSONSerialization.jsonObject(with: Data(alternate.evidenceJSON.utf8)) as? [String: Any])
         #expect(evidence["masterDigest"] as? String == hex(2))
         #expect(evidence["masterFilename"] as? String == "test_a.mkv")
         #expect(evidence["groupSize"] as? Int == 2)
-    }
-
-    @Test func aShorterFileInTheSameFolderIsNotClassifiedAtAll() {
-        let resolved = ProvenanceResolver.resolve([fact(1, seconds: 3_660), fact(2, seconds: 1_800)])
-        #expect(resolved.proposals.map(\.digest) == [hex(1)])
-        #expect(resolved.proposals.first?.role == .master)
-        #expect(resolved.shorterUnclassified == 1)
-        #expect(resolved.qualified == 2)
     }
 
     @Test func filesInDifferentFoldersAreDifferentTapes() {
@@ -188,6 +190,87 @@ struct ProvenanceResolverLogicTests {
         let resolved = ProvenanceResolver.resolve([fact(1), fact(2, codec: "h264", seconds: 3_660)])
         #expect(resolved.proposals.map(\.digest) == [hex(1)])
         #expect(resolved.shorterUnclassified == 0)
+    }
+}
+
+// MARK: - Grouping by name, then duration (the real folder shapes, 2026-11-10)
+
+@Suite("ProvenanceResolver — tapes are told apart by NAME first, then duration")
+struct ProvenanceResolverGroupingTests {
+
+    private static let root = "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026"
+
+    private func capture(_ n: Int, _ relative: String, minutes: Double, bits: String = "8", codec: String = "ffv1",
+                         container: String = "matroska,webm", resolution: String = "1280x720") -> ProvenanceFact {
+        fact(n, path: "\(Self.root)/\(relative)", container: container, codec: codec, seconds: minutes * 60, resolution: resolution, bits: bits)
+    }
+
+    private func roles(_ resolved: ProvenanceResolver.Resolution) -> [String: ProvenanceRole] {
+        Dictionary(uniqueKeysWithValues: resolved.proposals.map { ($0.digest, $0.role) })
+    }
+
+    /// The shapes found in the real catalog: names and durations as they are.
+    @Test func theRealFolderShapes() {
+        let resolved = ProvenanceResolver.resolve([
+            capture(1, "Misc1990/Franklin_1988.mkv", minutes: 56.0),
+            capture(2, "Misc1990/Franklin_1990_p216.mkv", minutes: 91.5, bits: "16"),
+            capture(3, "Misc1990/Franklin_1990_P216_2.mkv", minutes: 91.5, bits: "16"),
+            capture(4, "Misc1990/Franklin_Dan_Kindergarten_NV12_2.mkv", minutes: 67.0),
+            capture(5, "Montana/Montana_Tape_1.mkv", minutes: 83.9),
+            capture(6, "Montana/Montana_1995_part_x.mkv", minutes: 54.4),
+            capture(7, "Montana/Montana_Camping_1995.mov", minutes: 40, codec: "prores", container: "mov,mp4,m4a,3gp,3g2,mj2"),
+        ])
+        #expect(roles(resolved) == [hex(1): .master, hex(2): .master, hex(3): .alternateCapture, hex(4): .master,
+                                    hex(5): .master, hex(6): .master])
+        #expect(resolved.shorterUnclassified == 0)
+        #expect(resolved.qualified == 6, "the ProRes .mov is not a candidate at all")
+    }
+
+    @Test func twoUnrelatedNamesOfEqualLengthAreTwoTapes() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_birthday.mkv", minutes: 120), capture(2, "1984/test_christmas.mkv", minutes: 120)])
+        #expect(roles(resolved) == [hex(1): .master, hex(2): .master])
+    }
+
+    @Test func aNameRelatedShorterFileIsUnclassifiedAndTheLongerIsStillAMaster() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_x.mkv", minutes: 60), capture(2, "1984/test_x_trimmed.mkv", minutes: 25)])
+        #expect(roles(resolved) == [hex(1): .master])
+        #expect(resolved.shorterUnclassified == 1)
+    }
+
+    @Test func anUnrelatedShorterFileIsItsOwnTape() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_x.mkv", minutes: 60), capture(2, "1984/test_y.mkv", minutes: 25)])
+        #expect(roles(resolved) == [hex(1): .master, hex(2): .master])
+        #expect(resolved.shorterUnclassified == 0)
+    }
+
+    @Test func atEqualPictureAndDepthTheMasterIsTheShorterStem() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_x_2.mkv", minutes: 60), capture(2, "1984/test_x.mkv", minutes: 60)])
+        #expect(roles(resolved) == [hex(1): .alternateCapture, hex(2): .master])
+    }
+
+    @Test func nameRelationIgnoresCaseAndTheExtension() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/Test_X.MKV", minutes: 60), capture(2, "1984/test_x_B.mkv", minutes: 60.2)])
+        #expect(roles(resolved) == [hex(1): .master, hex(2): .alternateCapture])
+    }
+
+    @Test func theSameNameInAnotherFolderIsAnotherTape() {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_x.mkv", minutes: 60), capture(2, "1985/test_x_2.mkv", minutes: 60)])
+        #expect(roles(resolved) == [hex(1): .master, hex(2): .master])
+    }
+
+    @Test func theEvidenceCarriesTheNameRelationAndTheDurations() throws {
+        let resolved = ProvenanceResolver.resolve([capture(1, "1984/test_x.mkv", minutes: 60), capture(2, "1984/test_x_2.mkv", minutes: 60.1),
+                                                   capture(3, "1984/test_other.mkv", minutes: 60)])
+        let master = try #require(resolved.proposals.first { $0.digest == hex(1) })
+        let evidence = try #require(try JSONSerialization.jsonObject(with: Data(master.evidenceJSON.utf8)) as? [String: Any])
+        #expect(evidence["nameRelation"] as? String == "prefix")
+        #expect(evidence["relatedNames"] as? [String] == ["test_x_2.mkv"])
+        #expect(evidence["groupDurationsMs"] as? [Int] == [3_600_000, 3_606_000])
+        #expect(evidence["groupSize"] as? Int == 2)
+        let alone = try #require(resolved.proposals.first { $0.digest == hex(3) })
+        let single = try #require(try JSONSerialization.jsonObject(with: Data(alone.evidenceJSON.utf8)) as? [String: Any])
+        #expect(single["nameRelation"] as? String == "none")
+        #expect(single["groupSize"] as? Int == 1)
     }
 }
 
@@ -282,7 +365,9 @@ struct ProvenanceResolverMediaMatrixTests {
 struct ProvenanceResolverScaleTests {
 
     /// 100,000 archived facts: 20,000 qualifying captures in 10,000 folders
-    /// (a master and an alternate each) among 80,000 that do not qualify.
+    /// (a master and a name-related alternate each) among 80,000 that do not
+    /// qualify — and, below, 5,000 unrelated names in ONE folder (each its
+    /// own tape; the sorted-stem walk never compares unrelated files).
     /// Budget 2 s (Debug, M4 Max; measured ≈ 0.5 s) — O(n²) would be minutes.
     @Test(.timeLimit(.minutes(2)))
     func hundredThousandFacts() {
@@ -291,7 +376,7 @@ struct ProvenanceResolverScaleTests {
         for n in 1...100_000 {
             if n <= 20_000 {
                 let folder = "/Volumes/Fixture/Converted_VHS_Tapes_2026/tape_\((n - 1) / 2)"
-                facts.append(fact(n, path: "\(folder)/test_capture_\(n).mkv", seconds: 3_600 + Double(n % 2),
+                facts.append(fact(n, path: "\(folder)/test_capture\(n % 2 == 0 ? "" : "_2").mkv", seconds: 3_600 + Double(n % 2),
                                   resolution: n % 2 == 0 ? "1280x720" : "720x480"))
             } else {
                 facts.append(fact(n, path: "/Volumes/Fixture/Clips/test_clip_\(n).mov", container: "mov,mp4,m4a,3gp,3g2,mj2", codec: "h264"))
@@ -307,6 +392,17 @@ struct ProvenanceResolverScaleTests {
         print("ProvenanceResolver scale: 100k facts → \(resolved.proposals.count) proposals in \(took)")
         expectWithinTimingBudget("100k archived facts resolved to provenance proposals", measured: took,
                                  budget: .seconds(2), loadBefore: load)
+    }
+
+    @Test(.timeLimit(.minutes(2)))
+    func fiveThousandUnrelatedNamesInOneFolder() {
+        let facts = (1...5_000).map { fact($0, path: "\(vhsFolder)/test_\(String(format: "%05d", $0))_tape.mkv") }
+        let load = TimingBudget.sampleLoad()
+        var resolved = ProvenanceResolver.Resolution()
+        let took = ContinuousClock().measure { resolved = ProvenanceResolver.resolve(facts) }
+        #expect(resolved.masters == 5_000)
+        #expect(resolved.alternates == 0)
+        expectWithinTimingBudget("5,000 unrelated names in one folder", measured: took, budget: .seconds(1), loadBefore: load)
     }
 
     /// 100,000 assertion rows (one content's worth at a time) reduced to what stands.
@@ -410,8 +506,46 @@ struct ProvenanceResolverTruthTests {
         let estimate = try #require(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows))
         #expect(estimate.role == .alternateCapture)
         #expect(!estimate.isVHSMaster)
-        #expect(ProvenanceResolver.sentence(estimate, year: 1984, captured: july2026, technical: tech, timeZone: utc)
-                == "Alternate capture of the same tape as test_a.mkv")
+        #expect(estimate.masterDigest == hex(2))
+        // Named by what the caller says the archive calls the master — never by the original name in the evidence.
+        #expect(ProvenanceResolver.sentence(estimate, year: 1984, captured: july2026, technical: tech, masterName: "1984_test-a.mkv", timeZone: utc)
+                == "Alternate capture of the same tape as 1984_test-a.mkv")
+        #expect(ProvenanceResolver.shortLine(estimate, captured: july2026, masterName: "1984_test-a.mkv", timeZone: utc)
+                == "Estimated: alternate capture of the same tape as 1984_test-a.mkv — not confirmed")
+    }
+
+    @Test func anAlternateWhoseMasterNoLongerStandsDropsThePointer() throws {
+        let evidence = #"{"masterDigest":"\#(hex(2))","masterFilename":"test_a.mkv"}"#
+        let rows = [row(1, "role", "alternateCapture", evidence: evidence), row(2, "carrier", "VHS"),
+                    row(3, "captureSetup", CaptureSetup.july2026.id)]
+        let estimate = try #require(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows))
+        let sentence = try #require(ProvenanceResolver.sentence(estimate, year: 1984, captured: july2026, technical: tech, masterName: nil, timeZone: utc))
+        #expect(sentence == "Alternate capture of a VHS tape")
+        #expect(!sentence.contains("test_a"), "the original name in the evidence is never the pointer")
+        #expect(ProvenanceResolver.labelledLine(estimate, sentence: sentence) == "Provenance (estimated): Alternate capture of a VHS tape")
+        #expect(ProvenanceResolver.sentence(estimate, year: nil, captured: nil, technical: nil, masterName: "", timeZone: utc)
+                == "Alternate capture of a VHS tape")
+    }
+
+    @Test func theTapeYearIsTheArchivesFilingFolderAndNeverTheCapturesOwnYear() {
+        let filed = "/Volumes/Fixture/Archive/30_Video/1980-1989/1984/1984_test-tape.mkv"
+        #expect(ProvenanceResolver.filingYear(archivePath: filed) == 1984)
+        #expect(ProvenanceResolver.filingYear(archivePath: "30_Video/1990-1999/1995/1995-07_test.mkv") == 1995)
+        #expect(ProvenanceResolver.tapeYear(archivePath: filed, captured: july2026, timeZone: utc) == 1984)
+        #expect(ProvenanceResolver.tapeYear(archivePath: filed, captured: nil, timeZone: utc) == 1984)
+        // Filed by its capture stamp: that year says nothing about the tape.
+        let byCapture = "/Volumes/Fixture/Archive/30_Video/2020-2029/2026/2026-07-13_test-tape.mkv"
+        #expect(ProvenanceResolver.filingYear(archivePath: byCapture) == 2026)
+        #expect(ProvenanceResolver.tapeYear(archivePath: byCapture, captured: july2026, timeZone: utc) == nil)
+        #expect(ProvenanceResolver.tapeYear(archivePath: nil, captured: july2026, timeZone: utc) == nil)
+    }
+
+    @Test(arguments: ["", "/", "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026/1984/test.mkv",
+                      "/Volumes/Fixture/Archive/30_Video/Undated/test.mkv", "/Volumes/Fixture/Archive/30_Video/1980-1989/test.mkv",
+                      "/Volumes/Fixture/Archive/30_Video/1980-1989/1994/test.mkv", "/Volumes/Fixture/Archive/30_Video/1980-1990/1984/test.mkv",
+                      "/Volumes/Fixture/Archive/30_Video/abcd-efgh/1984/test.mkv", "/Volumes/Fixture/Archive/30_Video/1980-1989/1984"])
+    func aPathWithNoYearFolderHasNoFilingYear(_ path: String) {
+        #expect(ProvenanceResolver.filingYear(archivePath: path) == nil)
     }
 
     @Test func noSentenceEverCarriesAConfidence() throws {
@@ -450,7 +584,8 @@ struct ProvenanceResolverTruthTests {
         r.videoCodec = "ffv1"
         r.resolution = "1280x720"
         r.bitDepth = "8"
-        r.userDate = "1984"
+        r.userDate = "1977"         // not the source of the sentence's year
+        r.fullPath = "/Volumes/Fixture/Archive/30_Video/1980-1989/1984/1984_test-tape.mkv"
         r.embeddedCreationDate = july2026
         #expect(FileDossier.provenanceLine(r, assertions: []) == nil)
         let provisional = try #require(FileDossier.provenanceLine(r, assertions: inferred()))
@@ -470,6 +605,9 @@ struct ProvenanceResolverTruthTests {
         #expect(FileDossier.provenanceLine(r, assertions: rows) == nil)
         let built = FileDossier.build(record: r, digest: hex(1), assertions: inferred(), now: july2026)
         #expect(built.patterns.line("Provenance")?.standing == .observation)
+        // A row outside the archive has no filing year: the year is omitted, never taken from another field.
+        r.fullPath = "/Volumes/Fixture/_staging/Converted_VHS_Tapes_2026/1984/test_tape.mkv"
+        #expect(FileDossier.provenanceLine(r, assertions: inferred())?.value.hasPrefix("Original capture of a VHS tape, captured ") == true)
     }
 
     @Test func aSecondRunReusesTheStandingRowsTimeButNeverARejectedOnes() throws {

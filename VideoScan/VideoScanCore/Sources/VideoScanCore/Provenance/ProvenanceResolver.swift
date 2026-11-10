@@ -21,25 +21,38 @@
 //   * the probe gave a readable resolution and bit depth (they pick the
 //     master, so a file without them cannot be ranked) and the digest is a
 //     whole-file SHA-256.
-// TAPE GROUPING: within one parent directory, the files whose duration is
-// within 1 % of the LONGEST qualifying file's are captures of one tape. One
-// is `master` (more pixels, then more bits, then the smallest original path —
-// deterministic); the others are `alternateCapture`. A qualifying file in the
-// same directory that is clearly SHORTER is not classified at all: it may be
-// a trim, or another tape — the facts here cannot tell, so nothing is said.
+// TAPE GROUPING (2026-11-10, after the real folders: a source directory is
+// NOT one tape — `Misc1990/` holds four). Within one source directory files
+// are related by NAME first, then duration. A stem is the file name,
+// lowercased, without its extension; two files are NAME-RELATED when one stem
+// is a prefix of the other (`franklin_1990_p216` / `franklin_1990_p216_2`).
+//   * related to no other qualifying file → its own tape → `master`,
+//     whatever its length;
+//   * name-related AND durations within 1 % → captures of ONE tape: one
+//     `master` (more pixels, then more bits, then the SHORTER stem — the
+//     un-suffixed file — then the smaller path), the rest `alternateCapture`;
+//   * name-related to a clearly LONGER file → not classified at all: it may
+//     be a trim of that file, and the facts here cannot tell. The longer one
+//     is still a master.
 //
 // NOT asserted, by ruling (rule 3: archived means fixed): no name and no date
 // field — `tapeYear` and `digitizedOn` are refused by the door on archived
 // content. The capture month is read at display time from the file's own
-// embedded creation date, the tape year from the record's date.
+// embedded creation date. The tape year is the year FOLDER the archive
+// filed the copy under (`…/1980-1989/1984/…` — what the Archive tab's
+// "Archived To" column shows, so the sentence and the row cannot disagree),
+// and it is omitted when there is none or when it is merely the capture's
+// own year (a file filed by its capture stamp says nothing about the tape).
 //
 // Confidence: the table's CHECK requires one on an inferred row; a RULE has
 // no probability, so every row carries the fixed `ProvenanceEstimateRule
 // .confidence` and says what it is in `confidenceIs` (as the era job does).
 // It is never displayed (events_design rule 9); nothing here reads it back.
 //
-// Cost: `resolve` is O(n log n) in the number of facts (one sort per
-// directory); 100,000 facts are budgeted in ProvenanceResolverTests.
+// Cost: `resolve` is O(n log n) in the number of facts (one sort of stems
+// per directory) plus one step per name-related PAIR — name-related stems
+// are neighbours in sorted order, so unrelated files cost nothing more;
+// 100,000 facts are budgeted in ProvenanceResolverTests.
 // Memory: one small candidate (≈ 200 B) per QUALIFYING fact, and one
 // proposal (≈ 600 B with its evidence text) per classified content — worst
 // case 100k contents ≈ 80 MB transient, today tens of files.
@@ -169,7 +182,9 @@ public struct ProvenanceEstimate: Sendable, Equatable {
     /// True only when Rick's newest decision on EVERY shown field is
     /// `confirmed` (or `corrected`). A machine row alone never makes it true.
     public var isConfirmed: Bool
-    /// An alternate capture's master, as the rule recorded it.
+    /// An alternate capture's master, as the rule recorded it. The file
+    /// name is the ORIGINAL one — evidence, never shown as the master's name
+    /// (a surface asks the archive for the name Rick sees).
     public var masterDigest: String?
     public var masterFilename: String?
 
@@ -197,7 +212,7 @@ public enum ProvenanceResolver {
         public var examined = 0
         /// Facts every clause of the rule held for (before grouping; byte copies counted once).
         public var qualified = 0
-        /// Qualifying contents left unclassified: shorter than another capture in their folder.
+        /// Qualifying contents left unclassified: clearly shorter than a NAME-RELATED capture in their folder (maybe a trim).
         public var shorterUnclassified = 0
 
         public var masters: Int { proposals.lazy.filter { $0.role == .master }.count }
@@ -210,6 +225,8 @@ public enum ProvenanceResolver {
         var path: String
         var directory: String
         var filename: String
+        /// The file name, lowercased, without its extension.
+        var stem: String
         var seconds: Double
         var pixels: Int
         var bits: Int
@@ -230,16 +247,16 @@ public enum ProvenanceResolver {
         var byDirectory: [String: [Candidate]] = [:]
         for c in byDigest.values { byDirectory[c.directory, default: []].append(c) }
         for (_, members) in byDirectory {
-            let longest = members.lazy.map(\.seconds).max() ?? 0
-            let floor = longest * (1 - ProvenanceEstimateRule.durationTolerance)
-            let tape = members.filter { $0.seconds >= floor }
-            out.shorterUnclassified += members.count - tape.count
-            guard let master = tape.min(by: outranks) else { continue }
-            for c in tape {
-                let role: ProvenanceRole = c.digest == master.digest ? .master : .alternateCapture
-                out.proposals.append(ProvenanceProposal(digest: c.digest, role: role, carrier: ProvenanceEstimateRule.carrierVHS,
-                                                        captureSetupID: CaptureSetup.july2026.id,
-                                                        evidenceJSON: evidence(c, master: master, groupSize: tape.count)))
+            let (tapes, shorter) = tapes(in: members)
+            out.shorterUnclassified += shorter
+            for tape in tapes {
+                guard let master = tape.min(by: outranks) else { continue }
+                for c in tape {
+                    let role: ProvenanceRole = c.digest == master.digest ? .master : .alternateCapture
+                    out.proposals.append(ProvenanceProposal(digest: c.digest, role: role, carrier: ProvenanceEstimateRule.carrierVHS,
+                                                            captureSetupID: CaptureSetup.july2026.id,
+                                                            evidenceJSON: evidence(c, master: master, tape: tape)))
+                }
             }
         }
         out.proposals.sort { $0.digest < $1.digest }
@@ -260,8 +277,57 @@ public enum ProvenanceResolver {
               let pixels = pixelCount(fact.resolution), let bits = Int(fact.bitDepth.trimmingCharacters(in: .whitespaces)), bits > 0
         else { return nil }
         let directory = "/" + parts.dropLast().joined(separator: "/")
-        return Candidate(digest: digest, path: path, directory: directory, filename: String(parts[parts.count - 1]),
+        let filename = String(parts[parts.count - 1])
+        return Candidate(digest: digest, path: path, directory: directory, filename: filename, stem: stem(of: filename),
                          seconds: fact.durationSeconds, pixels: pixels, bits: bits, fact: fact)
+    }
+
+    /// "Franklin_1990_P216_2.mkv" → "franklin_1990_p216_2".
+    static func stem(of filename: String) -> String {
+        let lower = filename.lowercased()
+        guard let dot = lower.lastIndex(of: "."), dot != lower.startIndex else { return lower }
+        return String(lower[..<dot])
+    }
+
+    /// Durations within the tolerance of the longer one.
+    static func sameLength(_ a: Double, _ b: Double) -> Bool {
+        abs(a - b) <= ProvenanceEstimateRule.durationTolerance * max(a, b)
+    }
+
+    /// One directory's candidates → its tapes (each a list of captures) and
+    /// how many candidates were left out as clearly shorter than a
+    /// name-related file. Stems are sorted, so every stem that EXTENDS stem i
+    /// sits in the run right after it: the inner loop stops at the first
+    /// stem that does not, and unrelated files are never compared.
+    static func tapes(in members: [Candidate]) -> (tapes: [[Candidate]], shorter: Int) {
+        let sorted = members.sorted { ($0.stem, $0.path, $0.digest) < ($1.stem, $1.path, $1.digest) }
+        var related: [(Int, Int)] = []
+        var dropped = Set<Int>()
+        for i in sorted.indices {
+            var j = i + 1
+            while j < sorted.count, sorted[j].stem.hasPrefix(sorted[i].stem) {
+                if sameLength(sorted[i].seconds, sorted[j].seconds) {
+                    related.append((i, j))
+                } else {
+                    dropped.insert(sorted[i].seconds < sorted[j].seconds ? i : j)
+                }
+                j += 1
+            }
+        }
+        // Union-find over the captures that stay (C++: a disjoint-set forest in a vector).
+        var parent = Array(sorted.indices)
+        func root(_ x: Int) -> Int {
+            var r = x
+            while parent[r] != r { r = parent[r] }
+            return r
+        }
+        for (a, b) in related where !dropped.contains(a) && !dropped.contains(b) {
+            let (ra, rb) = (root(a), root(b))
+            if ra != rb { parent[max(ra, rb)] = min(ra, rb) }
+        }
+        var groups: [Int: [Candidate]] = [:]
+        for i in sorted.indices where !dropped.contains(i) { groups[root(i), default: []].append(sorted[i]) }
+        return (groups.keys.sorted().compactMap { groups[$0] }, dropped.count)
     }
 
     /// "1280x720" → 921600; nil unless both sides are positive integers.
@@ -272,16 +338,20 @@ public enum ProvenanceResolver {
         return w * h
     }
 
-    /// Master order: more pixels, then more bits, then the smaller original path.
+    /// Master order: more pixels, then more bits, then the SHORTER stem (the
+    /// un-suffixed file), then the smaller original path.
     static func outranks(_ a: Candidate, _ b: Candidate) -> Bool {
         if a.pixels != b.pixels { return a.pixels > b.pixels }
         if a.bits != b.bits { return a.bits > b.bits }
+        if a.stem.count != b.stem.count { return a.stem.count < b.stem.count }
         if a.path != b.path { return a.path < b.path }
         return a.digest < b.digest      // total order: two contents recorded at one path still rank one way
     }
 
     /// The facts the rule used, as sorted-key JSON (stable bytes).
-    static func evidence(_ c: Candidate, master: Candidate, groupSize: Int) -> String {
+    static func evidence(_ c: Candidate, master: Candidate, tape: [Candidate]) -> String {
+        // The other captures of this tape, by name (capped: evidence is a note, not a list of a folder).
+        let others = tape.filter { $0.digest != c.digest }.map(\.filename).sorted()
         var object: [String: Any] = [
             "rule": ProvenanceEstimateRule.ruleName,
             "confidenceIs": ProvenanceEstimateRule.confidenceIs,
@@ -293,11 +363,14 @@ public enum ProvenanceResolver {
             "durationMs": Int((c.seconds * 1000).rounded()),
             "resolution": c.fact.resolution,
             "bitDepth": c.bits,
-            "groupSize": groupSize,
+            "groupSize": tape.count,
+            "nameRelation": tape.count > 1 ? "prefix" : "none",
+            "groupDurationsMs": Array(tape.map { Int(($0.seconds * 1000).rounded()) }.sorted().prefix(8)),
             "setupStatement": CaptureSetup.july2026.statement,
         ]
         if !c.fact.frameRate.isEmpty { object["frameRate"] = c.fact.frameRate }
         if let encoder = c.fact.originEncoder, !encoder.isEmpty { object["originEncoder"] = encoder }
+        if !others.isEmpty { object["relatedNames"] = Array(others.prefix(8)) }
         if c.digest != master.digest {
             object["masterDigest"] = master.digest
             object["masterFilename"] = master.filename
@@ -364,7 +437,11 @@ public enum ProvenanceResolver {
         if let ms = e["durationMs"] as? Int { parts.append("\(ms / 60_000) min") }
         if let size = e["resolution"] as? String, let bits = e["bitDepth"] as? Int { parts.append("\(size), \(bits)-bit") }
         if let encoder = e["originEncoder"] as? String { parts.append("written by \(encoder)") }
-        if let group = e["groupSize"] as? Int { parts.append(group == 1 ? "the only capture of its length in that folder" : "\(group) captures of this length in that folder") }
+        if let group = e["groupSize"] as? Int {
+            let names = (e["relatedNames"] as? [String] ?? []).joined(separator: ", ")
+            parts.append(group == 1 ? "no other capture in that folder shares its name"
+                            : "\(group) captures in that folder share its name and length" + (names.isEmpty ? "" : " (with \(names))"))
+        }
         var text = "Rule \(e["rule"] as? String ?? "unknown") (\(row.by)): " + parts.joined(separator: "; ") + "."
         if let statement = e["setupStatement"] as? String { text += " Capture setup as stated: \(statement)." }
         return text
@@ -421,14 +498,47 @@ public enum ProvenanceResolver {
         return "\(months[month - 1]) \(year)"
     }
 
+    /// The year folder the archive filed a copy under: the `YYYY` component
+    /// that sits directly inside its decade folder `YYYY-YYYY`
+    /// (`30_Video/1980-1989/1984/1984_x.mkv` → 1984). nil for a path with no
+    /// such pair (not in the archive, `Undated`, a decade-only folder).
+    public static func filingYear(archivePath: String) -> Int? {
+        let parts = archivePath.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count >= 3 else { return nil }
+        for i in 1..<(parts.count - 1) {
+            let decade = parts[i - 1].split(separator: "-", omittingEmptySubsequences: false)
+            guard decade.count == 2, decade[0].utf8.count == 4, decade[1].utf8.count == 4, parts[i].utf8.count == 4,
+                  let from = Int(decade[0]), let to = Int(decade[1]), let year = Int(parts[i]), to == from + 9,
+                  (from...to).contains(year) else { continue }
+            return year
+        }
+        return nil
+    }
+
+    /// The tape's year for the sentence: the archive's filing year, unless
+    /// it is only the year of the capture itself (then nothing is said).
+    public static func tapeYear(archivePath: String?, captured: Date?, timeZone: TimeZone = .current) -> Int? {
+        guard let archivePath, let filed = filingYear(archivePath: archivePath) else { return nil }
+        if let captured {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            if calendar.component(.year, from: captured) == filed { return nil }
+        }
+        return filed
+    }
+
     /// "Original capture of a VHS tape" — the part every surface starts with; nil for
     /// a role this slice has no words for (nothing is shown then).
-    static func subject(_ estimate: ProvenanceEstimate) -> String? {
+    /// `masterName`: an alternate capture's master as the Archive tab names
+    /// it, given ONLY while that master's own estimate stands; nil drops the
+    /// pointer ("Alternate capture of a VHS tape").
+    static func subject(_ estimate: ProvenanceEstimate, masterName: String? = nil) -> String? {
         switch estimate.role {
         case .master:
             return estimate.carrier.map { "Original capture of a \($0) tape" } ?? "Original capture"
         case .alternateCapture:
-            return "Alternate capture of the same tape as " + (estimate.masterFilename ?? "another file in its folder")
+            if let masterName, !masterName.isEmpty { return "Alternate capture of the same tape as \(masterName)" }
+            return estimate.carrier.map { "Alternate capture of a \($0) tape" } ?? "Alternate capture"
         default:
             return nil
         }
@@ -437,10 +547,10 @@ public enum ProvenanceResolver {
     /// The full sentence, without its standing: "Original capture of a VHS
     /// tape from 1984, captured July 2026 using ClearClick into OBS — FFV1,
     /// 1280×720, 8-bit". `year` and `captured` are OMITTED when unknown,
-    /// never invented. An alternate capture names its master and stops.
+    /// never invented. An alternate capture names its master (see `subject`) and stops.
     public static func sentence(_ estimate: ProvenanceEstimate, year: Int?, captured: Date?, technical: Technical?,
-                                timeZone: TimeZone = .current) -> String? {
-        guard var text = subject(estimate) else { return nil }
+                                masterName: String? = nil, timeZone: TimeZone = .current) -> String? {
+        guard var text = subject(estimate, masterName: masterName) else { return nil }
         guard estimate.role == .master else { return text }
         if let year { text += " from \(year)" }
         let when = captured.map { monthYear($0, timeZone: timeZone) } ?? ""
@@ -461,8 +571,9 @@ public enum ProvenanceResolver {
     /// The glyph's help and the File Journey's sentence: short, with its standing.
     /// "Estimated: original capture of a VHS tape, captured July 2026 — not confirmed" /
     /// "Original capture of a VHS tape, captured July 2026. Provenance confirmed by Rick."
-    public static func shortLine(_ estimate: ProvenanceEstimate, captured: Date?, timeZone: TimeZone = .current) -> String? {
-        guard var text = subject(estimate) else { return nil }
+    public static func shortLine(_ estimate: ProvenanceEstimate, captured: Date?, masterName: String? = nil,
+                                 timeZone: TimeZone = .current) -> String? {
+        guard var text = subject(estimate, masterName: masterName) else { return nil }
         if estimate.role == .master, let captured {
             let when = monthYear(captured, timeZone: timeZone)
             if !when.isEmpty { text += ", captured \(when)" }

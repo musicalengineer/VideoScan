@@ -30,8 +30,9 @@
 //   reject   Rick's "Not Right": one `rejected` row by 'rick' for the
 //            estimated role value.
 // No name and no date is ever written (rule 3: archived means fixed) — the
-// three fields are `role`, `carrier`, `captureSetup`; the capture month and
-// the tape year are READ at display time from the record.
+// three fields are `role`, `carrier`, `captureSetup`; the capture month is
+// READ at display time from the record's embedded creation date and the tape
+// year from the year folder the archive filed the copy under.
 //
 // Truth: catalog.sqlite is the truth; `byDigest` is a read-only projection
 // (what ProvenanceResolver.estimate says of each content's rows), loaded when
@@ -148,7 +149,7 @@ final class ProvenanceEstimateStore: ObservableObject {
         var already = 0
         /// Contents whose role Rick rejected: the trigger ignored it.
         var vetoed = 0
-        /// Qualifying captures shorter than another in their folder — not classified.
+        /// Qualifying captures clearly shorter than a NAME-RELATED capture in their folder (maybe a trim) — not classified.
         var shorter = 0
         /// Contents catalog.sqlite does not hold yet (their row is still being saved).
         var notStored = 0
@@ -186,6 +187,9 @@ final class ProvenanceEstimateStore: ObservableObject {
     private(set) weak var roles: ProvenanceRoleStore?
     /// Archived records' facts, projected on the main actor when a run starts.
     private var facts: () -> [ProvenanceFact] = { [] }
+    /// The file name the ARCHIVE has for a content (what Rick sees in the
+    /// Archive tab), by digest — O(1); nil when the archive holds none.
+    private var archiveName: (String) -> String? = { _ in nil }
     /// The one log sink (the model's console + catalog.log + videoscan.log).
     var note: (String) -> Void = { _ in }
     /// Bumped by every commit and every `attach`; a load snapshot is stamped
@@ -194,10 +198,12 @@ final class ProvenanceEstimateStore: ObservableObject {
 
     // MARK: Attach / load
 
-    func attach(_ backing: ProvenanceEstimateCatalogBacking, roles: ProvenanceRoleStore, facts: @escaping () -> [ProvenanceFact]) {
+    func attach(_ backing: ProvenanceEstimateCatalogBacking, roles: ProvenanceRoleStore, facts: @escaping () -> [ProvenanceFact],
+                archiveName: @escaping (String) -> String? = { _ in nil }) {
         self.backing = backing
         self.roles = roles
         self.facts = facts
+        self.archiveName = archiveName
         byDigest = [:]
         commitEpoch &+= 1          // a load begun on the old backing is stale
         revision &+= 1
@@ -262,10 +268,21 @@ final class ProvenanceEstimateStore: ObservableObject {
         digests.reduce(0) { $0 + ((shown(of: $1, roles: roles).map { !$0.isConfirmed } ?? false) ? 1 : 0) }
     }
 
+    /// The name an ALTERNATE capture may point at: its master's file name in
+    /// the archive — only while that master's own estimate still stands as a
+    /// master (not rejected by Rick, not overruled by his Set Role). nil
+    /// drops the pointer; the original file name is never substituted.
+    func masterName(of estimate: ProvenanceEstimate, roles: ProvenanceRoleStore?) -> String? {
+        guard estimate.role == .alternateCapture, let master = estimate.masterDigest,
+              shown(of: master, roles: roles)?.role == .master else { return nil }
+        return archiveName(master.lowercased())
+    }
+
     /// The File Journey's event for `record`; nil when nothing is shown.
     func journey(for record: VideoRecord, roles: ProvenanceRoleStore?) -> JourneyProvenance? {
         guard let estimate = shown(of: CatalogCommit.digest(of: record), roles: roles),
-              let sentence = ProvenanceResolver.shortLine(estimate, captured: record.embeddedCreationDate) else { return nil }
+              let sentence = ProvenanceResolver.shortLine(estimate, captured: record.embeddedCreationDate,
+                                                          masterName: masterName(of: estimate, roles: roles)) else { return nil }
         return JourneyProvenance(sentence: sentence, captured: record.embeddedCreationDate)
     }
 
@@ -333,7 +350,7 @@ final class ProvenanceEstimateStore: ObservableObject {
     static func summary(_ t: Tally) -> String {
         var text = "\(t.examined) archived video\(t.examined == 1 ? "" : "s") examined, \(t.estimated) estimated, "
             + "\(t.already) already estimated, \(t.vetoed) vetoed"
-        if t.shorter > 0 { text += ", \(t.shorter) left unclassified (shorter than another capture in the same folder)" }
+        if t.shorter > 0 { text += ", \(t.shorter) left unclassified (shorter than a capture of the same name in its folder)" }
         if t.notStored > 0 { text += ", \(t.notStored) not in catalog.sqlite yet (run again)" }
         return text
     }

@@ -83,8 +83,10 @@ struct InspectorPanel: View {
                     if let provenanceRoles {
                         InspectorProvenanceRoleLine(digest: contentDigest, store: provenanceRoles)
                         if let provenanceEstimates {
-                            InspectorProvenanceEstimateLine(record: rec, digest: contentDigest, store: provenanceEstimates,
-                                                            roles: provenanceRoles)
+                            // The archived file: this row's master copy, else the row itself (an archive copy).
+                            InspectorProvenanceEstimateLine(record: rec, digest: contentDigest,
+                                                            archivePath: (masterCopy ?? rec).fullPath,
+                                                            store: provenanceEstimates, roles: provenanceRoles)
                         }
                     }
 
