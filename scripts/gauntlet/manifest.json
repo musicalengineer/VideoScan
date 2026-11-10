@@ -35082,10 +35082,14 @@
       ],
       "tests": [
         "test_a_day_outlives_githubs_14_days_and_a_rising_day_takes_the_larger_reading",
+        "test_a_day_whose_jobs_were_never_counted_does_not_say_zero",
+        "test_a_days_jobs_are_summed_across_its_runs_and_the_larger_reading_wins",
         "test_a_failed_fetch_changes_nothing_on_disk_and_the_cli_still_exits_zero",
         "test_a_new_fork_star_or_referrer_is_named_once_and_raises_the_alert",
+        "test_a_settled_day_that_already_has_its_jobs_is_not_asked_for_again",
         "test_gh_api_says_why_it_failed_and_never_hangs_on_stdin",
         "test_no_finished_day_and_many_ci_runs_pages",
+        "test_the_line_counts_checkouts_not_runs",
         "test_yesterdays_numbers_and_our_own_ci_runs_are_in_the_line"
       ]
     }

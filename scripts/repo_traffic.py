@@ -9,7 +9,9 @@ What GitHub gives, and does not:
   * our own machinery is in those counts: every GitHub Actions job that checks
     the repo out is a clone, and each runner is a new "unique". The counts
     cannot be split into ours and outsiders'; the line says so by showing the
-    day's Actions runs beside them.
+    day's Actions JOBS beside them (our_ci_jobs). A run is several jobs and
+    each job checks out on its own fresh machine, so runs alone undercount us:
+    2026-11-03 had 40 runs but 102 jobs (638 clones, 179 unique).
   * forks, stars and referring sites ARE named. A new one is an event.
 
 Each run: fetch, merge the days into days.jsonl (a day's numbers keep rising
@@ -35,6 +37,7 @@ from typing import Callable, Dict, List, Optional
 
 REPO = "musicalengineer/VideoScan"
 STATE = Path.home() / "Library" / "Logs" / "VideoScan" / "repo-traffic"
+JOBS_RECHECK_DAYS = 2                                       # a recent day's job count is asked for again
 GH_FALLBACKS = ("/opt/homebrew/bin/gh", "/usr/local/bin/gh")
 
 
@@ -71,22 +74,40 @@ def fetch(repo: str, api: Callable = gh_api) -> dict:
             if len(day) == 10:
                 days.setdefault(day, {"day": day}).update({total: int(r.get("count") or 0), unique: int(r.get("uniques") or 0)})
     since = (min(days) if days else dt.date.today().isoformat())
-    runs: Dict[str, int] = {}
+    runs: Dict[str, list] = {}                              # day -> that day's run ids
     for page in range(1, 11):                               # at most 1,000 runs in the 14-day window
         got = api(f"repos/{repo}/actions/runs?per_page=100&page={page}&created=>={since}").get("workflow_runs") or []
         for r in got:
-            day = str(r.get("created_at", ""))[:10]
-            runs[day] = runs.get(day, 0) + 1
+            runs.setdefault(str(r.get("created_at", ""))[:10], []).append(r.get("id"))
         if len(got) < 100:
             break
     for day, row in days.items():
-        row["our_ci_runs"] = runs.get(day, 0)
+        row["our_ci_runs"] = len(runs.get(day, []))
     return {
         "days": days,
+        "run_ids": {day: ids for day, ids in runs.items() if day in days},
         "forks": sorted(str((f.get("owner") or {}).get("login") or "?") for f in api(f"repos/{repo}/forks?per_page=100")),
         "stars": sorted(str(s.get("login") or "?") for s in api(f"repos/{repo}/stargazers?per_page=100")),
         "referrers": sorted(str(r.get("referrer") or "?") for r in api(f"repos/{repo}/traffic/popular/referrers")),
     }
+
+
+def count_jobs(repo: str, now: dict, saved: Dict[str, dict], today: str, api: Callable = gh_api) -> None:
+    """Add our_ci_jobs to each fetched day that needs it: the sum of its runs'
+    job counts. One API call per run, so it is asked only for a day that has no
+    saved count yet, or for today and the two days before (their runs may still
+    be finishing or be re-run). Worst case is the first run after this field
+    was added: every run in the 14-day window, at most 1,000 calls; after that
+    about three days' worth. A day not asked for gets no field here and keeps
+    its saved count through merge_days. Any failure raises, before anything is
+    written, like every other fetch."""
+    recent = (dt.date.fromisoformat(today) - dt.timedelta(days=JOBS_RECHECK_DAYS)).isoformat()
+    for day, row in now["days"].items():
+        if day < recent and "our_ci_jobs" in saved.get(day, {}):
+            continue
+        row["our_ci_jobs"] = sum(
+            int(api(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=1").get("total_count") or 0)
+            for run_id in now.get("run_ids", {}).get(day, []) if run_id is not None)
 
 
 def load_days(path: Path) -> Dict[str, dict]:
@@ -136,9 +157,14 @@ def headline(days: Dict[str, dict], evs: List[str], today: str) -> str:
     if not done:
         return "no finished day in GitHub's window yet" + ("; " + "; ".join(evs) if evs else "")
     d = days[done[-1]]
+    if "our_ci_jobs" in d:                                  # each job is one checkout, so one clone
+        n = d["our_ci_jobs"]
+        ours = f"our own CI made {n} checkout{'s' if n != 1 else ''} that day"
+    else:                                                   # jobs never counted for this day: unknown, not 0
+        n = d.get("our_ci_runs", 0)
+        ours = f"our own CI ran {n} time{'s' if n != 1 else ''} that day"
     line = (f"{done[-1]}: {d.get('clones', 0)} clones ({d.get('cloners', 0)} unique), "
-            f"{d.get('views', 0)} page views ({d.get('visitors', 0)} unique); "
-            f"our own CI ran {d.get('our_ci_runs', 0)} time{'s' if d.get('our_ci_runs', 0) != 1 else ''} that day")
+            f"{d.get('views', 0)} page views ({d.get('visitors', 0)} unique); {ours}")
     return line + ("; " + "; ".join(evs) if evs else "")
 
 
@@ -151,7 +177,9 @@ def write_atomic(path: Path, text: str) -> None:
 def run_once(repo: str, state: Path, today: str, api: Callable = gh_api) -> str:
     state.mkdir(parents=True, exist_ok=True)
     now = fetch(repo, api)
-    days = merge_days(load_days(state / "days.jsonl"), now["days"])
+    saved = load_days(state / "days.jsonl")
+    count_jobs(repo, now, saved, today, api)
+    days = merge_days(saved, now["days"])
     try:
         seen = json.loads((state / "seen.json").read_text(encoding="utf-8"))
         seen = seen if isinstance(seen, dict) else None
