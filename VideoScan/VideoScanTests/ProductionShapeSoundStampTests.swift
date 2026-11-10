@@ -100,8 +100,12 @@ struct ProductionShapeSoundStampTests {
         // the planner needs them again, however far the live catalog has got.
         let archiveDigests = "SELECT f.content_digest FROM files f JOIN archive_copies a ON a.file_id = f.id"
         let shape = try await ProductionShapeScene.make("sound416") { db in
-            try sqliteExecute(db, ["DELETE FROM sound_prints WHERE digest IN (\(archiveDigests))",
-                                   "DELETE FROM sound_attempts WHERE digest IN (\(archiveDigests))"])
+            // A catalog this build has not opened yet has no sound_attempts table
+            // (schema 14: the M4's viewer copy, 2026-11-07 … 11-09, where this test
+            // died on "no such table"). No table, no tries to remove.
+            let hasTries = try !sqliteTable(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sound_attempts'").isEmpty
+            try sqliteExecute(db, ["DELETE FROM sound_prints WHERE digest IN (\(archiveDigests))"]
+                              + (hasTries ? ["DELETE FROM sound_attempts WHERE digest IN (\(archiveDigests))"] : []))
         }
         defer { shape.cleanup() }
         let model = shape.model
