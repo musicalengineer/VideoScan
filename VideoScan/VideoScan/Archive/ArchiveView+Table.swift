@@ -280,6 +280,8 @@ extension ArchiveView {
                 Text(status.label).foregroundColor(.secondary)
             }
             soundMark(rec)
+            // The capture-master glyph (2026-11-10); every rule is ProvenanceEstimateMark's.
+            ProvenanceEstimateBadge(store: model.provenanceEstimates, roles: model.provenanceRoles, record: rec, size: 14)
             PublicMarkBadge(store: model.publicMarks, record: rec, size: 14)
         }
         .font(.system(size: 14))
@@ -383,6 +385,12 @@ extension ArchiveView {
         // archived video qualifies (GH #327: never the sampled leg).
         PublicMarkMenuItems(store: model.publicMarks,
                             targets: PublicMarkTargets(records: recs) { model.isProvenArchived($0) })
+
+        // Estimated provenance (Rick 2026-11-10): confirm the reviewed
+        // selection in one action, or say one estimate is not right. The
+        // engine is ProvenanceEstimateStore; only PROVEN archived rows count.
+        ProvenanceEstimateMenuItems(store: model.provenanceEstimates, roles: model.provenanceRoles,
+                                    targets: ProvenanceRoleTargets(records: recs.filter { model.isProvenArchived($0) }))
 
         // File Journey (Rick 2026-08-19): in the archive the journey IS
         // the provenance — origin, repairs, promote, rename — so the

@@ -824,6 +824,7 @@ struct CatalogContent: View {
             angelEvidence: selectedAngelEvidence,
             provenanceRoles: model.provenanceRoles,
             contentDigest: selectedRecord.flatMap(CatalogCommit.digest(of:)),
+            provenanceEstimates: model.provenanceEstimates,
             fileDossiers: FileDossierLoader.production(model: model)
         )
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)

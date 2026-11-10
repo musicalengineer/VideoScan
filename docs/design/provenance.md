@@ -1,6 +1,6 @@
 # Provenance — what each file is and where it came from
 
-Status: in flight — 2026-11-01. Built: Provenance ▸ Set Role (schema v13 `provenance_roles`, its one writer; Codex merge 10/26) and Phase A, Find Master by sound (`VideoScan/Provenance/`). Landed with background step 1: schema v14 `provenance_assertions` with the veto trigger, exactly the C2 table and nothing else (approved 2026-11-01; Part I "Data model ▸ Shipped"). Not built: the carrier / capture-setup / capture-event tables (their own migration, later), Phase B picture timeline, Phases C–E; Phase F is cut. Open rulings: STATUS "Open rulings wanted" items 1–2.
+Status: in flight — 2026-11-10. Built: Provenance ▸ Set Role (schema v13 `provenance_roles`, its one writer; Codex merge 10/26) and Phase A, Find Master by sound (`VideoScan/Provenance/`). Landed with background step 1: schema v14 `provenance_assertions` with the veto trigger, exactly the C2 table and nothing else (approved 2026-11-01; Part I "Data model ▸ Shipped"). Not built: the carrier / capture-setup / capture-event tables (their own migration, later), Phase B picture timeline, Phases C–E except C2's first slice (estimated provenance from one rule, confirmable; 2026-11-10); Phase F is cut. Open rulings: STATUS "Open rulings wanted" items 1–2.
 
 Every master in the archive should know its story — which tape it came from, when and how it was digitized, what kind of copy it is — captured once, by Rick, not reconstructed later (Part II, 10/22). Part I (10/26) is the design built on that: retroactive provenance for the files already catalogued, from the engines that already exist (sound and picture prints, the DV datecode, the 8B era witness), every value carrying its state (`inferred · confirmed · corrected · rejected`) and a trigger that refuses to re-propose a rejected value. What each role means, in Rick's words, is `docs/guides/provenance_roles.md`.
 
@@ -401,6 +401,29 @@ confirmed normal, corrected ✎, rejected behind "ruled out"). Tests: the veto �
 the trigger ignores it, the job logs "vetoed", the sheet never shows it (truth); confirm, correct, reject each
 survives relaunch; an assertion row shows its evidence and confidence (truth); writer set as C1; 100k assertions
 resolve < 1 s.
+
+**C2, first slice built 2026-11-10 (DECISIONS 2026-11-10, "estimated provenance is shown as PROVISIONAL").** One rule
+(`vhsCapture2026`: original path under `Converted_VHS_Tapes_2026`, FFV1 in Matroska, ≥ 20 min; within a source folder
+files are related by NAME first — equal lowercased stems, or one continuing the other at a separator (whole tokens:
+`tape_1` / `tape_10` are not related) — then duration: unrelated → its own
+tape, a master; related and within 1 % → one tape, one master, the rest alternate captures; related to a clearly
+longer file → left unclassified, it may be a trim)
+writes `inferred` `role` / `carrier` rows, and `captureSetup` only when the file's own embedded creation date is in
+2026. What stands is the NEWEST machine row per field (never an older one after a reject); a run withdraws an
+estimate it no longer makes with an inferred `role` = `unknown` row; Confirm is a compare-and-swap on what was shown;
+Rick's Set Role wins on every surface, and Unknown after a Confirm makes it provisional again (review 2026-11-10). Core `Provenance/ProvenanceResolver.swift` (the rule, what
+stands, the words); app `Provenance/ProvenanceEstimateStore.swift` (Estimate, Confirm, Not Right),
+`ProvenanceEstimateJob.swift` (MFO), `ProvenanceEstimateMark.swift` (the Archive glyph, the row menu, the Inspector
+line). Differences from the text above: the store is `ProvenanceEstimateStore` and the job `ProvenanceEstimateJob`;
+`ProvenanceResolver` also holds the rule, not only the display reduction; no sheet and no Triage filter (the Archive
+row menu confirms a selection); no typed carrier tables and no ledger `provenanceConfirmed` event (Confirm writes
+`confirmed` assertions and the `provenance_roles` row in one commit); no date or name field is asserted (the door
+refuses `tapeYear` / `digitizedOn` on archived content — the capture month is read at display time from the embedded
+creation date, the tape year from the year folder the archive filed the copy under, omitted when that is only the
+capture's own year); an alternate capture names its master by the archive's file name, and not at all once the
+master's estimate no longer stands;
+evidence is shown, confidence never is (2026-11-01 ruling, over "shows its evidence and confidence" above). Not
+built: the born-digital, name-pattern and `excerptOf` rules.
 
 **C3. Promote gate + travelling copy.** Promote requires role and carrier-or-born-digital; "Archive with provenance
 unknown" override with a reason, logged (the un-probeable override's pattern). `Provenance.csv`, `Carriers.csv`,

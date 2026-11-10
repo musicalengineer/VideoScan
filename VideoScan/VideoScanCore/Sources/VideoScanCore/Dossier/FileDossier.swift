@@ -19,7 +19,7 @@
 // change): the loader's own one-row read (`storedRow(id:)`, the same mapping
 // the app's records come from, so this view cannot disagree with the
 // inspector) plus the content's `provenance_assertions` (indexed by
-// subject). Measured cost and the budget: FileDossierTests' scale test.
+// subject) and its current `provenance_roles` row (one index probe). Measured cost and the budget: FileDossierTests' scale test.
 //
 // Memory: one file's rows — captions and OCR (tens to a few hundred short
 // strings), one transcript (≤ a few hundred KB for a 2-hour tape), the
@@ -147,7 +147,7 @@ extension FileDossier {
     /// Throws only what the reader throws. A stored value that no longer
     /// decodes does not hide the rest: the dossier is built without the
     /// derived values and says why on its own line.
-    public static func read(reader: any CatalogLiveReading & CatalogProvenanceAssertionReading, fileID: String,
+    public static func read(reader: any CatalogLiveReading & CatalogProvenanceAssertionReading & CatalogProvenanceRoleReading, fileID: String,
                             now: Date) throws -> FileDossier? {
         guard let row = try reader.storedRow(id: fileID) else { return nil }
         let record: VideoRecord
@@ -164,6 +164,8 @@ extension FileDossier {
         let assertions = try row.file.contentDigest.map {
             try reader.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: $0)
         } ?? []
-        return build(record: record, digest: row.file.contentDigest, assertions: assertions, unreadable: problem, now: now)
+        // Rick's own role for the content (one index probe): an estimated provenance yields to it.
+        let rickRole = try row.file.contentDigest.flatMap { try reader.currentProvenanceRoles(digests: [$0])[$0.lowercased()]?.role } ?? .unknown
+        return build(record: record, digest: row.file.contentDigest, assertions: assertions, rickRole: rickRole, unreadable: problem, now: now)
     }
 }

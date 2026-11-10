@@ -382,6 +382,7 @@ extension VideoScanModel {
         }
         publicMarks.attach(PublicMarkCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.publicMarks.load() }
+        attachProvenanceEstimatesToCatalog(committer)
         // The background helper's observations (schema v1.13): its journal
         // beside catalog.json, applied through this committer at launch and
         // every 5 minutes; Catalog Status hears the waiting / refused counts.
@@ -412,6 +413,29 @@ extension VideoScanModel {
             EventsDecisionStore.shared.attachCatalog(EventsCatalogBacking(committer: committer))
             Task { await EventsDecisionStore.shared.load() }
         }
+    }
+
+    /// Estimated provenance (2026-11-10): the rule's rows and Rick's Confirm /
+    /// Not Right go through this committer; the Archive tab's tape glyph reads
+    /// the store's projection. Nothing runs at launch but the read — Estimate
+    /// Provenance… is a command Rick starts.
+    private func attachProvenanceEstimatesToCatalog(_ committer: CatalogCommitter) {
+        provenanceEstimates.note = { [weak self] line in
+            self?.log("Provenance: " + line)
+            appLog.write("[provenance] " + line)
+        }
+        provenanceEstimates.attach(ProvenanceEstimateCatalogBacking(committer: committer), roles: provenanceRoles,
+                                   facts: { [weak self] in
+                                       guard let self else { return [] }
+                                       return ProvenanceEstimateStore.facts(records: self.records) { self.isArchiveElement($0) }
+                                   },
+                                   // The archive copy that holds a digest (the memoized index, O(1)): its name is the one Rick sees.
+                                   archiveName: { [weak self] digest in
+                                       guard let self else { return nil }
+                                       let version = RecordsVersion(count: self.records.count, revision: self.volumeAggregatesRevision)
+                                       return self.archivePromotionIndex.copy(withDigest: digest, in: self.records, version: version)?.filename
+                                   })
+        Task { [weak self] in _ = await self?.provenanceEstimates.load() }
     }
 
     /// The catalog's generation for a synchronous stamp: catalog.sqlite's as

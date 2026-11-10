@@ -103,6 +103,10 @@ struct FileDossierLoader {
         let catalogEdits = NotificationCenter.default.publisher(for: .videoScanCatalogMutated).map { _ in () }
         let revisions = model.$catalogMutationRevision.dropFirst().map { _ in () }
         let eras = model.machineEras.$eras.dropFirst().map { _ in () }
+        // Estimated provenance and Rick's role: each store bumps its revision
+        // AFTER its commit, so the dossier's Provenance line re-reads at once.
+        let provenance = model.provenanceEstimates.$revision.dropFirst().map { _ in () }
+            .merge(with: model.provenanceRoles.$revision.dropFirst().map { _ in () })
         let committed = afterCommit(catalogEdits.merge(with: revisions).eraseToAnyPublisher())
         return FileDossierLoader(
             load: { [weak model] fileID in
@@ -116,7 +120,7 @@ struct FileDossierLoader {
                 model?.log("File dossier: " + line)
                 appLog.write("[file-dossier] " + line)
             },
-            changes: committed.merge(with: eras).eraseToAnyPublisher())
+            changes: committed.merge(with: eras).merge(with: provenance).eraseToAnyPublisher())
     }
 }
 
