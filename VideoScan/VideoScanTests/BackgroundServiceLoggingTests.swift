@@ -53,7 +53,7 @@ struct BackgroundServiceLoggingTests {
         let (store, r) = T.make(enabled: false, agent: agent, readOnly: true)
         await store.refresh()
         await store.refresh()
-        #expect(r.lines == ["background service: the checkbox cannot turn it on here — \(BackgroundServiceRegistrar.viewerRefusal)"],
+        #expect(r.lines == ["background service: Start is refused here — \(BackgroundServiceRegistrar.viewerRefusal)"],
                 "\(r.lines)")
     }
 }

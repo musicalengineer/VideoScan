@@ -731,7 +731,7 @@ Swift protocol); the journal is a write-ahead log the app replays into the catal
 - **Pause** from the menu bar is kept per kind in `background/paused.json`. A restart adopts the job still paused, and Resume clears it.
 - **Only the helper enqueues a scheduled kind.** XPC and the CLI refuse `era`, and the CLI keeps `--run era` for hand runs. A queue file goes with its job's OUTCOME.
 - **Crash loops.** Before each unit, the checkpoint records that unit as in flight. A unit found in flight at 3 relaunches is quarantined: counted failed, skipped, and logged. A clean SIGTERM (unregister, logout) clears the mark first, so it never counts. The failure streak lives in the checkpoint, so the verdict survives a relaunch.
-- **An older helper is said.** `ServiceStatus.build` names the running build. When it differs from the helper bundled in the app, Settings says "older helper running — turn the checkbox off and on".
+- **An older helper is said.** `ServiceStatus.build` names the running build. When it differs from the helper bundled in the app, Settings says "running an older build" with both build dates and offers Restart (2026-11-09: the checkbox became a heading with Start / Stop / Restart; Stop means off until Start).
 - **Full Disk Access (note, 2026-11-04).** DTS (forum threads 694948, 661178) says TCC treats the containing app as
   the responsible code for a helper embedded in it, so the grant is the app's. This is not verified on the Ultra; the
   §8 point 6 wording stands until it is.

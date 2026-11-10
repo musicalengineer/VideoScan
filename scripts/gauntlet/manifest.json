@@ -8949,6 +8949,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceControlTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceControlTests"
+      ],
+      "tests": [
+        "buildDate",
+        "buildDateOfARealFile",
+        "neverRunningWithoutAnAnswer",
+        "olderHeading",
+        "oneAtATime",
+        "refusedBuildsOnlyStop",
+        "restart",
+        "restartRefusedTouchesNothing",
+        "restartStopsAtAFailedStop",
+        "runningHeading",
+        "startAfterMenuBarQuit",
+        "startFromStopped",
+        "startReregisters",
+        "stopStaysStopped",
+        "stoppedHeading",
+        "verbTable"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BackgroundServiceQuitTests.swift",
       "stage": "unit",
       "suites": [
@@ -37679,7 +37705,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3563,
+      "expected_floor": 3579,
       "name": "unit",
       "package_expected_floor": 813,
       "package_selectors": [
@@ -37863,6 +37889,7 @@
         "VideoScanTests/BackgroundServiceSensorTests",
         "VideoScanTests/BackgroundServiceStoreTests",
         "VideoScanTests/BackgroundServiceQuitTests",
+        "VideoScanTests/BackgroundServiceControlTests",
         "VideoScanTests/BackgroundSettingsSensorTests",
         "VideoScanTests/BalanceAudioClassifierTests",
         "VideoScanTests/BalanceFromDiagnosisTests",

@@ -1,6 +1,7 @@
 // ContentAnalysisSettingsRows.swift — the first rows of Settings ▸ Background
 // (Rick 2026-11-02: one pane for every background helper, Content Analysis
-// first): the checkbox that turns VideoScan Background on and off, the
+// first): the heading with its state and build date and the one button —
+// Start / Stop / Restart (Rick 2026-11-09, replacing the checkbox) — the
 // footnote about the two one-time macOS prompts, launchd's line and the
 // helper's job line. The words come from BackgroundServicePresentation
 // (pure, tested); the state from BackgroundServiceStore (the one setter).
@@ -16,12 +17,11 @@ struct ContentAnalysisSettingsRows: View {
     /// A viewer Mac never runs content analysis (its committer refuses the
     /// journal), and only the Release build registers the helper (Rick
     /// 2026-11-03): either way turning it ON is refused and the footnote says
-    /// why (`store.registrationRefusal`). Turning it OFF is never refused
-    /// (Codex 11/03 F4): a box left ON from Release stays enabled so it can
-    /// be unchecked (`store.checkboxDisabled`).
+    /// why (`store.registrationRefusal`). Stop is never refused (Codex 11/03
+    /// F4): a helper left ON from Release can always be stopped here
+    /// (`store.control.actionDisabled` is only ever true for Start).
     @ObservedObject var store: BackgroundServiceStore
 
-    static let title = "Keep analyzing content in the background"
     static let footnote = "VideoScan Background keeps running the content analyzers — Machine era first — whenever there is work, "
         + "including after VideoScan quits; it runs below your apps' priority, and its menu bar item pauses it. The first time you turn it on, macOS asks once to allow it under Login Items and "
         + "once for Full Disk Access for the helper so it can read your files. It never writes the catalog; only VideoScan "
@@ -34,13 +34,18 @@ struct ContentAnalysisSettingsRows: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(Self.title, isOn: Binding(
-                get: { store.enabled },
-                set: { store.setEnabled($0) }
-            ))
-            .toggleStyle(.checkbox)
-            .disabled(store.checkboxDisabled)
-            .accessibilityIdentifier("settings.backgroundService.enabled")
+            let control = store.control
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(control.heading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.backgroundService.heading")
+                Spacer(minLength: 8)
+                Button(control.action.rawValue) {
+                    Task { await store.perform(control.action) }
+                }
+                .disabled(control.actionDisabled || store.busy)
+                .accessibilityIdentifier("settings.backgroundService.action")
+            }
             // The refusal ADDS to the how-to, never replaces it (reviewer 11/03).
             Text(Self.footnoteWords(refusal: store.registrationRefusal))
                 .font(.footnote).foregroundColor(.secondary)

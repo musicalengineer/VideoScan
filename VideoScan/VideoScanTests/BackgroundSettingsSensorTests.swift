@@ -31,15 +31,17 @@ struct BackgroundSettingsSensorTests {
         #expect(section < rows && rows < sweep && sweep < people, "order: Content Analysis, Previews, Find People")
     }
 
-    @Test("the checkbox writes through BackgroundServiceStore.setEnabled, never a defaults key or @AppStorage")
+    @Test("the button writes through BackgroundServiceStore.perform, never a defaults key or @AppStorage")
     func theOneSetter() throws {
         let rows = try Self.source("App/ContentAnalysisSettingsRows.swift")
-        #expect(rows.contains("store.setEnabled($0)"))
+        let store0 = try Self.source("App/BackgroundServiceStore.swift")
+        #expect(rows.contains("await store.perform(control.action)"))
+        #expect(!rows.contains("Toggle(") && !rows.contains("setEnabled"), "Rick 2026-11-09: a state and a button, no checkbox")
         #expect(!rows.contains("UserDefaults") && !rows.contains("@AppStorage"))
-        #expect(rows.contains("settings.backgroundService.enabled"))
+        #expect(rows.contains("settings.backgroundService.heading") && rows.contains("settings.backgroundService.action"))
         #expect(rows.contains("settings.backgroundService.status"))
         #expect(rows.contains("settings.backgroundService.job"))
-        #expect(rows.contains("\"Keep analyzing content in the background\""), "Rick's wording")
+        #expect(store0.contains("static let name = \"Background Content Analysis\""), "Rick's wording")
         #expect(rows.contains("Login Items") && rows.contains("Full Disk Access"), "the footnote names both one-time prompts")
         let store = try Self.source("App/BackgroundServiceStore.swift")
         #expect(store.contains("registerIfEnabled(") && store.contains("unregister("),

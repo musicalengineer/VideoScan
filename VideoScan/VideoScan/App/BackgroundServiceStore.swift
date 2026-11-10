@@ -2,6 +2,11 @@
 // rows: the one place the app turns VideoScan Background on and off
 // (docs/design/background_service.md §13 caveat, §14.2).
 //
+// The control since 2026-11-09 (Rick): one heading — "Background Content
+// Analysis: <state> (<build date>)" — and one button, Start / Stop / Restart
+// (BackgroundServicePresentation.control). Stop means off until Start; the
+// helper's own menu bar Quit is unchanged. `setEnabled` stays the one engine.
+//
 // Two jobs since 2026-11-04 (Rick: the helper owns its schedule): register /
 // unregister the launchd agent and show launchd's REAL status
 // (SMAppService.status, never assumed); show the helper's own job line — its
@@ -42,13 +47,15 @@ final class BackgroundServiceStore: ObservableObject {
     /// The helper's last answer; nil when off, not asked, or not answering.
     @Published private(set) var service: ServiceStatus?
     @Published private(set) var serviceProblem: String?
-    /// The last refusal of the checkbox, for the job line.
+    /// The last refusal of Start, for the job line.
     @Published private(set) var lastNote: String?
     /// Quit from the helper's menu bar in this boot (BackgroundQuitMarker):
     /// while set, the status poll does not ask the helper (asking would make
     /// launchd start it, only for it to exit again).
     @Published private(set) var quit: BackgroundQuitMarker?
     private(set) var refreshCount = 0
+    /// A Start / Stop / Restart is in flight: the button is disabled.
+    @Published private(set) var busy = false
 
     // MARK: Seams (production in `production(...)`; tests inject)
 
@@ -66,21 +73,23 @@ final class BackgroundServiceStore: ObservableObject {
     var readQuit: () -> BackgroundQuitMarker? = { nil }
     /// Removes the marker; returns it when there was a readable one.
     var clearQuit: () -> BackgroundQuitMarker? = { nil }
+    /// Restart waits this long between unregister and register, so launchd
+    /// has let go of the old helper (a person's off-and-on took about this).
+    var restartPause: Duration = .seconds(1)
     var log: (String) -> Void
 
-    /// Why the checkbox may not turn the helper on here — nil when it may.
+    /// Why Start may not turn the helper on here — nil when it may.
     var registrationRefusal: String? {
         BackgroundServiceRegistrar.registrationRefusal(isViewer: isViewer(), isReleaseBuild: isReleaseBuild())
     }
 
-    /// The checkbox is disabled only when it is OFF and turning it ON is
-    /// refused (Codex 11/03 F4: enabled from Release, then opened in Debug or
-    /// after becoming a viewer, the box was disabled while ON — OFF was
-    /// unreachable). ON + refused stays enabled: unchecking unregisters.
-    var checkboxDisabled: Bool { Self.checkboxDisabled(enabled: enabled, refusal: registrationRefusal) }
-
-    nonisolated static func checkboxDisabled(enabled: Bool, refusal: String?) -> Bool {
-        !enabled && refusal != nil
+    /// The heading and the button, from the same answers as the two lines.
+    /// Stop is never refused (Codex 11/03 F4: enabled from Release, then
+    /// opened in Debug or as a viewer, OFF must stay reachable).
+    var control: BackgroundServicePresentation.Control {
+        BackgroundServicePresentation.control(enabled: enabled, launchd: launchdStatus, service: service,
+                                              serviceProblem: serviceProblem, refusal: registrationRefusal,
+                                              bundledBuild: bundledHelperBuild(), quit: quit)
     }
 
     private var cycle: Task<Void, Never>?
@@ -124,9 +133,55 @@ final class BackgroundServiceStore: ObservableObject {
         return store
     }
 
-    // MARK: The toggle
+    // MARK: Start / Stop / Restart (the Settings button)
 
-    /// The checkbox's setter: persist, then register or unregister (one log
+    /// The button's one entry: what was pressed is logged, then the verb,
+    /// then launchd and the helper are asked again so the heading is true.
+    func perform(_ action: BackgroundServicePresentation.Action) async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        log("background service: \(action.rawValue) pressed in Settings")
+        switch action {
+        case .start: startService()
+        case .stop: setEnabled(false)
+        case .restart:
+            guard registrationRefusal == nil else {
+                // Never stop what this build may not start again.
+                startService()
+                break
+            }
+            setEnabled(false)
+            if let serviceProblem {
+                log("background service: Restart stopped at Stop — \(serviceProblem); not started again")
+                break
+            }
+            try? await Task.sleep(for: restartPause)
+            setEnabled(true)
+        }
+        await refresh()
+    }
+
+    /// Start: off → on (the engine below); already on but quit from the menu
+    /// bar or dropped by launchd → clear the quit marker and register again.
+    private func startService() {
+        guard enabled else { setEnabled(true); return }
+        if let refusal = registrationRefusal {
+            lastNote = refusal
+            log("background service: not turned on — \(refusal)")
+            return
+        }
+        clearQuitMarker(reason: "Start was pressed")
+        let a = agent()
+        if a.status != .enabled {
+            BackgroundServiceRegistrar.registerIfEnabled(enabled: true, service: { a }, log: log)
+        }
+        launchdStatus = a.status
+    }
+
+    // MARK: The engine
+
+    /// On / off: persist, then register or unregister (one log
     /// line each, with launchd's answer) — and nothing else. The helper plans
     /// its own work once launchd starts it.
     func setEnabled(_ on: Bool) {
@@ -142,7 +197,7 @@ final class BackgroundServiceStore: ObservableObject {
         lastNote = nil
         let a = agent()
         if on {
-            clearQuitMarker(reason: "the checkbox was turned on")
+            clearQuitMarker(reason: "Start was pressed")
             BackgroundServiceRegistrar.registerIfEnabled(enabled: true, service: { a }, log: log)
             launchdStatus = a.status
             Task { await refresh() }
@@ -190,7 +245,7 @@ final class BackgroundServiceStore: ObservableObject {
         note("helper", BackgroundServicePresentation.helperProblem(enabled: enabled, launchd: launchdStatus,
                                                                     service: service, problem: serviceProblem,
                                                                     refusal: registrationRefusal, bundledBuild: bundledHelperBuild()))
-        note("registration", registrationRefusal.map { "the checkbox cannot turn it on here — \($0)" })
+        note("registration", registrationRefusal.map { "Start is refused here — \($0)" })
         note("hold", service?.holds?.first.map { "\($0.kind) \($0.words)" })
     }
 
@@ -293,7 +348,7 @@ enum BackgroundServicePresentation {
     /// Quit from the helper's own menu bar: Rick's choice, not a problem.
     static func quitHelperLine(_ quit: BackgroundQuitMarker, now: Date = Date()) -> String {
         "VideoScan Background: quit from its menu bar at \(quit.quitWords(now: now)) — starts again when VideoScan next opens "
-            + "or the Mac restarts (to start it now: turn the checkbox off and on)"
+            + "or the Mac restarts (to start it now: press Start)"
     }
 
     static let quitJobLine = "Content analysis: stopped — VideoScan Background was quit; work resumes where it stopped"
@@ -314,14 +369,86 @@ enum BackgroundServicePresentation {
         }
     }
 
-    /// The fix for "not registered": the checkbox, when this build may use
-    /// it; otherwise the build that may (the checkbox here only turns OFF).
+    /// The fix for "not registered": Start, when this build may use it;
+    /// otherwise the build that may (here the button only stops).
     static func reregisterFix(refusal: String?) -> String {
-        guard let refusal else { return "Fix: turn the checkbox off and on" }
+        guard let refusal else { return "Fix: press Start" }
         if refusal == BackgroundServiceRegistrar.viewerRefusal {
-            return "Fix: on the master's Release build, turn Background off and on (this Mac is a viewer)"
+            return "Fix: on the master's Release build, press Start (this Mac is a viewer)"
         }
-        return "Fix: in the Release build (scheme VideoScan-Release), turn Background off and on"
+        return "Fix: in the Release build (scheme VideoScan-Release), press Start"
+    }
+
+    // MARK: The heading and its button (Rick 2026-11-09)
+
+    /// The one button's verb; the raw value is its title.
+    enum Action: String, Equatable, Sendable {
+        case start = "Start", stop = "Stop", restart = "Restart"
+    }
+
+    struct Control: Equatable {
+        /// "running" only from the helper's own answer (rule 1).
+        var state: String
+        /// "built Nov 9, 2026 at 8:41 PM" — nil when no build is known.
+        var build: String?
+        var action: Action
+        /// Start where this build may not start it (viewer, Debug).
+        var actionDisabled: Bool
+
+        var heading: String { "\(Control.name): \(state)" + (build.map { " (\($0))" } ?? "") }
+        static let name = "Background Content Analysis"
+    }
+
+    static func buildWords(_ buildID: String?, format: (Date) -> String) -> String? {
+        buildID.flatMap(JobSchedule.buildDate(of:)).map { "built \(format($0))" }
+    }
+
+    /// State, build date and verb. The build date is the RUNNING helper's
+    /// when it answered; otherwise the one inside this app ("this app's").
+    static func control(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, serviceProblem: String?,
+                        refusal: String?, bundledBuild: String?, quit: BackgroundQuitMarker? = nil,
+                        format: (Date) -> String = { $0.formatted(date: .abbreviated, time: .shortened) }) -> Control {
+        let mine = buildWords(bundledBuild, format: format).map { "this app's helper: \($0)" }
+        let stopped = Control(state: "stopped", build: mine, action: .start, actionDisabled: refusal != nil)
+        guard enabled else {
+            var c = stopped
+            if launchd == .enabled, serviceProblem != nil { c.state = "Stop failed" }
+            return c
+        }
+        // A quit marker only where Start can undo it; a viewer or a Debug
+        // build keeps Stop (unregister) reachable instead.
+        if quit != nil, refusal == nil { return stopped }
+        func up(_ state: String, _ build: String?) -> Control {
+            Control(state: state, build: build, action: .stop, actionDisabled: false)
+        }
+        switch launchd {
+        case nil: return up("checking…", mine)
+        case .notRegistered?: return stopped
+        case .requiresApproval?: return up("waiting for your approval", mine)
+        case .notFound?: return up("the helper is missing from this build", nil)
+        case .enabled?:
+            return registered(service: service, serviceProblem: serviceProblem, mayStart: refusal == nil,
+                              bundledBuild: bundledBuild, mine: mine, format: format)
+        case .some(let other): return up(BackgroundServiceRegistrar.statusWords(other), mine)
+        }
+    }
+
+    /// launchd says enabled: what the helper's own answer (or silence) means.
+    /// Restart only where this build may start it again (`mayStart`).
+    private static func registered(service: ServiceStatus?, serviceProblem: String?, mayStart: Bool,
+                                   bundledBuild: String?, mine: String?, format: (Date) -> String) -> Control {
+        let again: Action = mayStart ? .restart : .stop
+        guard let service else {
+            return serviceProblem != nil
+                ? Control(state: "not answering", build: mine, action: again, actionDisabled: false)
+                : Control(state: "checking…", build: mine, action: .stop, actionDisabled: false)
+        }
+        let running = buildWords(service.build, format: format)
+        guard isOlder(service, than: bundledBuild) else {
+            return Control(state: "running", build: running, action: .stop, actionDisabled: false)
+        }
+        let both = [running, mine].compactMap { $0 }.joined(separator: "; ")
+        return Control(state: "running an older build", build: both.isEmpty ? nil : both, action: again, actionDisabled: false)
     }
 
     /// The running helper is another build than the one in this app.
@@ -335,7 +462,7 @@ enum BackgroundServicePresentation {
         let name = "VideoScan Background: "
         guard enabled else {
             if launchd == .enabled, let problem {
-                return name + "still enabled in launchd — turning it off failed (\(problem)); turn the checkbox on and off again"
+                return name + "still enabled in launchd — turning it off failed (\(problem)); press Start, then Stop again"
             }
             return name + (launchd == .enabled ? "off — still listed in \(loginItems) until the app unregisters it" : "off")
         }
@@ -346,7 +473,7 @@ enum BackgroundServicePresentation {
         case .notFound?: return name + "the helper is missing from this build"
         case .enabled?:
             if let service, isOlder(service, than: bundledBuild) {
-                return name + "older helper running (pid \(service.processIdentifier)) — turn the checkbox off and on to start this build's"
+                return name + "older helper running (pid \(service.processIdentifier)) — press Restart to start this build's"
             }
             if let service {
                 return name + "running · pid \(service.processIdentifier) · \(service.backoff.words)"
@@ -372,7 +499,7 @@ enum BackgroundServicePresentation {
             return "\(era.title): \(counts) · \(era.stateWords)"
         }
         guard enabled else {
-            return "Content analysis: off" + (lastNote.map { " — \($0)" } ?? " — turn the checkbox on to analyze in the background")
+            return "Content analysis: off" + (lastNote.map { " — \($0)" } ?? " — press Start to analyze in the background")
         }
         guard let service else { return "Content analysis: the helper is not answering — no plan to show" }
         guard let left = service.planned?[JobKind.era.rawValue] else { return "Content analysis: the helper has not planned yet" }

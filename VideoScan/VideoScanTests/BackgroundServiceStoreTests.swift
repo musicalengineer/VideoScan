@@ -213,7 +213,7 @@ struct BackgroundServiceStoreTests {
         #expect(approval.needsApproval)
         #expect(approval.helper == "VideoScan Background: waiting for your approval in System Settings ▸ General ▸ Login Items")
         let unregistered = Self.lines(enabled: true, launchd: .notRegistered)
-        #expect(unregistered.helper.contains("Fix: turn the checkbox off and on"))
+        #expect(unregistered.helper.contains("Fix: press Start"))
         #expect(Self.lines(enabled: true, launchd: nil).helper == "VideoScan Background: asking launchd…")
     }
 
@@ -232,7 +232,7 @@ struct BackgroundServiceStoreTests {
                 == "Content analysis: the helper has not planned yet")
         #expect(Self.lines(enabled: true, launchd: .enabled).job == "Content analysis: the helper is not answering — no plan to show")
         #expect(Self.lines(enabled: false, launchd: .notRegistered).job
-                == "Content analysis: off — turn the checkbox on to analyze in the background")
+                == "Content analysis: off — press Start to analyze in the background")
     }
 
     @Test("RED→GREEN Codex #236 F5: a hold is said even when its kept request sits queued — never just 'queued'")
@@ -250,7 +250,7 @@ struct BackgroundServiceStoreTests {
         service.build = "VideoScan Background 100 1"
         let older = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled, service: service, serviceProblem: nil,
                                                         lastNote: nil, bundledBuild: "VideoScan Background 200 2")
-        #expect(older.helper == "VideoScan Background: older helper running (pid 4242) — turn the checkbox off and on to start this build's")
+        #expect(older.helper == "VideoScan Background: older helper running (pid 4242) — press Restart to start this build's")
         #expect(BackgroundServicePresentation.helperProblem(enabled: true, launchd: .enabled, service: service, problem: nil,
                                                             bundledBuild: "VideoScan Background 200 2") == older.helper, "logged once as a problem")
         let same = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled, service: service, serviceProblem: nil,
