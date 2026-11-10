@@ -591,6 +591,11 @@ def run_cli(*args, env=None):
     e = dict(os.environ, **(env or {}))
     # Never run the real events prototype (it reads this Mac's catalog) unless a test names a script.
     events = [] if "--events-script" in args else ["--no-events"]
+    # Nor this Mac's own sanitizer / analysis logs: the M4 has them, so two tests that listed the out
+    # dir found two extra streams there (first script-tests run on the M4, 2026-11-10).
+    for flag in ("--sanitizer-dir", "--analysis-dir"):
+        if flag not in args:
+            events += [flag, "/nonexistent/videoscan-test-no-logs"]
     return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), *events, *args],
                           capture_output=True, text=True, env=e, timeout=60, stdin=subprocess.DEVNULL)
 

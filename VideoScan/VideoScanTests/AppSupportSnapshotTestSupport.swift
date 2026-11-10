@@ -40,8 +40,17 @@ enum AppSupportSnapshot {
     }
 
     /// True when `rel` (a path relative to the tree root) belongs to an
-    /// excluded top-level folder — its first component, exactly.
+    /// excluded top-level folder — its first component, exactly — or is a
+    /// SQLite `-shm` file.
+    ///
+    /// A `-shm` is the WAL's shared-memory index: every READER in every
+    /// process touches it, so its mtime moves when the Background helper or
+    /// Rick's app merely looks at the catalog (the M5 Ultra's nightly failed
+    /// on `catalog.sqlite-shm` alone, 2026-11-10, with the helper running).
+    /// It holds no data. A write still shows: it changes the database file
+    /// or its `-wal`, and both stay watched.
     static func isExcluded(_ rel: String) -> Bool {
+        if rel.hasSuffix(".sqlite-shm") || rel.hasSuffix(".sqlite3-shm") || rel.hasSuffix(".db-shm") { return true }
         let first = rel.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? rel
         return excludedTopLevel.contains(first)
     }
@@ -119,6 +128,32 @@ struct AppSupportSnapshotTests {
         #expect(snap["catalog.json"] != nil)
         #expect(AppSupportSnapshot.isExcluded("team-channel") && AppSupportSnapshot.isExcluded("team-channel/x/y"))
         #expect(!AppSupportSnapshot.isExcluded("team-channels") && !AppSupportSnapshot.isExcluded("a/team-channel"))
+    }
+
+    @Test("a SQLite -shm (touched by any reader in any process) is not watched; the database and its -wal are")
+    func readerTouchedShmIsNotAWrite() throws {
+        let root = try scratch("shm")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for rel in ["catalog.sqlite", "catalog.sqlite-wal", "catalog.sqlite-shm", "sub/cache.sqlite3-shm", "x.db-shm",
+                    "notes-shm", "catalog.sqlite-shm.txt"] {
+            let url = root.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: url)
+        }
+        let before = AppSupportSnapshot.take(root: root)
+        #expect(before["catalog.sqlite-shm"] == nil && before["sub/cache.sqlite3-shm"] == nil && before["x.db-shm"] == nil)
+        #expect(before["notes-shm"] != nil && before["catalog.sqlite-shm.txt"] != nil, "only a database's -shm is skipped")
+
+        // Another process reading the catalog: only the -shm moves. Not a write.
+        try Data("reader touched this".utf8).write(to: root.appendingPathComponent("catalog.sqlite-shm"))
+        #expect(AppSupportSnapshot.take(root: root) == before)
+
+        // A real write lands in the -wal (or the database): still seen.
+        try Data("a committed frame".utf8).write(to: root.appendingPathComponent("catalog.sqlite-wal"))
+        let afterWal = AppSupportSnapshot.take(root: root)
+        #expect(afterWal != before)
+        try Data("checkpointed".utf8).write(to: root.appendingPathComponent("catalog.sqlite"))
+        #expect(AppSupportSnapshot.take(root: root) != afterWal)
     }
 
     @Test("the test host's Angel evidence store and buffer root are pinned under temp — never Application Support or the real buffer")
