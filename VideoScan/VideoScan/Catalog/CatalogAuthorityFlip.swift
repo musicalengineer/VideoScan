@@ -382,6 +382,20 @@ extension VideoScanModel {
         }
         publicMarks.attach(PublicMarkCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.publicMarks.load() }
+        // Estimated provenance (2026-11-10): the rule's rows and Rick's
+        // Confirm / Not Right through this committer; the Archive tab's tape
+        // glyph reads the store's projection. Nothing runs at launch but the
+        // read — Estimate Provenance… is a command Rick starts.
+        provenanceEstimates.note = { [weak self] line in
+            self?.log("Provenance: " + line)
+            appLog.write("[provenance] " + line)
+        }
+        provenanceEstimates.attach(ProvenanceEstimateCatalogBacking(committer: committer), roles: provenanceRoles,
+                                   facts: { [weak self] in
+                                       guard let self else { return [] }
+                                       return ProvenanceEstimateStore.facts(records: self.records) { self.isArchiveElement($0) }
+                                   })
+        Task { [weak self] in _ = await self?.provenanceEstimates.load() }
         // The background helper's observations (schema v1.13): its journal
         // beside catalog.json, applied through this committer at launch and
         // every 5 minutes; Catalog Status hears the waiting / refused counts.

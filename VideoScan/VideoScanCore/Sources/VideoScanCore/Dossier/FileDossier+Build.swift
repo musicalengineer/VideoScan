@@ -133,6 +133,7 @@ extension FileDossier {
         var lines: [Line] = [eraLine(verdict, userDate: r.userDate, ran: ran)]
         if let mine = userDateLine(r) { lines.append(mine) }
         lines.append(inferredDateLine(r))
+        if let provenance = provenanceLine(r, assertions: assertions) { lines.append(provenance) }
         lines.append(sceneLine(r, ran: ran))
         lines.append(speechLine(r, ran: ran))
         lines.append(peopleLine(r))
@@ -275,6 +276,25 @@ extension FileDossier {
     static func confidenceWords(_ value: Float) -> String {
         let label = value >= 0.85 ? "strong" : (value >= 0.5 ? "fair" : "weak")
         return String(format: "%.0f %% confidence (%@)", value * 100, label)
+    }
+
+    // MARK: Provenance (estimated or confirmed; DECISIONS 2026-11-10)
+
+    /// What this content is, as ProvenanceResolver reads its rows: an
+    /// `.observation` ("estimated, unconfirmed") until Rick confirms, then his
+    /// `.fact`. No estimate, or one he rejected → no line. The year is the
+    /// record's own date and the capture month its embedded creation date —
+    /// each omitted when unknown, never invented.
+    static func provenanceLine(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading]) -> Line? {
+        guard let estimate = ProvenanceResolver.estimate(fromRowsOfOneSubject: assertions),
+              let sentence = ProvenanceResolver.sentence(
+                estimate, year: MachineEraResolver.rickYear(r.userDate), captured: r.embeddedCreationDate,
+                technical: .init(videoCodec: r.videoCodec, resolution: r.resolution, bitDepth: r.bitDepth)) else { return nil }
+        return Line(label: "Provenance", value: sentence,
+                    reading: estimate.isConfirmed ? "confirmed by you" : "estimated, unconfirmed",
+                    source: estimate.isConfirmed ? "Rick" : "catalog rule, unconfirmed",
+                    evidence: ProvenanceResolver.evidenceWords(fromRowsOfOneSubject: assertions),
+                    standing: estimate.isConfirmed ? .fact : .observation)
     }
 
     // MARK: Captions, OCR, transcript

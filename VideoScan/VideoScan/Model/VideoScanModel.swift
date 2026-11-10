@@ -1810,6 +1810,13 @@ final class VideoScanModel: ObservableObject {
     /// leaves it unattached (refuses, and everything reads as private).
     let publicMarks = PublicMarkStore()
 
+    /// Estimated provenance (DECISIONS 2026-11-10): what a rule proposes an
+    /// archived capture master is — shown as PROVISIONAL until Rick confirms
+    /// (ProvenanceEstimateStore.swift; rule 12: state behind a seam, no model
+    /// extension). Attached to the committer when catalog.sqlite becomes the
+    /// authority; unattached it shows nothing and refuses.
+    let provenanceEstimates = ProvenanceEstimateStore()
+
     /// The background helper's journal into catalog.sqlite (schema v1.13,
     /// JournalApplier.swift; rule 12: state behind a seam). Attached to the
     /// committer when catalog.sqlite becomes the authority; its journal is
