@@ -176,6 +176,15 @@ extension PromoteToArchiveJob {
             appLog.write("promote \(line)")
             promoteLog.notice("promote \(line, privacy: .public)")
         }
+        // "Archive anyway (I know this file)": the owner's tick for a file
+        // nothing can probe also stands in for the sound check — said so in
+        // the log and on the row, never silently.
+        if entry.readiness.blocking && plan.allowUnprobeable {
+            say("SOUND OUTCOME \(op): not checked — an un-probeable file, promoted on the owner's \"Archive anyway\" tick")
+            soundNotes[source.id] = "sound not checked — archived on your say-so"
+            return .pass(note: soundNotes[source.id])
+        }
+
         let path = source.fullPath
         let before = await Self.stampOffMain(path: path)
         let finding: PromoteSoundGate.Finding

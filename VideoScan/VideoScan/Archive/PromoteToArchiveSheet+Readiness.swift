@@ -1,7 +1,7 @@
 // PromoteToArchiveSheet+Readiness.swift
 // The archival-readiness section of the Promote confirmation sheet (Rick
-// 2026-08-16): summary counters (audio first), one line per file, and what
-// stops a file (un-probeable; sound, checked by the job — 2026-11-10).
+// 2026-08-16): summary counters (audio first), one line per file, and the
+// "Archive anyway (I know this file)" override for un-probeable files.
 // Everything here reads the plan's precomputed entries — O(selection),
 // never O(records).
 
@@ -57,10 +57,14 @@ extension PromoteToArchiveSheet {
 
                     if plan.unprobeableCount > 0 {
                         Divider()
-                        Text("\(plan.unprobeableCount) file(s) that nothing can read will not be promoted: their sound cannot be checked, and “could not check” is not a pass.")
-                            .font(.system(size: 12, weight: .medium))
-                            .accessibilityIdentifier("promote.unprobeableRefused")
-                        Text("Two things stop a file: nothing can read it, or its sound is missing, silent or damaged (checked when you promote). Everything else is a note for later — the original is always preserved byte-for-byte.")
+                        Toggle(isOn: $overrideUnprobeable) {
+                            Text("Archive anyway (I know this file)")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .toggleStyle(.checkbox)
+                        .help("\(plan.unprobeableCount) file(s) could not be probed (no decodable streams). The archive would hold bytes nobody has decoded — promote only if you know what they are.")
+                        .accessibilityIdentifier("promote.overrideUnprobeable")
+                        Text("Two things stop a promotion: an un-probeable file, and missing, silent or damaged sound (checked when you promote). Everything else is a note for later — the original is always preserved byte-for-byte.")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }

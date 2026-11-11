@@ -23,6 +23,10 @@ struct PromoteToArchiveSheet: View {
 
     let request: ArchivePromoteRequest
 
+    /// "Archive anyway (I know this file)" — Rick's explicit override for
+    /// un-probeable files (the ONE blocking readiness state).
+    @State var overrideUnprobeable = false
+
     /// Archive-name overrides per entry (Promote-Helper, Rick 2026-08-19):
     /// a vertical list — Master / Lossless Copy / Edit Copy — each
     /// with its own name; empty = keep that file's stem. Seeded from the
@@ -47,13 +51,11 @@ struct PromoteToArchiveSheet: View {
 
     private var plan: ArchivePromotePlan { request.plan }
 
-    /// Confirm is blocked by readiness only when NOTHING in the selection
-    /// can be promoted: every file is un-probeable (the job refuses each —
-    /// its sound cannot be checked). A mixed selection goes ahead and the
-    /// job says which files it refused. (Plus the pre-existing free-space /
-    /// read-only / identity gates and a copies-date question not answered.)
+    /// Confirm is blocked ONLY by un-probeable files without the override
+    /// (plus the pre-existing free-space / read-only / identity gates) and
+    /// by a copies-date question not yet answered.
     private var blockedByReadiness: Bool {
-        !plan.entries.isEmpty && plan.unprobeableCount == plan.entries.count
+        plan.unprobeableCount > 0 && !overrideUnprobeable
     }
 
     private var unansweredDateQuestions: Int {
@@ -486,6 +488,7 @@ struct PromoteToArchiveSheet: View {
 
     private func confirm() {
         var confirmed = plan
+        confirmed.allowUnprobeable = overrideUnprobeable
         confirmed.archiveTitles = archiveTitles.compactMapValues { VideoScanModel.normalizedTitle($0) }
         // Only entries with a real answer. An unparseable string is NOT an
         // override — it must not silently become Undated when they meant
