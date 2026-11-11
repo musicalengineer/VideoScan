@@ -23,7 +23,10 @@
 //
 // The owner's word is the existing per-content tag "Silent — checked"
 // (WorkflowTags.silentChecked). It accepts a file with no track or a silent
-// track, never damaged sound and never "could not check".
+// track, never damaged sound and never "could not check". The sheet's
+// "Archive anyway (I know this file)" tick is the other owner's word: for an
+// un-probeable file it accepts a sound that COULD NOT BE CHECKED, and nothing
+// that was measured.
 //
 // Pure: plain values in, one value out; no I/O, no catalog, no model. The
 // job owns the measurement step and the log lines.
@@ -38,6 +41,8 @@ enum PromoteSoundGate {
 
     /// The silence line, dBFS RMS. A channel carries sound only ABOVE it.
     static let floorDBFS: Double = AudioBalanceClassifier.programFloorDBFS
+    /// The Promote sheet's un-probeable override, as the log names it.
+    static let tickName = "Archive anyway"
     /// The owner's "no sound is right for this one" mark.
     static let ownerTag: String = WorkflowTags.silentChecked
 
@@ -193,12 +198,21 @@ enum PromoteSoundGate {
     /// `soundPartnerName`: the catalogued sound half when this is the
     /// picture half of a pair (words only — it never passes anything).
     /// `recordedYear`: for the "film before 1980 is often silent" hint only.
+    /// `ownerAcceptsUnchecked`: the Promote sheet's "Archive anyway (I know
+    /// this file)" tick, for an un-probeable file whose measurement could not
+    /// be MADE (owner ruling 2026-11-10: the tick keeps the meaning it has
+    /// always had). It accepts that one thing; every measured refusal —
+    /// silent, no track, pair half, damaged — stands, ticked or not.
     static func decide(finding: Finding, mark: Mark,
                        soundPartnerName: String?, recordedYear: Int?,
-                       digestPrefix: String) -> Decision {
+                       digestPrefix: String, ownerAcceptsUnchecked: Bool = false) -> Decision {
         let sha = digestPrefix.isEmpty ? "" : ", sha256 \(digestPrefix)…"
         switch finding {
         case .unchecked(let why):
+            if ownerAcceptsUnchecked {
+                return .promote(rowNote: "sound not checked — archived on your “\(tickName)” tick",
+                                logFacts: "not checked (\(why)), accepted — owner's \"\(tickName)\" tick\(sha)")
+            }
             return .refuse(code: .unchecked,
                            detail: "Not promoted — the sound could not be checked (\(why)). Could not check is not a pass. "
                                + "Nothing was copied; try again when the drive is connected and idle.",

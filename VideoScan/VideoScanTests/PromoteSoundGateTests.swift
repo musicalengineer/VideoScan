@@ -238,6 +238,25 @@ struct PromoteSoundGateTests {
         #expect(staleSilent.code == .silent && staleSilent.detail.contains("earlier version"))
     }
 
+    @Test("the owner's “Archive anyway” tick accepts ONE thing — a sound that could not be checked — and never a measured refusal")
+    func theTickAcceptsOnlyCouldNotCheck() throws {
+        func ticked(_ finding: G.Finding, mark: G.Mark = .absent) -> G.Decision {
+            G.decide(finding: finding, mark: mark, soundPartnerName: nil, recordedYear: nil, digestPrefix: "aaaaaaaaaaaa",
+                     ownerAcceptsUnchecked: true)
+        }
+        let accepted = try #require(Self.pass(ticked(.unchecked("ffprobe exited with status 1"))))
+        #expect(accepted.note == "sound not checked — archived on your “Archive anyway” tick")
+        #expect(accepted.log == "not checked (ffprobe exited with status 1), accepted — owner's \"Archive anyway\" tick, sha256 aaaaaaaaaaaa…")
+        #expect(Self.refusal(ticked(.silent(levels: "x", loudestDBFS: -70)))?.code == .silent)
+        #expect(Self.refusal(ticked(.noTrack))?.code == .noTrack)
+        #expect(Self.refusal(G.decide(finding: .noTrack, mark: .absent, soundPartnerName: "s.mxf", recordedYear: nil,
+                                      digestPrefix: "", ownerAcceptsUnchecked: true))?.code == .pairHalf)
+        #expect(Self.refusal(ticked(.damaged("x")))?.code == .damaged)
+        #expect(!ticked(.present(oneSided: nil, levels: "x")).isRefusal)
+        // Without the tick, could-not-check is refused whatever the tag says.
+        #expect(Self.refusal(Self.decide(.unchecked("x"), mark: .accepted))?.code == .unchecked)
+    }
+
     @Test("precedence: could not check, then damaged, then no track / silent, then present")
     func precedence() {
         // finding(from:) already orders damage over levels; decide never turns a refusal into a pass.

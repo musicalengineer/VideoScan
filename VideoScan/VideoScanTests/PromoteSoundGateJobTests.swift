@@ -191,34 +191,101 @@ struct PromoteSoundGateJobTests {
         _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
     }
 
-    @Test("REFUSED — owner ruling 2026-11-10: “Archive anyway (I know this file)” is the un-probeable override, NOT a sound override; a ticked file with silent sound is still refused with the tag sentence, and the tag is what lets it in")
-    func theArchiveAnywayTickDoesNotBypassTheSoundGate() async throws {
+    @Test("owner ruling 2026-11-10 — “Archive anyway (I know this file)” keeps its meaning: a ticked un-probeable file whose sound COULD NOT BE CHECKED is promoted and the override is logged; every MEASURED refusal stands, ticked or not; only the tag accepts silence")
+    func theArchiveAnywayTick() async throws {
         let (sb, model) = try H.setup("sg_tick"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_ticked.mov", seed: 671)
-        a.streamTypeRaw = StreamType.ffprobeFailed.rawValue; a.isPlayable = "ffprobe failed"
-        let before = ArchiveSnapshot.take(sb)
-        func ticked() throws -> PromoteToArchiveJob {
-            let job = try H.job(model, ids: [a.id]) { $0.allowUnprobeable = true }
-            #expect(job.plan.entries.first?.readiness.blocking == true && job.plan.allowUnprobeable, "fixture: un-probeable, ticked")
-            job.soundMeasure = S.measure(Self.silentPair)
-            return job
+        func unprobeable(_ name: String, _ seed: UInt64) throws -> VideoRecord {
+            let r = try H.source(sb, model, name: name, seed: seed)
+            r.streamTypeRaw = StreamType.ffprobeFailed.rawValue; r.isPlayable = "ffprobe failed"
+            return r
         }
-        let refused = try ticked()
-        refused.start(); await refused.task?.value; await refused.completionTask?.value
-        await Self.consoleSettled()
-        let o = try Self.expectRefused(refused, a, code: "sound-silent", sb, model, before: before)
+        func run(_ rec: VideoRecord, ticked: Bool, _ measure: PromoteSoundGate.Measure) async throws -> PromoteToArchiveJob.FileOutcome {
+            let job = try H.job(model, ids: [rec.id]) { $0.allowUnprobeable = ticked }
+            job.soundMeasure = measure
+            job.start(); await job.task?.value; await job.completionTask?.value
+            await Self.consoleSettled()
+            return try #require(H.outcome(job, rec.id))
+        }
+        let cannot = S.measure(throwing: AudioVerifyProbeError.probeFailed("ffprobe exited with status 1"))
+
+        // 1. Ticked + measured SILENT: refused with the tag sentence.
+        let silent = try unprobeable("test_tick_silent.mov", 671)
+        var before = ArchiveSnapshot.take(sb)
+        var o = try await run(silent, ticked: true, S.measure(Self.silentPair))
+        #expect(o.kind == .failed && o.refusalCode == "sound-silent", "\(o.kind) \(o.refusalCode ?? "nil")")
         #expect(o.detail.contains("tag it “Silent — checked” and promote again"), "\(o.detail)")
-        // Could-not-check is not waived by the tick either.
-        let unchecked = try H.job(model, ids: [a.id]) { $0.allowUnprobeable = true }
-        unchecked.soundMeasure = S.measure(throwing: AudioVerifyProbeError.probeFailed("ffprobe exited with status 1"))
-        unchecked.start(); await unchecked.task?.value; await unchecked.completionTask?.value
-        #expect(H.outcome(unchecked, a.id)?.refusalCode == "sound-unchecked")
         #expect(ArchiveSnapshot.take(sb) == before)
-        // The sound override is the tag.
-        a.tags = [WorkflowTags.silentChecked]
-        let accepted = try ticked()
-        accepted.start(); await accepted.task?.value; await accepted.completionTask?.value
-        #expect(H.outcome(accepted, a.id)?.kind == .promoted, "\(accepted.outcomes)")
+        // …and measured NO TRACK and DAMAGED likewise.
+        o = try await run(silent, ticked: true, S.measure(Self.noTrack))
+        #expect(o.refusalCode == "sound-none")
+        o = try await run(silent, ticked: true, S.measure(Self.damaged))
+        #expect(o.refusalCode == "sound-damaged")
+        #expect(ArchiveSnapshot.take(sb) == before)
+
+        // 2. NOT ticked: the un-probeable file never reaches the gate (as on main).
+        let plain = try unprobeable("test_tick_unticked.mov", 672)
+        o = try await run(plain, ticked: false, cannot)
+        #expect(o.kind == .skipped && o.detail.contains("Archive anyway"), "\(o.kind) — \(o.detail)")
+        #expect(ArchiveSnapshot.take(sb) == before)
+
+        // 3. Ticked + COULD NOT CHECK: promoted, and the log says who accepted what.
+        o = try await run(plain, ticked: true, cannot)
+        #expect(o.kind == .promoted, "\(o.kind) \(o.refusalCode ?? "") — \(o.detail)")
+        #expect(o.soundNote == "sound not checked — archived on your “Archive anyway” tick")
+        let digest = try #require(S.sha256(ofFile: plain.fullPath))
+        #expect(Self.lines(model, "SOUND OUTCOME").contains {
+            $0.contains("not checked (ffprobe exited with status 1), accepted — owner's \"Archive anyway\" tick, sha256 \(digest.prefix(12))…")
+        }, "\(Self.lines(model, "SOUND OUTCOME"))")
+        #expect(model.masterArchiveCopy(of: plain) != nil)
+
+        // 4. The tick is about UN-PROBEABLE files: an ordinary file in a ticked batch whose check fails is still refused.
+        let ordinary = try H.source(sb, model, name: "test_tick_ordinary.mov", seed: 673)
+        before = ArchiveSnapshot.take(sb)
+        o = try await run(ordinary, ticked: true, cannot)
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(o.kind) \(o.refusalCode ?? "nil")")
+        #expect(ArchiveSnapshot.take(sb) == before)
+
+        // 5. A file that moved during the check is not "could not be checked": the tick does not accept it.
+        let moving = try unprobeable("test_tick_moving.mov", 674)
+        o = try await run(moving, ticked: true, PromoteSoundGate.Measure { path in
+            _ = try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: path), bytes: 40_000, seed: 9_674)
+            throw AudioVerifyProbeError.probeFailed("ffprobe exited with status 1")
+        })
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(o.kind) \(o.refusalCode ?? "nil")")
+
+        // 6. Ticked + silent + TAGGED: the tag is the sound override.
+        silent.tags = [WorkflowTags.silentChecked]
+        o = try await run(silent, ticked: true, S.measure(Self.silentPair))
+        #expect(o.kind == .promoted, "\(o.kind) — \(o.detail)")
+    }
+
+    @Test("REFUSED — Codex #283 P2: the words follow the catalog's CURRENT record — a pairing removed while the sound was measured is not named in the refusal")
+    func refusalWordsFollowTheCurrentRecord() async throws {
+        let (sb, model) = try H.setup("sg_words"); defer { sb.cleanup() }
+        let v = try H.source(sb, model, name: "test_was_half.V01.mxf", seed: 675)
+        v.streamTypeRaw = StreamType.videoOnly.rawValue
+        let a = try H.source(sb, model, name: "test_was_half.A01.mxf", seed: 676)
+        a.streamTypeRaw = StreamType.audioOnly.rawValue
+        v.pairedWith = a; a.pairedWith = v
+        let id = v.id, path = v.fullPath, size = v.sizeBytes
+        let job = try H.job(model, ids: [v.id])
+        job.soundMeasure = PromoteSoundGate.Measure { _ in
+            await MainActor.run {
+                let fresh = VideoRecord(id: id)                // same id, the pairing gone
+                fresh.filename = (path as NSString).lastPathComponent
+                fresh.fullPath = path
+                fresh.directory = (path as NSString).deletingLastPathComponent
+                fresh.ext = "mxf"
+                fresh.streamTypeRaw = StreamType.videoOnly.rawValue
+                fresh.sizeBytes = size
+                model.records = model.records.map { $0.id == id ? fresh : $0 }
+            }
+            return MasterArchiveTestSupport.soundDiagnosis(channels: [], audioStreams: 0)
+        }
+        job.start(); await job.task?.value; await job.completionTask?.value
+        let o = try #require(H.outcome(job, id))
+        #expect(o.kind == .failed && o.refusalCode == "sound-none", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(!o.detail.contains("A01"), "the old partner is not named: \(o.detail)")
     }
 
     // MARK: Passes
