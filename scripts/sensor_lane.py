@@ -33,6 +33,10 @@ run is incremental) and `swift test --filter …` for VideoScanCore. It prints
 every failing test name and exits non-zero; a run where the lane executed ZERO
 tests is a failure too (an empty filter must never read as green).
 
+`run` also validates the gauntlet manifest against the source inventory
+(`manifest_check`, GH #400): a stale scripts/gauntlet/manifest.json is RED here,
+at the desk, instead of BLOCKING every stage of the M4 gauntlet.
+
 Memory: one test file's text at a time; the discovered list is a few thousand
 short strings.
 """
@@ -40,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -525,6 +530,47 @@ def _run(args: List[str], log_path: Path) -> Tuple[int, int, List[str], int, flo
     return passed, failed, names, rc, elapsed
 
 
+# ---------------------------------------------------------------- gauntlet manifest (GH #400)
+
+MANIFEST_REL = "scripts/gauntlet/manifest.json"
+MANIFEST_HOW = (f"refresh {MANIFEST_REL}: bring each named file's `tests`/`suites` lists (a new file: its stage; "
+                "a stage: its floor and selectors) in line with "
+                "`swift scripts/gauntlet/inventory.swift --discover .`, until "
+                f"`swift scripts/gauntlet/inventory.swift --validate . {MANIFEST_REL}` prints \"errors\" : [ ] "
+                "(docs/guides/testing.md, Inventory) — then run the lane again")
+
+
+def manifest_check(root: Path = REPO) -> Tuple[List[str], float]:
+    """(errors, seconds) from the gauntlet's own validator on the tree at `root`:
+    `swift scripts/gauntlet/inventory.swift --validate <root> <root>/scripts/gauntlet/manifest.json`.
+    The same check the gauntlet preflight runs, so a manifest that is stale here
+    is one that would BLOCK every stage on the M4 (GH #400: a test added to an
+    existing file passed pre-commit and this lane four times). A run that
+    produced no readable verdict (no manifest, bad JSON, swift missing, timeout)
+    is ONE error — "could not check" never reads as "nothing wrong".
+    Source scan only: no build, ~6 s. Memory: the validator's JSON verdict."""
+    script = REPO / "scripts" / "gauntlet" / "inventory.swift"
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(["swift", str(script), "--validate", str(root), str(Path(root) / MANIFEST_REL)],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        rc, out, err = -1, "", str(exc)
+    elapsed = time.monotonic() - t0
+    try:
+        errors = json.loads(out)["errors"]
+        if not isinstance(errors, list):
+            raise ValueError("errors is not a list")
+        errors = [str(e) for e in errors]
+    except (ValueError, KeyError, TypeError):
+        errors = None
+    if errors is None or (rc != 0 and not errors):
+        detail = " ".join((err or out).split())[-300:] or "no output"
+        return [f"{MANIFEST_REL} could not be validated (rc={rc}): {detail}"], elapsed
+    return errors, elapsed
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -558,6 +604,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     red: List[str] = []
     ran_total = 0
+    # Gauntlet manifest (GH #400) — first, because it needs no build and says so
+    # in seconds; always, whichever half was asked for, because the GREEN stamp
+    # run_sensors.sh records is for the whole tree and the pre-push hook trusts it.
+    manifest_errors, el = manifest_check(REPO)
+    print(f"  gauntlet manifest (inventory --validate): {len(manifest_errors)} error(s), {el:.0f}s", flush=True)
+    red += [f"gauntlet manifest: {e}" for e in manifest_errors]
     produced: List[Path] = []          # this run's logs, for the warning ratchet
     if not a.core_only:
         p, f, names, rc, el = run_app(app, log_dir, dd)
@@ -586,6 +638,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("\nSENSOR LANE RED — fix these before merging / reporting done:", file=sys.stderr)
         for r in red:
             print(f"  ✘ {r}", file=sys.stderr)
+        if manifest_errors:
+            print(f"  gauntlet manifest → {MANIFEST_HOW}", file=sys.stderr)
         return 1
     print(f"sensor lane GREEN ({ran_total} tests)")
     return 0
