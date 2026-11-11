@@ -107,6 +107,84 @@ struct VerifyAudioVerdictHeadlineTests {
         let summary = CheckMediaJob.summary([CheckMediaItem(id: UUID(), filename: "a.avi", outcome: .checked(card))])
         #expect(summary.hasPrefix("Sound not checked — "), "\(summary)")
     }
+
+    // MARK: GH #470 — the card's own verdict
+
+    /// The full cards Check Media writes when the sound could not be checked:
+    /// a failed pass, a partial pass, a pass that threw.
+    private func notCheckedCards() throws -> [(label: String, card: MediaReportCard)] {
+        let quick = try CheckMediaFixtures.healthy()
+        let rows: [(String, MediaCheck)] = [
+            ("failed pass", try soundRow(for: failedPassDiagnosis())),
+            ("partial pass", try soundRow(for: S.soundDiagnosis(channels: [-18, -20], levelsComplete: false))),
+            ("thrown pass", CheckMediaRules.checkSound(.failure(CheckMediaSkip(reason: "the drive went away")), facts: quick.facts)),
+        ]
+        return rows.map { ($0.0, CheckMediaRules.card(tier: .full, checks: [decodeOK, $0.1], quick: quick, at: Date())) }
+    }
+
+    @Test("#470: a full card whose sound was not checked never has the verdict OK — it carries the Sound row's reason")
+    func aSoundNotCheckedCardIsNeverOK() throws {
+        for (label, card) in try notCheckedCards() {
+            #expect(card.verdict != .ok, "\(label): \(card.headline)")
+            #expect(card.verdictWord != "OK", "\(label)")
+            #expect(card.verdict == card.check(.sound)?.verdict, "\(label): the reason is the Sound row's own")
+        }
+    }
+
+    @Test("#470 relaunch shape: the verdict is read off the stored card, so it is the same after a save and a load")
+    func theVerdictSurvivesARoundTrip() throws {
+        for (label, card) in try notCheckedCards() {
+            let loaded = try JSONDecoder().decode(MediaReportCard.self, from: JSONEncoder().encode(card))
+            #expect(loaded.verdict != .ok && loaded.verdict == card.verdict, "\(label)")
+        }
+    }
+
+    @Test("#470: a multi-file tally never counts a sound-not-checked card under OK")
+    @MainActor func theTallyDoesNotCountItOK() throws {
+        let quick = try CheckMediaFixtures.healthy()
+        let fine = CheckMediaRules.card(tier: .full, checks: [decodeOK, try soundRow(for: S.soundDiagnosis(channels: [-18, -20]))],
+                                        quick: quick, at: Date())
+        #expect(fine.verdict == .ok, "fixture: a full card with a measured sound row is OK")
+        var items = [CheckMediaItem(id: UUID(), filename: "fine.avi", outcome: .checked(fine))]
+        items += try notCheckedCards().map { CheckMediaItem(id: UUID(), filename: "\($0.label).avi", outcome: .checked($0.card)) }
+        #expect(CheckMediaTally(items).ok == 1, "only the measured file is OK")
+        #expect(CheckMediaJob.summary(items) == "1 checked — 1 OK, 3 couldn't be checked")
+    }
+
+    @Test("#470 unchanged: OK, Warning, Problem, the quick pass, a file with no sound track and a card with nothing run")
+    func theOtherCardVerdictsAreUnchanged() throws {
+        let quick = try CheckMediaFixtures.healthy()
+        let notChecked = try soundRow(for: failedPassDiagnosis())
+        func card(_ rows: [MediaCheck], _ q: CheckMediaQuickInputs, tier: MediaReportCard.Tier = .full) -> MediaReportCard {
+            CheckMediaRules.card(tier: tier, checks: rows, quick: q, at: Date())
+        }
+        let fine = try soundRow(for: S.soundDiagnosis(channels: [-18, -20]))
+        #expect(card([decodeOK, fine], quick).verdict == .ok)
+        // A Warning or Problem elsewhere still wins over "not checked".
+        let warning = MediaCheck(kind: .black, verdict: .warning, sentence: "Black.", evidence: [])
+        #expect(card([warning, notChecked], quick).verdict == .warning)
+        let problem = MediaCheck(kind: .decode, verdict: .problem, sentence: "Decoding found: errors.", evidence: [])
+        #expect(card([problem, notChecked], quick).verdict == .problem)
+        // The quick tier never ran the sound pass: it stays the quick pass, in its own words.
+        let quickCard = CheckMediaRules.quickCard(quick, at: Date())
+        #expect(quickCard.isQuickPassOnly && quickCard.verdict == .ok)
+        // No sound track: there was nothing to check, so the not-run row does not lower the card.
+        var silentFile = quick
+        silentFile.facts.streams.removeAll { $0.kind == .audio }
+        #expect(card([decodeOK, CheckMediaRules.checkSound(nil, facts: silentFile.facts)], silentFile).verdict == .ok)
+        // Nothing ran at all: not run, as before.
+        let nothing = card([.notRun(.decode, because: "x"), .notRun(.sound, because: "y")], quick)
+        #expect(nothing.verdict.rank == MediaCheckVerdict.notRun(reason: "").rank && nothing.headline == "Couldn't be checked.")
+    }
+
+    @Test("#470: a card with no verdict at all (nothing ran) is not counted under OK either")
+    @MainActor func aCardWithNothingRunIsNotTalliedOK() throws {
+        let quick = try CheckMediaFixtures.healthy()
+        let nothing = CheckMediaRules.card(tier: .full, checks: [.notRun(.decode, because: "x"), .notRun(.sound, because: "y")],
+                                           quick: quick, at: Date())
+        let tally = CheckMediaTally([CheckMediaItem(id: UUID(), filename: "n.avi", outcome: .checked(nothing))])
+        #expect(tally.ok == 0)
+    }
 }
 
 // MARK: - F2

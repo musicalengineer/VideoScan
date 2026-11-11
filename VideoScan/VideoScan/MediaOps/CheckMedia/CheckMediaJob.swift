@@ -301,8 +301,17 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         model?.saveCatalogDebounced()
         items[index].outcome = .checked(card)
         let length = items[index].durationEstimate.map { " · \($0.sentence)" } ?? ""
-        model?.log("Verify: \(rec.filename) → \(card.verdictWord) — \(card.headline)\(length)")
-        checkMediaJobLog.info("verify media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)\(length, privacy: .public)")
+        let outcome = Self.outcomeWords(card)
+        model?.log("Verify: \(rec.filename) → \(outcome)\(length)")
+        checkMediaJobLog.info("verify media: \(rec.filename, privacy: .public) → \(outcome, privacy: .public)\(length, privacy: .public)")
+    }
+
+    /// The log's words for one finished card: "<verdict> — <headline>". A
+    /// card whose sound was not checked has no verdict word to lead with
+    /// ("OK" would be false, GH #470), so its headline stands alone, as in
+    /// `summary`. Pure.
+    static func outcomeWords(_ card: MediaReportCard) -> String {
+        card.isSoundNotChecked ? card.headline : "\(card.verdictWord) — \(card.headline)"
     }
 
     private func setStep(_ step: String, index: Int, within: Double) {
@@ -366,7 +375,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
 }
 
 /// How a finished selection came out, counted once. A quick pass is its
-/// own outcome (never folded into "OK").
+/// own outcome (never folded into "OK"); "OK" counts only cards whose
+/// verdict is OK.
 struct CheckMediaTally: Equatable {
     var problem = 0, warning = 0, ok = 0, quickPass = 0, failed = 0
 
@@ -379,8 +389,11 @@ struct CheckMediaTally: Equatable {
         case .checked(let card) where card.isQuickPassOnly: quickPass += 1
         case .checked(let card) where card.verdict == .problem: problem += 1
         case .checked(let card) where card.verdict == .warning: warning += 1
-        case .checked: ok += 1
-        case .failed: failed += 1
+        case .checked(let card) where card.verdict == .ok: ok += 1
+        // A card with no verdict — the sound was not checked, or nothing
+        // ran — is never "OK" (GH #470). It is counted with the files that
+        // couldn't be checked; its own row says what was and was not.
+        case .checked, .failed: failed += 1
         default: break
         }
     }

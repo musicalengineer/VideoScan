@@ -268,7 +268,7 @@ extension CheckMediaRules {
     }
 
     /// How a headline starts when the full check could not check the sound.
-    static let soundNotCheckedLead = "Sound not checked — "
+    static let soundNotCheckedLead = MediaReportCard.soundNotCheckedLead
 
     /// Why the FULL check has no answer about a sound track that is there:
     /// the Sound row's not-run reason (the levels pass failed, was
@@ -283,9 +283,11 @@ extension CheckMediaRules {
     }
 
     /// The card's headline is the sound-not-checked one (so a summary does
-    /// not put "OK" in front of it).
+    /// not put "OK" in front of it). The rule is the card's own
+    /// (MediaReportCard.isSoundNotChecked), which also keeps its verdict
+    /// from reading OK (GH #470).
     static func isSoundNotChecked(_ card: MediaReportCard) -> Bool {
-        card.tier == .full && card.headline.hasPrefix(soundNotCheckedLead)
+        card.isSoundNotChecked
     }
 
     /// A Sound row that says the track could not be decoded — the one

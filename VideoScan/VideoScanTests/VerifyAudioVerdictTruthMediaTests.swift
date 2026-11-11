@@ -111,6 +111,39 @@ struct VerifyAudioVerdictCheckMediaTests {
         #expect(rec.mediaReportCard?.verdict != .problem, "a failed read is not a Problem card")
     }
 
+    @Test("#470: through the real job — the card is not OK, the log line does not say OK, the job does not count it OK")
+    func aSoundNotCheckedCardIsNotLoggedOrCountedOK() async throws {
+        for audio in [readFailedDiagnosis(), S.soundDiagnosis(channels: [-18, -20], audioStreams: 2, levelsComplete: false)] {
+            let model = VideoScanModel()
+            let rec = soundRecord("test_cm_470.avi")
+            model.records = [rec]
+            let quick = try CheckMediaFixtures.healthy()
+            let video = VideoVerifyDiagnosis(findings: [], facts: quick.videoFacts, sample: nil,
+                                             decode: VideoDecodeFacts(coverage: .complete))
+            let job = CheckMediaJob(records: [rec], tier: .full, model: model, center: MediaFileOperationsCenter(),
+                                    quickRunner: { _, _ in .measured(quick) },
+                                    fullRunner: { _, _, _, _ in
+                                        // No signal scan: its rows are honestly "not run", so
+                                        // nothing but the sound stands between this card and OK.
+                                        CheckMediaFullInputs(video: .success(video), audio: .success(audio), signals: nil)
+                                    })
+            job.start()
+            await job.task?.value
+            let card = try #require(rec.mediaReportCard)
+            #expect(card.headline.hasPrefix("Sound not checked — "), "fixture: \(card.headline)")
+            #expect(card.verdict != .ok, "the stored card's verdict")
+            // The console flushes 0.15 s after a line is logged.
+            let needle = "Verify: test_cm_470.avi → "
+            for _ in 0..<40 where !model.dashboard.consoleLines.contains(where: { $0.contains(needle) }) {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let outcome = try #require(model.dashboard.consoleLines.last { $0.contains(needle) })
+            #expect(!outcome.contains("→ OK"), "\(outcome)")
+            #expect(outcome.contains("→ Sound not checked — "), "the headline stands alone, as in the summary: \(outcome)")
+            #expect(CheckMediaTally(job.items).ok == 0)
+        }
+    }
+
     @Test("an earlier verdict is left alone by a full check that could not check the sound")
     func anEarlierVerdictIsLeftAlone() async throws {
         let then = Date(timeIntervalSince1970: 1_780_000_000)

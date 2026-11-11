@@ -35542,6 +35542,7 @@
         "VerifyAudioVerdictTruthMediaTests"
       ],
       "tests": [
+        "aSoundNotCheckedCardIsNotLoggedOrCountedOK",
         "anEarlierVerdictIsLeftAlone",
         "completeAndDamagedAreStored",
         "failedReadStoresNoSoundVerdict",
@@ -35563,8 +35564,10 @@
         "VerifyAudioVerdictNoteWordingTests"
       ],
       "tests": [
+        "aCardWithNothingRunIsNotTalliedOK",
         "aNotCheckedDiagnosisIsNotReused",
         "aSkippedStreamIsRefusedAndACompletePassIsNot",
+        "aSoundNotCheckedCardIsNeverOK",
         "aThrownSoundPassIsNotHealthy",
         "checkedDiagnosesAreReused",
         "damagedNoteDoesNotClaimUndecodable",
@@ -35575,9 +35578,12 @@
         "soundNotCheckedIsNeverLooksHealthy",
         "theAngelNeverCallsItFixable",
         "theCardRowAloneOpensRepair",
+        "theOtherCardVerdictsAreUnchanged",
         "theOtherHeadlinesAreUnchanged",
         "theRealRowsHeadline",
         "theSummaryDoesNotSayOK",
+        "theTallyDoesNotCountItOK",
+        "theVerdictSurvivesARoundTrip",
         "undecodableTrackStillOpensRepair"
       ]
     }
@@ -39416,7 +39422,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 560,
+      "expected_floor": 565,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [

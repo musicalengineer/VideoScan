@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 01:00 (Wednesday, after the night of 11/10: eleven merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-11 04:30 (Wednesday, after the night of 11/10: twelve merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -14,11 +14,11 @@
    adversarial confirm. Weekly sanitizers on the M4: address Sat 07:00, thread Sun 05:00. Kick a full M4 run by hand:
    `ssh ricksm4.local 'launchctl kickstart gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min). The 14:00
    guard now skips only when today's green run was for the commit `main` is at (`9aa5924a4`).
-2. **State of `main` on the testbed.** M4 full run finished 11/11 00:06 on `9aa5924a4`: app suite **GREEN**, 13,533 of
-   13,600 passed, 0 failed; gauntlet **AMBER** (7 known issues, 902 unadapted suites, ui not run — the expected
-   state); script tests **GREEN**, 2,079 passed. **Not yet covered by a full run:** the Verify Audio merge
-   (`78c90ac37`), which landed after that run started; its own suites and the sensor lane were green. The 14:00 run of
-   11/11 covers it.
+2. **State of `main` on the testbed.** M5 Ultra nightly 11/11 02:00 on `f28a61c27` (every merge of the night but
+   the #470 card fix): **GREEN**, 13,579 passed, 0 failed, 65 skipped; Core 2,567 passed, 0 failed. M4 full run
+   finished 11/11 00:06 on `9aa5924a4`: app suite GREEN (13,533 passed, 0 failed), gauntlet **AMBER** (7 known
+   issues, 902 unadapted suites, ui not run — the expected state), script tests GREEN (2,079 passed). The 14:00
+   M4 run of 11/11 is the first gauntlet over the night's later merges.
 3. **Merged the night of 11/10, for Rick's spot test (Debug is fine; none of it is about speed):**
    - `c30850610` **Promote sound gate.** Promote measures the sound of the proven bytes every time; it reads no
      stored verdict and stores none. Refusals: no audio track, half of a pair, silent, damaged, could not check. The
@@ -54,9 +54,12 @@
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound, what the two merges left (#470):** the Check Media card still says OK when sound was not checked; a
-   truncated decode that exits 0 is not caught. The production-shape sound-gate test needs a `.backup` of the live
-   catalog and has not run.
+2. **Sound, #470.** Done 11/11: a Check Media card whose sound was not checked no longer has the verdict OK (grey
+   "not run" icon; the log line and the tally no longer count it OK). **Not merged — a truncated decode that
+   exits 0 is still stored "ok"** (confirmed on mp4, mov, mkv, mxf cut to 60 %). The fix is written and seen
+   red then green (`.scratch/470-short-decode-2026-11-11/B-short-decode.patch`), but it changes what the Promote
+   sound gate decides, so it waits on Rick's ruling (below) and a Codex pass. The production-shape sound-gate
+   test needs a `.backup` of the live catalog and has not run.
 3. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
    suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
 4. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
@@ -75,6 +78,11 @@
 - **Spot test of item 3.** By eye only: the Frames Search button greys while a search runs and comes back; the sound
   gate's refusals on real files; the wording where sound was not checked.
 - **Sound gate:** should "Archive anyway" also pass a file measured silent? (Today no; tag it "Silent — checked".)
+- **Short decode (#470):** with the fix, a file whose sound decode ends early reads "not checked" everywhere, and
+  Promote refuses it (stricter). One corner goes the other way: such a file that is also silent, untagged and
+  un-probeable would pass on the "Archive anyway" tick, where today it is refused as silent. Accept that as what
+  the tick means, or have the tick refuse a check that ran but came up short? (Advice: the second.)
+- **Check Media tally:** a sound-not-checked card is now counted under "couldn't be checked". Own phrase instead?
 - **The archive sound check's findings:** the unplayable `Mark's-Bday-1984…` file; the silent CapeCodAndMuseum1991
   files, and whether to check the July recapture `CapeCod_1991-06-21_NV12`; the one-sided files.
 - **#263:** rewrite git history to remove the old fixture date, or leave it? (Advice: leave it.)
