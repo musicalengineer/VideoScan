@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 00:20 (Wednesday, after the night of 11/10: nine merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-11 01:00 (Wednesday, after the night of 11/10: ten merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -46,9 +46,12 @@
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
 
 ## Next (in order)
-1. **Observations, what is left for an A in design:** take the `mockup:` parameter out of the production views; one
-   read door for a session; `FrameSearchStore.reloadAfterSave` still re-reads the index from disk though the job now
-   hands it over; `loadIndex()` and `reloadAfterSave()` are not yet latest-wins. Test coverage is 41.6 % (the C).
+1. **Observations, what is left for an A in design:** the `mockup:` parameter stays in the production views for now —
+   the offscreen renderer that makes Rick's mockup PNGs cannot draw a text field, button or scroll view, so the
+   views carry static stand-ins (tried 11/11; removing it needs a different mockup tool, Rick's call); one read
+   door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
+   Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
+   Test coverage is 41.6 % (the C).
 2. **Sound, what the two merges left (#470):** the Check Media card still says OK when sound was not checked; a
    truncated decode that exits 0 is not caught. The production-shape sound-gate test needs a `.backup` of the live
    catalog and has not run.
