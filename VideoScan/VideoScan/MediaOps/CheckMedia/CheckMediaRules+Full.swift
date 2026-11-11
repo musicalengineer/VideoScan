@@ -112,6 +112,12 @@ extension CheckMediaRules {
                               evidence: evidence,
                               fix: "Right-click ▸ Repair… to rebuild the sound track, or look for another copy.")
         }
+        // Not a verdict (GH #467 / #468): the levels pass failed, or did not
+        // cover every channel of every stream. Never OK, never Problem.
+        if case .notChecked(let reason) = diagnosis.verdict {
+            return MediaCheck(kind: .sound, verdict: .notRun(reason: reason),
+                              sentence: "Not checked — \(reason).", evidence: evidence)
+        }
         if !diagnosis.isHealthy {
             return MediaCheck(kind: .sound, verdict: .warning,
                               sentence: "The sound plays, but: \(diagnosis.persistedNote).",

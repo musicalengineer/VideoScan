@@ -1,0 +1,423 @@
+// VerifyAudioVerdictTruthTests.swift
+// GH #467 / #468 (2026-11-10): the stored sound verdict must be supported by
+// the measurement.
+//
+//   #467 — "ok" is stored only when the levels pass covered every declared
+//          channel of every stream. An incomplete pass stores NOTHING and the
+//          job says "could not check" with the reason.
+//   #468 — a levels pass that FAILED while the header still reads is a failed
+//          read, not damage: nothing is stored, the job says "could not
+//          check", and the next run checks again. Damage is a decoded-and-bad
+//          result (reference movie, short audio, an old codec).
+//
+// Dimensions here: logic (rules + both jobs) · isolation (poisoned
+// diagnoses) · scale (100k verdicts) · the writer's relaunch shape (nothing
+// stored = no key in the record's DTO). No file, no subprocess: canned
+// diagnoses through the real jobs. The truth test on real media (five
+// containers) and the source sensors are in
+// VerifyAudioVerdictTruthMediaTests.swift.
+//
+// Every assertion here goes through names that exist before and after the
+// fix (record fields, job state, `persistedStatus`), so the file compiles
+// against the broken code and is seen red there.
+//
+// C++ note: the fixtures build the same value structs the probe builds — an
+// aggregate initializer per case, no mocks.
+
+import Foundation
+import Testing
+import VideoScanCore
+@testable import VideoScan
+
+// MARK: - Fixtures
+
+private typealias S = MasterArchiveTestSupport
+
+@MainActor
+private func soundRecord(_ name: String, path: String? = nil) -> VideoRecord {
+    let r = VideoRecord()
+    r.filename = name
+    r.fullPath = path ?? "/Volumes/T/\(name)"
+    r.directory = (r.fullPath as NSString).deletingLastPathComponent
+    r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+    return r
+}
+
+/// What the probe returns when the levels pass threw and the header still
+/// read (`analyzeFailed`): no analysis, one "could not be decoded" finding.
+private func readFailedDiagnosis(codec: String = "pcm_s16le",
+                                 extra: [AudioVerifyFinding] = []) -> AudioVerifyDiagnosis {
+    var shape = AudioVerifyShape()
+    shape.videoCodec = "h264"
+    shape.audioStreams = 1
+    shape.audioCodec = codec
+    shape.audioChannels = 2
+    return AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: codec, decodable: false)] + extra,
+                                shape: shape, balanceAnalysis: nil)
+}
+
+@MainActor
+private func runVerify(_ rec: VideoRecord, model: VideoScanModel,
+                       _ diagnose: (@Sendable (String) async throws -> AudioVerifyDiagnosis)?) async -> VerifyAudioJob {
+    let job = VerifyAudioJob(record: rec, model: model, diagnoseOverride: diagnose)
+    job.start()
+    await job.task?.value
+    return job
+}
+
+@MainActor
+private func failureMessage(_ job: VerifyAudioJob) -> String? {
+    if case .failed(let message) = job.state { return message }
+    return nil
+}
+
+// MARK: - #467: an incomplete levels pass is never stored "ok"
+
+@Suite("Verify Audio verdict truth — #467 incomplete levels pass")
+@MainActor
+struct VerifyAudioIncompleteLevelsTests {
+
+    @Test("a pass that skipped a stream stores nothing; the job says could not check, with the reason")
+    func aSkippedStreamIsNotStoredOk() async throws {
+        let model = VideoScanModel()
+        let rec = soundRecord("two-pairs.dv")
+        model.records = [rec]
+        let incomplete = S.soundDiagnosis(channels: [-18, -20], audioStreams: 2, levelsComplete: false)
+        let job = await runVerify(rec, model: model) { _ in incomplete }
+
+        #expect(rec.audioVerifyStatus == "", "an incomplete pass is not a verdict")
+        #expect(rec.audioVerifyNote == "")
+        #expect(rec.audioVerifyDate == nil)
+        let message = try #require(failureMessage(job), "the job must end 'could not check', not finished: \(job.state)")
+        #expect(message.hasPrefix("Could not check the audio — "))
+        #expect(message.contains("only partly measured"), "the reason is named: \(message)")
+        #expect(message.contains("no verdict was recorded"))
+    }
+
+    @Test("a channel whose level could not be read stores nothing — never ok, never one-sided")
+    func aParseGapIsNotStoredOk() async throws {
+        let model = VideoScanModel()
+        let rec = soundRecord("gap.mov")
+        model.records = [rec]
+        let gap = S.soundDiagnosis(channels: [-18, nil], levelsComplete: true)
+        let job = await runVerify(rec, model: model) { _ in gap }
+
+        #expect(rec.audioVerifyStatus == "")
+        #expect(rec.audioVerifyDate == nil)
+        #expect(failureMessage(job)?.contains("only partly measured") == true, "\(job.state)")
+    }
+
+    @Test("no level finding is built from an incomplete pass: not one-sided, not silent, not surround")
+    func noLevelFindingsFromAnIncompletePass() {
+        for channels in [[-18, -Double.infinity], [-Double.infinity, -Double.infinity],
+                         [-18, -18, -18, -18, -18, -18]] as [[Double]] {
+            let complete = S.soundDiagnosis(channels: channels, levelsComplete: true)
+            let incomplete = S.soundDiagnosis(channels: channels, levelsComplete: false)
+            #expect(!complete.findings.isEmpty, "precondition: \(channels) has a level finding when measured")
+            #expect(incomplete.findings.isEmpty, "an unmeasured fact is not a finding: \(incomplete.findings)")
+            #expect(!incomplete.isHealthy, "and it is not 'All is well' either")
+            #expect(incomplete.persistedStatus != "ok" && incomplete.persistedStatus != "damaged")
+        }
+    }
+
+    @Test("a verdict stored earlier is left exactly as it was: status, note and date")
+    func anEarlierVerdictIsLeftAlone() async {
+        let model = VideoScanModel()
+        let rec = soundRecord("earlier.mov")
+        let then = Date(timeIntervalSince1970: 1_780_000_000)
+        rec.audioVerifyStatus = "ok"
+        rec.audioVerifyNote = "mono audio"
+        rec.audioVerifyDate = then
+        model.records = [rec]
+        _ = await runVerify(rec, model: model) { _ in
+            S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)
+        }
+        #expect(rec.audioVerifyStatus == "ok")
+        #expect(rec.audioVerifyNote == "mono audio")
+        #expect(rec.audioVerifyDate == then, "a run that could not check must not re-date the old verdict")
+    }
+
+    @Test("the diagnosis is still handed over, so the results sheet can say what was not checked")
+    func theDiagnosisIsStillCached() async {
+        let center = MediaFileOperationsCenter()
+        let model = VideoScanModel()
+        let rec = soundRecord("cached.mov")
+        model.records = [rec]
+        let job = center.startVerifyAudio(record: rec, model: model, diagnoseOverride: { _ in
+            S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)
+        })
+        await job?.task?.value
+        #expect(rec.audioVerifyStatus == "")
+        #expect(center.verifyDiagnosis(forRecordID: rec.id)?.isHealthy == false)
+    }
+
+    @Test("a complete pass is still stored: ok, ok with a note, and the all-clear summary")
+    func aCompletePassIsStored() async {
+        let model = VideoScanModel()
+        let fine = soundRecord("fine.mov"), oneSided = soundRecord("left.mov")
+        model.records = [fine, oneSided]
+        let a = await runVerify(fine, model: model) { _ in S.soundDiagnosis(channels: [-18, -20]) }
+        let b = await runVerify(oneSided, model: model) { _ in S.soundDiagnosis(channels: [-18, -.infinity]) }
+        #expect(a.state == .finished(summary: "All is well — the audio track checked out."))
+        #expect(fine.audioVerifyStatus == "ok" && fine.audioVerifyNote == "" && fine.audioVerifyDate != nil)
+        #expect(b.state == .finished(summary: "one-sided audio (left only)"))
+        #expect(oneSided.audioVerifyStatus == "ok" && oneSided.audioVerifyNote == "one-sided audio (left only)")
+    }
+
+    @Test("WRITER, relaunch shape: a run that could not check leaves no audio-verdict key in the saved record")
+    func nothingStoredMeansNoKeyOnDisk() async throws {
+        let model = VideoScanModel()
+        let rec = soundRecord("relaunch.mov")
+        model.records = [rec]
+        _ = await runVerify(rec, model: model) { _ in
+            S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)
+        }
+        let json = try String(decoding: JSONEncoder().encode(VideoRecordDTO(rec)), as: UTF8.self)
+        #expect(!json.contains("audioVerifyStatus") && !json.contains("audioVerifyDate"),
+                "media_checks takes only 'ok' / 'damaged' — a not-checked run writes no row")
+        let back = try JSONDecoder().decode(VideoRecord.self, from: Data(json.utf8))
+        #expect(back.audioVerifyStatus == "" && back.audioVerifyDate == nil)
+    }
+}
+
+// MARK: - #468: a failed read is not damage
+
+@Suite("Verify Audio verdict truth — #468 a failed read is not damage")
+@MainActor
+struct VerifyAudioReadFailureTests {
+
+    @Test("levels pass failed, header still reads: nothing stored, not in the damaged selection, could not check")
+    func aFailedReadIsNotStoredDamaged() async throws {
+        let model = VideoScanModel()
+        let rec = soundRecord("hiccup.mov")
+        model.records = [rec]
+        let job = await runVerify(rec, model: model) { _ in readFailedDiagnosis() }
+
+        #expect(rec.audioVerifyStatus == "", "a failed read is not a damage verdict")
+        #expect(rec.audioVerifyNote == "")
+        #expect(rec.audioVerifyDate == nil)
+        #expect(model.records.filter { $0.audioVerifyStatus == "damaged" }.isEmpty,
+                "it must not join the damaged-file selection")
+        let message = try #require(failureMessage(job), "the job must end 'could not check': \(job.state)")
+        #expect(message.hasPrefix("Could not check the audio — "))
+        #expect(message.contains("could not be decoded") && message.contains("pcm_s16le"))
+        #expect(message.contains("no verdict was recorded"))
+        #expect(!message.lowercased().contains("damaged"))
+    }
+
+    @Test("an earlier ok is not turned into damaged by a failed read")
+    func anEarlierOkSurvivesAFailedRead() async {
+        let model = VideoScanModel()
+        let rec = soundRecord("was-ok.mov")
+        let then = Date(timeIntervalSince1970: 1_780_000_000)
+        rec.audioVerifyStatus = "ok"
+        rec.audioVerifyDate = then
+        model.records = [rec]
+        _ = await runVerify(rec, model: model) { _ in readFailedDiagnosis() }
+        #expect(rec.audioVerifyStatus == "ok" && rec.audioVerifyNote == "" && rec.audioVerifyDate == then)
+    }
+
+    @Test("decoded-and-bad is still damaged: reference movie, short audio, an old codec — and short audio beside a failed pass")
+    func measuredDamageIsStillStored() async {
+        let model = VideoScanModel()
+        var shape = AudioVerifyShape()
+        shape.audioStreams = 1
+        shape.audioCodec = "qdm2"
+        let mismatch = AudioVerifyFinding.durationMismatch(audioSeconds: 120, videoSeconds: 3780)
+        let cases: [(String, AudioVerifyDiagnosis)] = [
+            ("pointer.mov", AudioVerifyDiagnosis(findings: [.referenceMovie(referencedPaths: ["/x"])],
+                                                 shape: AudioVerifyShape(), balanceAnalysis: nil)),
+            ("short.mov", S.soundDiagnosis(channels: [-18, -20], extraFindings: [mismatch])),
+            ("qdm2.mov", AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: "qdm2", decodable: true)],
+                                              shape: shape, balanceAnalysis: nil)),
+            ("short-and-failed.mov", readFailedDiagnosis(extra: [mismatch])),
+        ]
+        for (name, diagnosis) in cases {
+            let rec = soundRecord(name)
+            model.records.append(rec)
+            let job = await runVerify(rec, model: model) { _ in diagnosis }
+            #expect(rec.audioVerifyStatus == "damaged", "\(name): \(job.state)")
+            #expect(rec.audioVerifyNote.hasPrefix(VerifyAudioRules.damagedNotePrefix), "\(name): \(rec.audioVerifyNote)")
+            #expect(job.state == .finished(summary: rec.audioVerifyNote), "\(name)")
+        }
+    }
+
+    @Test("Repair Damaged Audio still chains a rebuild for a track that could not be decoded")
+    func autoRepairStillChainsARebuild() async {
+        let center = MediaFileOperationsCenter()
+        let model = VideoScanModel()
+        let rec = soundRecord("rebuild-me.mov")
+        model.records = [rec]
+        let job = center.startVerifyAudio(record: rec, model: model, autoRepair: true,
+                                          diagnoseOverride: { _ in readFailedDiagnosis(codec: "qdm2") })
+        await job?.task?.value
+        let rebuilds = center.jobs.compactMap { $0 as? RebuildAudioJob }
+        #expect(rebuilds.count == 1, "the rebuild is the way to find out whether the track decodes")
+        #expect(rec.audioVerifyStatus == "")
+        await rebuilds.first?.task?.value
+    }
+
+    @Test("the same answer as the Promote sound gate: what the gate calls 'could not check', Verify does not store")
+    func consistentWithThePromoteSoundGate() {
+        let mismatch = AudioVerifyFinding.durationMismatch(audioSeconds: 120, videoSeconds: 3780)
+        let cases: [AudioVerifyDiagnosis] = [
+            readFailedDiagnosis(),
+            readFailedDiagnosis(extra: [mismatch]),
+            S.soundDiagnosis(channels: [-18, -20], levelsComplete: false),
+            S.soundDiagnosis(channels: [-18, nil]),
+            S.soundDiagnosis(channels: [-18, -20]),
+            S.soundDiagnosis(channels: [-70, -70]),
+            S.soundDiagnosis(channels: [], audioStreams: 0),
+            S.soundDiagnosis(channels: [-18, -20], extraFindings: [mismatch]),
+        ]
+        for d in cases {
+            let stored = d.persistedStatus
+            switch PromoteSoundGate.finding(from: d) {
+            case .unchecked: #expect(stored == "", "gate: could not check → nothing stored (\(d.findings))")
+            case .damaged: #expect(stored == "damaged", "gate: damaged → damaged (\(d.findings))")
+            case .present, .silent, .noTrack: #expect(stored == "ok", "gate: measured → ok (\(d.findings))")
+            }
+        }
+    }
+}
+
+// MARK: - Check Media writes the same verdict through the same writer
+
+@Suite("Verify Audio verdict truth — Check Media", .serialized)
+@MainActor
+struct VerifyAudioVerdictCheckMediaTests {
+
+    private func fullCheck(_ name: String, audio: AudioVerifyDiagnosis,
+                           seed: (VideoRecord) -> Void = { _ in }) async throws -> (VideoRecord, CheckMediaJob, MediaFileOperationsCenter) {
+        let model = VideoScanModel()
+        let center = MediaFileOperationsCenter()
+        let rec = soundRecord(name)
+        seed(rec)
+        model.records = [rec]
+        let quick = try CheckMediaFixtures.healthy()
+        let video = VideoVerifyDiagnosis(findings: [], facts: quick.videoFacts, sample: nil,
+                                         decode: VideoDecodeFacts(coverage: .complete))
+        let job = CheckMediaJob(records: [rec], tier: .full, model: model, center: center,
+                                quickRunner: { _, _ in .measured(quick) },
+                                fullRunner: { _, _, _, _ in
+                                    CheckMediaFullInputs(video: .success(video), audio: .success(audio),
+                                                         signals: MediaSignalScan(progressive: 900))
+                                })
+        job.start()
+        await job.task?.value
+        return (rec, job, center)
+    }
+
+    private func notRunReason(_ rec: VideoRecord) -> String? {
+        if case .notRun(let reason)? = rec.mediaReportCard?.check(.sound)?.verdict { return reason }
+        return nil
+    }
+
+    @Test("#467: an incomplete levels pass — no sound verdict stored, the Sound row says Not checked and why")
+    func incompletePassStoresNoSoundVerdict() async throws {
+        let (rec, _, center) = try await fullCheck(
+            "test_cm_incomplete.avi", audio: S.soundDiagnosis(channels: [-18, -20], audioStreams: 2, levelsComplete: false))
+        #expect(rec.audioVerifyStatus == "" && rec.audioVerifyDate == nil)
+        #expect(notRunReason(rec)?.contains("only partly measured") == true,
+                "Sound row: \(String(describing: rec.mediaReportCard?.check(.sound)))")
+        #expect(rec.videoVerifyStatus == "ok", "the picture's verdict is its own")
+        #expect(rec.mediaReportCard?.tier == .full, "the card is still written — its Sound row carries the reason")
+        #expect(center.verifyDiagnosis(forRecordID: rec.id) != nil)
+    }
+
+    @Test("#468: a failed levels pass — not stored as damaged, the Sound row is Not checked, not Problem")
+    func failedReadStoresNoSoundVerdict() async throws {
+        let (rec, _, _) = try await fullCheck("test_cm_hiccup.avi", audio: readFailedDiagnosis())
+        #expect(rec.audioVerifyStatus == "" && rec.audioVerifyNote == "" && rec.audioVerifyDate == nil)
+        #expect(notRunReason(rec)?.contains("could not be decoded") == true,
+                "Sound row: \(String(describing: rec.mediaReportCard?.check(.sound)))")
+        #expect(rec.mediaReportCard?.verdict != .problem, "a failed read is not a Problem card")
+    }
+
+    @Test("an earlier verdict is left alone by a full check that could not check the sound")
+    func anEarlierVerdictIsLeftAlone() async throws {
+        let then = Date(timeIntervalSince1970: 1_780_000_000)
+        let (rec, _, _) = try await fullCheck("test_cm_earlier.avi", audio: readFailedDiagnosis()) {
+            $0.audioVerifyStatus = "ok"
+            $0.audioVerifyDate = then
+        }
+        #expect(rec.audioVerifyStatus == "ok" && rec.audioVerifyDate == then)
+    }
+
+    @Test("a complete pass and measured damage are still stored by the full check")
+    func completeAndDamagedAreStored() async throws {
+        let (fine, _, _) = try await fullCheck("test_cm_fine.avi", audio: S.soundDiagnosis(channels: [-18, -20]))
+        #expect(fine.audioVerifyStatus == "ok")
+        #expect(fine.mediaReportCard?.check(.sound)?.verdict == .ok)
+        let mismatch = AudioVerifyFinding.durationMismatch(audioSeconds: 120, videoSeconds: 3780)
+        let (bad, _, _) = try await fullCheck("test_cm_short.avi",
+                                              audio: S.soundDiagnosis(channels: [-18, -20], extraFindings: [mismatch]))
+        #expect(bad.audioVerifyStatus == "damaged")
+        #expect(bad.mediaReportCard?.check(.sound)?.verdict == .problem)
+    }
+}
+
+// MARK: - Isolation: poisoned diagnoses never read as ok
+
+@Suite("Verify Audio verdict truth — isolation")
+struct VerifyAudioVerdictIsolationTests {
+
+    @Test("diagnoses no probe would build are never stored ok")
+    func poisonedDiagnosesAreNotOk() {
+        var shape = AudioVerifyShape()
+        shape.audioStreams = 1
+        shape.audioCodec = "aac"
+        // A sound track, no findings, no levels at all.
+        let neverDecoded = AudioVerifyDiagnosis(findings: [], shape: shape, balanceAnalysis: nil)
+        // "Complete", but with no channel measured.
+        var empty = S.soundDiagnosis(channels: [-18, -20])
+        empty.balanceAnalysis?.measurements = AudioBalanceMeasurements(channels: [], differenceRMSDBFS: nil)
+        // A failed pass that also carries an analysis.
+        var both = S.soundDiagnosis(channels: [-18, -20])
+        both.findings = [.unsupportedCodec(codec: "aac", decodable: false)]
+        // A level finding pasted onto an incomplete pass.
+        var pasted = S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)
+        pasted.findings = [.silentAudio]
+
+        for (name, d) in [("never decoded", neverDecoded), ("no channels", empty),
+                          ("failed + analysis", both), ("pasted finding", pasted)] {
+            #expect(d.persistedStatus == "", "\(name): got '\(d.persistedStatus)'")
+            #expect(!d.isHealthy, "\(name) is not 'All is well'")
+        }
+    }
+
+    @Test("a file with no sound track, and a reference movie, need no levels pass")
+    func noLevelsPassNeeded() {
+        #expect(S.soundDiagnosis(channels: [], audioStreams: 0).persistedStatus == "ok")
+        let pointer = AudioVerifyDiagnosis(findings: [.referenceMovie(referencedPaths: ["/x"])],
+                                           shape: AudioVerifyShape(), balanceAnalysis: nil)
+        #expect(pointer.persistedStatus == "damaged")
+    }
+}
+
+// MARK: - Scale
+
+@Suite("Verify Audio verdict truth — scale")
+struct VerifyAudioVerdictScaleTests {
+
+    @Test("100,000 verdicts are decided in under a second")
+    func hundredThousandVerdicts() {
+        let kinds = [S.soundDiagnosis(channels: [-18, -20]),
+                     S.soundDiagnosis(channels: [-18, -20], levelsComplete: false),
+                     readFailedDiagnosis(),
+                     S.soundDiagnosis(channels: [-18, -.infinity])]
+        let clock = ContinuousClock()
+        var ok = 0, notStored = 0
+        let elapsed = clock.measure {
+            for i in 0..<100_000 {
+                switch kinds[i % kinds.count].persistedStatus {
+                case "ok": ok += 1
+                case "": notStored += 1
+                default: break
+                }
+            }
+        }
+        #expect(ok == 50_000 && notStored == 50_000, "ok \(ok), not stored \(notStored)")
+        #expect(elapsed < .seconds(1), "100k verdicts took \(elapsed)")
+    }
+}

@@ -38,6 +38,17 @@ import os
 // r_frame_rate is kept ONLY as the raw-DV `-r` input override for the
 // rebuild remux (where `-c:v copy` makes the rate cosmetic anyway).
 //
+// STORED VERDICT (GH #467 / #468, 2026-11-10) — `AudioVerifyVerdict`:
+//   - damaged     a decoded-and-bad result (reference movie, short audio,
+//                 an old codec). Stored.
+//   - ok          no damage AND the levels pass covered every declared
+//                 channel of every stream (or none was needed). Stored.
+//   - notChecked  the levels pass failed (a failed read looks the same as a
+//                 track that will not decode) or did not cover everything.
+//                 NOTHING is stored; the job says "could not check" with the
+//                 reason and the next run checks again. Promote's sound gate
+//                 gives the same answer for the same diagnosis.
+//
 // Memory: ffprobe/ffmpeg stream; this process retains only ffprobe's
 // JSON (KBs) + its stderr (capped 256 KB by ProcessRunner) + astats
 // stderr per stream. Worst-case in-process footprint ≈ 1 MB per
@@ -90,10 +101,12 @@ enum AudioVerifyFinding: Sendable, Equatable {
     /// ever produced when `BalanceAudioFix.refusalReason` is nil for
     /// the analysis, so the sheet never offers what the job refuses.
     case channelImbalance(AudioChannelClass)
-    /// Audio codec AVFoundation can't play (qdm2/mace/…) or a track
-    /// ffmpeg itself failed to decode — Rebuild Audio Track applies.
-    /// `decodable` = false when even ffmpeg couldn't read it (rebuild
-    /// is still offered; it fails loudly if ffmpeg truly can't decode).
+    /// Audio codec AVFoundation can't play (qdm2/mace/…) — damage, Rebuild
+    /// Audio Track applies. `decodable` = false is a different fact: the
+    /// levels pass FAILED while the header still read. A failed read and a
+    /// track ffmpeg cannot decode look the same from here, so it is "could
+    /// not check", never damage (GH #468). Rebuild is still offered; it
+    /// fails loudly if ffmpeg truly can't decode.
     case unsupportedCodec(codec: String, decodable: Bool)
     /// No audio stream at all — point at Find Matching Audio.
     case noAudioStream
@@ -124,12 +137,58 @@ struct AudioVerifyDiagnosis: Sendable {
     /// so the render can never trigger a fresh decode.
     var balanceAnalysis: AudioBalanceAnalysis?
 
-    var isHealthy: Bool { findings.isEmpty }
+    /// "All is well": nothing found AND the sound was measured in full.
+    var isHealthy: Bool { findings.isEmpty && verdict == .ok }
 
-    /// Persisted `audioVerifyStatus` for this diagnosis.
-    var persistedStatus: String { VerifyAudioRules.status(for: findings) }
-    /// Persisted `audioVerifyNote` for this diagnosis.
+    /// How the levels pass ended — derived from what the diagnosis holds,
+    /// so it can never disagree with `findings` / `balanceAnalysis`.
+    var levelsPass: AudioLevelsPass {
+        VerifyAudioRules.levelsPass(findings: findings, shape: shape, analysis: balanceAnalysis)
+    }
+    /// What may be stored for this diagnosis (the one rule; file header).
+    var verdict: AudioVerifyVerdict {
+        VerifyAudioRules.verdict(findings: findings, levels: levelsPass)
+    }
+
+    /// Persisted `audioVerifyStatus`: "ok" / "damaged", or "" when the
+    /// verdict is `.notChecked` — "" is the never-verified value and is
+    /// never written (VerifyAudioJob.write stores nothing).
+    var persistedStatus: String {
+        switch verdict {
+        case .ok: return "ok"
+        case .damaged: return "damaged"
+        case .notChecked: return ""
+        }
+    }
+    /// The findings' words: the persisted `audioVerifyNote` when a verdict
+    /// is stored.
     var persistedNote: String { VerifyAudioRules.note(for: findings) }
+}
+
+/// How the levels pass (the whole-track astats decode) ended.
+/// (For Rick: one `enum class` with payloads ≈ std::variant, replacing
+/// `analysis != nullptr` + `bool analyzeFailed` + `bool levelsComplete`,
+/// whose combinations included states that mean nothing.)
+enum AudioLevelsPass: Sendable, Equatable {
+    /// Nothing to decode: a reference movie, or no audio stream.
+    case notNeeded
+    /// Every declared channel of every stream was measured.
+    case complete
+    /// It ran, but not over everything (a stream skipped, a channel short,
+    /// a level that could not be read) — or there is no measurement at all.
+    case incomplete(reason: String)
+    /// It failed while the header still read: a failed read, or a track
+    /// ffmpeg cannot decode. Not damage evidence.
+    case readFailed(reason: String)
+}
+
+/// What Verify Audio / Check Media may store for a diagnosis. `media_checks`
+/// takes only 'ok' and 'damaged' for the audio kind, so `.notChecked` stores
+/// nothing.
+enum AudioVerifyVerdict: Sendable, Equatable {
+    case ok
+    case damaged
+    case notChecked(reason: String)
 }
 
 enum AudioVerifyProbeError: Error, Equatable {
@@ -245,22 +304,56 @@ enum VerifyAudioRules {
     /// candidate). Everything else is reported in the sheet but leaves
     /// the record's status at "ok" — imbalance is repairable, silence /
     /// no-audio / surround are honest states, not broken files.
+    ///
+    /// Damage is a DECODED-and-bad result. A levels pass that failed
+    /// (`unsupportedCodec(decodable: false)`) is not one: a transient read
+    /// error on a healthy file produces the same finding (GH #468).
     static func isDamage(_ finding: AudioVerifyFinding) -> Bool {
         switch finding {
-        case .referenceMovie, .durationMismatch, .unsupportedCodec:
+        case .referenceMovie, .durationMismatch:
             return true
+        case .unsupportedCodec(_, let decodable):
+            return decodable
         case .channelImbalance, .noAudioStream, .silentAudio, .surround,
              .multipleProgramTracks:
             return false
         }
     }
 
-    /// Persisted `audioVerifyStatus`: "damaged" when any damage finding
-    /// is present, otherwise "ok" (verified — even when non-damage
-    /// findings exist; the note carries their story). "" is reserved
-    /// for never-verified and is never produced here.
-    static func status(for findings: [AudioVerifyFinding]) -> String {
-        findings.contains(where: isDamage) ? "damaged" : "ok"
+    /// How the levels pass ended, read off a diagnosis's parts. The order
+    /// is the Promote sound gate's (PromoteSoundGate.finding): a failed
+    /// pass, then "nothing to decode", then completeness. Pure.
+    static func levelsPass(findings: [AudioVerifyFinding], shape: AudioVerifyShape,
+                           analysis: AudioBalanceAnalysis?) -> AudioLevelsPass {
+        for finding in findings {
+            if case .unsupportedCodec(let codec, decodable: false) = finding {
+                return .readFailed(reason: "the sound track could not be decoded (\(codec.isEmpty ? "unknown codec" : codec)) — "
+                    + "a failed read, or sound that Repair… has to rebuild")
+            }
+        }
+        let isReferenceMovie = findings.contains { if case .referenceMovie = $0 { return true }; return false }
+        if isReferenceMovie || shape.audioStreams <= 0 { return .notNeeded }
+        guard let analysis else { return .incomplete(reason: "the sound track was not decoded") }
+        // The ONE completeness question (shared with Promote's gate and
+        // Check Media's sound row): every stream, every declared channel,
+        // every level readable.
+        guard analysis.measuredSilent != nil else {
+            return .incomplete(reason: "the sound track was only partly measured")
+        }
+        return .complete
+    }
+
+    /// THE stored-verdict rule (file header). Damage that was measured
+    /// stands whatever the levels pass did; "ok" needs a levels pass that
+    /// was complete or not needed; anything else is not a verdict. Pure.
+    static func verdict(findings: [AudioVerifyFinding], levels: AudioLevelsPass) -> AudioVerifyVerdict {
+        if findings.contains(where: isDamage) { return .damaged }
+        switch levels {
+        case .notNeeded, .complete:
+            return .ok
+        case .incomplete(let reason), .readFailed(let reason):
+            return .notChecked(reason: reason)
+        }
     }
 
     /// Short machine note per finding — the catalog tooltip / notes:
@@ -313,14 +406,19 @@ enum VerifyAudioRules {
             : joined
     }
 
-    /// Build the findings list from the probed shape + (optional)
-    /// balance analysis. `analyzeFailed` = the astats levels pass threw
-    /// (ffmpeg couldn't decode the audio). Pure — the I/O half feeds
-    /// it, tests feed it canned values.
+    /// What the levels step handed back: nil = it was not run (reference
+    /// movie / no audio stream), `.success` = it ran to the end, `.failure`
+    /// = it threw with the source still probeable.
+    /// (For Rick: `Result<T, E>?` ≈ `std::optional<std::expected<T, E>>` —
+    /// one value where there used to be a pointer plus a bool.)
+    typealias LevelsRun = Result<AudioBalanceAnalysis, AudioBalanceProbeError>
+
+    /// Build the findings list from the probed shape + what the levels
+    /// step handed back. Pure — the I/O half feeds it, tests feed it
+    /// canned values.
     static func findings(shape: AudioVerifyShape,
                          referencedPaths: [String],
-                         analysis: AudioBalanceAnalysis?,
-                         analyzeFailed: Bool) -> [AudioVerifyFinding] {
+                         levels: LevelsRun?) -> [AudioVerifyFinding] {
         // Reference movie outranks everything: there is no real essence
         // in the file, so every other measurement is meaningless.
         if !referencedPaths.isEmpty {
@@ -330,12 +428,12 @@ enum VerifyAudioRules {
         guard shape.audioStreams > 0 else {
             return [.noAudioStream]
         }
-        // Codec trouble: AVFoundation-dead codec (ffmpeg still decodes
-        // these — the rebuild fixes playback), or a track even ffmpeg
-        // couldn't decode.
+        // Codec trouble: a levels pass that failed (could not check — see
+        // isDamage), or an AVFoundation-dead codec (ffmpeg still decodes
+        // these — the rebuild fixes playback).
         let codec = shape.audioCodec.lowercased()
             .trimmingCharacters(in: .whitespaces)
-        if analyzeFailed {
+        if case .failure? = levels {
             out.append(.unsupportedCodec(codec: shape.audioCodec, decodable: false))
         } else if !codec.isEmpty, unplayableLegacyAudioCodecs.contains(codec) {
             out.append(.unsupportedCodec(codec: shape.audioCodec, decodable: true))
@@ -348,28 +446,35 @@ enum VerifyAudioRules {
             out.append(.durationMismatch(audioSeconds: shape.audioDurationSeconds,
                                          videoSeconds: shape.videoDurationSeconds))
         }
-        // Level-based findings need the analysis.
-        if let analysis {
-            if analysis.programStreamCount > 1 {
-                out.append(.multipleProgramTracks(count: analysis.programStreamCount))
-            } else {
-                switch analysis.classification {
-                case .silent:
-                    out.append(.silentAudio)
-                case .multichannel:
-                    out.append(.surround(channels: analysis.measurements.channels.count))
-                case .leftOnly, .rightOnly, .mono:
-                    // Offer Balance ONLY when the shared gate agrees —
-                    // the sheet must never promise what the job refuses.
-                    if BalanceAudioFix.refusalReason(for: analysis) == nil {
-                        out.append(.channelImbalance(analysis.classification))
-                    }
-                case .dualMono, .trueStereo:
-                    break   // healthy from a channel-balance standpoint
-                }
-            }
+        // Level-based findings need a COMPLETE analysis (GH #467): a class
+        // read off a pass that skipped a stream or could not read a channel
+        // is not a measured fact, so it is not a finding — the verdict says
+        // "not checked" instead.
+        if case .success(let analysis)? = levels, analysis.measuredSilent != nil {
+            out += levelFindings(from: analysis)
         }
         return out
+    }
+
+    /// What a COMPLETE levels pass says about the channels: at most one
+    /// finding. Callers check completeness first (`findings`). Pure.
+    static func levelFindings(from analysis: AudioBalanceAnalysis) -> [AudioVerifyFinding] {
+        if analysis.programStreamCount > 1 {
+            return [.multipleProgramTracks(count: analysis.programStreamCount)]
+        }
+        switch analysis.classification {
+        case .silent:
+            return [.silentAudio]
+        case .multichannel:
+            return [.surround(channels: analysis.measurements.channels.count)]
+        case .leftOnly, .rightOnly, .mono:
+            // Offer Balance ONLY when the shared gate agrees —
+            // the sheet must never promise what the job refuses.
+            return BalanceAudioFix.refusalReason(for: analysis) == nil
+                ? [.channelImbalance(analysis.classification)] : []
+        case .dualMono, .trueStereo:
+            return []   // healthy from a channel-balance standpoint
+        }
     }
 }
 
@@ -518,16 +623,15 @@ enum VerifyAudioProbe {
 
         // ---- Levels pass (audio-only decode; seconds even for a
         // two-hour tape). Skipped for reference movies (no essence to
-        // decode) and no-audio files. A decode failure on a STILL-
-        // REACHABLE file is itself a finding, not a diagnosis failure —
-        // but see the I/O split below.
-        var analysis: AudioBalanceAnalysis?
-        var analyzeFailed = false
+        // decode) and no-audio files. A failure on a STILL-REACHABLE file
+        // is kept as a finding (could not check), not thrown — see the I/O
+        // split below.
+        var levels: VerifyAudioRules.LevelsRun?
         if referencedPaths.isEmpty, shape.audioStreams > 0 {
             let analyze = analyzeOverride
                 ?? { try await AudioBalanceProbe.analyze(path: $0, control: control) }
             do {
-                analysis = try await analyze(path)
+                levels = .success(try await analyze(path))
             } catch is CancellationError {
                 throw CancellationError()
             } catch AudioBalanceProbeError.toolUnavailable(let detail) {
@@ -564,9 +668,12 @@ enum VerifyAudioProbe {
                 // re-check the source: still on disk AND still shape-
                 // probeable (sub-second). Unreachable / no longer
                 // probeable → diagnosis FAILURE (thrown — the sheet
-                // persists nothing). Still probeable → the evidence
-                // points at the codec, not the I/O path → the
-                // undecodable-codec damage finding stands.
+                // persists nothing). Still probeable → GH #468: that is
+                // STILL not damage evidence — a transient read error on a
+                // healthy file (the drive hiccups, then answers the
+                // sub-second recheck) lands here too. The failure is kept
+                // as a finding so the sheet can offer Rebuild Audio Track,
+                // and the verdict is "not checked": nothing is stored.
                 let recheck = sourceRecheckOverride
                     ?? { await sourceStillProbeable(path: $0) }
                 guard await recheck(path) else {
@@ -574,8 +681,8 @@ enum VerifyAudioProbe {
                     throw AudioVerifyProbeError.probeFailed(
                         "the file or its volume stopped responding while the audio was being read — no verdict was recorded; try again when the drive is reachable")
                 }
-                analyzeFailed = true
-                verifyLog.notice("verify: levels pass failed for \((path as NSString).lastPathComponent, privacy: .public) with the source still probeable — treating as undecodable audio (\(String(describing: error), privacy: .public))")
+                levels = .failure((error as? AudioBalanceProbeError) ?? .probeFailed(String(describing: error)))
+                verifyLog.notice("verify: levels pass failed for \((path as NSString).lastPathComponent, privacy: .public) with the source still probeable — could not check, no verdict will be recorded (\(String(describing: error), privacy: .public))")
             }
         }
         try Task.checkCancellation()
@@ -583,11 +690,15 @@ enum VerifyAudioProbe {
         let findings = VerifyAudioRules.findings(
             shape: shape,
             referencedPaths: referencedPaths,
-            analysis: analysis,
-            analyzeFailed: analyzeFailed)
+            levels: levels)
         let diagnosis = AudioVerifyDiagnosis(
-            findings: findings, shape: shape, balanceAnalysis: analysis)
-        verifyLog.info("verify: \((path as NSString).lastPathComponent, privacy: .public) → \(diagnosis.isHealthy ? "healthy" : diagnosis.persistedNote, privacy: .public) (status=\(diagnosis.persistedStatus, privacy: .public), audioStreams=\(shape.audioStreams), refs=\(referencedPaths.count))")
+            findings: findings, shape: shape, balanceAnalysis: try? levels?.get())
+        let outcome: String
+        switch diagnosis.verdict {
+        case .notChecked(let reason): outcome = "not checked — \(reason)"
+        case .ok, .damaged: outcome = diagnosis.isHealthy ? "healthy" : diagnosis.persistedNote
+        }
+        verifyLog.info("verify: \((path as NSString).lastPathComponent, privacy: .public) → \(outcome, privacy: .public) (status=\(diagnosis.persistedStatus.isEmpty ? "none" : diagnosis.persistedStatus, privacy: .public), audioStreams=\(shape.audioStreams), refs=\(referencedPaths.count))")
         return diagnosis
     }
 

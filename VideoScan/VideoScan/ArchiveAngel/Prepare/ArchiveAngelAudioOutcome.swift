@@ -41,6 +41,12 @@ enum ArchiveAngelAudioOutcome: Equatable {
     // question — they can disagree on an analysis without the finding.
     // Unify on one (behaviour change, so not in the S4 refactor).
     static func from(_ d: AudioVerifyDiagnosis) -> ArchiveAngelAudioOutcome {
+        // Not a verdict (GH #467 / #468): the levels pass failed or was
+        // incomplete. Plain words, no button — never "balanced", never
+        // "damaged".
+        if case .notChecked(let reason) = d.verdict {
+            return .refused("The sound could not be checked — \(reason).")
+        }
         // The imbalance finding is only ever produced when the fix gate
         // is open (VerifyAudioRules), but the gate is consulted AGAIN
         // here — never promise what the Balance job refuses.

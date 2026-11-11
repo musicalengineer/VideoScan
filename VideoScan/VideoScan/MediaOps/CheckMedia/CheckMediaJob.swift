@@ -289,7 +289,13 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         current.mediaReportCard = card
         if let video { VerifyVideoJob.write(video, onto: current, at: now) }
         if let audio {
-            VerifyAudioJob.write(audio, onto: current, at: now)
+            // The one writer stores only "ok" / "damaged". A sound pass that
+            // failed or was incomplete stores nothing (GH #467 / #468): the
+            // card's Sound row says "Not checked" and why, and so does the log.
+            if !VerifyAudioJob.write(audio, onto: current, at: now), case .notChecked(let reason) = audio.verdict {
+                model?.log("Verify: \(rec.filename) — sound not checked: \(reason); no sound verdict was recorded")
+                checkMediaJobLog.notice("verify media: \(rec.filename, privacy: .public) sound not checked — \(reason, privacy: .public); no sound verdict recorded")
+            }
             center?.storeVerifyDiagnosis(audio, forRecordID: rec.id)
         }
         model?.saveCatalogDebounced()

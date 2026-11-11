@@ -269,6 +269,7 @@ struct VerifyAudioSheet: View {
     }
 
     private func levelText(_ channel: AudioChannelLevels) -> String {
+        guard channel.rmsMeasured else { return "not measured" }
         guard channel.rmsDBFS.isFinite else { return "silent" }
         guard AudioBalanceClassifier.carriesProgram(channel) else {
             return "effectively silent"
@@ -302,6 +303,20 @@ struct VerifyAudioSheet: View {
             .accessibilityIdentifier("verifySheet.damagedHeadline")
         }
 
+        // Not a verdict (GH #467 / #468): say so before any finding, so a
+        // sheet with nothing else on it is never read as a clean bill.
+        if case .notChecked(let reason) = diagnosis.verdict {
+            Label {
+                Text("Not checked — \(reason). No verdict was recorded; run Verify Audio again.")
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundColor(.orange)
+            }
+            .accessibilityIdentifier("verifySheet.notCheckedHeadline")
+        }
+
         // ForEach over indices: AudioVerifyFinding is Equatable but not
         // Identifiable; the list is tiny and rebuilt per diagnosis.
         ForEach(Array(diagnosis.findings.enumerated()), id: \.offset) { _, finding in
@@ -327,7 +342,7 @@ struct VerifyAudioSheet: View {
                     Label {
                         Text(decodable
                              ? "The sound is stored in an old format (\(codec)) that today's Macs can't play."
-                             : "The sound track (\(codec.isEmpty ? "unknown format" : codec)) couldn't be read at all — it may be broken.")
+                             : "The sound track (\(codec.isEmpty ? "unknown format" : codec)) couldn't be read — the drive may have hiccuped, or the track may be broken.")
                             .font(.body)
                             .fixedSize(horizontal: false, vertical: true)
                     } icon: {

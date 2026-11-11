@@ -34,13 +34,10 @@ private func makeRecord(name: String, path: String? = nil) -> VideoRecord {
     return r
 }
 
+/// Healthy = a COMPLETE levels pass over a stereo track (GH #467: a sound
+/// track with no measurement is "not checked", never ok).
 private func healthyDiagnosis() -> AudioVerifyDiagnosis {
-    var shape = AudioVerifyShape()
-    shape.audioStreams = 1
-    shape.audioCodec = "pcm_s16le"
-    shape.audioChannels = 2
-    shape.containerDurationSeconds = 2.0
-    return AudioVerifyDiagnosis(findings: [], shape: shape, balanceAnalysis: nil)
+    MasterArchiveTestSupport.soundDiagnosis(channels: [-18, -20])
 }
 
 private func codecDamagedDiagnosis() -> AudioVerifyDiagnosis {

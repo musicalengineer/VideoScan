@@ -24,6 +24,11 @@ import os
 //
 // A failed diagnosis persists NOTHING — "couldn't check" is not a
 // verdict (the GH #128 transient-I/O rule lives inside diagnose()).
+// Neither does a diagnosis whose verdict is `.notChecked` (GH #467 / #468:
+// the levels pass failed or did not cover every channel): the job ends
+// "Could not check the audio — <reason>; no verdict was recorded", the
+// diagnosis is still handed to the cache so the results sheet can say what
+// was not checked, and the next run checks again.
 //
 // Per-disk pacing: acquires the same MediaVolumeGates compare/extract
 // use (PairCompareJob's recursive withPermit idiom) — a 25-row batch
@@ -291,11 +296,19 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
             diagnosis = result
             persistVerdict(result)
             onDiagnosis?(self, result)
-            let summary = result.isHealthy
-                ? "All is well — the audio track checked out."
-                : result.persistedNote
-            verifyLog.info("verify job DONE: \(self.record.filename, privacy: .public) → \(result.isHealthy ? "healthy" : result.persistedNote, privacy: .public)")
-            finish(success: summary)
+            switch result.verdict {
+            case .notChecked(let reason):
+                // Not a verdict: nothing was stored (write() refused), and
+                // the row says so in the words every other could-not-check
+                // ending uses. finish(failed:) logs it.
+                finish(failed: "Could not check the audio — \(reason); no verdict was recorded")
+            case .ok, .damaged:
+                let summary = result.isHealthy
+                    ? "All is well — the audio track checked out."
+                    : result.persistedNote
+                verifyLog.info("verify job DONE: \(self.record.filename, privacy: .public) → \(result.isHealthy ? "healthy" : result.persistedNote, privacy: .public)")
+                finish(success: summary)
+            }
         } catch AudioVerifyProbeError.toolUnavailable(let detail) {
             finish(failed: detail)
         } catch AudioVerifyProbeError.probeFailed(let detail) {
@@ -313,25 +326,37 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
 
     /// Write the verdict onto the record (the persistent damaged marking
     /// the red rows key off) and schedule the debounced save — verbatim
-    /// from the retired sheet flow. A failed probe never reaches here:
-    /// "couldn't check" is not a verdict.
+    /// from the retired sheet flow. A failed probe never reaches here, and
+    /// a `.notChecked` diagnosis writes nothing: "couldn't check" is not a
+    /// verdict.
     private func persistVerdict(_ diagnosis: AudioVerifyDiagnosis) {
         // regression: a rescan may replace the class instance while the
         // diagnosis runs. Commit onto the current catalog object by UUID.
         let currentRecord = model?.records.first(where: { $0.id == record.id })
             ?? record
-        Self.write(diagnosis, onto: currentRecord, at: Date())
+        guard Self.write(diagnosis, onto: currentRecord, at: Date()) else { return }
         model?.saveCatalogDebounced()
     }
 
     /// THE writer of the persisted audio verdict — shared with Check Media
     /// (2026-10-07) so `audioVerifyStatus/Note/Date` keep one meaning for
-    /// every reader (Angel, readiness, copy family, red rows). Only ever
-    /// called with a complete diagnosis.
-    static func write(_ diagnosis: AudioVerifyDiagnosis, onto record: VideoRecord, at date: Date) {
-        record.audioVerifyStatus = diagnosis.persistedStatus
-        record.audioVerifyNote = diagnosis.persistedNote
-        record.audioVerifyDate = date
+    /// every reader (Angel, readiness, copy family, red rows).
+    ///
+    /// Stores only what the measurement supports (GH #467 / #468): "ok" or
+    /// "damaged". A `.notChecked` verdict writes NOTHING — the record keeps
+    /// whatever an earlier run stored, date included — and returns false so
+    /// the caller can say so.
+    @discardableResult
+    static func write(_ diagnosis: AudioVerifyDiagnosis, onto record: VideoRecord, at date: Date) -> Bool {
+        switch diagnosis.verdict {
+        case .notChecked:
+            return false
+        case .ok, .damaged:
+            record.audioVerifyStatus = diagnosis.persistedStatus
+            record.audioVerifyNote = diagnosis.persistedNote
+            record.audioVerifyDate = date
+            return true
+        }
     }
 
     // MARK: Finish helpers

@@ -388,7 +388,14 @@ struct CheckMediaFullRuleTests {
         #expect(ok.evidence.map(\.label) == ["Left", "Right"], "per-channel loudness is evidence")
         #expect(R.checkSound(.success(diag([.init(rmsDBFS: -.infinity, peakDBFS: -.infinity)])), facts: f).verdict == .warning)
         #expect(R.checkSound(.success(diag([.init(rmsDBFS: -12, peakDBFS: 0)])), facts: f).verdict == .warning)
-        let damaged = diag([], findings: [.unsupportedCodec(codec: "qdm2", decodable: false)])
+        // GH #468: a levels pass that failed is "not checked", not a Problem;
+        // an old codec that decodes is still damage.
+        let failed = diag([], findings: [.unsupportedCodec(codec: "qdm2", decodable: false)])
+        guard case .notRun(let why) = R.checkSound(.success(failed), facts: f).verdict else {
+            Issue.record("a failed levels pass is not a verdict: \(R.checkSound(.success(failed), facts: f))"); return
+        }
+        #expect(why.contains("could not be decoded (qdm2)"))
+        let damaged = diag([], findings: [.unsupportedCodec(codec: "qdm2", decodable: true)])
         #expect(R.checkSound(.success(damaged), facts: f).verdict == .problem)
     }
 }

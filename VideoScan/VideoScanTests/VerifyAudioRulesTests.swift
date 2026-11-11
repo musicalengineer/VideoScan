@@ -172,17 +172,17 @@ struct VerifyAudioDurationMismatchTests {
 struct VerifyAudioStatusNoteTests {
 
     @Test func onlyTheThreeDamageFindingsProduceDamaged() {
-        // Damage set: reference movie, duration mismatch, invalid codec
-        // (both decodable and undecodable flavors).
+        // Damage set: reference movie, duration mismatch, an old codec
+        // that DECODES. A levels pass that failed (decodable: false) is
+        // "could not check", not damage (GH #468) — it is in the other set.
         let damage: [AudioVerifyFinding] = [
             .referenceMovie(referencedPaths: ["x"]),
             .durationMismatch(audioSeconds: 2, videoSeconds: 60),
             .unsupportedCodec(codec: "qdm2", decodable: true),
-            .unsupportedCodec(codec: "", decodable: false),
         ]
         for f in damage {
             #expect(VerifyAudioRules.isDamage(f), "\(f) must be damage")
-            #expect(VerifyAudioRules.status(for: [f]) == "damaged")
+            #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .damaged)
         }
         // Everything else is an honest state, not a broken file.
         let notDamage: [AudioVerifyFinding] = [
@@ -192,25 +192,26 @@ struct VerifyAudioStatusNoteTests {
             .silentAudio,
             .surround(channels: 6),
             .multipleProgramTracks(count: 2),
+            .unsupportedCodec(codec: "", decodable: false),
         ]
         for f in notDamage {
             #expect(!VerifyAudioRules.isDamage(f), "\(f) must NOT be damage")
-            #expect(VerifyAudioRules.status(for: [f]) == "ok")
+            #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .ok)
         }
     }
 
     @Test func emptyFindingsAreOkNeverEmptyString() {
-        // "" is reserved for never-verified — the mapper must never
-        // produce it (a clean verify must be distinguishable from no
-        // verify at all).
-        #expect(VerifyAudioRules.status(for: []) == "ok")
+        // "" is reserved for never-verified: a clean, COMPLETE verify is
+        // "ok", so it is distinguishable from no verify at all. (A pass that
+        // could not check is `.notChecked` and stores nothing — GH #467.)
+        #expect(VerifyAudioRules.verdict(findings: [], levels: .complete) == .ok)
         #expect(VerifyAudioRules.note(for: []) == "")
     }
 
     @Test func anyDamageFindingMakesTheWholeVerdictDamaged() {
-        #expect(VerifyAudioRules.status(for: [
+        #expect(VerifyAudioRules.verdict(findings: [
             .silentAudio, .durationMismatch(audioSeconds: 2, videoSeconds: 60),
-        ]) == "damaged")
+        ], levels: .complete) == .damaged)
     }
 
     @Test func noteFragmentsExactStrings() {
@@ -272,11 +273,10 @@ struct VerifyAudioStatusNoteTests {
             .referenceMovie(referencedPaths: ["x"]),
             .durationMismatch(audioSeconds: 120, videoSeconds: 3600),
             .unsupportedCodec(codec: "truespeech", decodable: true),
-            .unsupportedCodec(codec: "", decodable: false),
         ]
         for f in damageFindings {
             let note = VerifyAudioRules.note(for: [f])
-            #expect(VerifyAudioRules.status(for: [f]) == "damaged")
+            #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .damaged)
             #expect(note.hasPrefix(VerifyAudioRules.damagedNotePrefix),
                     "damaged note '\(note)' must begin with '\(VerifyAudioRules.damagedNotePrefix)'")
             // The prefix must also survive mixed damage + benign
@@ -302,7 +302,7 @@ struct VerifyAudioStatusNoteTests {
         ]
         for f in okFindings {
             let note = VerifyAudioRules.note(for: [f])
-            #expect(VerifyAudioRules.status(for: [f]) == "ok")
+            #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .ok)
             #expect(!note.localizedCaseInsensitiveContains("damaged"),
                     "ok-status note '\(note)' must not contain 'damaged'")
         }
@@ -320,7 +320,7 @@ struct VerifyAudioFindingsCompositionTests {
                           channelCount: Int = 2,
                           programStreams: Int = 1) -> AudioBalanceAnalysis {
         let live = AudioChannelLevels(rmsDBFS: -20, peakDBFS: -3)
-        return AudioBalanceAnalysis(
+        var a = AudioBalanceAnalysis(
             classification: classification,
             measurements: AudioBalanceMeasurements(
                 channels: Array(repeating: live, count: channelCount),
@@ -332,6 +332,8 @@ struct VerifyAudioFindingsCompositionTests {
             programStreamCount: programStreams,
             programStreamIndex: 1,
             droppedStreamIndices: [])
+        a.levelsComplete = true   // the probe's answer for a pass that covered everything
+        return a
     }
 
     private func shape(audioStreams: Int = 1,
@@ -355,8 +357,7 @@ struct VerifyAudioFindingsCompositionTests {
             shape: shape(audioStreams: 0, audioCodec: "qdm2",
                          audioSeconds: 2, videoSeconds: 600),
             referencedPaths: ["stream 0, alias: path='/Volumes/Gone/x.mov'"],
-            analysis: nil,
-            analyzeFailed: true)
+            levels: .failure(.probeFailed("ffmpeg astats pass exited with status 1")))
         #expect(out == [.referenceMovie(
             referencedPaths: ["stream 0, alias: path='/Volumes/Gone/x.mov'"])])
     }
@@ -364,14 +365,14 @@ struct VerifyAudioFindingsCompositionTests {
     @Test func noAudioStreamIsItsOwnVerdict() {
         #expect(VerifyAudioRules.findings(
             shape: shape(audioStreams: 0), referencedPaths: [],
-            analysis: nil, analyzeFailed: false) == [.noAudioStream])
+            levels: nil) == [.noAudioStream])
     }
 
     @Test func healthyStereoProducesNoFindings() {
         for c in [AudioChannelClass.trueStereo, .dualMono] {
             #expect(VerifyAudioRules.findings(
                 shape: shape(), referencedPaths: [],
-                analysis: analysis(c), analyzeFailed: false).isEmpty,
+                levels: .success(analysis(c))).isEmpty,
                 "\(c) must be healthy")
         }
     }
@@ -381,17 +382,23 @@ struct VerifyAudioFindingsCompositionTests {
         // rebuild offer. Trimming + case-folding must hold.
         let out = VerifyAudioRules.findings(
             shape: shape(audioCodec: " QDM2 "), referencedPaths: [],
-            analysis: analysis(.trueStereo), analyzeFailed: false)
+            levels: .success(analysis(.trueStereo)))
         #expect(out == [.unsupportedCodec(codec: " QDM2 ", decodable: true)])
     }
 
     @Test func analyzeFailureFlagsUndecodable() {
-        // The astats pass throwing is a FINDING (undecodable track),
-        // never a diagnosis failure — and it wins over the legacy list.
+        // The astats pass throwing with the header still readable is a
+        // FINDING (so Rebuild can be offered), and it wins over the legacy
+        // list — but it is not damage and not a verdict (GH #468).
         let out = VerifyAudioRules.findings(
             shape: shape(audioCodec: "qdm2"), referencedPaths: [],
-            analysis: nil, analyzeFailed: true)
+            levels: .failure(.probeFailed("ffmpeg astats pass exited with status 1")))
         #expect(out == [.unsupportedCodec(codec: "qdm2", decodable: false)])
+        let d = AudioVerifyDiagnosis(findings: out, shape: shape(audioCodec: "qdm2"), balanceAnalysis: nil)
+        guard case .readFailed = d.levelsPass, case .notChecked = d.verdict else {
+            Issue.record("a failed levels pass is could-not-check: \(d.levelsPass), \(d.verdict)"); return
+        }
+        #expect(d.persistedStatus == "" && !d.isHealthy)
     }
 
     @Test func durationMismatchIsIndependentOfLevels() {
@@ -400,14 +407,14 @@ struct VerifyAudioFindingsCompositionTests {
         let out = VerifyAudioRules.findings(
             shape: shape(audioSeconds: 120, videoSeconds: 3780),
             referencedPaths: [],
-            analysis: analysis(.trueStereo), analyzeFailed: false)
+            levels: .success(analysis(.trueStereo)))
         #expect(out == [.durationMismatch(audioSeconds: 120, videoSeconds: 3780)])
     }
 
     @Test func codecAndDurationFindingsCompose() {
         let out = VerifyAudioRules.findings(
             shape: shape(audioCodec: "mace3", audioSeconds: 120, videoSeconds: 3780),
-            referencedPaths: [], analysis: nil, analyzeFailed: false)
+            referencedPaths: [], levels: nil)
         #expect(out == [
             .unsupportedCodec(codec: "mace3", decodable: true),
             .durationMismatch(audioSeconds: 120, videoSeconds: 3780),
@@ -421,7 +428,7 @@ struct VerifyAudioFindingsCompositionTests {
                     "precondition: \(c) is actionable")
             #expect(VerifyAudioRules.findings(
                 shape: shape(), referencedPaths: [],
-                analysis: analysis(c), analyzeFailed: false)
+                levels: .success(analysis(c)))
                 == [.channelImbalance(c)])
         }
     }
@@ -434,24 +441,24 @@ struct VerifyAudioFindingsCompositionTests {
                 "precondition: multi-program is refused by the shared gate")
         #expect(VerifyAudioRules.findings(
             shape: shape(), referencedPaths: [],
-            analysis: a, analyzeFailed: false)
+            levels: .success(a))
             == [.multipleProgramTracks(count: 2)])
     }
 
     @Test func silentAndSurroundAreReportedHonestly() {
         #expect(VerifyAudioRules.findings(
             shape: shape(), referencedPaths: [],
-            analysis: analysis(.silent), analyzeFailed: false) == [.silentAudio])
+            levels: .success(analysis(.silent))) == [.silentAudio])
         #expect(VerifyAudioRules.findings(
             shape: shape(), referencedPaths: [],
-            analysis: analysis(.multichannel, channelCount: 6),
-            analyzeFailed: false) == [.surround(channels: 6)])
+            levels: .success(analysis(.multichannel, channelCount: 6))) == [.surround(channels: 6)])
     }
 
     @Test func diagnosisConvenienceAccessors() {
         let healthy = AudioVerifyDiagnosis(findings: [], shape: shape(),
-                                           balanceAnalysis: nil)
+                                           balanceAnalysis: analysis(.trueStereo))
         #expect(healthy.isHealthy)
+        #expect(healthy.levelsPass == .complete && healthy.verdict == .ok)
         #expect(healthy.persistedStatus == "ok")
         #expect(healthy.persistedNote == "")
 
@@ -461,6 +468,32 @@ struct VerifyAudioFindingsCompositionTests {
         #expect(!damaged.isHealthy)
         #expect(damaged.persistedStatus == "damaged")
         #expect(damaged.persistedNote == "Damaged audio — reference movie, media missing")
+        #expect(damaged.levelsPass == .notNeeded && damaged.verdict == .damaged)
+
+        // GH #467: a sound track with no measurement, or a partial one, is
+        // not a verdict — "" (never-verified) and not "All is well".
+        var partial = analysis(.trueStereo)
+        partial.levelsComplete = false
+        for unmeasured in [AudioVerifyDiagnosis(findings: [], shape: shape(), balanceAnalysis: nil),
+                           AudioVerifyDiagnosis(findings: [], shape: shape(), balanceAnalysis: partial)] {
+            guard case .incomplete = unmeasured.levelsPass, case .notChecked = unmeasured.verdict else {
+                Issue.record("expected incomplete / not checked: \(unmeasured.levelsPass)"); continue
+            }
+            #expect(unmeasured.persistedStatus == "" && !unmeasured.isHealthy)
+        }
+    }
+
+    @Test func noLevelFindingFromAnIncompletePass() {
+        // GH #467: the class of a pass that did not cover everything is not
+        // a measured fact — no finding is built from it.
+        for c in [AudioChannelClass.leftOnly, .rightOnly, .mono, .silent, .multichannel] {
+            var a = analysis(c, channelCount: c == .multichannel ? 6 : 2)
+            #expect(!VerifyAudioRules.findings(shape: shape(), referencedPaths: [], levels: .success(a)).isEmpty,
+                    "precondition: \(c) is a finding when the pass was complete")
+            a.levelsComplete = false
+            #expect(VerifyAudioRules.findings(shape: shape(), referencedPaths: [], levels: .success(a)).isEmpty,
+                    "\(c) from an incomplete pass must not be a finding")
+        }
     }
 }
 
