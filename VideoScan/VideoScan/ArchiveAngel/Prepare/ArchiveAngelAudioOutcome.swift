@@ -41,6 +41,12 @@ enum ArchiveAngelAudioOutcome: Equatable {
     // question — they can disagree on an analysis without the finding.
     // Unify on one (behaviour change, so not in the S4 refactor).
     static func from(_ d: AudioVerifyDiagnosis) -> ArchiveAngelAudioOutcome {
+        // Not a verdict (GH #467 / #468): the levels pass failed or was
+        // incomplete. Plain words, no button — never "balanced", never
+        // "damaged".
+        if case .notChecked(let reason) = d.verdict {
+            return .refused("The sound could not be checked — \(reason).")
+        }
         // The imbalance finding is only ever produced when the fix gate
         // is open (VerifyAudioRules), but the gate is consulted AGAIN
         // here — never promise what the Balance job refuses.
@@ -70,6 +76,17 @@ enum ArchiveAngelAudioOutcome: Equatable {
         }
         let words = d.findings.map(VerifyAudioRules.noteFragment(for:)).joined(separator: "; ")
         return .refused("Balance Audio can't help here — \(words).")
+    }
+
+    /// The Angel's "Already verified" skip: the diagnosis to reuse instead
+    /// of verifying again, or nil = verify now. Reused only when a verdict
+    /// is stored AND the cached diagnosis is itself a verdict: a newer
+    /// not-checked diagnosis behind an earlier stored "ok" is neither
+    /// "already verified" nor something to hand on (review F4). Pure.
+    static func reusableDiagnosis(storedStatus: String, cached: AudioVerifyDiagnosis?) -> AudioVerifyDiagnosis? {
+        guard !storedStatus.isEmpty, let cached else { return nil }
+        if case .notChecked = cached.verdict { return nil }
+        return cached
     }
 
     static func verdict(for c: AudioChannelClass) -> String {

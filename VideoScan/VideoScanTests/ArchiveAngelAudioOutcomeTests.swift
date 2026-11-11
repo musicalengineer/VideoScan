@@ -48,10 +48,12 @@ private func analysis(_ c: AudioChannelClass,
                                                             differenceRMSDBFS: nil)
         }
     }()
-    return AudioBalanceAnalysis(classification: c, measurements: measured,
-                                shape: shape(channels: c == .mono ? 1 : (c == .multichannel ? 6 : 2)),
-                                programStreamCount: programStreams, programStreamIndex: 1,
-                                droppedStreamIndices: [])
+    var a = AudioBalanceAnalysis(classification: c, measurements: measured,
+                                 shape: shape(channels: c == .mono ? 1 : (c == .multichannel ? 6 : 2)),
+                                 programStreamCount: programStreams, programStreamIndex: 1,
+                                 droppedStreamIndices: [])
+    a.levelsComplete = true   // the probe's answer for a pass that covered everything
+    return a
 }
 
 private func verifyShape() -> AudioVerifyShape {
@@ -105,9 +107,17 @@ struct ArchiveAngelAudioOutcomeTests {
         #expect(d.contains("already balanced"))
     }
 
-    @Test func healthyWithoutAnalysisStillReadsBalanced() {
-        let d = AudioVerifyDiagnosis(findings: [], shape: verifyShape(), balanceAnalysis: nil)
-        #expect(ArchiveAngelAudioOutcome.from(d) == .balanced("Audio is balanced — the track checked out."))
+    /// GH #467: a sound track with no measurement, or a partial one, is not
+    /// "balanced" — the Angel says it could not be checked, and why.
+    @Test func aSoundTrackThatWasNotMeasuredIsNotBalanced() {
+        let none = AudioVerifyDiagnosis(findings: [], shape: verifyShape(), balanceAnalysis: nil)
+        #expect(ArchiveAngelAudioOutcome.from(none)
+                == .refused("The sound could not be checked — the sound track was not decoded."))
+        var partial = analysis(.trueStereo)
+        partial.levelsComplete = false
+        let some = AudioVerifyDiagnosis(findings: [], shape: verifyShape(), balanceAnalysis: partial)
+        #expect(ArchiveAngelAudioOutcome.from(some)
+                == .refused("The sound could not be checked — the sound track was only partly measured."))
     }
 
     /// The fix gate is consulted AGAIN — an imbalance finding whose
@@ -127,24 +137,36 @@ struct ArchiveAngelAudioOutcomeTests {
         let silent = AudioVerifyDiagnosis(findings: [.silentAudio], shape: verifyShape(),
                                           balanceAnalysis: analysis(.silent))
         let multi = AudioVerifyDiagnosis(findings: [.multipleProgramTracks(count: 2)], shape: verifyShape(),
-                                         balanceAnalysis: nil)
+                                         balanceAnalysis: analysis(.trueStereo, programStreams: 2))
         guard case .refused(let s1) = ArchiveAngelAudioOutcome.from(surround) else { Issue.record("surround"); return }
         guard case .refused(let s2) = ArchiveAngelAudioOutcome.from(silent) else { Issue.record("silent"); return }
         guard case .refused(let s3) = ArchiveAngelAudioOutcome.from(multi) else { Issue.record("multi"); return }
         #expect(s1.contains("Surround"))
         #expect(s2.contains("No audio program"))
-        #expect(s3.contains("2 live audio tracks"))
+        #expect(s3.contains("both carry sound"), "the measured analysis' own refusal: \(s3)")
     }
 
     @Test func damageFindingsStayDamaged() {
         let ref = AudioVerifyDiagnosis(findings: [.referenceMovie(referencedPaths: ["/x"])],
                                        shape: AudioVerifyShape(), balanceAnalysis: nil)
-        let codec = AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: "qdm2", decodable: false)],
-                                         shape: AudioVerifyShape(), balanceAnalysis: nil)
+        let codec = AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: "qdm2", decodable: true)],
+                                         shape: verifyShape(), balanceAnalysis: nil)
         guard case .damaged(let n1) = ArchiveAngelAudioOutcome.from(ref) else { Issue.record("ref"); return }
         guard case .damaged(let n2) = ArchiveAngelAudioOutcome.from(codec) else { Issue.record("codec"); return }
         #expect(n1.contains("reference movie"))
-        #expect(n2.contains("undecodable audio"))
+        #expect(n2.contains("invalid codec (qdm2)"))
+    }
+
+    /// GH #468: a levels pass that failed is a failed read OR a track that
+    /// will not decode — "could not be checked", never "damaged".
+    @Test func aFailedLevelsPassIsNotDamage() {
+        let failed = AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: "qdm2", decodable: false)],
+                                          shape: verifyShape(), balanceAnalysis: nil)
+        guard case .refused(let why) = ArchiveAngelAudioOutcome.from(failed) else {
+            Issue.record("got \(ArchiveAngelAudioOutcome.from(failed))"); return
+        }
+        #expect(why.hasPrefix("The sound could not be checked — the sound track could not be decoded (qdm2)"))
+        #expect(!why.lowercased().contains("damaged"))
     }
 
     @Test func noAudioStreamIsItsOwnCase() {

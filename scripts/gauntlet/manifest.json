@@ -5999,9 +5999,10 @@
         "ArchiveAngelAudioOutcomeTests"
       ],
       "tests": [
+        "aFailedLevelsPassIsNotDamage",
+        "aSoundTrackThatWasNotMeasuredIsNotBalanced",
         "damageFindingsStayDamaged",
         "healthyStereoAndDualMonoAreBalanced",
-        "healthyWithoutAnalysisStillReadsBalanced",
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
@@ -30920,7 +30921,7 @@
         "RebuildAudioJobRoundTripTests"
       ],
       "tests": [
-        "analyzeFailureWithReachableSourceIsCodecDamage",
+        "analyzeFailureWithReachableSourceIsNotDamage",
         "analyzeFailureWithStalledMountThrows",
         "analyzeFailureWithVanishedSourceThrows",
         "analyzeTimeoutNeverConsultsReachability",
@@ -30984,6 +30985,7 @@
         "multiProgramTracksReportedInsteadOfImbalance",
         "noAudioDecodesFineHere",
         "noAudioStreamIsItsOwnVerdict",
+        "noLevelFindingFromAnIncompletePass",
         "noteFragmentsExactStrings",
         "noteOrdersDamageFirstAndPrefixesDamaged",
         "onlyTheThreeDamageFindingsProduceDamaged",
@@ -35480,6 +35482,84 @@
       "tests": [
         "theTagOnTheLiveCatalog"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioVerdictTruthTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VerifyAudioIncompleteLevelsTests",
+        "VerifyAudioReadFailureTests",
+        "VerifyAudioVerdictIsolationTests",
+        "VerifyAudioVerdictScaleTests"
+      ],
+      "tests": [
+        "aCompletePassIsStored",
+        "aFailedReadIsNotStoredDamaged",
+        "aParseGapIsNotStoredOk",
+        "aSkippedStreamIsNotStoredOk",
+        "anEarlierOkSurvivesAFailedRead",
+        "anEarlierVerdictIsLeftAlone",
+        "autoRepairStillChainsARebuild",
+        "consistentWithThePromoteSoundGate",
+        "hundredThousandVerdicts",
+        "measuredDamageIsStillStored",
+        "noLevelFindingsFromAnIncompletePass",
+        "noLevelsPassNeeded",
+        "nothingStoredMeansNoKeyOnDisk",
+        "poisonedDiagnosesAreNotOk",
+        "theDiagnosisIsStillCached"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioVerdictTruthMediaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VerifyAudioVerdictCheckMediaTests",
+        "VerifyAudioVerdictSensorTests",
+        "VerifyAudioVerdictTruthMediaTests"
+      ],
+      "tests": [
+        "anEarlierVerdictIsLeftAlone",
+        "completeAndDamagedAreStored",
+        "failedReadStoresNoSoundVerdict",
+        "incompletePassStoresNoSoundVerdict",
+        "okNeedsACompletePass",
+        "oneWriterBehindTheVerdict",
+        "storedVerdictEqualsTheMeasurement"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioVerdictConsumerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VerifyAudioVerdictHeadlineTests",
+        "VerifyAudioVerdictRepairDoorTests",
+        "VerifyAudioVerdictBalanceGateTests",
+        "VerifyAudioVerdictAngelReuseTests",
+        "VerifyAudioVerdictNoteWordingTests"
+      ],
+      "tests": [
+        "aNotCheckedDiagnosisIsNotReused",
+        "aSkippedStreamIsRefusedAndACompletePassIsNot",
+        "aThrownSoundPassIsNotHealthy",
+        "checkedDiagnosesAreReused",
+        "damagedNoteDoesNotClaimUndecodable",
+        "noFragmentSaysUndecodable",
+        "otherNotRunRowsDoNotOfferRebuild",
+        "partlyMeasuredTrackIsNeverBalanceable",
+        "protectedOriginalStillRefuses",
+        "soundNotCheckedIsNeverLooksHealthy",
+        "theAngelNeverCallsItFixable",
+        "theCardRowAloneOpensRepair",
+        "theOtherHeadlinesAreUnchanged",
+        "theRealRowsHeadline",
+        "theSummaryDoesNotSayOK",
+        "undecodableTrackStillOpensRepair"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -38212,7 +38292,7 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3646,
+      "expected_floor": 3648,
       "name": "unit",
       "package_expected_floor": 899,
       "package_selectors": [
@@ -39310,9 +39390,13 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCloseTSanReproTests.swift",
           "reason": "TSan repro: its CONTROL test runs only with VIDEOSCAN_SANITIZER=thread (scripts/weekly_sanitizer.py) and is skipped everywhere else; a skip under the floor is RED in the gauntlet (#423)"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/VerifyAudioVerdictTruthMediaTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 529,
+      "expected_floor": 560,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -39496,7 +39580,16 @@
         "VideoScanTests/AnalyzeLeftScaleTests",
         "VideoScanTests/AnalyzeLeftStoreTests",
         "VideoScanTests/AnalyzeLeftSensorTests",
-        "VideoScanTests/PromoteSoundGateTests"
+        "VideoScanTests/PromoteSoundGateTests",
+        "VideoScanTests/VerifyAudioIncompleteLevelsTests",
+        "VideoScanTests/VerifyAudioReadFailureTests",
+        "VideoScanTests/VerifyAudioVerdictIsolationTests",
+        "VideoScanTests/VerifyAudioVerdictScaleTests",
+        "VideoScanTests/VerifyAudioVerdictHeadlineTests",
+        "VideoScanTests/VerifyAudioVerdictRepairDoorTests",
+        "VideoScanTests/VerifyAudioVerdictBalanceGateTests",
+        "VideoScanTests/VerifyAudioVerdictAngelReuseTests",
+        "VideoScanTests/VerifyAudioVerdictNoteWordingTests"
       ]
     },
     {

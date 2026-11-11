@@ -183,7 +183,7 @@ enum MasterArchiveTestSupport {
             programStreamCount: programStreamCount ?? (live ? 1 : 0), programStreamIndex: 1, droppedStreamIndices: [])
         analysis.levelsComplete = levelsComplete
         let findings = extraFindings + VerifyAudioRules.findings(shape: vshape, referencedPaths: [],
-                                                                 analysis: analysis, analyzeFailed: false)
+                                                                 levels: .success(analysis))
         return AudioVerifyDiagnosis(findings: findings, shape: vshape, balanceAnalysis: analysis)
     }
 

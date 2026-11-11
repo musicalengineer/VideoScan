@@ -376,13 +376,15 @@ struct VerifyAudioMediaMatrixTests {
         }
     }
 
-    @Test("QA F1: analyze fails + source STILL probeable (real recheck) → undecodable damage stands",
+    @Test("GH #468: analyze fails + source STILL probeable (real recheck) → a finding, could not check, NOT damage",
           .timeLimit(.minutes(2)))
-    func analyzeFailureWithReachableSourceIsCodecDamage() async throws {
-        // The counterpart guard: when the file is still there and still
-        // shape-probeable, the evidence points at the codec — the
-        // damage finding must SURVIVE the QA F1 fix, or truly broken
-        // audio would stop being flagged.
+    func analyzeFailureWithReachableSourceIsNotDamage() async throws {
+        // This file is HEALTHY pcm: only the injected levels pass fails,
+        // exactly as a drive hiccup does, and the real recheck then finds
+        // the header readable. Before #468 that was stored as "Damaged
+        // audio — undecodable audio (pcm_s16le)" and joined the damaged
+        // selection. The finding stays (Rebuild can still be offered); the
+        // verdict is "not checked", so nothing is stored.
         try #require(VerifyAudioTestMedia.toolsAvailable)
         let dir = try VerifyAudioTestMedia.makeScratchDir("io_reachable")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -394,8 +396,13 @@ struct VerifyAudioMediaMatrixTests {
         let d = try await VerifyAudioProbe.diagnose(path: path,
                                                     analyzeOverride: Self.analyzeThrows)
         #expect(d.findings == [.unsupportedCodec(codec: "pcm_s16le", decodable: false)])
-        #expect(d.persistedStatus == "damaged")
-        #expect(d.persistedNote.hasPrefix("Damaged audio — undecodable audio"))
+        guard case .readFailed = d.levelsPass, case .notChecked(let reason) = d.verdict else {
+            Issue.record("expected read failed / not checked: \(d.levelsPass), \(d.verdict)"); return
+        }
+        #expect(reason.contains("could not be decoded (pcm_s16le)"))
+        #expect(d.persistedStatus == "", "nothing to store")
+        #expect(!d.persistedNote.contains("Damaged"))
+        #expect(!d.isHealthy)
         #expect(d.balanceAnalysis == nil)
     }
 
