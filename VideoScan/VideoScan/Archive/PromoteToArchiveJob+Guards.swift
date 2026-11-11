@@ -7,6 +7,7 @@
 
 import Foundation
 import os
+import VideoScanCore
 
 extension PromoteToArchiveJob {
 
@@ -92,6 +93,180 @@ extension PromoteToArchiveJob {
                 logFacts: "identical bytes (sha256 \(digest.prefix(12))…) are already in the archive; nothing copied"))
         }
         return .claimed(digest, proven: proven)
+    }
+
+    // MARK: The guards on the proven bytes
+
+    enum ProvenBytesStep {
+        case passed(SoundGateResult)
+        case refused(Refusal)
+        case cancelled
+    }
+
+    /// The two guards that judge the source's CURRENT bytes, in order, both
+    /// before the journal intent: (1) the digest proof — a stored fingerprint
+    /// is read back and refused on any difference (codex 2026-10-02 #1);
+    /// (2) the sound gate, on exactly the bytes just proven. `proven` false =
+    /// the digest came from a stored fingerprint and is read back first.
+    ///
+    /// `stampBeforeDigest`: the source's stat stamp taken BEFORE its digest
+    /// was read or trusted. The sound gate requires the file to still carry
+    /// it (Codex #280 F2): a file replaced after the proof is no longer the
+    /// proven one, however stable it then is while it is measured.
+    func provenBytesGuards(source: VideoRecord, entry: ArchivePromotePlan.Entry, digest: String,
+                           proven: Bool, stampBeforeDigest: FileIdentityStamp?,
+                           model: VideoScanModel) async throws -> ProvenBytesStep {
+        if !proven {
+            guard let actual = try await proveSourceDigest(source: source, entry: entry) else { return .cancelled }
+            if actual != digest {
+                return .refused(Refusal(
+                    code: .storedDigestMismatch, kind: .failed,
+                    detail: Self.storedDigestMismatch(recorded: digest, actual: actual),
+                    logFacts: "stored sha256 \(digest.prefix(12))… ≠ current sha256 \(actual.prefix(12))…; nothing written"))
+            }
+        }
+        testHookBeforeSoundCheck?(source)
+        if Task.isCancelled { return .cancelled }
+        let sound = try await soundGate(source: source, entry: entry, digest: digest,
+                                        stampBeforeDigest: stampBeforeDigest, model: model)
+        if let refusal = sound.refusal { return .refused(refusal) }
+        // After BOTH guards, still before the destination and the journal
+        // intent: a change made here is the copy engine's to catch.
+        testHookAfterSourceProof?(source)
+        return Task.isCancelled ? .cancelled : .passed(sound)
+    }
+
+    // MARK: Sound gate (Rick 2026-11-10)
+
+    /// What the sound gate decided for one file: a refusal, or go on with a
+    /// note (one-sided, or accepted by the owner's tag) that rides the
+    /// outcome row and the landed line.
+    struct SoundGateResult {
+        var note: String?
+        var refusal: Refusal?
+
+        static func pass(note: String?) -> SoundGateResult { SoundGateResult(note: note, refusal: nil) }
+        static func refused(_ refusal: Refusal) -> SoundGateResult { SoundGateResult(note: nil, refusal: refusal) }
+
+        /// " · sound on the left side only", or "".
+        var landedSuffix: String { note.map { " · \($0)" } ?? "" }
+    }
+
+    /// THE one call of PromoteSoundGate (the rule and its words live there).
+    /// Runs after the source's digest is proven and before the destination
+    /// is chosen, so a refusal has written nothing to the archive.
+    ///
+    /// The sound is MEASURED here, every time — `soundMeasure` (ffprobe + the
+    /// levels pass), run directly, not as a nested MFO job: this job already
+    /// holds the source volume's gate. Nothing stored about the file's sound
+    /// is read, and nothing is stored (Codex #280 / #281: a stored verdict
+    /// has no digest and no completeness mark). The record is the SOUND
+    /// OUTCOME line. The file must still carry the stamp it had before its
+    /// digest was read, and the same stamp after the measurement, or the
+    /// answer is "could not check".
+    ///
+    /// Memory: the diagnosis is a few small structs; the probe streams and
+    /// keeps at most ~1 MB of ffprobe output. Nothing is retained per file
+    /// but a one-line note.
+    func soundGate(source: VideoRecord, entry: ArchivePromotePlan.Entry, digest: String,
+                   stampBeforeDigest: FileIdentityStamp?, model: VideoScanModel) async throws -> SoundGateResult {
+        let op = currentOpLabel
+        func say(_ line: String) {
+            model.log("Promote: \(line)")
+            appLog.write("promote \(line)")
+            promoteLog.notice("promote \(line, privacy: .public)")
+        }
+        let path = source.fullPath
+        let before = await Self.stampOffMain(path: path)
+        let finding: PromoteSoundGate.Finding
+        var couldNotBeMade = false
+        if before == nil {
+            finding = .unchecked("the file is not reachable")
+        } else if before != stampBeforeDigest {
+            // Not the file whose digest was proven (Codex #280 F2): it is
+            // not measured.
+            finding = .unchecked("the file changed after its bytes were proven")
+        } else {
+            say("SOUND START \(op): measuring (\(source.sizeBytes) bytes)")
+            applyPhaseSubtitle("Checking the sound of \(source.filename)…")
+            let measured = try await measureSound(path: path, before: before)
+            finding = measured.finding
+            couldNotBeMade = measured.couldNotBeMade
+        }
+        // "Archive anyway (I know this file)" (owner ruling 2026-11-10): for
+        // an UN-PROBEABLE file the tick accepts a measurement that could not
+        // be made — the meaning it has always had. It accepts nothing that
+        // WAS measured, and not a file that moved or went away.
+        let tickAccepts = couldNotBeMade && entry.readiness.blocking && plan.allowUnprobeable
+
+        // The owner's word is read NOW, from the catalog's CURRENT record for
+        // this id (Codex #280 F4): a rescan may have replaced the object
+        // while the sound was measured, and the tag may have been taken back.
+        // A record the catalog no longer holds speaks for nothing: no
+        // fallback to the object this job started with (Codex #282). The
+        // WORDS follow the current record too when there is one (#283 P2).
+        let currentRecord = model.record(forID: source.id)
+        let facts = (currentRecord ?? source).soundPresenceContext
+        let mark: PromoteSoundGate.Mark
+        if let current = currentRecord {
+            mark = PromoteSoundGate.mark(tags: current.tags, storedFixity: current.contentFixity,
+                                         provenDigest: digest, recordSizeBytes: current.sizeBytes,
+                                         provenSizeBytes: before?.size ?? 0)
+        } else {
+            mark = .absent
+        }
+        let decision = PromoteSoundGate.decide(finding: finding, mark: mark,
+                                               soundPartnerName: facts.soundPartnerName,
+                                               recordedYear: facts.recordedYear,
+                                               digestPrefix: String(digest.prefix(12)),
+                                               ownerAcceptsUnchecked: tickAccepts)
+        switch decision {
+        case .promote(let rowNote, let logFacts):
+            say("SOUND OUTCOME \(op): \(logFacts)")
+            soundNotes[source.id] = rowNote
+            return .pass(note: rowNote)
+        case .refuse(let code, let detail, let logFacts):
+            // `noteRefusal` writes the one persistent REFUSED line.
+            let refusalCode = Refusal.Code(rawValue: code.rawValue) ?? .soundUnchecked
+            return .refused(Refusal(code: refusalCode, kind: .failed, detail: detail, logFacts: logFacts))
+        }
+    }
+
+    /// Measure now. A thrown probe error, a levels pass that did not cover
+    /// every channel, or a file whose stamp moved during the read is
+    /// "could not check" — never a pass. Nothing is written anywhere.
+    /// `couldNotBeMade`: the file held still and the probe gave no answer
+    /// (the one case the owner's "Archive anyway" tick may accept).
+    private func measureSound(path: String, before: FileIdentityStamp?) async throws
+        -> (finding: PromoteSoundGate.Finding, couldNotBeMade: Bool) {
+        var thrown: PromoteSoundGate.Finding?
+        var diagnosis: AudioVerifyDiagnosis?
+        do {
+            diagnosis = try await soundMeasure.diagnose(path)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            thrown = .unchecked(PromoteSoundGate.uncheckedReason(error))
+        }
+        if Task.isCancelled || state == .cancelling { throw CancellationError() }
+        let after = await Self.stampOffMain(path: path)
+        guard let before, let after, before == after else {
+            return (.unchecked("the file changed while its sound was being checked"), false)
+        }
+        if let thrown { return (thrown, true) }
+        guard let diagnosis else { return (.unchecked("the check failed to run"), true) }
+        let finding = PromoteSoundGate.finding(from: diagnosis)
+        if case .unchecked = finding { return (finding, true) }
+        return (finding, false)
+    }
+
+    /// One stat of the source, off the UI thread (a sleeping drive can make
+    /// a stat take seconds).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func stampOffMain(path: String) async -> FileIdentityStamp? {
+        FileIdentityStamp.capture(path: path)
     }
 
     /// Codex 2026-10-02 #1: one full read of the source, BEFORE the journal

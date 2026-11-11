@@ -20,6 +20,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import os
 import SwiftUI
 import Testing
 import VideoScanCore
@@ -134,6 +135,91 @@ struct FrameSearchStoreTests {
             #expect(store.hits.isEmpty && store.failure == nil, "no stale or partial hits")
         }
     }
+
+    // MARK: Latest wins (a result is published only for the request that is still current)
+
+    /// Contents 2 and 3 are indexed; /V/a holds content 2, /V/b holds content 3. `embedGate` holds the text tower
+    /// for the words it is given; `filesGate` holds the catalog read for the scope it is given.
+    private static func gatedLoader(_ gate: AsyncStream<Void>, heldWords: String? = nil, heldScope: ObservationsScope? = nil,
+                                    embed: @escaping @Sendable (String) async throws -> [Float] = { try await StubEmbedder().embed(text: $0) }) -> FrameSearchLoader {
+        let index = Self.index([2, 3])
+        return FrameSearchLoader(modelID: StubEmbedder().modelID, loadIndex: { .ready(index) },
+                          files: { scope in
+                              if scope == heldScope { for await _ in gate { break } }
+                              return scope == .folder("/V/b") ? [Env.row(3, path: "/V/b/three.mov")] : [Env.row(2, path: "/V/a/two.mov")]
+                          },
+                          embedText: { text in
+                              if text == heldWords { for await _ in gate { break } }
+                              return try await embed(text)
+                          },
+                          prewarm: {}, thumbnail: { _, _ in nil }, startIndex: { _, _ in nil }, reveal: { _ in true }, note: { _ in })
+    }
+
+    /// REGRESSION (reviewer 2026-11-10, A): clearing the field during a search returned without ending it, and the
+    /// superseded search returned early too — "Asking SigLIP 2…" stayed and Search stayed disabled.
+    @Test func clearingTheFieldDuringASearchEndsTheSearch() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.gatedLoader(gate.stream, heldWords: "axis 2"))
+        await store.loadIndex()
+        let first = Task { await store.search("axis 2") }
+        while !store.searching { await Task.yield() }
+        await store.search("")
+        #expect(store.searching == false, "the field is empty; the spinner goes at once")
+        gate.continuation.yield()
+        await first.value
+        #expect(store.searching == false, "no search is in flight; the spinner must go")
+        #expect(store.hits.isEmpty && store.query == nil && store.timing == nil && store.failure == nil, "and the cleared search publishes nothing")
+    }
+
+    @Test func aSupersededSearchNeverPublishes() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .everything, loader: Self.gatedLoader(gate.stream, heldWords: "axis 5"))
+        await store.loadIndex()
+        let old = Task { await store.search("axis 5") }
+        while !store.searching { await Task.yield() }
+        await store.search("axis 2")
+        #expect(store.query == "axis 2" && store.hits.first?.filename == "two.mov" && store.searching == false)
+        let shown = store.hits
+        gate.continuation.yield()
+        await old.value
+        #expect(store.query == "axis 2" && store.hits == shown, "the older search never replaces the newer one's hits")
+        #expect(store.searching == false && store.failure == nil)
+    }
+
+    @Test func aScopeChangeReSearchesAndShowsOnlyTheNewScopesHits() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.gatedLoader(gate.stream, heldScope: .folder("/V/a")))
+        await store.loadIndex()
+        let old = Task { await store.search("axis 2") }
+        while !store.searching { await Task.yield() }
+        await store.set(scope: .folder("/V/b"))
+        #expect(store.query == "axis 2" && !store.hits.isEmpty && store.hits.allSatisfy { $0.path == "/V/b/three.mov" }, "the same words, asked of the new scope")
+        gate.continuation.yield()
+        await old.value
+        #expect(store.hits.allSatisfy { $0.path == "/V/b/three.mov" } && !store.hits.isEmpty, "a frame read for /V/a never shows under /V/b")
+        #expect(store.searching == false)
+        await store.search("axis 3")
+        #expect(store.hits.first?.path == "/V/b/three.mov", "the next search reads the new scope's files, not the old scope's cached ones")
+    }
+
+    private struct TowerDown: LocalizedError {
+        var errorDescription: String? { "the text tower is not loaded" }
+    }
+
+    @Test func aFailedSearchShowsTheFailureAndARetryClearsIt() async {
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let gate = AsyncStream<Void>.makeStream()
+        let loader = Self.gatedLoader(gate.stream, embed: { text in
+            if calls.withLock({ $0 += 1; return $0 }) == 1 { throw TowerDown() }
+            return try await StubEmbedder().embed(text: text)
+        })
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: loader)
+        await store.loadIndex()
+        await store.search("axis 2")
+        #expect(store.failure?.contains("not loaded") == true && store.hits.isEmpty && store.searching == false)
+        await store.search("axis 2")
+        #expect(store.failure == nil && store.hits.first?.filename == "two.mov" && store.searching == false, "the retry's hits replace the failure")
+    }
 }
 
 // MARK: - The job (stub decode, stub model)
@@ -175,6 +261,335 @@ struct FrameIndexJobTests {
         await second.task?.value
         #expect(second.planned == 1, "only the offline file is left (the undecodable one is recorded, not retried)")
         #expect(second.indexed == 0 && second.offline == 1)
+    }
+
+    // MARK: Whose fault it was (Codex sweep 11/09 #14)
+
+    /// A model that is not there (weights missing, offline).
+    struct NoModel: FrameEmbedding {
+        let modelID = "test/stub-siglip"
+        let dims = 8
+        func embed(images: [CGImage]) async throws -> [[Float]] { throw SigLIPError.weightsMissing("offline") }
+        func embed(text: String) async throws -> [Float] { throw SigLIPError.weightsMissing("offline") }
+    }
+
+    /// A flag a `@Sendable` seam can read and the test can set (≈ C++ std::atomic<bool>).
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool { lock.withLock { value } }
+        func set(_ v: Bool = true) { lock.withLock { value = v } }
+    }
+
+    /// The log lines a job wrote through its one sink.
+    @MainActor final class Notes {
+        var lines: [String] = []
+    }
+
+    static func digest(_ n: Int) -> String { String(format: "%064x", n) }
+
+    /// A job over `rows` whose every file is online, present and decodes to `framesPerFile` (3) cards.
+    static func job(_ rows: [CatalogRow.FrameIndexFile], root: URL, embedder: any FrameEmbedding = StubEmbedder(),
+                    notes: Notes? = nil) -> FrameIndexJob {
+        let j = FrameIndexJob(scope: .everything, loadFiles: { _ in rows }, embedder: embedder)
+        j.root = root
+        j.framesPerFile = 3
+        j.concurrency = 1
+        j.volumeOnline = { _ in true }
+        j.fileExists = { _ in true }
+        j.note = { notes?.lines.append($0) }
+        j.extract = { _, times in times.map { ($0, FrameSearchTestCards.solid(9, 9, 9, size: 16)) } }
+        return j
+    }
+
+    @Test func aModelThatCannotLoadIsNotHeldAgainstTheFile() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [Env.row(1, path: "/V/ok.mov")]
+        let offline = Self.job(rows, root: root, embedder: NoModel())
+        offline.start()
+        await offline.task?.value
+        let online = Self.job(rows, root: root)
+        online.start()
+        await online.task?.value
+        #expect(online.indexed == 1, "the file decoded; the MODEL failed — the next run must index it")
+    }
+
+    @Test func aModelThatCannotLoadFailsTheJobAndTheOutcomeLineNamesTheCause() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notes = Notes()
+        let job = Self.job([Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov")], root: root, embedder: NoModel(), notes: notes)
+        job.start()
+        await job.task?.value
+        guard case .failed(let message) = job.state else { Issue.record("a run whose model never loaded ended \(job.state)"); return }
+        #expect(message.contains("SigLIP 2 weights are not on this Mac (offline)"), "\(message)")
+        #expect(!job.wasRefused, "it started; it did not refuse")
+        #expect(job.outcome == .modelUnavailable("SigLIP 2 weights are not on this Mac (offline)") && job.savePoints.isEmpty)
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title, state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome?.contains("FAILED") == true && outcome?.contains("weights are not on this Mac") == true, "\(outcome ?? "nil")")
+        #expect(job.indexed == 0 && job.unreadable == 0)
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip").index?.failures.isEmpty ?? true, "nothing is recorded against a file")
+        #expect(!notes.lines.contains { $0.hasPrefix("could not index") }, "\(notes.lines)")
+    }
+
+    @Test func aDriveThatGoesAwayMidDecodeDefersTheFile() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [Env.row(1, path: "/Tape/a.mov")]
+        let gone = Flag()
+        let first = Self.job(rows, root: root)
+        first.volumeOnline = { _ in !gone.isSet }
+        first.extract = { _, _ in
+            gone.set()
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        first.start()
+        await first.task?.value
+        #expect(first.unreadable == 0 && first.offline == 1 && first.indexed == 0)
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip").index?.failures.isEmpty ?? true, "a drive's fault is not the file's")
+        let second = Self.job(rows, root: root)
+        second.start()
+        await second.task?.value
+        #expect(second.planned == 1 && second.indexed == 1, "the drive is back: the file is indexed")
+    }
+
+    @Test func aModelThatFailsMidRunKeepsWhatWasIndexedAndBlamesNoFile() async throws {
+        /// Embeds the first file, then the model is gone.
+        actor OneThenGone: FrameEmbedding {
+            nonisolated let modelID = "test/stub-siglip"
+            nonisolated let dims = 8
+            private var calls = 0
+            func embed(images: [CGImage]) async throws -> [[Float]] {
+                calls += 1
+                guard calls == 1 else { throw SigLIPError.loadFailed("the GPU went away") }
+                return try await StubEmbedder().embed(images: images)
+            }
+            func embed(text: String) async throws -> [Float] { throw SigLIPError.unavailable }
+        }
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov"), Env.row(3, path: "/V/c.mov")]
+        let first = Self.job(rows, root: root, embedder: OneThenGone())
+        first.start()
+        await first.task?.value
+        #expect(first.outcome == .modelUnavailable("SigLIP 2 could not be loaded: the GPU went away"), "\(String(describing: first.outcome))")
+        guard case .failed(let message) = first.state else { Issue.record("ended \(first.state)"); return }
+        #expect(message.contains("2 files left for the next run") && message.contains("1 file indexed"), "\(message)")
+        #expect(first.savePoints == [.modelFailed], "what was indexed before the model failed is saved")
+        let index = try #require(FrameIndexStore.load(root: root, model: "test/stub-siglip").index)
+        #expect(index.indexedDigests == [Self.digest(1)] && index.failures.isEmpty)
+        let second = Self.job(rows, root: root)
+        second.start()
+        await second.task?.value
+        #expect(second.alreadyDone == 1 && second.indexed == 2 && second.outcome == .finished)
+    }
+
+    @Test func aFileTheDecoderCannotReadIsRecordedOnceAndNotTriedAgain() async throws {
+        /// The model is fine; its pixel door refuses this file's frames (the one model error that is the file's).
+        struct RefusesPixels: FrameEmbedding {
+            let modelID = "test/stub-siglip"
+            let dims = 8
+            func embed(images: [CGImage]) async throws -> [[Float]] {
+                if images.first?.width == 24 { throw SigLIPError.badImage }
+                return try await StubEmbedder().embed(images: images)
+            }
+            func embed(text: String) async throws -> [Float] { [] }
+        }
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [Env.row(1, path: "/V/torn.mov"), Env.row(2, path: "/V/odd-pixels.mov"), Env.row(3, path: "/V/ok.mov")]
+        let tries = Flag()
+        func job() -> FrameIndexJob {
+            let j = Self.job(rows, root: root, embedder: RefusesPixels())
+            j.extract = { path, times in
+                if path.contains("torn") {
+                    tries.set()
+                    throw CocoaError(.fileReadCorruptFile)   // the file is there (the seams say so) and will not decode
+                }
+                return times.map { ($0, FrameSearchTestCards.solid(9, 9, 9, size: path.contains("odd") ? 24 : 16)) }
+            }
+            return j
+        }
+        let first = job()
+        first.start()
+        await first.task?.value
+        #expect(first.outcome == .finished && first.unreadable == 2 && first.indexed == 1 && first.offline == 0, "\(first.state)")
+        let index = try #require(FrameIndexStore.load(root: root, model: "test/stub-siglip").index)
+        #expect(index.failures[Self.digest(1)] == CocoaError(.fileReadCorruptFile).localizedDescription, "the decoder's own words")
+        #expect(index.failures[Self.digest(2)] == "a frame could not be converted to pixels")
+        #expect(index.indexedDigests == [Self.digest(3)])
+
+        tries.set(false)
+        let second = job()
+        second.start()
+        await second.task?.value
+        #expect(second.planned == 0 && second.alreadyDone == 3 && !tries.isSet, "recorded, so a resume does not grind on it")
+        #expect(second.outcome == .finished && second.subtitle == "Nothing to index")
+    }
+
+    // MARK: When the index is saved (each save point by name)
+
+    /// Wait (main actor free) until `condition`, or fail naming what never happened.
+    static func until(_ what: String, _ condition: () -> Bool) async throws {
+        var waits = 0
+        while !condition(), waits < 2_000 {
+            waits += 1
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try #require(condition(), "never happened in 10 s: \(what)")
+    }
+
+    /// Three files; the decode of the first one waits at a gate so the test can act while it is in hand.
+    static func gated(root: URL) -> (job: FrameIndexJob, rows: [CatalogRow.FrameIndexFile], inHand: Flag, release: Flag) {
+        let rows = [Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov"), Env.row(3, path: "/V/c.mov")]
+        let inHand = Flag(), release = Flag()
+        let j = job(rows, root: root)
+        j.extract = { path, times in
+            if path.hasSuffix("a.mov") {
+                inHand.set()
+                while !release.isSet { try await Task.sleep(for: .milliseconds(5)) }
+            }
+            return times.map { ($0, FrameSearchTestCards.solid(9, 9, 9, size: 16)) }
+        }
+        return (j, rows, inHand, release)
+    }
+
+    @Test func pauseSavesWhatIsInHandHoldsThereAndResumeFinishes() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (job, _, inHand, release) = Self.gated(root: root)
+        job.start()
+        try await Self.until("the first file is in hand") { inHand.isSet }
+        job.pause()
+        #expect(job.isPaused && job.subtitle.hasPrefix("Pausing after the files in hand"))
+        release.set()
+        try await Self.until("the paused save") { job.subtitle.hasPrefix("Paused — 1 of 3 done") }
+        #expect(job.savePoints == [.paused] && job.state == .running && job.indexed == 1, "the file in hand finished; no other was taken")
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip").index?.indexedDigests == [Self.digest(1)], "paused = on disk")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(job.indexed == 1 && job.savePoints == [.paused], "nothing moves while paused")
+        job.resume()
+        await job.task?.value
+        #expect(job.outcome == .finished && job.indexed == 3 && job.savePoints == [.paused, .finished])
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip").index?.count == 9)
+    }
+
+    @Test func stopLetsTheFileInHandFinishSavesAndEndsCancelled() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (job, rows, inHand, release) = Self.gated(root: root)
+        let notes = Notes()
+        job.note = { notes.lines.append($0) }
+        job.start()
+        try await Self.until("the first file is in hand") { inHand.isSet }
+        job.cancel()
+        #expect(job.state == .cancelling && job.subtitle == "Stopping — finishing 1 file, then saving…")
+        release.set()
+        await job.task?.value
+        #expect(job.state == .cancelled && job.outcome == .stopped && job.savePoints == [.stopped] && job.indexed == 1)
+        #expect(notes.lines.last?.hasPrefix("stopped after 1 file indexed (3 frames") == true, "\(notes.lines)")
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip").index?.indexedDigests == [Self.digest(1)])
+        let next = Self.job(rows, root: root)
+        next.start()
+        await next.task?.value
+        #expect(next.alreadyDone == 1 && next.indexed == 2, "stopped = resumable")
+    }
+
+    @Test func quitCutsTheDecodeAndHoldsNothingAgainstTheFile() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inHand = Flag()
+        let job = Self.job([Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov")], root: root)
+        job.extract = { _, _ in
+            inHand.set()
+            try await Task.sleep(for: .seconds(60))   // cut by the quit (throws CancellationError)
+            return []
+        }
+        job.start()
+        try await Self.until("the first file is in hand") { inHand.isSet }
+        job.stopForQuit()
+        await job.task?.value
+        #expect(job.state == .cancelled && job.outcome == .stopped)
+        #expect(job.done == 0 && job.indexed == 0 && job.unreadable == 0 && job.savePoints.isEmpty, "a cut decode is not a try")
+        #expect(FrameIndexStore.load(root: root, model: "test/stub-siglip") == .notBuilt)
+    }
+
+    @Test func aCheckpointSavesAndHandsOverExactlyWhatItWrote() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rows = [Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov"), Env.row(3, path: "/V/c.mov")]
+        let job = Self.job(rows, root: root)
+        job.checkpointFiles = 1
+        var handed: [FrameIndex] = []
+        var onDiskAtHandover: [FrameIndex?] = []
+        job.onSaved = { index in
+            handed.append(index)
+            onDiskAtHandover.append(FrameIndexStore.load(root: root, model: "test/stub-siglip").index)
+        }
+        job.start()
+        await job.task?.value
+        #expect(job.savePoints == [.checkpoint, .checkpoint, .checkpoint], "one per file; the end has nothing new to write")
+        #expect(handed.map(\.count) == [3, 6, 9])
+        #expect(handed == onDiskAtHandover.compactMap { $0 }, "truth: the snapshot handed over is the index on disk at that moment")
+        #expect(job.outcome == .finished)
+    }
+
+    @Test(arguments: [(1, FrameIndexSavePoint.checkpoint, 1), (100, FrameIndexSavePoint.finished, 3)])
+    func aSaveThatFailsFailsTheJobAndSaysWhatIsNotOnDisk(checkpointFiles: Int, point: FrameIndexSavePoint, indexedByThen: Int) async throws {
+        let dir = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let root = dir.appendingPathComponent("not-a-folder")
+        try Data("x".utf8).write(to: root)   // the index folder cannot be made under a plain file
+        let notes = Notes()
+        let job = Self.job([Env.row(1, path: "/V/a.mov"), Env.row(2, path: "/V/b.mov"), Env.row(3, path: "/V/c.mov")], root: root, notes: notes)
+        job.checkpointFiles = checkpointFiles
+        var handed = 0
+        job.onSaved = { _ in handed += 1 }
+        job.start()
+        await job.task?.value
+        guard case .saveFailed(at: point, why: let why) = job.outcome else { Issue.record("ended \(String(describing: job.outcome))"); return }
+        guard case .failed(let message) = job.state else { Issue.record("ended \(job.state)"); return }
+        #expect(message.hasPrefix("The frame index could not be saved: \(why) (\(point.rawValue))"), "\(message)")
+        #expect(message.contains("\(indexedByThen) result\(indexedByThen == 1 ? "" : "s") since the last save"), "\(message)")
+        #expect(message.contains("not on disk"), "\(message)")
+        #expect(job.indexed == indexedByThen && job.savePoints.isEmpty && handed == 0, "the job stops at the failed save; nobody is told of an index")
+        #expect(notes.lines.contains { $0.hasPrefix("could not save the frame index (\(point.rawValue))") }, "\(notes.lines)")
+        #expect((try? Data(contentsOf: root)) == Data("x".utf8), "what was in the way is untouched")
+    }
+
+    // MARK: Scale and sensor
+
+    @Test(.timeLimit(.minutes(1)))
+    func oneHundredThousandRowsOverAFiftyThousandContentIndexArePlannedInsideTheBudget() async throws {
+        let root = try Env.tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // 50,000 contents already indexed (one frame each), 50,000 without a picture: nothing to do.
+        var seed = FrameIndexBuilder(model: "test/stub-siglip", dims: 8)
+        var v = [Float](repeating: 0, count: 8); v[0] = 1
+        for n in 0..<50_000 { seed.add(digest: Self.digest(n), frames: [(1, v)]) }
+        try FrameIndexStore.save(seed.snapshot(), root: root)
+        let rows = (0..<100_000).map { Env.row($0, path: "/V/\($0).mov", stream: $0 < 50_000 ? "Video+Audio" : "Audio only") }
+        let job = Self.job(rows, root: root)
+        let started = ContinuousClock.now
+        job.start()
+        await job.task?.value
+        let took = ContinuousClock.now - started
+        #expect(job.outcome == .finished && job.planned == 0 && job.alreadyDone == 50_000, "\(job.state)")
+        #expect(job.savePoints == [.finished], "kept from before: a complete run that changed nothing still writes once, so the window is told")
+        #expect(took < .seconds(10), "100k rows over a 50k-content index planned in \(took)")
+    }
+
+    @Test func theJobLeavesEveryIndexReadAndWriteToTheWriter() throws {
+        let src = try SourceTree.appCode(named: "FrameIndexJob.swift")   // comments stripped
+        let writerStart = try #require(src.range(of: "actor FrameIndexWriter {"))
+        let writerEnd = try #require(src.range(of: "enum FrameIndexSavePoint"), "the job's types follow the writer")
+        try #require(writerStart.lowerBound < writerEnd.lowerBound)
+        #expect(src[writerStart.lowerBound..<writerEnd.lowerBound].contains("FrameIndexStore.save("), "the writer is where the save is")
+        let code = String(src[..<writerStart.lowerBound]) + String(src[writerEnd.lowerBound...])
+        for forbidden in ["FrameIndexStore.load(", "FrameIndexStore.save(", "FrameIndexBuilder(", "save(reason:", "\"finished\""] {
+            #expect(!code.contains(forbidden), "`\(forbidden)` outside actor FrameIndexWriter — index IO belongs to the writer, save points are an enum")
+        }
     }
 }
 

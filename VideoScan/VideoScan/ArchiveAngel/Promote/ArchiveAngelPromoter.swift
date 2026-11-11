@@ -361,6 +361,24 @@ final class ArchiveAngelPromoter: ObservableObject {
         return job
     }
 
+    /// The row's words when Promote's sound gate refused the original
+    /// (PromoteSoundGate.Code): nil for every other refusal. Pure.
+    nonisolated static func soundRefusalWords(code: String?, detail: String) -> String? {
+        guard let code, let sound = PromoteSoundGate.Code(rawValue: code) else { return nil }
+        switch sound {
+        case .noTrack, .silent, .pairHalf: return "Needs your OK: no sound — \(detail)"
+        case .damaged: return "Needs repair: sound damaged — \(detail)"
+        case .unchecked: return "Could not check the sound — \(detail)"
+        }
+    }
+
+    /// What the row says, and what the log says, for an original that did
+    /// not land: the sound gate's words when it refused, else the reason.
+    nonisolated static func notPromotedWords(code: String?, why: String) -> (failure: String, logged: String) {
+        if let sound = soundRefusalWords(code: code, detail: why) { return (sound, sound) }
+        return ("Original not promoted: \(why)", "original not promoted: \(why)")
+    }
+
     /// Fold the Promote job's per-file outcomes back into the plan.
     static func settle(plan: inout ArchiveAngelPlan, job: PromoteToArchiveJob,
                        intended: [UUID: [UUID]], model: VideoScanModel) {
@@ -370,11 +388,14 @@ final class ArchiveAngelPromoter: ObservableObject {
         // deleted — and same-named companions collided the same way.
         var landed: [UUID: String] = [:]      // record → relPath
         var problems: [UUID: String] = [:]    // record → reason
+        var refusalCodes: [UUID: String] = [:]   // record → Promote's refusal code
         for o in job.outcomes {
             guard let id = o.recordID else { continue }
             switch o.kind {
             case .promoted, .adopted: landed[id] = o.detail
-            case .skipped, .failed: problems[id] = o.detail
+            case .skipped, .failed:
+                problems[id] = o.detail
+                refusalCodes[id] = o.refusalCode
             }
         }
         var report = plan.report ?? ArchiveAngelPlan.Report()
@@ -383,8 +404,12 @@ final class ArchiveAngelPromoter: ObservableObject {
             guard intended[entry.id] != nil else { continue }   // never enqueued
             guard let rel = landed[entry.id] else {
                 let why = problems[entry.id] ?? Self.terminalReason(job)
-                plan.entries[i].failure = "Original not promoted: \(why)"
-                Self.note("Archive Angel: \(entry.filename) — original not promoted: \(why)", plan: &plan, model: model)
+                // The Angel cannot ask (Rick 2026-11-10): a file Promote's
+                // sound gate refused is reported in the Angel's own words,
+                // never promoted, its buffer kept.
+                let words = Self.notPromotedWords(code: refusalCodes[entry.id], why: why)
+                plan.entries[i].failure = words.failure
+                Self.note("Archive Angel: \(entry.filename) — \(words.logged)", plan: &plan, model: model)
                 report.failed.append(entry.filename)
                 continue
             }

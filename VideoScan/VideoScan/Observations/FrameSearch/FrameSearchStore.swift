@@ -17,7 +17,9 @@
 // similarity 0.17" — and the file it came from (the link, nothing else).
 // The scope is the window's: a row whose content is not in scope is never a
 // hit. A missing or unreadable index is "index not built" with the reason,
-// never stale or partial hits. Similarity is SigLIP's raw cosine (−1…1;
+// never stale or partial hits. A search publishes only while its request
+// (scope, words) is still the current one — `LatestWins`
+// (ObservationsStore.swift), the same rule the Words search follows. Similarity is SigLIP's raw cosine (−1…1;
 // matching captions land around 0.10–0.20); it is a ranking, not a
 // probability, and the words say so.
 //
@@ -155,31 +157,48 @@ final class FrameSearchStore: ObservableObject {
         case ready(frames: Int, contents: Int)
     }
 
+    /// One search request: the words, and the scope they are asked of.
+    struct Request: Equatable, Sendable {
+        let scope: ObservationsScope
+        let query: String
+    }
+
+    /// What one search found. `rows` is the scope's files as that search read them (nil: nothing was read).
+    struct Found: Sendable {
+        var hits: [FrameHit] = []
+        /// "query 0.21 s (text tower 0.18 s, search 0.03 s) over 12,345 frames in scope"
+        var timing: String?
+        var rows: [String: CatalogRow.FrameIndexFile]?
+    }
+
     static let pageSize = 48
     static let perContent = 2
 
     @Published private(set) var scope: ObservationsScope
     @Published private(set) var indexState: IndexState = .loading
-    @Published private(set) var hits: [FrameHit] = []
-    @Published private(set) var query: String?
-    @Published private(set) var searching = false
-    @Published private(set) var failure: String?
-    /// "query 0.21 s (text tower 0.18 s, search 0.03 s) over 12,345 frames in scope"
-    @Published private(set) var timing: String?
+    @Published private var searchRun = LatestWins<Request, Found>()
     @Published private(set) var revealProblem: String?
     @Published private(set) var job: FrameIndexJob?
     @Published private(set) var jobLine: String?
 
     let loader: FrameSearchLoader
     private var index: FrameIndex?
+    /// The current scope's files, kept between searches (dropped with the scope).
     private var scopeFiles: [String: CatalogRow.FrameIndexFile]?
-    private var searchIssued = 0
+    private var warming: Task<Void, Never>?
     private var jobWatch: AnyCancellable?
 
     init(scope: ObservationsScope, loader: FrameSearchLoader) {
         self.scope = scope
         self.loader = loader
     }
+
+    // What the view reads — each one a reading of the request's phase, never a flag of its own.
+    var hits: [FrameHit] { searchRun.value?.hits ?? [] }
+    var query: String? { searchRun.key?.query }
+    var searching: Bool { searchRun.isLoading }
+    var failure: String? { searchRun.failure?.localizedDescription }
+    var timing: String? { searchRun.value?.timing }
 
     var modelID: String { loader.modelID }
 
@@ -193,7 +212,8 @@ final class FrameSearchStore: ObservableObject {
         }.value
         apply(status, contents: contents)
         let warm = loader.prewarm
-        Task.detached(priority: .utility) { try? await warm() }
+        warming?.cancel()
+        warming = Task.detached(priority: .utility) { try? await warm() }
     }
 
     private func apply(_ status: FrameIndexStatus, contents: Int) {
@@ -211,67 +231,64 @@ final class FrameSearchStore: ObservableObject {
         }
     }
 
+    /// A new scope: the old scope's hits and files go at once (a search still in flight for it is cancelled
+    /// and can no longer publish); the words in the field are asked again of the new one.
     func set(scope: ObservationsScope) async {
         guard scope != self.scope else { return }
+        let asked = query
         self.scope = scope
         scopeFiles = nil
-        hits = []
-        if let q = query { await search(q) }
+        searchRun.reset()
+        if let asked { await search(asked) }
     }
 
-    /// Embed the words, score every frame in scope, publish the best page.
+    /// Embed the words, score every frame in scope, publish the best page. Words too short to ask (the field
+    /// was cleared) end any search in flight and clear the hits.
     func search(_ raw: String) async {
-        searchIssued += 1
-        let mine = searchIssued
         revealProblem = nil
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.count >= 2 else { hits = []; query = nil; failure = nil; timing = nil; return }
-        query = text
-        guard let index else {
-            hits = []
-            failure = nil
+        guard text.count >= 2 else {
+            searchRun.reset()
             return
         }
-        searching = true
-        let scope = scope
+        let request = Request(scope: scope, query: text)
         let embed = loader.embedText, files = loader.files
-        let known = scopeFiles
-        let started = ContinuousClock.now
+        let index = index, known = scopeFiles
         let k = Self.pageSize, cap = Self.perContent
-        do {
-            let result = try await Task.detached(priority: .userInitiated) { () -> ([FrameSearch.Scored], [String: CatalogRow.FrameIndexFile], Duration, Duration, Int) in
-                let t0 = ContinuousClock.now
-                let vector = try await embed(text)
-                let t1 = ContinuousClock.now
-                let rows: [String: CatalogRow.FrameIndexFile]
-                if let known { rows = known } else {
-                    let fetched = try await files(scope)
-                    rows = Dictionary(fetched.map { ($0.digest, $0) }, uniquingKeysWith: { a, _ in a })
-                }
-                let top = FrameSearch.topK(query: vector, in: index, k: k, allowed: Set(rows.keys), perContent: cap)
-                let inScope = index.entries.reduce(0) { $0 + (rows[$1.digest] != nil ? 1 : 0) }
-                return (top, rows, t1 - t0, ContinuousClock.now - t1, inScope)
-            }.value
-            guard mine == searchIssued else { return }
-            scopeFiles = result.1
-            hits = result.0.compactMap { scored in
-                guard let row = result.1[scored.entry.digest] else { return nil }
+        let ticket = searchRun.begin(request) {
+            guard let index else { return Found() }   // no usable index: nothing to ask; the standing line says why
+            let t0 = ContinuousClock.now
+            let vector = try await embed(text)
+            let t1 = ContinuousClock.now
+            let rows: [String: CatalogRow.FrameIndexFile]
+            if let known { rows = known } else {
+                let fetched = try await files(request.scope)
+                rows = Dictionary(fetched.map { ($0.digest, $0) }, uniquingKeysWith: { a, _ in a })
+            }
+            let top = FrameSearch.topK(query: vector, in: index, k: k, allowed: Set(rows.keys), perContent: cap)
+            let inScope = index.entries.reduce(0) { $0 + (rows[$1.digest] != nil ? 1 : 0) }
+            let hits = top.compactMap { scored -> FrameHit? in
+                guard let row = rows[scored.entry.digest] else { return nil }
                 return FrameHit(model: index.model, digest: scored.entry.digest, seconds: scored.entry.seconds, score: scored.score,
                                 recordID: UUID(uuidString: row.fileID), filename: row.filename, path: row.path, removed: row.removed)
             }
-            failure = nil
-            searching = false
-            let total = ContinuousClock.now - started
-            timing = "query \(Self.seconds(total)) (text tower \(Self.seconds(result.2)), search \(Self.seconds(result.3))) over \(result.4.formatted()) frames in scope"
-            loader.note("searched \"\(text)\" in \(scope.words): \(hits.count) frame hit\(hits.count == 1 ? "" : "s"), best \(hits.first.map { String(format: "%.3f", $0.score) } ?? "—"); \(timing ?? "")")
-        } catch {
-            guard mine == searchIssued, !(error is CancellationError) else { return }
-            searching = false
-            failure = "\(error.localizedDescription)"
+            let t2 = ContinuousClock.now
+            let timing = "query \(FrameSearchStore.seconds(t2 - t0)) (text tower \(FrameSearchStore.seconds(t1 - t0)), search \(FrameSearchStore.seconds(t2 - t1))) over \(inScope.formatted()) frames in scope"
+            return Found(hits: hits, timing: timing, rows: rows)
+        }
+        let result = await ticket.result
+        guard searchRun.finish(ticket, result) else { return }
+        switch result {
+        case .success(let found):
+            guard let rows = found.rows else { return }
+            scopeFiles = rows
+            loader.note("searched \"\(text)\" in \(request.scope.words): \(found.hits.count) frame hit\(found.hits.count == 1 ? "" : "s"), best \(found.hits.first.map { String(format: "%.3f", $0.score) } ?? "—"); \(found.timing ?? "")")
+        case .failure(let error):
+            loader.note("the search for \"\(text)\" in \(request.scope.words) could not run — \(error.localizedDescription)")
         }
     }
 
-    static func seconds(_ d: Duration) -> String {
+    nonisolated static func seconds(_ d: Duration) -> String {
         String(format: "%.2f s", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
     }
 
@@ -314,8 +331,11 @@ final class FrameSearchStore: ObservableObject {
         return true
     }
 
+    /// The window went away: stop the search in flight and the model warm-up.
     func cancel() {
-        searchIssued += 1
+        searchRun.reset()
+        warming?.cancel()
+        warming = nil
         jobWatch = nil
     }
 }

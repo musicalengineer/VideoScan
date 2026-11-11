@@ -140,6 +140,21 @@ struct AudioBalanceAnalysis: Sendable, Equatable {
     var droppedStreamIndices: [Int]
 }
 
+extension AudioBalanceAnalysis {
+    /// What the levels pass MEASURED, in one place (Check Media's sound row
+    /// and Promote's sound gate both ask this): true = every channel sat at
+    /// or below the program floor (−60 dBFS RMS); false = at least one
+    /// carries sound; nil = not measured — the pass did not cover every
+    /// declared channel of every stream, or a channel's RMS was a parse gap.
+    /// `measurements` is the program stream's (the first stream when none
+    /// carries program), so "true" means no stream had sound. Pure.
+    var measuredSilent: Bool? {
+        let channels = measurements.channels
+        guard levelsComplete, !channels.isEmpty, channels.allSatisfy(\.rmsMeasured) else { return nil }
+        return !channels.contains(where: AudioBalanceClassifier.carriesProgram)
+    }
+}
+
 enum AudioBalanceProbeError: Error, Equatable {
     case toolUnavailable(String)
     case noAudioStream
