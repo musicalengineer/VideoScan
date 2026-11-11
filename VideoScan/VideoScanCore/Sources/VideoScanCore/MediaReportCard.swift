@@ -228,9 +228,28 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     }
 
     /// Worst row wins; a card whose every row was not run says not run.
+    ///
+    /// One exception (GH #470): OK is a claim about the whole file, and a
+    /// full check that could not check a sound track that is there has not
+    /// earned it. That card's verdict is its Sound row's "not run", with the
+    /// row's reason — never OK. A Warning or Problem elsewhere still wins.
+    /// Derived from what the card stores (tier, headline, rows), so it reads
+    /// the same after a relaunch; nothing new is persisted.
     public var verdict: MediaCheckVerdict {
-        let worst = checks.map(\.verdict).max { $0.rank < $1.rank }
-        return worst ?? .notRun(reason: "no checks ran")
+        let worst = checks.map(\.verdict).max { $0.rank < $1.rank } ?? .notRun(reason: "no checks ran")
+        guard worst == .ok, isSoundNotChecked,
+              let sound = check(.sound)?.verdict, case .notRun = sound else { return worst }
+        return sound
+    }
+
+    /// How a full card's headline starts when the sound track was there and
+    /// could not be checked (CheckMediaRules.headline writes it).
+    public static let soundNotCheckedLead = "Sound not checked — "
+
+    /// The full check ran and has no answer about this file's sound. The
+    /// headline says so only when no row is a Warning or a Problem.
+    public var isSoundNotChecked: Bool {
+        tier == .full && headline.hasPrefix(Self.soundNotCheckedLead)
     }
 
     /// A quick check that found nothing wrong. It is NOT a clean bill of
