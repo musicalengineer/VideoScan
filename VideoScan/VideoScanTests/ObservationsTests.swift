@@ -17,6 +17,7 @@
 
 import AppKit
 import Foundation
+import os
 import SwiftUI
 import Testing
 import VideoScanCore
@@ -150,6 +151,83 @@ struct ObservationsStoreTests {
         await store.load()
         #expect(store.report == nil && store.failure?.contains("not open") == true)
         #expect(notes.lines.filter { $0.contains("could not be read") }.count == 1)
+    }
+
+    // MARK: Latest wins (a result is published only for the request that is still current)
+
+    /// A loader whose search waits at `gate` when `held` says so; the hits' `query` names the scope they were read for.
+    private static func gatedLoader(_ gate: AsyncStream<Void>, held: @escaping @Sendable (ObservationsScope, String) -> Bool = { _, _ in true },
+                                    report: @escaping @Sendable (ObservationsScope) throws -> ObservationsReport = { Fixture.report(scope: $0) }) -> ObservationsLoader {
+        ObservationsLoader(loadReport: { try report($0) },
+                           search: { scope, q in
+                               if held(scope, q) { for await _ in gate { break } }
+                               return Fixture.hits("\(q) in \(scope.words)")
+                           },
+                           reveal: { _ in true }, dossiers: nil, note: { _ in })
+    }
+
+    /// REGRESSION (reviewer 2026-11-10, B): a scope change neither cancelled the search in flight nor outdated it,
+    /// so the old folder's hits were published under the new scope's header — a shown fact that is wrong.
+    @Test func hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = ObservationsStore(scope: .folder("/V/tapes"), loader: Self.gatedLoader(gate.stream))
+        let old = Task { await store.search("presents") }
+        while !store.searching { await Task.yield() }
+        await store.set(scope: .everything)
+        gate.continuation.yield()
+        await old.value
+        #expect(store.search == nil, "hits read for /V/tapes must not show under 'everything in the catalog'")
+        #expect(store.searching == false && store.report?.scope == .everything)
+    }
+
+    @Test func aSupersededSearchNeverPublishes() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = ObservationsStore(scope: .everything, loader: Self.gatedLoader(gate.stream, held: { _, q in q == "presents" }))
+        let old = Task { await store.search("presents") }
+        while !store.searching { await Task.yield() }
+        await store.search("birthday")
+        #expect(store.search?.query.hasPrefix("birthday") == true && store.searching == false)
+        gate.continuation.yield()
+        await old.value
+        #expect(store.search?.query.hasPrefix("birthday") == true, "the older search's hits never replace the newer one's")
+        #expect(store.searching == false && store.searchFailure == nil)
+    }
+
+    @Test func aScopeChangeThenASearchShowsTheNewScopesHits() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = ObservationsStore(scope: .folder("/V/tapes"), loader: Self.gatedLoader(gate.stream, held: { scope, _ in scope == .folder("/V/tapes") }))
+        let old = Task { await store.search("presents") }
+        while !store.searching { await Task.yield() }
+        await store.set(scope: .everything)
+        await store.search("presents")
+        #expect(store.search?.query == "presents in \(ObservationsScope.everything.words)")
+        gate.continuation.yield()
+        await old.value
+        #expect(store.search?.query == "presents in \(ObservationsScope.everything.words)", "the same words, read for the scope in the header")
+        #expect(store.searching == false)
+    }
+
+    @Test func aFailedLoadShowsTheFailureAndARetryClearsIt() async {
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let gate = AsyncStream<Void>.makeStream()
+        let loader = Self.gatedLoader(gate.stream, held: { _, _ in false }, report: { scope in
+            if calls.withLock({ $0 += 1; return $0 }) == 1 { throw Refusal("catalog.sqlite is not open") }
+            return Fixture.report(scope: scope)
+        })
+        let store = ObservationsStore(scope: .everything, loader: loader)
+        await store.load()
+        #expect(store.failure?.contains("not open") == true && store.report == nil && store.loading == false)
+        await store.load()
+        #expect(store.failure == nil && store.report?.files == 100 && store.loading == false, "the retry's report replaces the failure")
+    }
+
+    /// REGRESSION (reviewer 2026-11-10, C): the window held the Frames store as a plain `let`, so its `searching`
+    /// never repainted the Search button. A source pin (SwiftUI's refresh is not ours to test): the button is
+    /// drawn by a view that observes the Frames store.
+    @Test func theSearchButtonObservesTheFramesStore() throws {
+        let window = try SourceTree.appCode(named: "ObservationsWindow.swift")
+        #expect(window.contains("@ObservedObject var frames: FrameSearchStore"), "a view repaints only for the stores it observes")
+        #expect(!window.contains("frames?.searching"), "a read through an unobserved reference never refreshes")
     }
 }
 
