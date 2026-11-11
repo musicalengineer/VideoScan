@@ -9,7 +9,8 @@
 #              job instead of installing it.
 #
 # All hosts run scripts/nightly_guarded.sh, which no-ops if a green run for
-# today already landed. Run once per machine (re-runnable / idempotent):
+# today and for the commit main is at already landed. Run once per machine
+# (re-runnable / idempotent):
 #
 #   bash scripts/install_nightly.sh
 #
