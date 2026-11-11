@@ -3467,15 +3467,27 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Observations/ObservationsReportTests.swift",
       "stage": "unit",
       "suites": [
-        "ObservationsReportTests"
+        "ObservationsReportTests",
+        "ObservationsTypedRowsTests"
       ],
       "tests": [
+        "aBurnedInDateNamesTheSignerThatReadIt",
         "aFileNameOrPathOrNoteIsNeverAHit",
+        "aStoredKindOutsideTheSetIsRefusedInWords",
+        "aTranscriptHitShowsItsMatchWhenTheQueryHoldsALikeMetacharacter",
+        "anEraVerdictIsExactlyOneVerdictOrRefused",
+        "anEventStateThisVersionDoesNotKnowIsShownAsStoredNeverAsDismissed",
         "everyCountEqualsADirectCount",
         "everyHitContainsOrDerivesFromTheQuery",
+        "everyHitHasItsOwnID",
+        "everyHitKindComesBackThroughTheRealReader",
+        "everyTechnicalFacetIsALabelTechnicalReadingEmits",
         "oneHundredThousandFilesMeasured",
+        "theReaderDecodesEveryVerdictAndOtherIsInNoEraRow",
         "theReportAndTheSearchWriteNothing",
-        "theScopesSelectWhatTheySay"
+        "theScopesSelectWhatTheySay",
+        "theTechnicalTierHasOneGroupPerFacetWithItsSource",
+        "theTextsReadStreamsTheKindItIsAskedFor"
       ]
     },
     {
@@ -38151,7 +38163,7 @@
       ],
       "expected_floor": 3646,
       "name": "unit",
-      "package_expected_floor": 888,
+      "package_expected_floor": 899,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -38234,6 +38246,7 @@
         "VideoScanCoreTests.ModelLabWindowSamplerTests",
         "VideoScanCoreTests.ObservationJournalTests",
         "VideoScanCoreTests.ObservationsReportTests",
+        "VideoScanCoreTests.ObservationsTypedRowsTests",
         "VideoScanCoreTests.PeerRequirementTests",
         "VideoScanCoreTests.PeerTrustPolicyTests",
         "VideoScanCoreTests.PoisonedCatalogFixtureAppDecodeTests",

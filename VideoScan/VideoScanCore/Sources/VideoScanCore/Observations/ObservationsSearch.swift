@@ -41,18 +41,19 @@ public struct ObservationsSearch: Sendable, Equatable {
             (Kind.allCases.firstIndex(of: a) ?? 0) < (Kind.allCases.firstIndex(of: b) ?? 0)
         }
 
-        static func from(_ store: String) -> Kind? {
-            switch store {
-            case "scene": return .scene
-            case "ocrText": return .onScreenText
-            case "ocrDate": return .onScreenDate
-            case "speech": return .speech
-            case "burnedIn": return .burnedInDate
-            case "person": return .person
-            case "event": return .event
-            case "era": return .era
-            case "technical": return .technical
-            default: return nil
+        /// The store's hit kind as the window names it (total: every stored kind has one; the row
+        /// boundary has already refused anything else).
+        init(_ stored: CatalogRow.ObservationHitKind) {
+            switch stored {
+            case .scene: self = .scene
+            case .ocrText: self = .onScreenText
+            case .ocrDate: self = .onScreenDate
+            case .speech: self = .speech
+            case .burnedIn: self = .burnedInDate
+            case .person: self = .person
+            case .event: self = .event
+            case .era: self = .era
+            case .technical: self = .technical
             }
         }
     }
@@ -115,11 +116,6 @@ public struct ObservationsSearch: Sendable, Equatable {
         return q.count >= minimumQuery ? q : nil
     }
 
-    /// `LIKE` needs `%`, `_` and the escape itself escaped.
-    static func escapedForLike(_ q: String) -> String {
-        q.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
-    }
-
     public static func search(reader: any CatalogObservationsReading, scope: ObservationsScope, query raw: String, now: Date,
                               limit: Int = limit, perKind: Int = perKind) throws -> ObservationsSearch {
         guard let q = normalized(raw) else { return ObservationsSearch(query: raw, hits: [], truncated: false, counts: [:]) }
@@ -142,19 +138,19 @@ public struct ObservationsSearch: Sendable, Equatable {
 
     /// Texts: captions, transcripts, burned-in dates, people, events (SQL LIKE, bounded per kind).
     static func textHits(reader: any CatalogObservationsReading, scope: ObservationsScope, query q: String, perKind: Int) throws -> Part {
-        let rows = try reader.observationTextHits(scope, query: escapedForLike(q), limitPerKind: perKind)
-        var perKindCount: [String: Int] = [:]
+        // The query goes to the reader as it is: the reader escapes it for its LIKE (the SQL boundary's business).
+        let rows = try reader.observationTextHits(scope, query: q, limitPerKind: perKind)
+        var perKindCount: [CatalogRow.ObservationHitKind: Int] = [:]
         for r in rows { perKindCount[r.kind, default: 0] += 1 }
-        let hits: [Hit] = rows.compactMap { r in
-            guard let kind = Kind.from(r.kind) else { return nil }
+        let hits: [Hit] = rows.map { r in
             let source: String
-            switch kind {
+            switch r.kind {
             case .person: source = "face recognition (\(r.by)), unconfirmed"
-            case .event: source = "related-score ladder · \(r.by) by you"
-            case .burnedInDate: source = "\(MachineEraResolver.modelShortName(by: r.by)) date reader, unconfirmed"
-            default: source = r.by
+            case .event: source = "related-score ladder · " + ObservationsReport.stateWords(.init(stored: r.by))
+            case .burnedIn: source = ObservationsReport.burnedInSource([r.by])
+            case .scene, .ocrText, .ocrDate, .speech, .era, .technical: source = r.by
             }
-            return hit(r, kind: kind, text: snippet(r.text, around: q), source: source)
+            return hit(r, text: snippet(r.text, around: q), source: source)
         }
         return (hits, perKindCount.values.contains { $0 >= perKind })
     }
@@ -162,14 +158,14 @@ public struct ObservationsSearch: Sendable, Equatable {
     /// Machine eras: the query against each distinct shown value's words and years, then the files of the matching values.
     static func eraHits(reader: any CatalogObservationsReading, scope: ObservationsScope, query q: String, perKind: Int) throws -> Part {
         var matching: [String] = []
-        for v in try reader.observationEraVerdicts(scope) where v.found {
-            guard let value = v.value, !matching.contains(value), eraMatches(value, query: q) else { continue }
+        for v in try reader.observationEraVerdicts(scope) {
+            guard let value = v.foundValue, !matching.contains(value), eraMatches(value, query: q) else { continue }
             matching.append(value)
         }
         guard !matching.isEmpty else { return ([], false) }
         let rows = try reader.observationEraHits(scope, values: matching, limit: perKind)
         let hits = rows.map { r in
-            hit(r, kind: .era, text: AnalysisResultsReport.eraWords(r.text), source: "\(MachineEraResolver.modelShortName(by: r.by)) era, unconfirmed")
+            hit(r, text: AnalysisResultsReport.eraWords(r.text), source: "\(MachineEraResolver.modelShortName(by: r.by)) era, unconfirmed")
         }
         return (hits, rows.count >= perKind)
     }
@@ -183,15 +179,24 @@ public struct ObservationsSearch: Sendable, Equatable {
             matched += 1
             if matched > tupleCap { return (hits, true) }
             let rows = try reader.observationTechnicalHits(scope, tuple: t, limit: max(0, perKind - hits.count))
-            hits += rows.map { r in hit(r, kind: .technical, text: line, source: ObservationsReport.probe + " · TechnicalReading") }
+            // One content can sit under two tuples (two copies probed differently): the tuple's ordinal keeps the two hits apart.
+            hits += rows.map { r in
+                var row = r
+                row.key = "tuple \(matched)"
+                return hit(row, text: line, source: ObservationsReport.probe + " · TechnicalReading")
+            }
             if hits.count >= perKind { return (hits, true) }
         }
         return (hits, false)
     }
 
-    static func hit(_ r: CatalogRow.ObservationHitRow, kind: Kind, text: String, source: String) -> Hit {
-        Hit(id: "\(kind.rawValue)·\(r.digest)·\(r.seq)·\(r.at ?? -1)·\(r.by)", kind: kind, text: text, at: r.at, source: source, digest: r.digest,
-            recordID: r.fileID.flatMap(UUID.init(uuidString:)), filename: r.filename ?? "(no file in the catalog)", path: r.path ?? "", removed: r.removed)
+    /// The id is the row's whole identity — kind, content, sequence, time, who said it and the row's own key —
+    /// so no two hits share one (a SwiftUI Table's row identity; ObservationsTypedRowsTests.everyHitHasItsOwnID).
+    static func hit(_ r: CatalogRow.ObservationHitRow, text: String, source: String) -> Hit {
+        let kind = Kind(r.kind)
+        return Hit(id: "\(kind.rawValue)·\(r.digest)·\(r.seq)·\(r.at ?? -1)·\(r.by)·\(r.key)", kind: kind, text: text, at: r.at, source: source,
+                   digest: r.digest, recordID: r.fileID.flatMap(UUID.init(uuidString:)), filename: r.filename ?? "(no file in the catalog)",
+                   path: r.path ?? "", removed: r.removed)
     }
 
     /// "1991-1995" matches "1990s", "early 90s", "early 1990s", any year in range, or the value itself.

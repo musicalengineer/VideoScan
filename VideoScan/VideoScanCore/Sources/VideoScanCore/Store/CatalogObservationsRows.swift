@@ -17,7 +17,15 @@
 // histograms, the dated contents' era rows for the agreement) hand the
 // caller one row at a time.
 //
-// (For Rick: the DAO header — value structs plus one read-only interface.)
+// Typed at the row boundary: a stored column that names one of a set (an era
+// verdict, a people tag's kind, an event's state, a hit's kind) is decoded
+// into an enum ONCE, where the row is read. A value outside the set is
+// refused in words (a set this file's SQL closes) or carried as
+// `unknown(String)` (a set a later schema may widen) — never defaulted.
+//
+// (For Rick: the DAO header — value structs plus one read-only interface.
+// The enums are `enum class` parsed where the row is read, instead of a
+// `std::string kind` compared at every use.)
 
 import Foundation
 
@@ -111,28 +119,68 @@ extension CatalogRow {
         }
     }
 
-    /// One (signer, verdict, value) group of the Results sheet's classification, counted over the scope.
+    /// One (signer, verdict) group of the Results sheet's classification, counted over the scope.
     public struct ObservationEraVerdict: Sendable, Equatable {
+
+        /// What one signer concluded about one content (GRDBCatalogRepository+AnalysisResults.swift's
+        /// precedence: found, then rejected, then given up, then no usable era). The fused value
+        /// ("1991-1995") rides the two cases that have one.
+        /// (C++: a `std::variant` — a verdict cannot be both found and rejected, nor found without a value.)
+        public enum Verdict: Sendable, Equatable {
+            case found(String)
+            case rejected(String)
+            case gaveUp
+            /// An `era.none` row: the analyzer looked and found no usable era. Never an era.
+            case noUsableEra
+            /// Rows by the signer but none of the four (only `ocr.date`, or a malformed fused value): analyzed, in no list.
+            case other
+
+            /// The classification's four flags and its value → the one verdict. Two flags at once, or
+            /// a found / rejected verdict without its value, is not a row this reader understands.
+            public init(found: Bool, rejected: Bool, gaveUp: Bool, none: Bool, value: String?) throws {
+                switch (found, rejected, gaveUp, none, value) {
+                case (true, false, false, false, let value?): self = .found(value)
+                case (false, true, false, false, let value?): self = .rejected(value)
+                case (false, false, true, false, _): self = .gaveUp
+                case (false, false, false, true, _): self = .noUsableEra
+                case (false, false, false, false, _): self = .other
+                default:
+                    throw Refusal("an era verdict that is not one verdict (found \(found), rejected \(rejected), gave up \(gaveUp), "
+                                  + "none \(none), value \(value ?? "NULL")): the Observations read refuses it")
+                }
+            }
+        }
+
         public var by: String
-        /// The fused value ("1991-1995") when found or rejected; nil otherwise.
-        public var value: String?
-        public var found: Bool
-        public var rejected: Bool
-        public var gaveUp: Bool
-        public var none: Bool
+        public var verdict: Verdict
         public var contents: Int
-        public init(by: String, value: String?, found: Bool, rejected: Bool, gaveUp: Bool, none: Bool, contents: Int) {
+        public init(by: String, verdict: Verdict, contents: Int) {
             self.by = by
+            self.verdict = verdict
+            self.contents = contents
+        }
+
+        /// The shown era's value; nil for every verdict that is not an era.
+        public var foundValue: String? {
+            if case .found(let value) = verdict { return value }
+            return nil
+        }
+    }
+
+    /// One burned-in date (`ocr.date`), the contents carrying it and every signer that read it.
+    public struct ObservationBurnedInDate: Sendable, Equatable {
+        public var value: String
+        /// The assertions' `by`, whole ("machine:qwen3-vl-8b-4bit/…"), sorted; never empty.
+        public var signers: [String]
+        public var contents: Int
+        public init(value: String, signers: [String], contents: Int) {
             self.value = value
-            self.found = found
-            self.rejected = rejected
-            self.gaveUp = gaveUp
-            self.none = none
+            self.signers = signers
             self.contents = contents
         }
     }
 
-    /// A label and how many contents carry it (a person's name, a burned-in date, a decade).
+    /// A label and how many contents carry it (an inferred date's decade).
     public struct ObservationCount: Sendable, Equatable {
         public var key: String
         public var contents: Int
@@ -203,12 +251,27 @@ extension CatalogRow {
         }
     }
 
+    /// `people_tags.kind`, the three this window reads (`rejected` is never selected).
+    public enum ObservationPersonKind: String, Sendable, Equatable, CaseIterable {
+        case detected, suspected, confirmed
+
+        /// The machine's guess (`detected` / `suspected`); `confirmed` is Rick's, the comparison.
+        public var isMachine: Bool { self != .confirmed }
+
+        public init(stored: String) throws {
+            guard let kind = Self(rawValue: stored) else {
+                throw Refusal("people_tags.kind \"\(stored)\" is not a kind the Observations read selects")
+            }
+            self = kind
+        }
+    }
+
     /// One person the machine found (`detected` / `suspected`), or Rick confirmed (the comparison).
     public struct ObservationPerson: Sendable, Equatable {
         public var name: String
-        public var kind: String
+        public var kind: ObservationPersonKind
         public var contents: Int
-        public init(name: String, kind: String, contents: Int) {
+        public init(name: String, kind: ObservationPersonKind, contents: Int) {
             self.name = name
             self.kind = kind
             self.contents = contents
@@ -227,12 +290,27 @@ extension CatalogRow {
         }
     }
 
+    /// `events.state`. The column is not filtered by the read, so a state a later schema adds
+    /// arrives as `unknown` and is shown as what it is — never as "dismissed".
+    public enum ObservationEventState: Sendable, Equatable {
+        case confirmed, dismissed
+        case unknown(String)
+
+        public init(stored: String) {
+            switch stored {
+            case "confirmed": self = .confirmed
+            case "dismissed": self = .dismissed
+            default: self = .unknown(stored)
+            }
+        }
+    }
+
     /// One event touching the scope.
     public struct ObservationEvent: Sendable, Equatable {
         public var name: String
-        public var state: String
+        public var state: ObservationEventState
         public var members: Int
-        public init(name: String, state: String, members: Int) {
+        public init(name: String, state: ObservationEventState, members: Int) {
             self.name = name
             self.state = state
             self.members = members
@@ -259,6 +337,28 @@ extension CatalogRow {
         }
     }
 
+    /// What a search hit is. The raw values are the literals the hit queries select (the three
+    /// `captions.kind` values, and one literal per other source); the queries name every kind
+    /// they return, so anything else is refused.
+    public enum ObservationHitKind: String, Sendable, Equatable, CaseIterable {
+        case scene, ocrText, ocrDate, speech, burnedIn, person, event, era, technical
+
+        public init(stored: String) throws {
+            guard let kind = Self(rawValue: stored) else {
+                throw Refusal("a search hit of kind \"\(stored)\" is not a kind the Observations read knows")
+            }
+            self = kind
+        }
+    }
+
+    /// Which texts the word histograms stream.
+    public enum ObservationTextsKind: Sendable, Equatable, CaseIterable {
+        /// `captions.kind = 'scene'`.
+        case sceneCaptions
+        /// `transcripts.text`, the non-empty ones.
+        case transcripts
+    }
+
     /// One search hit as the store returns it: the observation and the file that stands for its content in the scope.
     public struct ObservationHitRow: Sendable, Equatable {
         public var digest: String
@@ -266,8 +366,7 @@ extension CatalogRow {
         public var filename: String?
         public var path: String?
         public var removed: Bool
-        /// 'scene' · 'ocrText' · 'ocrDate' · 'speech' · 'burnedIn' · 'person' · 'event' · 'era' · 'technical'.
-        public var kind: String
+        public var kind: ObservationHitKind
         /// Seconds into the clip; nil when untimed.
         public var at: Double?
         /// The observation (a transcript is cut to a window around the match in SQL — memory stays bounded).
@@ -275,8 +374,11 @@ extension CatalogRow {
         /// Who said it: the caption/transcript model, the signer, the people tag's kind, the event's state.
         public var by: String
         public var seq: Int64
-        public init(digest: String, fileID: String?, filename: String?, path: String?, removed: Bool, kind: String, at: Double?,
-                    text: String, by: String, seq: Int64) {
+        /// What tells two rows of one (kind, digest, seq, at, by) apart — a person's name, an event's id
+        /// and range; '' where those five already name one row. With them it is the hit's identity.
+        public var key: String
+        public init(digest: String, fileID: String?, filename: String?, path: String?, removed: Bool, kind: ObservationHitKind, at: Double?,
+                    text: String, by: String, seq: Int64, key: String) {
             self.digest = digest
             self.fileID = fileID
             self.filename = filename
@@ -287,6 +389,7 @@ extension CatalogRow {
             self.text = text
             self.by = by
             self.seq = seq
+            self.key = key
         }
     }
 }
@@ -297,10 +400,10 @@ public protocol CatalogObservationsReading {
     /// Every distinct probe tuple in the scope with its content count (hundreds at most on a family archive).
     func observationTechnicalTuples(_ scope: ObservationsScope) throws -> [CatalogRow.ObservationTechnicalTuple]
     func observationEmbeddedDates(_ scope: ObservationsScope) throws -> [CatalogRow.ObservationEmbeddedDateGroup]
-    /// The Results sheet's per-(signer, content) classification, grouped by (signer, verdict, value) over the scope.
+    /// The Results sheet's per-(signer, content) classification, grouped by (signer, verdict) over the scope.
     func observationEraVerdicts(_ scope: ObservationsScope) throws -> [CatalogRow.ObservationEraVerdict]
-    /// `ocr.date` values by machine signers, not rejected, with their content counts (most frequent first).
-    func observationBurnedInDates(_ scope: ObservationsScope, limit: Int) throws -> [CatalogRow.ObservationCount]
+    /// `ocr.date` values by machine signers, not rejected, with their content counts and signers (most frequent first).
+    func observationBurnedInDates(_ scope: ObservationsScope, limit: Int) throws -> [CatalogRow.ObservationBurnedInDate]
     func observationCaptions(_ scope: ObservationsScope) throws -> CatalogRow.ObservationCaptions
     func observationSpeech(_ scope: ObservationsScope) throws -> CatalogRow.ObservationSpeech
     /// People tags by (name, kind), most frequent first; all three kinds (the caller keeps `confirmed` apart as the comparison).
@@ -311,10 +414,11 @@ public protocol CatalogObservationsReading {
     /// For each content in scope with Rick's date: that date and its `era.fused` rows (all signers, rejections included), streamed.
     func observationEraRowsOfDatedContents(_ scope: ObservationsScope,
                                            _ body: (_ rickDate: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) throws -> Void) throws
-    /// The scene captions (`kind: "scene"`) or the transcripts (`kind: "transcript"`) of the scope, one text at a time.
-    func observationTexts(_ scope: ObservationsScope, kind: String, _ visit: (String) throws -> Void) throws
+    /// The scene captions or the transcripts of the scope, one text at a time.
+    func observationTexts(_ scope: ObservationsScope, kind: CatalogRow.ObservationTextsKind, _ visit: (String) throws -> Void) throws
     /// Captions (three kinds), transcripts, burned-in dates, machine people, event names whose text contains `query`
-    /// (ASCII case-insensitive LIKE; `%`, `_` and `\` in the query are escaped by the caller), at most `limitPerKind` each.
+    /// literally (ASCII case-insensitive; the reader escapes `%`, `_` and `\` for its LIKE — the caller passes the
+    /// query as typed, lowercased), at most `limitPerKind` each.
     func observationTextHits(_ scope: ObservationsScope, query: String, limitPerKind: Int) throws -> [CatalogRow.ObservationHitRow]
     /// Contents whose shown era (found, not rejected) is one of `values`, at most `limit`.
     func observationEraHits(_ scope: ObservationsScope, values: [String], limit: Int) throws -> [CatalogRow.ObservationHitRow]

@@ -246,3 +246,235 @@ struct ObservationsReportTests {
         await repository.close()
     }
 }
+
+// MARK: - ObservationsTypedRowsTests — the Observations reads' row boundary
+// (CatalogObservationsRows.swift, GRDBCatalogRepository+Observations.swift)
+// and three regressions found in review (2026-11-10), each seen red first:
+//   A  a transcript hit shows its match when the query holds a LIKE
+//      metacharacter ("100%", "tim_", a backslash);
+//   B  every hit's id is unique (two machine people on one content, two
+//      events on one content, one content under two probe tuples);
+//   C  a burned-in date's source names the signer that read it (a shown
+//      fact), never a hard-coded model.
+// Then the typed rows: a stored value outside the known set is refused or
+// carried as `unknown`, never defaulted.
+// Synthetic names, paths and digests only.
+
+@Suite("Observations — typed rows and review regressions")
+struct ObservationsTypedRowsTests {
+
+    static let by8B = ObservationsReportTests.by8B
+    static let by2B = "machine:qwen3-vl-2b-4bit/dates-v1@r1"
+
+    static func catalog(_ count: Int) async throws -> StoreFixture {
+        try await DossierFixture.catalog((1...count).map { .init(n: $0, path: "/V/clips/clip-\($0).dv") })
+    }
+
+    // MARK: A — the transcript window is cut around the match, whatever the query's characters
+
+    @Test(arguments: [("100%", "100% sure"), ("tim_", "tim_ sure"), ("a\\b", "a\\b sure")])
+    func aTranscriptHitShowsItsMatchWhenTheQueryHoldsALikeMetacharacter(query: String, ending: String) async throws {
+        let fixture = try await Self.catalog(2)
+        defer { fixture.remove() }
+        let long = String(repeating: "word ", count: 98) + ending                 // ≈ 500 characters, the match at the very end
+        try DossierFixture.seed(fixture, 1, DossierFixture.Knowledge(transcript: long, transcriptModel: "whisper-medium"))
+        // The metacharacter is a literal, never a wildcard: this transcript must not match.
+        try DossierFixture.seed(fixture, 2, DossierFixture.Knowledge(transcript: "100 sure, timx sure, axb sure", transcriptModel: "whisper-medium"))
+        let repository = try await DossierFixture.open(fixture)
+        let found = try await ObservationsReportTests.search(repository, query)
+        #expect(found.hits.map(\.kind) == [.speech], "one transcript holds \(query) literally")
+        let hit = try #require(found.hits.first)
+        #expect(hit.text.contains(query), "the hit shows its match, not the transcript's first words: \(hit.text)")
+        #expect(hit.filename == "clip-1.dv")
+        await repository.close()
+    }
+
+    // MARK: B — a hit's id is unique (a SwiftUI Table's row identity)
+
+    @Test func everyHitHasItsOwnID() async throws {
+        let fixture = try await Self.catalog(1)
+        defer { fixture.remove() }
+        // people_tags' key is (digest, name, kind): two machine names on one content, same kind.
+        var k = DossierFixture.Knowledge()
+        k.people = [("Zed", "detected"), ("Zedekiah", "detected")]
+        try DossierFixture.seed(fixture, 1, k)
+        // Two events with one name and one state, the same content in both.
+        for id in ["00000000-0000-0000-0000-00000000E001", "00000000-0000-0000-0000-00000000E002"] {
+            try DossierFixture.execute(fixture, "INSERT INTO events (event_id, name, state, created_at, updated_at) VALUES (?, 'Reunion', 'confirmed', 1, 1)", [id])
+            try DossierFixture.execute(fixture, "INSERT INTO event_members (event_id, digest, imported_key) VALUES (?, ?, 'k')", [id, DossierFixture.hex(1)])
+        }
+        // One content under two probe tuples (a second copy probed as another container).
+        try DossierFixture.execute(fixture, """
+            INSERT INTO files (id, content_digest, volume_uuid, full_path, path_fold, filename, ext, directory, size_bytes, digest_computed_at,
+                               digest_source, stream_type, duration_s, container, video_codec, audio_codec, lifecycle, archive_stage, volume_case_sensitive)
+            VALUES (?, ?, '', '/V/clips/copy.mov', '/v/clips/copy.mov', 'copy.mov', 'mov', '/V/clips', 100, 1, 'archiveFixity', 'Video+Audio', 600,
+                    'QuickTime / MOV', 'dvvideo', 'pcm_s16le', 'Cataloged', 'None', 0)
+            """, [DossierFixture.fileID(9), DossierFixture.hex(1)])
+        let repository = try await DossierFixture.open(fixture)
+        for (query, kind, count) in [("zed", ObservationsSearch.Kind.person, 2), ("reunion", .event, 2), ("dvvideo", .technical, 2)] {
+            let found = try await ObservationsReportTests.search(repository, query)
+            #expect(found.hits.map(\.kind) == Array(repeating: kind, count: count), "\(query): \(found.hits.map(\.text))")
+            #expect(Set(found.hits.map(\.id)).count == found.hits.count, "\(query): duplicate ids \(found.hits.map(\.id))")
+        }
+        await repository.close()
+    }
+
+    // MARK: C — a burned-in date's source is the signer that read it
+
+    @Test func aBurnedInDateNamesTheSignerThatReadIt() async throws {
+        let fixture = try await Self.catalog(3)
+        defer { fixture.remove() }
+        var k1 = DossierFixture.Knowledge()
+        k1.assertions = [("ocr.date", "1988-12-25", Self.by2B, "inferred", #"{"atS":4.0}"#)]
+        try DossierFixture.seed(fixture, 1, k1)
+        var k2 = DossierFixture.Knowledge()
+        k2.assertions = [("ocr.date", "1991-07-04", Self.by2B, "inferred", "{}")]
+        try DossierFixture.seed(fixture, 2, k2)
+        var k3 = DossierFixture.Knowledge()
+        k3.assertions = [("ocr.date", "1991-07-04", Self.by8B, "inferred", "{}")]
+        try DossierFixture.seed(fixture, 3, k3)
+        let repository = try await DossierFixture.open(fixture)
+        let report = try await ObservationsReportTests.report(repository)
+        let one = try #require(report.patterns.row("Burned-in dates", "1988-12-25"))
+        #expect(one.count == 1 && one.source == "2B date reader, unconfirmed", "the signer is the 2B: \(one.source)")
+        #expect(one.evidence?.contains(Self.by2B) == true, "the ⓘ names the whole signer")
+        let both = try #require(report.patterns.row("Burned-in dates", "1991-07-04"))
+        #expect(both.count == 2 && both.source == "2B, 8B date reader, unconfirmed", "one row per date, every signer named: \(both.source)")
+        // The search hit and the report row say the same about the same row.
+        let hit = try #require(try await ObservationsReportTests.search(repository, "1988-12-25").hits.first)
+        #expect(hit.kind == .burnedInDate && hit.source == one.source && hit.at == 4)
+        await repository.close()
+    }
+
+    // MARK: Typed rows — decoded once, never defaulted
+
+    typealias Verdict = CatalogRow.ObservationEraVerdict.Verdict
+
+    @Test func anEraVerdictIsExactlyOneVerdictOrRefused() throws {
+        #expect(try Verdict(found: true, rejected: false, gaveUp: false, none: false, value: "1990-1994") == .found("1990-1994"))
+        #expect(try Verdict(found: false, rejected: true, gaveUp: false, none: false, value: "1960-1964") == .rejected("1960-1964"))
+        #expect(try Verdict(found: false, rejected: false, gaveUp: true, none: false, value: nil) == .gaveUp)
+        #expect(try Verdict(found: false, rejected: false, gaveUp: false, none: true, value: nil) == .noUsableEra)
+        #expect(try Verdict(found: false, rejected: false, gaveUp: false, none: false, value: nil) == .other)
+        #expect(throws: Refusal.self, "two verdicts at once") { try Verdict(found: true, rejected: true, gaveUp: false, none: false, value: "1990-1994") }
+        #expect(throws: Refusal.self, "found and no usable era") { try Verdict(found: true, rejected: false, gaveUp: false, none: true, value: "1990-1994") }
+        #expect(throws: Refusal.self, "a found era without its value") { try Verdict(found: true, rejected: false, gaveUp: false, none: false, value: nil) }
+        #expect(throws: Refusal.self, "a rejected era without its value") { try Verdict(found: false, rejected: true, gaveUp: false, none: false, value: nil) }
+    }
+
+    /// The scene through the real reader: every verdict the SQL classifies arrives as its case, and a
+    /// signer with only an `ocr.date` row is `other` — analyzed, and in no era row.
+    @Test func theReaderDecodesEveryVerdictAndOtherIsInNoEraRow() async throws {
+        let (fixture, repository) = try await ObservationsReportTests.scene()
+        defer { fixture.remove() }
+        var k = DossierFixture.Knowledge()
+        k.assertions = [("ocr.date", "1999-01-01", Self.by2B, "inferred", "{}"),
+                        ("era.none", "none", "machine:gave-up-test/era-v1@r1", "inferred", #"{"gaveUp":true,"reason":"3 tries"}"#)]
+        try DossierFixture.seed(fixture, 7, k)
+        let verdicts = try await repository.read { try $0.observationEraVerdicts(.everything) }
+        func contents(_ v: Verdict) -> Int { verdicts.filter { $0.verdict == v }.reduce(0) { $0 + $1.contents } }
+        #expect(contents(.found("1990-1994")) == 1 && contents(.found("2001-2003")) == 1)
+        #expect(contents(.rejected("1960-1964")) == 1 && contents(.noUsableEra) == 1 && contents(.gaveUp) == 1)
+        #expect(verdicts.filter { $0.by == Self.by2B }.map(\.verdict) == [.other], "only an ocr.date row: analyzed, no era verdict")
+        #expect(verdicts.compactMap(\.foundValue).sorted() == ["1990-1994", "2001-2003"], "an era is a found verdict and nothing else")
+        let era = try #require(try await ObservationsReportTests.report(repository).patterns.group("Machine era")).rows
+        let counted = era.filter { !$0.label.hasPrefix("Reading: ") && $0.label != "Not analyzed yet" }.reduce(0) { $0 + ($1.count ?? 0) }
+        #expect(counted == verdicts.reduce(0) { $0 + $1.contents } - contents(.other), "every verdict but `other` is in exactly one era row")
+        #expect(era.first { $0.label == "Given up" }?.count == 1)
+        await repository.close()
+    }
+
+    @Test func aStoredKindOutsideTheSetIsRefusedInWords() throws {
+        #expect(try CatalogRow.ObservationPersonKind(stored: "suspected") == .suspected)
+        #expect(throws: Refusal("people_tags.kind \"rejected\" is not a kind the Observations read selects")) {
+            try CatalogRow.ObservationPersonKind(stored: "rejected")
+        }
+        #expect(CatalogRow.ObservationPersonKind.allCases.filter(\.isMachine) == [.detected, .suspected])
+        #expect(try CatalogRow.ObservationHitKind(stored: "ocrDate") == .ocrDate)
+        #expect(throws: Refusal("a search hit of kind \"captions\" is not a kind the Observations read knows")) {
+            try CatalogRow.ObservationHitKind(stored: "captions")
+        }
+        // Every stored hit kind is its own kind in the window (no two fold into one, none is dropped).
+        #expect(Set(CatalogRow.ObservationHitKind.allCases.map(ObservationsSearch.Kind.init)) == Set(ObservationsSearch.Kind.allCases))
+    }
+
+    /// The hit SQL's kind literals and the enum cannot drift apart unseen: every kind comes back
+    /// through the real reader (a literal the enum does not know would throw here).
+    @Test func everyHitKindComesBackThroughTheRealReader() async throws {
+        let (fixture, repository) = try await ObservationsReportTests.scene()
+        defer { fixture.remove() }
+        var seen = Set<ObservationsSearch.Kind>()
+        var ids: [String] = []
+        for query in ["tree", "dec 25", "1990-12-25", "donna", "christmas 1990", "early 1990s", "prores"] {
+            let found = try await ObservationsReportTests.search(repository, query)
+            #expect(Set(found.hits.map(\.id)).count == found.hits.count, "\(query): duplicate ids")
+            seen.formUnion(found.hits.map(\.kind))
+            ids += found.hits.map(\.id)
+        }
+        #expect(seen == Set(ObservationsSearch.Kind.allCases), "missing: \(Set(ObservationsSearch.Kind.allCases).subtracting(seen))")
+        #expect(ids.allSatisfy { !$0.isEmpty })
+        await repository.close()
+    }
+
+    @Test func anEventStateThisVersionDoesNotKnowIsShownAsStoredNeverAsDismissed() {
+        typealias State = CatalogRow.ObservationEventState
+        #expect(State(stored: "confirmed") == .confirmed && State(stored: "dismissed") == .dismissed)
+        #expect(State(stored: "suggested") == .unknown("suggested") && State(stored: "") == .unknown(""))
+        let group = ObservationsReport.eventsGroup([.init(name: "Reunion", state: .unknown("suggested"), members: 2),
+                                                    .init(name: "Picnic", state: .dismissed, members: 1),
+                                                    .init(name: "Christmas", state: .confirmed, members: 3)])
+        #expect(group.rows.map(\.value) == ["2 files · state “suggested” (not one this version knows)", "1 file · dismissed by you", "3 files · confirmed by you"])
+        #expect(group.rows.map(\.standing) == [.missing, .nothingFound, .fact])
+    }
+
+    @Test func theTextsReadStreamsTheKindItIsAskedFor() async throws {
+        let (fixture, repository) = try await ObservationsReportTests.scene()
+        defer { fixture.remove() }
+        func texts(_ kind: CatalogRow.ObservationTextsKind) async throws -> [String] {
+            try await repository.read { reader in
+                var out: [String] = []
+                try reader.observationTexts(.everything, kind: kind) { out.append($0) }
+                return out
+            }
+        }
+        let scenes = try await texts(.sceneCaptions), said = try await texts(.transcripts)
+        #expect(scenes.count == (try ObservationsReportTests.count(fixture, "SELECT count(*) FROM captions WHERE kind = 'scene'")) && scenes.count == 4)
+        #expect(said.sorted() == ["the beach at Tahoe was cold that year", "we opened the presents and the dog ran under the tree"], "the empty transcript is not a text")
+        #expect(Set(scenes).isDisjoint(with: said))
+        await repository.close()
+    }
+
+    // MARK: The technical tier's facets — keyed by a case, the label derived from it
+
+    /// A facet's raw value is the label TechnicalReading gives its line. If TechnicalReading renames
+    /// one, this goes red — the tier would otherwise drop the whole group in silence.
+    @Test func everyTechnicalFacetIsALabelTechnicalReadingEmits() {
+        let tuple = CatalogRow.ObservationTechnicalTuple(container: "DV (Digital Video)", ext: "dv", videoCodec: "dvvideo", audioCodec: "pcm_s16le",
+                                                         streamType: "Video+Audio", resolution: "720x480", frameRate: "29.97", scanType: "bb",
+                                                         audioSampleRate: "32000 Hz", audioChannels: "2", make: "Sony", model: "DCR-TRV900",
+                                                         encoder: "Lavf58.76.100", contents: 1, durationSeconds: 600)
+        let labels = Set(TechnicalReading.interpret(tuple.facts, now: ObservationsReportTests.now).map(\.label))
+        for facet in ObservationsReport.TechnicalFacet.allCases {
+            #expect(labels.contains(facet.rawValue), "TechnicalReading emits no “\(facet.rawValue)” line")
+        }
+        typealias Facet = ObservationsReport.TechnicalFacet
+        #expect(Facet.allCases.map(\.groupTitle) == ["Containers", "Video codecs", "Audio", "Frame sizes", "Frame rates", "Scan",
+                                                    "Cameras (make / model)", "Encoders / muxers"], "the groups, in the order shown")
+        #expect(Facet.frameRate.rowLabel("29.97") == "29.97 fps" && Facet.audio.rowLabel("first audio stream: pcm_s16le") == "pcm_s16le")
+        #expect(Facet(rawValue: "Creation time") == nil && Facet(rawValue: "container") == nil, "an uncounted line and a typo are no facet")
+    }
+
+    @Test func theTechnicalTierHasOneGroupPerFacetWithItsSource() async throws {
+        let (fixture, repository) = try await ObservationsReportTests.scene()
+        defer { fixture.remove() }
+        let technical = try await ObservationsReportTests.report(repository).technical
+        #expect(technical.groups.map(\.title) == ["Format readings"] + ObservationsReport.TechnicalFacet.allCases.map(\.groupTitle) + ["Embedded creation dates", "Probe"])
+        for facet in ObservationsReport.TechnicalFacet.allCases {
+            let rows = try #require(technical.group(facet.groupTitle)).rows
+            #expect(rows.allSatisfy { $0.source == facet.source && $0.standing == .fact }, "\(facet)")
+        }
+        #expect(technical.row("Frame rates", "29.97 fps")?.count == 4 && technical.row("Containers", "DV (Digital Video)")?.count == 4)
+        #expect(technical.row("Scan", "interlaced, bottom field first (as flagged)")?.evidence?.hasPrefix("interlaced") == true, "the ⓘ is what the value suggests")
+        await repository.close()
+    }
+}
