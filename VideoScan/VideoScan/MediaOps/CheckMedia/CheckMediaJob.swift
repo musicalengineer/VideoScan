@@ -353,7 +353,10 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
     /// video (counted from frames)".
     static func summary(_ items: [CheckMediaItem]) -> String {
         if items.count == 1, case .checked(let card) = items[0].outcome {
-            let verdict = card.isQuickPassOnly ? card.displayHeadline : "\(card.verdict.word) — \(card.headline)"
+            // "OK — Sound not checked — …" would contradict itself: that
+            // headline stands alone, like the quick pass's.
+            let verdict = card.isQuickPassOnly || CheckMediaRules.isSoundNotChecked(card)
+                ? card.displayHeadline : "\(card.verdict.word) — \(card.headline)"
             return verdict + (items[0].durationEstimate.map { " · \($0.sentence)" } ?? "")
         }
         let tally = CheckMediaTally(items)

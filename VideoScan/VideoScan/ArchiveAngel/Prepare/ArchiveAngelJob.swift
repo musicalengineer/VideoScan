@@ -688,7 +688,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         var diagnosis: AudioVerifyDiagnosis?
         if rec.streamType == .videoOnly {
             step(idx, .verifyAudio, .skipped, note: "No audio track")
-        } else if !rec.audioVerifyStatus.isEmpty, let cached = center.verifyDiagnosis(forRecordID: rec.id) {
+        } else if let cached = ArchiveAngelAudioOutcome.reusableDiagnosis(
+                    storedStatus: rec.audioVerifyStatus, cached: center.verifyDiagnosis(forRecordID: rec.id)) {
             // Only with the diagnosis in hand (audit #6): it lives in an
             // in-memory cache, so after a restart it is gone and the file
             // is verified again below rather than assumed fine.

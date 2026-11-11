@@ -85,7 +85,7 @@ struct MediaRepairOffer: Equatable, Sendable, Identifiable {
 struct MediaRepairSoundFacts: Equatable, Sendable {
     /// A channel-imbalance finding with the balance analysis attached.
     var canBalance = false
-    /// An old / unreadable sound format finding.
+    /// An old sound format, or a track that could not be decoded.
     var canRebuild = false
     /// A diagnosis exists this session at all.
     var measured = false
@@ -169,6 +169,14 @@ enum MediaRepairPlan {
         case (.sound, .problem) where sound.canRebuild || !sound.measured:
             // Unmeasured this session: the existing Repair Damaged Audio
             // path re-checks first and only rebuilds the format class.
+            return soundOffer(.rebuildAudio, originalProtected: originalProtected)
+        case (.sound, .notRun) where sound.canRebuild
+                || (!sound.measured && CheckMediaRules.isSoundNotDecodedRow(check)):
+            // The sound track could not be decoded (GH #468: not stored as
+            // damaged, so no red row keeps this door open). This session's
+            // diagnosis says so, or — after a relaunch — the card's own Sound
+            // row does. Rebuild is how to find out whether it decodes; it
+            // writes a new file and fails loudly when it cannot.
             return soundOffer(.rebuildAudio, originalProtected: originalProtected)
         case (.sound, .warning) where sound.canBalance:
             return soundOffer(.balanceAudio, originalProtected: originalProtected)

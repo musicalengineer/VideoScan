@@ -35530,6 +35530,36 @@
         "oneWriterBehindTheVerdict",
         "storedVerdictEqualsTheMeasurement"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioVerdictConsumerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VerifyAudioVerdictHeadlineTests",
+        "VerifyAudioVerdictRepairDoorTests",
+        "VerifyAudioVerdictBalanceGateTests",
+        "VerifyAudioVerdictAngelReuseTests",
+        "VerifyAudioVerdictNoteWordingTests"
+      ],
+      "tests": [
+        "aNotCheckedDiagnosisIsNotReused",
+        "aSkippedStreamIsRefusedAndACompletePassIsNot",
+        "aThrownSoundPassIsNotHealthy",
+        "checkedDiagnosesAreReused",
+        "damagedNoteDoesNotClaimUndecodable",
+        "noFragmentSaysUndecodable",
+        "otherNotRunRowsDoNotOfferRebuild",
+        "partlyMeasuredTrackIsNeverBalanceable",
+        "protectedOriginalStillRefuses",
+        "soundNotCheckedIsNeverLooksHealthy",
+        "theAngelNeverCallsItFixable",
+        "theCardRowAloneOpensRepair",
+        "theOtherHeadlinesAreUnchanged",
+        "theRealRowsHeadline",
+        "theSummaryDoesNotSayOK",
+        "undecodableTrackStillOpensRepair"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -39366,7 +39396,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 548,
+      "expected_floor": 564,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -39555,7 +39585,12 @@
         "VideoScanTests/VerifyAudioReadFailureTests",
         "VideoScanTests/VerifyAudioVerdictCheckMediaTests",
         "VideoScanTests/VerifyAudioVerdictIsolationTests",
-        "VideoScanTests/VerifyAudioVerdictScaleTests"
+        "VideoScanTests/VerifyAudioVerdictScaleTests",
+        "VideoScanTests/VerifyAudioVerdictHeadlineTests",
+        "VideoScanTests/VerifyAudioVerdictRepairDoorTests",
+        "VideoScanTests/VerifyAudioVerdictBalanceGateTests",
+        "VideoScanTests/VerifyAudioVerdictAngelReuseTests",
+        "VideoScanTests/VerifyAudioVerdictNoteWordingTests"
       ]
     },
     {

@@ -8,6 +8,9 @@
 //   * SENSOR: one writer of the record's audio verdict, behind the typed
 //     verdict; "ok" asks the one shared completeness question.
 //
+//   * CHECK MEDIA: the full check writes the same verdict through the same
+//     writer (canned diagnoses through the real CheckMediaJob).
+//
 // The logic / isolation / scale tests are in VerifyAudioVerdictTruthTests.swift.
 // Like that file, every behaviour assertion goes through names that exist
 // before and after the fix, so it was seen red on the broken code.
@@ -17,12 +20,25 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
+private typealias S = MasterArchiveTestSupport
+
+/// What the probe returns when the levels pass threw and the header still read.
+private func readFailedDiagnosis(codec: String = "pcm_s16le") -> AudioVerifyDiagnosis {
+    var shape = AudioVerifyShape()
+    shape.videoCodec = "h264"
+    shape.audioStreams = 1
+    shape.audioCodec = codec
+    shape.audioChannels = 2
+    return AudioVerifyDiagnosis(findings: [.unsupportedCodec(codec: codec, decodable: false)],
+                                shape: shape, balanceAnalysis: nil)
+}
+
 @MainActor
-private func soundRecord(_ name: String, path: String) -> VideoRecord {
+private func soundRecord(_ name: String, path: String? = nil) -> VideoRecord {
     let r = VideoRecord()
     r.filename = name
-    r.fullPath = path
-    r.directory = (path as NSString).deletingLastPathComponent
+    r.fullPath = path ?? "/Volumes/T/\(name)"
+    r.directory = (r.fullPath as NSString).deletingLastPathComponent
     r.streamTypeRaw = StreamType.videoAndAudio.rawValue
     return r
 }
@@ -40,6 +56,82 @@ private func runVerify(_ rec: VideoRecord, model: VideoScanModel,
 private func failureMessage(_ job: VerifyAudioJob) -> String? {
     if case .failed(let message) = job.state { return message }
     return nil
+}
+
+// MARK: - Check Media writes the same verdict through the same writer
+
+@Suite("Verify Audio verdict truth — Check Media", .serialized)
+@MainActor
+struct VerifyAudioVerdictCheckMediaTests {
+
+    private func fullCheck(_ name: String, audio: AudioVerifyDiagnosis,
+                           seed: (VideoRecord) -> Void = { _ in }) async throws -> (VideoRecord, CheckMediaJob, MediaFileOperationsCenter) {
+        let model = VideoScanModel()
+        let center = MediaFileOperationsCenter()
+        let rec = soundRecord(name)
+        seed(rec)
+        model.records = [rec]
+        let quick = try CheckMediaFixtures.healthy()
+        let video = VideoVerifyDiagnosis(findings: [], facts: quick.videoFacts, sample: nil,
+                                         decode: VideoDecodeFacts(coverage: .complete))
+        let job = CheckMediaJob(records: [rec], tier: .full, model: model, center: center,
+                                quickRunner: { _, _ in .measured(quick) },
+                                fullRunner: { _, _, _, _ in
+                                    CheckMediaFullInputs(video: .success(video), audio: .success(audio),
+                                                         signals: MediaSignalScan(progressive: 900))
+                                })
+        job.start()
+        await job.task?.value
+        return (rec, job, center)
+    }
+
+    private func notRunReason(_ rec: VideoRecord) -> String? {
+        if case .notRun(let reason)? = rec.mediaReportCard?.check(.sound)?.verdict { return reason }
+        return nil
+    }
+
+    @Test("#467: an incomplete levels pass — no sound verdict stored, the Sound row says Not checked and why")
+    func incompletePassStoresNoSoundVerdict() async throws {
+        let (rec, _, center) = try await fullCheck(
+            "test_cm_incomplete.avi", audio: S.soundDiagnosis(channels: [-18, -20], audioStreams: 2, levelsComplete: false))
+        #expect(rec.audioVerifyStatus == "" && rec.audioVerifyDate == nil)
+        #expect(notRunReason(rec)?.contains("only partly measured") == true,
+                "Sound row: \(String(describing: rec.mediaReportCard?.check(.sound)))")
+        #expect(rec.videoVerifyStatus == "ok", "the picture's verdict is its own")
+        #expect(rec.mediaReportCard?.tier == .full, "the card is still written — its Sound row carries the reason")
+        #expect(center.verifyDiagnosis(forRecordID: rec.id) != nil)
+    }
+
+    @Test("#468: a failed levels pass — not stored as damaged, the Sound row is Not checked, not Problem")
+    func failedReadStoresNoSoundVerdict() async throws {
+        let (rec, _, _) = try await fullCheck("test_cm_hiccup.avi", audio: readFailedDiagnosis())
+        #expect(rec.audioVerifyStatus == "" && rec.audioVerifyNote == "" && rec.audioVerifyDate == nil)
+        #expect(notRunReason(rec)?.contains("could not be decoded") == true,
+                "Sound row: \(String(describing: rec.mediaReportCard?.check(.sound)))")
+        #expect(rec.mediaReportCard?.verdict != .problem, "a failed read is not a Problem card")
+    }
+
+    @Test("an earlier verdict is left alone by a full check that could not check the sound")
+    func anEarlierVerdictIsLeftAlone() async throws {
+        let then = Date(timeIntervalSince1970: 1_780_000_000)
+        let (rec, _, _) = try await fullCheck("test_cm_earlier.avi", audio: readFailedDiagnosis()) {
+            $0.audioVerifyStatus = "ok"
+            $0.audioVerifyDate = then
+        }
+        #expect(rec.audioVerifyStatus == "ok" && rec.audioVerifyDate == then)
+    }
+
+    @Test("a complete pass and measured damage are still stored by the full check")
+    func completeAndDamagedAreStored() async throws {
+        let (fine, _, _) = try await fullCheck("test_cm_fine.avi", audio: S.soundDiagnosis(channels: [-18, -20]))
+        #expect(fine.audioVerifyStatus == "ok")
+        #expect(fine.mediaReportCard?.check(.sound)?.verdict == .ok)
+        let mismatch = AudioVerifyFinding.durationMismatch(audioSeconds: 120, videoSeconds: 3780)
+        let (bad, _, _) = try await fullCheck("test_cm_short.avi",
+                                              audio: S.soundDiagnosis(channels: [-18, -20], extraFindings: [mismatch]))
+        #expect(bad.audioVerifyStatus == "damaged")
+        #expect(bad.mediaReportCard?.check(.sound)?.verdict == .problem)
+    }
 }
 
 // MARK: - Sensor: one writer, one rule

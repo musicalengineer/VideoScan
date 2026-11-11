@@ -127,11 +127,22 @@ enum BalanceAudioFix {
     /// THE one gate — the sheet's Balance button and the job's refusal
     /// branch BOTH call this, so what the sheet promises the job never
     /// refuses (the sensor in BalanceAudioMultiTrackTests pins this
-    /// agreement). Stream-level refusal first, then the per-class table.
+    /// agreement). Completeness first, then the stream-level refusal, then
+    /// the per-class table.
+    ///
+    /// Completeness (review F3, 2026-11-11): a channel whose level could not
+    /// be read parses as −inf, so a healthy stereo track with one unread
+    /// channel classifies leftOnly — and a balance render from that would
+    /// throw the unread channel away. An analysis that is not a complete
+    /// measurement (`measuredSilent == nil`) is never actionable.
     static func refusalReason(for analysis: AudioBalanceAnalysis) -> String? {
-        streamRefusalReason(programStreamCount: analysis.programStreamCount)
+        guard analysis.measuredSilent != nil else { return incompleteMeasurementReason }
+        return streamRefusalReason(programStreamCount: analysis.programStreamCount)
             ?? refusalReason(for: analysis.classification)
     }
+
+    static let incompleteMeasurementReason =
+        "The sound was only partly measured — run Verify Audio again before balancing."
 
     /// nil = actionable. Non-nil = the plain-language reason the job
     /// refuses (surfaced verbatim in the sheet and the job row).

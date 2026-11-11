@@ -320,6 +320,11 @@ enum VerifyAudioRules {
         }
     }
 
+    /// How every `.readFailed` reason starts. Check Media stores the reason
+    /// on the card's Sound row; Repair… reads this lead there to keep
+    /// Rebuild Audio Track on offer (CheckMediaRules.isSoundNotDecodedRow).
+    static let couldNotDecodeLead = "the sound track could not be decoded"
+
     /// How the levels pass ended, read off a diagnosis's parts. The order
     /// is the Promote sound gate's (PromoteSoundGate.finding): a failed
     /// pass, then "nothing to decode", then completeness. Pure.
@@ -327,7 +332,7 @@ enum VerifyAudioRules {
                            analysis: AudioBalanceAnalysis?) -> AudioLevelsPass {
         for finding in findings {
             if case .unsupportedCodec(let codec, decodable: false) = finding {
-                return .readFailed(reason: "the sound track could not be decoded (\(codec.isEmpty ? "unknown codec" : codec)) — "
+                return .readFailed(reason: "\(couldNotDecodeLead) (\(codec.isEmpty ? "unknown codec" : codec)) — "
                     + "a failed read, or sound that Repair… has to rebuild")
             }
         }
@@ -369,9 +374,14 @@ enum VerifyAudioRules {
             // missing" reads as one clause, not two dashes.
             return "reference movie, media missing"
         case .unsupportedCodec(let codec, let decodable):
+            // decodable == false: the levels pass FAILED. That is not
+            // decode evidence (a failed read looks the same), so the words
+            // never say "undecodable" (review F5) — this fragment can sit in
+            // a stored damaged note beside real damage, and is the rebuild's
+            // File Journey reason.
             return decodable
                 ? "invalid codec (\(codec))"
-                : "undecodable audio (\(codec.isEmpty ? "unknown codec" : codec))"
+                : "audio could not be read (\(codec.isEmpty ? "unknown codec" : codec))"
         case .durationMismatch(let audio, let video):
             return "audio shorter than video (\(Int(audio.rounded()))s vs \(Int(video.rounded()))s)"
         case .channelImbalance(let c):

@@ -78,6 +78,17 @@ enum ArchiveAngelAudioOutcome: Equatable {
         return .refused("Balance Audio can't help here — \(words).")
     }
 
+    /// The Angel's "Already verified" skip: the diagnosis to reuse instead
+    /// of verifying again, or nil = verify now. Reused only when a verdict
+    /// is stored AND the cached diagnosis is itself a verdict: a newer
+    /// not-checked diagnosis behind an earlier stored "ok" is neither
+    /// "already verified" nor something to hand on (review F4). Pure.
+    static func reusableDiagnosis(storedStatus: String, cached: AudioVerifyDiagnosis?) -> AudioVerifyDiagnosis? {
+        guard !storedStatus.isEmpty, let cached else { return nil }
+        if case .notChecked = cached.verdict { return nil }
+        return cached
+    }
+
     static func verdict(for c: AudioChannelClass) -> String {
         switch c {
         case .leftOnly:  return "One-sided audio — left channel only"

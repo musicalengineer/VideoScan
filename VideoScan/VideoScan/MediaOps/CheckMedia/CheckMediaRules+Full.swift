@@ -259,14 +259,51 @@ extension CheckMediaRules {
         if checks.allSatisfy({ if case .notRun = $0.verdict { return true }; return false }) {
             return "Couldn't be checked."
         }
+        // A full check that could not check the sound is not a clean bill
+        // (review F1, 2026-11-11): say so, and why, instead of "Looks healthy".
+        if let why = soundNotCheckedReason(checks: checks, quick: quick, tier: tier) {
+            return "\(soundNotCheckedLead)\(why). No problems were found in the rest of the full check."
+        }
         return tier == .quick ? quickPassHeadline : fullPassHeadline
+    }
+
+    /// How a headline starts when the full check could not check the sound.
+    static let soundNotCheckedLead = "Sound not checked — "
+
+    /// Why the FULL check has no answer about a sound track that is there:
+    /// the Sound row's not-run reason (the levels pass failed, was
+    /// incomplete, or threw). nil for the quick tier (it does not include
+    /// the sound pass), for a file with no sound track, and when the row
+    /// has a verdict. O(rows).
+    static func soundNotCheckedReason(checks: [MediaCheck], quick: CheckMediaQuickInputs,
+                                      tier: MediaReportCard.Tier) -> String? {
+        guard tier == .full, quick.facts.audio != nil,
+              case .notRun(let reason)? = checks.first(where: { $0.kind == .sound })?.verdict else { return nil }
+        return reason
+    }
+
+    /// The card's headline is the sound-not-checked one (so a summary does
+    /// not put "OK" in front of it).
+    static func isSoundNotChecked(_ card: MediaReportCard) -> Bool {
+        card.tier == .full && card.headline.hasPrefix(soundNotCheckedLead)
+    }
+
+    /// A Sound row that says the track could not be decoded — the one
+    /// not-run reason Repair… answers with Rebuild Audio Track (review F2).
+    /// The reason is VerifyAudioRules' own (`couldNotDecodeLead`), stored on
+    /// the card, so this still reads true after a relaunch.
+    static func isSoundNotDecodedRow(_ c: MediaCheck) -> Bool {
+        guard c.kind == .sound, case .notRun(let reason) = c.verdict else { return false }
+        return reason.hasPrefix(VerifyAudioRules.couldNotDecodeLead)
     }
 
     /// A quick check that found nothing is NOT a clean bill of health
     /// (Rick 2026-10-07: "Looks healthy" was shown for a file whose sound
     /// stutters). Never "fine", "healthy" or "OK" for the quick tier.
     static let quickPassHeadline = MediaReportCard.quickPassHeadline
-    /// Only a full check, every row OK or not run (each row says why).
+    /// Only a full check, every row OK or not run (each row says why) —
+    /// and never when the sound track was there and could not be checked
+    /// (`soundNotCheckedReason`).
     static let fullPassHeadline =
         "Looks healthy — the full check read the whole file and found nothing wrong."
 
