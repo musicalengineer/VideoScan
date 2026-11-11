@@ -9,7 +9,7 @@
 //   * poisoned STORED STATE with a measurement that says silent: a stored
 //     "ok" in every shape that must not be believed (no date, a fingerprint
 //     of other bytes, a stale stamp, garbage words, a header that claims
-//     channels) — each is measured again and refused.
+//     channels) — none is read: each file is measured and refused.
 //
 // Sandbox only; no preference, environment variable or real path is touched
 // (the ffmpeg-missing case is the pure `uncheckedReason` row in

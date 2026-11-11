@@ -10,7 +10,7 @@
 //      channel count, not a codec name (DECISIONS 2026-10-16: a header never
 //      says "has sound");
 //   3. no production file assigns the job's `soundMeasure` test seam;
-//   4. the persisted sound verdict has one writer, called from three places;
+//   4. the gate reads nothing stored about sound and stores nothing (2b, 4);
 //   5. the only ungated catalog links are the two recovery adoptions;
 //   6. the words on the sheet are true.
 //
@@ -126,6 +126,21 @@ struct PromoteSoundGateSensorTests {
         }
     }
 
+    @Test("2b — the gate reads NOTHING stored about sound (no media_checks verdict, no report card) and writes nothing: the owner's tag is its only stored input")
+    func theGateReadsNoStoredVerdict() throws {
+        let rule = Self.code(try Self.source("Archive/PromoteSoundGate.swift")).joined(separator: "\n")
+        let guards = try Self.source("Archive/PromoteToArchiveJob+Guards.swift")
+        let start = try #require(guards.range(of: "func soundGate("))
+        let end = try #require(guards.range(of: "nonisolated static func stampOffMain", range: start.upperBound..<guards.endIndex))
+        let gate = Self.code(String(guards[start.upperBound..<end.lowerBound])).joined(separator: "\n")
+        for stored in ["audioVerifyStatus", "audioVerifyNote", "audioVerifyDate", "mediaReportCard", "media_checks",
+                       "storedPass", "VerifyAudioJob.write", "saveCatalog", "verifyDiagnosis(", "audioFingerprint"] {
+            #expect(!rule.contains(stored), "PromoteSoundGate must not use \(stored)")
+            #expect(!gate.contains(stored), "the sound gate's guard must not use \(stored)")
+        }
+        #expect(gate.contains("current.tags"), "the owner's tag is the one stored input")
+    }
+
     @Test("3 — no production file assigns the measurement seam: it is `.live` everywhere outside tests")
     func theSeamIsNeverAssignedInProduction() throws {
         var uses: [String] = []
@@ -149,7 +164,7 @@ struct PromoteSoundGateSensorTests {
                 "the live measurement is Verify Audio's probe — no second measurement engine")
     }
 
-    @Test("4 — the persisted sound verdict has ONE writer; the gate calls it only for a complete, stable measurement")
+    @Test("4 — the persisted sound verdict has ONE writer, and Promote is not one of its callers")
     func oneVerdictWriter() throws {
         var writers: Set<String> = []
         var callers: Set<String> = []
@@ -165,17 +180,8 @@ struct PromoteSoundGateSensorTests {
             }
         }
         #expect(writers == ["MediaOps/VerifyAudioJob.swift"], "one writer of the audio verdict: \(writers.sorted())")
-        #expect(callers == ["Archive/PromoteToArchiveJob+Guards.swift", "MediaOps/CheckMedia/CheckMediaJob.swift"],
-                "VerifyAudioJob.write is called from Check Media and the Promote sound gate: \(callers.sorted())")
-        let guards = try Self.source("Archive/PromoteToArchiveJob+Guards.swift")
-        let start = try #require(guards.range(of: "private func measureSound("))
-        let end = try #require(guards.range(of: "\n    }\n", range: start.upperBound..<guards.endIndex))
-        let body = String(guards[start.upperBound..<end.lowerBound])
-        let write = try #require(body.range(of: "VerifyAudioJob.write(")).lowerBound
-        #expect(try #require(body.range(of: "before == after")).lowerBound < write, "only after the stamp is proven unchanged")
-        #expect(try #require(body.range(of: "if case .unchecked = finding { return finding }")).lowerBound < write,
-                "never for a measurement that could not answer")
-        #expect(body.contains("model.record(forID: source.id) ?? source"), "onto the SOURCE record, by id")
+        #expect(callers == ["MediaOps/CheckMedia/CheckMediaJob.swift"],
+                "VerifyAudioJob.write is called from Check Media only — never from Promote: \(callers.sorted())")
     }
 
     @Test("5 — a catalog link to an archive copy is made in one place, reached by the gated copy and the two recovery adoptions only")

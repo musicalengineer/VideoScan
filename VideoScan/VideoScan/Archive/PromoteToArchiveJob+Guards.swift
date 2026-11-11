@@ -107,9 +107,7 @@ extension PromoteToArchiveJob {
     /// before the journal intent: (1) the digest proof — a stored fingerprint
     /// is read back and refused on any difference (codex 2026-10-02 #1);
     /// (2) the sound gate, on exactly the bytes just proven. `proven` false =
-    /// the digest came from a stored fingerprint that still described the
-    /// file; once the read confirms it, that is the only case in which a
-    /// stored sound check may be reused.
+    /// the digest came from a stored fingerprint and is read back first.
     ///
     /// `stampBeforeDigest`: the source's stat stamp taken BEFORE its digest
     /// was read or trusted. The sound gate requires the file to still carry
@@ -129,7 +127,7 @@ extension PromoteToArchiveJob {
         }
         testHookBeforeSoundCheck?(source)
         if Task.isCancelled { return .cancelled }
-        let sound = try await soundGate(source: source, entry: entry, digest: digest, fixityVouchedNow: !proven,
+        let sound = try await soundGate(source: source, entry: entry, digest: digest,
                                         stampBeforeDigest: stampBeforeDigest, model: model)
         if let refusal = sound.refusal { return .refused(refusal) }
         // After BOTH guards, still before the destination and the journal
@@ -158,23 +156,20 @@ extension PromoteToArchiveJob {
     /// Runs after the source's digest is proven and before the destination
     /// is chosen, so a refusal has written nothing to the archive.
     ///
-    /// Evidence, in order: a stored Verify Audio pass that is provably about
-    /// these bytes (`PromoteSoundGate.storedPass`), else a measurement taken
-    /// now — `soundMeasure` (ffprobe + the levels pass), run directly, not as
-    /// a nested MFO job: this job already holds the source volume's gate.
-    /// The file's stat stamp must be the same before and after the
-    /// measurement, or the answer is "could not check".
-    ///
-    /// The one catalog write: a COMPLETE fresh measurement is stored on the
-    /// source record through Verify Audio's writer, so the next Promote
-    /// reuses it. "Could not check" stores nothing (GH #128).
+    /// The sound is MEASURED here, every time — `soundMeasure` (ffprobe + the
+    /// levels pass), run directly, not as a nested MFO job: this job already
+    /// holds the source volume's gate. Nothing stored about the file's sound
+    /// is read, and nothing is stored (Codex #280 / #281: a stored verdict
+    /// has no digest and no completeness mark). The record is the SOUND
+    /// OUTCOME line. The file must still carry the stamp it had before its
+    /// digest was read, and the same stamp after the measurement, or the
+    /// answer is "could not check".
     ///
     /// Memory: the diagnosis is a few small structs; the probe streams and
     /// keeps at most ~1 MB of ffprobe output. Nothing is retained per file
     /// but a one-line note.
     func soundGate(source: VideoRecord, entry: ArchivePromotePlan.Entry, digest: String,
-                   fixityVouchedNow: Bool, stampBeforeDigest: FileIdentityStamp?,
-                   model: VideoScanModel) async throws -> SoundGateResult {
+                   stampBeforeDigest: FileIdentityStamp?, model: VideoScanModel) async throws -> SoundGateResult {
         let op = currentOpLabel
         func say(_ line: String) {
             model.log("Promote: \(line)")
@@ -183,28 +178,17 @@ extension PromoteToArchiveJob {
         }
         let path = source.fullPath
         let before = await Self.stampOffMain(path: path)
-        var basis = PromoteSoundGate.Basis.measured
         let finding: PromoteSoundGate.Finding
         if before == nil {
             finding = .unchecked("the file is not reachable")
         } else if before != stampBeforeDigest {
-            // Not the file whose digest was proven (Codex #280 F2): nothing
-            // is measured, reused or stored for it.
+            // Not the file whose digest was proven (Codex #280 F2): it is
+            // not measured.
             finding = .unchecked("the file changed after its bytes were proven")
-        } else if let checkedAt = source.audioVerifyDate,
-                  let stored = PromoteSoundGate.storedPass(status: source.audioVerifyStatus,
-                                                           note: source.audioVerifyNote,
-                                                           checkedAt: checkedAt,
-                                                           fixity: source.contentFixity,
-                                                           fixityVouchesNow: fixityVouchedNow,
-                                                           provenDigest: digest) {
-            finding = stored
-            basis = .stored(checkedAt: checkedAt)
-            say("SOUND START \(op): reusing the stored check of \(ISO8601DateFormatter().string(from: checkedAt)) (sha256 \(digest.prefix(12))…)")
         } else {
             say("SOUND START \(op): measuring (\(source.sizeBytes) bytes)")
             applyPhaseSubtitle("Checking the sound of \(source.filename)…")
-            finding = try await measureSound(source: source, path: path, before: before, model: model)
+            finding = try await measureSound(path: path, before: before)
         }
 
         // The owner's word is read NOW, from the catalog's CURRENT record for
@@ -215,7 +199,7 @@ extension PromoteToArchiveJob {
         let mark = PromoteSoundGate.mark(tags: current.tags, storedFixity: current.contentFixity,
                                          provenDigest: digest, recordSizeBytes: current.sizeBytes,
                                          provenSizeBytes: before?.size ?? 0)
-        let decision = PromoteSoundGate.decide(finding: finding, basis: basis, mark: mark,
+        let decision = PromoteSoundGate.decide(finding: finding, mark: mark,
                                                soundPartnerName: facts.soundPartnerName,
                                                recordedYear: facts.recordedYear,
                                                digestPrefix: String(digest.prefix(12)))
@@ -226,18 +210,15 @@ extension PromoteToArchiveJob {
             return .pass(note: rowNote)
         case .refuse(let code, let detail, let logFacts):
             // `noteRefusal` writes the one persistent REFUSED line.
-            guard let refusalCode = Refusal.Code(rawValue: code.rawValue) else {
-                return .refused(Refusal(code: .soundUnchecked, kind: .failed, detail: detail, logFacts: logFacts))
-            }
+            let refusalCode = Refusal.Code(rawValue: code.rawValue) ?? .soundUnchecked
             return .refused(Refusal(code: refusalCode, kind: .failed, detail: detail, logFacts: logFacts))
         }
     }
 
     /// Measure now. A thrown probe error, a levels pass that did not cover
     /// every channel, or a file whose stamp moved during the read is
-    /// "could not check" — never a pass, never a stored verdict.
-    private func measureSound(source: VideoRecord, path: String, before: FileIdentityStamp?,
-                              model: VideoScanModel) async throws -> PromoteSoundGate.Finding {
+    /// "could not check" — never a pass. Nothing is written anywhere.
+    private func measureSound(path: String, before: FileIdentityStamp?) async throws -> PromoteSoundGate.Finding {
         let diagnosis: AudioVerifyDiagnosis
         do {
             diagnosis = try await soundMeasure.diagnose(path)
@@ -252,13 +233,7 @@ extension PromoteToArchiveJob {
         guard let before, let after, before == after else {
             return .unchecked("the file changed while its sound was being checked")
         }
-        let finding = PromoteSoundGate.finding(from: diagnosis)
-        if case .unchecked = finding { return finding }
-        // A rescan may have replaced the record object: write by id.
-        let current = model.record(forID: source.id) ?? source
-        VerifyAudioJob.write(diagnosis, onto: current, at: Date())
-        model.saveCatalogDebounced()
-        return finding
+        return PromoteSoundGate.finding(from: diagnosis)
     }
 
     /// One stat of the source, off the UI thread (a sleeping drive can make

@@ -4,10 +4,10 @@
 // refuses a video whose sound is missing, silent or damaged unless the owner
 // has marked that file as acceptable without sound."
 //
-// Pure: PromoteSoundGate's four functions over canned values — what a
-// measurement means (`finding`), when a stored check may stand in
-// (`storedPass`), when the owner's tag speaks for these bytes (`mark`) and
-// the decision with its words (`decide`). No file is read, no model built.
+// Pure: PromoteSoundGate's three functions over canned values — what a
+// measurement means (`finding`), when the owner's tag speaks for these bytes
+// (`mark`) and the decision with its words (`decide`). There is no fourth:
+// a stored check is never reused (PromoteSoundGateSensorTests 2b). No file is read, no model built.
 // The call site is PromoteSoundGateJobTests; real media is
 // PromoteSoundGateMediaMatrixTests.
 //
@@ -38,7 +38,7 @@ struct PromoteSoundGateTests {
 
     static func decide(_ finding: G.Finding, mark: G.Mark = .absent, partner: String? = nil,
                        year: Int? = nil) -> G.Decision {
-        G.decide(finding: finding, basis: .measured, mark: mark, soundPartnerName: partner,
+        G.decide(finding: finding, mark: mark, soundPartnerName: partner,
                  recordedYear: year, digestPrefix: "aaaaaaaaaaaa")
     }
 
@@ -125,6 +125,21 @@ struct PromoteSoundGateTests {
                 "a reference movie is damage, and its paths stay out of the words")
     }
 
+    @Test("Codex #281 F1: a levels pass that FAILED (the probe's 'undecodable') is could-not-check, not 'damaged' — a failed read is not a decoded-and-bad result")
+    func failedLevelsPassIsUncheckedNotDamaged() {
+        let failed = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.unsupportedCodec(codec: "aac", decodable: false)])
+        guard case .unchecked(let why) = G.finding(from: failed) else {
+            Issue.record("a failed levels pass must be could-not-check: \(G.finding(from: failed))"); return
+        }
+        #expect(why.contains("could not be decoded (aac)"), "\(why)")
+        // Real, decoded evidence of damage still says damaged — alone or beside a failed pass.
+        let both = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.unsupportedCodec(codec: "aac", decodable: false),
+                                                                           .durationMismatch(audioSeconds: 2, videoSeconds: 10)])
+        #expect(G.finding(from: both) == .damaged("audio shorter than video (2s vs 10s)"))
+        let legacy = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.unsupportedCodec(codec: "qdm2", decodable: true)])
+        #expect(G.finding(from: legacy) == .damaged("invalid codec (qdm2)"))
+    }
+
     @Test("an incomplete measurement is COULD NOT CHECK, never silent and never a pass")
     func incompleteIsUnchecked() {
         func unchecked(_ d: AudioVerifyDiagnosis) -> Bool {
@@ -146,15 +161,12 @@ struct PromoteSoundGateTests {
     func presentDecisions() throws {
         let plain = try #require(Self.pass(Self.decide(.present(oneSided: nil, levels: "2 ch: L -18.0, R -20.0 dBFS RMS"))))
         #expect(plain.note == nil)
-        #expect(plain.log == "present — 2 ch: L -18.0, R -20.0 dBFS RMS, floor -60.0 [measured], sha256 aaaaaaaaaaaa…")
+        #expect(plain.log == "present — 2 ch: L -18.0, R -20.0 dBFS RMS, floor -60.0, sha256 aaaaaaaaaaaa…")
         let left = try #require(Self.pass(Self.decide(.present(oneSided: .left, levels: "2 ch: L -18.0, R -inf dBFS RMS"))))
         #expect(left.note == "sound on the left side only")
-        #expect(left.log.hasPrefix("present, left only — "))
-        let right = try #require(Self.pass(Self.decide(.present(oneSided: .right, levels: ""))))
+        #expect(left.log == "present, left only — 2 ch: L -18.0, R -inf dBFS RMS, floor -60.0, sha256 aaaaaaaaaaaa…")
+        let right = try #require(Self.pass(Self.decide(.present(oneSided: .right, levels: "2 ch: L -inf, R -18.0 dBFS RMS"))))
         #expect(right.note == "sound on the right side only")
-        let stored = G.decide(finding: .present(oneSided: nil, levels: ""), basis: .stored(checkedAt: Date()), mark: .absent,
-                              soundPartnerName: nil, recordedYear: nil, digestPrefix: "aaaaaaaaaaaa")
-        #expect(Self.pass(stored)?.log == "present [stored], sha256 aaaaaaaaaaaa…")
     }
 
     @Test("no track: refused in plain words that name the exact tag; nothing about a partner in the log")
@@ -235,52 +247,6 @@ struct PromoteSoundGateTests {
         #expect(!Self.decide(.present(oneSided: nil, levels: "")).isRefusal)
     }
 
-    // MARK: storedPass — when a stored check may stand in
-
-    static func stored(status: String = "ok", note: String = "",
-                       checkedAt: Date? = Date(timeIntervalSince1970: 1_700_000_100),
-                       fixity: ContentFixity? = PromoteSoundGateTests.fixity(), vouches: Bool = true,
-                       proven: String = PromoteSoundGateTests.digest) -> G.Finding? {
-        G.storedPass(status: status, note: note, checkedAt: checkedAt, fixity: fixity,
-                     fixityVouchesNow: vouches, provenDigest: proven)
-    }
-
-    @Test("a stored pass is reused only when all four conditions hold")
-    func storedPassConditions() {
-        #expect(Self.stored() == .present(oneSided: nil, levels: ""), "the baseline: vouched, same digest, newer, ok")
-        #expect(Self.stored(vouches: false) == nil, "1 — the fingerprint no longer describes the file")
-        #expect(Self.stored(fixity: nil) == nil, "1 — no fingerprint")
-        #expect(Self.stored(proven: Self.other) == nil, "2 — the proven digest is a different file")
-        #expect(Self.stored(proven: "") == nil, "2 — no proven digest")
-        #expect(Self.stored(checkedAt: Date(timeIntervalSince1970: 1_699_999_999)) == nil, "3 — the check is older than the fingerprint")
-        #expect(Self.stored(checkedAt: Date(timeIntervalSince1970: 1_700_000_000)) == nil, "3 — the same instant is not newer")
-        #expect(Self.stored(checkedAt: nil) == nil, "3 — a verdict with no date")
-        #expect(Self.stored(status: "") == nil, "4 — never checked")
-        #expect(Self.stored(status: "damaged", note: "Damaged audio — invalid codec (qdm2)") == nil, "4 — a stored refusal is measured again")
-        #expect(Self.stored(proven: Self.digest.uppercased()) != nil, "digest case does not matter")
-        // Codex #280 F3: a verdict dated in the FUTURE proves nothing about when it was measured.
-        #expect(Self.stored(checkedAt: .distantFuture) == nil, "3 — a future-dated verdict")
-        #expect(Self.stored(checkedAt: Date().addingTimeInterval(120)) == nil, "3 — two minutes ahead of the clock")
-    }
-
-    @Test("stored note fragments: only the ones the levels pass wrote for a track that carries sound")
-    func storedFragments() {
-        #expect(Self.stored(note: "one-sided audio (left only)") == .present(oneSided: .left, levels: ""))
-        #expect(Self.stored(note: "one-sided audio (right only)") == .present(oneSided: .right, levels: ""))
-        #expect(Self.stored(note: "mono audio") == .present(oneSided: nil, levels: ""))
-        #expect(Self.stored(note: "2 live audio tracks") == .present(oneSided: nil, levels: ""))
-        for refusedOrUnknown in ["silent audio", "no audio stream", "surround audio (6 channels)",
-                                 "1 live audio tracks", "0 live audio tracks", "x live audio tracks",
-                                 "channel imbalance", "something a later build wrote",
-                                 "mono audio; silent audio", "one-sided audio (left only); surround audio (6 channels)"] {
-            #expect(Self.stored(note: refusedOrUnknown) == nil, "\"\(refusedOrUnknown)\" must be measured now")
-        }
-        // The fragments are the ones Verify Audio writes today (no drift).
-        #expect(VerifyAudioRules.noteFragment(for: .channelImbalance(.leftOnly)) == "one-sided audio (left only)")
-        #expect(VerifyAudioRules.noteFragment(for: .multipleProgramTracks(count: 2)) == "2 live audio tracks")
-        #expect(VerifyAudioRules.noteFragment(for: .surround(channels: 6)) == "surround audio (6 channels)")
-    }
-
     // MARK: mark — when the owner's tag speaks for these bytes
 
     @Test("the tag binds to the digest it is stored under; a never-fingerprinted record binds by size")
@@ -336,20 +302,19 @@ struct PromoteSoundGateTests {
 
     // MARK: Scale
 
-    @Test("SCALE: 100,000 files through storedPass + mark + decide in under a second", .timeLimit(.minutes(1)))
+    @Test("SCALE: 100,000 files through finding + mark + decide in under a second", .timeLimit(.minutes(1)))
     func scale() {
         let fixity = Self.fixity()
-        let notes = ["", "one-sided audio (left only)", "silent audio", "surround audio (6 channels)", "mono audio", "2 live audio tracks"]
-        let when = Date(timeIntervalSince1970: 1_700_000_100)
+        let diagnoses = [S.soundDiagnosis(channels: [-18, -20]), S.soundDiagnosis(channels: [-18, -.infinity]),
+                         S.soundDiagnosis(channels: [-68, -68]), S.soundDiagnosis(channels: [], audioStreams: 0),
+                         S.soundDiagnosis(channels: [-70, -72, -.infinity, -90, -75, -80]), S.soundDiagnosis(channels: [-18, nil])]
         let start = Date()
         var promoted = 0, refused = 0
         for i in 0..<100_000 {
-            let stored = G.storedPass(status: i % 7 == 0 ? "damaged" : "ok", note: notes[i % notes.count], checkedAt: when,
-                                      fixity: fixity, fixityVouchesNow: i % 5 != 0, provenDigest: Self.digest)
-            let finding = stored ?? (i % 3 == 0 ? G.Finding.noTrack : .silent(levels: "2 ch", loudestDBFS: -70))
+            let finding = G.finding(from: diagnoses[i % diagnoses.count])
             let mark = G.mark(tags: i % 11 == 0 ? ["Silent — checked"] : ["Gold"], storedFixity: fixity,
                               provenDigest: Self.digest, recordSizeBytes: 4_096, provenSizeBytes: 4_096)
-            if G.decide(finding: finding, basis: .measured, mark: mark, soundPartnerName: nil, recordedYear: 1994,
+            if G.decide(finding: finding, mark: mark, soundPartnerName: nil, recordedYear: 1994,
                         digestPrefix: "aaaaaaaaaaaa").isRefusal { refused += 1 } else { promoted += 1 }
         }
         let elapsed = -start.timeIntervalSinceNow

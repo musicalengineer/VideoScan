@@ -6,7 +6,7 @@
 //
 // The invariants (design §5):
 //   I-1  nothing reaches the archive without a pass for the proven bytes;
-//   I-2  a stored check is reused only when it is provably about these bytes;
+//   I-2  nothing stored about the sound is read, and nothing is stored;
 //   I-5  the owner's tag accepts no-track / silent only, and only for the
 //        digest it is stored under;
 //   I-7  a refusal leaves the archive byte-for-byte as it was;
@@ -270,7 +270,7 @@ struct PromoteSoundGateJobTests {
         #expect(Self.lines(model, "refused [sound-silent]").contains { $0.contains("owner tag not tied to these bytes") })
     }
 
-    // MARK: Stored checks (I-2)
+    // MARK: Fixture: a current whole-file fingerprint
 
     /// A real, current whole-file fingerprint for `rec`, taken `ago` seconds back.
     static func fingerprint(_ rec: VideoRecord, computedAt: Date) throws {
@@ -281,87 +281,7 @@ struct PromoteSoundGateJobTests {
         rec.contentFixity = fixity
     }
 
-    static let neverMeasure = PromoteSoundGate.Measure { _ in
-        Issue.record("the measurement ran, but a stored check should have been reused")
-        return MasterArchiveTestSupport.soundDiagnosis(channels: [-18, -20])
-    }
-
-    @Test("a stored pass that is provably about these bytes is REUSED: no measurement runs, the START line says so")
-    func storedPassIsReused() async throws {
-        let (sb, model) = try H.setup("sg_reuse"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_verified.mov", seed: 617)
-        try await Task.sleep(for: .milliseconds(20))          // past the stamp's racy window
-        try Self.fingerprint(a, computedAt: Date())
-        try await Task.sleep(for: .milliseconds(20))
-        a.audioVerifyStatus = "ok"; a.audioVerifyNote = "one-sided audio (right only)"
-        a.audioVerifyDate = Date()                             // after the fingerprint, not after now
-        try await Task.sleep(for: .milliseconds(20))
-        let job = try await Self.promote(model, a, measure: Self.neverMeasure)
-        let o = try #require(H.outcome(job, a.id))
-        #expect(o.kind == .promoted && o.soundNote == "sound on the right side only", "\(o.kind) — \(o.detail)")
-        #expect(Self.lines(model, "SOUND START").contains { $0.contains("reusing the stored check of") })
-        #expect(Self.lines(model, "SOUND OUTCOME").contains { $0.contains("present, right only [stored]") })
-    }
-
-    @Test("REFUSED: a stale stored 'ok' never passes — the file was rewritten to silence after it was checked")
-    func staleStoredPassIsMeasuredAgain() async throws {
-        let (sb, model) = try H.setup("sg_stale"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_rewritten.mov", seed: 618)
-        try await Task.sleep(for: .milliseconds(20))
-        let checked = Date()
-        try Self.fingerprint(a, computedAt: checked)
-        a.audioVerifyStatus = "ok"; a.audioVerifyNote = ""; a.audioVerifyDate = checked.addingTimeInterval(60)
-        // Rewritten: same size, same path, different bytes. The stored fingerprint no longer describes it.
-        try S.writeBlob(at: URL(fileURLWithPath: a.fullPath), bytes: 40_000, seed: 9_618)
-        let before = ArchiveSnapshot.take(sb)
-        let job = try await Self.promote(model, a, measure: S.measure(Self.silentPair))
-        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
-        #expect(Self.lines(model, "SOUND START").allSatisfy { !$0.contains("reusing") })
-    }
-
-    @Test("REFUSED: a stored 'ok' OLDER than the fingerprint is not evidence — it may be about an earlier version")
-    func verdictOlderThanFingerprintIsMeasuredAgain() async throws {
-        let (sb, model) = try H.setup("sg_older"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_older.mov", seed: 619)
-        try await Task.sleep(for: .milliseconds(20))
-        let hashed = Date()
-        try Self.fingerprint(a, computedAt: hashed)
-        a.audioVerifyStatus = "ok"; a.audioVerifyNote = ""; a.audioVerifyDate = hashed.addingTimeInterval(-3_600)
-        let before = ArchiveSnapshot.take(sb)
-        let job = try await Self.promote(model, a, measure: S.measure(Self.silentPair))
-        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
-    }
-
-    @Test("REFUSED: stored 'ok' / surround is a header verdict — measured again, and six silent channels are refused")
-    func storedSurroundIsMeasuredAgain() async throws {
-        let (sb, model) = try H.setup("sg_surround"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_51.mov", seed: 620)
-        try await Task.sleep(for: .milliseconds(20))
-        let now = Date()
-        try Self.fingerprint(a, computedAt: now)
-        a.audioVerifyStatus = "ok"; a.audioVerifyNote = "surround audio (6 channels)"; a.audioVerifyDate = now.addingTimeInterval(60)
-        let before = ArchiveSnapshot.take(sb)
-        let job = try await Self.promote(model, a, measure: S.measure(S.soundDiagnosis(channels: [-70, -72, -.infinity, -90, -75, -80])))
-        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
-    }
-
     // MARK: Codex #280 (2026-11-10) — each seen red first
-
-    @Test("REFUSED — Codex #280 F3: a FUTURE-dated 'ok' survives a rewrite and a fingerprint refresh; it must be measured again")
-    func futureDatedVerdictIsMeasuredAgain() async throws {
-        let (sb, model) = try H.setup("sg_future"); defer { sb.cleanup() }
-        let a = try H.source(sb, model, name: "test_future.mov", seed: 651)
-        // Audible version A verified with a clock that ran ahead…
-        a.audioVerifyStatus = "ok"; a.audioVerifyNote = ""; a.audioVerifyDate = Date().addingTimeInterval(86_400)
-        // …then rewritten to silent B (same size, same path) and fingerprinted NOW.
-        try S.writeBlob(at: URL(fileURLWithPath: a.fullPath), bytes: 40_000, seed: 9_651)
-        try await Task.sleep(for: .milliseconds(20))
-        try Self.fingerprint(a, computedAt: Date())
-        let before = ArchiveSnapshot.take(sb)
-        let job = try await Self.promote(model, a, measure: S.measure(Self.silentPair))
-        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
-        #expect(Self.lines(model, "SOUND START").allSatisfy { !$0.contains("reusing") })
-    }
 
     @Test("REFUSED — Codex #280 F5: stereo above the line from a levels pass that did not cover every stream is could-not-check, and stores no verdict")
     func incompletePassWithALiveChannelIsRefused() async throws {
@@ -430,21 +350,48 @@ struct PromoteSoundGateJobTests {
         #expect(model.masterArchiveCopy(of: a) == nil)
     }
 
-    // MARK: The one catalog write
+    // MARK: Nothing stored is read, nothing is stored (2026-11-10, after Codex #281)
 
-    @Test("a complete measurement is stored on the source through Verify Audio's writer — refusal or pass")
-    func measurementIsStored() async throws {
-        let (sb, model) = try H.setup("sg_stored"); defer { sb.cleanup() }
-        let silent = try H.source(sb, model, name: "test_s.mov", seed: 621)
-        let good = try H.source(sb, model, name: "test_g.mov", seed: 622)
-        _ = try await Self.promote(model, silent, measure: S.measure(Self.silentPair))
-        #expect(silent.audioVerifyStatus == "ok" && silent.audioVerifyNote == "silent audio" && silent.audioVerifyDate != nil,
-                "\(silent.audioVerifyStatus) / \(silent.audioVerifyNote)")
-        _ = try await Self.promote(model, good, measure: S.soundPresent)
-        #expect(good.audioVerifyStatus == "ok" && good.audioVerifyNote.isEmpty && good.audioVerifyDate != nil)
-        // Never onto an archived record: the copy's verdict is not written by the gate.
-        #expect(model.masterArchiveCopy(of: good)?.audioVerifyDate == nil)
+    @Test("REFUSED — a stored 'ok' that is new, dated and bound to a current fingerprint is still NOT believed: Promote measures, and the measurement says silent")
+    func aPerfectStoredPassIsNeverReused() async throws {
+        let (sb, model) = try H.setup("sg_noreuse"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_noreuse.mov", seed: 661)
+        try await Task.sleep(for: .milliseconds(20))
+        try Self.fingerprint(a, computedAt: Date())
+        try await Task.sleep(for: .milliseconds(20))
+        a.audioVerifyStatus = "ok"; a.audioVerifyNote = ""; a.audioVerifyDate = Date()
+        var card = MediaReportCard(tier: .full, checkedAt: Date(), fileSizeBytes: a.sizeBytes, headline: "Looks healthy",
+                                   checks: [MediaCheck(kind: .sound, verdict: .ok, sentence: "Sound is fine.")])
+        card.soundMeasuredSilent = false
+        a.mediaReportCard = card
+        try await Task.sleep(for: .milliseconds(20))
+        let before = ArchiveSnapshot.take(sb)
+        let measured = PromoteSoundGateIsolationTests.Counter()
+        let job = try await Self.promote(model, a, measure: PromoteSoundGate.Measure { _ in
+            measured.bump()
+            return MasterArchiveTestSupport.soundDiagnosis(channels: [-68, -68])
+        })
+        #expect(measured.value == 1, "the sound is measured in this run, whatever is stored")
+        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
+        #expect(Self.lines(model, "SOUND START").allSatisfy { $0.contains("measuring") })
     }
+
+    @Test("the gate STORES nothing: after a refusal and after a pass the source's stored verdict, its date and its report card are as they were")
+    func theGateStoresNothing() async throws {
+        let (sb, model) = try H.setup("sg_nostore"); defer { sb.cleanup() }
+        let silent = try H.source(sb, model, name: "test_ns_silent.mov", seed: 662)
+        let good = try H.source(sb, model, name: "test_ns_good.mov", seed: 663)
+        let earlier = Date(timeIntervalSince1970: 1_700_000_000)
+        good.audioVerifyStatus = "damaged"; good.audioVerifyNote = "Damaged audio — invalid codec (qdm2)"; good.audioVerifyDate = earlier
+        _ = try await Self.promote(model, silent, measure: S.measure(Self.silentPair))
+        #expect(silent.audioVerifyStatus.isEmpty && silent.audioVerifyNote.isEmpty && silent.audioVerifyDate == nil && silent.mediaReportCard == nil)
+        let job = try await Self.promote(model, good, measure: S.soundPresent)
+        #expect(H.outcome(job, good.id)?.kind == .promoted, "a stored 'damaged' does not refuse either: the measurement decides")
+        #expect(good.audioVerifyStatus == "damaged" && good.audioVerifyDate == earlier, "what Verify Audio stored is Verify Audio's to change")
+        // The record of the measurement is the log line.
+        #expect(Self.lines(model, "SOUND OUTCOME").contains { $0.contains("present — 2 ch: L -18.0, R -20.0 dBFS RMS, floor -60.0, sha256 ") })
+    }
+
 
     // MARK: A batch, and Stop
 

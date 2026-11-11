@@ -1,8 +1,15 @@
 // PromoteSoundGate.swift
 // THE rule for "may this file's sound go into the archive?" (Rick
-// 2026-11-10): Promote measures a video's sound itself when no current
-// measurement exists, and refuses a video whose sound is missing, silent or
-// damaged unless the owner has marked that file as acceptable without sound.
+// 2026-11-10): Promote measures a video's sound itself and refuses a video
+// whose sound is missing, silent or damaged unless the owner has marked that
+// file as acceptable without sound.
+//
+// ALWAYS measured, never reused, never stored (after Codex #280 / #281): a
+// stored Verify Audio verdict carries neither the digest it was measured on
+// nor whether the levels pass was complete, so no stored verdict is read
+// here, and the gate writes none. Its record is the SOUND OUTCOME log line
+// (per-channel levels + the sha256 of the bytes measured). The owner's tag
+// is the only stored input.
 //
 // One rule, one caller: PromoteToArchiveJob.soundGate (+Guards), which every
 // Promote door reaches — the Catalog / Triage / Archive buttons and Archive
@@ -39,7 +46,7 @@ enum PromoteSoundGate {
     /// What the sound of these bytes is.
     enum Finding: Sendable, Equatable {
         /// At least one channel of one stream carries sound. `levels` is the
-        /// measured line ("" when the answer came from a stored check).
+        /// measured line.
         case present(oneSided: Side?, levels: String)
         /// ffprobe found no audio stream.
         case noTrack
@@ -49,19 +56,6 @@ enum PromoteSoundGate {
         case damaged(String)
         /// No measurement: the reason. Never a pass.
         case unchecked(String)
-    }
-
-    /// Where a finding came from.
-    enum Basis: Sendable, Equatable {
-        case measured
-        case stored(checkedAt: Date)
-
-        var word: String {
-            switch self {
-            case .measured: return "measured"
-            case .stored: return "stored"
-            }
-        }
     }
 
     /// Whether the owner's tag speaks for the bytes being promoted.
@@ -110,9 +104,17 @@ enum PromoteSoundGate {
     /// What a complete Verify Audio diagnosis says about the sound.
     /// Precedence: damage, then no track, then the levels.
     static func finding(from d: AudioVerifyDiagnosis) -> Finding {
-        let damage = d.findings.filter(VerifyAudioRules.isDamage)
+        // Damage is a DECODED-and-bad result. The probe's "undecodable"
+        // (`decodable: false`) only means its levels pass failed while the
+        // header still read — a failed read looks the same — so on its own
+        // it is "could not check", not damage (Codex #281 F1).
+        let damage = d.findings.filter { VerifyAudioRules.isDamage($0) && failedLevelsPassCodec($0) == nil }
         if !damage.isEmpty {
             return .damaged(damage.map(VerifyAudioRules.noteFragment(for:)).joined(separator: "; "))
+        }
+        if let codec = d.findings.lazy.compactMap(failedLevelsPassCodec).first {
+            return .unchecked("the sound track could not be decoded (\(codec.isEmpty ? "unknown codec" : codec)) — "
+                + "a failed read, or sound that Repair… has to rebuild")
         }
         if d.shape.audioStreams <= 0 { return .noTrack }
         guard let analysis = d.balanceAnalysis else {
@@ -130,6 +132,12 @@ enum PromoteSoundGate {
             return .silent(levels: line, loudestDBFS: channels.map(\.rmsDBFS).max() ?? -.infinity)
         }
         return .present(oneSided: oneSided(analysis), levels: line)
+    }
+
+    /// The codec of a levels pass that FAILED to run to the end, else nil.
+    private static func failedLevelsPassCodec(_ finding: AudioVerifyFinding) -> String? {
+        if case .unsupportedCodec(let codec, decodable: false) = finding { return codec }
+        return nil
     }
 
     /// One side only: exactly one stream carries sound, it has two
@@ -159,58 +167,6 @@ enum PromoteSoundGate {
         value == -.infinity ? "-inf" : String(format: "%.1f", value)
     }
 
-    // MARK: Stored measurement (reuse)
-
-    /// The stored Verify Audio verdict as a finding, ONLY when it is a pass
-    /// that levels decided and it is provably about the bytes proven now:
-    ///   1. `fixityVouchesNow` — the record's whole-file fingerprint still
-    ///      describes the file (ContentFixity.describesFileNow held);
-    ///   2. that fingerprint's digest is the digest just proven by reading;
-    ///   3. the verdict is NEWER than the fingerprint (an older verdict may
-    ///      be about an earlier version of the file) and NOT in the future
-    ///      (Codex #280 F3: a date ahead of the clock says nothing about
-    ///      when the check ran, so it could "outlive" any later rewrite);
-    ///   4. status "ok" and every note fragment is one the levels pass
-    ///      wrote for a track that carries sound.
-    /// nil = measure now. A stored refusal is never reused (a refusal's
-    /// words must be true now), and a stored "surround" note is never a
-    /// pass (the classifier names surround without reading its levels).
-    static func storedPass(status: String, note: String, checkedAt: Date?,
-                           fixity: ContentFixity?, fixityVouchesNow: Bool,
-                           provenDigest: String, now: Date = Date()) -> Finding? {
-        guard fixityVouchesNow, let fixity, fixity.algorithm == ContentFixity.sha256,
-              !provenDigest.isEmpty, fixity.digest.lowercased() == provenDigest.lowercased(),
-              let checkedAt, checkedAt > fixity.computedAt, checkedAt <= now, fixity.computedAt <= now,
-              status == "ok" else { return nil }
-        var side: Side?
-        for raw in note.split(separator: ";") {
-            let fragment = raw.trimmingCharacters(in: .whitespaces)
-            if fragment.isEmpty { continue }
-            if fragment == leftOnlyFragment { side = .left; continue }
-            if fragment == rightOnlyFragment { side = .right; continue }
-            if fragment == monoFragment { continue }
-            if isLiveTracksFragment(fragment) { side = nil; continue }
-            return nil   // silent, no stream, surround, or words this build does not know
-        }
-        return .present(oneSided: side, levels: "")
-    }
-
-    private static let leftOnlyFragment = VerifyAudioRules.noteFragment(for: .channelImbalance(.leftOnly))
-    private static let rightOnlyFragment = VerifyAudioRules.noteFragment(for: .channelImbalance(.rightOnly))
-    private static let monoFragment = VerifyAudioRules.noteFragment(for: .channelImbalance(.mono))
-    private static let liveTracksSuffix: String = {
-        let sample = VerifyAudioRules.noteFragment(for: .multipleProgramTracks(count: 2))
-        return String(sample.drop { $0.isNumber })
-    }()
-
-    /// "2 live audio tracks" — a count of at least 2, then the exact suffix.
-    static func isLiveTracksFragment(_ fragment: String) -> Bool {
-        guard fragment.hasSuffix(liveTracksSuffix), !liveTracksSuffix.isEmpty else { return false }
-        let digits = fragment.dropLast(liveTracksSuffix.count)
-        guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int(digits) else { return false }
-        return n >= 2
-    }
-
     // MARK: The owner's mark
 
     /// Does the "Silent — checked" tag speak for the bytes proven now?
@@ -237,7 +193,7 @@ enum PromoteSoundGate {
     /// `soundPartnerName`: the catalogued sound half when this is the
     /// picture half of a pair (words only — it never passes anything).
     /// `recordedYear`: for the "film before 1980 is often silent" hint only.
-    static func decide(finding: Finding, basis: Basis, mark: Mark,
+    static func decide(finding: Finding, mark: Mark,
                        soundPartnerName: String?, recordedYear: Int?,
                        digestPrefix: String) -> Decision {
         let sha = digestPrefix.isEmpty ? "" : ", sha256 \(digestPrefix)…"
@@ -254,13 +210,13 @@ enum PromoteSoundGate {
                            logFacts: "damaged sound (\(what)); nothing written")
 
         case .present(let side, let levels):
-            let measured = levels.isEmpty ? "" : " — \(levels), floor \(db(floorDBFS))"
+            let measured = " — \(levels), floor \(db(floorDBFS))"
             switch side {
             case .none:
-                return .promote(rowNote: nil, logFacts: "present\(measured) [\(basis.word)]\(sha)")
+                return .promote(rowNote: nil, logFacts: "present\(measured)\(sha)")
             case .some(let s):
                 return .promote(rowNote: "sound on the \(s.rawValue) side only",
-                                logFacts: "present, \(s.rawValue) only\(measured) [\(basis.word)]\(sha)")
+                                logFacts: "present, \(s.rawValue) only\(measured)\(sha)")
             }
 
         case .noTrack:

@@ -139,6 +139,7 @@ extension PromoteToArchiveJob {
     ///   done                       → trusted (a durable catalog save wrote it)
     /// Returns how many promotions were completed here.
     func reconcileJournal(model: VideoScanModel, ctx: RunContext) async -> Int {
+        // No sound gate here, on purpose (Codex #280 F6, declined 2026-11-10): these bytes are ALREADY in the archive; refusing would leave an archived file unindexed. The gate is at the entry door (copyOrAdopt) only.
         let latest = ArchivePromoteJournal.latestBySource(rootPath: ctx.root)
         var completed = 0
         for (sourceID, entry) in latest where entry.state != .done && entry.state != .abandoned {
@@ -259,6 +260,7 @@ extension PromoteToArchiveJob {
                                    entry: ArchivePromotePlan.Entry,
                                    model: VideoScanModel,
                                    ctx: RunContext) async -> FileResult {
+        // No sound gate here, on purpose (Codex #280 F6, declined 2026-11-10): these bytes are ALREADY in the archive; refusing would leave an archived file unindexed. The gate is at the entry door (copyOrAdopt) only.
         // Containment FIRST (codex R4-A): the manifest relpath is data from
         // disk. Non-contained / symlinked ⇒ refused, never read or adopted.
         guard ArchivePromoteEngine.isContainedRelPath(row.relPath, root: ctx.root) else {

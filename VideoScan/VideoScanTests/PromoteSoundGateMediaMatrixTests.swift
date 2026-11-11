@@ -109,10 +109,10 @@ struct PromoteSoundGateMediaMatrixTests {
         for shape in [Shape.silent, .quiet68, .noTrack] {
             #expect(model.masterArchiveCopy(of: try #require(records[shape])) == nil, "\(c.ext) \(shape) must not be archived")
         }
-        // TRUTH: the stored verdicts are the measured ones.
-        #expect(records[.stereo]?.audioVerifyStatus == "ok" && records[.stereo]?.audioVerifyNote == "")
-        #expect(records[.silent]?.audioVerifyNote == "silent audio")
-        #expect(records[.noTrack]?.audioVerifyNote == "no audio stream")
+        // The gate stores nothing: no verdict was written for any of the five.
+        for shape in Shape.allCases {
+            #expect(records[shape]?.audioVerifyStatus == "" && records[shape]?.audioVerifyDate == nil, "\(c.ext) \(shape)")
+        }
         // TRUTH: the measured line in the log names the side the fixture put the tone on.
         await PromoteSoundGateJobTests.consoleSettled()
         #expect(model.dashboard.consoleLines.contains { $0.contains("SOUND OUTCOME") && $0.contains("present, left only") })
@@ -191,7 +191,7 @@ struct PromoteSoundGateMediaMatrixTests {
             Issue.record("measured silent expected: \(PromoteSoundGate.finding(from: d))"); return
         }
         #expect(reported == loudest)
-        guard case .refuse(_, let detail, _) = PromoteSoundGate.decide(finding: PromoteSoundGate.finding(from: d), basis: .measured,
+        guard case .refuse(_, let detail, _) = PromoteSoundGate.decide(finding: PromoteSoundGate.finding(from: d),
                                                                        mark: .absent, soundPartnerName: nil, recordedYear: nil,
                                                                        digestPrefix: "") else {
             Issue.record("refusal expected"); return
