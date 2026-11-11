@@ -17637,7 +17637,13 @@
       "tests": [
         "aHitNamesTheFileAndTimeOfTheRowThatProducedItAndStaysInScope",
         "noIndexOrAnUnreadableOneIsIndexNotBuiltAndNoHits",
+        "clearingTheFieldDuringASearchEndsTheSearch",
+        "aSupersededSearchNeverPublishes",
+        "aScopeChangeReSearchesAndShowsOnlyTheNewScopesHits",
+        "aFailedSearchShowsTheFailureAndARetryClearsIt",
         "indexesPicturesSkipsOfflineRecordsUndecodableAndResumes",
+        "noModelExtensionAndNothingWritesTheCatalog",
+        "framesDark",
         "aModelThatCannotLoadIsNotHeldAgainstTheFile",
         "aModelThatCannotLoadFailsTheJobAndTheOutcomeLineNamesTheCause",
         "aDriveThatGoesAwayMidDecodeDefersTheFile",
@@ -17649,9 +17655,7 @@
         "aCheckpointSavesAndHandsOverExactlyWhatItWrote",
         "aSaveThatFailsFailsTheJobAndSaysWhatIsNotOnDisk",
         "oneHundredThousandRowsOverAFiftyThousandContentIndexArePlannedInsideTheBudget",
-        "theJobLeavesEveryIndexReadAndWriteToTheWriter",
-        "noModelExtensionAndNothingWritesTheCatalog",
-        "framesDark"
+        "theJobLeavesEveryIndexReadAndWriteToTheWriter"
       ]
     },
     {
@@ -24305,6 +24309,11 @@
       "tests": [
         "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
         "aFailureIsWordsAndIsLoggedOnce",
+        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
+        "aSupersededSearchNeverPublishes",
+        "aScopeChangeThenASearchShowsTheNewScopesHits",
+        "aFailedLoadShowsTheFailureAndARetryClearsIt",
+        "theSearchButtonObservesTheFramesStore",
         "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
         "everythingIsReadOnly",
         "theSearchMatchesObservationColumnsOnlyNeverACatalogField",
@@ -34434,6 +34443,10 @@
       ],
       "tests": [
         "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_manifest_that_cannot_be_checked_is_an_error_not_a_pass",
+        "test_a_manifest_that_matches_the_source_has_no_errors",
+        "test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh",
+        "test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error",
         "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
@@ -34443,7 +34456,8 @@
         "test_known_source_scan_sensors_are_found_both_ways",
         "test_parameterised_and_xctest_identifiers",
         "test_the_lane_is_a_slice_not_the_suite",
-        "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane"
+        "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane",
+        "test_this_checkouts_manifest_is_current"
       ]
     },
     {
@@ -37989,7 +38003,7 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3637,
+      "expected_floor": 3646,
       "name": "unit",
       "package_expected_floor": 888,
       "package_selectors": [

@@ -35,7 +35,8 @@ struct ObservationsContent: View {
     }
 
     @ObservedObject var store: ObservationsStore
-    /// The Frames mode's store (nil: no Frames mode, e.g. the mockups).
+    /// The Frames mode's store (nil: no Frames mode, e.g. the mockups). Held, not observed: an `@ObservedObject`
+    /// cannot be optional, so what this view shows of it is drawn by a view that does observe it (`FramesSearching`).
     private let frames: FrameSearchStore?
     @State private var mode: Mode
     @State private var query = ""
@@ -124,7 +125,7 @@ struct ObservationsContent: View {
         }
         .padding(16)
         .frame(minWidth: 820, minHeight: 560)
-        .task(id: store.scope) { if store.report == nil { await store.load() } }
+        .task(id: store.scope) { if store.report == nil, !store.loading { await store.load() } }
         .sheet(item: $dossierHit) { hit in
             if let loader = store.loader.dossiers {
                 FileDossierSheet(row: AnalysisResultsReport.FileRow(digest: hit.digest, recordID: hit.recordID, filename: hit.filename, path: hit.path,
@@ -177,9 +178,11 @@ struct ObservationsContent: View {
                     Button { query = ""; submit() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                         .buttonStyle(.borderless)
                 }
-                Button("Search") { submit() }
-                    .disabled(ObservationsSearch.normalized(query) == nil || store.searching || (frames?.searching ?? false))
-                    .keyboardShortcut(.defaultAction)
+                if let frames {
+                    FramesSearching(frames: frames) { busy in searchButton(busy: store.searching || busy) }
+                } else {
+                    searchButton(busy: store.searching)
+                }
                 if frames != nil {
                     Picker("", selection: $mode) { ForEach(Mode.allCases) { Text($0.rawValue).tag($0) } }
                         .pickerStyle(.segmented)
@@ -194,6 +197,12 @@ struct ObservationsContent: View {
         .padding(8)
         .background(Color.secondary.opacity(0.08))
         .cornerRadius(7)
+    }
+
+    private func searchButton(busy: Bool) -> some View {
+        Button("Search") { submit() }
+            .disabled(ObservationsSearch.normalized(query) == nil || busy)
+            .keyboardShortcut(.defaultAction)
     }
 
     private var footer: some View {
@@ -316,6 +325,16 @@ struct ObservationsContent: View {
         guard let id, let hit = hitRows.first(where: { $0.id == id }) else { return }
         dossierHit = hit
     }
+}
+
+/// Draws `content` with whether a Frames search is in flight, and again whenever that changes.
+/// (For Rick: a view repaints only for the stores it observes — `@ObservedObject` ≈ subscribing to the
+/// store's change signal; reading a store through a plain `let` shows whatever it held at the last repaint.)
+private struct FramesSearching<Content: View>: View {
+    @ObservedObject var frames: FrameSearchStore
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View { content(frames.searching) }
 }
 
 /// One row: label · value · source ⓘ — the dossier line's shape, for a count.
