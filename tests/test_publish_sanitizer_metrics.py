@@ -68,10 +68,10 @@ def test_the_two_real_runs_become_counts_per_sanitizer(tmp_path):
     assert rows == [
         {"schemaVersion": 1, "date": "2026-10-31", "kind": "address", "source": "weekly", "configuration": "Debug",
          "subset": "full", "status": "findings", "sha": "30e415296", "tests": 4292, "host_restarts": 2, "reports": 2,
-         "asan_issues": 0, "ubsan_issues": 1, "tsan_issues": None},
+         "asan_issues": 0, "ubsan_issues": 1, "tsan_issues": None, "suppressed": [], "test_only_issues": 0},
         {"schemaVersion": 1, "date": "2026-11-01", "kind": "thread", "source": "weekly", "configuration": "Debug",
          "subset": "full", "status": "findings", "sha": "4fc66b944", "tests": 10333, "host_restarts": 8, "reports": 8,
-         "asan_issues": None, "ubsan_issues": None, "tsan_issues": 1},
+         "asan_issues": None, "ubsan_issues": None, "tsan_issues": 1, "suppressed": [], "test_only_issues": 0},
     ]
     for row in rows:
         pm.validate("sanitizer.jsonl", row)
@@ -182,3 +182,87 @@ def test_scale_a_decade_of_weekly_runs_publishes_in_budget(tmp_path):
     text = pm.sanitized_files({"sanitizer.jsonl": rows}, None, None)["sanitizer.jsonl"]
     assert len(rows) == 1040 and text.count("\n") == 1040
     assert time.monotonic() - t0 < 5.0
+
+
+# ── 2026-11-08: known findings travel as code + issue + hits, never pattern or reason ──
+# The runner's row now lists each suppressed known finding with its pattern and reason
+# (scripts/sanitizer/*.supp). Only the code, the issue number and the hit count leave.
+
+KNOWN_ROW = [{"code": "grdb-close-read-race", "issue": 423, "check": "race", "pattern": "DatabasePool.close",
+              "reason": "GRDB 7.11.1 DatabasePool.close() writes readerPool in /Users/rickb/...", "hits": 15}]
+THREAD_AFTER = dict(THREAD_1101, started="2026-11-15T05:00:00-05:00", status="ok", reports=0, host_restarts=0,
+                    unique_findings=[], suppressed=KNOWN_ROW)
+ADDRESS_AFTER = dict(ADDRESS_1031, started="2026-11-14T07:00:00-05:00", status="ok", reports=0, host_restarts=0,
+                     unique_findings=[], failed_tests=[],
+                     suppressed=[{"code": "mlx-null-linked-functions", "issue": 463, "check": "null",
+                                  "pattern": "*mlx/backend/metal/device.cpp", "reason": "mlx-swift device.cpp", "hits": None}])
+
+
+def test_suppressed_known_findings_publish_as_code_issue_and_hits_only(tmp_path):
+    rows = pm.sanitizer_rows(write_runs(tmp_path, [ADDRESS_AFTER, THREAD_AFTER]) / "runs.jsonl")
+    assert [(r["kind"], r["status"], r["suppressed"]) for r in rows] == [
+        ("address", "ok", [{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}]),
+        ("thread", "ok", [{"code": "grdb-close-read-race", "issue": 423, "hits": 15}]),
+    ]
+    assert rows[1]["tsan_issues"] == 0
+    for row in rows:
+        pm.validate("sanitizer.jsonl", row)
+    blob = list(strings(rows))
+    for secret in SECRETS:
+        assert not [s for s in blob if secret in s], secret
+
+
+def test_a_malformed_known_entry_is_dropped_not_published(tmp_path):
+    bad = dict(THREAD_AFTER, suppressed=[{"code": "Has Spaces /Users/rickb", "issue": 1}, {"code": "x", "issue": "423"},
+                                         {"code": "ok-code", "issue": 5, "hits": -1}, "nope"])
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [bad]) / "runs.jsonl")
+    assert row["suppressed"] == [{"code": "ok-code", "issue": 5, "hits": None}]
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r["suppressed"][0].update(reason="DatabasePool race"),
+    lambda r: r["suppressed"][0].update(code="DatabasePool.close"),
+    lambda r: r["suppressed"][0].update(issue=None),
+    lambda r: r.update(suppressed="grdb"),
+])
+def test_the_gate_refuses_a_suppressed_entry_off_the_allowlist(tmp_path, mutate):
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [THREAD_AFTER]) / "runs.jsonl")
+    mutate(row)
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("sanitizer.jsonl", row)
+
+
+def test_rows_published_before_the_field_still_validate_and_config_error_is_a_status(tmp_path):
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [THREAD_1101]) / "runs.jsonl")
+    row.pop("suppressed")
+    pm.validate("sanitizer.jsonl", row)
+    run = {"kind": "thread", "started": "2026-11-08T05:00:00-05:00", "status": "config-error", "tests": 0, "reports": 0}
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [run]) / "runs.jsonl")
+    assert row["status"] == "config-error" and row["tsan_issues"] is None
+    pm.validate("sanitizer.jsonl", row)
+
+
+# ── 2026-11-08 (Rick): findings only in test code are their own grey count ──
+
+def test_test_code_findings_publish_as_their_own_count_and_never_inflate_the_red_ones(tmp_path):
+    run = dict(THREAD_AFTER, status="test-findings", reports=2, test_only_reports=2, unique_findings=[],
+               test_only_findings=["ThreadSanitizer: data race FooTests.swift:12 in bar",
+                                   "ThreadSanitizer: data race BarTests.swift:3 in baz"])
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [run]) / "runs.jsonl")
+    assert row["status"] == "test-findings" and row["test_only_issues"] == 2
+    assert row["tsan_issues"] == 0, "test-only reports never fall back onto the red count"
+    pm.validate("sanitizer.jsonl", row)
+    assert not [s for s in strings(row) if "FooTests" in s]
+    mixed = dict(run, reports=3, unique_findings=[])           # one unparsed product report
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path / "m", [mixed]) / "runs.jsonl")
+    assert row["tsan_issues"] == 1
+
+
+def test_a_run_before_the_split_has_a_null_test_count(tmp_path):
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [THREAD_1101]) / "runs.jsonl")
+    assert row["test_only_issues"] == 0
+    nothing = {"kind": "thread", "started": "2026-11-08T05:00:00-05:00", "status": "build-failed", "tests": 0, "reports": 0}
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path / "n", [nothing]) / "runs.jsonl")
+    assert row["test_only_issues"] is None
+    row.pop("test_only_issues")
+    pm.validate("sanitizer.jsonl", row)

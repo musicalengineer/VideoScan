@@ -1324,14 +1324,34 @@ function sanitizerRuns(d) {
     return { ...k, row, age, fresh: age != null && age <= SAN_STALE_DAYS };
   });
 }
+// Known findings the run suppressed (scripts/sanitizer/*.supp, 2026-11-08): code, issue and hits
+// only. Grey: they are tracked by their issue and never make the card red.
+function suppressedWords(row) {
+  const known = Array.isArray(row.suppressed) ? row.suppressed.filter(s => s && typeof s.code === "string") : [];
+  if (!known.length) return "";
+  const each = known.map(s => `${codeWords(s.code)}${isNum(s.issue) ? ` #${s.issue}` : ""}` +
+    `${isNum(s.hits) ? `, ${s.hits} hit${s.hits === 1 ? "" : "s"}` : ""}`).join("; ");
+  return word("grey", `${known.length} known suppressed: ${each}`);
+}
+// Red means something new to go and look at (Rick 2026-11-08): an unsuppressed finding, a test
+// failure, a build failure, a crashed host, a run that timed out, ran nothing or refused its
+// suppression file. ok (with or without suppressed known findings) is not red; skipped is amber.
+const SAN_NOT_RED = ["ok", "skipped-busy", "test-findings"];
+function sanitizerRunIsRed(row) {
+  return !SAN_NOT_RED.includes(row.status) || ["asan_issues", "ubsan_issues", "tsan_issues"].some(k => isNum(row[k]) && row[k] > 0);
+}
 function sanitizerWords(k) {
   if (!k.row) return `${k.label} ${word("grey", "no run published")}`;
   if (!k.fresh) return `${k.label} ${word("grey", `no run in ${k.age} days`)} (last ${day(k.row.date)})`;
   const counts = k.keys.map(([lab, key]) => `${lab} ${isNum(k.row[key]) ? `<b>${k.row[key]}</b>` : "not measured"}`).join(" · ");
   const extra = [];
   if (k.row.host_restarts > 0) extra.push(`test host restarted ${k.row.host_restarts}×, so some tests never ran`);
-  if (k.row.status !== "ok" && k.row.status !== "findings") extra.push(esc(k.row.status));
-  return `${counts} (${day(k.row.date)}, ${k.age === 0 ? "today" : `${k.age} d ago`}${extra.length ? `; ${extra.join("; ")}` : ""})`;
+  if (!["ok", "findings", "test-findings"].includes(k.row.status)) extra.push(esc(k.row.status));
+  const known = suppressedWords(k.row);
+  // Findings only in test code (Rick 2026-11-08): grey, never red.
+  const inTests = isNum(k.row.test_only_issues) && k.row.test_only_issues > 0
+    ? ` ${word("grey", `${k.row.test_only_issues} in test code only, fix when convenient`)}` : "";
+  return `${counts} (${day(k.row.date)}, ${k.age === 0 ? "today" : `${k.age} d ago`}${extra.length ? `; ${extra.join("; ")}` : ""})${inTests}${known ? ` ${known}` : ""}`;
 }
 // Static checks come from the M4's Swift 6 analysis lane (scripts/nightly_analysis_lane.sh;
 // tools/publish_metrics.py, rows with source "m4-analysis-lane" on static_analysis.jsonl) since
@@ -1476,8 +1496,8 @@ const SUMMARY = {
     const hits = ["asan_issues", "ubsan_issues", "tsan_issues"].map(hit);
     const total = hits.some(isNum) ? hits.reduce((a, v) => a + (v || 0), 0) : null;
     const state = !fresh.length ? "grey"
-      : (hit("asan_issues") > 0 || hit("tsan_issues") > 0) ? "red"
-      : (hit("ubsan_issues") > 0 || fresh.some(k => k.row.host_restarts > 0)) ? "watch"
+      : fresh.some(k => sanitizerRunIsRed(k.row)) ? "red"
+      : fresh.some(k => k.row.status === "skipped-busy") ? "watch"
       : fresh.length < runs.length ? "grey" : "green";
     const na = d.naRun && d.naRun.done ? d.naRun.done : null;
     const naWords = na ? ` GitHub nightly analysis ${word(na.conclusion === "success" ? "green" : "red", na.conclusion || na.status)} ${day(na.updated_at)}.` : "";
@@ -1867,7 +1887,8 @@ const BODIES = {
     // One card per sanitizer, from the newest M4 run of its kind; stale or missing is "no data yet".
     for (const k of sanitizerRuns(d)) for (const [lab, key] of k.keys) {
       const v = k.fresh && isNum(k.row[key]) ? k.row[key] : null;
-      const why = !k.row ? "no run published" : !k.fresh ? `no run in ${k.age} days` : `weekly on the M4, ${day(k.row.date)}${k.row.host_restarts > 0 ? ` · host restarted ${k.row.host_restarts}×` : ""}`;
+      const nKnown = k.fresh && Array.isArray(k.row.suppressed) ? k.row.suppressed.length : 0;
+      const why = !k.row ? "no run published" : !k.fresh ? `no run in ${k.age} days` : `weekly on the M4, ${day(k.row.date)}${k.row.host_restarts > 0 ? ` · host restarted ${k.row.host_restarts}×` : ""}${nKnown ? ` · ${nKnown} known suppressed` : ""}`;
       cards.push(card(`${lab} unique findings`, v, null, null, true, why));
     }
     body.innerHTML = moved("Moved here unchanged: the Static analysis cards, its four charts (CodeQL findings and extraction are two charts now) and the findings-by-tool table. Only counts, tool names and severities are read, never titles or paths.") +
