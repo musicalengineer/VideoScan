@@ -194,11 +194,17 @@ extension PromoteToArchiveJob {
         // The owner's word is read NOW, from the catalog's CURRENT record for
         // this id (Codex #280 F4): a rescan may have replaced the object
         // while the sound was measured, and the tag may have been taken back.
-        let current = model.record(forID: source.id) ?? source
-        let facts = current.soundPresenceContext
-        let mark = PromoteSoundGate.mark(tags: current.tags, storedFixity: current.contentFixity,
+        // A record the catalog no longer holds speaks for nothing: no
+        // fallback to the object this job started with (Codex #282).
+        let facts = source.soundPresenceContext
+        let mark: PromoteSoundGate.Mark
+        if let current = model.record(forID: source.id) {
+            mark = PromoteSoundGate.mark(tags: current.tags, storedFixity: current.contentFixity,
                                          provenDigest: digest, recordSizeBytes: current.sizeBytes,
                                          provenSizeBytes: before?.size ?? 0)
+        } else {
+            mark = .absent
+        }
         let decision = PromoteSoundGate.decide(finding: finding, mark: mark,
                                                soundPartnerName: facts.soundPartnerName,
                                                recordedYear: facts.recordedYear,

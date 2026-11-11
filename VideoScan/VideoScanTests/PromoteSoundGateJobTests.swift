@@ -325,6 +325,34 @@ struct PromoteSoundGateJobTests {
         #expect(S.archivedFiles(sb).isEmpty)
     }
 
+    @Test("REFUSED — Codex #282: the tagged record leaves the catalog WHILE the sound is measured (a new, untagged row takes its path); a tag on a record the catalog no longer holds accepts nothing")
+    func tagOnARecordNoLongerInTheCatalogAcceptsNothing() async throws {
+        let (sb, model) = try H.setup("sg_gone_record"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_detached.mov", seed: 655)
+        a.tags = [WorkflowTags.silentChecked]
+        let id = a.id, path = a.fullPath, size = a.sizeBytes
+        let before = ArchiveSnapshot.take(sb)
+        let job = try H.job(model, ids: [a.id])
+        job.soundMeasure = PromoteSoundGate.Measure { _ in
+            await MainActor.run {
+                let fresh = VideoRecord()                      // a NEW id: the old record is gone from the catalog
+                fresh.filename = (path as NSString).lastPathComponent
+                fresh.fullPath = path
+                fresh.directory = (path as NSString).deletingLastPathComponent
+                fresh.ext = "mov"
+                fresh.streamTypeRaw = StreamType.videoAndAudio.rawValue
+                fresh.sizeBytes = size
+                model.records = model.records.map { $0.id == id ? fresh : $0 }
+            }
+            return MasterArchiveTestSupport.soundDiagnosis(channels: [-68, -68])
+        }
+        job.start(); await job.task?.value; await job.completionTask?.value
+        let o = try #require(H.outcome(job, id))
+        #expect(o.kind == .failed && o.refusalCode == "sound-silent", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(ArchiveSnapshot.take(sb) == before)
+        #expect(S.archivedFiles(sb).isEmpty)
+    }
+
     @Test("REFUSED — Codex #280 F2: the source is replaced AFTER its digest is proven and BEFORE the measurement; a stable measurement of the new file is not about the proven bytes")
     func replacedBetweenProofAndMeasurementIsRefused() async throws {
         let (sb, model) = try H.setup("sg_after_proof"); defer { sb.cleanup() }

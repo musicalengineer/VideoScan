@@ -35301,6 +35301,7 @@
         "stopDuringTheCheck",
         "tagAcceptsSilent",
         "tagDoesNotCrossToOtherBytes",
+        "tagOnARecordNoLongerInTheCatalogAcceptsNothing",
         "tagRemovedDuringMeasurementAcceptsNothing",
         "tagRemovedIsRefused",
         "taggedHalfPromotesAlone",
