@@ -13,15 +13,20 @@
 // nothing extends VideoScanModel and the model holds nothing new. The loader
 // is a value of closures a test replaces (the mockups drive it with fixtures).
 //
-// Truth: a result is published only for the scope and query it was read for
-// (a newer request drops an older one). A failed read is shown in words and
-// logged once per reason through the one sink.
+// Truth: a result is published only for the request (scope, query) it was
+// read for, and only while that request is still the current one — the rule
+// lives in ONE place, `LatestWins` below, which the Frames store uses too. A
+// newer request cancels the one it replaces; a new scope drops the old
+// scope's report and hits at once. A failed read is shown in words and
+// logged through the one sink (a failed load once per reason).
 //
 // Reveal: one engine (rule 4) — `VideoScanModel.showInCatalog(recordID:)`,
 // guarded by `canNavigateToRecord(id:)`; the dossier through
 // FileDossierLoader.production (the one dossier door).
 //
-// Memory: one report (a few hundred rows) and one search (≤ 2,000 hits).
+// Memory (worst case): one report (a few hundred rows) and one search
+// (≤ 2,000 hits); `LatestWins` names each in `value` and in `.loaded` — the
+// same copy-on-write buffers, not a second copy.
 //
 // (For Rick: a controller with constructor-injected closures;
 // `Task.detached` ≈ a worker thread that does not inherit the UI thread.)
@@ -94,26 +99,91 @@ struct ObservationsLoader {
     }
 }
 
+/// Latest wins: the state of ONE kind of request (a load, a search) where only the newest answer may be shown.
+///
+/// The request is named by its `key` (scope, or scope + words). `begin` cancels the request it replaces and
+/// hands back a ticket; `finish` publishes a result only if its ticket is still the current one — so an answer
+/// read for an older key can never appear under a newer one, and "is something in flight" is a fact about the
+/// current ticket, not a flag someone must remember to clear. `reset` (the field was cleared, the scope
+/// changed, the window closed) cancels and returns to `.idle`.
+///
+/// `value` is the newest answer for the CURRENT key: it stays on screen while the same request is re-run
+/// (Refresh) and is dropped the moment the key changes.
+///
+/// (For Rick: a generation-tagged future — the tag is the task handle itself, compared on completion — in
+/// place of three bools and a counter. A struct, so assigning through the owner's `@Published` repaints.)
+struct LatestWins<Key: Equatable, Value: Sendable> {
+    enum Phase {
+        case idle
+        case loading
+        case loaded(Value)
+        case failed(any Error)
+    }
+
+    typealias Ticket = Task<Value, any Error>
+
+    private(set) var key: Key?
+    private(set) var phase: Phase = .idle
+    private(set) var value: Value?
+    private var current: Ticket?
+
+    var isLoading: Bool { if case .loading = phase { true } else { false } }
+    var failure: (any Error)? { if case .failed(let error) = phase { error } else { nil } }
+
+    /// Start `work` for `key` off the caller's actor; whatever was in flight is cancelled and can no longer publish.
+    mutating func begin(_ key: Key, _ work: @escaping @Sendable () async throws -> Value) -> Ticket {
+        current?.cancel()
+        if key != self.key { value = nil }
+        self.key = key
+        phase = .loading
+        let ticket = Task.detached(priority: .userInitiated) { try await work() }
+        current = ticket
+        return ticket
+    }
+
+    /// Publish `result` if `ticket` is still the current request. False: superseded, reset or cancelled — nothing to say.
+    mutating func finish(_ ticket: Ticket, _ result: Result<Value, any Error>) -> Bool {
+        guard ticket == current else { return false }
+        current = nil
+        switch result {
+        case .success(let found):
+            value = found
+            phase = .loaded(found)
+            return true
+        case .failure(let error) where error is CancellationError:
+            phase = value.map(Phase.loaded) ?? .idle    // the work gave up on its own: not a failure to show
+            return false
+        case .failure(let error):
+            phase = .failed(error)
+            return true
+        }
+    }
+
+    /// Nothing asked: cancel what is in flight and forget the key and its answer.
+    mutating func reset() {
+        current?.cancel()
+        self = LatestWins()
+    }
+}
+
 @MainActor
 final class ObservationsStore: ObservableObject {
 
+    /// One search request: the words, and the scope they are asked of.
+    struct SearchRequest: Equatable, Sendable {
+        let scope: ObservationsScope
+        let query: String
+    }
+
     @Published private(set) var scope: ObservationsScope
-    @Published private(set) var report: ObservationsReport?
-    @Published private(set) var loading = false
-    @Published private(set) var failure: String?
-    @Published private(set) var search: ObservationsSearch?
-    @Published private(set) var searching = false
-    @Published private(set) var searchFailure: String?
+    @Published private var reportRun = LatestWins<ObservationsScope, ObservationsReport>()
+    @Published private var searchRun = LatestWins<SearchRequest, ObservationsSearch>()
     /// Words under the hits when a click could not reveal the file.
     @Published private(set) var revealProblem: String?
     /// Completed reads (tests).
     private(set) var reads = 0
 
     let loader: ObservationsLoader
-    private var reportTask: Task<ObservationsReport, Error>?
-    private var searchTask: Task<ObservationsSearch, Error>?
-    private var issued = 0
-    private var searchIssued = 0
     private var said: Set<String> = []
 
     init(scope: ObservationsScope, loader: ObservationsLoader) {
@@ -121,70 +191,58 @@ final class ObservationsStore: ObservableObject {
         self.loader = loader
     }
 
-    /// Read the report for the scope (a newer request drops an older one).
+    // What the view reads — each one a reading of the request's phase, never a flag of its own.
+    var report: ObservationsReport? { reportRun.value }
+    var loading: Bool { reportRun.isLoading }
+    var failure: String? { reportRun.failure.map { "\($0)" } }
+    var search: ObservationsSearch? { searchRun.value }
+    var searching: Bool { searchRun.isLoading }
+    var searchFailure: String? { searchRun.failure.map { "\($0)" } }
+
+    /// Read the report for the scope (a newer request cancels an older one).
     func load() async {
-        issued += 1
-        let mine = issued
-        reportTask?.cancel()
-        loading = true
         let scope = scope
         let load = loader.loadReport
         let started = ContinuousClock.now
-        let task = Task.detached(priority: .userInitiated) { try await load(scope) }
-        reportTask = task
-        do {
-            let built = try await task.value
-            guard mine == issued else { return }
-            report = built
-            failure = nil
-            loading = false
+        let ticket = reportRun.begin(scope) { try await load(scope) }
+        let result = await ticket.result
+        guard reportRun.finish(ticket, result) else { return }
+        switch result {
+        case .success(let built):
             reads += 1
             let took = ContinuousClock.now - started
             loader.note("read \(scope.words): \(built.files.formatted()) files, \(built.analyzed.formatted()) analyzed, in \(took.formatted(.units(allowed: [.milliseconds])))")
-        } catch {
-            guard mine == issued, !(error is CancellationError) else { return }
-            loading = false
-            failure = "\(error)"
-            if said.insert(failure ?? "").inserted { loader.note("could not be read for \(scope.words) — \(error)") }
+        case .failure(let error):
+            if said.insert("\(error)").inserted { loader.note("could not be read for \(scope.words) — \(error)") }
         }
     }
 
-    /// A new scope: re-read, and re-run the search on it.
+    /// A new scope: the old scope's report and hits go at once (a search still in flight for it is cancelled
+    /// and can no longer publish), then the report is read for the new one. The hits are not re-asked.
     func set(scope: ObservationsScope) async {
         guard scope != self.scope else { return }
         self.scope = scope
-        search = nil
+        searchRun.reset()
         await load()
     }
 
-    /// Search the observations in scope; an empty or too-short query clears the hits.
+    /// Search the observations in scope; an empty or too-short query ends any search and clears the hits.
     func search(_ query: String) async {
-        searchIssued += 1
-        let mine = searchIssued
-        searchTask?.cancel()
         revealProblem = nil
         guard ObservationsSearch.normalized(query) != nil else {
-            search = nil
-            searching = false
-            searchFailure = nil
+            searchRun.reset()
             return
         }
-        searching = true
-        let scope = scope
+        let request = SearchRequest(scope: scope, query: query)
         let run = loader.search
-        let task = Task.detached(priority: .userInitiated) { try await run(scope, query) }
-        searchTask = task
-        do {
-            let found = try await task.value
-            guard mine == searchIssued else { return }
-            search = found
-            searchFailure = nil
-            searching = false
-            loader.note("searched \"\(query)\" in \(scope.words): \(found.hits.count.formatted()) hit\(found.hits.count == 1 ? "" : "s")\(found.truncated ? " (capped)" : "")")
-        } catch {
-            guard mine == searchIssued, !(error is CancellationError) else { return }
-            searching = false
-            searchFailure = "\(error)"
+        let ticket = searchRun.begin(request) { try await run(request.scope, request.query) }
+        let result = await ticket.result
+        guard searchRun.finish(ticket, result) else { return }
+        switch result {
+        case .success(let found):
+            loader.note("searched \"\(query)\" in \(request.scope.words): \(found.hits.count.formatted()) hit\(found.hits.count == 1 ? "" : "s")\(found.truncated ? " (capped)" : "")")
+        case .failure(let error):
+            loader.note("the search for \"\(query)\" in \(request.scope.words) could not be read — \(error)")
         }
     }
 
@@ -201,11 +259,7 @@ final class ObservationsStore: ObservableObject {
 
     /// The window went away: stop every read in flight.
     func cancel() {
-        issued += 1
-        searchIssued += 1
-        reportTask?.cancel()
-        searchTask?.cancel()
-        reportTask = nil
-        searchTask = nil
+        reportRun.reset()
+        searchRun.reset()
     }
 }

@@ -20,6 +20,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import os
 import SwiftUI
 import Testing
 import VideoScanCore
@@ -133,6 +134,91 @@ struct FrameSearchStoreTests {
             await store.search("axis 1")
             #expect(store.hits.isEmpty && store.failure == nil, "no stale or partial hits")
         }
+    }
+
+    // MARK: Latest wins (a result is published only for the request that is still current)
+
+    /// Contents 2 and 3 are indexed; /V/a holds content 2, /V/b holds content 3. `embedGate` holds the text tower
+    /// for the words it is given; `filesGate` holds the catalog read for the scope it is given.
+    private static func gatedLoader(_ gate: AsyncStream<Void>, heldWords: String? = nil, heldScope: ObservationsScope? = nil,
+                                    embed: @escaping @Sendable (String) async throws -> [Float] = { try await StubEmbedder().embed(text: $0) }) -> FrameSearchLoader {
+        let index = Self.index([2, 3])
+        return FrameSearchLoader(modelID: StubEmbedder().modelID, loadIndex: { .ready(index) },
+                          files: { scope in
+                              if scope == heldScope { for await _ in gate { break } }
+                              return scope == .folder("/V/b") ? [Env.row(3, path: "/V/b/three.mov")] : [Env.row(2, path: "/V/a/two.mov")]
+                          },
+                          embedText: { text in
+                              if text == heldWords { for await _ in gate { break } }
+                              return try await embed(text)
+                          },
+                          prewarm: {}, thumbnail: { _, _ in nil }, startIndex: { _, _ in nil }, reveal: { _ in true }, note: { _ in })
+    }
+
+    /// REGRESSION (reviewer 2026-11-10, A): clearing the field during a search returned without ending it, and the
+    /// superseded search returned early too — "Asking SigLIP 2…" stayed and Search stayed disabled.
+    @Test func clearingTheFieldDuringASearchEndsTheSearch() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.gatedLoader(gate.stream, heldWords: "axis 2"))
+        await store.loadIndex()
+        let first = Task { await store.search("axis 2") }
+        while !store.searching { await Task.yield() }
+        await store.search("")
+        #expect(store.searching == false, "the field is empty; the spinner goes at once")
+        gate.continuation.yield()
+        await first.value
+        #expect(store.searching == false, "no search is in flight; the spinner must go")
+        #expect(store.hits.isEmpty && store.query == nil && store.timing == nil && store.failure == nil, "and the cleared search publishes nothing")
+    }
+
+    @Test func aSupersededSearchNeverPublishes() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .everything, loader: Self.gatedLoader(gate.stream, heldWords: "axis 5"))
+        await store.loadIndex()
+        let old = Task { await store.search("axis 5") }
+        while !store.searching { await Task.yield() }
+        await store.search("axis 2")
+        #expect(store.query == "axis 2" && store.hits.first?.filename == "two.mov" && store.searching == false)
+        let shown = store.hits
+        gate.continuation.yield()
+        await old.value
+        #expect(store.query == "axis 2" && store.hits == shown, "the older search never replaces the newer one's hits")
+        #expect(store.searching == false && store.failure == nil)
+    }
+
+    @Test func aScopeChangeReSearchesAndShowsOnlyTheNewScopesHits() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.gatedLoader(gate.stream, heldScope: .folder("/V/a")))
+        await store.loadIndex()
+        let old = Task { await store.search("axis 2") }
+        while !store.searching { await Task.yield() }
+        await store.set(scope: .folder("/V/b"))
+        #expect(store.query == "axis 2" && !store.hits.isEmpty && store.hits.allSatisfy { $0.path == "/V/b/three.mov" }, "the same words, asked of the new scope")
+        gate.continuation.yield()
+        await old.value
+        #expect(store.hits.allSatisfy { $0.path == "/V/b/three.mov" } && !store.hits.isEmpty, "a frame read for /V/a never shows under /V/b")
+        #expect(store.searching == false)
+        await store.search("axis 3")
+        #expect(store.hits.first?.path == "/V/b/three.mov", "the next search reads the new scope's files, not the old scope's cached ones")
+    }
+
+    private struct TowerDown: LocalizedError {
+        var errorDescription: String? { "the text tower is not loaded" }
+    }
+
+    @Test func aFailedSearchShowsTheFailureAndARetryClearsIt() async {
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let gate = AsyncStream<Void>.makeStream()
+        let loader = Self.gatedLoader(gate.stream, embed: { text in
+            if calls.withLock({ $0 += 1; return $0 }) == 1 { throw TowerDown() }
+            return try await StubEmbedder().embed(text: text)
+        })
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: loader)
+        await store.loadIndex()
+        await store.search("axis 2")
+        #expect(store.failure?.contains("not loaded") == true && store.hits.isEmpty && store.searching == false)
+        await store.search("axis 2")
+        #expect(store.failure == nil && store.hits.first?.filename == "two.mov" && store.searching == false, "the retry's hits replace the failure")
     }
 }
 
