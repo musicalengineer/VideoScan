@@ -221,7 +221,7 @@ struct PromoteRefusalRollbackTests {
         _ = try await H.run(model, ids: recs.enumerated().filter { $0.offset % 2 == 1 }.map(\.element.id))
         _ = try await H.run(model, ids: recs.reversed().map(\.id))
         if let plan = model.buildPromotePlan(recordIDs: recs.map(\.id)), !plan.entries.isEmpty {
-            let j = PromoteToArchiveJob(plan: plan, model: model); j.start(); await j.task?.value
+            let j = PromoteToArchiveJob(plan: plan, model: model); j.soundMeasure = MasterArchiveTestSupport.soundPresent; j.start(); await j.task?.value
         }
         let digests = H.archivedDigests(sb)
         #expect(digests.count == 12, "12 distinct sources → 12 files, got \(digests.count)")

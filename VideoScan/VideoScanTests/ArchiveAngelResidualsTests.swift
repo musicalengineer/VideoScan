@@ -321,6 +321,7 @@ struct ArchiveAngelResidualsTests {
         var controlPlan = control.plan
         let started = ArchiveAngelPromoter().promote(plan: &controlPlan, model: control.model,
                                                      center: MediaFileOperationsCenter()) { _ in }
+        started?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(started != nil, "control: the unclaimed fixture did not start — \(controlPlan.log.suffix(3))")
         #expect(controlPlan.status == .promoting)
         started?.cancel()
@@ -333,6 +334,7 @@ struct ArchiveAngelResidualsTests {
         defer { ArchiveAngelLiveBatches.end(f.plan.batchDir) }
         let refused = ArchiveAngelPromoter().promote(plan: &plan, model: f.model,
                                                      center: MediaFileOperationsCenter()) { _ in }
+        refused?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(refused == nil, "Promote started on a batch a Clear holds")
         #expect(plan.status != .promoting)
         #expect(plan.status == .ready, "the plan status moved: \(plan.status)")

@@ -46,6 +46,15 @@ extension PromoteToArchiveJob {
             case changedDuringCopy = "changed-during-copy"
             case dateAgreement = "date-agreement"
             case filingYear = "filing-year"
+            // The sound gate (PromoteSoundGate.Code — same raw values).
+            case soundNone = "sound-none"
+            case soundPairHalf = "sound-pair-half"
+            case soundSilent = "sound-silent"
+            case soundDamaged = "sound-damaged"
+            case soundUnchecked = "sound-unchecked"
+
+            /// True for the sound gate's refusals.
+            var isSound: Bool { PromoteSoundGate.Code(rawValue: rawValue) != nil }
         }
         let code: Code
         /// How the outcome row shows it (a duplicate is a skip, the rest fail).
@@ -130,6 +139,7 @@ extension PromoteToArchiveJob {
     ///   done                       → trusted (a durable catalog save wrote it)
     /// Returns how many promotions were completed here.
     func reconcileJournal(model: VideoScanModel, ctx: RunContext) async -> Int {
+        // No sound gate here, on purpose (Codex #280 F6, declined 2026-11-10): these bytes are ALREADY in the archive; refusing would leave an archived file unindexed. The gate is at the entry door (copyOrAdopt) only.
         let latest = ArchivePromoteJournal.latestBySource(rootPath: ctx.root)
         var completed = 0
         for (sourceID, entry) in latest where entry.state != .done && entry.state != .abandoned {
@@ -249,6 +259,7 @@ extension PromoteToArchiveJob {
                                    entry: ArchivePromotePlan.Entry,
                                    model: VideoScanModel,
                                    ctx: RunContext) async -> FileResult {
+        // No sound gate here, on purpose (Codex #280 F6, declined 2026-11-10): these bytes are ALREADY in the archive; refusing would leave an archived file unindexed. The gate is at the entry door (copyOrAdopt) only.
         // Containment FIRST (codex R4-A): the manifest relpath is data from
         // disk. Non-contained / symlinked ⇒ refused, never read or adopted.
         guard ArchivePromoteEngine.isContainedRelPath(row.relPath, root: ctx.root) else {
@@ -301,6 +312,9 @@ extension PromoteToArchiveJob {
             return .refused(refusal)
         }
 
+        // The source as it is before its digest is read or trusted: the
+        // sound gate requires this same stamp at measurement time.
+        let stampBeforeDigest = await Self.stampOffMain(path: source.fullPath)
         // GH #190 — content idempotency, BEFORE the journal intent.
         let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
         let claim = try await claimSourceDigest(source: source, entry: entry, provisional: provisional,
@@ -315,19 +329,16 @@ extension PromoteToArchiveJob {
         // for the duplicate lookup above; it is never evidence that the
         // source's CURRENT bytes are these. Read them now (one full read)
         // and refuse on any difference — nothing has been written yet.
-        if !proven {
-            guard let actual = try await proveSourceDigest(source: source, entry: entry) else {
-                return .cancelled
-            }
-            if actual != digest {
-                return .refused(Refusal(
-                    code: .storedDigestMismatch, kind: .failed,
-                    detail: Self.storedDigestMismatch(recorded: digest, actual: actual),
-                    logFacts: "stored sha256 \(digest.prefix(12))… ≠ current sha256 \(actual.prefix(12))…; nothing written"))
-            }
+        // Then THE SOUND GATE (Rick 2026-11-10), on exactly those bytes.
+        // Both run BEFORE the destination is chosen or the journal intent
+        // written: a refusal here has written nothing to the archive.
+        let sound: SoundGateResult
+        switch try await provenBytesGuards(source: source, entry: entry, digest: digest, proven: proven,
+                                           stampBeforeDigest: stampBeforeDigest, model: model) {
+        case .cancelled: return .cancelled
+        case .refused(let refusal): return .refused(refusal)
+        case .passed(let result): sound = result
         }
-        testHookAfterSourceProof?(source)
-        if Task.isCancelled { return .cancelled }
 
         // `provenSourceSHA` is the digest just read from the source (never
         // a cached one): adoption compares the existing file against it.
@@ -387,7 +398,7 @@ extension PromoteToArchiveJob {
                                   model: model, ctx: ctx, journalBase: journalEntry,
                                   readiness: entry.readiness, sourceStamp: sourceStamp)
         let elapsed = -fileStart.timeIntervalSinceNow
-        model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓ in \(Self.promoteElapsedText(elapsed))")
+        model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓ in \(Self.promoteElapsedText(elapsed))\(sound.landedSuffix)")
         // .notice, not .info: promote is irreversible, so its DONE line has
         // to survive into the persisted log for post-hoc reading
         // (docs/ops/findings_2026_09_14_overnight.md, row 14).

@@ -35271,6 +35271,152 @@
         "wiring",
         "withdrawalIsIdempotentReversibleAndNeverTouchesRicksWord"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateTests"
+      ],
+      "tests": [
+        "before1980",
+        "edgeWords",
+        "failedLevelsPassIsUncheckedNotDamaged",
+        "incompleteIsUnchecked",
+        "liveChannelDoesNotExcuseAnIncompletePass",
+        "markBinding",
+        "noTrackAndDamage",
+        "noTrackRefusal",
+        "oneSided",
+        "pairHalf",
+        "precedence",
+        "presentDecisions",
+        "presentShapes",
+        "scale",
+        "silentRefusal",
+        "silentSurround",
+        "tagAccepts",
+        "tagLimits",
+        "theLine",
+        "theTickAcceptsOnlyCouldNotCheck"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateJobTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateJobTests"
+      ],
+      "tests": [
+        "aPerfectStoredPassIsNeverReused",
+        "changedDuringMeasurementIsRefused",
+        "couldNotCheckIsRefused",
+        "damagedIsRefusedEvenTagged",
+        "headerNeverPasses",
+        "incompletePassWithALiveChannelIsRefused",
+        "mixedBatch",
+        "noTrackIsRefused",
+        "oneSidedPromotesWithANote",
+        "pairHalfIsRefused",
+        "partialMeasurementIsRefused",
+        "refusalWordsFollowTheCurrentRecord",
+        "replacedBetweenProofAndMeasurementIsRefused",
+        "silentAudioOnlyIsRefused",
+        "silentIsRefused",
+        "stopDuringTheCheck",
+        "tagAcceptsSilent",
+        "tagDoesNotCrossToOtherBytes",
+        "tagOnARecordNoLongerInTheCatalogAcceptsNothing",
+        "tagRemovedDuringMeasurementAcceptsNothing",
+        "tagRemovedIsRefused",
+        "taggedHalfPromotesAlone",
+        "theArchiveAnywayTick",
+        "theGateStoresNothing"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveAngelSoundGateTests"
+      ],
+      "tests": [
+        "damagedAndUnchecked",
+        "noTrackNeedsYourOK",
+        "silentNeedsYourOK",
+        "soundPromotes",
+        "taggedRowPromotes",
+        "theAngelHasNoSecondDoor"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateMediaMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateMediaMatrixTests"
+      ],
+      "tests": [
+        "avi",
+        "missingFfmpegIsNotDamage",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf",
+        "theNumberIsTheMeasurement"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateIsolationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateIsolationTests"
+      ],
+      "tests": [
+        "poisonedStoredVerdicts",
+        "replacedMidRead",
+        "sourceGoneMidRead",
+        "undecodableFiles"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateSensorTests"
+      ],
+      "tests": [
+        "endToEnd",
+        "oneCallBeforeTheFirstWrite",
+        "oneVerdictWriter",
+        "onlyRecoveryIsUngated",
+        "theGateReadsNoStoredVerdict",
+        "theRuleReadsNoHeader",
+        "theSeamIsNeverAssignedInProduction",
+        "theWordsAreTrue"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapePromoteSoundGateTests"
+      ],
+      "tests": [
+        "theTagOnTheLiveCatalog"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -39072,9 +39218,33 @@
         {
           "name": "tests/test_repo_traffic.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelSoundGateTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateMediaMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateIsolationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 509,
+      "expected_floor": 529,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -39257,7 +39427,8 @@
         "VideoScanTests/AnalyzeLeftPlanTests",
         "VideoScanTests/AnalyzeLeftScaleTests",
         "VideoScanTests/AnalyzeLeftStoreTests",
-        "VideoScanTests/AnalyzeLeftSensorTests"
+        "VideoScanTests/AnalyzeLeftSensorTests",
+        "VideoScanTests/PromoteSoundGateTests"
       ]
     },
     {

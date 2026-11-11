@@ -242,6 +242,7 @@ struct PromoteDatesAndLockEndToEndTests {
         var plan = try #require(model.buildPromotePlan(recordIDs: ids))
         edit(&plan)
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.fileLock = lock
         job.start()
         await job.task?.value

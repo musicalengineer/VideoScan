@@ -221,6 +221,7 @@ struct ArchiveAngelCodex1654Tests {
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(),
                                                  freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(job != nil)
         #expect(rec.userDate == "1987-06" && rec.userDateConfidence == "known")
         job?.cancel()
@@ -240,6 +241,7 @@ struct ArchiveAngelCodex1654Tests {
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)
         #expect(!fresh.isEmpty, "the donor is verified — the stamp would happen")
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: center, freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(job == nil, "a promote started without a durable journal")
         #expect(center.jobs.isEmpty)
         #expect(rec.userDate == nil, "an inherited fact was left on the record with no journal to undo it")
@@ -255,6 +257,7 @@ struct ArchiveAngelCodex1654Tests {
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
                                                               center: MediaFileOperationsCenter(),
                                                               freshFixity: fresh) { settled = $0 })
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(rec.userDate == "1987-06", "stamped from the verified twin")
         // The catalog cannot be saved (a full or read-only volume) while
         // the cancel settles — the restore is NOT durable yet.

@@ -115,6 +115,7 @@ struct ArchiveAngelCodex1659Tests {
                                     entries: [entry(f.target, proposedDate: nil)])
         plan.status = .ready
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: f.model, center: MediaFileOperationsCenter()) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(f.target.userDate == nil, "a stale donor's \(f.target.userDate ?? "") was stamped as \(f.target.userDateConfidence ?? "")")
         #expect(f.target.userPlace == nil)
         job?.cancel()
@@ -133,6 +134,7 @@ struct ArchiveAngelCodex1659Tests {
         #expect(fresh == [f.target.id], "only the unchanged target's fixity describes its file now")
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: f.model, center: MediaFileOperationsCenter(),
                                                  freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(f.target.userDate == nil, "a stale donor's \(f.target.userDate ?? "") was stamped")
         #expect(f.target.userPlace == nil)
         job?.cancel()
@@ -161,6 +163,7 @@ struct ArchiveAngelCodex1659Tests {
         #expect(fresh == [f.target.id, f.donor.id])
         let promote = ArchiveAngelPromoter().promote(plan: &plan, model: f.model, center: MediaFileOperationsCenter(),
                                                      freshFixity: fresh) { _ in }
+        promote?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(f.target.userDate == "1991-07" && f.target.userDateConfidence == "known")
         promote?.cancel()
         await promote?.task?.value

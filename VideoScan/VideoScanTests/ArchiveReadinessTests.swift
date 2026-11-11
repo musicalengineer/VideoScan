@@ -118,7 +118,7 @@ struct ArchiveReadinessLogicTests {
         #expect(r.warnings[1].hasPrefix("Codec DV"))
         #expect(r.warnings[2].hasPrefix("Undated"))
         let unverified = ArchiveReadiness.assess(inputs { $0.videoCodec = "mpeg2video"; $0.userDate = nil })
-        #expect(unverified.warnings.first?.hasPrefix("Audio not verified") == true)
+        #expect(unverified.warnings.first?.hasPrefix("Sound not checked yet — Promote checks it") == true)
         let unprobeable = ArchiveReadiness.assess(inputs { $0.streamTypeRaw = StreamType.ffprobeFailed.rawValue })
         #expect(unprobeable.warnings.first?.hasPrefix("Un-probeable") == true)
     }
@@ -248,6 +248,7 @@ struct ArchiveReadinessPromoteTests {
         #expect(plan.entries[0].readiness.blocking)
 
         let refused = PromoteToArchiveJob(plan: plan, model: model)
+        refused.soundMeasure = MasterArchiveTestSupport.soundPresent
         refused.start(); await refused.task?.value
         guard case .finished(let s1) = refused.state else { Issue.record("\(refused.state)"); return }
         #expect(s1.contains("skipped 1"), "\(s1)")
@@ -257,6 +258,7 @@ struct ArchiveReadinessPromoteTests {
 
         plan.allowUnprobeable = true
         let allowed = PromoteToArchiveJob(plan: plan, model: model)
+        allowed.soundMeasure = MasterArchiveTestSupport.soundPresent
         allowed.start(); await allowed.task?.value
         guard case .finished(let s2) = allowed.state else { Issue.record("\(allowed.state)"); return }
         #expect(s2.hasPrefix("Promoted 1"), "\(s2)")

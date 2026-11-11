@@ -120,6 +120,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(job != nil, "\(plan.log)")
         #expect(rec.userDate == "1987-06" && rec.userDateConfidence == "known")
         #expect(rec.userPlace == "Cape Cod" && rec.userPlaceConfidence == "known")
@@ -141,6 +142,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(rec.userDate == "1990" && rec.userDateConfidence == "estimated", "own date kept")
         #expect(rec.userPlace == "Montana" && rec.userPlaceConfidence == "estimated", "own place kept")
         await job?.task?.value
@@ -158,6 +160,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: model, center: MediaFileOperationsCenter(), freshFixity: fresh) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(rec.userDate == nil || rec.userDateConfidence != "known")
         #expect(rec.userPlace == nil, "nor its place")
         await job?.task?.value
@@ -172,6 +175,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
                                                               center: MediaFileOperationsCenter(), freshFixity: fresh) { settled = $0 })
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.cancel()
         await job.task?.value
         for _ in 0..<500 where settled == nil {
@@ -194,6 +198,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: model)   // codex #1659
         let job = try #require(ArchiveAngelPromoter().promote(plan: &plan, model: model,
                                                               center: MediaFileOperationsCenter(), freshFixity: fresh) { settled = $0 })
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         await job.task?.value
         for _ in 0..<500 where settled == nil {
             await Task.yield(); try? await Task.sleep(for: .milliseconds(2))
