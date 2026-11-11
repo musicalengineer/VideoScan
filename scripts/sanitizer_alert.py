@@ -24,6 +24,11 @@ rule as the metrics card (red = something new to go and look at).
 Findings only in test code (Rick 2026-11-08; status "test-findings": every
 frame of ours is in VideoScanTests/ or a package's Tests/) are a grey ⚪ line,
 "fix when convenient", never red.
+
+A relaunched test host (#469) is read by its place in the log (the runner's
+RESTART_RULE): red "crashed" only for a relaunch with no test-only or known
+report printed immediately before it, with the test that was running; a
+relaunch right after a known finding's report is a grey ⚪ line naming the issue.
 """
 from __future__ import annotations
 
@@ -36,6 +41,7 @@ from pathlib import Path
 LOGDIR = Path.home() / "Library" / "Logs" / "VideoScan" / "sanitizer"
 NAMES = {"address": "Address Sanitizer", "thread": "Thread Sanitizer"}
 MAX_LISTED = 4
+MAX_NAME = 70
 COUNTS = (("asan_issues", "ASan"), ("ubsan_issues", "UBSan"), ("tsan_issues", "TSan"))
 M4_LOGS = "on the M4 (~/Library/Logs/VideoScan/sanitizer/)"
 
@@ -49,6 +55,47 @@ def suppressed_words(row: dict) -> str:
     return f"; {len(known)} known finding{'' if len(known) == 1 else 's'} suppressed" + (f" ({issues})" if issues else "")
 
 
+def _restarts(row: dict) -> list:
+    return [r for r in (row.get("restarts") or []) if isinstance(r, dict)]
+
+
+def running_words(row: dict, explained: bool) -> str:
+    """'; running then: a, b' for the relaunches that are (not) explained, or ''."""
+    names = [n if len(n) <= MAX_NAME else n[:MAX_NAME] + "…" for n in
+             (str(r["during"]) for r in _restarts(row) if (r.get("explained_by") is not None) == explained and r.get("during"))]
+    more = f", …and {len(names) - MAX_LISTED} more" if len(names) > MAX_LISTED else ""
+    return f"; running then: {', '.join(names[:MAX_LISTED])}{more}" if names else ""
+
+
+def explained_words(row: dict) -> str:
+    """'; the test host also restarted 2× right after a known or test-only report (#463)' or '' —
+    for a line that is red for another reason, so an explained relaunch is still said."""
+    n = (row.get("host_restarts") or 0) - (row.get("unexplained_restarts") or 0) if "unexplained_restarts" in row else 0
+    if n <= 0:
+        return ""
+    issues = sorted({r["issue"] for r in _restarts(row) if isinstance(r.get("issue"), int)})
+    after = " (" + ", ".join(f"#{i}" for i in issues) + ")" if issues else ""
+    return f"; the test host also restarted {n}× right after a known or test-only report{after}"
+
+
+def known_restart_line(row: dict, name: str, when: str) -> list[str]:
+    """The grey line of an ok run in which a known finding's report printed or
+    the host was relaunched right after an explained report; [] when neither."""
+    restarts, printed = row.get("host_restarts") or 0, row.get("known_reports") or 0
+    if not restarts and not printed:
+        return []
+    issues = sorted({r["issue"] for r in _restarts(row) if isinstance(r.get("issue"), int)})
+    said = []
+    if printed:
+        said.append(f"{printed} report(s) of a known finding printed despite the suppression")
+    if restarts:
+        after = " (" + ", ".join(f"#{i}" for i in issues) + ")" if issues else ""
+        said.append(f"the test host restarted {restarts}×, each right after a known finding's report{after}; "
+                    f"the tests running then did not finish{running_words(row, True)}")
+    tail = "" if issues else suppressed_words(row)
+    return [f"⚪ {name} ({when}, {row.get('sha', '?')}): nothing new — {'; '.join(said)}{tail} — log {row.get('log', '?')}"]
+
+
 def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
     try:
         started = dt.datetime.fromisoformat(row["started"])
@@ -60,7 +107,7 @@ def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
     when = started.strftime("%a %b %d")
     status = row.get("status")
     if status == "ok":
-        return []
+        return known_restart_line(row, name, when)
     if status == "findings":
         findings = row.get("unique_findings") or []
         count = row.get("finding_count") or len(findings) or row.get("reports", 0)
@@ -75,19 +122,28 @@ def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
     if status == "test-findings":
         findings = row.get("test_only_findings") or []
         count = row.get("test_only_issues") or len(findings) or 1
+        restarts = row.get("host_restarts") or 0
+        went = f"; the test host restarted {restarts}× right after a report" if restarts else ""
         out = [f"⚪ {name} ({when}, {row.get('sha', '?')}): {count} finding(s) in test code only — "
-               f"fix when convenient{suppressed_words(row)} — log {row.get('log', '?')}"]
+               f"fix when convenient{went}{suppressed_words(row)} — log {row.get('log', '?')}"]
         return out + [f"     • {f}" for f in findings[:MAX_LISTED]]
     if status == "skipped-busy":
         return [f"🟡 {name} ({when}) skipped — {row.get('reason', 'M4 busy')}"]
+    crashes = row.get("unexplained_restarts") or row.get("host_restarts", 1)
+    # Only a row that carries the account (not a published one, not one from before #469) can say why.
+    unexplained = " with no sanitizer report right before it" if row.get("unexplained_restarts") else ""
     detail = {"build-failed": "build failed", "tests-failed": "tests failed",
               "timeout": "timed out", "no-tests-ran": "no tests ran",
               "config-error": f"suppression file refused, nothing ran ({row.get('reason', 'see the runner')})",
-              "host-crashed": f"the test host crashed {row.get('host_restarts', 1)}× and was relaunched "
-                              "(some tests never ran — see the .ips in DiagnosticReports)"}.get(status, status or "unknown")
+              "host-crashed": f"the test host crashed {crashes}×{unexplained} and was relaunched "
+                              "(some tests never ran — see the .ips in DiagnosticReports)"
+              }.get(status, status or "unknown")
     failed = row.get("failed_tests") or []
     tail = f": {', '.join(failed[:MAX_LISTED])}" if failed else ""
-    return [f"🔴 {name} ({when}, {row.get('sha', '?')}): {detail}{tail}{suppressed_words(row)} — log {row.get('log', '?')}"]
+    if status == "host-crashed":
+        tail = (f"; failed tests{tail}" if failed else "") + running_words(row, False)
+    return [f"🔴 {name} ({when}, {row.get('sha', '?')}): {detail}{tail}{explained_words(row)}{suppressed_words(row)} "
+            f"— log {row.get('log', '?')}"]
 
 
 def from_published(row: dict, now: dt.datetime) -> dict | None:
@@ -104,6 +160,7 @@ def from_published(row: dict, now: dt.datetime) -> dict | None:
             "unique_findings": [f"{label}: {v} unique finding{'' if v == 1 else 's'}" for label, v in counts if v],
             "failed_tests": [], "log": M4_LOGS,
             "suppressed": [s for s in (row.get("suppressed") or []) if isinstance(s, dict)],
+            # Counts only travel: the restarts' issues and running tests stay on the M4.
             "test_only_issues": row.get("test_only_issues") if isinstance(row.get("test_only_issues"), int) else None}
 
 

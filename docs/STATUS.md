@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 01:00 (Wednesday, after the night of 11/10: ten merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-11 01:00 (Wednesday, after the night of 11/10: eleven merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -36,11 +36,13 @@
      known sanitizer finding is suppressed with its issue and reason, a test-only finding is grey, red means a new
      product finding; `9aa5924a4` the guard change in item 1.
    - `c40e8dd1b` #263 item 1: a test fixture that carried a real birth date now carries an invented one.
-4. **Not merged, on purpose:** `fix/469-sanitizer-host-crash` (local branch). It assumed an Undefined Behavior
-   Sanitizer report cannot stop the test host; the M4's 11/07 log shows each report followed at once by a host
-   restart. The right rule matches a restart to the report printed just before it. Evidence is on #469. **Watch
-   Saturday 11/14's address run:** the suppression merged in `33121a067` may hide the report without stopping the host
-   exit, so that run may still read "host crashed".
+4. **Sanitizer triage, #469 (merged 11/11):** a relaunched test host is explained only by the report printed
+   immediately before it (by place in the log, no test line between), else it is red "host crashed" with the
+   running test named. Re-read with this rule, the M4's 10/31–11/08 logs attribute all 27 relaunches to #463 and
+   #423. The earlier attempt (`fix/469-sanitizer-host-crash`, local branch, unmerged) is superseded. **Watch
+   Saturday 11/14's address run:** the one run made with the #463 suppression in force showed no host exit but a
+   second report one frame down (`NSObject.hpp:112`), which the suppression does not cover — so Saturday may
+   read red "findings" for it. Widening the suppression is a #463 decision.
 5. **P0/P1:** open P0 — #332, #327 (both wait on Rick). Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
    #338. Look fixed in the code, close after Rick's check — #327, #354, #353, #342, #345 (one real-data check). Not
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
@@ -55,7 +57,8 @@
 2. **Sound, what the two merges left (#470):** the Check Media card still says OK when sound was not checked; a
    truncated decode that exits 0 is not caught. The production-shape sound-gate test needs a `.backup` of the live
    catalog and has not run.
-3. **#469** by position in the log (item 4 above); then narrow the #423 suppression after the 11/15 thread run.
+3. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
+   suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
 4. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
    there); Core tests fail inside the M4's 04:00 coverage build (timing); the Ultra's nightly builds Rick's checkout
    instead of a clean clone of `main`; the warning ratchet cannot see a warning behind a warm build; the M4's catalog

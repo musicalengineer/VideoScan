@@ -878,8 +878,9 @@ def sanitizer_row(run: dict) -> Optional[dict]:
     reports, tests = _int(run.get("reports")), _int(run.get("tests"))
     counts: Dict[str, Optional[int]] = {k: None for k in _SAN_PREFIX}
     # Reports in test code only (weekly_sanitizer.py's classification) never fall
-    # back onto the red counts; they are test_only_issues.
-    product_reports = max(0, reports - _int(run.get("test_only_reports")))
+    # back onto the red counts; they are test_only_issues. Nor do printed reports
+    # of a known finding (known_reports, #469): the known finding is `suppressed`.
+    product_reports = max(0, reports - _int(run.get("test_only_reports")) - _int(run.get("known_reports")))
     test_only = [f for f in (run.get("test_only_findings") or []) if isinstance(f, str)]
     if reports or tests:
         for key in _SAN_MEASURES[kind]:

@@ -32,7 +32,9 @@ What it does, in order:
      deadline shared by the targets.
   3. Parses each log: sanitizer reports (deduplicated by their SUMMARY line),
      the Swift Testing run line and the XCTest "Executed N tests" line, build
-     failure, timeout, a relaunched test host.
+     failure, timeout, a relaunched test host. Each relaunch is accounted for
+     by its place in the log (RESTART_RULE, #469): explained only by a report
+     printed immediately before it; anything else is a crash.
   3a. Known findings (2026-11-08, Rick: "make red mean a new finding"): each
      sanitizer's suppression file under scripts/sanitizer/ (tsan.supp,
      ubsan.supp) goes to the runtime through TSAN_OPTIONS / UBSAN_OPTIONS (and
@@ -254,9 +256,11 @@ def classify_report(block: str) -> str:
     return "test" if sides == {"test"} else "product"
 
 
-def report_blocks(text: str) -> List[tuple]:
-    """(block, summary line or None) per sanitizer report: from the report's
-    first line to its SUMMARY (or to the next report)."""
+def report_spans(text: str) -> List[tuple]:
+    """(block, summary line or None, start, last) per sanitizer report, in log
+    order: the block runs from the report's first line to its SUMMARY (or to
+    the next report); `last` is the offset where the report's own text ends
+    (the end of its SUMMARY line, or of its first line when it has none)."""
     starts = sorted({text.rfind("\n", 0, m.start()) + 1 for m in REPORT_START.finditer(text)})
     out = []
     for i, start in enumerate(starts):
@@ -265,29 +269,183 @@ def report_blocks(text: str) -> List[tuple]:
         sm = SUMMARY.search(chunk)
         if sm:
             chunk = chunk[:sm.end()]
-        out.append((chunk, f"{sm.group(1)}: {sm.group(2).strip()}" if sm else None))
+            last = start + sm.end()
+        else:
+            eol = text.find("\n", start)
+            last = eol if eol != -1 else len(text)
+        out.append((chunk, f"{sm.group(1)}: {sm.group(2).strip()}" if sm else None, start, last))
     return out
 
 
-def parse_log(text: str) -> dict:
-    """Pure: everything the row needs, from an xcodebuild or swift test log."""
+def report_blocks(text: str) -> List[tuple]:
+    """(block, summary line or None) per sanitizer report."""
+    return [(block, line) for block, line, _start, _last in report_spans(text)]
+
+
+# ── A printed report of a KNOWN finding (#469) ───────────────────────────────
+# A suppressed report is normally never printed. When one prints anyway (the
+# file did not reach the runtime, or a log from before the entry is re-read),
+# it is still the known finding, not a new one: matched against the entries in
+# force the way the runtime matches them. Grey needs positive evidence, so the
+# check word must be one this table knows and the place must match:
+#   race:<template>  a ThreadSanitizer data race with <template> in a frame of
+#                    one of the two racing accesses ("Write of size…", "Previous
+#                    read of size…"), not of where the memory or a thread was made
+#   null:<template>  a UBSan "null pointer" report whose own location (the
+#                    file before ": runtime error:") matches <template>
+# The 11/08 verification run printed the same mlx null call one frame down
+# (metal-cpp NSObject.hpp:112:49); that is not device.cpp and stays a finding.
+CHECK_WORDS = {"race": "ThreadSanitizer: data race", "null": "null pointer"}
+ACCESS_HEADER = re.compile(r"^\s+(?:Previous )?(?:[Aa]tomic )?(?:[Rr]ead|[Ww]rite) of size \d+ ")
+
+
+def access_frames(lines: List[str]) -> List[str]:
+    """Pure: the frames of a TSan report's racing accesses (the stacks under
+    "Write of size…" / "Previous read of size…"), not the allocation's, the
+    sleep's or the threads' creation stacks."""
+    out: List[str] = []
+    inside = False
+    for line in lines:
+        m = FRAME_LINE.match(line)
+        if m:
+            if inside:
+                out.append(m.group(1))
+        elif line.strip():
+            inside = bool(ACCESS_HEADER.match(line))
+    return out
+
+
+def template_matches(template: str, where: str) -> bool:
+    """Pure: the sanitizer runtimes' suppression template — a substring match,
+    `*` is any run of characters, a leading ^ / trailing $ anchor that end."""
+    head, tail = template.startswith("^"), template.endswith("$") and len(template) > 1
+    body = template[1 if head else 0:len(template) - (1 if tail else 0)]
+    pattern = ".*".join(re.escape(part) for part in body.split("*"))
+    return re.search(("^" if head else "") + pattern + ("$" if tail else ""), where) is not None
+
+
+def known_entry_for(block: str, entries) -> Optional[dict]:
+    """Pure: the suppression entry this printed report is, or None."""
+    lines = block.splitlines()
+    first = lines[0] if lines else ""
+    for e in entries or ():
+        says = CHECK_WORDS.get(e.get("check", ""))
+        if not says or says not in first:
+            continue
+        if e["check"] == "race":
+            places = access_frames(lines)
+        else:
+            places = [first.split(": runtime error: ", 1)[0]]
+        if any(template_matches(e["pattern"], place) for place in places):
+            return e
+    return None
+
+
+# ── Which relaunch of the test host is explained (#469) ──────────────────────
+RESTART_RULE = ("a restart is explained only by a sanitizer report printed immediately before it: "
+                "the last report of that host launch, test-only or of a known finding, with no test or "
+                "suite started or finished between the report's last line and the restart")
+# By POSITION, never by which sanitizer printed the report and never by counting
+# reports against restarts. What the M4's logs show (2026-11-11 reading):
+#   10/31 + 11/07 address  4 of 4 restarts: a UBSan report (mlx device.cpp:717,
+#       #463), then only the next host's "TEST_HOST_STARTED epoch=… pid=…", up
+#       to two os_log lines of that new host, a blank, "Restarting after
+#       unexpected exit, crash, or test timeout…". So a UBSan report can be the
+#       last thing a host prints; "UBSan never stops the host" is not a rule.
+#   11/01 + 11/08 thread   23 of 23 restarts: a TSan report (GRDB close race,
+#       #423), its "==================" rule, then the same lines.
+#   In all 27 no test or suite line lies between SUMMARY and the restart.
+#   11/08 verification     a UBSan report followed by "✔ Test … passed": the
+#       host ran on, no restart. A report the host ran on from explains nothing.
+#   10/05 thread           a restart with no report in the log at all (a
+#       TSan-runtime SIGSEGV): a crash.
+# xcodebuild prints no signal or crash line for the dead host; what the log does
+# hold is the test that had started and not finished, kept as `during`.
+# A new product report before a restart does not explain it either (the row is
+# red "findings" anyway and the restart counts as a crash).
+# xcodebuild relaunches a test host that died mid-run and carries on; each
+# relaunch prints a further "Test Suite 'VideoScanTests.xctest' started" line
+# (2026-10-05: a TSan-runtime SIGSEGV lost ~800 cases unnoticed). That line is
+# the restart's place in the log; "Restarting after…" sits just above it.
+HOST_START_LINE = "Test Suite 'VideoScanTests.xctest' started"
+TEST_EVENT = re.compile(r"^(?:[◇✔✘] (?:Test|Suite) |Test Case '-\[)", re.M)
+TEST_STARTED = re.compile(r"^(?:◇ Test (?!run started\.)(.+) started\.|Test Case '-\[(.+)\]' started\.)$", re.M)
+TEST_START_MARKS = ("\n◇ Test ", "\nTest Case '-[")
+MAX_RESTARTS_LISTED = 40
+MAX_NAME = 160
+
+
+def running_test(text: str, lo: int, hi: int) -> Optional[str]:
+    """Pure: the test that had started and not finished when the log reached
+    `hi` (searching back to `lo`), or None. One started line back from the end:
+    after it there must be no other test or suite line."""
+    at = max(text.rfind(mark, lo, hi) for mark in TEST_START_MARKS)
+    while at != -1:
+        m = TEST_STARTED.match(text, at + 1)
+        if m:
+            name = (m.group(1) or m.group(2))[:MAX_NAME]
+            return None if TEST_EVENT.search(text, m.end(), hi) else name
+        at = max(text.rfind(mark, lo, at) for mark in TEST_START_MARKS)   # "◇ Test run started.": look further back
+    return None
+
+
+def restart_accounts(text: str, reports: List[tuple]) -> List[dict]:
+    """Pure: one {explained_by, issue, during} per relaunch of the test host, by
+    RESTART_RULE. `reports` = (start, last, "test" | "known" | "product", issue)
+    in log order. Cost: one str.find pass for the host starts, then slices no
+    larger than the gap being judged."""
+    starts: List[int] = []
+    at = text.find(HOST_START_LINE)
+    while at != -1:
+        starts.append(at)
+        at = text.find(HOST_START_LINE, at + 1)
+    out: List[dict] = []
+    i = 0                                  # reports[:i] start before the restart being judged
+    for launch, restart in zip(starts, starts[1:]):
+        while i < len(reports) and reports[i][0] < restart:
+            i += 1
+        account = {"explained_by": None, "issue": None, "during": running_test(text, launch, restart)}
+        if i:
+            start, last, side, issue = reports[i - 1]
+            if start > launch and side != "product" and not TEST_EVENT.search(text, last, restart):
+                account.update(explained_by="known" if side == "known" else "test-only", issue=issue)
+        out.append(account)
+    return out
+
+
+def parse_log(text: str, known=()) -> dict:
+    """Pure: everything the row needs, from an xcodebuild or swift test log.
+    `known` = the suppression entries in force (sanitizer_env): a printed
+    report one of them matches is that known finding, not a new one."""
     summaries: list[str] = []
     test_only: list[str] = []
-    test_only_reports = 0
-    for block, line in report_blocks(text):
-        if classify_report(block) == "test":
+    known_lines: list[str] = []
+    test_only_reports = known_reports = 0
+    placed: List[tuple] = []
+    for block, line, start, last in report_spans(text):
+        entry = known_entry_for(block, known)
+        if entry is not None:
+            known_reports += 1
+            placed.append((start, last, "known", entry.get("issue")))
+            if line and line not in known_lines:
+                known_lines.append(line)
+        elif classify_report(block) == "test":
             test_only_reports += 1
+            placed.append((start, last, "test", None))
             if line and line not in test_only:
                 test_only.append(line)
-        elif line and line not in summaries:
-            summaries.append(line)
+        else:
+            placed.append((start, last, "product", None))
+            if line and line not in summaries:
+                summaries.append(line)
     # A SUMMARY whose report start was not recognised is product (never hidden).
     for m in SUMMARY.finditer(text):
         line = f"{m.group(1)}: {m.group(2).strip()}"
-        if line not in summaries and line not in test_only:
+        if line not in summaries and line not in test_only and line not in known_lines:
             summaries.append(line)
     # One line seen both in tests and product is product.
     test_only = [t for t in test_only if t not in summaries]
+    restarts = restart_accounts(text, placed)
     run = RUN_LINE.findall(text)
     tests, suites, outcome = (int(run[-1][0]), int(run[-1][1]), run[-1][2]) if run else (0, 0, None)
     # XCTest prints "Executed N tests, with F failures" per suite and once for
@@ -298,12 +456,11 @@ def parse_log(text: str) -> dict:
         if int(xct[-1][1]) > 0 and outcome != "failed":
             outcome = "failed"
     failed_tests = sorted({a or b for a, b in FAILED_TEST.findall(text)})
-    # xcodebuild silently relaunches a test host that died mid-run; the only
-    # trace is a second "Test Suite 'VideoScanTests.xctest' started" line
-    # (2026-10-05: a TSan-runtime SIGSEGV lost ~800 cases unnoticed).
-    host_starts = text.count("Test Suite 'VideoScanTests.xctest' started")
     return {
-        "host_restarts": max(0, host_starts - 1),
+        "host_restarts": len(restarts),
+        "unexplained_restarts": sum(1 for r in restarts if r["explained_by"] is None),
+        "restarts": restarts[:MAX_RESTARTS_LISTED],
+        "known_reports": known_reports,
         "reports": len(REPORT_START.findall(text)),
         "suppressed_hits": matched_suppressions(text),
         "unique_findings": summaries,
@@ -328,9 +485,14 @@ def merge(parsed: List[dict]) -> dict:
     sums of counts, worst outcome)."""
     out = {"host_restarts": 0, "reports": 0, "unique_findings": [], "tests": 0, "suites": 0,
            "tests_outcome": None, "failed_tests": [], "build_failed": False, "test_succeeded": bool(parsed),
-           "suppressed_hits": {}, "test_only_findings": [], "test_only_reports": 0}
+           "suppressed_hits": {}, "test_only_findings": [], "test_only_reports": 0,
+           "unexplained_restarts": 0, "restarts": [], "known_reports": 0}
     for p in parsed:
         out["test_only_reports"] += p.get("test_only_reports", 0)
+        out["known_reports"] += p.get("known_reports", 0)
+        # A result from before the field: every restart of it is unexplained (red), never explained.
+        out["unexplained_restarts"] += p.get("unexplained_restarts", p["host_restarts"])
+        out["restarts"] = (out["restarts"] + p.get("restarts", []))[:MAX_RESTARTS_LISTED]
         out["test_only_findings"] += [f for f in p.get("test_only_findings", []) if f not in out["test_only_findings"]]
         for key, n in p.get("suppressed_hits", {}).items():
             out["suppressed_hits"][key] = out["suppressed_hits"].get(key, 0) + n
@@ -354,12 +516,14 @@ def merge(parsed: List[dict]) -> dict:
 def status_for(parsed: dict, timed_out: bool) -> str:
     """One word for the morning: product findings beat everything else; a
     finding only in test code (grey, "test-findings") is the last word before
-    ok, and each test-only report may explain one relaunched host (the
-    sanitizer halts the host on a report)."""
+    ok. A relaunched host is a crash unless RESTART_RULE explains it (#469: by
+    the report printed immediately before it, never by counting reports). A
+    printed report of a known finding is not a new one: like a suppressed hit
+    it leaves the word alone, and the digest says it grey."""
     test_only_reports = parsed.get("test_only_reports", 0)
-    if parsed["unique_findings"] or parsed["reports"] > test_only_reports:
+    if parsed["unique_findings"] or parsed["reports"] > test_only_reports + parsed.get("known_reports", 0):
         return "findings"
-    if parsed.get("host_restarts", 0) > test_only_reports:
+    if parsed.get("unexplained_restarts", parsed.get("host_restarts", 0)) > 0:
         return "host-crashed"
     if timed_out:
         return "timeout"
@@ -534,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
         rc, t_out = run_target(cmd, log_path, env, deadline)
         timed_out = timed_out or t_out
         exit_codes[target] = rc
-        p = parse_log(log_path.read_text(errors="replace"))
+        p = parse_log(log_path.read_text(errors="replace"), known)
         per_target[target] = {**p, "exit_code": rc, "timed_out": t_out, "log": str(log_path),
                               "status": status_for(p, t_out)}
         parsed_all.append(p)
