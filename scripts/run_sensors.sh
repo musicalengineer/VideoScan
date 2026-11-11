@@ -12,6 +12,11 @@
 #
 # All the logic lives in scripts/sensor_lane.py; this is the shell entry.
 #
+# 2026-11-10 (GH #400): the lane also validates the gauntlet manifest
+# (scripts/gauntlet/inventory.swift --validate, ~6 s, no build). A stale
+# manifest is RED here with the errors and how to refresh — so the stamp below,
+# and therefore the pre-push hook, already covers it.
+#
 # 2026-10-23: on GREEN this script records the hash of the exact working tree it
 # ran against in <git common dir>/sensor-lane-green (last 50 trees). The
 # pre-push hook refuses a push to main whose commit tree has no recorded green
