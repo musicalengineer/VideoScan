@@ -10,7 +10,7 @@
 // `swift test --sanitize=thread --filter GRDBCloseTSanRepro` they reproduce
 // the same report (or not); in a normal run they are ordinary pass/fail tests
 // that close a pool after awaited work. The verdict and the suppression live
-// in scripts/sanitizer/tsan.supp and GH #462 (2026-11-08).
+// in scripts/sanitizer/tsan.supp and GH #423 (2026-11-08).
 
 import Foundation
 import GRDB
@@ -72,7 +72,7 @@ struct GRDBCloseTSanReproTests {
         try await owner.close()
     }
 
-    /// The CONTROL deliberately races GRDB's unsynchronised `readerPool` (GH #462),
+    /// The CONTROL deliberately races GRDB's unsynchronised `readerPool` (GH #423),
     /// so it runs only inside a Thread Sanitizer run: weekly_sanitizer.py sets
     /// VIDEOSCAN_SANITIZER=thread and its suppression (scripts/sanitizer/tsan.supp)
     /// counts the hit, which also proves the pattern still matches. Result on
@@ -81,7 +81,7 @@ struct GRDBCloseTSanReproTests {
     /// exact pair. The three sequential tests above: no report.
     @Test("CONTROL: reads still starting while close runs (GRDB allows it; it should throw, not race)",
           .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SANITIZER"] == "thread",
-                   "races GRDB on purpose (#462); runs only under the Thread Sanitizer runner"))
+                   "races GRDB on purpose (#423); runs only under the Thread Sanitizer runner"))
     func readsInFlightDuringClose() async throws {
         let (pool, dir) = try Self.makePool()
         defer { try? FileManager.default.removeItem(at: dir) }

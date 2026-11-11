@@ -188,7 +188,7 @@ def test_scale_a_decade_of_weekly_runs_publishes_in_budget(tmp_path):
 # The runner's row now lists each suppressed known finding with its pattern and reason
 # (scripts/sanitizer/*.supp). Only the code, the issue number and the hit count leave.
 
-KNOWN_ROW = [{"code": "grdb-close-read-race", "issue": 462, "check": "race", "pattern": "DatabasePool.close",
+KNOWN_ROW = [{"code": "grdb-close-read-race", "issue": 423, "check": "race", "pattern": "DatabasePool.close",
               "reason": "GRDB 7.11.1 DatabasePool.close() writes readerPool in /Users/rickb/...", "hits": 15}]
 THREAD_AFTER = dict(THREAD_1101, started="2026-11-15T05:00:00-05:00", status="ok", reports=0, host_restarts=0,
                     unique_findings=[], suppressed=KNOWN_ROW)
@@ -202,7 +202,7 @@ def test_suppressed_known_findings_publish_as_code_issue_and_hits_only(tmp_path)
     rows = pm.sanitizer_rows(write_runs(tmp_path, [ADDRESS_AFTER, THREAD_AFTER]) / "runs.jsonl")
     assert [(r["kind"], r["status"], r["suppressed"]) for r in rows] == [
         ("address", "ok", [{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}]),
-        ("thread", "ok", [{"code": "grdb-close-read-race", "issue": 462, "hits": 15}]),
+        ("thread", "ok", [{"code": "grdb-close-read-race", "issue": 423, "hits": 15}]),
     ]
     assert rows[1]["tsan_issues"] == 0
     for row in rows:
@@ -213,7 +213,7 @@ def test_suppressed_known_findings_publish_as_code_issue_and_hits_only(tmp_path)
 
 
 def test_a_malformed_known_entry_is_dropped_not_published(tmp_path):
-    bad = dict(THREAD_AFTER, suppressed=[{"code": "Has Spaces /Users/rickb", "issue": 1}, {"code": "x", "issue": "462"},
+    bad = dict(THREAD_AFTER, suppressed=[{"code": "Has Spaces /Users/rickb", "issue": 1}, {"code": "x", "issue": "423"},
                                          {"code": "ok-code", "issue": 5, "hits": -1}, "nope"])
     (row,) = pm.sanitizer_rows(write_runs(tmp_path, [bad]) / "runs.jsonl")
     assert row["suppressed"] == [{"code": "ok-code", "issue": 5, "hits": None}]

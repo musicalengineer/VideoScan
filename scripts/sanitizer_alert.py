@@ -41,7 +41,7 @@ M4_LOGS = "on the M4 (~/Library/Logs/VideoScan/sanitizer/)"
 
 
 def suppressed_words(row: dict) -> str:
-    """'; 1 known finding suppressed (#462)' or '' — for the end of a red line."""
+    """'; 1 known finding suppressed (#423)' or '' — for the end of a red line."""
     known = [s for s in (row.get("suppressed") or []) if isinstance(s, dict)]
     if not known:
         return ""

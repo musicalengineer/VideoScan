@@ -282,7 +282,7 @@ def test_morning_digest_falls_back_to_the_published_rows():
 
 # ── 2026-11-08: known findings are suppressed with a reason; red means NEW ──
 # RED: every weekly run was "findings" for the same two known reports (GRDB close
-# race, #462, 15 reports and 15 host restarts on 11/08; mlx-swift null release,
+# race, #423, 15 reports and 15 host restarts on 11/08; mlx-swift null release,
 # #463, 2 restarts on 11/07). The runner now hands scripts/sanitizer/*.supp to the
 # runtimes, refuses an entry without an issue and a reason, and lists each entry
 # with its hits in the row.
@@ -303,7 +303,7 @@ def test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_r
             for e in entries:
                 assert code_re.match(e["code"]) and e["issue"] > 0 and len(e["reason"]) > 40, e
     tsan = ws.load_suppressions(ws.SUPP_DIR / "tsan.supp")
-    assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 462)]
+    assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 423)]
     ubsan = ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp")
     assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "*mlx/backend/metal/device.cpp", 463)]
 
@@ -350,7 +350,7 @@ def test_a_run_whose_only_race_was_suppressed_is_ok_and_says_what_was_held_back(
     p = ws.parse_log(GREEN_LOG + TSAN_SUPPRESSED_TAIL)
     assert ws.status_for(p, timed_out=False) == "ok" and p["reports"] == 0
     rows = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "tsan.supp"), p["suppressed_hits"], "thread")
-    assert [(r["code"], r["issue"], r["hits"]) for r in rows] == [("grdb-close-read-race", 462, 15)]
+    assert [(r["code"], r["issue"], r["hits"]) for r in rows] == [("grdb-close-read-race", 423, 15)]
     ub = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp"), {}, "address")
     assert [(r["code"], r["hits"]) for r in ub] == [("mlx-null-linked-functions", None)], "UBSan hits are not observable: null, never 0"
 
@@ -378,7 +378,7 @@ def test_main_passes_the_suppressions_and_records_each_with_its_hits(tmp_path, m
                     "--timeout-hours", "0.01"]) == 0
     row = json.loads((logdir / "latest-thread.json").read_text())
     assert row["status"] == "ok" and row["tests"] == 12
-    assert [(s["code"], s["issue"], s["hits"]) for s in row["suppressed"]] == [("grdb-close-read-race", 462, 4)]
+    assert [(s["code"], s["issue"], s["hits"]) for s in row["suppressed"]] == [("grdb-close-read-race", 423, 4)]
     assert f"suppressions={ws.SUPP_DIR / 'tsan.supp'}" in (tmp_path / "env.txt").read_text()
 
 
@@ -396,7 +396,7 @@ def test_main_with_an_unexplained_suppression_writes_a_config_error_row_and_runs
     assert line.startswith("🔴 Thread Sanitizer") and "suppression file" in line
 
 
-KNOWN = [{"code": "grdb-close-read-race", "issue": 462, "hits": 15}]
+KNOWN = [{"code": "grdb-close-read-race", "issue": 423, "hits": 15}]
 
 
 def test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings(tmp_path, capsys):
@@ -409,12 +409,12 @@ def test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings(tmp_
 
 def test_a_red_digest_line_says_which_known_findings_were_held_back(tmp_path, capsys):
     line = alert.lines_for(_row("tests-failed", failed_tests=["x"], suppressed=KNOWN), NOW, 8)[0]
-    assert line.startswith("🔴") and "1 known finding suppressed (#462)" in line
+    assert line.startswith("🔴") and "1 known finding suppressed (#423)" in line
     src = tmp_path / "sanitizer.jsonl"
     src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", tsan_issues=1, reports=1, suppressed=KNOWN)) + "\n")
     alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
     out = capsys.readouterr().out
-    assert "1 finding(s); 1 known finding suppressed (#462)" in out
+    assert "1 finding(s); 1 known finding suppressed (#423)" in out
 
 
 # ── 2026-11-08 (Rick): a finding whose OUR frames are all test code is grey ──

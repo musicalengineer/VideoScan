@@ -6,7 +6,7 @@
 # finding), records each entry and its hit count in the run row, and the metrics card
 # shows it as a grey "suppressed" count. Remove the entry when its issue closes.
 
-# known: code=grdb-close-read-race issue=462 date=2026-11-08 repro=GRDBCloseTSanReproTests.readsInFlightDuringClose
+# known: code=grdb-close-read-race issue=423 date=2026-11-08 repro=GRDBCloseTSanReproTests.readsInFlightDuringClose
 # reason: GRDB 7.11.1 DatabasePool.close() writes readerPool = nil inside its barrier
 # reason: (DatabasePool.swift:283) while read() reads it outside (:357). Real, inside GRDB;
 # reason: needs a read starting while close runs (actor reentrancy in GRDBCatalogRepository).

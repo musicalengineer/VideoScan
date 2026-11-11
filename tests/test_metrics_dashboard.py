@@ -1425,11 +1425,11 @@ def test_sanitizer_rows_alone_render_without_static_rows(tmp_path):
 
 # ---------------------------------------------------------------- known findings (2026-11-08)
 # RED 2026-11-08 (Rick: "make red mean a new finding, go look"): the card was red every week
-# for the same two known reports (GRDB close race #462, mlx-swift null release #463), and a
+# for the same two known reports (GRDB close race #423, mlx-swift null release #463), and a
 # failing test or a failed build never turned it red at all. Now: suppressed known findings
 # are a grey count with their issue; red = an unsuppressed finding or a run that failed.
 
-KNOWN_TSAN = [{"code": "grdb-close-read-race", "issue": 462, "hits": 15}]
+KNOWN_TSAN = [{"code": "grdb-close-read-race", "issue": 423, "hits": 15}]
 KNOWN_UBSAN = [{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}]
 
 
@@ -1443,7 +1443,7 @@ def test_runs_clean_apart_from_known_findings_are_green_with_a_grey_suppressed_c
     assert out["errors"] == []
     line = out["sections"]["sum-san"]
     assert "dot green" in line and "0 sanitizer findings" in line
-    assert 'class="word grey">1 known suppressed: grdb close read race #462, 15 hits</span>' in line
+    assert 'class="word grey">1 known suppressed: grdb close read race #423, 15 hits</span>' in line
     assert 'class="word grey">1 known suppressed: mlx null linked functions #463</span>' in line
     assert "1 known suppressed" in out["sections"]["body-san"]
 
