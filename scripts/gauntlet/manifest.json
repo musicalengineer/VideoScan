@@ -4807,6 +4807,7 @@
       ]
     },
     {
+      "blocked_reason": "TSan repro: its CONTROL test runs only with VIDEOSCAN_SANITIZER=thread (scripts/weekly_sanitizer.py) and is skipped everywhere else; a skip under the floor is RED in the gauntlet (#423)",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCloseTSanReproTests.swift",
       "stage": "regression",
@@ -39296,11 +39297,15 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCloseTSanReproTests.swift",
+          "reason": "TSan repro: its CONTROL test runs only with VIDEOSCAN_SANITIZER=thread (scripts/weekly_sanitizer.py) and is skipped everywhere else; a skip under the floor is RED in the gauntlet (#423)"
         }
       ],
       "expected_floor": 529,
       "name": "regression",
-      "package_expected_floor": 329,
+      "package_expected_floor": 325,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -39353,8 +39358,7 @@
         "VideoScanCoreTests.EraJobFailFastTests",
         "VideoScanCoreTests.EraJobConvergenceTests",
         "VideoScanCoreTests.EraJobMediaMatrixTests",
-        "VideoScanCoreTests.EraJobRetryReviewTests",
-        "VideoScanCoreTests.GRDBCloseTSanReproTests"
+        "VideoScanCoreTests.EraJobRetryReviewTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
