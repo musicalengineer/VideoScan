@@ -14,6 +14,16 @@ metrics/sanitizer.jsonl, the counts tools/publish_metrics.py publishes from the
 M4 (2026-11-04: the 11/01 TSan race and the 10/31 UBSan report never reached
 the Ultra). Local files win when they exist. A published row carries counts,
 not the findings' text; the line says where the logs are.
+
+Known findings (2026-11-08): reports matched by scripts/sanitizer/*.supp are
+never printed, so they are not findings and do not make a line red; a red line
+for some other reason says how many known findings were held back and their
+issues. A run that is ok apart from suppressed findings stays quiet, the same
+rule as the metrics card (red = something new to go and look at).
+
+Findings only in test code (Rick 2026-11-08; status "test-findings": every
+frame of ours is in VideoScanTests/ or a package's Tests/) are a grey ⚪ line,
+"fix when convenient", never red.
 """
 from __future__ import annotations
 
@@ -28,6 +38,15 @@ NAMES = {"address": "Address Sanitizer", "thread": "Thread Sanitizer"}
 MAX_LISTED = 4
 COUNTS = (("asan_issues", "ASan"), ("ubsan_issues", "UBSan"), ("tsan_issues", "TSan"))
 M4_LOGS = "on the M4 (~/Library/Logs/VideoScan/sanitizer/)"
+
+
+def suppressed_words(row: dict) -> str:
+    """'; 1 known finding suppressed (#423)' or '' — for the end of a red line."""
+    known = [s for s in (row.get("suppressed") or []) if isinstance(s, dict)]
+    if not known:
+        return ""
+    issues = ", ".join(f"#{s['issue']}" for s in known if isinstance(s.get("issue"), int))
+    return f"; {len(known)} known finding{'' if len(known) == 1 else 's'} suppressed" + (f" ({issues})" if issues else "")
 
 
 def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
@@ -48,20 +67,27 @@ def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
         restarts = row.get("host_restarts") or 0
         crashed = f"; the test host restarted {restarts}× (some tests never ran)" if restarts else ""
         out = [f"🔴 {name} ({when}, {row.get('sha', '?')}): {count} "
-               f"finding(s){crashed} — log {row.get('log', '?')}"]
+               f"finding(s){crashed}{suppressed_words(row)} — log {row.get('log', '?')}"]
         out += [f"     • {f}" for f in findings[:MAX_LISTED]]
         if len(findings) > MAX_LISTED:
             out.append(f"     • …and {len(findings) - MAX_LISTED} more")
         return out
+    if status == "test-findings":
+        findings = row.get("test_only_findings") or []
+        count = row.get("test_only_issues") or len(findings) or 1
+        out = [f"⚪ {name} ({when}, {row.get('sha', '?')}): {count} finding(s) in test code only — "
+               f"fix when convenient{suppressed_words(row)} — log {row.get('log', '?')}"]
+        return out + [f"     • {f}" for f in findings[:MAX_LISTED]]
     if status == "skipped-busy":
         return [f"🟡 {name} ({when}) skipped — {row.get('reason', 'M4 busy')}"]
     detail = {"build-failed": "build failed", "tests-failed": "tests failed",
               "timeout": "timed out", "no-tests-ran": "no tests ran",
+              "config-error": f"suppression file refused, nothing ran ({row.get('reason', 'see the runner')})",
               "host-crashed": f"the test host crashed {row.get('host_restarts', 1)}× and was relaunched "
                               "(some tests never ran — see the .ips in DiagnosticReports)"}.get(status, status or "unknown")
     failed = row.get("failed_tests") or []
     tail = f": {', '.join(failed[:MAX_LISTED])}" if failed else ""
-    return [f"🔴 {name} ({when}, {row.get('sha', '?')}): {detail}{tail} — log {row.get('log', '?')}"]
+    return [f"🔴 {name} ({when}, {row.get('sha', '?')}): {detail}{tail}{suppressed_words(row)} — log {row.get('log', '?')}"]
 
 
 def from_published(row: dict, now: dt.datetime) -> dict | None:
@@ -76,7 +102,9 @@ def from_published(row: dict, now: dt.datetime) -> dict | None:
             "status": row.get("status"), "reports": row.get("reports") or 0,
             "host_restarts": row.get("host_restarts") or 0, "finding_count": sum(v for _, v in counts),
             "unique_findings": [f"{label}: {v} unique finding{'' if v == 1 else 's'}" for label, v in counts if v],
-            "failed_tests": [], "log": M4_LOGS}
+            "failed_tests": [], "log": M4_LOGS,
+            "suppressed": [s for s in (row.get("suppressed") or []) if isinstance(s, dict)],
+            "test_only_issues": row.get("test_only_issues") if isinstance(row.get("test_only_issues"), int) else None}
 
 
 def published_latest(text: str, now: dt.datetime) -> dict:

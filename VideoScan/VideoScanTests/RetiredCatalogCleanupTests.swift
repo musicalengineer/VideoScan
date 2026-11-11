@@ -132,6 +132,9 @@ final class RetiredCatalogCleanupTests: XCTestCase {
         let elapsed = CFAbsoluteTimeGetCurrent() - t0
         XCTAssertEqual(c.count, 5)
         XCTAssertEqual(c.map(\.recordCount).reduce(0, +), 100_000)
-        XCTAssertLessThan(elapsed, 2.0, "selector took \(elapsed)s over 100k records; budget 2s")
+        // Through debugCeiling (2026-11-08): the weekly Thread Sanitizer run
+        // measured 2.92 s (11/08) against the raw 2 s; plain Debug is unchanged.
+        let budget = PerformanceLane.debugCeiling(seconds: 2.0)
+        XCTAssertLessThan(elapsed, budget, "selector took \(elapsed)s over 100k records; budget \(budget)s (\(PerformanceLane.sanitizerDescription))")
     }
 }

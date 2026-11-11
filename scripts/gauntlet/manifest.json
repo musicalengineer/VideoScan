@@ -4807,6 +4807,21 @@
       ]
     },
     {
+      "blocked_reason": "TSan repro: its CONTROL test runs only with VIDEOSCAN_SANITIZER=thread (scripts/weekly_sanitizer.py) and is skipped everywhere else; a skip under the floor is RED in the gauntlet (#423)",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCloseTSanReproTests.swift",
+      "stage": "regression",
+      "suites": [
+        "GRDBCloseTSanReproTests"
+      ],
+      "tests": [
+        "actorReadCheckpointClose",
+        "closeAfterAwaitedRead",
+        "closeAfterAwaitedWrite",
+        "readsInFlightDuringClose"
+      ]
+    },
+    {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/SQLiteWALSidecarTests.swift",
       "stage": "regression",
@@ -32198,6 +32213,7 @@
         "test_an_incremental_run_does_not_probe_the_baseline",
         "test_an_unproven_fall_is_reported_not_claimed",
         "test_each_stage_subcommand_prints_one_line_and_writes_its_json",
+        "test_findings_only_in_test_code_are_not_red",
         "test_lint_counts_repo_findings_only_and_a_missing_report_is_red",
         "test_memsafe_counts_strict_memory_safety_diagnostics_and_handles_an_unsupported_toolchain",
         "test_no_violations_is_zero_and_green",
@@ -33645,6 +33661,7 @@
         "test_metrics_dashboard.py"
       ],
       "tests": [
+        "test_a_failed_run_is_red_even_with_zero_findings",
         "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
@@ -33653,6 +33670,7 @@
         "test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind",
         "test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale",
         "test_a_scoped_run_says_why_a_stage_failed_and_which_tests",
+        "test_an_unsuppressed_ubsan_finding_is_red_and_a_skip_is_amber",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
         "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
@@ -33660,6 +33678,7 @@
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
         "test_failures_links_list_each_macs_failed_test_names",
+        "test_findings_only_in_test_code_are_grey_never_red",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
         "test_gedcom_line_compares_the_pulls_each_mac_replayed",
         "test_gedcom_line_never_shows_a_name_or_markup_from_the_row",
@@ -33682,6 +33701,7 @@
         "test_refresh_invalid_or_unavailable_choices_cannot_submit",
         "test_refresh_statuses_are_queue_evidence_and_escape_private_progress",
         "test_refresh_uncertain_retry_reuses_key_and_accepts_already_running_request",
+        "test_runs_clean_apart_from_known_findings_are_green_with_a_grey_suppressed_count",
         "test_sanitizer_card_shows_the_m4_weekly_runs_with_their_dates",
         "test_sanitizer_rows_alone_render_without_static_rows",
         "test_sprint_graphic_reports_actual_completion",
@@ -34204,14 +34224,20 @@
       ],
       "tests": [
         "test_a_clean_run_is_zero_for_what_it_measured_and_null_for_the_rest",
+        "test_a_malformed_known_entry_is_dropped_not_published",
+        "test_a_run_before_the_split_has_a_null_test_count",
         "test_a_run_where_nothing_ran_is_null_never_zero",
         "test_cli_out_dir_writes_the_stream_from_the_sanitizer_folder",
         "test_merge_keeps_both_kinds_of_one_day_and_branch_only_rows",
         "test_no_finding_text_path_or_test_name_leaves_the_mac",
         "test_one_row_per_day_kind_and_source_the_later_run_wins",
         "test_reports_without_a_parsed_summary_still_count",
+        "test_rows_published_before_the_field_still_validate_and_config_error_is_a_status",
         "test_rows_without_a_kind_or_date_are_dropped_and_no_file_is_none",
         "test_scale_a_decade_of_weekly_runs_publishes_in_budget",
+        "test_suppressed_known_findings_publish_as_code_issue_and_hits_only",
+        "test_test_code_findings_publish_as_their_own_count_and_never_inflate_the_red_ones",
+        "test_the_gate_refuses_a_suppressed_entry_off_the_allowlist",
         "test_the_gate_refuses_anything_off_the_allowlist",
         "test_the_two_real_runs_become_counts_per_sanitizer"
       ]
@@ -34913,24 +34939,40 @@
       "tests": [
         "test_a_findings_line_says_the_host_restarted",
         "test_a_link_failure_reads_as_build_failed_not_no_tests",
+        "test_a_new_race_beside_a_suppressed_one_is_still_a_finding",
+        "test_a_product_finding_beside_a_test_only_one_is_red",
+        "test_a_red_digest_line_says_which_known_findings_were_held_back",
         "test_a_relaunched_test_host_is_a_crash_not_a_pass",
+        "test_a_report_is_test_only_when_every_frame_of_ours_is_test_code",
+        "test_a_run_whose_only_race_was_suppressed_is_ok_and_says_what_was_held_back",
+        "test_a_run_with_only_test_code_findings_is_grey_and_its_halted_host_is_explained",
         "test_alert_flags_failures_and_skips",
         "test_alert_is_quiet_when_green_or_stale",
         "test_alert_main_reads_latest_files",
         "test_alert_shouts_findings_with_the_list",
+        "test_an_unexplained_suppression_is_refused",
         "test_catalog_subset_comes_from_the_gauntlet_manifest",
         "test_commands_carry_the_sanitizer_the_configuration_and_the_subset",
+        "test_each_frame_is_ours_in_tests_ours_in_product_or_not_ours",
+        "test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process",
         "test_findings_are_counted_and_deduplicated",
         "test_findings_beat_timeout_and_failures",
         "test_local_files_win_over_published_rows_on_the_m4",
+        "test_main_passes_the_suppressions_and_records_each_with_its_hits",
         "test_main_runs_both_targets_with_fake_tools_and_writes_one_row",
+        "test_main_with_an_unexplained_suppression_writes_a_config_error_row_and_runs_nothing",
+        "test_matched_suppressions_sum_over_every_process_and_ignore_lookalikes",
         "test_merge_folds_targets_findings_win_and_counts_add",
         "test_morning_digest_falls_back_to_the_published_rows",
         "test_published_rows_older_than_the_window_or_green_are_quiet",
         "test_published_rows_reach_a_mac_without_the_local_files",
         "test_status_precedence_without_findings",
+        "test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings",
+        "test_the_digest_shows_test_code_findings_grey_not_red",
         "test_the_real_manifest_yields_a_catalog_subset_of_hundreds_of_suites",
+        "test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_reason",
         "test_tsan_report_shape",
+        "test_ubsan_prints_its_stack_so_its_frames_can_be_classified",
         "test_ubsan_runtime_errors_count_as_findings",
         "test_xctest_executed_line_adds_to_the_count_and_an_xctest_failure_is_a_failure"
       ]
@@ -39264,6 +39306,10 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCloseTSanReproTests.swift",
+          "reason": "TSan repro: its CONTROL test runs only with VIDEOSCAN_SANITIZER=thread (scripts/weekly_sanitizer.py) and is skipped everywhere else; a skip under the floor is RED in the gauntlet (#423)"
         }
       ],
       "expected_floor": 529,

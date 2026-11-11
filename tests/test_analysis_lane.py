@@ -173,6 +173,16 @@ class ToolStages(unittest.TestCase):
             self.assertEqual(lane.memsafe(0, probe, app, d / "absent.log", 0, 0)["status"], "red")
             self.assertEqual(lane.memsafe(0, probe, app, core, 65, 0)["status"], "red")
 
+    def test_findings_only_in_test_code_are_not_red(self):
+        """Rick 2026-11-08: frames of ours all in test code = grey, fix when convenient."""
+        with tempfile.TemporaryDirectory() as d:
+            row = write(Path(d), "latest-thread.json", json.dumps({
+                "status": "test-findings", "unique_findings": [], "tests": 1900, "log": "/x.log",
+                "test_only_findings": ["ThreadSanitizer: data race FooTests.swift:12 in bar"]}))
+            r = lane.sanitizer("thread", row)
+            self.assertEqual((r["status"], r["number"]), ("ok", 0))
+            self.assertIn("1 in test code only", r["line"])
+
     def test_sanitizer_findings_are_red_and_a_missing_row_is_red(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)

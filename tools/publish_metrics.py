@@ -232,7 +232,7 @@ FAILED_NAMES_MAX = 25
 # its two kinds (ASan+UBSan share a build; TSan cannot), who ran it.
 SAN_KINDS = ("address", "thread")
 SAN_STATUS = ("ok", "findings", "host-crashed", "timeout", "build-failed", "tests-failed",
-              "no-tests-ran", "skipped-busy", "other")
+              "no-tests-ran", "skipped-busy", "config-error", "test-findings", "other")
 SAN_SOURCES = ("weekly", "analysis-lane", "unknown")
 ANALYSIS_SOURCE = "m4-analysis-lane"
 ANALYSIS_FIELDS = ("strict_warning_total", "concurrency_warnings", "memory_safety_warnings",
@@ -403,6 +403,14 @@ SCHEMAS: Dict[str, dict] = {
         "asan_issues": "int?",
         "ubsan_issues": "int?",
         "tsan_issues": "int?",
+        # 2026-11-08: the known findings the run suppressed (scripts/sanitizer/*.supp):
+        # their machine code, the issue that tracks each, and hits (null when the
+        # runtime cannot report them — UBSan). Absent on older rows.
+        "suppressed": ("maybe", ("list", ("obj", {"code": "code", "issue": "int", "hits": "int?"}))),
+        # 2026-11-08 (Rick): unique findings whose frames of ours are ALL test code —
+        # grey, "fix when convenient"; never part of the three red counts above.
+        # Null when nothing ran; absent on older rows.
+        "test_only_issues": ("maybe", "int?"),
     },
     # The M4 analysis lane's rows on static_analysis.jsonl (2026-11-04), one per
     # night. Only rows with this `source` are ours, validated and replaced by
@@ -869,12 +877,23 @@ def sanitizer_row(run: dict) -> Optional[dict]:
     findings = [f for f in (run.get("unique_findings") or []) if isinstance(f, str)]
     reports, tests = _int(run.get("reports")), _int(run.get("tests"))
     counts: Dict[str, Optional[int]] = {k: None for k in _SAN_PREFIX}
+    # Reports in test code only (weekly_sanitizer.py's classification) never fall
+    # back onto the red counts; they are test_only_issues.
+    product_reports = max(0, reports - _int(run.get("test_only_reports")))
+    test_only = [f for f in (run.get("test_only_findings") or []) if isinstance(f, str)]
     if reports or tests:
         for key in _SAN_MEASURES[kind]:
             counts[key] = sum(1 for f in findings if f.startswith(_SAN_PREFIX[key]))
-        if reports and not any(counts[k] for k in _SAN_MEASURES[kind]):
-            counts[_SAN_PRIMARY[kind]] = reports
+        if product_reports and not any(counts[k] for k in _SAN_MEASURES[kind]):
+            counts[_SAN_PRIMARY[kind]] = product_reports
     sha = run.get("sha")
+    # Known findings: code, issue and hits only — the pattern and reason stay here.
+    suppressed = [{"code": e["code"], "issue": e["issue"],
+                   "hits": e["hits"] if isinstance(e.get("hits"), int) and not isinstance(e.get("hits"), bool)
+                   and e["hits"] >= 0 else None}
+                  for e in (run.get("suppressed") or [])
+                  if isinstance(e, dict) and isinstance(e.get("code"), str) and CODE_RE.match(e["code"])
+                  and isinstance(e.get("issue"), int) and not isinstance(e.get("issue"), bool) and e["issue"] > 0]
     return dict({
         "schemaVersion": SCHEMA_VERSION, "date": date, "kind": kind,
         "source": run.get("source") if run.get("source") in SAN_SOURCES else "unknown",
@@ -883,6 +902,9 @@ def sanitizer_row(run: dict) -> Optional[dict]:
         "status": status,
         "sha": sha if isinstance(sha, str) and SHA_RE.match(sha) else None,
         "tests": tests, "host_restarts": _int(run.get("host_restarts")), "reports": reports,
+        "suppressed": suppressed,
+        # A test-only report whose SUMMARY was not parsed still counts as one.
+        "test_only_issues": max(len(test_only), min(1, _int(run.get("test_only_reports")))) if (reports or tests) else None,
     }, **counts)
 
 
