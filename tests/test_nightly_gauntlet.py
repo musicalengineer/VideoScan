@@ -19,7 +19,10 @@ results here ...'". These tests pin that contract:
   suite and still writes the done line;
 - the guard (nightly_guarded.sh): on a gauntlet Mac a green suite row alone is
   NOT "done today" — a published passed/amber gauntlet row is needed too, else
-  the retry runs the gauntlet only (Codex 2026-11-05 P1).
+  the retry runs the gauntlet only (Codex 2026-11-05 P1);
+- the guard skips by COMMIT, not by date: a green row counts only when it is
+  for the commit origin/main is at now (2026-11-10: a 01:40 manual run made
+  the 14:00 run skip and a day of merges went untested on the M4).
 
 Everything runs for real in a fake HOME with a fake suite, a fake
 run_gauntlet.sh and a fake ssh on PATH; the real m4_run_summary.py and
@@ -537,9 +540,15 @@ class RotaGauntletTests(unittest.TestCase):
 
 
 FAKE_GIT = r'''#!/bin/sh
-# Stand-in for git: `fetch` is a no-op, `show origin/metrics:…` prints the planted rows.
+# Stand-in for git: `fetch` is a no-op (`fetch origin main` fails when
+# $FAKE/fetch_main_fails exists), `rev-parse` prints the commit origin/main is
+# at ($FAKE/main_sha: what the LAST good fetch left, so it answers even when
+# the fetch fails), `show origin/metrics:…` prints the planted rows.
 case "$1" in
-    fetch) exit 0 ;;
+    fetch)
+        if [ "$3" = main ] && [ -e "$FAKE/fetch_main_fails" ]; then exit 1; fi
+        exit 0 ;;
+    rev-parse) [ -e "$FAKE/main_sha" ] || exit 1; cat "$FAKE/main_sha"; exit 0 ;;
     show) cat "$FAKE/rows.jsonl"; exit 0 ;;
 esac
 exit 1
@@ -561,7 +570,15 @@ class GuardRetryTests(unittest.TestCase):
     then the gauntlet fails, is skipped (testbed busy) or never publishes; a
     same-day retry saw the suite row and exited 0. "Done today" on a gauntlet Mac
     needs BOTH rows; suite green without the gauntlet row → gauntlet only.
+
+    2026-11-10: "done" is per COMMIT. A row counts only when it carries the
+    commit origin/main is at after the guard's own fetch (the suite row a short
+    hash, the gauntlet row the full one). Another commit, no hash, or a failed
+    fetch → not done → it runs. The date filter stays: one run a day at least.
     """
+
+    MAIN = "4dc4eb2a6c5ef9c4baf812d8b6b068abeb853fce"       # origin/main now
+    OLDER = "25bcbab2e3f8ecfe7b3701bcefdc5c29ce2b35c5"      # main at the 01:40 manual run
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -578,6 +595,7 @@ class GuardRetryTests(unittest.TestCase):
                         PATH=f"{self.bin}:{os.environ['PATH']}", TOOLCHAIN_UPDATE_LOCK=str(t / "no-lock"))
         self.today = time.strftime("%Y-%m-%d", time.gmtime())
         self.host("RicksM4")
+        self.main(self.MAIN)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -585,13 +603,24 @@ class GuardRetryTests(unittest.TestCase):
     def host(self, name):
         (self.fake / "host").write_text(name)
 
-    def suite_row(self, host="RicksM4", status="ok", day=None, total=13000):
-        return {"ts": f"{day or self.today}T18:10:00Z", "source": "nightly-local", "host": host,
-                "status": status, "total": total, "passed": total, "failed": 0}
+    def main(self, sha):
+        (self.fake / "main_sha").write_text(sha + "\n")
 
-    def gauntlet_row(self, status="passed", machine="m4", day=None, schema=1):
-        return {"ts": f"{day or self.today}T18:40:00Z", "source": "gauntlet", "schemaVersion": schema,
-                "machine": machine, "status": status, "run_id": "x"}
+    # commit: the full hash the run tested (default: where main is now); None = a row without one.
+    # The suite publishes `git rev-parse --short HEAD` (9 here), the gauntlet the full hash.
+    def suite_row(self, host="RicksM4", status="ok", day=None, total=13000, commit=MAIN):
+        row = {"ts": f"{day or self.today}T18:10:00Z", "source": "nightly-local", "host": host,
+               "status": status, "total": total, "passed": total, "failed": 0}
+        if commit is not None:
+            row["commit"] = commit[:9]
+        return row
+
+    def gauntlet_row(self, status="passed", machine="m4", day=None, schema=1, commit=MAIN):
+        row = {"ts": f"{day or self.today}T18:40:00Z", "source": "gauntlet", "schemaVersion": schema,
+               "machine": machine, "status": status, "run_id": "x"}
+        if commit is not None:
+            row["commit"] = commit
+        return row
 
     def run_guard(self, *rows):
         (self.fake / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -601,6 +630,108 @@ class GuardRetryTests(unittest.TestCase):
         ran = args.read_text().split("\n") if args.exists() else None
         log = (self.home / "Library/Logs/VideoScan/nightly_guard.log").read_text()
         return r.returncode, ran, log
+
+    def fresh(self):
+        """Between two guard runs in one test: forget what the last one ran and logged."""
+        (self.fake / "caffeinate_args").unlink(missing_ok=True)
+        (self.home / "Library/Logs/VideoScan/nightly_guard.log").unlink(missing_ok=True)
+
+    FULL = ["scripts/nightly_gauntlet.sh", ""]
+    GAUNTLET_ONLY = ["scripts/nightly_gauntlet.sh", "--gauntlet-only"]
+
+    def assert_ran(self, ran, what, log):
+        self.assertIsNotNone(ran, f"the guard skipped: {log}")
+        self.assertEqual(ran[2:4], [str(self.repo / what[0]), what[1]], log)   # ran ends with "" after the last newline
+
+    # ── 2026-11-10: skip by commit, not by date ──────────────────────────
+
+    def test_a_green_run_today_for_an_older_commit_does_not_skip(self):
+        # The bug: 01:40 manual run green on OLDER; seven merges; the 14:00 run skipped.
+        rc, ran, log = self.run_guard(self.suite_row(commit=self.OLDER), self.gauntlet_row("amber", commit=self.OLDER))
+        self.assertEqual(rc, 0)
+        self.assert_ran(ran, self.FULL, log)
+        self.assertIn("running the full testbed", log)
+        # The run line says why: which commit the green row was for, and where main is now.
+        self.assertIn(self.OLDER[:9], log)
+        self.assertIn(self.MAIN[:9], log)
+        self.assertNotIn("skipping", log)
+
+    def test_a_green_run_for_the_commit_on_main_skips_and_names_it(self):
+        rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("amber"))
+        self.assertEqual(rc, 0)
+        self.assertIsNone(ran, log)
+        self.assertIn("skipping (no-op)", log)
+        self.assertIn(f"main {self.MAIN[:9]}", log)                    # the commit
+        self.assertIn(f"suite row {self.today}T18:10:00Z", log)        # the earlier runs it matched
+        self.assertIn(f"gauntlet row {self.today}T18:40:00Z amber", log)
+
+    def test_a_non_green_run_for_the_commit_on_main_follows_the_old_rule(self):
+        # Unchanged: a red suite → the full testbed again; a green suite with a
+        # failed gauntlet → the gauntlet only. Same commit does not excuse a red.
+        rc, ran, log = self.run_guard(self.suite_row(status="failed"), self.gauntlet_row("passed"))
+        self.assert_ran(ran, self.FULL, log)
+        self.assertIn("failed", log)
+        self.fresh()
+        rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("failed"))
+        self.assert_ran(ran, self.GAUNTLET_ONLY, log)
+
+    def test_a_green_row_without_a_commit_hash_does_not_skip(self):
+        for commit in (None, "unknown", "", "4dc4"):                  # absent, the script's fallback, empty, too short to be a hash
+            with self.subTest(commit=commit):
+                self.fresh()
+                row = self.suite_row(commit=None)
+                if commit is not None:
+                    row["commit"] = commit
+                rc, ran, log = self.run_guard(row, self.gauntlet_row("passed"))
+                self.assertEqual(rc, 0)
+                self.assert_ran(ran, self.FULL, log)
+                self.assertIn("no commit hash", log)
+
+    def test_a_failed_fetch_of_main_never_skips(self):
+        # origin/main still resolves (to what the last good fetch left) and the
+        # rows are green for exactly that commit: without a fresh fetch that
+        # proves nothing about main now, so it runs and says why.
+        (self.fake / "fetch_main_fails").write_text("")
+        rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("passed"))
+        self.assertEqual(rc, 0)
+        self.assert_ran(ran, self.FULL, log)
+        self.assertIn("could not fetch origin/main", log)
+        self.assertNotIn("skipping", log)
+
+    def test_an_unresolvable_main_never_skips(self):
+        (self.fake / "main_sha").unlink()
+        rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("passed"))
+        self.assert_ran(ran, self.FULL, log)
+        self.assertNotIn("skipping", log)
+
+    def test_a_green_suite_for_main_and_a_gauntlet_for_an_older_commit_retries_the_gauntlet_only(self):
+        for stale in (self.gauntlet_row("passed", commit=self.OLDER), self.gauntlet_row("passed", commit=None)):
+            with self.subTest(commit=stale.get("commit")):
+                self.fresh()
+                rc, ran, log = self.run_guard(self.suite_row(), stale)
+                self.assert_ran(ran, self.GAUNTLET_ONLY, log)
+                self.assertIn("running the gauntlet only", log)
+
+    def test_a_plain_nightly_mac_skips_by_commit_too(self):
+        self.host("RicksUltra")
+        rc, ran, log = self.run_guard(self.suite_row(host="RicksUltra", commit=self.OLDER))
+        self.assert_ran(ran, ["scripts/nightly_local_tests.sh", ""], log)
+        self.assertIn(self.OLDER[:9], log)
+        self.fresh()
+        rc, ran, log = self.run_guard(self.suite_row(host="RicksUltra"))
+        self.assertIsNone(ran, log)
+        self.assertIn(f"main {self.MAIN[:9]}", log)
+
+    def test_a_hash_matches_only_as_a_prefix_of_main(self):
+        # Short (suite) and full (gauntlet) forms of the same commit match; a
+        # hash that merely shares its first characters with main does not.
+        near = self.MAIN[:8] + "0" + self.MAIN[9:]
+        rc, ran, log = self.run_guard(self.suite_row(commit=near), self.gauntlet_row("passed"))
+        self.assert_ran(ran, self.FULL, log)
+        self.fresh()
+        row = dict(self.suite_row(), commit=self.MAIN[:9].upper())
+        rc, ran, log = self.run_guard(row, self.gauntlet_row("passed"))
+        self.assertIsNone(ran, log)
 
     def test_green_suite_and_red_gauntlet_retries_the_gauntlet_only(self):
         rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("failed"))

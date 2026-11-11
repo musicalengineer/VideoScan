@@ -278,3 +278,236 @@ def test_local_files_win_over_published_rows_on_the_m4(tmp_path, capsys):
 def test_morning_digest_falls_back_to_the_published_rows():
     script = (ROOT / "scripts" / "morning_metrics.sh").read_text()
     assert "metrics/sanitizer.jsonl" in script and "sanitizer_alert.py\" --published -" in script
+
+
+# ── 2026-11-08: known findings are suppressed with a reason; red means NEW ──
+# RED: every weekly run was "findings" for the same two known reports (GRDB close
+# race, #423, 15 reports and 15 host restarts on 11/08; mlx-swift null release,
+# #463, 2 restarts on 11/07). The runner now hands scripts/sanitizer/*.supp to the
+# runtimes, refuses an entry without an issue and a reason, and lists each entry
+# with its hits in the row.
+
+import pytest  # noqa: E402
+
+TSAN_SUPPRESSED_TAIL = ("ThreadSanitizer: Matched 1 suppressions (pid=60898):\n"
+                        "15 race:DatabasePool.close\n")
+
+
+def test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_reason():
+    import re
+    code_re = re.compile(r"^[a-z][a-z0-9-]{0,31}$")         # publishable as a metrics code
+    for kind, files in ws.SUPPRESSION_FILES.items():
+        for _var, name, _extra in files:
+            entries = ws.load_suppressions(ws.SUPP_DIR / name)
+            assert entries, f"{name} is empty: drop it from SUPPRESSION_FILES instead"
+            for e in entries:
+                assert code_re.match(e["code"]) and e["issue"] > 0 and len(e["reason"]) > 40, e
+    tsan = ws.load_suppressions(ws.SUPP_DIR / "tsan.supp")
+    assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 423)]
+    ubsan = ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp")
+    assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "*mlx/backend/metal/device.cpp", 463)]
+
+
+@pytest.mark.parametrize("text, why", [
+    ("race:Anything\n", "no `# known:` header"),
+    ("# known: code=x issue=1\nrace:Anything\n", "no `# reason:`"),
+    ("# known: code=x\n# reason: r\nrace:Anything\n", "needs code"),
+    ("# known: code=x issue=abc\n# reason: r\nrace:Anything\n", "needs code"),
+    ("# known: code=x issue=1\n# reason: r\n", "has no pattern"),
+    ("# known: code=x issue=1\n# reason: r\n# known: code=y issue=2\n# reason: r\nrace:A\n", "before the previous"),
+    ("# known: code=x issue=1\n# reason: r\nAnything\n", "not <check>:<pattern>"),
+])
+def test_an_unexplained_suppression_is_refused(tmp_path, text, why):
+    f = tmp_path / "tsan.supp"
+    f.write_text("# preamble comments are fine\n\n" + text)
+    with pytest.raises(ws.SuppressionError, match=why):
+        ws.load_suppressions(f)
+
+
+def test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process(tmp_path):
+    env, known = ws.sanitizer_env("thread", {"PATH": "/bin", "TSAN_OPTIONS": "halt_on_error=0"})
+    supp = ws.SUPP_DIR / "tsan.supp"
+    assert env["TSAN_OPTIONS"] == f"halt_on_error=0:suppressions={supp}:print_suppressions=1"
+    assert env["TEST_RUNNER_TSAN_OPTIONS"] == f"suppressions={supp}:print_suppressions=1"
+    assert "UBSAN_OPTIONS" not in env and [e["code"] for e in known] == ["grdb-close-read-race"]
+    env, known = ws.sanitizer_env("address", {})
+    assert env["UBSAN_OPTIONS"] == env["TEST_RUNNER_UBSAN_OPTIONS"] == f"suppressions={ws.SUPP_DIR / 'ubsan.supp'}:print_stacktrace=1"
+    assert "TSAN_OPTIONS" not in env
+    # No file -> no suppressions, nothing in force; the reporting options stay.
+    assert ws.sanitizer_env("thread", {"A": "1"}, tmp_path) == (
+        {"A": "1", "TSAN_OPTIONS": "print_suppressions=1", "TEST_RUNNER_TSAN_OPTIONS": "print_suppressions=1"}, [])
+
+
+def test_matched_suppressions_sum_over_every_process_and_ignore_lookalikes():
+    log = ("12 race:NotInABlock\n" + TSAN_SUPPRESSED_TAIL + "Test Suite 'x' started\n"
+           "ThreadSanitizer: Matched 2 suppressions (pid=7):\n  3 race:DatabasePool.close\n  1 race:Other\n\n9 race:After\n")
+    assert ws.matched_suppressions(log) == {"race:DatabasePool.close": 18, "race:Other": 1}
+
+
+def test_a_run_whose_only_race_was_suppressed_is_ok_and_says_what_was_held_back():
+    """Production shape of the 11/08 run after the change: no report printed, no
+    restart, the matched block at exit."""
+    p = ws.parse_log(GREEN_LOG + TSAN_SUPPRESSED_TAIL)
+    assert ws.status_for(p, timed_out=False) == "ok" and p["reports"] == 0
+    rows = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "tsan.supp"), p["suppressed_hits"], "thread")
+    assert [(r["code"], r["issue"], r["hits"]) for r in rows] == [("grdb-close-read-race", 423, 15)]
+    ub = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp"), {}, "address")
+    assert [(r["code"], r["hits"]) for r in ub] == [("mlx-null-linked-functions", None)], "UBSan hits are not observable: null, never 0"
+
+
+def test_a_new_race_beside_a_suppressed_one_is_still_a_finding():
+    log = TSAN_SUPPRESSED_TAIL + "WARNING: ThreadSanitizer: data race (pid=1)\nSUMMARY: ThreadSanitizer: data race Store.swift:9 in commit\n" + GREEN_LOG
+    p = ws.parse_log(log)
+    assert ws.status_for(p, timed_out=False) == "findings" and p["suppressed_hits"] == {"race:DatabasePool.close": 15}
+
+
+def _fake_tools(tmp_path, monkeypatch, app_out):
+    fake = tmp_path / "bin"; fake.mkdir()
+    (fake / "xcodebuild").write_text("#!/bin/sh\nprintf '%s\\n' \"$TEST_RUNNER_TSAN_OPTIONS\" > \"$FAKE_ENV\"\n"
+                                     f"printf '{app_out}'\n")
+    (fake / "xcodebuild").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_ENV", str(tmp_path / "env.txt"))
+
+
+def test_main_passes_the_suppressions_and_records_each_with_its_hits(tmp_path, monkeypatch):
+    _fake_tools(tmp_path, monkeypatch, "✔ Test run with 12 tests in 2 suites passed after 1.0 seconds.\\n"
+                                       "** TEST SUCCEEDED **\\nThreadSanitizer: Matched 1 suppressions (pid=9):\\n4 race:DatabasePool.close\\n")
+    logdir = tmp_path / "logs"
+    assert ws.main(["--sanitizer", "thread", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
+                    "--timeout-hours", "0.01"]) == 0
+    row = json.loads((logdir / "latest-thread.json").read_text())
+    assert row["status"] == "ok" and row["tests"] == 12
+    assert [(s["code"], s["issue"], s["hits"]) for s in row["suppressed"]] == [("grdb-close-read-race", 423, 4)]
+    assert f"suppressions={ws.SUPP_DIR / 'tsan.supp'}" in (tmp_path / "env.txt").read_text()
+
+
+def test_main_with_an_unexplained_suppression_writes_a_config_error_row_and_runs_nothing(tmp_path, monkeypatch):
+    _fake_tools(tmp_path, monkeypatch, "should not run\\n")
+    supp = tmp_path / "supp"; supp.mkdir()
+    (supp / "tsan.supp").write_text("race:Everything\n")
+    logdir = tmp_path / "logs"
+    assert ws.main(["--sanitizer", "thread", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
+                    "--suppressions-dir", str(supp)]) == 0
+    row = json.loads((logdir / "latest-thread.json").read_text())
+    assert row["status"] == "config-error" and "no `# known:` header" in row["reason"] and row["tests"] == 0
+    assert not (tmp_path / "env.txt").exists()
+    line = alert.lines_for(row, dt.datetime.fromisoformat(row["started"]) + dt.timedelta(hours=1), 8)[0]
+    assert line.startswith("🔴 Thread Sanitizer") and "suppression file" in line
+
+
+KNOWN = [{"code": "grdb-close-read-race", "issue": 423, "hits": 15}]
+
+
+def test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings(tmp_path, capsys):
+    assert alert.lines_for(_row("ok", suppressed=KNOWN), NOW, 8) == []
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", status="ok", tsan_issues=0, suppressed=KNOWN)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    assert capsys.readouterr().out == ""
+
+
+def test_a_red_digest_line_says_which_known_findings_were_held_back(tmp_path, capsys):
+    line = alert.lines_for(_row("tests-failed", failed_tests=["x"], suppressed=KNOWN), NOW, 8)[0]
+    assert line.startswith("🔴") and "1 known finding suppressed (#423)" in line
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", tsan_issues=1, reports=1, suppressed=KNOWN)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    out = capsys.readouterr().out
+    assert "1 finding(s); 1 known finding suppressed (#423)" in out
+
+
+# ── 2026-11-08 (Rick): a finding whose OUR frames are all test code is grey ──
+# "Keep running sanitizers over everything, but a finding whose stack frames (our
+# frames) are entirely in test code shows grey — fix when convenient. Red stays for
+# findings that touch product code." Classification is by frame: source path first
+# (VideoScanTests/, */Tests/ = test; VideoScan/VideoScan/, VideoScanCore/Sources/ =
+# product), then the Swift symbol's module, then the binary module. Third-party and
+# runtime frames are not ours. No frame of ours at all = product (never hide it).
+
+REPO_PATH = "/Users/rickb/dev/VideoScan/VideoScan"
+
+
+@pytest.mark.parametrize("frame, side", [
+    ("    #0 closure #1 in VideoScanTests.FooTests.bar() FooTests.swift:12 (VideoScanTests:arm64+0x10)", "test"),
+    (f"    #1 0x1 in Foo.helper() {REPO_PATH}/VideoScanTests/Support/Helpers.swift:9", "test"),
+    (f"    #1 Foo.bar() {REPO_PATH}/VideoScanCore/Tests/VideoScanCoreTests/Store/X.swift:9 (VideoScanCoreTests:arm64+0x1)", "test"),
+    ("    #6 VideoScanCoreTests.StoreTests.helper() Helpers.swift:3 (VideoScanCoreTests:arm64+0x3)", "test"),
+    (f"    #3 0x104 in VideoScan.CatalogStore.save() {REPO_PATH}/VideoScan/Store/CatalogStore.swift:40", "product"),
+    (f"    #3 0x104 in x() {REPO_PATH}/VideoScanCore/Sources/VideoScanCore/Store/Repo.swift:40", "product"),
+    ("    #2 closure #1 in static VideoScanCore.GRDBCatalogRepository.decideAtClose(GRDB.DatabasePool) <null> "
+     "(VideoScanCore_-7D3187DD9FB04CEE_PackageProduct:arm64+0xf6ec6c)", "product"),
+    ("    #5 VideoScanCore.Store.commit() Store.swift:9 (VideoScanCoreTests:arm64+0x2)", "product"),
+    ("    #7 static VideoScan.CatalogLaunchWait.run() <null> (VideoScan.debug.dylib:arm64+0x2)", "product"),
+    ("    #8 closure #1 () -> () in VideoScanTests.FooTests.testX() <null> (VideoScan.debug.dylib:arm64+0x2)", "test"),
+    ("    #0 $defer #1 () -> () in closure #1 () throws -> () in GRDB.DatabasePool.close() throws -> () <null> "
+     "(GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0)", None),
+    ("    #1 swift::runJobInEstablishedExecutorContext(swift::Job*) <null> (libswift_Concurrency.dylib:arm64e+0x2c4c)", None),
+    ("    #0 0x1 in mlx::core::metal::Device::get_kernel_(std::string) /x/SourcePackages/checkouts/mlx-swift/"
+     "Source/Cmlx/mlx/mlx/backend/metal/device.cpp:717:21", None),
+    ("not a frame at all", None),
+])
+def test_each_frame_is_ours_in_tests_ours_in_product_or_not_ours(frame, side):
+    assert ws.frame_side(frame) == side
+
+
+def _tsan(frames, summary="SUMMARY: ThreadSanitizer: data race FooTests.swift:12 in bar"):
+    return ("WARNING: ThreadSanitizer: data race (pid=1)\n  Write of size 8 at 0x1 by thread T1:\n"
+            + "".join(f"    #{i} {f}\n" for i, f in enumerate(frames)) + summary + "\n==================\n")
+
+
+TEST_FRAME = "closure #1 in VideoScanTests.FooTests.bar() FooTests.swift:12 (VideoScanTests:arm64+0x10)"
+PRODUCT_FRAME = "VideoScan.CatalogStore.save() <null> (VideoScan.debug.dylib:arm64+0x20)"
+GRDB_FRAME = "GRDB.DatabasePool.close() <null> (GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0)"
+
+
+def test_a_report_is_test_only_when_every_frame_of_ours_is_test_code():
+    assert ws.classify_report(_tsan([GRDB_FRAME, TEST_FRAME])) == "test"
+    assert ws.classify_report(_tsan([GRDB_FRAME, TEST_FRAME, PRODUCT_FRAME])) == "product"
+    assert ws.classify_report(_tsan([GRDB_FRAME])) == "product", "no frame of ours: never hidden"
+    ub_no_stack = "/x/checkouts/mlx-swift/device.cpp:717:21: runtime error: member call on null pointer\n"
+    assert ws.classify_report(ub_no_stack) == "product"
+    ub_test = (f"{REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40:9: runtime error: load of misaligned address\n"
+               f"    #0 0x1 in VideoScanTests.MLXSafetyTests.x() {REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40\n")
+    assert ws.classify_report(ub_test) == "test"
+
+
+def test_a_run_with_only_test_code_findings_is_grey_and_its_halted_host_is_explained():
+    p = ws.parse_log("Test Suite 'VideoScanTests.xctest' started at x\n" + _tsan([GRDB_FRAME, TEST_FRAME])
+                     + "Test Suite 'VideoScanTests.xctest' started at y\n" + GREEN_LOG)
+    assert p["unique_findings"] == [] and p["test_only_findings"] == ["ThreadSanitizer: data race FooTests.swift:12 in bar"]
+    assert p["reports"] == 1 and p["test_only_reports"] == 1 and p["host_restarts"] == 1
+    assert ws.status_for(p, timed_out=False) == "test-findings"
+    # A second restart nothing explains is a crash.
+    p2 = ws.parse_log(_tsan([TEST_FRAME]) + "Test Suite 'VideoScanTests.xctest' started at x\n" * 3 + GREEN_LOG)
+    assert ws.status_for(p2, timed_out=False) == "host-crashed"
+    # Red failures still outrank it.
+    p3 = ws.parse_log(_tsan([TEST_FRAME]) + "✘ Test fooBar() failed after 0.1 seconds.\n✘ Test run with 3 tests in 1 suite failed after 1 seconds.\n")
+    assert ws.status_for(p3, timed_out=False) == "tests-failed"
+
+
+def test_a_product_finding_beside_a_test_only_one_is_red():
+    log = _tsan([TEST_FRAME]) + _tsan([TEST_FRAME, PRODUCT_FRAME], "SUMMARY: ThreadSanitizer: data race CatalogStore.swift:40 in save") + GREEN_LOG
+    p = ws.parse_log(log)
+    assert p["unique_findings"] == ["ThreadSanitizer: data race CatalogStore.swift:40 in save"]
+    assert p["test_only_findings"] == ["ThreadSanitizer: data race FooTests.swift:12 in bar"]
+    assert ws.status_for(p, timed_out=False) == "findings"
+    m = ws.merge([p, ws.parse_log(_tsan([TEST_FRAME], "SUMMARY: ThreadSanitizer: data race B.swift:1 in b") + GREEN_LOG)])
+    assert m["test_only_reports"] == 2 and len(m["test_only_findings"]) == 2
+
+
+def test_the_digest_shows_test_code_findings_grey_not_red(tmp_path, capsys):
+    line = alert.lines_for(_row("test-findings", test_only_findings=["ThreadSanitizer: data race FooTests.swift:12"]), NOW, 8)
+    assert line[0].startswith("⚪ Address Sanitizer") and "1 finding(s) in test code only" in line[0]
+    assert "fix when convenient" in line[0] and "🔴" not in "".join(line)
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", status="test-findings", tsan_issues=0,
+                                         reports=1, test_only_issues=1)) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    out = capsys.readouterr().out
+    assert out.startswith("⚪ Thread Sanitizer") and "1 finding(s) in test code only" in out
+
+
+def test_ubsan_prints_its_stack_so_its_frames_can_be_classified():
+    env, _ = ws.sanitizer_env("address", {})
+    assert "print_stacktrace=1" in env["UBSAN_OPTIONS"] and "print_stacktrace=1" in env["TEST_RUNNER_UBSAN_OPTIONS"]

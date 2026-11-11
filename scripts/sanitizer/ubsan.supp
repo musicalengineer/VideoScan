@@ -1,0 +1,11 @@
+# Undefined Behavior Sanitizer suppressions for scripts/weekly_sanitizer.py
+# (UBSAN_OPTIONS=suppressions=<this file>). Same contract as tsan.supp: each entry is a
+# KNOWN finding with an open issue (`# known:` line, `# reason:` lines, one pattern);
+# the runner refuses anything else and the card shows it grey.
+
+# known: code=mlx-null-linked-functions issue=463 date=2026-11-08 repro=MLXSafetyTests
+# reason: mlx-swift 0.29.1 device.cpp:717 calls mtl_linked_funcs->release() when
+# reason: get_linked_functions_() returned nullptr (a kernel with no linked functions).
+# reason: The body is objc_msgSend(nil, release): a no-op at runtime, formally UB.
+# reason: Not a missing Metal device. Gone in mlx-swift 0.33.0 (smart pointers).
+null:*mlx/backend/metal/device.cpp
