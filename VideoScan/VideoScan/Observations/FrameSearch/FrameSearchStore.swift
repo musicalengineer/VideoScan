@@ -19,9 +19,12 @@
 // hit. A missing or unreadable index is "index not built" with the reason,
 // never stale or partial hits. A search publishes only while its request
 // (scope, words) is still the current one — `LatestWins`
-// (ObservationsStore.swift), the same rule the Words search follows. Similarity is SigLIP's raw cosine (−1…1;
-// matching captions land around 0.10–0.20); it is a ranking, not a
-// probability, and the words say so.
+// (ObservationsStore.swift), the same rule the Words search follows. The
+// index follows it too: the newest read of the disk or the newest save the
+// job handed over is the one shown and searched; an older one finishing late
+// is dropped. Similarity is SigLIP's raw cosine (−1…1; matching captions
+// land around 0.10–0.20); it is a ranking, not a probability, and the words
+// say so.
 //
 // Memory (worst case): the index in RAM (FrameIndex.swift: 3 KB per frame;
 // 160k frames ≈ 490 MB; after a save it is the job's snapshot, handed over,
@@ -173,18 +176,31 @@ final class FrameSearchStore: ObservableObject {
         var rows: [String: CatalogRow.FrameIndexFile]?
     }
 
+    /// What one look at the index found — read from disk, or handed over by a save.
+    struct IndexRead: Sendable {
+        let status: FrameIndexStatus
+        /// The videos with a frame in it. O(frames) to count, so it is counted where the read is made (off the main actor).
+        let contents: Int
+
+        init(_ status: FrameIndexStatus) {
+            self.status = status
+            contents = status.index?.indexedDigests.count ?? 0
+        }
+    }
+
     static let pageSize = 48
     static let perContent = 2
 
     @Published private(set) var scope: ObservationsScope
-    @Published private(set) var indexState: IndexState = .loading
+    /// The index, latest wins. One index per model, so the key is the model id: it never changes, which keeps
+    /// the index on screen (and searchable) while a newer one is on its way.
+    @Published private var indexRun = LatestWins<String, IndexRead>()
     @Published private var searchRun = LatestWins<Request, Found>()
     @Published private(set) var revealProblem: String?
     @Published private(set) var job: FrameIndexJob?
     @Published private(set) var jobLine: String?
 
     let loader: FrameSearchLoader
-    private var index: FrameIndex?
     /// The current scope's files, kept between searches (dropped with the scope).
     private var scopeFiles: [String: CatalogRow.FrameIndexFile]?
     private var warming: Task<Void, Never>?
@@ -202,35 +218,45 @@ final class FrameSearchStore: ObservableObject {
     var failure: String? { searchRun.failure?.localizedDescription }
     var timing: String? { searchRun.value?.timing }
 
+    /// The standing line: a reading of the newest index, never a field of its own. (O(1): the counts are already made.)
+    var indexState: IndexState {
+        guard let read = indexRun.value else { return .loading }
+        switch read.status {
+        case .notBuilt:
+            return .notBuilt("Index not built — no frames have been indexed with \(loader.modelID) yet.")
+        case .unreadable(let why):
+            return .notBuilt("Index not built — the index on disk cannot be used (\(why)). Index Frames builds a new one.")
+        case .ready(let index):
+            return .ready(frames: index.count, contents: read.contents)
+        }
+    }
+
+    /// The index a search runs over: the one the standing line describes.
+    private var index: FrameIndex? { indexRun.value?.status.index }
+
     var modelID: String { loader.modelID }
 
-    /// Read the index from disk (and warm the model in the background so the first query is fast).
+    /// Read the index from disk — the window's first look, the one place there is no snapshot to be handed —
+    /// and warm the model in the background so the first query is fast.
     func loadIndex() async {
-        indexState = .loading
         let load = loader.loadIndex
-        let (status, contents) = await Task.detached(priority: .userInitiated) { () -> (FrameIndexStatus, Int) in
-            let s = await load()
-            return (s, s.index?.indexedDigests.count ?? 0)   // O(frames): off the main actor
-        }.value
-        apply(status, contents: contents)
+        guard await show({ IndexRead(await load()) }) else { return }
         let warm = loader.prewarm
         warming?.cancel()
         warming = Task.detached(priority: .utility) { try? await warm() }
     }
 
-    private func apply(_ status: FrameIndexStatus, contents: Int) {
-        switch status {
-        case .notBuilt:
-            index = nil
-            indexState = .notBuilt("Index not built — no frames have been indexed with \(loader.modelID) yet.")
-        case .unreadable(let why):
-            index = nil
-            indexState = .notBuilt("Index not built — the index on disk cannot be used (\(why)). Index Frames builds a new one.")
+    /// The ONE way the index on screen changes: `look` runs off the main actor and is shown only if no newer
+    /// look (a read, a save) began meanwhile. False: superseded, or the window closed — nothing was shown.
+    @discardableResult
+    private func show(_ look: @escaping @Sendable () async -> IndexRead) async -> Bool {
+        let ticket = indexRun.begin(loader.modelID, look)
+        let result = await ticket.result
+        guard indexRun.finish(ticket, result) else { return false }
+        if case .success(let read) = result, case .unreadable(let why) = read.status {
             loader.note("the frame index cannot be used: \(why)")
-        case .ready(let i):
-            index = i
-            indexState = .ready(frames: i.count, contents: contents)
         }
+        return true
     }
 
     /// A new scope: the old scope's hits and files go at once (a search still in flight for it is cancelled
@@ -318,8 +344,7 @@ final class FrameSearchStore: ObservableObject {
     /// The job saved the index: show exactly what it wrote. The snapshot is the job's own (handed over, sharing
     /// the builder's buffers until the job adds a file) — the disk is not read again; only `loadIndex()` reads it.
     private func show(saved index: FrameIndex) async {
-        let contents = await Task.detached(priority: .utility) { index.indexedDigests.count }.value   // O(frames): off the main actor
-        apply(.ready(index), contents: contents)
+        await show { IndexRead(.ready(index)) }
     }
 
     @discardableResult
@@ -332,8 +357,9 @@ final class FrameSearchStore: ObservableObject {
         return true
     }
 
-    /// The window went away: stop the search in flight and the model warm-up.
+    /// The window went away: stop the search in flight and the model warm-up; an index read still running shows nothing.
     func cancel() {
+        indexRun.reset()
         searchRun.reset()
         warming?.cancel()
         warming = nil

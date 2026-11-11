@@ -17684,7 +17684,10 @@
         "aSaveThatFailsFailsTheJobAndSaysWhatIsNotOnDisk",
         "oneHundredThousandRowsOverAFiftyThousandContentIndexArePlannedInsideTheBudget",
         "theJobLeavesEveryIndexReadAndWriteToTheWriter",
-        "aSavedIndexIsShownFromTheSnapshotTheJobHandsOverNotReadFromDisk"
+        "aSavedIndexIsShownFromTheSnapshotTheJobHandsOverNotReadFromDisk",
+        "anOlderIndexReadFinishingLateNeverReplacesANewerOne",
+        "aDiskReadFinishingAfterASaveNeverReplacesTheSavedIndex",
+        "closingTheWindowDuringAnIndexReadPublishesNothing"
       ]
     },
     {
@@ -38293,7 +38296,7 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3649,
+      "expected_floor": 3652,
       "name": "unit",
       "package_expected_floor": 899,
       "package_selectors": [

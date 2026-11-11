@@ -172,6 +172,71 @@ struct FrameSearchStoreTests {
         #expect(store.hits.first?.filename == "three.mov" && store.hits.first?.seconds == 3, "truth: the search runs over the index that was handed over")
     }
 
+    // MARK: Latest wins for the index (the newest read or save is the one shown)
+
+    /// A disk read that waits at `gate` on its FIRST call and answers `first`; every later call answers `later` at once.
+    private static func heldFirstRead(_ gate: AsyncStream<Void>, first: FrameIndexStatus, later: FrameIndexStatus,
+                                      calls: OSAllocatedUnfairLock<Int>) -> @Sendable () async -> FrameIndexStatus {
+        {
+            guard calls.withLock({ $0 += 1; return $0 }) == 1 else { return later }
+            for await _ in gate { break }
+            return first
+        }
+    }
+
+    /// REGRESSION (design review 2026-11-10): loadIndex() applied whatever it read whenever it came back, so an older
+    /// read finishing late replaced a newer index — the standing line and every search then ran over the stale one.
+    @Test func anOlderIndexReadFinishingLateNeverReplacesANewerOne() async throws {
+        let gate = AsyncStream<Void>.makeStream()
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let read = Self.heldFirstRead(gate.stream, first: .ready(Self.index([2])), later: .ready(Self.index([2, 3])), calls: calls)
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.indexLoader(IndexSeams(), read: read))
+        let older = Task { await store.loadIndex() }
+        try await FrameIndexJobTests.until("the older read is at the disk") { calls.withLock { $0 } == 1 }
+        await store.loadIndex()
+        #expect(store.indexState == .ready(frames: 4, contents: 2), "the newer read is shown")
+        gate.continuation.yield()
+        await older.value
+        #expect(store.indexState == .ready(frames: 4, contents: 2), "an older read finishing late must not replace the newer index")
+        await store.search("axis 3")
+        #expect(store.hits.first?.filename == "three.mov", "truth: the search runs over the newer index (content 3 is only in it)")
+    }
+
+    /// REGRESSION (same review): a disk read still running when the job saved came back afterwards and put what
+    /// the disk held BEFORE the save over the saved index ("Index not built" while the index is on disk).
+    @Test func aDiskReadFinishingAfterASaveNeverReplacesTheSavedIndex() async throws {
+        let gate = AsyncStream<Void>.makeStream()
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let seams = IndexSeams()
+        let read = Self.heldFirstRead(gate.stream, first: .notBuilt, later: .notBuilt, calls: calls)
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.indexLoader(seams, read: read))
+        let firstLook = Task { await store.loadIndex() }
+        try await FrameIndexJobTests.until("the first look is at the disk") { calls.withLock { $0 } == 1 }
+        store.buildIndex()
+        let onSaved = try #require(seams.onSaved, "the store gives the job its onSaved")
+        onSaved(Self.index([2, 3]))
+        try await FrameIndexJobTests.until("the saved index is shown") { store.indexState == .ready(frames: 4, contents: 2) }
+        gate.continuation.yield()
+        await firstLook.value
+        #expect(store.indexState == .ready(frames: 4, contents: 2), "what the disk held before the save must not replace the saved index")
+        await store.search("axis 3")
+        #expect(store.hits.first?.filename == "three.mov", "truth: the search runs over the saved index")
+    }
+
+    /// REGRESSION (same review): cancel() (the window closed) did not stop an index read; it published when it came back.
+    @Test func closingTheWindowDuringAnIndexReadPublishesNothing() async throws {
+        let gate = AsyncStream<Void>.makeStream()
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let read = Self.heldFirstRead(gate.stream, first: .ready(Self.index([2])), later: .notBuilt, calls: calls)
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.indexLoader(IndexSeams(), read: read))
+        let reading = Task { await store.loadIndex() }
+        try await FrameIndexJobTests.until("the read is at the disk") { calls.withLock { $0 } == 1 }
+        store.cancel()
+        gate.continuation.yield()
+        await reading.value
+        #expect(store.indexState == .loading, "a read the window no longer wants publishes nothing: \(store.indexState)")
+    }
+
     // MARK: Latest wins (a result is published only for the request that is still current)
 
     /// Contents 2 and 3 are indexed; /V/a holds content 2, /V/b holds content 3. `embedGate` holds the text tower
