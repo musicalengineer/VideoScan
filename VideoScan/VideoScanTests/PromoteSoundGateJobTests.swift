@@ -291,10 +291,11 @@ struct PromoteSoundGateJobTests {
         let (sb, model) = try H.setup("sg_reuse"); defer { sb.cleanup() }
         let a = try H.source(sb, model, name: "test_verified.mov", seed: 617)
         try await Task.sleep(for: .milliseconds(20))          // past the stamp's racy window
-        let now = Date()
-        try Self.fingerprint(a, computedAt: now)
+        try Self.fingerprint(a, computedAt: Date())
+        try await Task.sleep(for: .milliseconds(20))
         a.audioVerifyStatus = "ok"; a.audioVerifyNote = "one-sided audio (right only)"
-        a.audioVerifyDate = now.addingTimeInterval(60)
+        a.audioVerifyDate = Date()                             // after the fingerprint, not after now
+        try await Task.sleep(for: .milliseconds(20))
         let job = try await Self.promote(model, a, measure: Self.neverMeasure)
         let o = try #require(H.outcome(job, a.id))
         #expect(o.kind == .promoted && o.soundNote == "sound on the right side only", "\(o.kind) — \(o.detail)")
@@ -342,6 +343,91 @@ struct PromoteSoundGateJobTests {
         let before = ArchiveSnapshot.take(sb)
         let job = try await Self.promote(model, a, measure: S.measure(S.soundDiagnosis(channels: [-70, -72, -.infinity, -90, -75, -80])))
         _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
+    }
+
+    // MARK: Codex #280 (2026-11-10) — each seen red first
+
+    @Test("REFUSED — Codex #280 F3: a FUTURE-dated 'ok' survives a rewrite and a fingerprint refresh; it must be measured again")
+    func futureDatedVerdictIsMeasuredAgain() async throws {
+        let (sb, model) = try H.setup("sg_future"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_future.mov", seed: 651)
+        // Audible version A verified with a clock that ran ahead…
+        a.audioVerifyStatus = "ok"; a.audioVerifyNote = ""; a.audioVerifyDate = Date().addingTimeInterval(86_400)
+        // …then rewritten to silent B (same size, same path) and fingerprinted NOW.
+        try S.writeBlob(at: URL(fileURLWithPath: a.fullPath), bytes: 40_000, seed: 9_651)
+        try await Task.sleep(for: .milliseconds(20))
+        try Self.fingerprint(a, computedAt: Date())
+        let before = ArchiveSnapshot.take(sb)
+        let job = try await Self.promote(model, a, measure: S.measure(Self.silentPair))
+        _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
+        #expect(Self.lines(model, "SOUND START").allSatisfy { !$0.contains("reusing") })
+    }
+
+    @Test("REFUSED — Codex #280 F5: stereo above the line from a levels pass that did not cover every stream is could-not-check, and stores no verdict")
+    func incompletePassWithALiveChannelIsRefused() async throws {
+        let (sb, model) = try H.setup("sg_incomplete"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_incomplete.mov", seed: 652)
+        let before = ArchiveSnapshot.take(sb)
+        let job = try await Self.promote(model, a, measure: S.measure(S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)))
+        _ = try Self.expectRefused(job, a, code: "sound-unchecked", sb, model, before: before)
+        #expect(a.audioVerifyStatus.isEmpty && a.audioVerifyDate == nil, "an incomplete measurement stores nothing")
+    }
+
+    @Test("REFUSED — Codex #280 F4: the record is replaced and its tag removed WHILE the sound is measured; the old object's tag accepts nothing")
+    func tagRemovedDuringMeasurementAcceptsNothing() async throws {
+        let (sb, model) = try H.setup("sg_swap_record"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_retagged.mov", seed: 653)
+        a.tags = [WorkflowTags.silentChecked]
+        let id = a.id, path = a.fullPath, size = a.sizeBytes
+        let before = ArchiveSnapshot.take(sb)
+        let job = try H.job(model, ids: [a.id])
+        job.soundMeasure = PromoteSoundGate.Measure { _ in
+            await MainActor.run {
+                // A rescan replaces the catalog object (same id, same file); Rick then takes the tag back.
+                let fresh = VideoRecord(id: id)
+                fresh.filename = (path as NSString).lastPathComponent
+                fresh.fullPath = path
+                fresh.directory = (path as NSString).deletingLastPathComponent
+                fresh.ext = "mov"
+                fresh.streamTypeRaw = StreamType.videoAndAudio.rawValue
+                fresh.sizeBytes = size
+                fresh.tags = [WorkflowTags.silentChecked]
+                model.records = model.records.map { $0.id == id ? fresh : $0 }
+                model.setTag(WorkflowTags.silentChecked, on: [fresh], present: false)
+            }
+            return MasterArchiveTestSupport.soundDiagnosis(channels: [-68, -68])
+        }
+        job.start(); await job.task?.value; await job.completionTask?.value
+        await Self.consoleSettled()
+        let o = try #require(H.outcome(job, id))
+        #expect(o.kind == .failed && o.refusalCode == "sound-silent", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(ArchiveSnapshot.take(sb) == before)
+        #expect(S.archivedFiles(sb).isEmpty)
+    }
+
+    @Test("REFUSED — Codex #280 F2: the source is replaced AFTER its digest is proven and BEFORE the measurement; a stable measurement of the new file is not about the proven bytes")
+    func replacedBetweenProofAndMeasurementIsRefused() async throws {
+        let (sb, model) = try H.setup("sg_after_proof"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_after_proof.mov", seed: 654)
+        let before = ArchiveSnapshot.take(sb)
+        let measured = PromoteSoundGateIsolationTests.Counter()
+        let job = try H.job(model, ids: [a.id])
+        job.testHookBeforeSoundCheck = { rec in
+            // Same size, other bytes — and it then stays put for the whole measurement.
+            _ = try? S.writeBlob(at: URL(fileURLWithPath: rec.fullPath), bytes: 40_000, seed: 9_654)
+        }
+        job.soundMeasure = PromoteSoundGate.Measure { _ in
+            measured.bump()
+            return MasterArchiveTestSupport.soundDiagnosis(channels: [-18, -20])   // the NEW file has sound
+        }
+        job.start(); await job.task?.value; await job.completionTask?.value
+        let o = try #require(H.outcome(job, a.id))
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(o.detail.contains("changed after its bytes were proven"), "\(o.detail)")
+        #expect(measured.value == 0, "a file that is no longer the proven one is not measured, and nothing is stored")
+        #expect(a.audioVerifyStatus.isEmpty)
+        #expect(ArchiveSnapshot.take(sb) == before)
+        #expect(model.masterArchiveCopy(of: a) == nil)
     }
 
     // MARK: The one catalog write

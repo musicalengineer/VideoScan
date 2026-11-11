@@ -110,8 +110,14 @@ extension PromoteToArchiveJob {
     /// the digest came from a stored fingerprint that still described the
     /// file; once the read confirms it, that is the only case in which a
     /// stored sound check may be reused.
+    ///
+    /// `stampBeforeDigest`: the source's stat stamp taken BEFORE its digest
+    /// was read or trusted. The sound gate requires the file to still carry
+    /// it (Codex #280 F2): a file replaced after the proof is no longer the
+    /// proven one, however stable it then is while it is measured.
     func provenBytesGuards(source: VideoRecord, entry: ArchivePromotePlan.Entry, digest: String,
-                           proven: Bool, model: VideoScanModel) async throws -> ProvenBytesStep {
+                           proven: Bool, stampBeforeDigest: FileIdentityStamp?,
+                           model: VideoScanModel) async throws -> ProvenBytesStep {
         if !proven {
             guard let actual = try await proveSourceDigest(source: source, entry: entry) else { return .cancelled }
             if actual != digest {
@@ -121,10 +127,14 @@ extension PromoteToArchiveJob {
                     logFacts: "stored sha256 \(digest.prefix(12))… ≠ current sha256 \(actual.prefix(12))…; nothing written"))
             }
         }
-        testHookAfterSourceProof?(source)
+        testHookBeforeSoundCheck?(source)
         if Task.isCancelled { return .cancelled }
-        let sound = try await soundGate(source: source, entry: entry, digest: digest, fixityVouchedNow: !proven, model: model)
+        let sound = try await soundGate(source: source, entry: entry, digest: digest, fixityVouchedNow: !proven,
+                                        stampBeforeDigest: stampBeforeDigest, model: model)
         if let refusal = sound.refusal { return .refused(refusal) }
+        // After BOTH guards, still before the destination and the journal
+        // intent: a change made here is the copy engine's to catch.
+        testHookAfterSourceProof?(source)
         return Task.isCancelled ? .cancelled : .passed(sound)
     }
 
@@ -163,7 +173,8 @@ extension PromoteToArchiveJob {
     /// keeps at most ~1 MB of ffprobe output. Nothing is retained per file
     /// but a one-line note.
     func soundGate(source: VideoRecord, entry: ArchivePromotePlan.Entry, digest: String,
-                   fixityVouchedNow: Bool, model: VideoScanModel) async throws -> SoundGateResult {
+                   fixityVouchedNow: Bool, stampBeforeDigest: FileIdentityStamp?,
+                   model: VideoScanModel) async throws -> SoundGateResult {
         let op = currentOpLabel
         func say(_ line: String) {
             model.log("Promote: \(line)")
@@ -176,6 +187,10 @@ extension PromoteToArchiveJob {
         let finding: PromoteSoundGate.Finding
         if before == nil {
             finding = .unchecked("the file is not reachable")
+        } else if before != stampBeforeDigest {
+            // Not the file whose digest was proven (Codex #280 F2): nothing
+            // is measured, reused or stored for it.
+            finding = .unchecked("the file changed after its bytes were proven")
         } else if let checkedAt = source.audioVerifyDate,
                   let stored = PromoteSoundGate.storedPass(status: source.audioVerifyStatus,
                                                            note: source.audioVerifyNote,
@@ -192,9 +207,13 @@ extension PromoteToArchiveJob {
             finding = try await measureSound(source: source, path: path, before: before, model: model)
         }
 
-        let facts = source.soundPresenceContext
-        let mark = PromoteSoundGate.mark(tags: source.tags, storedFixity: source.contentFixity,
-                                         provenDigest: digest, recordSizeBytes: source.sizeBytes,
+        // The owner's word is read NOW, from the catalog's CURRENT record for
+        // this id (Codex #280 F4): a rescan may have replaced the object
+        // while the sound was measured, and the tag may have been taken back.
+        let current = model.record(forID: source.id) ?? source
+        let facts = current.soundPresenceContext
+        let mark = PromoteSoundGate.mark(tags: current.tags, storedFixity: current.contentFixity,
+                                         provenDigest: digest, recordSizeBytes: current.sizeBytes,
                                          provenSizeBytes: before?.size ?? 0)
         let decision = PromoteSoundGate.decide(finding: finding, basis: basis, mark: mark,
                                                soundPartnerName: facts.soundPartnerName,

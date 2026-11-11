@@ -145,6 +145,37 @@ struct PromoteSoundGateMediaMatrixTests {
                                 size: "720x480", rate: "30000/1001"))
     }
 
+    @Test("REFUSED — Codex #280 F1: ffmpeg missing (ffprobe present) is 'tool unavailable', never a 'damaged' verdict on a healthy file",
+          .timeLimit(.minutes(5)))
+    func missingFfmpegIsNotDamage() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let sb = try S.makeSandbox("sg_noffmpeg"); defer { sb.cleanup() }
+        let model = S.makeModel(sb)
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try S.initialize(model, in: sb)
+        let path = try VerifyAudioTestMedia.generate(into: sb.sources, name: "test_sg_healthy.mov", videoCodec: "prores",
+                                                     audioCodec: "pcm_s16le")
+        // The probe itself: the levels step reports the tool missing while the file is still probeable.
+        await #expect(throws: AudioVerifyProbeError.self) {
+            _ = try await VerifyAudioProbe.diagnose(path: path,
+                                                    analyzeOverride: { _ in throw AudioBalanceProbeError.toolUnavailable("ffmpeg not found") },
+                                                    sourceRecheckOverride: { _ in true })
+        }
+        // Through the job: could not check, nothing stored, nothing archived.
+        let rec = await model.probeFile(url: URL(fileURLWithPath: path), skipHashing: true)
+        model.records.append(rec)
+        let noFfmpeg = PromoteSoundGate.Measure { p in
+            try await VerifyAudioProbe.diagnose(path: p,
+                                                analyzeOverride: { _ in throw AudioBalanceProbeError.toolUnavailable("ffmpeg not found") },
+                                                sourceRecheckOverride: { _ in true })
+        }
+        let job = try #require(await S.promote(model, ids: [rec.id], measure: noFfmpeg))
+        let o = try #require(job.outcomes.first)
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(rec.audioVerifyStatus.isEmpty && rec.audioVerifyDate == nil, "no verdict — least of all 'damaged': \(rec.audioVerifyStatus) \(rec.audioVerifyNote)")
+        #expect(S.archivedFiles(sb).isEmpty)
+    }
+
     @Test("TRUTH: the −68 dBFS refusal carries the number the levels pass measured (mov / pcm)", .timeLimit(.minutes(5)))
     func theNumberIsTheMeasurement() async throws {
         try #require(VerifyAudioTestMedia.toolsAvailable)

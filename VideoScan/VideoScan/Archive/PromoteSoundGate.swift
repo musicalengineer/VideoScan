@@ -118,17 +118,18 @@ enum PromoteSoundGate {
         guard let analysis = d.balanceAnalysis else {
             return .unchecked("the sound track was not decoded")
         }
-        let channels = analysis.measurements.channels
-        let line = levelsLine(channels)
-        let measuredLive = channels.contains { $0.rmsMeasured && AudioBalanceClassifier.carriesProgram($0) }
-        if measuredLive {
-            return .present(oneSided: oneSided(analysis), levels: line)
-        }
-        guard analysis.measuredSilent == true else {
+        // Completeness FIRST (Codex #280 F5): a live channel does not excuse
+        // a pass that skipped a stream or could not read a channel — the
+        // answer, and the verdict stored from it, must be about every channel.
+        guard let silent = analysis.measuredSilent else {
             return .unchecked("the sound track was only partly measured")
         }
-        let loudest = channels.map(\.rmsDBFS).max() ?? -.infinity
-        return .silent(levels: line, loudestDBFS: loudest)
+        let channels = analysis.measurements.channels
+        let line = levelsLine(channels)
+        if silent {
+            return .silent(levels: line, loudestDBFS: channels.map(\.rmsDBFS).max() ?? -.infinity)
+        }
+        return .present(oneSided: oneSided(analysis), levels: line)
     }
 
     /// One side only: exactly one stream carries sound, it has two
@@ -166,7 +167,9 @@ enum PromoteSoundGate {
     ///      describes the file (ContentFixity.describesFileNow held);
     ///   2. that fingerprint's digest is the digest just proven by reading;
     ///   3. the verdict is NEWER than the fingerprint (an older verdict may
-    ///      be about an earlier version of the file);
+    ///      be about an earlier version of the file) and NOT in the future
+    ///      (Codex #280 F3: a date ahead of the clock says nothing about
+    ///      when the check ran, so it could "outlive" any later rewrite);
     ///   4. status "ok" and every note fragment is one the levels pass
     ///      wrote for a track that carries sound.
     /// nil = measure now. A stored refusal is never reused (a refusal's
@@ -174,10 +177,10 @@ enum PromoteSoundGate {
     /// pass (the classifier names surround without reading its levels).
     static func storedPass(status: String, note: String, checkedAt: Date?,
                            fixity: ContentFixity?, fixityVouchesNow: Bool,
-                           provenDigest: String) -> Finding? {
+                           provenDigest: String, now: Date = Date()) -> Finding? {
         guard fixityVouchesNow, let fixity, fixity.algorithm == ContentFixity.sha256,
               !provenDigest.isEmpty, fixity.digest.lowercased() == provenDigest.lowercased(),
-              let checkedAt, checkedAt > fixity.computedAt,
+              let checkedAt, checkedAt > fixity.computedAt, checkedAt <= now, fixity.computedAt <= now,
               status == "ok" else { return nil }
         var side: Side?
         for raw in note.split(separator: ";") {

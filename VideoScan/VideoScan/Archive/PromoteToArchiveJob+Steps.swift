@@ -311,6 +311,9 @@ extension PromoteToArchiveJob {
             return .refused(refusal)
         }
 
+        // The source as it is before its digest is read or trusted: the
+        // sound gate requires this same stamp at measurement time.
+        let stampBeforeDigest = await Self.stampOffMain(path: source.fullPath)
         // GH #190 — content idempotency, BEFORE the journal intent.
         let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
         let claim = try await claimSourceDigest(source: source, entry: entry, provisional: provisional,
@@ -329,7 +332,8 @@ extension PromoteToArchiveJob {
         // Both run BEFORE the destination is chosen or the journal intent
         // written: a refusal here has written nothing to the archive.
         let sound: SoundGateResult
-        switch try await provenBytesGuards(source: source, entry: entry, digest: digest, proven: proven, model: model) {
+        switch try await provenBytesGuards(source: source, entry: entry, digest: digest, proven: proven,
+                                           stampBeforeDigest: stampBeforeDigest, model: model) {
         case .cancelled: return .cancelled
         case .refused(let refusal): return .refused(refusal)
         case .passed(let result): sound = result

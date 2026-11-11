@@ -141,10 +141,14 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     var archiveDigests = ArchiveDigestIndex()
 
     /// Test seam (always nil in production): runs on the main actor after a
-    /// file's digest is claimed AND proven, before the destination is
-    /// chosen or the journal intent is written — so a test can change the
-    /// source under the copy, or cancel, at a deterministic point.
+    /// file's digest is claimed AND proven and its sound has passed, before
+    /// the destination is chosen or the journal intent is written — so a
+    /// test can change the source under the copy, or cancel, at a
+    /// deterministic point.
     var testHookAfterSourceProof: ((VideoRecord) -> Void)?
+    /// Test seam (always nil in production): between the digest proof and
+    /// the sound check — a file replaced here is no longer the proven one.
+    var testHookBeforeSoundCheck: ((VideoRecord) -> Void)?
 
     /// "promote 1A2B3C4D item 3/12" — names the file being worked on in
     /// PERSISTENT log lines without naming the file (codex 2026-10-02 #7).

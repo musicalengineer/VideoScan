@@ -530,6 +530,15 @@ enum VerifyAudioProbe {
                 analysis = try await analyze(path)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch AudioBalanceProbeError.toolUnavailable(let detail) {
+                // Codex #280 F1 (2026-11-10): ffmpeg missing while ffprobe is
+                // present. The file said nothing about itself, and the
+                // reachability recheck below (ffprobe only) would pass — so
+                // without this case a missing tool became "undecodable
+                // audio", a DAMAGED verdict on a healthy file. A diagnosis
+                // failure: thrown, nothing persisted.
+                verifyLog.notice("verify: the levels pass could not run for \((path as NSString).lastPathComponent, privacy: .public) — ffmpeg unavailable; diagnosis failure, no verdict recorded")
+                throw AudioVerifyProbeError.toolUnavailable(detail)
             } catch AudioBalanceProbeError.timedOut(let seconds) {
                 // GH #136: the levels pass was stopped by OUR OWN time
                 // limit — the file said nothing about itself, so this is

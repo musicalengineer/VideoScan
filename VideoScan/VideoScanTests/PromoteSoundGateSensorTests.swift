@@ -108,7 +108,13 @@ struct PromoteSoundGateSensorTests {
             #expect(!code.contains(header), "PromoteSoundGate must not read \(header) — a header never says 'has sound'")
         }
         #expect(code.contains("AudioBalanceClassifier.programFloorDBFS"), "one silence line, the app's")
-        #expect(code.contains("AudioBalanceClassifier.carriesProgram"), "one comparison, the classifier's")
+        #expect(code.contains("analysis.measuredSilent"), "one silence test, shared with Check Media")
+        let probe = try Self.source("Media/AudioBalanceProbe.swift")
+        let ms = try #require(probe.range(of: "var measuredSilent: Bool? {"))
+        let msEnd = try #require(probe.range(of: "\n    }\n", range: ms.upperBound..<probe.endIndex))
+        let msBody = String(probe[ms.upperBound..<msEnd.lowerBound])
+        #expect(msBody.contains("levelsComplete") && msBody.contains("allSatisfy(\\.rmsMeasured)")
+                && msBody.contains("AudioBalanceClassifier.carriesProgram"), "complete, every channel read, the classifier's comparison")
         #expect(!code.contains("-60"), "no second copy of the threshold")
         // And the guard hands it nothing header-shaped to pass on.
         let guards = try Self.source("Archive/PromoteToArchiveJob+Guards.swift")
@@ -132,6 +138,12 @@ struct PromoteSoundGateSensorTests {
             "Archive/PromoteToArchiveJob+Guards.swift: diagnosis = try await soundMeasure.diagnose(path)",
             "Archive/PromoteToArchiveJob.swift: var soundMeasure: PromoteSoundGate.Measure = .live",
         ], "soundMeasure is declared once (= .live) and used once: \(uses)")
+        // The two test hooks around the guards are declared and called, never assigned.
+        for file in try Self.appFiles() {
+            for line in file.code where line.contains("testHookBeforeSoundCheck =") || line.contains("testHookAfterSourceProof =") {
+                Issue.record("a production file assigns a Promote test hook: \(file.rel): \(line)")
+            }
+        }
         let gate = Self.code(try Self.source("Archive/PromoteSoundGate.swift")).joined(separator: "\n")
         #expect(gate.contains("static let live = Measure { try await VerifyAudioProbe.diagnose(path: $0) }"),
                 "the live measurement is Verify Audio's probe — no second measurement engine")

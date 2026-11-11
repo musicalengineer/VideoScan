@@ -35257,6 +35257,7 @@
         "before1980",
         "edgeWords",
         "incompleteIsUnchecked",
+        "liveChannelDoesNotExcuseAnIncompletePass",
         "markBinding",
         "noTrackAndDamage",
         "noTrackRefusal",
@@ -35287,13 +35288,16 @@
         "changedDuringMeasurementIsRefused",
         "couldNotCheckIsRefused",
         "damagedIsRefusedEvenTagged",
+        "futureDatedVerdictIsMeasuredAgain",
         "headerNeverPasses",
+        "incompletePassWithALiveChannelIsRefused",
         "measurementIsStored",
         "mixedBatch",
         "noTrackIsRefused",
         "oneSidedPromotesWithANote",
         "pairHalfIsRefused",
         "partialMeasurementIsRefused",
+        "replacedBetweenProofAndMeasurementIsRefused",
         "silentAudioOnlyIsRefused",
         "silentIsRefused",
         "staleStoredPassIsMeasuredAgain",
@@ -35302,6 +35306,7 @@
         "storedSurroundIsMeasuredAgain",
         "tagAcceptsSilent",
         "tagDoesNotCrossToOtherBytes",
+        "tagRemovedDuringMeasurementAcceptsNothing",
         "tagRemovedIsRefused",
         "taggedHalfPromotesAlone",
         "verdictOlderThanFingerprintIsMeasuredAgain"
@@ -35334,6 +35339,7 @@
       ],
       "tests": [
         "avi",
+        "missingFfmpegIsNotDamage",
         "mkv",
         "mov",
         "mp4",
@@ -39212,7 +39218,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 528,
+      "expected_floor": 529,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [

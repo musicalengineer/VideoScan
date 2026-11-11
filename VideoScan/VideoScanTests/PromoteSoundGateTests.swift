@@ -73,10 +73,17 @@ struct PromoteSoundGateTests {
                 == .present(oneSided: .left, levels: "2 ch: L -18.0, R -inf dBFS RMS"))
         #expect(G.finding(from: S.soundDiagnosis(channels: [-91, -18]))
                 == .present(oneSided: .right, levels: "2 ch: L -91.0, R -18.0 dBFS RMS"))
-        // A channel the levels pass could not read is not "silent": present, but no side is claimed.
-        if case .present(let side, _) = G.finding(from: S.soundDiagnosis(channels: [-18, nil])) {
-            #expect(side == nil, "an unmeasured channel never makes a one-sided claim")
-        } else { Issue.record("a measured live channel is present") }
+    }
+
+    @Test("Codex #280 F5: a live channel does not excuse an incomplete measurement — one unread channel, or a pass that did not cover every stream, is COULD NOT CHECK")
+    func liveChannelDoesNotExcuseAnIncompletePass() {
+        func unchecked(_ d: AudioVerifyDiagnosis) -> Bool {
+            if case .unchecked = G.finding(from: d) { return true }
+            return false
+        }
+        #expect(unchecked(S.soundDiagnosis(channels: [-18, nil])), "left live, right never read: \(G.finding(from: S.soundDiagnosis(channels: [-18, nil])))")
+        #expect(unchecked(S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)), "stereo, but the pass did not cover every stream")
+        #expect(unchecked(S.soundDiagnosis(channels: [-18, -.infinity], levelsComplete: false)))
     }
 
     @Test("the −60 dBFS line: the real archived title (both channels at −68) is SILENT; exactly −60.0 is silent; −59.9 has sound; digital silence is silent")
@@ -251,6 +258,9 @@ struct PromoteSoundGateTests {
         #expect(Self.stored(status: "") == nil, "4 — never checked")
         #expect(Self.stored(status: "damaged", note: "Damaged audio — invalid codec (qdm2)") == nil, "4 — a stored refusal is measured again")
         #expect(Self.stored(proven: Self.digest.uppercased()) != nil, "digest case does not matter")
+        // Codex #280 F3: a verdict dated in the FUTURE proves nothing about when it was measured.
+        #expect(Self.stored(checkedAt: .distantFuture) == nil, "3 — a future-dated verdict")
+        #expect(Self.stored(checkedAt: Date().addingTimeInterval(120)) == nil, "3 — two minutes ahead of the clock")
     }
 
     @Test("stored note fragments: only the ones the levels pass wrote for a track that carries sound")
