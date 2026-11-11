@@ -301,6 +301,7 @@ struct ArchiveUpdateSafetyTests {
         try MasterArchiveTestSupport.initialize(model, in: sb)
         let root = sb.archiveRoot.path
         let job = PromoteToArchiveJob(plan: try #require(model.buildPromotePlan(recordIDs: [])), model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.publishedThisBatch = (0..<8).map { i in
             ArchivePromoteJournal.Entry(sourceRecordID: UUID(), sourcePath: "/Volumes/test_S/\(i).mov",
                                         destRelPath: "30_Video/Undated/xxxx-xx-xx_\(i).mov",

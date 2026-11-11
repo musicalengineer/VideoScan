@@ -43,6 +43,7 @@
 - Nightly adversarial confirm step must build at the reviewed head, not current main (#247).
 - Change-driven staleness for the Files line: a drive mount, or FSEvents under catalogued roots since the last check's event id, marks that drive or folder stale and the worker re-checks only it (Rick 2026-11-07, step 2 of the daily file check; not built).
 - Validate Catalog… tier 5 should run the full `PRAGMA integrity_check` (today only `quick_check` at open); report it as its own stamp; nightly too (Rick's SQLite operations matrix, 2026-11-01).
+- A silent 5.1 track is stored as ok / "surround audio" without its levels being read (`AudioBalanceClassifier.classify` returns `.multichannel` on channel count alone), so it passes the Archive Angel's recommend-time `noSound` floor; Promote's sound gate reads the levels and refuses it, the stored verdict and the recommender do not (found 2026-11-10).
 
 ## Provenance (top of mind)
 - Carrier / capture tables migration — `capture_setups`, `carriers`, `capture_events`, `carrier_spans`, `file_provenance` — its own additive migration and Rick's approval (`provenance_assertions` shipped in v14: Done).
