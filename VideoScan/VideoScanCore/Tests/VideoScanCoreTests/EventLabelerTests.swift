@@ -114,9 +114,10 @@ struct EventLabelerBirthdayTests {
         #expect(EventLabeler.birthdayLabels(day(1994, 6, 2), birthdays: [baby], windowDays: 3).isEmpty)
         #expect(EventLabeler.birthdayLabels(day(1995, 6, 2), birthdays: [baby], windowDays: 3).map(\.reason)
                 == ["1 day after Baby's 1st birthday"])
-        let dad = FamilyBirthday(name: "Dad", born: day(1929, 2, 21), diedYear: 2008)
-        #expect(EventLabeler.birthdayLabels(day(2008, 2, 21), birthdays: [dad], windowDays: 3).count == 1)
-        #expect(EventLabeler.birthdayLabels(day(2009, 2, 21), birthdays: [dad], windowDays: 3).isEmpty)
+        // Invented dates (#263): no fixture here carries a real person's birth or death.
+        let elder = FamilyBirthday(name: "Elder", born: day(1931, 3, 14), diedYear: 2005)
+        #expect(EventLabeler.birthdayLabels(day(2005, 3, 14), birthdays: [elder], windowDays: 3).count == 1)
+        #expect(EventLabeler.birthdayLabels(day(2006, 3, 14), birthdays: [elder], windowDays: 3).isEmpty)
     }
 
     @Test("Leap-day births: Feb 28 in a common year, Feb 29 in a leap year")
@@ -158,7 +159,7 @@ struct EventLabelerBirthdayTests {
     @Test("The pass's day-of-year table finds exactly what the full scan finds, every day of a common and a leap year, windows 0…14")
     func tableEqualsScan() {
         let people = [timmy, FamilyBirthday(name: "Leap", born: day(1984, 2, 29)), FamilyBirthday(name: "Jan", born: day(1990, 1, 1)),
-                      FamilyBirthday(name: "Eve", born: day(1990, 12, 31)), FamilyBirthday(name: "Dad", born: day(1929, 2, 21), diedYear: 2008)]
+                      FamilyBirthday(name: "Eve", born: day(1990, 12, 31)), FamilyBirthday(name: "Elder", born: day(1931, 3, 14), diedYear: 2005)]
         for window in [0, 3, 14] {
             var cache = EventLabeler.FolderWordCache()
             for year in [1995, 1996] {
