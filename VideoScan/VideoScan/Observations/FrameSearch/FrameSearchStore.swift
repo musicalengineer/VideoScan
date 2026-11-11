@@ -24,7 +24,8 @@
 // probability, and the words say so.
 //
 // Memory (worst case): the index in RAM (FrameIndex.swift: 3 KB per frame;
-// 160k frames ≈ 490 MB), the scope's file rows (~250 B per content), one
+// 160k frames ≈ 490 MB; after a save it is the job's snapshot, handed over,
+// not a second read of the file), the scope's file rows (~250 B per content), one
 // page of hits (≤ 60), the thumbnail cache (≤ 240 frames × ~130 KB ≈ 31 MB).
 //
 // (For Rick: `@MainActor final class … ObservableObject` ≈ a UI-thread
@@ -64,7 +65,8 @@ struct FrameSearchLoader {
     let prewarm: @Sendable () async throws -> Void
     let thumbnail: @Sendable (_ path: String, _ seconds: Double) async -> CGImage?
     /// Start (or find) the index job over the scope; nil when no MFO center is reachable.
-    let startIndex: @MainActor (_ scope: ObservationsScope, _ onSaved: @escaping @MainActor () -> Void) -> FrameIndexJob?
+    /// `onSaved` is given the index exactly as each save wrote it.
+    let startIndex: @MainActor (_ scope: ObservationsScope, _ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob?
     let reveal: @MainActor (UUID) -> Bool
     let note: @MainActor (String) -> Void
 
@@ -292,9 +294,9 @@ final class FrameSearchStore: ObservableObject {
         String(format: "%.2f s", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
     }
 
-    /// Start (or show) the index job over the window's scope.
+    /// Start (or show) the index job over the window's scope. Each save hands back the index it wrote.
     func buildIndex() {
-        guard let job = loader.startIndex(scope, { [weak self] in Task { await self?.reloadAfterSave() } }) else {
+        guard let job = loader.startIndex(scope, { [weak self] saved in Task { await self?.show(saved: saved) } }) else {
             jobLine = "The Media File Operations center is not available in this window."
             return
         }
@@ -313,12 +315,11 @@ final class FrameSearchStore: ObservableObject {
             }
     }
 
-    private func reloadAfterSave() async {
-        let (status, contents) = await Task.detached(priority: .utility) { [load = loader.loadIndex] () -> (FrameIndexStatus, Int) in
-            let s = await load()
-            return (s, s.index?.indexedDigests.count ?? 0)
-        }.value
-        apply(status, contents: contents)
+    /// The job saved the index: show exactly what it wrote. The snapshot is the job's own (handed over, sharing
+    /// the builder's buffers until the job adds a file) — the disk is not read again; only `loadIndex()` reads it.
+    private func show(saved index: FrameIndex) async {
+        let contents = await Task.detached(priority: .utility) { index.indexedDigests.count }.value   // O(frames): off the main actor
+        apply(.ready(index), contents: contents)
     }
 
     @discardableResult

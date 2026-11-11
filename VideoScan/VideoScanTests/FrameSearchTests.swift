@@ -136,6 +136,42 @@ struct FrameSearchStoreTests {
         }
     }
 
+    // MARK: The index after a save (handed over by the job, not read again)
+
+    /// What a test's loader saw: the job's `onSaved` as the store gave it to `startIndex`.
+    @MainActor final class IndexSeams {
+        var onSaved: (@MainActor (FrameIndex) -> Void)?
+    }
+
+    /// A loader whose disk read is `read` and whose `startIndex` keeps the store's `onSaved` (no job runs).
+    /// /V/a holds contents 2 and 3.
+    static func indexLoader(_ seams: IndexSeams, read: @escaping @Sendable () async -> FrameIndexStatus) -> FrameSearchLoader {
+        FrameSearchLoader(modelID: StubEmbedder().modelID, loadIndex: read,
+                          files: { _ in [Env.row(2, path: "/V/a/two.mov"), Env.row(3, path: "/V/a/three.mov")] },
+                          embedText: { try await StubEmbedder().embed(text: $0) }, prewarm: {}, thumbnail: { _, _ in nil },
+                          startIndex: { _, onSaved in seams.onSaved = onSaved; return nil }, reveal: { _ in true }, note: { _ in })
+    }
+
+    @Test func aSavedIndexIsShownFromTheSnapshotTheJobHandsOverNotReadFromDisk() async throws {
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let seams = IndexSeams()
+        let store = FrameSearchStore(scope: .folder("/V/a"), loader: Self.indexLoader(seams) {
+            reads.withLock { $0 += 1 }
+            return .notBuilt   // the disk never has an index in this test: what is shown can only be what was handed over
+        })
+        await store.loadIndex()
+        guard case .notBuilt = store.indexState else { Issue.record("nothing on disk must read as not built: \(store.indexState)"); return }
+        store.buildIndex()
+        let onSaved = try #require(seams.onSaved, "the store gives the job its onSaved")
+        onSaved(Self.index([2]))
+        try await FrameIndexJobTests.until("the first save is shown") { store.indexState == .ready(frames: 2, contents: 1) }
+        onSaved(Self.index([2, 3]))
+        try await FrameIndexJobTests.until("the second save is shown") { store.indexState == .ready(frames: 4, contents: 2) }
+        #expect(reads.withLock { $0 } == 1, "the window's first look is the only disk read; a save is not read back")
+        await store.search("axis 3")
+        #expect(store.hits.first?.filename == "three.mov" && store.hits.first?.seconds == 3, "truth: the search runs over the index that was handed over")
+    }
+
     // MARK: Latest wins (a result is published only for the request that is still current)
 
     /// Contents 2 and 3 are indexed; /V/a holds content 2, /V/b holds content 3. `embedGate` holds the text tower
