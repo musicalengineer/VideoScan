@@ -191,6 +191,36 @@ struct PromoteSoundGateJobTests {
         _ = try Self.expectRefused(job, a, code: "sound-silent", sb, model, before: before)
     }
 
+    @Test("REFUSED — owner ruling 2026-11-10: “Archive anyway (I know this file)” is the un-probeable override, NOT a sound override; a ticked file with silent sound is still refused with the tag sentence, and the tag is what lets it in")
+    func theArchiveAnywayTickDoesNotBypassTheSoundGate() async throws {
+        let (sb, model) = try H.setup("sg_tick"); defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_ticked.mov", seed: 671)
+        a.streamTypeRaw = StreamType.ffprobeFailed.rawValue; a.isPlayable = "ffprobe failed"
+        let before = ArchiveSnapshot.take(sb)
+        func ticked() throws -> PromoteToArchiveJob {
+            let job = try H.job(model, ids: [a.id]) { $0.allowUnprobeable = true }
+            #expect(job.plan.entries.first?.readiness.blocking == true && job.plan.allowUnprobeable, "fixture: un-probeable, ticked")
+            job.soundMeasure = S.measure(Self.silentPair)
+            return job
+        }
+        let refused = try ticked()
+        refused.start(); await refused.task?.value; await refused.completionTask?.value
+        await Self.consoleSettled()
+        let o = try Self.expectRefused(refused, a, code: "sound-silent", sb, model, before: before)
+        #expect(o.detail.contains("tag it “Silent — checked” and promote again"), "\(o.detail)")
+        // Could-not-check is not waived by the tick either.
+        let unchecked = try H.job(model, ids: [a.id]) { $0.allowUnprobeable = true }
+        unchecked.soundMeasure = S.measure(throwing: AudioVerifyProbeError.probeFailed("ffprobe exited with status 1"))
+        unchecked.start(); await unchecked.task?.value; await unchecked.completionTask?.value
+        #expect(H.outcome(unchecked, a.id)?.refusalCode == "sound-unchecked")
+        #expect(ArchiveSnapshot.take(sb) == before)
+        // The sound override is the tag.
+        a.tags = [WorkflowTags.silentChecked]
+        let accepted = try ticked()
+        accepted.start(); await accepted.task?.value; await accepted.completionTask?.value
+        #expect(H.outcome(accepted, a.id)?.kind == .promoted, "\(accepted.outcomes)")
+    }
+
     // MARK: Passes
 
     @Test("sound on one side promotes as it is; the row and the landed line say which side")

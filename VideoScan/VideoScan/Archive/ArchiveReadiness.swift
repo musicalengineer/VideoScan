@@ -6,7 +6,8 @@
 //     (no streams / ffprobe failed), and even that the user can override
 //     ("Archive anyway (I know this file)"). Since 2026-11-10 the Promote
 //     JOB also refuses missing, silent or damaged sound (PromoteSoundGate):
-//     that is a measurement taken in the job, not a field read here;
+//     a measurement taken in the job, not a field read here, and that tick
+//     does not waive it (the sound override is the “Silent — checked” tag);
 //   • AUDIO first: "a person can handle wiggly lines in a video, but bad,
 //     out-of-sync or missing audio is torture" — audio findings lead the
 //     warning list, then format, then date.
