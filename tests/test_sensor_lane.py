@@ -8,9 +8,13 @@ No build here: `run` itself is exercised by scripts/run_sensors.sh."""
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("sensor_lane", ROOT / "scripts" / "sensor_lane.py")
@@ -159,6 +163,7 @@ def test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way():
 
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     # The app half "ran" zero tests (a filter that matched nothing): red.
+    monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 0.0))
     monkeypatch.setattr(sl, "run_app", lambda *a, **k: (0, 0, [], 0, 1.0))
     monkeypatch.setattr(sl, "run_core", lambda *a, **k: (3, 0, [], 0, 1.0))
     assert sl.main(["run", "--log-dir", str(tmp_path)]) == 1
@@ -168,3 +173,84 @@ def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sl, "run_app", lambda *a, **k: (699, 1, ["x()"], 65, 1.0))
     assert sl.main(["run", "--log-dir", str(tmp_path)]) == 1
     assert "VideoScanTests: x()" in capsys.readouterr().err
+
+
+# ---- GH #400: the gauntlet manifest is validated in the lane ----------------
+
+STAGES = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"]
+
+
+def _tree_with_manifest(root: Path, listed: list, declared: list) -> Path:
+    """A minimal checkout: one Python test file declaring `declared`, and a
+    manifest that lists `listed` for it (python is unadapted, so it is blocked)."""
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_x.py").write_text("".join(f"def {n}():\n    pass\n\n" for n in declared))
+    (root / "scripts" / "gauntlet").mkdir(parents=True)
+    manifest = {
+        "schema": 1,
+        "assignments": [{"path": "tests/test_x.py", "kind": "python", "stage": "unit", "suites": ["test_x.py"],
+                         "tests": listed, "blocked_reason": "no python adapter"}],
+        "stages": [{"name": n, "expected_floor": 1, "selectors": [], "package_selectors": [],
+                    "blocked": [{"name": "tests/test_x.py", "reason": "no python adapter"}] if n == "unit" else []}
+                   for n in STAGES],
+    }
+    (root / "scripts" / "gauntlet" / "manifest.json").write_text(json.dumps(manifest))
+    return root
+
+
+needs_swift = pytest.mark.skipif(sys.platform != "darwin" or shutil.which("swift") is None,
+                                 reason="macOS-only: runs scripts/gauntlet/inventory.swift with swift")
+
+
+@needs_swift
+def test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error(tmp_path):
+    """RED first (GH #400, 2026-10-30 and 11/06, 11/08, 11/10): a new test function in
+    an EXISTING file passed pre-commit and the lane, and blocked the M4 gauntlet in 1 s."""
+    stale = _tree_with_manifest(tmp_path / "stale", listed=["test_a"], declared=["test_a", "test_b"])
+    errors, _ = sl.manifest_check(stale)
+    assert errors == ["tests inventory changed (unassigned or stale): tests/test_x.py"]
+
+
+@needs_swift
+def test_a_manifest_that_matches_the_source_has_no_errors(tmp_path):
+    good = _tree_with_manifest(tmp_path / "good", listed=["test_a", "test_b"], declared=["test_a", "test_b"])
+    assert sl.manifest_check(good)[0] == []
+
+
+@needs_swift
+def test_a_manifest_that_cannot_be_checked_is_an_error_not_a_pass(tmp_path):
+    # No manifest at all, and one that is not JSON: the validator exits 2 with no
+    # errors list. "Could not check" must never read as "nothing wrong".
+    (tmp_path / "none").mkdir()
+    errors, _ = sl.manifest_check(tmp_path / "none")
+    assert len(errors) == 1 and "could not be validated" in errors[0]
+    bad = _tree_with_manifest(tmp_path / "bad", listed=["test_a"], declared=["test_a"])
+    (bad / "scripts" / "gauntlet" / "manifest.json").write_text("{ not json")
+    errors, _ = sl.manifest_check(bad)
+    assert len(errors) == 1 and "could not be validated" in errors[0]
+
+
+@needs_swift
+def test_this_checkouts_manifest_is_current():
+    # Truth: the real validator on the real tree (what the gauntlet preflight runs).
+    errors, _ = sl.manifest_check(ROOT)
+    assert errors == [], errors
+
+
+def test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sl, "run_app", lambda *a, **k: (700, 0, [], 0, 1.0))
+    monkeypatch.setattr(sl, "run_core", lambda *a, **k: (3, 0, [], 0, 1.0))
+    monkeypatch.setattr(sl, "manifest_check",
+                        lambda *a, **k: (["tests inventory changed (unassigned or stale): tests/test_x.py"], 5.0))
+    assert sl.main(["run", "--log-dir", str(tmp_path)]) == 1
+    out = capsys.readouterr()
+    assert "SENSOR LANE RED" in out.err
+    assert "gauntlet manifest: tests inventory changed (unassigned or stale): tests/test_x.py" in out.err
+    assert "inventory.swift --discover" in out.err and "scripts/gauntlet/manifest.json" in out.err
+    assert "sensor lane GREEN" not in out.out
+    # ... also when only one half is asked for: the stamp covers the tree either way.
+    assert sl.main(["run", "--app-only", "--log-dir", str(tmp_path)]) == 1
+    assert sl.main(["run", "--core-only", "--log-dir", str(tmp_path)]) == 1
+    monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 5.0))
+    assert sl.main(["run", "--log-dir", str(tmp_path)]) == 0
+    assert "sensor lane GREEN (703 tests)" in capsys.readouterr().out
