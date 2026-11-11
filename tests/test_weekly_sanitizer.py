@@ -511,3 +511,311 @@ def test_the_digest_shows_test_code_findings_grey_not_red(tmp_path, capsys):
 def test_ubsan_prints_its_stack_so_its_frames_can_be_classified():
     env, _ = ws.sanitizer_env("address", {})
     assert "print_stacktrace=1" in env["UBSAN_OPTIONS"] and "print_stacktrace=1" in env["TEST_RUNNER_UBSAN_OPTIONS"]
+
+
+# ── #469: a relaunched host is explained by POSITION, not by counting reports ──
+# RED: status_for let every test-only report explain one restart, wherever the
+# report was. A test-only UBSan report the host ran on from, plus a genuine host
+# crash an hour later, read "test-findings" (grey); the crash went unmentioned.
+#
+# The rule (ws.RESTART_RULE): a restart is explained only by a sanitizer report
+# printed immediately before it, whatever the sanitizer; "immediately" = no test
+# or suite started or finished between the report's last line and the restart.
+# A test-only report explains it grey; a report of a known finding (an entry of
+# scripts/sanitizer/*.supp that printed anyway) explains it by that issue; no
+# report, a report the host ran on from, or a new product report is a crash.
+#
+# The fixtures are the shapes of the M4's logs (tool output only, shortened):
+#   2026-11-07-address.log  2 UBSan reports (mlx device.cpp:717, #463), each
+#                           followed by TEST_HOST_STARTED, a blank, "Restarting
+#                           after unexpected exit…" (2 of 2; 10/31: 2 of 2)
+#   2026-11-08-thread.log   15 TSan reports (GRDB close race, #423), each followed
+#                           by the ====== rule, then the same lines (15 of 15;
+#                           11/01: 8 of 8, with two os_log lines of the new host)
+#   2026-10-05-thread.log   1 restart with no report at all (TSan-runtime SIGSEGV)
+#   verify-2026-11-08       a UBSan report, then the SAME test passes: no restart
+
+HOST_START = "Test Suite 'VideoScanTests.xctest' started at 2026-11-07 07:03:18.935.\n"
+RESTARTING = "Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.\n"
+NEW_HOST_OSLOG = ("2026-11-01 05:06:55.908826-0500 VideoScan[15123:5150029] [Connection] Unable to get remote object proxy\n"
+                  "2026-11-01 05:06:55.909038-0500 VideoScan[15123:5150029] [Application] Error registering app\n")
+
+
+def _relaunch(oslog=""):
+    """What xcodebuild prints when the hosted test process died: the next host's
+    banner (and, some weeks, two os_log lines of it), the Restarting line, the
+    empty XCTest half of the new launch."""
+    return ("TEST_HOST_STARTED epoch=1794056175.505 pid=35307\n" + oslog + "\n" + RESTARTING + "\n"
+            "Test Suite 'Selected tests' started at 2026-11-07 07:56:16.396.\n"
+            "Test Suite 'VideoScanTests.xctest' started at 2026-11-07 07:56:16.397.\n"
+            "Test Suite 'VideoScanTests.xctest' passed at 2026-11-07 07:56:16.397.\n"
+            "\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds\n"
+            "◇ Test run started.\n")
+
+
+def _started(name):
+    return f"◇ Test {name} started.\n"
+
+
+def _passed(name):
+    return f"◇ Test {name} started.\n✔ Test {name} passed after 0.006 seconds.\n"
+
+
+MLX_PATH = "/Users/x/Library/Caches/VideoScan/sanitizer-dd/address/SourcePackages/checkouts/mlx-swift/Source/Cmlx"
+UBSAN_MLX = (f"{MLX_PATH}/mlx/mlx/backend/metal/device.cpp:717:21: runtime error: member call on null pointer of type "
+             "'NS::Referencing<MTL::LinkedFunctions>'\n"
+             f"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior {MLX_PATH}/mlx/mlx/backend/metal/device.cpp:717:21 \n")
+UBSAN_MLX_CALLEE = (f"{MLX_PATH}/metal-cpp/Foundation/NSObject.hpp:112:49: runtime error: member call on null pointer of type "
+                    "'NS::Referencing<MTL::LinkedFunctions> *'\n"
+                    f"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior {MLX_PATH}/metal-cpp/Foundation/NSObject.hpp:112:49 \n")
+UBSAN_TEST_ONLY = (f"{REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40:9: runtime error: load of misaligned address\n"
+                   f"    #0 0x1 in VideoScanTests.MLXSafetyTests.x() {REPO_PATH}/VideoScanTests/MLXSafetyTests.swift:40\n"
+                   "SUMMARY: UndefinedBehaviorSanitizer: misaligned-pointer-use MLXSafetyTests.swift:40:9\n")
+TSAN_GRDB = _tsan(["$defer #1 () -> () in closure #1 () throws -> () in GRDB.DatabasePool.close() throws -> () <null> "
+                   "(GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0)",
+                   "closure #1 in static VideoScanCore.GRDBCatalogRepository.decideAtClose(GRDB.DatabasePool) <null> "
+                   "(VideoScanCore_-7D3187DD9FB04CEE_PackageProduct:arm64+0xf6ec6c)"],
+                  "SUMMARY: ThreadSanitizer: data race (/x/GRDB_5DC4DB053_PackageProduct:arm64+0xa32c0) in $defer #1 () -> () "
+                  "in closure #1 () throws -> () in GRDB.DatabasePool.close() throws -> ()+0x70")
+HAPPY, SYNC = '"happy-path MLX call inside runMLX returns normally"', '"synchronous runMLX returns normally"'
+ADDRESS_1107 = (HOST_START + _passed('"shape mismatch throws instead of crashing the process"')
+                + _started(HAPPY) + UBSAN_MLX + _relaunch()
+                + _started(SYNC) + UBSAN_MLX + _relaunch()
+                + _passed('"error in one runMLX does not contaminate the next"') + GREEN_LOG)
+THREAD_1108 = (HOST_START + _started("notesTypedDuringTheScanReachCatalogSQLite()") + TSAN_GRDB + _relaunch()
+               + _started('"a file missing at its path is not an attempt"') + TSAN_GRDB + _relaunch(NEW_HOST_OSLOG)
+               + _passed("somethingElse()") + GREEN_LOG)
+
+
+def _known(name):
+    return ws.load_suppressions(ws.SUPP_DIR / name)
+
+
+def _status(log, known=()):
+    return ws.status_for(ws.parse_log(log, known), timed_out=False)
+
+
+def test_a_test_only_report_the_host_ran_on_from_does_not_explain_a_later_crash():
+    """The bug as filed: the report is nowhere near the restart."""
+    log = (HOST_START + _started("misaligned()") + UBSAN_TEST_ONLY + "✔ Test misaligned() passed after 0.1 seconds.\n"
+           + _passed("aThousandTestsLater()") + _started("theOneThatCrashed()") + _relaunch() + GREEN_LOG)
+    p = ws.parse_log(log)
+    assert p["test_only_reports"] == 1 and p["host_restarts"] == 1 and p["unexplained_restarts"] == 1
+    assert ws.status_for(p, timed_out=False) == "host-crashed"
+    assert p["restarts"] == [{"explained_by": None, "issue": None, "during": "theOneThatCrashed()"}]
+    # The grey finding is still in the row; red only outranks it.
+    assert p["test_only_findings"] == ["UndefinedBehaviorSanitizer: misaligned-pointer-use MLXSafetyTests.swift:40:9"]
+
+
+@pytest.mark.parametrize("report", [UBSAN_TEST_ONLY, _tsan([GRDB_FRAME, TEST_FRAME])])
+def test_a_test_only_report_right_before_the_restart_explains_it_whatever_the_sanitizer(report):
+    """Position, not kind: the M4's 11/07 log shows a UBSan report followed by the
+    host's exit, so "UBSan never stops the host" is not a rule."""
+    log = HOST_START + _started("x()") + report + _relaunch() + GREEN_LOG
+    p = ws.parse_log(log)
+    assert p["host_restarts"] == 1 and p["unexplained_restarts"] == 0
+    assert p["restarts"] == [{"explained_by": "test-only", "issue": None, "during": "x()"}]
+    assert ws.status_for(p, timed_out=False) == "test-findings"
+    # The same report explains ONE restart: a second relaunch straight after is a crash.
+    assert _status(HOST_START + _started("x()") + report + _relaunch() + _started("y()") + _relaunch() + GREEN_LOG) == "host-crashed"
+
+
+@pytest.mark.parametrize("between", [
+    "✔ Test x() passed after 0.1 seconds.\n",                      # the verify-2026-11-08 shape: the test carried on
+    "◇ Test another() started.\n",
+    "✔ Suite MKVDossierPipelineTests passed after 0.195 seconds.\n",
+    "Test Case '-[VideoScanTests.OldTests testThing]' started.\n",
+    "Test Case '-[VideoScanTests.OldTests testThing]' passed (0.1 seconds).\n",
+])
+def test_immediately_before_means_no_test_or_suite_started_or_finished_in_between(between):
+    log = HOST_START + _started("x()") + UBSAN_TEST_ONLY + between + _relaunch() + GREEN_LOG
+    p = ws.parse_log(log)
+    assert p["unexplained_restarts"] == 1 and ws.status_for(p, timed_out=False) == "host-crashed"
+    assert ws.RESTART_RULE.startswith("a restart is explained only by a sanitizer report printed immediately before it")
+
+
+def test_what_the_real_logs_put_between_report_and_restart_does_not_break_the_rule():
+    """TSan's ====== rule, the next host's banner, its os_log lines, blanks (11/01: 8 of 8)."""
+    log = HOST_START + _started("x()") + _tsan([TEST_FRAME]) + _relaunch(NEW_HOST_OSLOG) + GREEN_LOG
+    assert ws.parse_log(log)["unexplained_restarts"] == 0
+
+
+def test_the_address_log_of_1107_reads_as_the_known_mlx_finding_not_as_a_crash():
+    """Two reports of #463 (suppressed in ubsan.supp), each followed by the host's
+    exit: both restarts belong to #463, nothing is new, nothing is red."""
+    p = ws.parse_log(ADDRESS_1107, _known("ubsan.supp"))
+    assert p["reports"] == 2 and p["known_reports"] == 2 and p["host_restarts"] == 2 and p["unexplained_restarts"] == 0
+    assert p["unique_findings"] == [] and p["test_only_reports"] == 0
+    assert p["restarts"] == [{"explained_by": "known", "issue": 463, "during": HAPPY},
+                             {"explained_by": "known", "issue": 463, "during": SYNC}]
+    assert ws.status_for(p, timed_out=False) == "ok"
+    row = _row("ok", **p, suppressed=[{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}])
+    line = alert.lines_for(row, NOW, 8)
+    assert len(line) == 1 and line[0].startswith("⚪ Address Sanitizer") and "🔴" not in line[0]
+    assert "#463" in line[0] and "restarted 2×" in line[0] and "happy-path MLX" in line[0]
+
+
+def test_the_thread_log_of_1108_reads_as_the_known_grdb_race():
+    p = ws.parse_log(THREAD_1108, _known("tsan.supp"))
+    assert p["known_reports"] == 2 and p["unexplained_restarts"] == 0 and p["unique_findings"] == []
+    assert [(r["explained_by"], r["issue"]) for r in p["restarts"]] == [("known", 423), ("known", 423)]
+    assert ws.status_for(p, timed_out=False) == "ok"
+
+
+@pytest.mark.parametrize("log", [ADDRESS_1107, THREAD_1108])
+def test_without_a_known_entry_the_same_log_is_a_new_finding_and_its_restarts_are_crashes(log):
+    """A new product finding before a restart explains nothing: the row is red
+    (findings outrank everything) and both relaunches count as crashes."""
+    p = ws.parse_log(log)
+    assert ws.status_for(p, timed_out=False) == "findings" and len(p["unique_findings"]) == 1
+    assert p["known_reports"] == 0 and p["unexplained_restarts"] == 2
+    assert [r["explained_by"] for r in p["restarts"]] == [None, None]
+    assert "test host restarted 2×" in alert.lines_for(_row("findings", **p), NOW, 8)[0]
+
+
+def test_a_restart_with_no_report_before_it_is_a_crash_and_names_the_test_that_was_running():
+    """The 10/05 shape (TSan-runtime SIGSEGV), and the shape a suppressed report
+    would leave if the host still exited: the log holds no report, no signal and
+    no crash line, only the test that started and never finished."""
+    log = HOST_START + _passed("fine()") + _started(HAPPY) + _relaunch() + _passed("later()") + GREEN_LOG
+    p = ws.parse_log(log, _known("ubsan.supp"))
+    assert p["reports"] == 0 and p["restarts"] == [{"explained_by": None, "issue": None, "during": HAPPY}]
+    assert ws.status_for(p, timed_out=False) == "host-crashed"
+    line = alert.lines_for(_row("host-crashed", **p), NOW, 8)[0]
+    assert line.startswith("🔴") and "crashed 1×" in line and "no sanitizer report" in line and "happy-path MLX" in line
+    # Nothing was running (the last test had finished): the line does not invent one.
+    quiet = ws.parse_log(HOST_START + _passed("fine()") + _relaunch() + GREEN_LOG)
+    assert quiet["restarts"] == [{"explained_by": None, "issue": None, "during": None}]
+    xct = ws.parse_log(HOST_START + "Test Case '-[VideoScanTests.OldTests testThing]' started.\n" + _relaunch() + GREEN_LOG)
+    assert xct["restarts"][0]["during"] == "VideoScanTests.OldTests testThing"
+
+
+def test_a_known_report_explains_its_own_restart_and_no_other():
+    log = (HOST_START + _started(HAPPY) + UBSAN_MLX + _relaunch()          # known, explained
+           + _passed("fine()") + _started("crasher()") + _relaunch() + GREEN_LOG)   # nothing before it
+    p = ws.parse_log(log, _known("ubsan.supp"))
+    assert p["host_restarts"] == 2 and p["unexplained_restarts"] == 1
+    assert [(r["explained_by"], r["during"]) for r in p["restarts"]] == [("known", HAPPY), (None, "crasher()")]
+    assert ws.status_for(p, timed_out=False) == "host-crashed"
+    line = alert.lines_for(_row("host-crashed", **p), NOW, 8)[0]
+    assert "crashed 1×" in line and "running then: crasher()" in line and "happy-path" not in line.split("also restarted")[0]
+    assert "also restarted 1× right after a known or test-only report (#463)" in line
+    # Red for another reason: the explained relaunches are still said, and a long test name is cut.
+    known_only = ws.parse_log(ADDRESS_1107.replace(HAPPY, '"' + "x" * 200 + '"'), _known("ubsan.supp"))
+    red = alert.lines_for(_row("tests-failed", **{**known_only, "failed_tests": ["fooBar"]}), NOW, 8)[0]
+    assert red.startswith("🔴") and "tests failed: fooBar; the test host also restarted 2×" in red and "(#463)" in red
+    grey = alert.lines_for(_row("ok", **known_only), NOW, 8)[0]
+    assert '"' + "x" * 69 + "…" in grey and "x" * 70 not in grey      # 70 characters, the opening quote among them
+
+
+def test_a_printed_report_is_known_only_when_an_entry_matches_its_check_and_its_place():
+    ub, ts = _known("ubsan.supp"), _known("tsan.supp")
+    assert ws.known_entry_for(UBSAN_MLX, ub)["issue"] == 463
+    assert ws.known_entry_for(TSAN_GRDB, ts)["issue"] == 423
+    # The verify-2026-11-08 run: the same null call reported one frame down is NOT the entry's file.
+    assert ws.known_entry_for(UBSAN_MLX_CALLEE, ub) is None
+    assert _status(HOST_START + _started(HAPPY) + UBSAN_MLX_CALLEE + "✔ Test x passed after 0.155 seconds.\n" + GREEN_LOG, ub) == "findings"
+    # Another check in the same file, the other sanitizer's entries, an unknown check word: never grey.
+    overflow = UBSAN_MLX.replace("member call on null pointer of type", "signed integer overflow in")
+    assert ws.known_entry_for(overflow, ub) is None
+    assert ws.known_entry_for(UBSAN_MLX, ts) is None and ws.known_entry_for(TSAN_GRDB, ub) is None
+    assert ws.known_entry_for(_tsan([TEST_FRAME, PRODUCT_FRAME]), ts) is None
+    # Only the two racing accesses count, as in the runtime: not where the memory or a thread was made.
+    elsewhere = ("WARNING: ThreadSanitizer: data race (pid=1)\n  Write of size 8 at 0x1 by thread T1:\n"
+                 f"    #0 {PRODUCT_FRAME}\n\n  Previous read of size 8 at 0x1 by thread T2:\n    #0 {PRODUCT_FRAME}\n\n"
+                 f"  Location is heap block of size 48 at 0x1 allocated by thread T3:\n    #0 {GRDB_FRAME}\n"
+                 "SUMMARY: ThreadSanitizer: data race CatalogStore.swift:40 in save\n")
+    assert ws.known_entry_for(elsewhere, ts) is None
+    assert ws.known_entry_for(elsewhere.replace(f"T2:\n    #0 {PRODUCT_FRAME}", f"T2:\n    #0 {GRDB_FRAME}"), ts)["issue"] == 423
+    assert ws.known_entry_for(UBSAN_MLX, [{"check": "vptr", "pattern": "*device.cpp", "issue": 1, "code": "x"}]) is None
+    # The runtime's template: a substring unless anchored; * is any run.
+    assert ws.template_matches("DatabasePool.close", "in GRDB.DatabasePool.close() throws")
+    assert ws.template_matches("*mlx/backend/metal/device.cpp", f"{MLX_PATH}/mlx/mlx/backend/metal/device.cpp")
+    assert not ws.template_matches("^DatabasePool.close", "in GRDB.DatabasePool.close()")
+    assert ws.template_matches("^GRDB.*close$", "GRDB.DatabasePool.close") and not ws.template_matches("close$", "close()")
+    assert not ws.template_matches("DatabasePoolXclose", "DatabasePool.close"), "a dot is a dot"
+
+
+def test_a_known_report_beside_a_new_one_is_still_red():
+    log = HOST_START + UBSAN_MLX + _relaunch() + UBSAN_MLX_CALLEE + GREEN_LOG
+    p = ws.parse_log(log, _known("ubsan.supp"))
+    assert p["known_reports"] == 1 and len(p["unique_findings"]) == 1 and "NSObject.hpp" in p["unique_findings"][0]
+    assert ws.status_for(p, timed_out=False) == "findings"
+
+
+def test_merge_adds_the_restart_accounts_of_each_target():
+    app = ws.parse_log(ADDRESS_1107, _known("ubsan.supp"))
+    core = ws.parse_log(_tsan([TEST_FRAME]) + GREEN_LOG)            # swift test: no hosted bundle, no restart
+    m = ws.merge([app, core])
+    assert (m["host_restarts"], m["unexplained_restarts"], m["known_reports"], m["test_only_reports"]) == (2, 0, 2, 1)
+    assert len(m["restarts"]) == 2 and ws.status_for(m, timed_out=False) == "test-findings"
+    crashed = ws.parse_log(HOST_START + _started("c()") + _relaunch() + GREEN_LOG)
+    assert ws.status_for(ws.merge([app, crashed]), timed_out=False) == "host-crashed"
+    # A row written before the field: every restart counts as unexplained (red), never as explained.
+    old = {k: v for k, v in app.items() if k not in ("unexplained_restarts", "restarts", "known_reports")}
+    assert ws.status_for({**old, "reports": 0}, timed_out=False) == "host-crashed"
+
+
+def test_main_attributes_each_restart_by_position_end_to_end(tmp_path, monkeypatch):
+    """The real call site: main() hands the entries in force to parse_log, per target and merged."""
+    fake = tmp_path / "bin"; fake.mkdir()
+    out = tmp_path / "app-out.txt"
+    (fake / "xcodebuild").write_text(f"#!/bin/sh\ncat '{out}'\n")
+    (fake / "xcodebuild").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+
+    def run(text, name):
+        out.write_text(text)
+        logdir = tmp_path / name
+        assert ws.main(["--sanitizer", "address", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
+                        "--timeout-hours", "0.01"]) == 0
+        row = json.loads((logdir / "latest-address.json").read_text())
+        return row, alert.lines_for(row, dt.datetime.fromisoformat(row["started"]) + dt.timedelta(hours=1), 8)
+
+    row, lines = run(ADDRESS_1107, "known")
+    assert row["status"] == "ok" and row["per_target"]["app"]["status"] == "ok"
+    assert (row["host_restarts"], row["unexplained_restarts"], row["known_reports"]) == (2, 0, 2)
+    assert [r["issue"] for r in row["restarts"]] == [463, 463]
+    assert lines[0].startswith("⚪ Address Sanitizer") and "#463" in lines[0]
+
+    bug = (HOST_START + _started("misaligned()") + UBSAN_TEST_ONLY + "✔ Test misaligned() passed after 0.1 seconds.\n"
+           + _started("theOneThatCrashed()") + _relaunch() + GREEN_LOG)
+    row, lines = run(bug, "bug")
+    assert row["status"] == "host-crashed" and row["per_target"]["app"]["status"] == "host-crashed"
+    assert row["unexplained_restarts"] == 1 and row["test_only_reports"] == 1
+    assert lines[0].startswith("🔴 Address Sanitizer") and "crashed 1×" in lines[0] and "theOneThatCrashed()" in lines[0]
+
+
+def test_the_digest_words_for_explained_and_published_restarts(tmp_path, capsys):
+    # Grey, test code: the line says the host went down with it.
+    p = ws.parse_log(HOST_START + _started("x()") + UBSAN_TEST_ONLY + _relaunch() + GREEN_LOG)
+    line = alert.lines_for(_row("test-findings", **p), NOW, 8)[0]
+    assert line.startswith("⚪") and "in test code only" in line and "restarted 1×" in line
+    # A row without the account (published, or from before #469) is not given a reason it never established.
+    assert "no sanitizer report" not in alert.lines_for(_row("host-crashed", host_restarts=1), NOW, 8)[0]
+    # ok with nothing known printed and no restart stays quiet (the 11/08 rule).
+    assert alert.lines_for(_row("ok", host_restarts=0, known_reports=0, suppressed=KNOWN), NOW, 8) == []
+    # A published row carries counts only: ok + restarts is still said, grey.
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "address", status="ok", asan_issues=0, ubsan_issues=0,
+                                         host_restarts=2, reports=2,
+                                         suppressed=[{"code": "mlx-null-linked-functions", "issue": 463, "hits": None}])) + "\n")
+    alert.main(["--published", str(src), "--now", NOW.isoformat(), "--dir", str(tmp_path / "none")])
+    out = capsys.readouterr().out
+    assert out.startswith("⚪ Address Sanitizer") and "restarted 2×" in out and "#463" in out and "🔴" not in out
+
+
+def test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget():
+    """The 11/08 thread log: ~220k lines, 15 reports, 15 relaunches. One pass per
+    question; nothing quadratic in the restarts."""
+    import time
+    filler = "".join(_passed(f"test{i}()") + f"2026-11-08 05:06:43.{i:06d}-0500 VideoScan[1:2] [catalog] committed {i} rows\n"
+                     for i in range(4600))                       # ~13.8k lines per launch
+    log = HOST_START + "".join(filler + _started(f"racy{i}()") + TSAN_GRDB + _relaunch() for i in range(15)) + filler + GREEN_LOG
+    assert log.count("\n") > 200_000
+    t0 = time.monotonic()
+    p = ws.parse_log(log, _known("tsan.supp"))
+    assert time.monotonic() - t0 < 5.0
+    assert (p["host_restarts"], p["known_reports"], p["unexplained_restarts"]) == (15, 15, 0)
+    assert [r["during"] for r in p["restarts"]] == [f"racy{i}()" for i in range(15)]
+    assert ws.status_for(p, timed_out=False) == "ok"

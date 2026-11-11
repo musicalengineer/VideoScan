@@ -266,3 +266,20 @@ def test_a_run_before_the_split_has_a_null_test_count(tmp_path):
     assert row["test_only_issues"] is None
     row.pop("test_only_issues")
     pm.validate("sanitizer.jsonl", row)
+
+
+# ── #469: a printed report of a known finding is not a new one ──
+# weekly_sanitizer.py matches a printed report against the suppression entries in
+# force (known_reports). Like a test-only report it never falls back onto a red count.
+
+def test_printed_reports_of_a_known_finding_never_fall_back_onto_the_red_counts(tmp_path):
+    run = dict(ADDRESS_AFTER, reports=2, known_reports=2, host_restarts=2, unexplained_restarts=0,
+               restarts=[{"explained_by": "known", "issue": 463, "during": "MLXSafetyTests /Users/rickb"}] * 2)
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path, [run]) / "runs.jsonl")
+    assert row["status"] == "ok" and (row["asan_issues"], row["ubsan_issues"]) == (0, 0)
+    assert row["host_restarts"] == 2 and row["reports"] == 2
+    pm.validate("sanitizer.jsonl", row)
+    assert not [s for s in strings(row) if "MLXSafetyTests" in s or "/Users/" in s], "the running test's name stays on this Mac"
+    new_one = dict(run, reports=3)                                 # one more report nothing matched
+    (row,) = pm.sanitizer_rows(write_runs(tmp_path / "n", [new_one]) / "runs.jsonl")
+    assert row["asan_issues"] == 1, "a report that is neither known nor test-only still counts"
