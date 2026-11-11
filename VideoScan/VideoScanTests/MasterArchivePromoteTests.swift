@@ -165,6 +165,7 @@ struct MasterArchivePromoteSensorTests {
 
         // A job built with the ORIGINAL plan (stale) must also skip.
         let stale = PromoteToArchiveJob(plan: first.plan, model: model)
+        stale.soundMeasure = MasterArchiveTestSupport.soundPresent
         stale.start(); await stale.task?.value
         guard case .finished(let s3) = stale.state else { Issue.record("stale run: \(stale.state)"); return }
         #expect(s3.contains("skipped 6"), "\(s3)")
@@ -415,6 +416,7 @@ struct MasterArchivePromoteSensorTests {
         model.records = recs
         let plan = try #require(model.buildPromotePlan(recordIDs: recs.map(\.id)))
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.start()
         // Let the first file land, then cancel.
         while job.outcomes.isEmpty && job.state.isActive {

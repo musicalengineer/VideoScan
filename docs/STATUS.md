@@ -1,85 +1,68 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-07 (Saturday ~00:00, SigLIP 2 Frames search). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-10 (Tuesday, after the testbed night and Rick's two rulings). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
-0. **How work moves now (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
-   to `main` WITHOUT waiting to be asked once its checklist, its own tests, the touched suites and the sensor lane are
+0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
+   to `main` without waiting to be asked once its checklist, its own tests, the touched suites and the sensor lane are
    green — as ONE `--no-ff` merge commit (undo: `git revert -m 1 <merge>`) — then its branch, worktree and DerivedData
-   are deleted. Data-risk code (CLAUDE.md rule 10) still gets its Codex pass first. Run testbed scripts from an
-   up-to-date worktree of `main`, never from Rick's checkout (it lags; on 11/06 an old `m4_run.sh` ran from it).
-1. **The testbed schedule (DECISIONS 2026-11-05).** M5 Ultra 02:00 nightly suite; M4 14:00 the FULL testbed (suite, then
-   the deep gauntlet, both published, then a "done" line in `~/Library/Logs/VideoScan/testbed_latest.txt` on the M4 and
-   an `osascript` notification to the Ultra — the notification does not show; Rick to check Notifications settings).
-   M4 04:30 Swift 6 analysis lane installed 11/06. Both runs test `main` from GitHub, never a checkout.
-2. **11/06's first 14:00 run was RED, all causes fixed and merged the same day:** the gauntlet's new `swift test list`
-   cross-check compared an unfiltered listing with filtered runs (`9fd8afb6d`; M4 re-run AMBER 16:58); a red test
-   pinning a helper-status race sat on `main` since 11/04 (`d67a5686c`); two production-shape tests encoded a one-time
-   catalog state (`a27aab8d7`); the gauntlet inventory went invalid after the metrics merges (`0f3421c6c`). Metrics page
-   stale cards fixed (`48f73c291` CI history stream, `7a7355737` Codex count reads the archive, `44b8daffe` summary
-   rebuilt after the 14:00 run). Expect AMBER tonight and tomorrow (7 known issues, 880 unadapted suites, ui not run).
-3. **Merged 11/05–11/06 for Rick's spot test (Release):** Realtime Content Analysis viewer (`ae1d2c653`; Content
-   Analysis ▸ Realtime…, or right-click an Analyze row in MFO), the Realtime Catalog Scan tiles (Not media / Gone / Not
-   accessible / Failed = Errors; `a5674d9dd`), the file dossier view, the Results sheet, the Whisper red/green smoke.
-   Reports and mockups: `~/dev/VideoScan/.scratch/kept-2026-11-06/`.
-   **Overnight 11/06→07 (experiment, streamlined process):** the **Observations window** — Content Analysis ▸
-   Observations…, the Realtime window's "See what we learned" after a pass, or right-click rows ▸ Observations…: what the
-   machine found across many files in three chevrons (Technical · Patterns & events · Across the collection), one search
-   over every observation (captions, transcripts, on-screen text, eras, people found, events, format readings), a filter
-   per tier, hits open the file or its dossier. Machine observations only — never a file name, note or tag (Rick 11/06).
-   Design: `docs/design/file_dossier_view.md` Part II. Report and mockups: the night-shift worktree's
-   `.scratch/reports/observations-2026-11-07.md`.
-   **Then (11/07, experiment for Saturday's demo):** the window's **Words | Frames** switch — SigLIP 2 text→frame search,
-   native MLX Swift on the GPU (no Python), 8 frames per video in its own rebuildable cache (never the catalog), built by
-   the `Index Frames` MFO job (Index Frames… in Frames mode; Pause/Stop; re-run resumes). Item 1 of §II.7 (text
-   embeddings over observations) is still designed only. Report: `.scratch/kept-2026-11-07/reports/siglip-2026-11-07.md`.
-   **Then (11/07): Hallie's brain choice** — Settings ▸ Hallie ▸ Brain: Local (Ollama, qwen3.8:27b-mlx, default) or Cloud
-   (Anthropic, opt-in, key from the Keychain); one seam for every asking path, the remote gate refuses family media
-   (canary in the sensor lane), a cloud answer is always labelled "answered by Cloud · <model>". DECISIONS 2026-11-07.
-   **Then (11/07 evening): the daily file check** — the app runs Validate Catalog itself at 03:30 (catch-up at launch or
-   when idle if over 24 h old; an MFO row with Pause/Stop, "Validate Catalog: daily check — …" lines in catalog.log);
-   the Files/Database lines' backstop is 7 days, not 24 h; the Backup Catalog pill and the viewer's sync chip are 7-day
-   reminders (yellow, no orange/red). DECISIONS 2026-11-07.
-4. **Catalog went red for ~3 min at 17:02 (#441):** Update runs the catalog check BEFORE Detect Duplicates, so 262
-   sampled-hash groups whose members now have different full hashes (revealed by #434's re-hashing) turned the chip
-   Unhealthy until the next check; Detect Duplicates had already fixed them a second later. Fix: verify last.
+   are removed. Data-risk code (CLAUDE.md rule 10) still gets its Codex pass first. Run testbed scripts from an
+   up-to-date worktree of `main`, never from Rick's checkout.
+1. **The testbed schedule (DECISIONS 2026-11-05).** M5 Ultra 02:00 nightly suite; M4 14:00 the FULL testbed: app suite,
+   deep gauntlet, then (new 11/10) the testbed's own Python tests, all published, then one "done" line in
+   `~/Library/Logs/VideoScan/testbed_latest.txt` on the M4. M4 04:00 coverage, 04:30 Swift 6 analysis lane, 05:30
+   adversarial confirm. Kick a full M4 run by hand: `ssh ricksm4.local 'launchctl kickstart
+   gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min).
+2. **State of `main` on the testbed, 11/10 (commit `4dc4eb2a6`):**
+   - M4 app suite **GREEN**: 13,393 passed, 0 failed. Gauntlet **AMBER** (7 known issues, 894 unadapted suites, ui not
+     run) — AMBER is the expected state until those are adapted. A skipped test now makes its stage AMBER with the
+     test named, not RED (Rick 11/10); it had been RED four days for two SigLIP tests that
+     cannot run in its sandbox (now listed as blocked, with the reason).
+   - M5 Ultra nightly: 13,397 passed, **1 failed** — `persistVerdictPathNeverWritesTheRealCatalog()`. A false alarm: the
+     only file that moved was `catalog.sqlite-shm`, which the Background helper touches by reading. Fixed in
+     `fix/testbed-first-night` (the isolation snapshot no longer counts a `-shm`; the database and `-wal` stay watched).
+   - M4 script tests, first run ever: 1,990 passed, **3 failed**, all three the tests' own assumptions (two assumed a
+     Mac with no sanitizer logs; one waited a fixed half second for a stub server). Fixed in the same branch.
+3. **What the metrics page now does (merged 11/10, `4dc4eb2a6`):** each Mac's row names its failed tests; the gauntlet
+   table has a "Why, and which tests" column; a page summary older than the newest published run says BEHIND; the
+   Ultra's nightly rebuilds the page summary itself (before, only M4 jobs did, so a failed M4 publish left the page
+   stale); a publish retries a transient git failure (5 s, 20 s, 60 s) instead of dropping the row. The Ultra's 02:00
+   run of 11/10 still ran the previous script (it pulls after it starts); the first run on the new script is 11/11.
+4. **Merged 11/09–11/10 for Rick's spot test (Release):** Settings ▸ Background — "Background Content Analysis
+   <state> (<build date>)" with one Start / Stop / Restart button (`25bcbab2e`); Make Public / Make Private, schema
+   v1.15 (`0678bdc56`); #422 a journal unit lands all or nothing (`dde3e2b4f`).
+5. **P0/P1 triage, 11/10 (19 open; full notes `.scratch/p0-p1-triage-2026-11-10.md`):** still bugs — #423, #413, #412,
+   #357, #356, #351, #344, #339, #338. Fixed tonight — #422, #440. Look fixed in the code, close after Rick's check —
+   #327, #354, #353, #342, #345 (one real-data check). Not bugs as filed — #360, #343, #337. Needs Rick — #332.
 
 ## Next (in order)
-1. **#441** Update's verify runs last (red test: an Update that leaves a clean catalog never goes red).
-2. **#434** rescans throw away known whole-file hashes and re-hash unchanged files (TB per rescan). Catalog writer →
+1. **Testbed, what tonight did not fix (BACKLOG, 11/10 lines):** the M4 adversarial review has been off since 11/07
+   (`claude` exits 1 there); Core tests fail inside the M4's 04:00 coverage build (timing); the Ultra's nightly builds
+   Rick's checkout instead of a clean clone of `main`; the warning ratchet cannot see a warning behind a warm build;
+   the M4's catalog copy is still schema 14.
+2. **Observations module C → A/B** (Rick 11/09; Codex as reviewer, Console API key allowed). Not started.
+3. **#434** rescans throw away known whole-file hashes and re-hash unchanged files (TB per rescan). Catalog writer →
    rule 8 writer tests + production-shape test on a `.backup` + Codex pass before merge.
-3. **C → B module lift using Rick's Anthropic Console API credits** (Rick 2026-11-06; ~$197 left; key in Keychain
-   item `anthropic-api-key`, no dedicated key wanted). A module with any function over CCN 30 is capped at C
-   (docs/index.html GRADE.capAtC); 15 functions hold 8 modules at C (list: `ci/baselines/complexity_debt.json`, ccn > 30;
-   check each module's other sub-grades before promising B). Build `scripts/claude_api_session.sh`: reads the key from
-   the Keychain, sets `ANTHROPIC_API_KEY`, opens a `claude` session on a brief (billed to the Console, usable when the
-   plan's Fable/Claude run out Wed/Thu). One function per merge: characterization tests first, split to ≤ 25, same tests
-   green. Non-data-risk first: InspectorPanel.formatAllMetadata, CatalogContent.previewPlayer, FindTagCLI.run,
-   TreeIdentityDeriver.deriveWithResolvedPointerPins, GedcomFamilyGraph.applyingFactOverlay, BirthplaceUnitResolver
-   Scan.apply. Data-risk later with safety-critical + Codex: ArchiveAngel ×5, ArchiveVolumeProtection.make,
-   DeleteDuplicatesJob.finishRun, runRelocate, POIStorage.migrateToUUIDFoldersIfNeeded.
-4. **`tools/claude_review.py`**: a fresh-context reviewer on the same API key, twin of `tools/codex_review.py` (same brief
-   and output contract), code and diffs only (rule 13), per-review cost cap and running total, reuses
-   `scripts/hallie_e1/costs.py` prices. Batch API for overnight reviews.
-5. Issues from 11/06: #435 (cancelled probe shows Failed; vanished extensionless file audited wrong), #436 (gauntlet
-   Python adapter — four script regressions stay blocked), #439 (nightly calls expectation failures "crashed"),
-   #440 (M4: `scriptedSessionsMatchTheirRecordedSnapshots` failed).
-6. Carried: the worker records its exit signal (jetsam must not count as a try); `CaptionRunnerError` on Avid MXF;
-   #418; #413, #412, #408.
+4. **Open P1s that need more than a fix:** #344 (needs a schema change — Rick approves), #338 (data-risk, Codex pass).
+5. **`tools/claude_review.py`**: a fresh-context reviewer on the Console key, twin of `tools/codex_review.py`, code and
+   diffs only (rule 13), per-review cost cap.
+6. Carried: #435, #436 (gauntlet Python adapter; the daily script-tests lane now covers the gap outside the gauntlet),
+   #439, #418, #408; the worker records its exit signal; `CaptionRunnerError` on Avid MXF.
 
 ## Waiting on Rick
+- **Triage:** close #327, #354, #353, #342, #345 after a look; #332.
 - **Realtime viewer questions:** (1) should Stop confirm first? (2) helper counts: today, last 24 h, or since start?
 - **"Gone" tile wording/icon** (Realtime Catalog Scan).
 - **Notifications:** allow Script Editor notifications on the Ultra, or pick another route for the 14:00 done line.
 - Carried: the "Does it settle?" checklist line; #415; M4 `OLLAMA_HOST`; whether `run_catalog_tests.sh` follows the
-  AMBER rule; #327's two rulings; #332.
+  AMBER rule; #327's two rulings.
 
 ## Ideas parked (BACKLOG)
-- Layer 3's north star (Rick 2026-11-06): the Rick & Donna Breen family's story told by evidence, answerable by plain
-  questions; prerequisites are people on footage, events with dates, speaker identity.
-- Living family in the Family Tree view (sons, siblings) from a local-only store, behind a "show children/siblings"
-  chevron — needs a schema addition and Rick's approval.
+- A stable installed home for the app and its background helper (Rick 11/09).
+- Make Public and Show in Photos; Publish adds an optional linked Apple Photos import (Rick 11/09).
+- Mutation testing, incremental (Rick 11/08).
+- Layer 3's north star (Rick 2026-11-06): the family's story told by evidence, answerable by plain questions.
 
 ## Dates
-- Mid-November: grade B or better in every module (the C → B lift above). 2026-12 soft / 2027-01 target: Public view
-  link for family (Charter §5).
+- Mid-November: grade B or better in every module. 2026-12 soft / 2027-01 target: Public view link for family
+  (Charter §5).

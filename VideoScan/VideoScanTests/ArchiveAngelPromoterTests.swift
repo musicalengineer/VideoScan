@@ -178,6 +178,7 @@ struct ArchiveAngelPromoterIdentityTests {
         let promoter = ArchiveAngelPromoter()
         let center = MediaFileOperationsCenter()
         let job = promoter.promote(plan: &plan, model: model, center: center) { _ in }
+        job?.soundMeasure = MasterArchiveTestSupport.soundPresent
         #expect(job == nil)
         #expect(plan.entries[0].status == .failed)
         #expect(plan.entries[0].failure?.contains("size changed") == true)

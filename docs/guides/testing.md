@@ -253,7 +253,9 @@ commonest drift early: the pre-commit hook (`--staged`) refuses a commit that
 adds a test file without a stage in the staged manifest, and CI preflight
 (`--all`) does the same over the whole tree. It only checks that each test
 file is assigned; declaration lists, suites, selectors and floors are still
-`inventory.swift --validate`'s job. An `assignments[].blocked_reason` and matching
+`inventory.swift --validate`'s job — and the sensor lane (`scripts/run_sensors.sh`)
+runs that validator on every run (#400), so a test added to an existing file
+without a manifest edit is RED before the push. An `assignments[].blocked_reason` and matching
 `stages[].blocked` entry explain each unadapted test. Normal hosted suites
 without direct filesystem/global-state dependencies are selected; tests with
 unadapted positive gates, real data, persistence, or shared process state are

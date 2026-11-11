@@ -60,6 +60,7 @@ struct MasterArchiveHardeningTests {
         let plan = try #require(model.buildPromotePlan(recordIDs: [rec.id]))
         probe.uuid = "UUID-B"
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.start(); await job.task?.value
         guard case .failed(let msg) = job.state else { Issue.record("expected refusal, got \(job.state)"); return }
         #expect(msg.contains("NOT the Master Archive volume"), "\(msg)")
@@ -116,6 +117,7 @@ struct MasterArchiveHardeningTests {
         #expect(model.pendingPromoteRequest == nil && model.pendingPromoteWithoutMaster == nil)
         let plan = try #require(model.buildPromotePlan(recordIDs: [rec.id]))
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.start(); await job.task?.value
         guard case .failed(let msg) = job.state else { Issue.record("expected refusal, got \(job.state)"); return }
         #expect(msg.contains("read-only"), "\(msg)")
@@ -402,6 +404,7 @@ struct MasterArchiveHardeningTests {
         model.scanTargets.removeAll { model.isMasterArchive($0) }
         #expect(model.resolvedMasterArchiveTarget() == nil)
         let job = PromoteToArchiveJob(plan: plan, model: model)
+        job.soundMeasure = MasterArchiveTestSupport.soundPresent
         job.start(); await job.task?.value
         guard case .failed(let msg) = job.state else { Issue.record("expected refusal, got \(job.state)"); return }
         #expect(msg.contains("could not be matched"), "\(msg)")
@@ -414,11 +417,13 @@ struct MasterArchiveHardeningTests {
         // … and if THAT one is retired, promote is refused for retirement (not fail-open).
         alias.retiredAt = Date()
         let job2 = PromoteToArchiveJob(plan: plan, model: model)
+        job2.soundMeasure = MasterArchiveTestSupport.soundPresent
         job2.start(); await job2.task?.value
         guard case .failed(let msg2) = job2.state else { Issue.record("expected refusal, got \(job2.state)"); return }
         #expect(msg2.contains("retired"), "\(msg2)")
         alias.retiredAt = nil
         let job3 = PromoteToArchiveJob(plan: plan, model: model)
+        job3.soundMeasure = MasterArchiveTestSupport.soundPresent
         job3.start(); await job3.task?.value
         guard case .finished = job3.state else { Issue.record("\(job3.state)"); return }
         #expect(MasterArchiveTestSupport.archivedFiles(sb).count == 1)

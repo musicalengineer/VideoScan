@@ -106,10 +106,37 @@ class ArgumentTests(unittest.TestCase):
         r['amber_reasons'] = ['6 stages blocked (912 unadapted suites)']
         self.assertEqual(ms.gauntlet_verdict(r, 0), ('AMBER', '6 stages blocked (912 unadapted suites)'))
 
+    def test_gauntlet_skips_are_amber_and_named(self):
+        """Rick 2026-11-10: a skipped test is AMBER with the test named, not RED."""
+        r = self._result('amber', unit=dict(status='amber', skipped=2, reason='2 skipped tests — named, not a pass',
+                                            skipped_tests=['VideoScanTests/A/one()', 'VideoScanTests/B/two()']))
+        self.assertEqual(ms.gauntlet_verdict(r, 0),
+                         ('AMBER', '2 skipped in unit: VideoScanTests/A/one(), VideoScanTests/B/two()'))
+        r['stages'][0].update(skipped=9, skipped_tests=[f'T/s/t{i}()' for i in range(7)])
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[1],
+                         '9 skipped in unit: T/s/t0(), T/s/t1(), T/s/t2(), T/s/t3(), T/s/t4() +4 more')
+        r['stages'][0].update(skipped=1, skipped_tests=[])
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[1], '1 skipped in unit')
+
     def test_gauntlet_failure_beside_known_issues_is_red(self):
         r = self._result('failed', unit=dict(status='failed', reason='test failures'),
                          regression=dict(status='amber', known_issues=7))
         self.assertEqual(ms.gauntlet_verdict(r, 1), ('RED', 'unit failed: test failures'))
+
+    def test_gauntlet_red_names_the_tests_behind_it(self):
+        """RED 2026-11-10: the done line said "unit failed: unexpected skipped tests" for
+        four days and never said which tests."""
+        r = self._result('failed')
+        r['stages'][0].update(status='failed', reason='unexpected skipped tests',
+                              skipped_tests=['VideoScanTests/A/one()', 'VideoScanTests/B/two()'])
+        self.assertEqual(ms.gauntlet_verdict(r, 1),
+                         ('RED', 'unit failed: unexpected skipped tests [skipped: VideoScanTests/A/one(), VideoScanTests/B/two()]'))
+        r['stages'][0].update(reason='test failures', skipped_tests=[], failed_tests=[f'T/s/t{i}()' for i in range(7)],
+                              failed_tests_truncated=3, incomplete_tests=['T/s/late()'])
+        words = ms.gauntlet_verdict(r, 1)[1]
+        self.assertIn('failed: T/s/t0(), T/s/t1(), T/s/t2(), T/s/t3(), T/s/t4() +5 more', words)
+        self.assertIn('did not finish: T/s/late()', words)
+        self.assertEqual(ms.stage_names({}), '')
 
     def test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red(self):
         r = self._result('failed', regression=dict(status='failed', reason='executed count below expected floor 426'))

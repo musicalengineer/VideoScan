@@ -145,7 +145,20 @@ else:
         self.assertIn('UI not run (phase 2)', self.completed.stdout)
         self.assertIn('GAUNTLET AMBER', self.completed.stdout)
         self.assertNotIn('GAUNTLET PASSED', self.completed.stdout)
-        self.assertEqual(len(self.completed.stdout.splitlines()), 1)
+        # One verdict line (SUMMARY / TIDY lines follow it and are not verdicts).
+        verdicts = [l for l in self.completed.stdout.splitlines() if l.split()[1:2] in (['PASSED'], ['AMBER'], ['FAILED'])]
+        self.assertEqual(len(verdicts), 1, self.completed.stdout)
+        # The summary row (Rick 2026-11-08): totals and names, no paths into the run dir;
+        # a queued publish keeps the run (result.json) and says why.
+        row = json.loads((self.root / 'results' / 'history.jsonl').read_text().splitlines()[-1])
+        self.assertEqual(row['run_id'], self.result['run_id'])
+        self.assertEqual(set(row['totals']), {'passed', 'failed', 'skipped', 'known_issues', 'unknown'})
+        self.assertEqual(row['totals']['failed'], 0)
+        self.assertNotIn('roots', row)
+        self.assertEqual(row['new_failures'], [])
+        self.assertTrue(all('failed_tests' in s and 'artifacts' not in s for s in row['stages']))
+        self.assertEqual(self.result['totals'], row['totals'])
+        self.assertIn('GAUNTLET TIDY kept run (publish queued', self.completed.stdout)
 
     def test_dry_run_prints_plan_without_building_or_writing_results(self):
         self.run_runner('--dry-run')
@@ -169,7 +182,8 @@ else:
     def test_poisoned_home_and_roots_replaced_in_child_and_xctestrun(self):
         cache_keys = ['CLANG_MODULE_CACHE_PATH', 'SWIFT_MODULECACHE_PATH',
                       'SWIFTPM_MODULECACHE_OVERRIDE', 'XDG_CACHE_HOME']
-        self.run_runner('--only', 'unit', environment={
+        # --keep-run: the end-of-run tidy would remove DerivedData, whose .xctestrun is checked below.
+        self.run_runner('--only', 'unit', '--keep-run', environment={
             'HOME': '/private/tmp/poison-home', 'CFFIXED_USER_HOME': '/private/tmp/poison-home',
             'VS_GAUNTLET_CATALOG_ROOT': '/private/tmp/poison-catalog', 'VS_UI_TEST': '0',
             **{key: '/private/tmp/poison-cache' for key in cache_keys}})
@@ -191,13 +205,44 @@ else:
         self.assertEqual(env['HOME'], self.result['roots']['home'])
         self.assertEqual(env['VS_UI_TEST'], '1')
 
-    def test_missing_structured_counts_and_skips_fail(self):
-        self.config.update(unit={'malformed': True}, regression={'skipped': 1})
+    def test_missing_structured_counts_fail(self):
+        self.config.update(unit={'malformed': True})
         self.run_runner()
         self.assertEqual(self.stage('unit')['status'], 'failed')
         self.assertIn('counts unavailable', self.stage('unit')['reason'])
-        self.assertEqual(self.stage('regression')['status'], 'failed')
-        self.assertIn('skipped', self.stage('regression')['reason'])
+
+    def test_a_skipped_test_is_amber_and_said_not_red(self):
+        # Rick 2026-11-10: "amber with test name". Until then one skip was RED
+        # ("unexpected skipped tests"): two SigLIP skips held the gauntlet RED 11/06-11/09.
+        self.config.update(regression={'passed': 2, 'skipped': 1})
+        self.run_runner()
+        regression = self.stage('regression')
+        self.assertEqual(regression['status'], 'amber')
+        self.assertEqual(regression['reason'], '1 skipped test — named, not a pass')
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.completed.returncode, 0)
+        self.assertIn('1 skipped in regression', self.result['amber_reasons'])
+        self.assertIn('GAUNTLET AMBER', self.completed.stdout)
+
+    def test_a_skip_beside_a_known_issue_says_both(self):
+        self.config.update(unit={'passed': 5, 'skipped': 2, 'known': 1})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'amber')
+        self.assertEqual(self.stage('unit')['reason'],
+                         '2 skipped tests — named, not a pass; 1 known issue (withKnownIssue) — tracked, not a pass')
+
+    def test_a_failure_beside_a_skip_is_red(self):
+        self.config.update(unit={'passed': 5, 'skipped': 2, 'failed': 1})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertEqual(self.stage('unit')['reason'], 'test failures')
+        self.assertEqual(self.result['status'], 'failed')
+
+    def test_skipping_under_the_floor_is_still_red(self):
+        self.config.update(unit={'passed': 1, 'skipped': 4})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertIn('below expected floor', self.stage('unit')['reason'])
 
     def test_known_issue_is_counted_and_named_not_a_pass(self):
         # 2026-09-28 baseline: one withKnownIssue (#567) made the Hallie stage

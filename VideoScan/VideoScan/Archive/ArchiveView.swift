@@ -510,6 +510,16 @@ struct ArchiveView: View {
             }
             .disabled(model.isReadOnly)
             .help("Read each video once and keep its picture fingerprint in the catalog, archived files first. Nothing on disk is changed. Can run overnight; Pause / Stop any time.")
+            // Estimated provenance (Rick 2026-11-10): a rule reads the stored
+            // facts of every archived video and marks the capture masters as
+            // ESTIMATED. On demand only; an MFO job Rick starts.
+            Button(ProvenanceEstimateWords.estimateTitle) {
+                _ = fileOpsCenter.startedByUser { $0.startEstimateProvenance(store: model.provenanceEstimates) }
+                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+            }
+            .disabled(model.isReadOnly)
+            .help(ProvenanceEstimateWords.estimateHelp)
+            .accessibilityIdentifier("archive.actions.estimateProvenance")
             // One-time catch-up (Rick 2026-09-27): Promote locks every new
             // file; this locks the ones promoted before locking existed. Gone
             // once it has completed cleanly (marker in App Support).

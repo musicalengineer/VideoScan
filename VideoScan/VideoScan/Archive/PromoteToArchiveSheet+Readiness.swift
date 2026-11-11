@@ -64,7 +64,7 @@ extension PromoteToArchiveSheet {
                         .toggleStyle(.checkbox)
                         .help("\(plan.unprobeableCount) file(s) could not be probed (no decodable streams). The archive would hold bytes nobody has decoded — promote only if you know what they are.")
                         .accessibilityIdentifier("promote.overrideUnprobeable")
-                        Text("Un-probeable files are the only thing that stops a promotion. Everything else is a note for later — the original is always preserved byte-for-byte.")
+                        Text("Two things stop a promotion: an un-probeable file, and missing, silent or damaged sound (checked when you promote). Everything else is a note for later — the original is always preserved byte-for-byte.")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }

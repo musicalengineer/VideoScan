@@ -43,6 +43,7 @@
 - Nightly adversarial confirm step must build at the reviewed head, not current main (#247).
 - Change-driven staleness for the Files line: a drive mount, or FSEvents under catalogued roots since the last check's event id, marks that drive or folder stale and the worker re-checks only it (Rick 2026-11-07, step 2 of the daily file check; not built).
 - Validate Catalog… tier 5 should run the full `PRAGMA integrity_check` (today only `quick_check` at open); report it as its own stamp; nightly too (Rick's SQLite operations matrix, 2026-11-01).
+- A silent 5.1 track is stored as ok / "surround audio" without its levels being read (`AudioBalanceClassifier.classify` returns `.multichannel` on channel count alone), so it passes the Archive Angel's recommend-time `noSound` floor; Promote's sound gate reads the levels and refuses it, the stored verdict and the recommender do not (found 2026-11-10).
 
 ## Provenance (top of mind)
 - Carrier / capture tables migration — `capture_setups`, `carriers`, `capture_events`, `carrier_spans`, `file_provenance` — its own additive migration and Rick's approval (`provenance_assertions` shipped in v14: Done).
@@ -60,6 +61,8 @@
 - `provenance_assertions.by = 'rick'` is really "the admin user" (Rick, 2026-11-01, on approving v14): one day replace the literal with the owner's identity (a `users`/owner row or a constant the app sets), by an additive migration that keeps old rows readable; nothing until a second user exists.
 
 ## Events, Compare Media, segments
+- Multi-signal file signature: tell SAME footage from RELATED footage by several signals together, not one. Detail: closed GH #225.
+- Event folders: a representative photo as the folder icon, and Finder-style colour tags. Detail: closed GH #331.
 - Events page gets the Compare Media verdict band + two spools per suggested group ("same occasion or different years?" pre-answered); constellation view.
 - Fold the Streams table and Compare Footage into Compare Media.
 - New evidence lines, no new rungs: video barcode for silent footage, SigLIP 2 scene words, speaker similarity.
@@ -92,12 +95,15 @@
 - (ruling) Clear the 959 legacy "manually deleted" labels.
 - #259 duplicate detector over-claims same-size re-exports; remember refusals; Reclaim numbers inflated.
 - Archive-internal cleanup of redundant versions (keep: original + preservation + access + edit), per-item OK; the invariants need amending to match (DECISIONS contradiction 4).
+- Archive browsing by title, not by file (Rick 2026-11-10, thinking out loud): one title holds its versions (original, access, improved, editable, v2), best shown first, the rest one click away; and one source tape holds its clips — 1984 is ONE VHS tape (about 1 h 33 min) showing as 12 archive videos: the whole transfer plus clips of five occasions, each with versions, while 1985–1987 are empty. Two relationships, not one: a VERSION is the same footage treated differently; a CLIP is part of a longer transfer (containment with a range, DECISIONS 9/23). The 11/10 originals ruling says which versions may be retired.
 - Only-copy badge in Triage/Catalog; codec ladder table; DRM movies suggested "not family media".
 - "Interesting family video" score for Triage ranking (duration, people present, not a transition/test pattern) — a RANKING, never a scan gate: measured 2026-10-25, 7,506 of 11,468 live rows are under 30 s and 649 of those Rick marked Important, so duration alone is not junk evidence.
 - Run MediaAnalyzer scoring on scan (today it runs only from Triage's Analyze button) — policy change, Rick's call.
 - (ruling) Delete `ArchiveRefile` (predecessor of Update…).
 
 ## Catalog UI and folders
+- Open an audio-only file in an audio editor the user picks. Detail: closed GH #127.
+- Right-click a folder ▸ Validate Folder: every file present, hashed, with sound (Verify for a whole folder). Detail: closed GH #352.
 - Folders, next in order: drag files onto a folder, rename, remove (ungroup, files stay), person folders (green), other (grey); relax exclusive events for person folders.
 - Sound relation `⊂` clip-of within an event; pairwise audio match cached per event.
 - Promote from a folder member offers archive-original / retire-original / remove-other-copies through Cleanup lanes.
@@ -108,6 +114,8 @@
 - Proposed rename (Rick to rule): Catalog ▸ "Update Catalog…" → "Relink Moved Files…" — the verb rescans and relinks after files moved outside the app; "Update" reads as a schema migration, which is automatic at open and never a menu verb (2026-11-01).
 
 ## Archive
+- Misfiled filter in the Archive tab, and a Catalog badge "filed under X · dated Y" (deferred from Update…, 2026-09-27). Detail: closed GH #213.
+- Archive health: verify first, then a reversible remove. Detail: closed GH #223.
 - Off-site copy, verifiable: "Export critical set" (BagIt + checksums), off-site/cloud tracked per archive file (#249, target 2026-11-01).
 - #294 identity drift (17 archived rows read Not Yet Archived, 60 dangling lineage, stale manifest ids) · #286 promote/refile hardening · #221 inspector date edit on an archived record opens Update… · #280 access copies for archived originals · #170 archive portability / Adopt on the Ultra.
 - Portable archive a family can read without VideoScan: `Provenance_README` / Living Will stewardship page.
@@ -128,9 +136,11 @@
 - Pin `.claude/scripts/session_start.sh`'s lane lines with a test (the retired morning-line tests covered the old hook).
 
 ## Archive Angel (all hang on Q8)
+- RAM scratch tier (Off / 8 / 16 / 32 GB): read the original once into RAM and run every step from it. Detail: closed GH #174.
 - Consolidate to one rule set and façade; wise-design stages 4–7; curation phases (fatigue, "New to you", the wings-and-bell reward); `default:` arms that swallow new floors (C07 plan); #231 Angel Checks gates stale across an await.
 
 ## People (Q9), Family Tree, Hallie (Q7)
+- Parked: face recognition research (closed GH #6); person-finder engine follow-ups, engine demoted 2026-09-26, fix only when the People tab needs it (closed GH #148).
 - Hallie's brain placement (Rick 2026-10-27, investigating): bigger model on the M4 served to the Ultra over the Thunderbolt Bridge, vs. a huge model on the Ultra (96 GB) as an experiment. Today: Ultra local first (`archivist.ollamaHosts`); code `OllamaEndpoints.defaultHosts` still M4-first.
 - Hallie presence (reviewer 2026-10-25, pinned as-is by `HalliePresenceLikeCharacterizationTests.treeOnlyKinshipRebindsThePersonButKeepsTheKinWord`): a GEDCOM-only resolution of "my dad" keeps `dad` as a content word so the answer relaxes instead of listing Dad's videos; the People-tab path marks the kin word spent. Intended or a gap? Also: `retryUntaggedNamesAsWords` takes 8 parameters — a request struct; and the Hallie characterization file sits in the gauntlet unit stage while its siblings are in `hallie` (a manifest move).
 - People: move clip compilation to a future "Create" window; #84 merge two profiles; #133 People column/tags reliability; a rejected tag must never be re-proposed (the FamilyTagging bug the provenance trigger fixes for its own tables).
@@ -139,7 +149,7 @@
 - (idea, Rick 2026-11-05) **Living family in the Family Tree view:** Rick's sons (Dan, Mark, Matt, Timmy) and his brothers and sisters are not in the GEDCOM and stay out of FamilySearch (privacy; spouses later). A local-only store of living family, never exported, never sent to a cloud model (rule 13), merged into the tree view behind a "show children / show siblings" chevron or right-click. Needs a schema addition (Rick approves).
 - A7 Household Roster, next rungs (measured 2026-10-30, `docs/reviews/household_roster_feasibility.md`): co-presence as a constraint, an identity-bearing attribute, and the People-tab data gaps. Detail: `docs/archive/backlog_detail_2026_11_01.md` §"A7 measured 2026-10-30".
 - `A7 Household Roster` (Charter §4 Claude Feedback, 2026-10-30): people as a constraint solver — date window × tree (who was alive, ages, sex, household, likely camera operator) × VLM attribute perceptions (adult/child, age band, sex, infant present) → one or two named candidates with a written reason, proposed to Rick, never written by the machine; no percentage until calibrated. Add to the video-LLM ladder after A5.
-- **Public view / web interface** (Rick 2026-10-30, Charter §5; target Jan 2027): a Public tab of media Rick marks "Publish", the tree in full, Hallie for guests; folds #244 and #42; the family-viewer ruling first; design when Rick says so. Detail: `docs/archive/backlog_detail_2026_11_01.md` §"Public view / web interface".
+- **Public view / web interface** (Rick 2026-10-30, Charter §5; target Jan 2027): a Public tab of media Rick marks "Publish", the tree in full, Hallie for guests; folds #244 and #42. Added 2026-11-09, two right-click verbs on an archived video: (1) **Make Public**, meaning the whole family may watch it — one bit, private by default (DECISIONS 2026-11-09). BUILT 2026-11-09: the bit, the Archive row menu items, the globe; NOT built: the public/private changes as lines in the file's journey (Rick 11/09; the history is in `public_marks`, the journey builder is synchronous over records and does not read it yet), a one-action "make everything private" (wanted only once something is served), a Public filter in the Archive tab, and anything that serves the bit (the web view must be deny-by-default on it); (2) **Show in Photos** (Mac only): link the compact access copy (#280) into a separate archive Photos library, never the master (a 65 GB master never enters Photos). It is a referenced import through AppleScript, since PhotoKit always copies; one album per decade. Goal: watch on the living-room TV through Apple TV. Check first that Apple TV can play a Mac's referenced Photos videos (Media Sharing); the fallback is the TV app on Home Sharing, or AirPlay. Photos reads the date embedded in the file, so the access copy carries the archive date. The family-viewer ruling comes first; design when Rick says so. Detail: `docs/archive/backlog_detail_2026_11_01.md` §"Public view / web interface".
 - Hallie: agent lane + E1 harness (cloud model in a bounded tool loop, Swift verifier, data-class gate); compound/filter/count queries (QueryAST v3); family web access read-only (#244) and iPad browse (#42) gated on the family-viewer ruling.
 - Family Tree crawling (Rick, 2026-10-31): a model-driven job that gathers public records for people in the tree; could live in the background
   service; needs a privacy ruling (what leaves the machine) before any design.
@@ -151,6 +161,9 @@
 - Improve (Nov–Dec): QTGMC/VapourSynth restoration, local upscale/interpolation (#299); Trim (#154); A/V sync check on improved versions (#309).
 
 ## Process and tooling
+- Concurrency stress tester: Compare Footage + Hallie Q&A + captions at once, with a memory red/green. Detail: closed GH #270.
+- Mutation testing, incremental (Rick 11/08): start with a LIVE walkthrough Rick can follow (one existing, appropriately small test; show it green, mutate the code under test — flip a `<`, drop a line, return early — rerun, watch it go red or survive); then mutation passes on data-risk modules (Archive, delete/prune) as an overnight theme. A surviving mutant = a test that doesn't check what we think. Not a lane until it proves its worth.
+- M4 testbed guard skips by DATE, not by commit (found 2026-11-10): `scripts/nightly_guarded.sh` saw a green run from a 01:40 manual kick and skipped the 14:00 run, so the day's seven merges were never run on the M4. It should run again when `main` has moved since the green run; there is no force option either.
 - UPS wattage menu-bar app (Rick 2026-10-27, just for fun): live watts from the CyberPower UPS over HID, logged to SQLite for weekly/monthly kWh. Detail: `docs/archive/backlog_detail_2026_11_01.md` §"UPS wattage menu-bar app".
 - Ultra move follow-ups (2026-10-27): `migrate_data.sh` skips app preferences (Storage list, dup-keep precedence, scan options lived only there); `install.sh` prints "ready" after a stopped preflight; `TimingBudget` treats all 30 Ultra cores as equal (10 Super + 20 Performance) so a busy run reads as quiet → strict false reds; TreeWalkScale wall-clock flake (work 1.0 s, wall 24.6 s at load 42/16); M4's nightly role as headless test host; code defaults `defaultMasterHostname` → RicksUltra.local once declared.
 - Swift 6 test-host crash follow-ups (2026-10-25, fix 2ab067d62): confirm `MasterArchivePromoteTests.swift:350` (`var poisoned` mutated in a `progress:` closure) is called on the test's own thread; `nonisolated(unsafe) var` on a CAPTURED LOCAL does not silence the runtime isolation check (BoundaryAuthorization crashed with it); `-test-iterations N` does not repeat Swift Testing tests on this Xcode — repeat runs need N separate invocations.
@@ -199,6 +212,7 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
   sampler, perceptual video hash and SigLIP embeddings as dedup tiers 2–3, constraint propagation from birthdates; events stay rulings
   (not DBSCAN); cloud offload stays a §9 ruling and never carries family pixels (rule 13).
 - Analyze tab: a row/button to start the era job (today: `--enqueue era` / `--run era` from the helper binary only).
+- A stable home for the installed app and its helper (Rick 2026-11-09: "keep the BG process executable somewhere so I don't keep accidentally cleaning & rebuilding it"): today launchd resolves `VideoScan Background` inside whichever build product holds bundle id `Rick-Breen.VideoScan`, so Clean Build Folder pulls the running helper's binary out from under it (seen 11/09: it ran from `CleanBuildFolderInProgress`). Proposal: an install step that copies a Release build to `/Applications/VideoScan.app`, and only that copy registers the helper; dev builds talk to it and never re-register. Needs Rick's ruling on the install workflow.
 - Content Analysis ▸ a read-only **results sheet** for the helper's work (Rick 2026-11-04, "how can we see what it produced?"): counts by outcome (era found · no usable era · given up after 3 tries, with the reason · still to do), a clickable file list per outcome, and the "agrees with your confirmed date within 5 y" number — today the only per-file view is the inspector's Machine era line, and era.none / give-ups show nowhere.
 
 ## To file as issues (found 2026-10-31 → 2026-11-01)
@@ -220,3 +234,10 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 - If the regrouped Catalog menu still confuses after a few days of use, "Content Analyzer" becomes its own top-level menu holding the analyzers, the background service status and the Content line of Catalog Status (Rick, 2026-11-01, "let us see for now").
 - Viewer Macs (Rick ran the app on the M4 over the Thunderbolt bridge, 2026-11-01): (1) the Family Tree tab refuses entirely when the designated Master Archive is absent (`FamilyAssetStore.Access.unavailable`, by design for writers); on a viewer it should open the compiled graph read-only and say photos/documents are unavailable until the archive is connected — a data-risk-area change (safety-critical path, Codex) after Rick's ruling; (2) an SMB mount of a known volume carries a different UUID, so the viewer treated the mounted CrucialX10 as a new drive and held 5,642 "new" rows — a remote mount of a known volume should resolve to that volume (share name, then digests), never a second one; (3) a ten-line "run the app on the M4 as a viewer" section in guides/operations.md.
 - **Background helper throughput (Rick 2026-11-03):** (a) on the 96 GB Ultra, let model jobs run at a measured reduced rate while Rick is at the keyboard instead of waiting (`background_service.md` §14.5 `.trickle` today = the model never loads); measure UI latency and memory before/after; (b) run VideoScan Background jobs on the M4 over the TB5 bridge (read media over the bridge or the M4's own mounts; observations journal back to the master).
+- **Testbed findings from the 2026-11-10 night shift, not fixed (each needs a ruling or a design):**
+  - *The M5 Ultra's 02:00 nightly builds and tests `~/dev/VideoScan`* (`REPO="$HOME/dev/VideoScan"` in `nightly_local_tests.sh`): Rick's checkout, pulled at 02:00 when it is on main and clean. STATUS says "never a checkout". A branch or uncommitted work left there is what gets tested (the row says `dirty` / the branch). Give the nightly its own worktree, as the M4 on-demand runs have.
+  - *The M4's nightly adversarial review has been off since 11/07*: three nights of `claude exit 1`, then it disabled itself ("run `adversarial_nightly.py enable`"). Most likely the `claude` CLI on the M4 needs a login or a key. Needs Rick at the M4.
+  - *Core tests fail in the M4's 04:00 coverage build* (Debug + coverage, beside the 04:30 analysis lane): 27 issues on 11/09, timing budgets (25 M landmarks, busy timeout, 100k journal lines, JobSchedule). The Release nightly passes them. Either the coverage run sets the loose timing mode or the two lanes stop overlapping.
+  - *The sensor lane's warning ratchet only sees files compiled in that run*: with a warm DerivedData a file is not recompiled and its warnings are not seen (11/09: two warnings reached main behind a GREEN lane). Force the changed files to recompile, or run the ratchet on a clean build before a merge.
+  - *The M4's own catalog is a viewer copy at schema 14, last written 11/02.* Three tests failed on it for that reason (fixed). Is viewer sync to the M4 still running, and should the test host hold a current copy?
+  - *A launch refused or failed before any row is published is silent on the page* until the 36-hour STALE cue. A "last attempt" line per Mac would say it sooner.

@@ -67,8 +67,10 @@ PRIVACY GATE (mandatory). The repo and the page are public, and finding titles
 can name family-data code paths. Every row is checked against SCHEMAS before any
 file is written: only numbers, dates, folder names, tool names and severity keys
 pass. A string that is not a date, a listed enum value or a source folder name
-fails the whole publish, and nothing is pushed. Titles, paths, test names, hosts,
-commit text and person names never leave this machine.
+fails the whole publish, and nothing is pushed. Titles, paths, hosts, commit text
+and person names never leave this machine. One exception, Rick 2026-11-08: the
+summary's nightly cells list their failed tests by name ("M4 failures"), and only
+a name the repo's public Swift test sources declare (TestNames) is published.
 
 GIT. All git work happens in a dedicated, DETACHED worktree (default
 ~/Library/Caches/VideoScan/metrics-publish-wt). The main checkout is asked only
@@ -99,6 +101,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -123,6 +126,10 @@ REMOTE_REF = "refs/remotes/origin/metrics"
 FETCH_SPEC = "+refs/heads/metrics:" + REMOTE_REF
 PUSH_SPEC = "HEAD:refs/heads/metrics"
 PUSH_ATTEMPTS = 4
+# A fetch that fails is usually the network or GitHub for a few seconds (2026-11-09:
+# both early-morning publishes on the M4 died on one "Could not read from remote
+# repository" and the page's summary stayed a day old). Retried with these waits.
+FETCH_BACKOFF_S = (5, 20, 60)
 SCHEMA_VERSION = 1
 
 
@@ -184,6 +191,11 @@ VERS_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}$")
 TAGNAME_RE = re.compile(r"^demo[A-Za-z0-9._/-]{0,59}$")
 PUBTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:'/#+()-]{0,59}$")
 EVENTCAT_RE = re.compile(r"^[A-Z][a-z]{1,19}(?: / [a-z]{1,19})?$")   # "Birthday", "Beach / vacation"; never a name
+#   testname  a failed test's name as the nightly prints it: a Swift function
+#             ("Type.name()", "name(arg:)") or a Swift Testing display string. The
+#             shape check is the backstop; the gate is failed_test_names, which keeps
+#             only names that appear in the repo's (public) Swift test sources.
+TESTNAME_RE = re.compile(r"^[^\x00-\x1f\x7f\\]{1,240}$")
 NIGHT_STATES = ("green", "watch", "red", "did_not_run")
 # Rick, 2026-10-15: "if fail < 10 make it orange or yellow, but red means
 # broken." Fewer than this many failed tests, with the suite otherwise
@@ -206,7 +218,15 @@ _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "to
           # none (scripts/hallie_replay_reason.py) — "0 of 56 · incomplete" read as "a few".
           "hallie_strict_completed": "int?", "hallie_strict_reason": "code?",
           "hallie_advisory_completed": "int?", "hallie_advisory_reason": "code?",
-          "hallie_voice_status": "code?"}
+          "hallie_voice_status": "code?",
+          # 2026-11-08 (Rick): each Mac's row shows its newest run with ITS completion time,
+          # and "M4 failures" lists the failed tests by name. `finished` is the row's ts;
+          # `failed_tests` are only names proven to be a test in the repo's Swift test
+          # sources (failed_test_names) — never a message, a path, or anything a row adds.
+          "finished": ("maybe", "ts"), "failed_tests": ("maybe", ("list", "testname"))}
+# At most this many names per cell (the app and Core lanes together); the page says
+# how many more failed than are named.
+FAILED_NAMES_MAX = 25
 
 # Sanitizer runs (scripts/weekly_sanitizer.py's runs.jsonl). Its status words,
 # its two kinds (ASan+UBSan share a build; TSan cannot), who ran it.
@@ -493,6 +513,7 @@ _SCALARS = {
     "tagname": (_matches(TAGNAME_RE), "expected a demo* git tag name"),
     "pubtext": (_matches(PUBTEXT_RE), "expected a short public milestone title"),
     "eventcat": (_matches(EVENTCAT_RE), "expected an event category constant such as Birthday"),
+    "testname": (_matches(TESTNAME_RE), "expected a test name from the repo's Swift test sources"),
 }
 
 
@@ -1066,8 +1087,73 @@ def load_rota(path: Path = NIGHTLY_ROTA) -> dict:
     return {"on": on, "off": off}
 
 
+# The Swift test sources a published failed-test name must come from (all public in the repo).
+SWIFT_TEST_ROOTS = (REPO / "VideoScan" / "VideoScanTests", REPO / "VideoScan" / "VideoScanUITests",
+                    REPO / "VideoScan" / "VideoScanCore" / "Tests")
+_FUNC_DECL_RE = re.compile(r"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_TEST_TITLE_RE = re.compile(r'@(?:Test|Suite)\s*\(\s*"((?:[^"\\\n]|\\.)*)"')
+# "Type.name()", "name()", "name(arg:)", "name": the function part must be declared in a test source.
+_FAILED_FUNC_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*[./])*([A-Za-z_][A-Za-z0-9_]*)(?:\((?:[A-Za-z_][A-Za-z0-9_]*:)*\))?$")
+
+
+class TestNames:
+    """What the repo's Swift tests are called: every `func` name and every
+    @Test/@Suite display string under the test roots, read once per publish.
+    Worst case memory: one file's text at a time plus two sets of names
+    (~40k short strings for ~14k tests, a few MB)."""
+    __test__ = False   # not a pytest class
+
+    def __init__(self, roots=SWIFT_TEST_ROOTS):
+        self.funcs: set = set()
+        self.titles: set = set()
+        for root in roots:
+            for path in sorted(Path(root).rglob("*.swift")) if Path(root).is_dir() else ():
+                try:
+                    text = path.read_text(errors="replace")
+                except OSError:
+                    continue
+                self.funcs.update(_FUNC_DECL_RE.findall(text))
+                self.titles.update(_TEST_TITLE_RE.findall(text))
+
+    def publishable(self, name) -> Optional[str]:
+        """The name as it may be published, or None when it is not provably a test
+        in the repo (a message, a path, a host name, anything else a row carries)."""
+        if not isinstance(name, str):
+            return None
+        name = name.strip()
+        if len(name) >= 2 and name[0] == name[-1] == '"':
+            title = name[1:-1]
+            return title if title in self.titles and TESTNAME_RE.match(title) else None
+        m = _FAILED_FUNC_RE.match(name)
+        return name if m and m.group(1) in self.funcs and TESTNAME_RE.match(name) else None
+
+
+_TEST_NAMES: Optional[TestNames] = None
+
+
+def repo_test_names() -> TestNames:
+    global _TEST_NAMES
+    if _TEST_NAMES is None:
+        _TEST_NAMES = TestNames()
+    return _TEST_NAMES
+
+
+def failed_test_names(row: dict, names: TestNames) -> List[str]:
+    """The app lane's then the Core lane's failed tests, deduplicated, each proven
+    by `names`, at most FAILED_NAMES_MAX. A name that is not proven is left out
+    (the page says how many failed beyond the names it shows)."""
+    out: List[str] = []
+    for key in ("failed_names", "core_failed_names"):
+        raw = row.get(key)
+        for item in raw if isinstance(raw, list) else ():
+            name = names.publishable(item)
+            if name is not None and name not in out:
+                out.append(name)
+    return out[:FAILED_NAMES_MAX]
+
+
 def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
-                    rota: Optional[dict] = None) -> dict:
+                    rota: Optional[dict] = None, test_names: Optional[TestNames] = None) -> dict:
     """The last `days` nights (ending `today`, a UTC date) of the 2 AM nightly,
     one cell per Mac, from the published testdriver rows. The last row a host
     published on a UTC date wins for that night (a rerun is newer evidence).
@@ -1077,6 +1163,7 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
     read as a failure or a "no run"; it is listed in `off_rota` instead and the
     page says so."""
     rota = load_rota() if rota is None else rota
+    test_names = repo_test_names() if test_names is None else test_names
     off = set(rota.get("off") or ())
     order = tuple(rota.get("on") or ()) + tuple(h for h in HOST_ORDER if h not in (rota.get("on") or ()))
     end = datetime.strptime(today, "%Y-%m-%d")
@@ -1111,6 +1198,8 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
             "hallie_advisory_completed": _opt_int(row.get("hallie_advisory_completed")),
             "hallie_advisory_reason": reason_code(row.get("hallie_advisory_reason")),
             "hallie_voice_status": reason_code(row.get("hallie_voice_status")),
+            "finished": ts,
+            "failed_tests": failed_test_names(row, test_names),
         }
     hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))
     return {"days": days, "hosts": hosts, "off_rota": sorted(off),
@@ -1421,6 +1510,30 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
 
 # ---------------------------------------------------------------- git (seam)
 
+def one_line(text, limit: int = 300) -> str:
+    """Git's stderr as ONE line: callers log the last line of this tool's output,
+    and a multi-line error used to leave only its tail ("and the repository exists.")."""
+    return " ".join(str(text or "").split())[:limit]
+
+
+def fetch_metrics(git, wt: Path, say: Callable[[str], None], sleep: Callable[[float], None] = time.sleep) -> None:
+    """Fetch origin/metrics, retrying a failure after each FETCH_BACKOFF_S wait.
+    Raises PublishError (one line, with git's own words) when every try failed."""
+    waits = list(FETCH_BACKOFF_S)
+    attempt = 0
+    while True:
+        attempt += 1
+        proc = git(wt, "fetch", "--quiet", "origin", FETCH_SPEC, check=False)
+        if proc.returncode == 0:
+            return
+        why = one_line(getattr(proc, "stderr", "")) or f"exit {proc.returncode}"
+        if not waits:
+            raise PublishError(f"git fetch failed {attempt} times: {why}")
+        wait = waits.pop(0)
+        say(f"fetch attempt {attempt} failed ({why}); retrying in {wait}s")
+        sleep(wait)
+
+
 class Git:
     """`git -C <path> <args>`; the test suite swaps in a fake. Returns stdout;
     raises PublishError on a non-zero exit unless check=False."""
@@ -1429,7 +1542,7 @@ class Git:
         proc = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=180)
         if check and proc.returncode != 0:
-            raise PublishError(f"git {' '.join(args[:2])} failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+            raise PublishError(f"git {' '.join(args[:2])} failed ({proc.returncode}): {one_line(proc.stderr)}")
         return proc
 
 
@@ -1458,7 +1571,8 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
             git: Optional[Git] = None, folders: Optional[set] = None,
             say: Callable[[str], None] = print,
             summary: Optional[Callable[[Path], dict]] = None,
-            daily: Optional[Callable[[], Optional[List[dict]]]] = None) -> str:
+            daily: Optional[Callable[[], Optional[List[dict]]]] = None,
+            sleep: Callable[[float], None] = time.sleep) -> str:
     """Merge, validate, commit and push. Returns "pushed" or "unchanged".
     `summary(metrics_dir)` (see SummaryBuilder) runs after each fetch, so the
     nights it summarizes are the ones just pulled from the branch. `daily()`
@@ -1468,7 +1582,7 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
     wt = wt.expanduser().resolve()
     ensure_worktree(repo, wt, git)
     for attempt in range(1, PUSH_ATTEMPTS + 1):
-        git(wt, "fetch", "--quiet", "origin", FETCH_SPEC)
+        fetch_metrics(git, wt, say, sleep)
         git(wt, "reset", "--hard", "--quiet", REMOTE_REF)
         if summary is not None:
             fresh = dict(fresh, **{"summary_latest.json": summary(wt / "metrics")})
@@ -1539,6 +1653,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--metrics-dir", help="with --dry-run / --out-dir: build the summary from the "
                                           "published streams in this directory (e.g. the publish "
                                           "worktree's metrics/); without it no summary is produced")
+    ap.add_argument("--summary-only", action="store_true",
+                    help="rebuild and publish ONLY metrics/summary_latest.json (and today's github_daily row) from the "
+                         "published rows; no local stream is read. For a Mac that just published a test row and "
+                         "holds none of the M4's coverage / review / sanitizer logs (the M5 Ultra's 02:00 nightly)")
     ap.add_argument("--no-events", action="store_true",
                     help="do not run scripts/events_prototype.py for metrics/events_latest.json")
     ap.add_argument("--events-script", default=str(EVENTS_SCRIPT),
@@ -1551,11 +1669,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if os.environ.get("VIDEOSCAN_PUBLISH_METRICS") == "0":
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
         return 0
-    fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
-                          [Path(d).expanduser() for d in a.codex_dir] if a.codex_dir else CODEX_DIRS,
-                          Path(a.sanitizer_dir).expanduser(),
-                          Path(a.analysis_dir).expanduser())
-    fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
+    if a.summary_only and a.no_summary:
+        ap.error("--summary-only and --no-summary contradict each other")
+    if a.summary_only:
+        fresh: Dict[str, Optional[List[dict]]] = {}
+    else:
+        fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
+                              [Path(d).expanduser() for d in a.codex_dir] if a.codex_dir else CODEX_DIRS,
+                              Path(a.sanitizer_dir).expanduser(),
+                              Path(a.analysis_dir).expanduser())
+        fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()
     try:

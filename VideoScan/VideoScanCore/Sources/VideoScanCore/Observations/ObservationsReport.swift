@@ -139,36 +139,73 @@ public struct ObservationsReport: Sendable, Equatable {
 
     static let probe = "ffprobe"
 
+    /// One counted facet of the technical tier, in the order its groups are shown. The raw value is
+    /// the label `TechnicalReading.interpret` gives the line: a line is matched to its facet ONCE
+    /// (`init(rawValue:)`), and the group's title, source and row label all derive from the case.
+    /// The lines the tier does not count (creation time, duration, file modified, "Video: none") have no case.
+    /// (C++: an `enum class` with a name table, instead of `if (label == "Container")` at each use.)
+    enum TechnicalFacet: String, CaseIterable, Sendable {
+        case container = "Container"
+        case videoCodec = "Video codec"
+        case audio = "Audio"
+        case frameSize = "Frame size"
+        case frameRate = "Frame rate"
+        case scan = "Scan"
+        case camera = "Make / model"
+        case encoder = "Encoder / muxer"
+
+        var groupTitle: String {
+            switch self {
+            case .container: return "Containers"
+            case .videoCodec: return "Video codecs"
+            case .audio: return "Audio"
+            case .frameSize: return "Frame sizes"
+            case .frameRate: return "Frame rates"
+            case .scan: return "Scan"
+            case .camera: return "Cameras (make / model)"
+            case .encoder: return "Encoders / muxers"
+            }
+        }
+
+        var source: String {
+            switch self {
+            case .container: return ObservationsReport.probe
+            case .videoCodec, .frameSize, .frameRate, .scan: return TechnicalReading.firstVideoStream
+            case .audio: return TechnicalReading.firstAudioStream
+            case .camera, .encoder: return "embedded tag"
+            }
+        }
+
+        /// The row's label for a line's value.
+        func rowLabel(_ value: String) -> String {
+            switch self {
+            case .audio: return value.replacingOccurrences(of: "first audio stream: ", with: "")
+            case .frameRate: return value + " fps"
+            case .container, .videoCodec, .frameSize, .scan, .camera, .encoder: return value
+            }
+        }
+    }
+
     static func technicalTier(reader: any CatalogObservationsReading, scope: ObservationsScope, totals: CatalogRow.ObservationTotals,
                               now: Date) throws -> Tier {
         let tuples = try reader.observationTechnicalTuples(scope)
         var readings: [String: Int] = [:]
-        var containers: [String: Int] = [:], vcodecs: [String: Int] = [:], acodecs: [String: Int] = [:]
-        var sizes: [String: Int] = [:], rates: [String: Int] = [:], scans: [String: Int] = [:]
-        var cameras: [String: Int] = [:], encoders: [String: Int] = [:]
-        var suggests: [String: String] = [:]
+        // Per facet: row label → contents, and row label → what the value suggests (the first seen).
+        var counts: [TechnicalFacet: [String: Int]] = [:]
+        var suggests: [TechnicalFacet: [String: String]] = [:]
         for t in tuples where !t.streamType.isEmpty && t.streamType != "ffprobe failed" {
             let facts = t.facts
             readings[TechnicalReading.oneLiner(facts), default: 0] += t.contents
             for line in TechnicalReading.interpret(facts, now: now) {
-                let key: String
-                switch line.label {
-                case "Container": key = line.value; containers[key, default: 0] += t.contents
-                case "Video codec": key = line.value; vcodecs[key, default: 0] += t.contents
-                case "Audio": key = line.value.replacingOccurrences(of: "first audio stream: ", with: ""); acodecs[key, default: 0] += t.contents
-                case "Frame size": key = line.value; sizes[key, default: 0] += t.contents
-                case "Frame rate": key = line.value + " fps"; rates[key, default: 0] += t.contents
-                case "Scan": key = line.value; scans[key, default: 0] += t.contents
-                case "Make / model": key = line.value; cameras[key, default: 0] += t.contents
-                case "Encoder / muxer": key = line.value; encoders[key, default: 0] += t.contents
-                default: continue
-                }
-                if suggests[line.label + key] == nil { suggests[line.label + key] = line.suggests }
+                guard let facet = TechnicalFacet(rawValue: line.label) else { continue }
+                let key = facet.rowLabel(line.value)
+                counts[facet, default: [:]][key, default: 0] += t.contents
+                if suggests[facet]?[key] == nil { suggests[facet, default: [:]][key] = line.suggests }
             }
         }
-        func group(_ title: String, _ label: String, _ counts: [String: Int], source: String) -> Group {
-            Group(title: title, rows: counts.sorted { ($1.value, $0.key) < ($0.value, $1.key) }.map {
-                Row.files($0.key, $0.value, source: source, evidence: suggests[label + $0.key], standing: .fact)
+        func group(_ facet: TechnicalFacet) -> Group {
+            Group(title: facet.groupTitle, rows: (counts[facet] ?? [:]).sorted { ($1.value, $0.key) < ($0.value, $1.key) }.map {
+                Row.files($0.key, $0.value, source: facet.source, evidence: suggests[facet]?[$0.key], standing: .fact)
             })
         }
         var groups: [Group] = []
@@ -177,14 +214,7 @@ public struct ObservationsReport: Sendable, Equatable {
                       evidence: "The dossier's one-line reading of each distinct probe tuple (container, codecs, frame size, rate, scan, audio, device tags), "
                         + "counted over the files that share it. A reading, not a stored fact.", standing: .observation)
         }))
-        groups.append(group("Containers", "Container", containers, source: probe))
-        groups.append(group("Video codecs", "Video codec", vcodecs, source: TechnicalReading.firstVideoStream))
-        groups.append(group("Audio", "Audio", acodecs, source: TechnicalReading.firstAudioStream))
-        groups.append(group("Frame sizes", "Frame size", sizes, source: TechnicalReading.firstVideoStream))
-        groups.append(group("Frame rates", "Frame rate", rates, source: TechnicalReading.firstVideoStream))
-        groups.append(group("Scan", "Scan", scans, source: TechnicalReading.firstVideoStream))
-        groups.append(group("Cameras (make / model)", "Make / model", cameras, source: "embedded tag"))
-        groups.append(group("Encoders / muxers", "Encoder / muxer", encoders, source: "embedded tag"))
+        groups += TechnicalFacet.allCases.map(group)
         groups.append(embeddedDates(try reader.observationEmbeddedDates(scope)))
         groups.append(Group(title: "Probe", rows: [
             Row.files("Probed", totals.contents - totals.unprobed - totals.probeFailed, source: probe, standing: .fact),
@@ -229,12 +259,13 @@ public struct ObservationsReport: Sendable, Equatable {
         let burned = try reader.observationBurnedInDates(scope, limit: topBurnedIn)
         if !burned.isEmpty {
             groups.append(Group(title: "Burned-in dates", rows: burned.map {
-                Row.files($0.key, $0.contents, source: "8B date reader, unconfirmed",
-                          evidence: "Dates the model read off the picture (ocr.date). A reading, never a date of the file.")
+                Row.files($0.value, $0.contents, source: burnedInSource($0.signers),
+                          evidence: "Dates the model read off the picture (ocr.date), signed by \($0.signers.joined(separator: ", ")). "
+                            + "A reading, never a date of the file.")
             }))
         }
         groups.append(scenesGroup(captions, videoNotCaptioned: coverage.videoNotCaptioned))
-        let described = try histogram(reader: reader, scope: scope, kind: "scene")
+        let described = try histogram(reader: reader, scope: scope, kind: .sceneCaptions)
         if !described.isEmpty {
             groups.append(Group(title: "Most described", rows: described.map {
                 Row(label: $0.key, value: "\($0.count.formatted()) mention\($0.count == 1 ? "" : "s")", count: $0.count,
@@ -244,7 +275,7 @@ public struct ObservationsReport: Sendable, Equatable {
             }))
         }
         groups.append(speechGroup(speech, audioNotTranscribed: coverage.audioNotTranscribed))
-        let said = try histogram(reader: reader, scope: scope, kind: "transcript")
+        let said = try histogram(reader: reader, scope: scope, kind: .transcripts)
         if !said.isEmpty {
             groups.append(Group(title: "Most said", rows: said.map {
                 Row(label: $0.key, value: "\($0.count.formatted()) mention\($0.count == 1 ? "" : "s")", count: $0.count,
@@ -257,12 +288,19 @@ public struct ObservationsReport: Sendable, Equatable {
         groups.append(peopleGroup(try reader.observationPeople(scope, limit: topNames * 3)))
         groups.append(inferredGroup(try reader.observationInferredDates(scope)))
         groups.append(eventsGroup(try reader.observationEvents(scope, limit: topEvents)))
-        let found = eras.filter(\.found).reduce(0) { $0 + $1.contents }
+        let found = eras.filter { $0.foundValue != nil }.reduce(0) { $0 + $1.contents }
         var parts: [String] = []
         if found > 0 { parts.append("\(files(found)) with a machine era") }
         if captions.sceneContents > 0 { parts.append("\(files(captions.sceneContents)) with scenes described") }
         if speech.withSpeech > 0 { parts.append("\(files(speech.withSpeech)) with speech") }
         return Tier(layer: .patterns, summary: parts.isEmpty ? "nothing analyzed yet" : parts.joined(separator: " · "), groups: groups)
+    }
+
+    /// Who read a burned-in date, in words: each signer's short model name ("8B"), once, sorted —
+    /// the same words a burned-in search hit's source carries (one signer there).
+    static func burnedInSource(_ signers: [String]) -> String {
+        let who = Set(signers.map(MachineEraResolver.modelShortName(by:))).sorted().joined(separator: ", ")
+        return "\(who) date reader, unconfirmed"
     }
 
     /// The machine era by decade words, then the verdicts that are not an era (never shown as one).
@@ -273,7 +311,8 @@ public struct ObservationsReport: Sendable, Equatable {
         var signers = Set<String>()
         for v in eras {
             signers.insert(v.by)
-            if v.found, let value = v.value {
+            switch v.verdict {
+            case .found(let value):
                 if let r = MachineEraResolver.range(value) {
                     let mid = Int((Double(r.lo + r.hi) / 2).rounded(.down))
                     decades["\(mid - mid % 10)s", default: 0] += v.contents
@@ -281,9 +320,11 @@ public struct ObservationsReport: Sendable, Equatable {
                     decades["unreadable value", default: 0] += v.contents
                 }
                 readings[AnalysisResultsReport.eraWords(value), default: 0] += v.contents
-            } else if v.rejected { rejected += v.contents }
-            else if v.gaveUp { gaveUp += v.contents }
-            else if v.none { none += v.contents }
+            case .rejected: rejected += v.contents
+            case .gaveUp: gaveUp += v.contents
+            case .noUsableEra: none += v.contents
+            case .other: break                      // analyzed, no era verdict (only ocr.date, or a malformed value): in no era row
+            }
         }
         let who = signers.map(MachineEraResolver.modelShortName(by:)).sorted().joined(separator: ", ")
         let source = who.isEmpty ? "era analyzer" : "\(who) era, unconfirmed"
@@ -340,11 +381,11 @@ public struct ObservationsReport: Sendable, Equatable {
     }
 
     static func peopleGroup(_ people: [CatalogRow.ObservationPerson]) -> Group {
-        let machine = people.filter { $0.kind == "detected" || $0.kind == "suspected" }
-        let confirmed = people.filter { $0.kind == "confirmed" }.reduce(0) { $0 + $1.contents }
+        let machine = people.filter(\.kind.isMachine)
+        let confirmed = people.filter { $0.kind == .confirmed }.reduce(0) { $0 + $1.contents }
         var rows = machine.prefix(topNames).map {
-            Row.files("\($0.name) (\($0.kind))", $0.contents, source: "face recognition, unconfirmed",
-                      evidence: "people_tags.kind = \($0.kind): the machine's guess, not a confirmed identity.")
+            Row.files("\($0.name) (\($0.kind.rawValue))", $0.contents, source: "face recognition, unconfirmed",
+                      evidence: "people_tags.kind = \($0.kind.rawValue): the machine's guess, not a confirmed identity.")
         }
         if rows.isEmpty { rows.append(Row(label: "People found", value: "none yet", count: 0, source: "face recognition", standing: .missing)) }
         rows.append(Row.files("Confirmed by you (the comparison)", confirmed, source: "Rick",
@@ -367,10 +408,28 @@ public struct ObservationsReport: Sendable, Equatable {
             return Group(title: "Events", rows: [Row(label: "Events", value: "none touch these files", count: 0, source: "related-score ladder", standing: .missing)])
         }
         return Group(title: "Events", rows: events.map {
-            Row(label: $0.name, value: "\(files($0.members)) · \($0.state == "confirmed" ? "confirmed by you" : "dismissed by you")", count: $0.members,
+            Row(label: $0.name, value: "\(files($0.members)) · \(stateWords($0.state))", count: $0.members,
                 source: "related-score ladder", evidence: "An event the ladder grouped (events + event_members); its state is yours.",
-                standing: $0.state == "confirmed" ? .fact : .nothingFound)
+                standing: eventStanding($0.state))
         })
+    }
+
+    /// An event's state in words (the report's row and a search hit's source say the same).
+    /// A state this build does not know is shown as stored, never as one it knows.
+    static func stateWords(_ state: CatalogRow.ObservationEventState) -> String {
+        switch state {
+        case .confirmed: return "confirmed by you"
+        case .dismissed: return "dismissed by you"
+        case .unknown(let stored): return "state “\(stored)” (not one this version knows)"
+        }
+    }
+
+    static func eventStanding(_ state: CatalogRow.ObservationEventState) -> Standing {
+        switch state {
+        case .confirmed: return .fact
+        case .dismissed: return .nothingFound
+        case .unknown: return .missing
+        }
     }
 
     // MARK: Tier 3 — Across the collection (statistics)
@@ -392,7 +451,7 @@ public struct ObservationsReport: Sendable, Equatable {
             Row.files("Observed in the last 24 h", coverage.last24Hours, source: "every analyzer", standing: .observation),
         ])
         var decadeSpan: ClosedRange<Int>?
-        for v in eras where v.found { if let value = v.value, let r = MachineEraResolver.range(value) {
+        for v in eras { if let value = v.foundValue, let r = MachineEraResolver.range(value) {
             decadeSpan = decadeSpan.map { min($0.lowerBound, r.lo)...max($0.upperBound, r.hi) } ?? r.lo...r.hi
         } }
         let eraGroup = Group(title: "Machine eras across the collection", rows: [
@@ -477,7 +536,7 @@ public struct ObservationsReport: Sendable, Equatable {
 
     /// The `topWords` most frequent words over the scope's scene captions or transcripts.
     /// Memory: the dictionary stops taking NEW keys at `wordKeyCap` (existing keys still count).
-    static func histogram(reader: any CatalogObservationsReading, scope: ObservationsScope, kind: String) throws -> [WordCount] {
+    static func histogram(reader: any CatalogObservationsReading, scope: ObservationsScope, kind: CatalogRow.ObservationTextsKind) throws -> [WordCount] {
         var counts: [String: Int] = [:]
         try reader.observationTexts(scope, kind: kind) { text in
             for token in tokens(text) {

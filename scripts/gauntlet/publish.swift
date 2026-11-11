@@ -74,6 +74,107 @@ func runStatus(_ result: [String: Any], _ stages: [[String: Any]]) -> String {
     return stages.allSatisfy { $0["status"] as? String == "passed" } ? "passed" : "amber"
 }
 
+// ── What a stage's verdict rests on (2026-11-10) ──────────────────────
+// The page said "unit: failed" for four days and could not say why or which
+// tests: the row carried counts only. A stage now also publishes `why` (the
+// runner's reason, kept ONLY where each part is one of the runner's own fixed
+// phrases — anything else, e.g. an error's description with a path in it,
+// becomes "other") and up to `publishedNames` test identifiers per kind. A name
+// is published only when it is PROVEN to be a test of this repository: shaped
+// Suite/function() (optionally Module.Suite/…), every type component declared
+// in the repo's test sources (or a test module's name) and the function
+// declared there too — the rule tools/publish_metrics.py uses for the nightly's
+// names. Shape alone is not enough (Codex #275 F1: "Users/<family>/Movies/
+// Wedding.mov" is identifier-shaped). A display title, a path or anything else
+// is counted in `<kind>_more`, never shown. No test sources found: nothing is
+// named (fail closed). Every pattern must match the WHOLE string (`$` alone
+// also matches before a trailing newline).
+let publishedNames = 20
+let testModules: Set<String> = ["VideoScanTests", "VideoScanCoreTests", "VideoScanUITests"]
+let testSourceRoots = ["VideoScan/VideoScanTests", "VideoScan/VideoScanUITests", "VideoScan/VideoScanCore/Tests"]
+
+func matchesWhole(_ text: String, _ pattern: String) -> Bool {
+    guard let range = text.range(of: pattern, options: .regularExpression) else { return false }
+    return range.lowerBound == text.startIndex && range.upperBound == text.endIndex
+}
+
+/// Every `func` name and every type name declared under the repo's test roots.
+/// Worst case memory: one source file's text at a time plus two sets of short
+/// names (~40k strings for ~17k tests, a few MB). Read once per publish.
+struct RepoTestNames {
+    var functions = Set<String>()
+    var types = Set<String>()
+
+    init(repo: URL) {
+        guard let function = try? NSRegularExpression(pattern: #"\bfunc\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\s*[(<]"#),
+              let type = try? NSRegularExpression(pattern: #"\b(?:struct|class|enum|actor|extension)\s+([A-Za-z_][A-Za-z0-9_]*)"#) else { return }
+        for root in testSourceRoots {
+            let base = repo.appendingPathComponent(root)
+            guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil) else { continue }
+            for case let url as URL in walker where url.pathExtension == "swift" {
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let whole = NSRange(text.startIndex..., in: text)
+                for match in function.matches(in: text, range: whole) {
+                    if let r = Range(match.range(at: 1), in: text) { functions.insert(String(text[r])) }
+                }
+                for match in type.matches(in: text, range: whole) {
+                    if let r = Range(match.range(at: 1), in: text) { types.insert(String(text[r])) }
+                }
+            }
+        }
+    }
+
+    static let shape = #"(?:[A-Za-z_][A-Za-z0-9_]*[./])+`?[A-Za-z_][A-Za-z0-9_]*`?\((?:[A-Za-z_][A-Za-z0-9_]*:)*\)"#
+
+    /// The name as it may be published — "Owner/…/function()" — or nil. Only for
+    /// Suite/function(…) whose every type part and whose function this repository's
+    /// tests declare. The argument labels are DROPPED, never checked or shown
+    /// (Codex #276 F1: "known(SECRET_FAMILY:)" kept its label): every character
+    /// that leaves is one of those declared identifiers, a separator or "()".
+    /// (A declared type paired with a declared function of another type would
+    /// pass; both are still identifiers from this public repository.)
+    func publishable(_ name: String) -> String? {
+        guard name.count <= 200, matchesWhole(name, Self.shape), let slash = name.lastIndex(of: "/") else { return nil }
+        let call = name[name.index(after: slash)...]
+        let function = call.prefix { $0 != "(" }.replacingOccurrences(of: "`", with: "")
+        guard functions.contains(function) else { return nil }
+        let owners = name[..<slash].split(whereSeparator: { $0 == "/" || $0 == "." }).map(String.init)
+        guard !owners.isEmpty, owners.allSatisfy({ types.contains($0) || testModules.contains($0) }) else { return nil }
+        return String(name[...slash]) + function + "()"
+    }
+}
+let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+let repoTestNames = RepoTestNames(repo: repoRoot)
+let reasonPhrases = [
+    #"command exit \d{1,4}"#, #"structured test counts unavailable"#, #"test failures"#,
+    #"unexpected skipped tests"#, #"\d{1,6} skipped tests? — named, not a pass"#, #"executed count below expected floor \d{1,7}"#,
+    #"\d{1,6} known issues? \(withKnownIssue\) — tracked, not a pass"#, #"safe subset passed"#,
+    #"unsafe or unadapted suites: \d{1,6}"#, #"(package|stage) watchdog timeout"#,
+    #"unreaped process contamination( \(swift test list\))?"#, #"package build did not run"#, #"amber"#,
+]
+
+func publishableReason(_ value: Any?) -> String? {
+    guard let text = value as? String, !text.isEmpty else { return nil }
+    let parts = text.components(separatedBy: "; ").map { part -> String in
+        let package = part.hasPrefix("package: ")
+        let body = package ? String(part.dropFirst("package: ".count)) : part
+        let known = reasonPhrases.contains { matchesWhole(body, $0) }
+        return known ? part : (package ? "package: other" : "other")
+    }
+    return parts.prefix(8).joined(separator: "; ")
+}
+
+/// (names to publish, how many more exist that are not shown)
+func publishableNames(_ stage: [String: Any], _ key: String) -> ([String], Int) {
+    let all = (stage[key] as? [Any] ?? []).compactMap { $0 as? String }
+    var shaped: [String] = []
+    for name in all {
+        if let safe = repoTestNames.publishable(name), !shaped.contains(safe) { shaped.append(safe) }
+    }
+    let truncated = Int(number(stage[key + "_truncated"]))
+    return (Array(shaped.prefix(publishedNames)), max(0, all.count - min(shaped.count, publishedNames)) + truncated)
+}
+
 func sanitized(_ result: [String: Any]) throws -> [String: Any] {
     let names = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"]
     let statuses = ["passed", "failed", "not_run", "blocked", "amber", "incomplete"]
@@ -94,7 +195,15 @@ func sanitized(_ result: [String: Any]) throws -> [String: Any] {
         for key in ["expected", "passed", "failed", "skipped", "incomplete"] {
             row[key] = stage[key] is NSNumber ? number(stage[key]) : NSNull()
         }
-        if name == "ui" { row["status"] = "not_run"; row["reason"] = "phase 2" }
+        if let why = publishableReason(stage["why"] ?? stage["reason"]) { row["why"] = why }
+        for key in ["failed_tests", "skipped_tests", "incomplete_tests"] {
+            let (names, more) = publishableNames(stage, key)
+            // A row re-sanitized from the queue keeps its own "_more" count.
+            let already = Int(number(stage[key + "_more"]))
+            if !names.isEmpty { row[key] = names }
+            if more + already > 0 { row[key + "_more"] = more + already }
+        }
+        if name == "ui" { row["status"] = "not_run"; row["reason"] = "phase 2"; row["why"] = NSNull() }
         return row
     }
     var row: [String: Any] = ["schemaVersion": 1, "source": "gauntlet", "run_id": id, "ts": ts,

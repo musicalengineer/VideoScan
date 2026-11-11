@@ -418,6 +418,7 @@ extension VideoScanModel {
         allRecords: [VideoRecord],
         resolveVolumeSafety: VolumeSafetyResolver,
         archivedCopy: VideoRecord? = nil,
+        provenance: JourneyProvenance? = nil,
         probe: (String) -> JourneyPresence = { JourneyPresence.probe($0) }
     ) -> FileJourney {
         // The CONTENT this row stands for may live on in its archived copy
@@ -434,6 +435,13 @@ extension VideoScanModel {
         let origin = originEvent(for: rec)
         var events: [JourneyEvent] = []
         if let catalogued = cataloguedEvent(for: rec) { events.append(catalogued) }
+        // What the content is (estimated or confirmed), dated at its capture.
+        // Passed in: this builder reads no catalog.
+        if let provenance {
+            events.append(JourneyEvent(timestamp: provenance.captured, displayStamp: friendlyStamp(provenance.captured),
+                                       icon: JourneyEventKind.provenance.defaultIcon, kind: .provenance,
+                                       sentence: provenance.sentence))
+        }
 
         // 2. Each parsed note event becomes a timeline event. Combines
         //    use the record's `dateCreatedRaw` as their best-known
@@ -752,7 +760,8 @@ extension VideoScanModel {
             // PROVEN copy only (GH #327): a sampled-signature match is
             // not this file's archived copy, so it never ticks the ladder
             // or names "the archived copy is at …".
-            archivedCopy: provenArchivedCopy(of: rec)
+            archivedCopy: provenArchivedCopy(of: rec),
+            provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles)
         )
     }
 

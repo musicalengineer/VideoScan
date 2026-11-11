@@ -369,7 +369,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "ArchiveAngel/UI/ArchiveAngelReviewSheet.swift": 1,      // Promote (Angel review)
         "ArchivedWhatNextSheet.swift": 1,         // Move N to Trash (prune apply)
         "ExcessCopiesPane.swift": 1,              // Move N to Trash (the same prune apply, catalog-wide)
-        "ArchiveView.swift": 3,                   // Verify copies…, Fingerprint Pictures (archive first)… (928df4d8, 2026-10-07), Lock files already in the archive (one-time) (2026-09-27)
+        "ArchiveView.swift": 4,                   // Verify copies…, Fingerprint Pictures (archive first)… (928df4d8, 2026-10-07), Lock files already in the archive (one-time) (2026-09-27), Estimate Provenance… (2026-11-10)
         // Archive Angel Start (start sheet) + Prepare with Archive Angel
         // (catalog menu) — both through ArchiveAngel.prepare since S2.
         "ArchiveAngel/Seams/AppConformances.swift": 2,

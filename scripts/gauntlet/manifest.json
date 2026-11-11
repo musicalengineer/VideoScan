@@ -376,6 +376,25 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundQuitMarkerTests"
+      ],
+      "tests": [
+        "clearRemovesAndReturns",
+        "noBootTime",
+        "noFileReadsNone",
+        "otherBootIsStaleAndRemoved",
+        "quitWords",
+        "realBootTimeSensor",
+        "sameBootIsActive",
+        "tornFileReadsUnreadableAndClears",
+        "writeCreatesTheStateRoot"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundPayloadCodecTests.swift",
       "stage": "unit",
       "suites": [
@@ -711,7 +730,9 @@
         "ObservationJournalTests"
       ],
       "tests": [
+        "aPartlyWrittenUnitLeavesNothing",
         "aTornLastLineIsIgnoredReportedAndSealedByTheNextAppend",
+        "aWriteThatFailsAtOnceChangesNothing",
         "anEditedLineIsCaughtByItsId",
         "codex187F1UnwritableRefusalThrows",
         "codex187F2TornRefusalTailIsSealed",
@@ -727,7 +748,8 @@
         "subjectsByOneSignerAreFoundAndOthersAreNot",
         "theAppliedCursorRoundTripsAndAnUnreadableOneIsZero",
         "theIdIsTheIdempotenceKey",
-        "theLineIsCanonicalAndRoundTrips"
+        "theLineIsCanonicalAndRoundTrips",
+        "theUnitsBeforeAFailedOneAreUntouched"
       ]
     },
     {
@@ -3445,15 +3467,27 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Observations/ObservationsReportTests.swift",
       "stage": "unit",
       "suites": [
-        "ObservationsReportTests"
+        "ObservationsReportTests",
+        "ObservationsTypedRowsTests"
       ],
       "tests": [
+        "aBurnedInDateNamesTheSignerThatReadIt",
         "aFileNameOrPathOrNoteIsNeverAHit",
+        "aStoredKindOutsideTheSetIsRefusedInWords",
+        "aTranscriptHitShowsItsMatchWhenTheQueryHoldsALikeMetacharacter",
+        "anEraVerdictIsExactlyOneVerdictOrRefused",
+        "anEventStateThisVersionDoesNotKnowIsShownAsStoredNeverAsDismissed",
         "everyCountEqualsADirectCount",
         "everyHitContainsOrDerivesFromTheQuery",
+        "everyHitHasItsOwnID",
+        "everyHitKindComesBackThroughTheRealReader",
+        "everyTechnicalFacetIsALabelTechnicalReadingEmits",
         "oneHundredThousandFilesMeasured",
+        "theReaderDecodesEveryVerdictAndOtherIsInNoEraRow",
         "theReportAndTheSearchWriteNothing",
-        "theScopesSelectWhatTheySay"
+        "theScopesSelectWhatTheySay",
+        "theTechnicalTierHasOneGroupPerFacetWithItsSource",
+        "theTextsReadStreamsTheKindItIsAskedFor"
       ]
     },
     {
@@ -5825,6 +5859,7 @@
       "tests": [
         "evidenceStoreAndBufferArePinnedUnderTemp",
         "exclusionsAreExactComponents",
+        "readerTouchedShmIsNotAWrite",
         "snapshotSeesCreateChangeDelete"
       ]
     },
@@ -8940,6 +8975,51 @@
         "toggleOff",
         "toggleOn",
         "viewerRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceControlTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceControlTests"
+      ],
+      "tests": [
+        "buildDate",
+        "buildDateOfARealFile",
+        "neverRunningWithoutAnAnswer",
+        "olderHeading",
+        "oneAtATime",
+        "refusedBuildsOnlyStop",
+        "restart",
+        "restartRefusedTouchesNothing",
+        "restartStopsAtAFailedStop",
+        "runningHeading",
+        "startAfterMenuBarQuit",
+        "startFromStopped",
+        "startReregisters",
+        "stopStaysStopped",
+        "stoppedHeading",
+        "verbTable"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceQuitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceQuitTests"
+      ],
+      "tests": [
+        "checkboxOnClears",
+        "disabledIgnoresMarker",
+        "pollAsksWithoutMarker",
+        "pollDoesNotAskWhileQuit",
+        "presentation",
+        "realStore",
+        "startClears",
+        "startWithoutMarkerIsSilent",
+        "viewerIgnoresQuit"
       ]
     },
     {
@@ -17575,20 +17655,46 @@
       "path": "VideoScan/VideoScanTests/FrameSearchTests.swift",
       "stage": "unit",
       "suites": [
-        "SigLIPEmbedderTests",
         "FrameSearchStoreTests",
         "FrameIndexJobTests",
         "FrameSearchSensorTests",
         "FrameSearchMockupTests"
       ],
       "tests": [
-        "tokensAndVectorsMatchTheReferenceImplementation",
-        "aRedImageRanksTheRedClipFirst",
         "aHitNamesTheFileAndTimeOfTheRowThatProducedItAndStaysInScope",
         "noIndexOrAnUnreadableOneIsIndexNotBuiltAndNoHits",
+        "clearingTheFieldDuringASearchEndsTheSearch",
+        "aSupersededSearchNeverPublishes",
+        "aScopeChangeReSearchesAndShowsOnlyTheNewScopesHits",
+        "aFailedSearchShowsTheFailureAndARetryClearsIt",
         "indexesPicturesSkipsOfflineRecordsUndecodableAndResumes",
         "noModelExtensionAndNothingWritesTheCatalog",
-        "framesDark"
+        "framesDark",
+        "aModelThatCannotLoadIsNotHeldAgainstTheFile",
+        "aModelThatCannotLoadFailsTheJobAndTheOutcomeLineNamesTheCause",
+        "aDriveThatGoesAwayMidDecodeDefersTheFile",
+        "aModelThatFailsMidRunKeepsWhatWasIndexedAndBlamesNoFile",
+        "aFileTheDecoderCannotReadIsRecordedOnceAndNotTriedAgain",
+        "pauseSavesWhatIsInHandHoldsThereAndResumeFinishes",
+        "stopLetsTheFileInHandFinishSavesAndEndsCancelled",
+        "quitCutsTheDecodeAndHoldsNothingAgainstTheFile",
+        "aCheckpointSavesAndHandsOverExactlyWhatItWrote",
+        "aSaveThatFailsFailsTheJobAndSaysWhatIsNotOnDisk",
+        "oneHundredThousandRowsOverAFiftyThousandContentIndexArePlannedInsideTheBudget",
+        "theJobLeavesEveryIndexReadAndWriteToTheWriter"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigLIPEmbedderTests"
+      ],
+      "tests": [
+        "tokensAndVectorsMatchTheReferenceImplementation",
+        "aRedImageRanksTheRedClipFirst"
       ]
     },
     {
@@ -24229,6 +24335,11 @@
       "tests": [
         "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
         "aFailureIsWordsAndIsLoggedOnce",
+        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
+        "aSupersededSearchNeverPublishes",
+        "aScopeChangeThenASearchShowsTheNewScopesHits",
+        "aFailedLoadShowsTheFailureAndARetryClearsIt",
+        "theSearchButtonObservesTheFramesStore",
         "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
         "everythingIsReadOnly",
         "theSearchMatchesObservationColumnsOnlyNeverACatalogField",
@@ -32493,10 +32604,12 @@
         "test_complexity_shrink_ci.py"
       ],
       "tests": [
+        "test_a_baseline_path_given_on_the_command_line_is_used_as_given",
         "test_ccn15_excess_never_grows_by_shrinking",
         "test_ccn15_excess_regenerate_command_writes_todays_total",
         "test_ccn15_excess_shrink_refuses_an_empty_scan",
         "test_ccn15_excess_shrinks_when_a_function_is_lowered_and_ci_stays_green",
+        "test_default_baselines_are_the_ones_under_root_not_under_the_cwd",
         "test_nightly_shrink_after_a_move_keeps_the_whole_tree_gate_green"
       ]
     },
@@ -32975,16 +33088,28 @@
         "test_gauntlet_run_tidy.py"
       ],
       "tests": [
-        "test_keep_build_flag_keeps_everything",
+        "test_a_test_skipped_or_incomplete_now_is_not_fixed",
+        "test_first_row_for_a_machine_compares_to_nothing",
+        "test_keep_run_flag_keeps_everything",
+        "test_name_lists_are_capped_at_200_with_a_truncated_count",
+        "test_new_failures_fixed_and_first_failed_against_the_previous_row_for_this_machine",
+        "test_package_names_failed_skipped_and_incomplete_even_when_the_run_was_killed",
         "test_retain_never_follows_a_symlinked_run_dir",
         "test_retain_removes_old_finished_runs_and_nothing_else",
         "test_retain_with_nothing_old_prints_nothing_and_removes_nothing",
-        "test_retention_plan_picks_finished_runs_older_than_14_days_by_name",
-        "test_runner_accepts_keep_build_in_its_option_parser",
+        "test_retention_plan_picks_runs_older_than_3_days_by_name",
+        "test_row_has_totals_and_names_and_no_links_into_the_run_dir",
+        "test_runner_accepts_keep_run_in_its_option_parser",
+        "test_scale_a_long_history_is_streamed_within_budget",
         "test_tidy_does_not_follow_a_symlinked_scratch_dir",
+        "test_tidy_keeps_a_published_run_whose_summary_row_is_not_in_history",
+        "test_tidy_keeps_a_queued_or_failed_publish_and_says_why",
         "test_tidy_of_a_run_without_build_products_is_quiet_and_safe",
         "test_tidy_refuses_before_result_json_exists",
-        "test_tidy_removes_only_build_scratch_of_a_finished_run"
+        "test_tidy_removes_only_build_scratch_of_a_finished_run",
+        "test_tidy_removes_the_whole_run_after_a_published_summary_row",
+        "test_verdict_comes_from_the_history_row_when_result_json_is_gone",
+        "test_xcode_names_from_the_xcresult_summary_and_tests_tree"
       ]
     },
     {
@@ -33060,6 +33185,12 @@
         "test_gauntlet_publish.py"
       ],
       "tests": [
+        "test_a_failed_stage_publishes_why_and_which_tests",
+        "test_a_path_or_a_name_the_repo_does_not_declare_is_never_published",
+        "test_a_queued_row_keeps_its_names_and_counts_when_published_later",
+        "test_a_reason_or_name_that_is_not_the_runners_own_shape_is_never_published",
+        "test_an_amber_skip_publishes_its_phrase_and_the_test_names",
+        "test_argument_labels_are_dropped_so_only_declared_identifiers_leave",
         "test_dashboard_names_the_run_green_amber_red",
         "test_dashboard_separates_nightly_and_keeps_blocked_stage_duration",
         "test_dry_run_sanitizes_private_fields_and_forces_honest_ui",
@@ -33081,17 +33212,21 @@
         "test_gauntlet_runner.py"
       ],
       "tests": [
+        "test_a_failure_beside_a_skip_is_red",
         "test_a_failure_beside_known_issues_is_red",
         "test_a_floor_miss_is_red_even_with_only_known_issues_elsewhere",
+        "test_a_skip_beside_a_known_issue_says_both",
+        "test_a_skipped_test_is_amber_and_said_not_red",
         "test_build_failure_blocks_stages_and_records_code",
         "test_dry_run_prints_plan_without_building_or_writing_results",
         "test_exited_leader_with_live_descendant_blocks_next_stage",
         "test_failure_preserves_exit_and_continues_using_one_build",
         "test_known_issue_is_counted_and_named_not_a_pass",
         "test_known_issues_only_make_the_run_amber_with_counts",
-        "test_missing_structured_counts_and_skips_fail",
+        "test_missing_structured_counts_fail",
         "test_omitted_blocked_assignment_projection_fails_preflight",
         "test_poisoned_home_and_roots_replaced_in_child_and_xctestrun",
+        "test_skipping_under_the_floor_is_still_red",
         "test_symlink_results_root_refused_before_build",
         "test_timeout_preserves_124_and_cannot_pass",
         "test_ui_not_run_cannot_be_reported_as_pass",
@@ -33486,6 +33621,8 @@
         "test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red",
         "test_gauntlet_known_issues_only_is_amber_with_counts",
         "test_gauntlet_pre_amber_result_reads_as_amber",
+        "test_gauntlet_red_names_the_tests_behind_it",
+        "test_gauntlet_skips_are_amber_and_named",
         "test_green_needs_rc_zero_no_failures_and_a_pass",
         "test_live_holder_refuses_and_latest_is_untouched",
         "test_status_dry_run_prints_the_probe",
@@ -33527,13 +33664,19 @@
         "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
+        "test_a_mac_the_summary_has_never_seen_is_behind_too",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
+        "test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind",
+        "test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale",
+        "test_a_scoped_run_says_why_a_stage_failed_and_which_tests",
         "test_an_unsuppressed_ubsan_finding_is_red_and_a_skip_is_amber",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
         "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
+        "test_each_mac_row_keeps_its_newest_run_with_its_own_date",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
+        "test_failures_links_list_each_macs_failed_test_names",
         "test_findings_only_in_test_code_are_grey_never_red",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
         "test_gedcom_line_compares_the_pulls_each_mac_replayed",
@@ -33566,6 +33709,7 @@
         "test_summary_first_page_renders_every_line_and_twist",
         "test_summary_sparkline_does_not_join_across_missing_sample",
         "test_theme_defaults_dark_and_respects_saved_choice",
+        "test_version_and_app_source_share_a_tile_and_test_results_is_wide",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
         "test_without_a_summary_the_page_says_so_and_still_renders",
         "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone"
@@ -33633,7 +33777,12 @@
       "tests": [
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
         "test_core_codecov_json_keeps_only_core_sources",
+        "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",
         "test_folders_split_logic_from_views_and_core_from_app",
+        "test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess",
+        "test_profiles_from_before_todays_run_are_not_todays_coverage",
+        "test_sensor_a_night_without_core_coverage_says_missing_in_capitals",
+        "test_yesterdays_swiftpm_export_is_not_todays_coverage",
         "test_zero_coverage_logic_files_are_flagged_but_small_ones_are_not"
       ]
     },
@@ -33765,6 +33914,7 @@
         "test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done",
         "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
         "test_a_plain_nightly_mac_needs_only_its_green_suite",
+        "test_a_published_run_whose_dir_is_gone_reads_its_history_row_after_the_tidy_lines",
         "test_an_owner_paused_after_claiming_refuses_the_contender",
         "test_cli",
         "test_gauntlet_is_published_never_queue_only_with_the_rota_machine",
@@ -34019,6 +34169,8 @@
       ],
       "tests": [
         "test_a_deleted_transcript_never_lowers_a_published_codex_day",
+        "test_a_failed_fetch_is_retried_with_a_wait_and_then_publishes",
+        "test_a_fetch_that_never_works_fails_in_one_line_with_gits_own_words",
         "test_a_folder_deleted_since_it_was_published_does_not_wedge_the_publish",
         "test_adversarial_rows_are_per_night_counts",
         "test_cli_codex_dir_repeats_and_reads_every_folder",
@@ -34032,6 +34184,7 @@
         "test_events_stream_is_the_prototypes_counts_and_absent_on_any_failure",
         "test_existing_published_rows_are_revalidated",
         "test_folder_names_must_be_plain_source_folders",
+        "test_git_errors_are_one_line",
         "test_merge_keeps_branch_only_days_and_fresh_wins",
         "test_missing_sources_are_none_not_empty",
         "test_no_free_text_leaks_from_any_source",
@@ -34045,6 +34198,7 @@
         "test_refuses_the_main_checkout_as_its_worktree",
         "test_rejected_push_refetches_resets_and_keeps_the_other_publishers_rows",
         "test_second_publish_with_nothing_new_commits_nothing",
+        "test_summary_only_publishes_the_summary_and_reads_no_local_stream",
         "test_the_publisher_reads_live_and_archived_codex_transcripts",
         "test_unknown_stream_is_refused",
         "test_validator_rejects_anything_off_the_allowlist"
@@ -34134,7 +34288,9 @@
         "test_summary_object_validates_and_leaks_nothing",
         "test_summary_with_everything_failing_is_still_valid",
         "test_the_cell_carries_how_much_of_each_hallie_lane_ran_and_why_it_did_not",
-        "test_the_real_rota_runs_the_nightly_on_mac_studios_only"
+        "test_the_cell_says_when_the_run_finished_and_names_only_tests_found_in_the_sources",
+        "test_the_real_rota_runs_the_nightly_on_mac_studios_only",
+        "test_the_real_test_sources_prove_the_names_the_nightly_prints"
       ]
     },
     {
@@ -34323,6 +34479,12 @@
         "test_sensor_lane.py"
       ],
       "tests": [
+        "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_manifest_that_cannot_be_checked_is_an_error_not_a_pass",
+        "test_a_manifest_that_matches_the_source_has_no_errors",
+        "test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh",
+        "test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error",
+        "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
         "test_counting_the_log_names_every_failure",
@@ -34331,7 +34493,8 @@
         "test_known_source_scan_sensors_are_found_both_ways",
         "test_parameterised_and_xctest_identifiers",
         "test_the_lane_is_a_slice_not_the_suite",
-        "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane"
+        "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane",
+        "test_this_checkouts_manifest_is_current"
       ]
     },
     {
@@ -34861,6 +35024,451 @@
         "textBlockDecodes",
         "thinkingBlockIgnored",
         "truncated"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPublicMarksTests"
+      ],
+      "tests": [
+        "aDigestInAnyCaseIsTheSameContent",
+        "aDigestThatIsNotContentWritesNothing",
+        "aFileHoldingAPoisonedFlagIsRefusedAtOpenWithWords",
+        "aPoisonedFlagReadsAsUnreadableAndPrivateAndNeverThrows",
+        "aReadOnlyOpenRefusesAMark",
+        "aSchemaFifteenDatabaseOpensAsSixteenWithEveryContentRowIntactAndEverythingPrivate",
+        "aSixteenFileIsRefusedInWordsByTheGateAFifteenBuildRan",
+        "contentHeldNamesOnlyTheStoredDigestsInAnyCase",
+        "makePrivateAppendsAZeroRowAndNeverDeletes",
+        "noRowIsPrivateAndTheNewestRowIsCurrent",
+        "oneHundredThousandContentsCurrentBitInsideBudgets",
+        "onlyAnExactOneIsPublic",
+        "theTableIsAppendOnlyAndItsChecksHold",
+        "theWholeTableReadingGivesOneCurrentRowPerDigest"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PublicMarkTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PublicMarkLogicTests",
+        "PublicMarkTruthTests",
+        "PublicMarkScaleTests",
+        "PublicMarkSensorTests"
+      ],
+      "tests": [
+        "acrossAViewerMasterFlip",
+        "already",
+        "anOlderLoadSnapshotNeverWins",
+        "archiveRowMenuCarriesTheItems",
+        "duringAWriteHold",
+        "hundredThousandSelected",
+        "insideTheDebounceWindow",
+        "menuRefusal",
+        "missingContentRollsBack",
+        "missingContentRollsBackMakePrivateToo",
+        "noSQLNoCommitInTheViews",
+        "offer",
+        "poisonedRow",
+        "privateAgainAndMultiSelection",
+        "publicShowsOnCopiesAndSurvivesRelaunch",
+        "staleProjectionDoesNotSkipARealChange",
+        "targets",
+        "theGlobeReadsTheStore",
+        "theProjectionTakesOnlyAnExactOne",
+        "unattachedIsPrivateAndRefuses",
+        "words"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapePublicMarksMigrationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapePublicMarksMigrationTests"
+      ],
+      "tests": [
+        "theDoorMarksARealContentOnTheMigratedCopy",
+        "theLiveCatalogOpensWithEveryRowKept",
+        "theRewoundCopyMigratesWithEveryRowKeptAndEverythingPrivate"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_nightly_shell_selftests.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_shell_selftests.py"
+      ],
+      "tests": [
+        "test_every_nightly_shell_selftest_has_a_seat_here",
+        "test_nightly_analysis_lane_selftest_passes",
+        "test_nightly_failure_modes_selftest_passes",
+        "test_nightly_hallie_replay_selftest_passes"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_script_tests_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_script_tests_lane.py"
+      ],
+      "tests": [
+        "test_a_child_in_its_own_session_is_killed_too",
+        "test_a_run_that_proves_nothing_is_red_never_green",
+        "test_a_timeout_is_red_whatever_the_log_says",
+        "test_cli_a_child_that_ignores_term_is_killed_after_the_leader_exits",
+        "test_cli_a_hung_runner_is_stopped_at_its_budget_with_its_children",
+        "test_cli_bad_arguments_and_a_missing_runner_are_red_in_one_line",
+        "test_cli_runs_a_real_runner_and_writes_its_log",
+        "test_failures_are_named_and_counted",
+        "test_green_needs_exit_zero_and_at_least_one_passed_test",
+        "test_only_pytests_final_summary_line_counts",
+        "test_sensor_the_testbed_runs_the_lane_and_its_red_fails_the_run"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_nightly_publish_and_summary.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_publish_and_summary.py"
+      ],
+      "tests": [
+        "test_a_commit_that_fails_is_not_pushed_and_nothing_is_lost",
+        "test_a_good_publish_lands_the_queued_rows_first_and_clears_the_queue",
+        "test_sensor_the_summary_is_rebuilt_from_an_exit_trap_after_every_run",
+        "test_the_exit_trap_keeps_the_runs_own_exit_code"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_repo_traffic.py",
+      "stage": "regression",
+      "suites": [
+        "test_repo_traffic.py"
+      ],
+      "tests": [
+        "test_a_day_outlives_githubs_14_days_and_a_rising_day_takes_the_larger_reading",
+        "test_a_day_whose_jobs_were_never_counted_does_not_say_zero",
+        "test_a_days_jobs_are_summed_across_its_runs_and_the_larger_reading_wins",
+        "test_a_failed_fetch_changes_nothing_on_disk_and_the_cli_still_exits_zero",
+        "test_a_new_fork_star_or_referrer_is_named_once_and_raises_the_alert",
+        "test_a_settled_day_that_already_has_its_jobs_is_not_asked_for_again",
+        "test_gh_api_says_why_it_failed_and_never_hangs_on_stdin",
+        "test_no_finished_day_and_many_ci_runs_pages",
+        "test_the_line_counts_checkouts_not_runs",
+        "test_yesterdays_numbers_and_our_own_ci_runs_are_in_the_line"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/ProvenanceResolverTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProvenanceResolverLogicTests",
+        "ProvenanceResolverGroupingTests",
+        "ProvenanceResolverIsolationTests",
+        "ProvenanceResolverMediaMatrixTests",
+        "ProvenanceResolverScaleTests",
+        "ProvenanceResolverTruthTests",
+        "ProvenanceResolverDoorTests",
+        "ProvenanceResolverReviewTests",
+        "ProvenanceResolverReviewFixTests"
+      ],
+      "tests": [
+        "aCaptureShorterThanTwentyMinutesProposesNothing",
+        "aCodecOtherThanFFV1ProposesNothing",
+        "aContainerOtherThanMatroskaProposesNothing",
+        "aDigestThatIsNotAWholeFileSHA256ProposesNothing",
+        "aDurationThatIsNotALengthProposesNothing",
+        "aFileDatedInAnotherYearGetsRoleAndCarrierButNoSetup",
+        "aFileThatDoesNotQualifyNeverJoinsAGroup",
+        "aFileWithNoEmbeddedDateGetsRoleAndCarrierButNoSetup",
+        "aHumanInferredRowIsNotAnEstimate",
+        "aNameIsRelatedByWholeTokensOnly",
+        "aNameRelatedShorterFileIsUnclassifiedAndTheLongerIsStillAMaster",
+        "aNameThatOnlyStartsAnotherIsNotTheSameTape",
+        "aPathThatIsNotEvidenceProposesNothing",
+        "aPathWithNoYearFolderHasNoFilingYear",
+        "aPathWithoutTheFolderComponentProposesNothing",
+        "aPoisonedBitDepthProposesNothing",
+        "aPoisonedResolutionProposesNothing",
+        "aRejectAfterAConfirmShowsNothing",
+        "aRejectedRoleShowsNothing",
+        "aRoleKeyThisBuildCannotReadShowsNothing",
+        "aSecondRunReusesTheStandingRowsTimeButNeverARejectedOnes",
+        "aWithdrawalRowLeavesNothingStandingAndASecondOneIsNotNeeded",
+        "anAlternateCaptureNamesItsMaster",
+        "anAlternateNamesItsMasterInItsEvidence",
+        "anAlternateWhoseMasterNoLongerStandsDropsThePointer",
+        "anUnknownYearOrMonthIsOmittedNeverInvented",
+        "anUnrelatedShorterFileIsItsOwnTape",
+        "atEqualPictureAndDepthTheMasterIsTheShorterStem",
+        "atEqualPictureDepthAndStemLengthTheMasterIsTheSmallestOriginalPath",
+        "atEqualPictureTheMasterIsTheDeeperOne",
+        "byteCopiesAreOneContent",
+        "capturesWithinOnePercentAreOneTapeWithExactlyOneMaster",
+        "estimateThenRejectThenReEstimateIsVetoedAndASecondRunIsADuplicate",
+        "everyOrderOfTheSameFactsGivesTheSameProposals",
+        "filesInDifferentFoldersAreDifferentTapes",
+        "fiveThousandUnrelatedNamesInOneFolder",
+        "hundredThousandFacts",
+        "hundredThousandRowsReduceToEstimates",
+        "inferredRowsAloneAreNeverConfirmed",
+        "missingProbeValuesProposeNothing",
+        "nameRelationIgnoresCaseAndTheExtension",
+        "noAssertedFieldIsANameOrADate",
+        "noFactsIsNoProposals",
+        "noRowsIsNoEstimate",
+        "noSentenceEverCarriesAConfidence",
+        "numberedTapesOfEqualLengthAreNotCapturesOfOneTape",
+        "onePoisonedFactDoesNotStopTheOthers",
+        "onlyMkvFFV1FromTheVHSFolderQualifies",
+        "onlyRicksConfirmedRowsOnEveryFieldMakeItConfirmed",
+        "rejectingTheNewestProposalDoesNotResurrectAnOlderOne",
+        "ricksConfirmationOutlivesAWithdrawal",
+        "ricksConfirmedRowsLandAndReadBackAsConfirmed",
+        "ricksOwnRoleWinsOnEverySurface",
+        "technicalWordsComeFromTheFilesOwnProbeValues",
+        "theCaptureSetupIsClaimedOnlyWithTheFilesOwn2026Date",
+        "theComponentMustBeADirectoryNotPartOfAName",
+        "theCountsAddUpToExamined",
+        "theDossierLineIsAnObservationUntilConfirmedAndAbsentWithoutAnEstimate",
+        "theDossierLineYieldsToRicksRole",
+        "theEvidenceCarriesTheNameRelationAndTheDurations",
+        "theEvidenceNamesTheRuleAndTheFactsItUsed",
+        "theExampleFileIsProposedAsAVHSMasterWithThreeDrafts",
+        "theFullSentenceIsTheRulingsExample",
+        "theMasterIsTheLargerPicture",
+        "theRealFolderShapes",
+        "theSameFactsGiveTheSameEvidenceBytes",
+        "theSameNameInAnotherFolderIsAnotherTape",
+        "theTapeYearIsTheArchivesFilingFolderAndNeverTheCapturesOwnYear",
+        "theWholeMatrixInOneFolderYieldsOneMasterAndNothingElse",
+        "theWithdrawalRowPassesTheDoorAndIsNotVetoed",
+        "twoUnrelatedNamesOfEqualLengthAreTwoTapes",
+        "whatMayBeWithdrawn"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProvenanceEstimateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProvenanceEstimateLogicTests",
+        "ProvenanceEstimateStoreTests",
+        "ProvenanceEstimateScaleTests",
+        "ProvenanceEstimateSensorTests",
+        "ProvenanceEstimateReviewTests",
+        "ProvenanceEstimateReviewFixTests"
+      ],
+      "tests": [
+        "aChangedRefusalRefreshesWhatIsShown",
+        "aContentTheCatalogDoesNotHold",
+        "aMasterRickRoledOtherwiseIsNotPointedAt",
+        "aShorterCaptureIsReportedNotClassified",
+        "aStaleProjectionConfirmsNothing",
+        "acrossAViewerMasterFlip",
+        "anAlternateNamesItsMasterByTheArchiveNameUntilTheMasterIsRejected",
+        "anEstimateNeverClaimsConfirmation",
+        "anEstimateTheRuleWithdrewIsNotShown",
+        "anOpenDossierHearsEveryProvenanceChange",
+        "confirmAListWithASkip",
+        "confirmComparesEveryField",
+        "confirmNeverWritesAValueThatWasNotShown",
+        "confirmWritesRowsAndTheRoleInOneTransaction",
+        "confirmsLogNamesTheRows",
+        "duringAWriteHold",
+        "estimateLandsAndASecondRunWritesNothing",
+        "factsProjection",
+        "glyphSeam",
+        "hundredThousandRecords",
+        "insideTheDebounceWindow",
+        "inspectorLine",
+        "journeyEvent",
+        "journeySeam",
+        "masterNameSeamWithoutAnArchive",
+        "mediaMatrixThroughTheProjection",
+        "noNameOrDateFieldIsWritten",
+        "noSQLNoCommitInTheViews",
+        "noSetupWithoutTheFilesOwnDate",
+        "notRightSeesWhatIsShown",
+        "nothingStartsAnEstimateAtLaunch",
+        "offer",
+        "olderSnapshotNeverWins",
+        "rejectThenEstimateAgainIsVetoedAndReported",
+        "ricksOwnRoleWins",
+        "ricksSetRoleWinsOverAnEstimate",
+        "setRoleUnknownAfterAConfirmMakesItProvisionalAgain",
+        "summaryWords",
+        "theArchiveTabHoldsNoGlyphLogic",
+        "theDossierYieldsToRicksOwnRole",
+        "theInspectorBodyDoesNoArchiveLookup",
+        "theInspectorReadsTheCatalog",
+        "theJob",
+        "theRunsCountsAddUp",
+        "theSymbolResolves",
+        "unattachedShowsNothingAndRefuses",
+        "wiring",
+        "withdrawalIsIdempotentReversibleAndNeverTouchesRicksWord"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateTests"
+      ],
+      "tests": [
+        "before1980",
+        "edgeWords",
+        "failedLevelsPassIsUncheckedNotDamaged",
+        "incompleteIsUnchecked",
+        "liveChannelDoesNotExcuseAnIncompletePass",
+        "markBinding",
+        "noTrackAndDamage",
+        "noTrackRefusal",
+        "oneSided",
+        "pairHalf",
+        "precedence",
+        "presentDecisions",
+        "presentShapes",
+        "scale",
+        "silentRefusal",
+        "silentSurround",
+        "tagAccepts",
+        "tagLimits",
+        "theLine",
+        "theTickAcceptsOnlyCouldNotCheck"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateJobTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateJobTests"
+      ],
+      "tests": [
+        "aPerfectStoredPassIsNeverReused",
+        "changedDuringMeasurementIsRefused",
+        "couldNotCheckIsRefused",
+        "damagedIsRefusedEvenTagged",
+        "headerNeverPasses",
+        "incompletePassWithALiveChannelIsRefused",
+        "mixedBatch",
+        "noTrackIsRefused",
+        "oneSidedPromotesWithANote",
+        "pairHalfIsRefused",
+        "partialMeasurementIsRefused",
+        "refusalWordsFollowTheCurrentRecord",
+        "replacedBetweenProofAndMeasurementIsRefused",
+        "silentAudioOnlyIsRefused",
+        "silentIsRefused",
+        "stopDuringTheCheck",
+        "tagAcceptsSilent",
+        "tagDoesNotCrossToOtherBytes",
+        "tagOnARecordNoLongerInTheCatalogAcceptsNothing",
+        "tagRemovedDuringMeasurementAcceptsNothing",
+        "tagRemovedIsRefused",
+        "taggedHalfPromotesAlone",
+        "theArchiveAnywayTick",
+        "theGateStoresNothing"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveAngelSoundGateTests"
+      ],
+      "tests": [
+        "damagedAndUnchecked",
+        "noTrackNeedsYourOK",
+        "silentNeedsYourOK",
+        "soundPromotes",
+        "taggedRowPromotes",
+        "theAngelHasNoSecondDoor"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateMediaMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateMediaMatrixTests"
+      ],
+      "tests": [
+        "avi",
+        "missingFfmpegIsNotDamage",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf",
+        "theNumberIsTheMeasurement"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateIsolationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateIsolationTests"
+      ],
+      "tests": [
+        "poisonedStoredVerdicts",
+        "replacedMidRead",
+        "sourceGoneMidRead",
+        "undecodableFiles"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteSoundGateSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteSoundGateSensorTests"
+      ],
+      "tests": [
+        "endToEnd",
+        "oneCallBeforeTheFirstWrite",
+        "oneVerdictWriter",
+        "onlyRecoveryIsUngated",
+        "theGateReadsNoStoredVerdict",
+        "theRuleReadsNoHeader",
+        "theSeamIsNeverAssignedInProduction",
+        "theWordsAreTrue"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapePromoteSoundGateTests"
+      ],
+      "tests": [
+        "theTagOnTheLiveCatalog"
       ]
     }
   ],
@@ -37584,11 +38192,19 @@
         {
           "name": "VideoScan/VideoScanTests/FrameIndexRealRunTests.swift",
           "reason": "opt-in real run: runs only when observations/siglip2/realrun.json names a .backup copy of a real catalog"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
+          "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3533,
+      "expected_floor": 3646,
       "name": "unit",
-      "package_expected_floor": 804,
+      "package_expected_floor": 899,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -37598,6 +38214,7 @@
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
         "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
         "VideoScanCoreTests.BackgroundMenuPresentationTests",
+        "VideoScanCoreTests.BackgroundQuitMarkerTests",
         "VideoScanCoreTests.BackgroundPayloadCodecTests",
         "VideoScanCoreTests.BackoffPolicyTests",
         "VideoScanCoreTests.CaptionTextQualityTests",
@@ -37670,6 +38287,7 @@
         "VideoScanCoreTests.ModelLabWindowSamplerTests",
         "VideoScanCoreTests.ObservationJournalTests",
         "VideoScanCoreTests.ObservationsReportTests",
+        "VideoScanCoreTests.ObservationsTypedRowsTests",
         "VideoScanCoreTests.PeerRequirementTests",
         "VideoScanCoreTests.PeerTrustPolicyTests",
         "VideoScanCoreTests.PoisonedCatalogFixtureAppDecodeTests",
@@ -37682,7 +38300,16 @@
         "VideoScanCoreTests.StateRootLockTests",
         "VideoScanCoreTests.SubprocessEnvironmentTests",
         "VideoScanCoreTests.SubprocessPathSensorTests",
-        "VideoScanCoreTests.TechnicalReadingTests"
+        "VideoScanCoreTests.TechnicalReadingTests",
+        "VideoScanCoreTests.ProvenanceResolverLogicTests",
+        "VideoScanCoreTests.ProvenanceResolverIsolationTests",
+        "VideoScanCoreTests.ProvenanceResolverMediaMatrixTests",
+        "VideoScanCoreTests.ProvenanceResolverScaleTests",
+        "VideoScanCoreTests.ProvenanceResolverTruthTests",
+        "VideoScanCoreTests.ProvenanceResolverDoorTests",
+        "VideoScanCoreTests.ProvenanceResolverGroupingTests",
+        "VideoScanCoreTests.ProvenanceResolverReviewTests",
+        "VideoScanCoreTests.ProvenanceResolverReviewFixTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -37768,6 +38395,8 @@
         "VideoScanTests/BackgroundServiceRegistrarTests",
         "VideoScanTests/BackgroundServiceSensorTests",
         "VideoScanTests/BackgroundServiceStoreTests",
+        "VideoScanTests/BackgroundServiceQuitTests",
+        "VideoScanTests/BackgroundServiceControlTests",
         "VideoScanTests/BackgroundSettingsSensorTests",
         "VideoScanTests/BalanceAudioClassifierTests",
         "VideoScanTests/BalanceFromDiagnosisTests",
@@ -38184,7 +38813,6 @@
         "VideoScanTests/SetAsideVisibilityTests",
         "VideoScanTests/ShortClipTests",
         "VideoScanTests/SideStoreAuthorityTests",
-        "VideoScanTests/SigLIPEmbedderTests",
         "VideoScanTests/SigningIdentitySensorTests",
         "VideoScanTests/SoundCopyFinderDecideTests",
         "VideoScanTests/SoundCopyFinderScaleTests",
@@ -38274,7 +38902,17 @@
         "VideoScanTests/WorkspaceImportTests",
         "VideoScanTests/HallieCloudStructuredOutputShapeTests",
         "VideoScanTests/HallieCloudStructuredOutputDecodeTests",
-        "VideoScanTests/AnthropicSchemaSanitizerTests"
+        "VideoScanTests/AnthropicSchemaSanitizerTests",
+        "VideoScanTests/PublicMarkLogicTests",
+        "VideoScanTests/PublicMarkScaleTests",
+        "VideoScanTests/PublicMarkSensorTests",
+        "VideoScanTests/PublicMarkTruthTests",
+        "VideoScanTests/ProvenanceEstimateLogicTests",
+        "VideoScanTests/ProvenanceEstimateStoreTests",
+        "VideoScanTests/ProvenanceEstimateScaleTests",
+        "VideoScanTests/ProvenanceEstimateSensorTests",
+        "VideoScanTests/ProvenanceEstimateReviewTests",
+        "VideoScanTests/ProvenanceEstimateReviewFixTests"
       ]
     },
     {
@@ -38614,9 +39252,53 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeContentLeftTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapePublicMarksMigrationTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "tests/test_nightly_shell_selftests.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_script_tests_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_nightly_publish_and_summary.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_repo_traffic.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelSoundGateTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateMediaMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateIsolationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteSoundGateSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapePromoteSoundGateTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 509,
+      "expected_floor": 529,
       "name": "regression",
       "package_expected_floor": 329,
       "package_selectors": [
@@ -38800,7 +39482,8 @@
         "VideoScanTests/AnalyzeLeftPlanTests",
         "VideoScanTests/AnalyzeLeftScaleTests",
         "VideoScanTests/AnalyzeLeftStoreTests",
-        "VideoScanTests/AnalyzeLeftSensorTests"
+        "VideoScanTests/AnalyzeLeftSensorTests",
+        "VideoScanTests/PromoteSoundGateTests"
       ]
     },
     {

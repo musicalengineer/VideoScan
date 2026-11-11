@@ -85,3 +85,46 @@ def test_ccn15_excess_shrink_refuses_an_empty_scan(tmp_path):
     cm.write_ccn15_excess(path, 300, {})
     plan = cm.ccn15_excess_shrink_plan(str(tmp_path), path, str(tmp_path / "ov.jsonl"), funcs=[])
     assert plan["problems"] and not plan["changed"]
+
+
+def _repo_with_baselines(root, ccn_recorded, excess_recorded):
+    """A tiny tree under `root`: one CCN-20 function and both committed baselines."""
+    src = root / OTHER
+    src.parent.mkdir(parents=True)
+    src.write_text(mid_ccn("body", 20))
+    base = root / "ci" / "baselines"
+    base.mkdir(parents=True)
+    cm.write_baseline(str(base / "complexity_debt.json"), {f"{OTHER}::body": {"ccn": ccn_recorded, "nloc": 50}})
+    cm.write_ccn15_excess(str(base / "complexity_ccn15_excess.json"), excess_recorded, {OTHER: excess_recorded})
+    return base / "complexity_debt.json", base / "complexity_ccn15_excess.json"
+
+
+def test_default_baselines_are_the_ones_under_root_not_under_the_cwd(tmp_path, monkeypatch):
+    """#456: `--root <worktree> --shrink-baseline` run from another checkout read and
+    rewrote the CWD's ci/baselines (the default paths were cwd-relative), not the worktree's."""
+    debt, excess = _repo_with_baselines(tmp_path / "worktree", 25, 10)
+    cwd_debt, cwd_excess = _repo_with_baselines(tmp_path / "elsewhere", 99, 99)
+    before = (cwd_debt.read_bytes(), cwd_excess.read_bytes())
+    monkeypatch.chdir(tmp_path / "elsewhere")
+
+    assert cm.main(["--root", str(tmp_path / "worktree"), "--shrink-baseline"]) == 0
+
+    assert cm.load_baseline(str(debt))[f"{OTHER}::body"]["ccn"] == 20           # the worktree's, shrunk
+    assert cm.load_ccn15_excess(str(excess))["total_excess"] == 5
+    assert (cwd_debt.read_bytes(), cwd_excess.read_bytes()) == before             # the cwd's, untouched
+
+
+def test_a_baseline_path_given_on_the_command_line_is_used_as_given(tmp_path, monkeypatch):
+    """Only the DEFAULTS follow --root; a path the caller names is the caller's (cwd-relative as typed)."""
+    debt, _ = _repo_with_baselines(tmp_path / "worktree", 25, 10)
+    named, named_excess = _repo_with_baselines(tmp_path / "elsewhere", 25, 10)
+    before = debt.read_bytes()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+
+    assert cm.main(["--root", str(tmp_path / "worktree"), "--shrink-baseline",
+                    "--baseline", "ci/baselines/complexity_debt.json",
+                    "--ccn15-excess", "ci/baselines/complexity_ccn15_excess.json"]) == 0
+
+    assert cm.load_baseline(str(named))[f"{OTHER}::body"]["ccn"] == 20
+    assert cm.load_ccn15_excess(str(named_excess))["total_excess"] == 5
+    assert debt.read_bytes() == before

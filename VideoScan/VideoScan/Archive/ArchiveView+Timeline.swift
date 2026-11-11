@@ -142,7 +142,10 @@ extension ArchiveView {
             // opens its archived copy; a lost file says so with the
             // archive path (Rick 2026-10-16).
             openItems: { ids in self.openArchiveItems(ids) },
-            auditYear: { year in auditYearRequest = ArchiveAuditRequest(year: year) })
+            auditYear: { year in auditYearRequest = ArchiveAuditRequest(year: year) },
+            // Make Public (2026-11-09): the globe reads the store's
+            // projection of catalog.sqlite; O(1) per visible card.
+            publicBadge: { id in AnyView(PublicMarkBadge(store: model.publicMarks, record: model.record(forID: id))) })
     }
 }
 
@@ -174,6 +177,9 @@ struct ArchiveTimelinePane: View {
     /// Year header ▸ "Audit <year>…" (ArchiveAuditYearSheet). Behind the
     /// right-click only — Rick's visibility rule: no ribbon badges.
     var auditYear: (Int) -> Void = { _ in }
+    /// The globe beside a card whose video is public (PublicMarkBadge, fed
+    /// by the tab like `contextMenu`); nothing by default.
+    var publicBadge: (UUID) -> AnyView = { _ in AnyView(EmptyView()) }
 
     private static let undatedAnchor = ArchiveDecadeTick.undatedID
 
@@ -477,6 +483,7 @@ struct ArchiveTimelinePane: View {
                                 .foregroundStyle(.green)
                                 .help("Byte-verified in the Master Archive")
                         }
+                        publicBadge(item.id)
                     }
                     HStack(spacing: 6) {
                         Image(systemName: icon(for: item.kind))

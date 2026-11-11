@@ -102,6 +102,12 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         /// Set when the file landed but could NOT be locked — why. The
         /// copy is good and stays; Verify Copies keeps listing it as not locked.
         var notLocked: String? = nil
+        /// What the sound gate recorded for a file that landed: "sound on the
+        /// left side only", or that the owner's tag accepted it without sound.
+        var soundNote: String? = nil
+        /// The refusal's code ("sound-silent", "duplicate", …) when a guard
+        /// refused the file; Archive Angel chooses its words from it.
+        var refusalCode: String? = nil
     }
     @Published private(set) var outcomes: [FileOutcome] = []
 
@@ -110,6 +116,15 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     var fileLock: ArchiveFileLock.Seams = .live
     /// source record id → why its archive copy could not be locked (this run).
     var lockWarnings: [UUID: String] = [:]
+    /// The sound gate's measurement step (PromoteSoundGate). Production never
+    /// assigns this: it stays `.live` (ffprobe + the levels pass on the
+    /// source). Tests that promote random bytes replace it before the run.
+    var soundMeasure: PromoteSoundGate.Measure = .live
+    /// source record id → the sound gate's note for a file it let through.
+    var soundNotes: [UUID: String] = [:]
+    /// "<file>: <why>" for each file the sound gate refused, in order — the
+    /// finished row shows the first (names stay out of the persistent logs).
+    var soundRefusalRows: [String] = []
     /// source record id → why this run's date was refused: an earlier,
     /// interrupted run had already placed the file elsewhere (codex r1 #3).
     var placementConflicts: [UUID: String] = [:]
@@ -126,10 +141,14 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     var archiveDigests = ArchiveDigestIndex()
 
     /// Test seam (always nil in production): runs on the main actor after a
-    /// file's digest is claimed AND proven, before the destination is
-    /// chosen or the journal intent is written — so a test can change the
-    /// source under the copy, or cancel, at a deterministic point.
+    /// file's digest is claimed AND proven and its sound has passed, before
+    /// the destination is chosen or the journal intent is written — so a
+    /// test can change the source under the copy, or cancel, at a
+    /// deterministic point.
     var testHookAfterSourceProof: ((VideoRecord) -> Void)?
+    /// Test seam (always nil in production): between the digest proof and
+    /// the sound check — a file replaced here is no longer the proven one.
+    var testHookBeforeSoundCheck: ((VideoRecord) -> Void)?
 
     /// "promote 1A2B3C4D item 3/12" — names the file being worked on in
     /// PERSISTENT log lines without naming the file (codex 2026-10-02 #7).
@@ -364,10 +383,12 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         model.log("Promote: \(summary).")
         if tally.promoted + tally.adopted == 0 && tally.failed > 0 {
             finish(failed: summary)
+            showSoundRefusals(after: summary)
             completionTask = ledgerFlush
             return
         }
         finish(success: summary)
+        showSoundRefusals(after: summary)
 
         // Stage 2, part 2 — protection line + the sheet, ONLY when every
         // copy landed verified: no failed file, something landed.
@@ -386,6 +407,21 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             model.offerArchivedWhatNext(batchID: batchID, recordIDs: landed, totalBytes: bytes,
                                         protection: protection, source: .promoteBatch)
         }
+    }
+
+    /// The finished row says WHY a file was refused for its sound: the
+    /// summary, then the first refused file and its sentence. Row text only
+    /// — the persistent lines carry the op id, the code and path-free facts
+    /// (`noteRefusal`). Pure text builder below.
+    private func showSoundRefusals(after summary: String) {
+        guard let text = Self.soundRefusalSubtitle(summary: summary, rows: soundRefusalRows) else { return }
+        subtitleText = text
+    }
+
+    nonisolated static func soundRefusalSubtitle(summary: String, rows: [String]) -> String? {
+        guard let first = rows.first else { return nil }
+        let more = rows.count > 1 ? " (and \(rows.count - 1) more refused for their sound)" : ""
+        return "\(summary) — \(first)\(more)"
     }
 
     /// Append this run's `archived` lines and (for a clean finish) mirror
@@ -409,12 +445,14 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             tally.promoted += 1
             tally.bytesDone += entry.sizeBytes
             record(.promoted, entry.filename, relPath, recordID: entry.recordID,
-                   notLocked: noteLockWarning(entry, &tally, model: model))
+                   notLocked: noteLockWarning(entry, &tally, model: model),
+                   soundNote: soundNotes[entry.recordID])
         case .adopted(let relPath):
             tally.adopted += 1
             tally.bytesDone += entry.sizeBytes
             record(.adopted, entry.filename, relPath, recordID: entry.recordID,
-                   notLocked: noteLockWarning(entry, &tally, model: model))
+                   notLocked: noteLockWarning(entry, &tally, model: model),
+                   soundNote: soundNotes[entry.recordID])
             model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
         case .skipped(let why):
             tally.skipped += 1
@@ -435,7 +473,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             }
             // The detail (names, paths, dates) goes to the outcome row
             // only; the persistent lines carry the op id + code + facts.
-            record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID)
+            record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID,
+                   refusalCode: refusal.code.rawValue)
+            if refusal.code.isSound { soundRefusalRows.append("\(entry.filename): \(refusal.detail)") }
             noteRefusal(refusal, model: model)
         case .cancelled:
             break
@@ -453,9 +493,9 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     }
 
     func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil,
-                notLocked: String? = nil) {
+                notLocked: String? = nil, soundNote: String? = nil, refusalCode: String? = nil) {
         outcomes.append(FileOutcome(filename: filename, kind: kind, detail: detail, recordID: recordID,
-                                    notLocked: notLocked))
+                                    notLocked: notLocked, soundNote: soundNote, refusalCode: refusalCode))
     }
 
     /// The "promoted — not locked" warning for one landed entry, if any:

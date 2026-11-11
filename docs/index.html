@@ -106,7 +106,6 @@
   /* Lane ladders (Rick 2026-10-31): one per Mac, one rung per lane of the 2 AM run, lit from the bottom. */
   .ladders { display: flex; gap: 18px; margin: 12px 0 4px; flex-wrap: wrap; align-items: flex-end; }
   .ladders figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .ladders figcaption { font-size: 14px; color: var(--muted); font-weight: 600; }
   .ladder { display: block; }
   .ladder .well { fill: var(--chip-bg); stroke: var(--border); }
   .ladder .rung { fill: var(--border); }
@@ -115,8 +114,24 @@
   .ladder .rung.red { fill: var(--bad); }
   .ladder .rung.grey { fill: var(--border); }
   .ladder .lane { fill: var(--muted); font-size: 11px; font-family: inherit; }
-  .hosts { display: flex; gap: 7px; margin: 8px 0 12px; flex-wrap: wrap; }
-  .hosts > span { font-size: 15px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  /* One row per Mac (Rick 2026-11-08): name, RAM and when ITS newest run finished, then that run's counts. */
+  .hosts { display: flex; flex-direction: column; gap: 7px; margin: 8px 0 12px; }
+  .hosts > span { font-size: 15px; display: flex; flex-direction: column; gap: 3px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .hosts .hosthead { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .hosts .hostline { padding-left: 17px; }
+  .tile.wide { grid-column: span 2; }
+  .parts { display: flex; flex-direction: column; gap: 2px; }
+  .parts .ver { margin-top: 10px; letter-spacing: .04em; }
+  .parts .since { color: var(--muted); font-size: 13px; }
+  .grow-up { color: var(--good); }
+  .value .growth { margin-left: 1.6em; }
+  .grow-down { color: var(--bad); }
+  .tile.wide .hosts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .fails, .fails > summary { display: inline; }
+  .fails > summary::-webkit-details-marker { display: none; }
+  .fails > summary { cursor: pointer; color: var(--accent); text-decoration: underline; }
+  .fails ol { margin: 6px 0 0; padding-left: 22px; font-size: 14px; }
+  .behind { display: block; margin-top: 6px; font-size: 13px; }
   .hosts > .red { border-color: var(--bad); }
   .hosts > .green { border-color: var(--good); }
   .hosts > .amber { border-color: var(--amber); }
@@ -247,6 +262,7 @@
     .top h1 { font-size: 27px; }
     .top .sub { flex-basis: 100%; order: 2; }
     .head { grid-template-columns: minmax(0, 1fr); }
+    .tile.wide { grid-column: auto; }
     .tile, .block { padding: 18px; }
     details.area summary { padding: 16px 14px; grid-template-columns: 12px 8px minmax(0, 1fr); grid-template-areas: "c d n" ". . v" ". . s" ". . sp"; column-gap: 9px; }
     .num { text-align: left; }
@@ -811,6 +827,24 @@ function renderEvidence(d) {
   };
   for (const [area, streams] of Object.entries(pairs)) document.getElementById(`evidence-${area}`).textContent = streams.map(([label, row]) => evidenceText(label, row, area === "hallie" && row ? row.hallie_replay_git_sha : undefined)).join(" · ");
 }
+// Why a stage has its outcome and which tests are behind it (2026-11-10): the runner's own
+// fixed phrases (`why`) and the test identifiers the publisher let through, each list
+// behind its own opener, with how many more are not shown. Nothing to say -> a dash.
+const STAGE_NAME_LISTS = [["failed_tests", "failed"], ["skipped_tests", "skipped"], ["incomplete_tests", "did not finish"]];
+function stageWhy(stage) {
+  const parts = [];
+  if (typeof stage.why === "string" && stage.why) parts.push(esc(stage.why));
+  for (const [key, word] of STAGE_NAME_LISTS) {
+    const names = Array.isArray(stage[key]) ? stage[key].filter(x => typeof x === "string") : [];
+    const more = isNum(stage[key + "_more"]) ? stage[key + "_more"] : 0;
+    if (!names.length && !more) continue;
+    const total = names.length + more;
+    parts.push(`<details class="fails"><summary>${n(total)} ${word}</summary>`
+      + (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
+      + (more ? `${n(more)} more ${more === 1 ? "is" : "are"} not named.` : "") + `</details>`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
 function manualTestResults(d) {
   const rows = d.allTdRows.filter(r => r.source === "gauntlet" && r.schemaVersion === 1);
   const latest = new Map();
@@ -820,9 +854,9 @@ function manualTestResults(d) {
   const body = [...latest.values()].map(row => {
     const machine = REFRESH_MACHINES[row.machine] || (row.machine === "m1" ? "M1" : "Unknown system");
     const stages = Array.isArray(row.stages) ? row.stages : [];
-    return `<p><b>${machine}</b> · ${esc(evidenceText("Stage run", row))}</p>` + table(["Stage", "Outcome", "Passed", "Failed", "Skipped"], knownStages.map(name => {
+    return `<p><b>${machine}</b> · ${esc(evidenceText("Stage run", row))}</p>` + table(["Stage", "Outcome", "Passed", "Failed", "Skipped", "Why, and which tests"], knownStages.map(name => {
       const stage = stages.find(s => s.name === name);
-      return [esc(name), stage ? esc(states[stage.status] || "unknown") : "not run", stage && isNum(stage.passed) ? n(stage.passed) : null, stage && isNum(stage.failed) ? n(stage.failed) : null, stage && isNum(stage.skipped) ? n(stage.skipped) : null];
+      return [esc(name), stage ? esc(states[stage.status] || "unknown") : "not run", stage && isNum(stage.passed) ? n(stage.passed) : null, stage && isNum(stage.failed) ? n(stage.failed) : null, stage && isNum(stage.skipped) ? n(stage.skipped) : null, stage ? stageWhy(stage) : null];
     }));
   }).join("");
   return `<section class="manual-results"><h3>Scoped test runs</h3><p class="refresh-help">These stage results are separate from the nightly trend. A passing subset does not verify the whole repository. UI tests are not run by the current gauntlet.</p>${body || `<p class="refresh-help">No scoped test run has been published yet.</p>`}</section>`;
@@ -856,12 +890,12 @@ const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["re
 // The lanes beside the app suite (2026-10-31): the Core package lane and the Hallie
 // replay, each with its own numbers or word. A cell from before a lane existed says
 // nothing about it (null), never "0 passed".
-function laneWords(cell) {
+function laneWords(cell, sep = " · ") {
   const parts = [];
   if (isNum(cell.core_passed) || isNum(cell.core_failed)) parts.push(`Core ${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed`);
   const hallie = hallieReplayWords(cell);
   if (hallie) parts.push(hallie);
-  return parts.length ? " · " + parts.join(" · ") : "";
+  return parts.length ? sep + parts.join(sep) : "";
 }
 // A sanitized reason code as words ("catalog-schema-not-current" -> "catalog schema not current").
 const codeWords = code => String(code || "").replace(/[-:=]+/g, " ").trim();
@@ -941,8 +975,7 @@ function ladderSVG(host, cell) {
     ? (look ? `${look} lane${look === 1 ? "" : "s"} to look at` : "all lanes green") + (unlit ? ` · ${unlit} not run` : "")
     : "did not run";
   return `<figure><svg class="ladder" data-host="${esc(host)}" width="${w + labelW}" height="${h}" viewBox="0 0 ${w + labelW} ${h}" role="img" aria-label="${esc(hostName(host))}: ${esc(caption)}">`
-    + `<rect class="well" x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6"/>${rungs}</svg>`
-    + `<figcaption><b>${esc(hostName(host))}</b> · ${esc(caption)}</figcaption></figure>`;
+    + `<rect class="well" x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6"/>${rungs}</svg></figure>`;   // no caption line (Rick 2026-11-08); the aria-label keeps it
 }
 function cellWords(cell) {
   if (!cell) return "no run";
@@ -954,6 +987,60 @@ function cellWords(cell) {
   // "(a few)" describes the app suite's failed count, so it sits beside it — never after a Hallie lane (11/04).
   if (cell.state === "watch") return `${app} (a few${why})${laneWords(cell)}`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
+}
+// ---------------------------------------------------------------- the Test Results card (Rick 2026-11-08)
+// Each Mac's row is ALWAYS its newest run, dated by when that run finished: at 1 PM the
+// M4's 2 PM run of yesterday and the M5 Ultra's 2 AM run of today, never a blank row
+// because a run is "not from last night" (the STALE cue still marks one past 36 h).
+const ET_FMT = { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+// "Nov 9, 2:00 PM", Eastern; a date-only value (a cell without `finished`) is its date alone.
+function whenET(ts) {
+  const t = toTime(ts);
+  if (Number.isNaN(t)) return DASH;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return day(ts);
+  return new Date(t).toLocaleString("en-US", ET_FMT).replace(/ /g, " ");
+}
+// The row's name and memory (hardware facts, Rick's CLAUDE.md).
+const HOST_SPEC = { M4: { name: "M4 Max", ram: "64GB RAM" }, Ultra: { name: "M5 Ultra", ram: "96GB RAM" } };
+const specOf = h => HOST_SPEC[h] || { name: hostName(h), ram: "" };
+// The newest night that holds a cell for `h`: { night, cell, when } or null.
+function latestRun(N, h) {
+  for (let i = N.list.length - 1; i >= 0; i--) {
+    const cell = cellOf(N.list[i], h);
+    if (cell) return { night: N.list[i], cell, when: typeof cell.finished === "string" ? cell.finished : N.list[i].date };
+  }
+  return null;
+}
+// One row's counts: app then every other lane, the same words for green and a few failed.
+// `sep` "\n": each lane on its own line on the card (Rick 2026-11-08: no leading dots).
+function runWords(cell, sep = " · ") {
+  if (cell.state === "did_not_run") return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
+  const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
+  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell, sep)}${cell.state === "red" ? ` — broken${why}` : ""}`;
+}
+// The row's own "N failed" opens the failed tests of that Mac's newest run, by name (only
+// names the publisher proved against the repo's test sources), and how many more were not
+// named (Rick 2026-11-08). A row with nothing failed has nothing to open.
+function failuresBody(cell) {
+  const names = cell && Array.isArray(cell.failed_tests) ? cell.failed_tests.filter(x => typeof x === "string") : null;
+  const failed = cell ? laneFailed(cell) : 0;
+  let body;
+  if (!names) body = `${n(failed)} failed; this summary was built before failed tests were listed by name. It is rebuilt after every run.`;
+  else {
+    const more = failed - names.length;
+    body = (names.length ? `<ol>${names.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "")
+      + (more > 0 ? `${n(more)} more failed test${more === 1 ? " is" : "s are"} not named.` : "");
+  }
+  return body;
+}
+function runLine(cell) {
+  const words = esc(runWords(cell, "\n")).replace(/\n/g, "<br>");
+  if (cell.state === "did_not_run" || !laneFailed(cell)) return words;
+  // The first nonzero "N failed" (app first, then a lane's) becomes the opener.
+  const m = /(^|[^\d,])([1-9][\d,]*) failed/.exec(words);
+  if (!m) return words;
+  const at = m.index + m[1].length, count = `${m[2]} failed`;
+  return words.slice(0, at) + `<details class="fails"><summary>${count}</summary>${failuresBody(cell)}</details>` + words.slice(at + count.length);
 }
 function stability(N) {
   const L = N.list;
@@ -1022,8 +1109,37 @@ function weeklyBugs(rows, weeks, today = new Date()) {
 }
 
 // ---------------------------------------------------------------- 1. headline strip
-function tile(label, value, words, state = "", graphic = "") {
-  return `<div class="tile"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
+// The card reads the summary; the runs themselves are published separately. When a Mac's
+// newest published run is NOT the one the summary shows for it, the card is behind the
+// truth and says so (2026-11-09: a failed publish left the summary a day old and nothing
+// on the page said it). Compared by CONTENT — each Mac's newest row against the run its
+// row on the card shows — never by the summary's build time, which says nothing about
+// what the summary holds (Codex #275 F5). A cell without its finish time (an older
+// summary) is compared by its night: a row dated after that night is newer.
+const rowLabel = host => typeof host === "string" ? host.replace(/^ricks/i, "") : "";
+function summaryBehind(d, N) {
+  if (!d.summary || !N) return "";
+  // Every Mac the page knows (HOST_SPEC), not only those the summary already lists: a
+  // Mac whose first row the summary has not seen yet is behind too (Codex #276 F5).
+  const off = Array.isArray(d.summary.nightly && d.summary.nightly.off_rota) ? d.summary.nightly.off_rota : [];
+  const candidates = [...new Set([...N.hosts, ...Object.keys(HOST_SPEC)])].filter(h => !off.includes(h));
+  for (const h of candidates) {
+    const newest = d.tdRows.filter(r => r.source === "nightly-local" && typeof r.ts === "string" && rowLabel(r.host) === h)
+      .map(r => r.ts).filter(ts => !Number.isNaN(toTime(ts))).sort((a, b) => toTime(a) - toTime(b)).pop();
+    if (!newest) continue;
+    // A run older than the nights the summary covers is not something it is missing (#277).
+    if (N.list.length && newest.slice(0, 10) < N.list[0].date) continue;
+    const run = latestRun(N, h);
+    const shown = !run ? null : typeof run.cell.finished === "string" ? run.cell.finished : null;
+    const behind = !run ? true
+      : shown ? toTime(newest) > toTime(shown)
+      : newest.slice(0, 10) > run.night.date;
+    if (behind) return `<span class="behind"><span class="stale">BEHIND</span> ${esc(specOf(h).name)} finished a run ${esc(whenET(newest))} that is not in this summary yet (built ${esc(whenET(d.summary.generated))})</span>`;
+  }
+  return "";
+}
+function tile(label, value, words, state = "", graphic = "", wide = false) {
+  return `<div class="tile${wide ? " wide" : ""}"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
 }
 function renderHead(d) {
   const S = d.summary || {};
@@ -1035,45 +1151,75 @@ function renderHead(d) {
   // Version + tip of main + CI on main
   const v = S.version;
   const ci = d.ciRun && d.ciRun.done ? d.ciRun.done : null;
-  const ciWords = ci ? `CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
+  const ciWords = ci ? `GitHub CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
     : (hist.length ? `CI on main: result unknown (Actions API unavailable) · last metrics row ${fmtWhen(last.ts)}` : "CI on main: " + NO_DATA);
-  tiles.push(tile("Version", v ? `${esc(v.marketing)} <small>build ${esc(v.build)}</small>` : `<span class="word grey">${DASH}</span>`,
-    `${g.main_sha ? `main <b>${esc(String(g.main_sha).slice(0, 7))}</b> · ${day(g.main_date)}` : "main: " + DASH} · ${ciWords}`));
+  // Application Source and Version in one tile (Rick 2026-11-08): lines of code, one line per
+  // part with its growth so far this month (green up, red down; Rick 2026-11-08: monthly progress),
+  // then the version, main's tip, and CI on main, each on its own line.
+  // The baseline is the last row before the 1st of this month (Eastern); the first row if none.
+  const withSource = hist.filter(r => isNum(r.app_source_lines));
+  const ref = new Date(toTime(last.ts) || Date.now());
+  const monthStart = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), 1, 5);   // 00:00 EST ≈ 05:00 UTC
+  const before = withSource.filter(r => toTime(r.ts) < monthStart);
+  const first = before.length ? before[before.length - 1] : withSource[0];
+  const sinceWords = `since ${new Date(monthStart).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} 1`;
+  const delta = key => {
+    if (!first || !isNum(first[key]) || !isNum(last[key])) return "";
+    const d = last[key] - first[key];
+    return d ? ` <span class="${d > 0 ? "grow-up" : "grow-down"}">${d > 0 ? "+" : "−"}${n(Math.abs(d))}</span>` : "";
+  };
+  const part = (name, key, note = "") => isNum(last[key]) ? `<span class="part">${name} ${n(last[key])}${note}${delta(key)}</span>` : "";
+  const since = stale(last.ts) ? `<span class="part since">${stale(last.ts)}</span>` : "";
+  const total = delta("app_source_lines");
+  const sourceValue = isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines of code</small>${total ? `<small class="growth">${total} (${sinceWords})</small>` : ""}` : `<span class="word grey">${NO_DATA}</span>`;
+  const parts = isNum(last.app_source_lines)
+    ? part("Swift", "app_swift_lines") + part("Python", "app_python_lines")
+      + part("Tests", "test_lines", " <small>(not counted)</small>") + part("Tooling", "tooling_lines", " <small>(not counted)</small>") + since
+    : `<span class="part">CI rows before 2026-10-11 did not split app from tests</span>`;
+  const version = `<span class="part ver">VERSION <b>${v ? `${esc(v.marketing)}</b> <small>build ${esc(v.build)}</small>` : `${DASH}</b>`}</span>`
+    + `<span class="part">${g.main_sha ? `main <b>${esc(String(g.main_sha).slice(0, 7))}</b> · ${day(g.main_date)}` : "main: " + DASH}</span>`
+    + `<span class="part">${ciWords}</span>`;
+  tiles.push(tile("Application Source", sourceValue, `<span class="parts">${parts}${version}</span>`));
 
-  // App source lines: app only. total_swift_lines stays in the chart for continuity.
-  const first = hist.find(r => isNum(r.app_source_lines));
-  const growth = first && isNum(last.app_source_lines) ? ` · +${n(last.app_source_lines - first.app_source_lines)} since ${day(first.ts)} (new measure)` : "";
-  tiles.push(tile("App source", isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines</small>` : `<span class="word grey">${NO_DATA}</span>`,
-    isNum(last.app_source_lines)
-      ? `Swift ${n(last.app_swift_lines)} · Python ${n(last.app_python_lines)} · <b>app only</b> (tests ${n(last.test_lines)} and tooling ${n(last.tooling_lines)} not counted)${growth}${stale(last.ts)}`
-      : "CI rows before 2026-10-11 did not split app from tests"));
-
-  // Last night's tests: one dot per Mac
+  // Test Results <published>: one row per Mac, each its own newest run (see latestRun).
   if (N && N.list.length) {
     const lastNight = N.list[N.list.length - 1];
-    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(hostName(h))}</b> ${esc(cellWords(c))}</span>`; }).join("");
-    const lastWatch = anyWatch(lastNight);
-    const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
-    const primary = ran[0];
-    // The same failing tests show up on every Mac that ran: the worst Mac's count, never a sum.
-    // Every lane of that Mac counts (2026-10-31: "0 failing" sat above a red Core lane).
-    const failing = Math.max(0, ...ran.map(laneFailed));
+    const lastWatch = anyWatch(lastNight);   // the Stability tile below is about nights
+    const runs = N.hosts.map(h => ({ h, run: latestRun(N, h) }));
+    const cellFor = h => { const r = runs.find(x => x.h === h); return r && r.run ? r.run.cell : null; };
+    const hosts = runs.map(({ h, run }) => {
+      const c = run ? run.cell : null;
+      const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey";
+      const sp = specOf(h);
+      return `<span class="${esc(state)}"><span class="hosthead">${dot(state)}<b>${esc(sp.name)}</b>${sp.ram ? ` ${esc(sp.ram)}` : ""} · ${run ? esc(whenET(run.when)) + stale(run.when) : "no run in 90 nights"}</span>`
+        + `<span class="hostline">${c ? runLine(c) : DASH}</span></span>`;
+    }).join("");
+    // The headline is the most recent run of any Mac, named and dated.
+    const newest = runs.filter(x => x.run).sort((a, b) => toTime(b.run.when) - toTime(a.run.when))[0];
+    const nc = newest ? newest.run.cell : null;
+    const where = newest ? ` on ${esc(specOf(newest.h).name)} ${esc(whenET(newest.run.when))}` : "";
+    const value = !nc ? `<span class="word grey">${DASH}</span>`
+      : nc.state === "did_not_run" ? `<span class="word amber">did not run</span><small>${where}</small>`
+      // Every lane of that Mac counts (2026-10-31: "0 failing" sat above a red Core lane).
+      : `${n(nc.passed)} <small>passed · ${n(laneFailed(nc))} failed${where}</small>`;
     // Two passing Macs are enough when another is offline; each host keeps its own status.
     // Actual test failures still take precedence over the passing quorum.
-    const greenHosts = ran.filter(c => c.state === "green").length;
-    const testState = N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch"
-      : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
+    const cells = N.hosts.map(cellFor);
+    const greenHosts = cells.filter(c => c && c.state === "green").length;
+    const testState = cells.some(c => c && c.state === "red") ? "red" : cells.some(c => c && c.state === "watch") ? "watch"
+      : greenHosts >= 2 ? "green" : cells.some(c => c && c.state === "did_not_run") ? "amber"
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
-    const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellOf(lastNight, h))).join("")}</div>`;
-    tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>nightly runs of ${day(lastNight.date)}${stale(lastNight.date)}`, testState, ladders));
+    const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellFor(h))).join("")}</div>`;
+    const published = S.generated ? ` ${whenET(S.generated)}` : "";
+    tiles.push(tile(`Test Results${published}`, value,
+      `<div class="hosts">${hosts}${summaryBehind(d, N)}</div>`, testState, ladders, true));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
     tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
       `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : lastWatch ? "watch" : "amber"));
   } else {
-    tiles.push(tile("Last night's tests", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
+    tiles.push(tile("Test Results", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)", "", "", true));
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
   }
 
@@ -1170,7 +1316,11 @@ function sanitizerRuns(d) {
     const rows = d.sanRows.filter(r => r.kind === k.kind);
     const row = rows.length ? rows[rows.length - 1] : null;
     const t = row ? toTime(row.date) : NaN;
-    const age = Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+    // Calendar days, not elapsed milliseconds: across the end of daylight saving time a run
+    // "12 days ago" is 12 days and 25 hours old late in the evening, and floor() said 13
+    // (2026-11-09, 23:00–24:00: two tests of this card failed for that hour every night).
+    const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const age = Number.isNaN(t) ? null : Math.max(0, Math.round((today - t) / 86400000));
     return { ...k, row, age, fresh: age != null && age <= SAN_STALE_DAYS };
   });
 }

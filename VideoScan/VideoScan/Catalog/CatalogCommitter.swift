@@ -380,13 +380,20 @@ final class CatalogCommitter {
 
     /// The side tables a person's decision writes outside the records:
     /// Catalog folders (2026-10-19), the footage likeness the split records,
-    /// the ignore list (schema v1.11) and provenance roles (v1.12,
-    /// Provenance ▸ Set Role). Each says which in the log line.
+    /// the ignore list (schema v1.11), provenance roles (v1.12,
+    /// Provenance ▸ Set Role), the public bit (v1.15, Make Public) and the
+    /// estimated provenance a rule proposes (2026-11-10).
+    /// Each says which in the log line.
     enum SideTable: String, Sendable {
         case folders
         case footageLikeness = "footage likeness"
         case ignoredContent = "ignored content"
         case provenanceRoles = "provenance roles"
+        case publicMarks = "public marks"
+        /// Estimated provenance (DECISIONS 2026-11-10): the rule's inferred
+        /// rows from Estimate Provenance and Rick's "Not Right" — rows of
+        /// `provenance_assertions` (v1.13), through ProvenanceEstimateStore.
+        case provenanceEstimates = "provenance estimates"
         /// The background helper's observations (schema v1.13), from its
         /// journal through JournalApplier — the only road in (design §3.4).
         case observations = "background observations"

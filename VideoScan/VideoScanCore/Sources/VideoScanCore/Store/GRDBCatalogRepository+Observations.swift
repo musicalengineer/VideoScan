@@ -24,6 +24,10 @@
 // start if one is set. Memory: each read returns at most a
 // few hundred grouped rows, or `limit` hit rows (≈ 400 B each: a transcript
 // hit is cut to 220 characters IN SQL, never the whole transcript).
+//
+// The row boundary: a column that names one of a set is decoded into its
+// enum here, once (CatalogObservationsRows.swift); a value outside a closed
+// set throws a Refusal in words and the read fails — never a default.
 
 import Foundation
 import GRDB
@@ -115,8 +119,8 @@ extension GRDBReader: CatalogObservationsReading {
         let predicate = Self.tupleColumns.enumerated().map { "\($0.element) = ?\($0.offset + 2)" }.joined(separator: " AND ")
         return try Row.fetchAll(db, sql: """
             \(Self.cte(scope))
-            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq
-              FROM (SELECT DISTINCT f.content_digest AS digest, 'technical' AS kind, NULL AS at, '' AS text, 'ffprobe' AS by, 0 AS seq
+            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq, h.key
+              FROM (SELECT DISTINCT f.content_digest AS digest, 'technical' AS kind, NULL AS at, '' AS text, 'ffprobe' AS by, 0 AS seq, '' AS key
                       FROM files f JOIN s ON s.file_id = f.id WHERE \(predicate) LIMIT ?15) h
               \(Self.standingFileJoin)
              ORDER BY f.filename COLLATE NOCASE, h.digest
@@ -154,8 +158,10 @@ extension GRDBReader: CatalogObservationsReading {
              GROUP BY p.by, value, p.found, p.rejected, gave, none
              ORDER BY p.by, count(*) DESC, value
             """, arguments: Self.arguments(scope)).map {
-            CatalogRow.ObservationEraVerdict(by: $0[0], value: $0[1], found: ($0[2] as Int) == 1, rejected: ($0[3] as Int) == 1,
-                                             gaveUp: ($0[4] as Int) == 1, none: ($0[5] as Int) == 1, contents: $0[6])
+            CatalogRow.ObservationEraVerdict(by: $0[0],
+                                             verdict: try .init(found: ($0[2] as Int) == 1, rejected: ($0[3] as Int) == 1,
+                                                                gaveUp: ($0[4] as Int) == 1, none: ($0[5] as Int) == 1, value: $0[1]),
+                                             contents: $0[6])
         }
     }
 
@@ -163,8 +169,8 @@ extension GRDBReader: CatalogObservationsReading {
         let json = (try? JSONSerialization.data(withJSONObject: values)).flatMap { String(bytes: $0, encoding: .utf8) } ?? "[]"
         return try Row.fetchAll(db, sql: """
             \(Self.cte(scope))
-            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq
-              FROM (SELECT p.subject_id AS digest, 'era' AS kind, NULL AS at, p.fvalue AS text, p.by AS by, 0 AS seq
+            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq, h.key
+              FROM (SELECT p.subject_id AS digest, 'era' AS kind, NULL AS at, p.fvalue AS text, p.by AS by, 0 AS seq, '' AS key
                       FROM (\(Self.verdicts(signerFilter: ""))) p JOIN sc ON sc.digest = p.subject_id
                      WHERE p.found AND p.fvalue IN (SELECT value FROM json_each(?2)) LIMIT ?3) h
               \(Self.standingFileJoin)
@@ -172,15 +178,23 @@ extension GRDBReader: CatalogObservationsReading {
             """, arguments: Self.arguments(scope, [json, limit])).map(Self.hit)
     }
 
-    func observationBurnedInDates(_ scope: ObservationsScope, limit: Int) throws -> [CatalogRow.ObservationCount] {
+    /// One row per date; the signers that read it ride along as a JSON array (a signer may hold any character, a comma included).
+    func observationBurnedInDates(_ scope: ObservationsScope, limit: Int) throws -> [CatalogRow.ObservationBurnedInDate] {
         try Row.fetchAll(db, sql: """
             \(Self.cte(scope))
-            SELECT a.value, count(DISTINCT a.subject_id)
+            SELECT a.value, count(DISTINCT a.subject_id), json_group_array(DISTINCT a.by)
               FROM provenance_assertions a JOIN sc ON sc.digest = a.subject_id
              WHERE a.subject_kind = 'content' AND a.field = 'ocr.date' AND a.state = 'inferred' AND a.by \(Self.machineSigner)
                AND NOT \(MachineEraResolver.rejectedLaterSQL("a"))
              GROUP BY a.value ORDER BY count(DISTINCT a.subject_id) DESC, a.value LIMIT ?2
-            """, arguments: Self.arguments(scope, [limit])).map { CatalogRow.ObservationCount(key: $0[0], contents: $0[1]) }
+            """, arguments: Self.arguments(scope, [limit])).map { row in
+            let value: String = row[0]
+            let json: String = row[2]
+            guard let signers = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String], !signers.isEmpty else {
+                throw Refusal("the signers of the burned-in date \(value) could not be read (\(json)): the Observations read refuses it")
+            }
+            return CatalogRow.ObservationBurnedInDate(value: value, signers: signers.sorted(), contents: row[1])
+        }
     }
 
     func observationCaptions(_ scope: ObservationsScope) throws -> CatalogRow.ObservationCaptions {
@@ -235,7 +249,7 @@ extension GRDBReader: CatalogObservationsReading {
             SELECT p.name, p.kind, count(DISTINCT p.digest) FROM people_tags p JOIN sc ON sc.digest = p.digest
              WHERE p.kind IN ('detected', 'suspected', 'confirmed')
              GROUP BY p.name, p.kind ORDER BY count(DISTINCT p.digest) DESC, p.name, p.kind LIMIT ?2
-            """, arguments: Self.arguments(scope, [limit])).map { CatalogRow.ObservationPerson(name: $0[0], kind: $0[1], contents: $0[2]) }
+            """, arguments: Self.arguments(scope, [limit])).map { CatalogRow.ObservationPerson(name: $0[0], kind: try .init(stored: $0[1]), contents: $0[2]) }
     }
 
     func observationInferredDates(_ scope: ObservationsScope) throws -> CatalogRow.ObservationInferredDates {
@@ -257,7 +271,7 @@ extension GRDBReader: CatalogObservationsReading {
             SELECT e.name, e.state, count(DISTINCT m.digest)
               FROM events e JOIN event_members m ON m.event_id = e.event_id JOIN sc ON sc.digest = m.digest
              GROUP BY e.event_id ORDER BY count(DISTINCT m.digest) DESC, e.name LIMIT ?2
-            """, arguments: Self.arguments(scope, [limit])).map { CatalogRow.ObservationEvent(name: $0[0], state: $0[1], members: $0[2]) }
+            """, arguments: Self.arguments(scope, [limit])).map { CatalogRow.ObservationEvent(name: $0[0], state: .init(stored: $0[1]), members: $0[2]) }
     }
 
     // MARK: The collection tier
@@ -325,16 +339,27 @@ extension GRDBReader: CatalogObservationsReading {
         if current != nil, !group.isEmpty { try body(date, group) }
     }
 
-    func observationTexts(_ scope: ObservationsScope, kind: String, _ visit: (String) throws -> Void) throws {
-        let sql = kind == "transcript"
-            ? "SELECT t.text FROM transcripts t JOIN sc ON sc.digest = t.digest WHERE t.text <> ''"
-            : "SELECT c.text FROM captions c JOIN sc ON sc.digest = c.digest WHERE c.kind = 'scene'"
+    func observationTexts(_ scope: ObservationsScope, kind: CatalogRow.ObservationTextsKind, _ visit: (String) throws -> Void) throws {
+        let sql: String
+        switch kind {
+        case .transcripts: sql = "SELECT t.text FROM transcripts t JOIN sc ON sc.digest = t.digest WHERE t.text <> ''"
+        case .sceneCaptions: sql = "SELECT c.text FROM captions c JOIN sc ON sc.digest = c.digest WHERE c.kind = 'scene'"
+        }
         let cursor = try String.fetchCursor(db, sql: "\(Self.cte(scope)) \(sql)", arguments: Self.arguments(scope))
         while let text = try cursor.next() { try visit(text) }
     }
 
     // MARK: Search (observations only — never a catalog field)
 
+    /// `q` as a LIKE pattern that matches it literally anywhere: `%`, `_` and the escape itself are escaped.
+    private static func containsPattern(_ q: String) -> String {
+        "%" + q.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_") + "%"
+    }
+
+    /// `?2` is the query as a LIKE pattern (escaped HERE); `?4` is the query itself, for `instr` — which takes no
+    /// pattern, so handing it the escaped form would never find a query holding `%`, `_` or `\`.
+    /// Each arm's last column is the hit's `key` (what tells two rows of one content apart).
     func observationTextHits(_ scope: ObservationsScope, query: String, limitPerKind: Int) throws -> [CatalogRow.ObservationHitRow] {
         let like = "LIKE ?2 ESCAPE '\\'"
         // A transcript can be hundreds of KB: the hit carries a 220-character window around the match (ASCII lower()).
@@ -344,42 +369,44 @@ extension GRDBReader: CatalogObservationsReading {
             """
         return try Row.fetchAll(db, sql: """
             \(Self.cte(scope))
-            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq
+            SELECT h.digest, f.id, f.filename, f.full_path, (f.removal_state IS NOT NULL), h.kind, h.at, h.text, h.by, h.seq, h.key
               FROM (SELECT * FROM (SELECT c.digest, c.kind AS kind, c.at_s AS at, substr(c.text, 1, 400) AS text,
-                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM') AS by, c.seq
+                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM') AS by, c.seq, '' AS key
                                      FROM captions c JOIN sc ON sc.digest = c.digest WHERE c.kind = 'scene' AND c.text \(like) LIMIT ?3)
                     UNION ALL
                     SELECT * FROM (SELECT c.digest, c.kind, c.at_s, substr(c.text, 1, 400),
-                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM'), c.seq
+                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM'), c.seq, ''
                                      FROM captions c JOIN sc ON sc.digest = c.digest WHERE c.kind = 'ocrText' AND c.text \(like) LIMIT ?3)
                     UNION ALL
                     SELECT * FROM (SELECT c.digest, c.kind, c.at_s, substr(c.text, 1, 400),
-                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM'), c.seq
+                                          coalesce((SELECT r.model FROM caption_runs r WHERE r.digest = c.digest), 'VLM'), c.seq, ''
                                      FROM captions c JOIN sc ON sc.digest = c.digest WHERE c.kind = 'ocrDate' AND c.text \(like) LIMIT ?3)
                     UNION ALL
-                    SELECT * FROM (SELECT t.digest, 'speech', NULL, \(window), coalesce(t.model, 'Whisper'), 0
+                    SELECT * FROM (SELECT t.digest, 'speech', NULL, \(window), coalesce(t.model, 'Whisper'), 0, ''
                                      FROM transcripts t JOIN sc ON sc.digest = t.digest WHERE t.text \(like) LIMIT ?3)
                     UNION ALL
-                    SELECT * FROM (SELECT a.subject_id, 'burnedIn', CAST(json_extract(a.evidence_json, '$.atS') AS REAL), a.value, a.by, a.seq
+                    SELECT * FROM (SELECT a.subject_id, 'burnedIn', CAST(json_extract(a.evidence_json, '$.atS') AS REAL), a.value, a.by, a.seq, ''
                                      FROM provenance_assertions a JOIN sc ON sc.digest = a.subject_id
                                     WHERE a.subject_kind = 'content' AND a.field = 'ocr.date' AND a.state = 'inferred'
                                       AND a.by \(Self.machineSigner) AND NOT \(MachineEraResolver.rejectedLaterSQL("a"))
                                       AND a.value \(like) LIMIT ?3)
                     UNION ALL
-                    SELECT * FROM (SELECT p.digest, 'person', NULL, p.name, p.kind, 0
+                    SELECT * FROM (SELECT p.digest, 'person', NULL, p.name, p.kind, 0, p.name
                                      FROM people_tags p JOIN sc ON sc.digest = p.digest
                                     WHERE p.kind IN ('detected', 'suspected') AND p.name \(like) LIMIT ?3)
                     UNION ALL
-                    SELECT * FROM (SELECT m.digest, 'event', m.range_start_s, e.name, e.state, 0
+                    SELECT * FROM (SELECT m.digest, 'event', m.range_start_s, e.name, e.state, 0,
+                                          e.event_id || ':' || ifnull(m.range_end_s, '')
                                      FROM events e JOIN event_members m ON m.event_id = e.event_id JOIN sc ON sc.digest = m.digest
                                     WHERE e.name \(like) LIMIT ?3)) h
               \(Self.standingFileJoin)
              ORDER BY h.kind, f.filename COLLATE NOCASE, h.digest, h.at, h.seq
-            """, arguments: Self.arguments(scope, ["%" + query + "%", limitPerKind, query.lowercased()])).map(Self.hit)
+            """, arguments: Self.arguments(scope, [Self.containsPattern(query), limitPerKind, query.lowercased()])).map(Self.hit)
     }
 
-    private static func hit(_ row: Row) -> CatalogRow.ObservationHitRow {
+    private static func hit(_ row: Row) throws -> CatalogRow.ObservationHitRow {
         CatalogRow.ObservationHitRow(digest: row[0], fileID: row[1], filename: row[2], path: row[3], removed: (row[4] as Int?) == 1,
-                                     kind: row[5], at: row[6], text: row[7] ?? "", by: row[8] ?? "", seq: row[9] ?? 0)
+                                     kind: try .init(stored: row[5]), at: row[6], text: row[7] ?? "", by: row[8] ?? "", seq: row[9] ?? 0,
+                                     key: row[10] ?? "")
     }
 }

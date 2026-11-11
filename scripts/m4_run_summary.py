@@ -18,8 +18,8 @@ Usage:
     m4_run_summary.py --gauntlet RESULT_JSON RC SECONDS [--timeout]
 Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only).
 
---gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift)
-and prints ONE line (Rick 2026-11-05, DECISIONS):
+--gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift),
+or that run's history.jsonl row when a published run dir is already gone, and prints ONE line (Rick 2026-11-05, DECISIONS):
 
     deep: GREEN — every stage passed
     deep: AMBER 7 known issues (regression 7); 6 stages blocked (912 unadapted suites); ui not run (phase 2)
@@ -33,6 +33,7 @@ no failure.
 """
 import json
 import argparse
+import os
 import re
 import sys
 
@@ -85,6 +86,13 @@ def _amber_reasons(result):
         total = sum(n for _, n in known)
         reasons.append(f"{total} known issue{'s' if total != 1 else ''} ("
                        + ", ".join(f"{name} {n}" for name, n in known) + ")")
+    for s in stages:
+        if int(s.get('skipped') or 0) > 0:                  # AMBER with the test named (Rick 2026-11-10)
+            n = int(s['skipped'])
+            names = [t for t in (s.get('skipped_tests') or []) if isinstance(t, str)]
+            more = n - min(len(names), NAMES_SHOWN)
+            shown = ', '.join(names[:NAMES_SHOWN]) + (f" +{more} more" if more > 0 and names else '')
+            reasons.append(f"{n} skipped in {s.get('name', '?')}" + (f": {shown}" if names else ''))
     held = [s for s in stages if s.get('status') in ('blocked', 'amber', 'incomplete') and s.get('blocked_details')]
     if held:
         reasons.append(f"{len(held)} stage{'s' if len(held) != 1 else ''} blocked "
@@ -93,6 +101,23 @@ def _amber_reasons(result):
         if s.get('status') == 'not_run':
             reasons.append(f"{s.get('name', '?')} not run ({s.get('reason') or '?'})")
     return reasons
+
+
+NAMES_SHOWN = 5
+
+
+def stage_names(stage):
+    """" [skipped: A, B; failed: C +2 more]" — the tests behind a stage's verdict, from the
+    names the runner recorded (failed_tests / skipped_tests / incomplete_tests and their
+    `_truncated` counts). Empty when the stage carries none. 2026-11-10: the done line said
+    "unit failed: unexpected skipped tests" for four days and never said which tests."""
+    parts = []
+    for word, key in (('failed', 'failed_tests'), ('skipped', 'skipped_tests'), ('did not finish', 'incomplete_tests')):
+        names = [n for n in (stage.get(key) or []) if isinstance(n, str)]
+        more = len(names) - NAMES_SHOWN + int(stage.get(key + '_truncated') or 0)
+        if names:
+            parts.append(f"{word}: {', '.join(names[:NAMES_SHOWN])}" + (f" +{more} more" if more > 0 else ''))
+    return f" [{'; '.join(parts)}]" if parts else ''
 
 
 def gauntlet_verdict(result, rc, timed_out=False):
@@ -111,7 +136,7 @@ def gauntlet_verdict(result, rc, timed_out=False):
     failed = [s for s in stages if s.get('status') == 'failed']
     status = result.get('status')
     if status == 'failed' or failed or result.get('inventory_errors') or rc not in (0,):
-        words = [f"{s.get('name', '?')} failed: {s.get('reason') or '?'}" for s in failed]
+        words = [f"{s.get('name', '?')} failed: {s.get('reason') or '?'}{stage_names(s)}" for s in failed]
         if result.get('inventory_errors'):
             words.append(f"inventory: {len(result['inventory_errors'])} error(s)")
         if result.get('reason') and not failed:
@@ -126,6 +151,32 @@ def gauntlet_verdict(result, rc, timed_out=False):
     return RED, f"unknown status {status!r}"
 
 
+def load_result(path):
+    """The run's result.json, or — once the runner has deleted a published run
+    dir (Rick 2026-11-08: only the summary row is kept) — that run's row in
+    <results-root>/history.jsonl, matched by run_id (the run dir's name). None
+    when neither exists."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        pass
+    run = os.path.dirname(os.path.abspath(path))
+    found = None
+    try:
+        with open(os.path.join(os.path.dirname(run), 'history.jsonl'), encoding='utf-8') as f:
+            for line in f:                                  # streamed: one row in memory at a time
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get('run_id') == os.path.basename(run):
+                    found = row
+    except OSError:
+        return None
+    return found
+
+
 def gauntlet_main(argv):
     ap = argparse.ArgumentParser(prog='m4_run_summary.py --gauntlet')
     ap.add_argument('result')
@@ -136,11 +187,7 @@ def gauntlet_main(argv):
         a = ap.parse_args(argv)
     except SystemExit:
         return 2
-    try:
-        with open(a.result, encoding='utf-8') as f:
-            result = json.load(f)
-    except (OSError, ValueError):
-        result = None
+    result = load_result(a.result)
     verdict, words = gauntlet_verdict(result, a.rc, a.timeout)
     sha = str((result or {}).get('commit') or '')[:9]
     print(f"deep: {verdict} {words} (sha={sha or '?'}, {a.seconds}s, results={a.result})")
