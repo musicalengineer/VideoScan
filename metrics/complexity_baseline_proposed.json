@@ -111,8 +111,8 @@
    "nloc": 29
   },
   "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift::PromoteToArchiveJob.copyOrAdopt": {
-   "ccn": 17,
-   "nloc": 84
+   "ccn": 16,
+   "nloc": 79
   },
   "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift::PromoteToArchiveJob.finishPublished": {
    "ccn": 17,
