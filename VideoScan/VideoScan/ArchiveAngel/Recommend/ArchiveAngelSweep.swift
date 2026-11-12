@@ -258,6 +258,26 @@ final class ArchiveAngelSweep: ObservableObject {
         await runTask?.value
     }
 
+    /// One run's working state, from the snapshot to the published file: the
+    /// state the scores are built on (attention, catalog, policy — captured
+    /// at the snapshot, never at the finish line), the candidates (their
+    /// play counts written back as Spotlight answers), and the evidence so
+    /// far. A value owned by `perform` (≈ a struct on the run's stack,
+    /// passed by reference to each step).
+    private struct SweepRun {
+        let attention: (revision: Int, lastEventAt: Date?)
+        let catalog: (token: String?, revision: Int)
+        let policy: AngelRecommendationPolicy
+        var candidates: [ArchiveAngelCandidate]
+        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        var eligible = 0
+        var total: Int { candidates.count }
+    }
+
+    /// The run: wait for the policy, park while the app is busy, snapshot,
+    /// score every record in main-actor slices (floors, then play history
+    /// and the score for the files that clear them), classify the whole set
+    /// once, publish. A cancel at any step ends it with nothing published.
     private func perform(reason: String) async {
         guard let first = configuration else { return }
         // The policy may still be loading (off-main, at launch): wait, then
@@ -267,127 +287,92 @@ final class ArchiveAngelSweep: ObservableObject {
         let clock = ContinuousClock()
         let started = clock.now
         longestSliceSeconds = 0
+        guard await parkBeforeStart(cfg, reason: reason) else { return }
+        var run = takeSnapshot(cfg, clock: clock)
+        status = .scoring(done: 0, total: run.total)
+        cfg.log("Archive Angel Assessment: assessing \(run.total.formatted()) records (reason: \(reason))")
+        run.records.reserveCapacity(run.total)
+        guard await scoreAll(&run, cfg, clock: clock),
+              let classified = await classifyAll(&run, cfg, clock: clock) else { return }
+        await publish(run, classified: classified.result, classifySeconds: classified.seconds,
+                      cfg, reason: reason, started: started, clock: clock)
+    }
 
-        // Park while the app is busy elsewhere (bounded: give up after ~10 min).
+    /// A cancelled run leaves the status as the setting says.
+    private func endCancelled() {
+        status = enabled ? .idle : .disabled
+    }
+
+    private func parkReason(_ cfg: Configuration) -> String {
+        cfg.isExternallyBusy() ? "another job is using the catalog" : "you are working"
+    }
+
+    /// Park while the app is busy elsewhere (bounded: give up after ~10
+    /// min). false = cancelled or gave up; the run ends.
+    private func parkBeforeStart(_ cfg: Configuration, reason: String) async -> Bool {
         var parkedPolls = 0
         while cfg.isExternallyBusy() || userIsInteracting(cfg) {
-            if Task.isCancelled { status = enabled ? .idle : .disabled; return }
-            status = .paused(reason: cfg.isExternallyBusy() ? "another job is using the catalog" : "you are working")
+            if Task.isCancelled { endCancelled(); return false }
+            status = .paused(reason: parkReason(cfg))
             parkedPolls += 1
             if parkedPolls > (10 * 60 * 1000) / max(1, cfg.pausePollMilliseconds) {
                 status = .idle
                 sweepLog.info("sweep gave up waiting (\(reason, privacy: .public))")
-                return
+                return false
             }
             try? await Task.sleep(nanoseconds: UInt64(cfg.pausePollMilliseconds) * 1_000_000)
         }
+        return true
+    }
 
-        // Snapshot (one main-actor pass; the projection is the cost). The
-        // attention state is read FIRST: it is the state the projection
-        // will bake into the candidates, and it is what the evidence file
-        // is stamped with — never the state at the finish line.
+    /// Park mid-run too — a scan or an Angel job may start while we score.
+    /// No give-up here: the run already holds its snapshot. false = cancelled.
+    private func parkMidRun(_ cfg: Configuration) async -> Bool {
+        while cfg.isExternallyBusy() || userIsInteracting(cfg) {
+            status = .paused(reason: parkReason(cfg))
+            try? await Task.sleep(nanoseconds: UInt64(cfg.pausePollMilliseconds) * 1_000_000)
+            if Task.isCancelled { endCancelled(); return false }
+        }
+        return true
+    }
+
+    /// Snapshot (one main-actor pass; the projection is the cost). The
+    /// attention state is read FIRST: it is the state the projection
+    /// will bake into the candidates, and it is what the evidence file
+    /// is stamped with — never the state at the finish line.
+    private func takeSnapshot(_ cfg: Configuration, clock: ContinuousClock) -> SweepRun {
         let snapshotStart = clock.now
         let attention = cfg.attentionState()
         let catalog = cfg.catalogState()
-        var all = cfg.candidates()
+        let all = cfg.candidates()
         let policy = cfg.policy
         noteSlice(clock.now - snapshotStart)
-        let total = all.count
-        status = .scoring(done: 0, total: total)
-        cfg.log("Archive Angel Assessment: assessing \(total.formatted()) records (reason: \(reason))")
+        return SweepRun(attention: attention, catalog: catalog, policy: policy, candidates: all)
+    }
 
-        var records: [UUID: ArchiveAngelEvidenceRecord] = [:]
-        records.reserveCapacity(total)
-        var eligible = 0
+    /// Score every record, `sliceSize` at a time, yielding between slices;
+    /// log a line every `checkpointEvery` and save the partial file on a
+    /// doubling schedule. false = cancelled (nothing published).
+    private func scoreAll(_ run: inout SweepRun, _ cfg: Configuration, clock: ContinuousClock) async -> Bool {
         var index = 0
         let sliceSize = max(1, cfg.sliceSize)
         var sinceCheckpoint = 0
         var nextCheckpointSave = max(1, cfg.checkpointEvery)
-
-        while index < total {
-            if Task.isCancelled { status = enabled ? .idle : .disabled; return }
-            // Park mid-run too — a scan or an Angel job may start while we score.
-            while cfg.isExternallyBusy() || userIsInteracting(cfg) {
-                status = .paused(reason: cfg.isExternallyBusy() ? "another job is using the catalog" : "you are working")
-                try? await Task.sleep(nanoseconds: UInt64(cfg.pausePollMilliseconds) * 1_000_000)
-                if Task.isCancelled { status = enabled ? .idle : .disabled; return }
-            }
-            let end = min(total, index + sliceSize)
-
-            // Floor pass (main actor, cheap) → indices that need play history.
-            let t0 = clock.now
-            var pending: [Int] = []
-            pending.reserveCapacity(end - index)
+        while index < run.total {
+            if Task.isCancelled { endCancelled(); return false }
+            guard await parkMidRun(cfg) else { return false }
+            let end = min(run.total, index + sliceSize)
             let now = cfg.now()
-            for i in index..<end {
-                let c = all[i]
-                // codex #1643 A2: the safety floors in their OWN pass, kept
-                // apart from the first floor in policy order (the reason
-                // shown), so no optional floor can mask one.
-                // (When the first floor hit IS a safety floor it is also the
-                // first safety floor — they keep their relative order — so
-                // the separate pass runs only when it could differ.)
-                let hit = ArchiveAngelScorer.floorHit(c, policy: policy, now: now)
-                let safety = hit.flatMap { AngelPolicyDefaults.safetyFloorIDs.contains($0.rule.id) ? $0.rejection : nil }
-                    ?? ArchiveAngelScorer.safetyHit(c, now: now)
-                if let hit {
-                    var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: hit.rejection,
-                                                         useCount: 0, lastUsed: nil, computedAt: now,
-                                                         timesProposed: c.attention.timesProposed,
-                                                         familySkips: c.familySkips, bands: policy.grades,
-                                                         excludedBy: Self.excludedBy(hit))
-                    rec.safetyRejection = safety
-                    records[c.id] = rec
-                } else if let safety {
-                    // Unreachable under a validated policy (every safety
-                    // floor is in `floors`, intact) — a hand-built one
-                    // without them still never recommends the file.
-                    var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: safety,
-                                                         useCount: 0, lastUsed: nil, computedAt: now,
-                                                         timesProposed: c.attention.timesProposed,
-                                                         familySkips: c.familySkips, bands: policy.grades)
-                    rec.safetyRejection = safety
-                    records[c.id] = rec
-                } else {
-                    pending.append(i)
-                }
-            }
-            noteSlice(clock.now - t0)
-
-            // Spotlight for the eligible ones, off-main.
-            let readings = pending.isEmpty ? [:] : await cfg.playHistory(pending.map { all[$0].fullPath })
-
-            let t1 = clock.now
-            for i in pending {
-                // Written back so the classifier sees the same plays.
-                if let r = readings[all[i].fullPath] { all[i].useCount = r.useCount; all[i].lastUsed = r.lastUsed }
-                let c = all[i]
-                switch ArchiveAngelScorer.verdict(c, policy: policy, now: now) {
-                case .eligible(let score, let lines):
-                    eligible += 1
-                    let rec = ArchiveAngelEvidenceRecord(score: score, lines: lines, rejection: nil,
-                                                         useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
-                                                         timesProposed: c.attention.timesProposed,
-                                                         familySkips: c.familySkips, bands: policy.grades)
-                    records[c.id] = rec
-                    sweepLog.debug("\(c.filename, privacy: .public): \(rec.summary(), privacy: .public)")
-                case .rejected(let rejection):
-                    records[c.id] = .init(score: 0, lines: [], rejection: rejection,
-                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
-                                          timesProposed: c.attention.timesProposed,
-                                          familySkips: c.familySkips, bands: policy.grades)
-                    sweepLog.debug("\(c.filename, privacy: .public): excluded — \(rejection.rawValue, privacy: .public)")
-                }
-            }
-            noteSlice(clock.now - t1)
+            let pending = floorPass(&run, index..<end, now: now, clock: clock)
+            await scoreEligible(&run, pending, cfg, now: now, clock: clock)
 
             sinceCheckpoint += end - index
             index = end
-            status = .scoring(done: index, total: total)
+            status = .scoring(done: index, total: run.total)
 
-            if sinceCheckpoint >= cfg.checkpointEvery, index < total {
+            if sinceCheckpoint >= cfg.checkpointEvery, index < run.total {
                 sinceCheckpoint = 0
-                cfg.log("Archive Angel Assessment: \(index.formatted()) of \(total.formatted())")
+                cfg.log("Archive Angel Assessment: \(index.formatted()) of \(run.total.formatted())")
             }
             // The partial file is written on a DOUBLING schedule (first at
             // `checkpointEvery`, then each time the scored count has doubled),
@@ -401,60 +386,166 @@ final class ArchiveAngelSweep: ObservableObject {
             // after a mid-sweep quit — so at most half the progress so far
             // is unsaved, the price of a linear sweep. The log contract (one
             // line per `checkpointEvery`) is unchanged.
-            if index >= nextCheckpointSave, index < total {
+            if index >= nextCheckpointSave, index < run.total {
                 nextCheckpointSave = index * 2
-                let checkpoint = ArchiveAngelEvidenceFile(computedAt: now, complete: false,
-                                                          considered: index, eligible: eligible, records: records,
-                                                          attentionRevision: attention.revision,
-                                                          attentionLastEventAt: attention.lastEventAt,
-                                                          policyFingerprint: store.policyFingerprint,
-                                                          catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
+                let checkpoint = evidenceFile(run, computedAt: now, complete: false, considered: index)
                 _ = await ArchiveAngelEvidenceStore.saveOffMain(checkpoint, to: store.fileURL)
             }
             await Task.yield()
         }
+        return true
+    }
 
-        // Consolidation S3b: ONE classification over the whole set (copies
-        // need every record at once), off the main actor — the inputs are
-        // values. Every record gets its class, reasons, year and copies.
+    /// Floor pass over one slice (main actor, cheap): a rejected file gets
+    /// its evidence now; the indices of the files that clear every floor
+    /// are returned — they need play history.
+    private func floorPass(_ run: inout SweepRun, _ slice: Range<Int>, now: Date, clock: ContinuousClock) -> [Int] {
+        let t0 = clock.now
+        var pending: [Int] = []
+        pending.reserveCapacity(slice.count)
+        for i in slice {
+            let c = run.candidates[i]
+            if let rec = Self.floorRecord(c, policy: run.policy, now: now) {
+                run.records[c.id] = rec
+            } else {
+                pending.append(i)
+            }
+        }
+        noteSlice(clock.now - t0)
+        return pending
+    }
+
+    /// The evidence for a file a floor rejects, or nil when it clears them
+    /// all. codex #1643 A2: the safety floors in their OWN pass, kept apart
+    /// from the first floor in policy order (the reason shown), so no
+    /// optional floor can mask one. (When the first floor hit IS a safety
+    /// floor it is also the first safety floor — they keep their relative
+    /// order — so the separate pass runs only when it could differ.) Pure.
+    nonisolated static func floorRecord(_ c: ArchiveAngelCandidate, policy: AngelRecommendationPolicy,
+                                        now: Date) -> ArchiveAngelEvidenceRecord? {
+        let hit = ArchiveAngelScorer.floorHit(c, policy: policy, now: now)
+        let safety = hit.flatMap { AngelPolicyDefaults.safetyFloorIDs.contains($0.rule.id) ? $0.rejection : nil }
+            ?? ArchiveAngelScorer.safetyHit(c, now: now)
+        if let hit {
+            var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: hit.rejection,
+                                                 useCount: 0, lastUsed: nil, computedAt: now,
+                                                 timesProposed: c.attention.timesProposed,
+                                                 familySkips: c.familySkips, bands: policy.grades,
+                                                 excludedBy: excludedBy(hit))
+            rec.safetyRejection = safety
+            return rec
+        }
+        guard let safety else { return nil }
+        // Unreachable under a validated policy (every safety floor is in
+        // `floors`, intact) — a hand-built one without them still never
+        // recommends the file.
+        var rec = ArchiveAngelEvidenceRecord(score: 0, lines: [], rejection: safety,
+                                             useCount: 0, lastUsed: nil, computedAt: now,
+                                             timesProposed: c.attention.timesProposed,
+                                             familySkips: c.familySkips, bands: policy.grades)
+        rec.safetyRejection = safety
+        return rec
+    }
+
+    /// Spotlight for the files that cleared the floors (off-main), their
+    /// plays written back onto the candidates so the classifier sees the
+    /// same plays, then each one scored.
+    private func scoreEligible(_ run: inout SweepRun, _ pending: [Int], _ cfg: Configuration,
+                               now: Date, clock: ContinuousClock) async {
+        let readings = pending.isEmpty ? [:] : await cfg.playHistory(pending.map { run.candidates[$0].fullPath })
+        let t1 = clock.now
+        for i in pending {
+            // Written back so the classifier sees the same plays.
+            if let r = readings[run.candidates[i].fullPath] {
+                run.candidates[i].useCount = r.useCount; run.candidates[i].lastUsed = r.lastUsed
+            }
+            let c = run.candidates[i]
+            switch ArchiveAngelScorer.verdict(c, policy: run.policy, now: now) {
+            case .eligible(let score, let lines):
+                run.eligible += 1
+                let rec = ArchiveAngelEvidenceRecord(score: score, lines: lines, rejection: nil,
+                                                     useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
+                                                     timesProposed: c.attention.timesProposed,
+                                                     familySkips: c.familySkips, bands: run.policy.grades)
+                run.records[c.id] = rec
+                sweepLog.debug("\(c.filename, privacy: .public): \(rec.summary(), privacy: .public)")
+            case .rejected(let rejection):
+                run.records[c.id] = .init(score: 0, lines: [], rejection: rejection,
+                                          useCount: c.useCount, lastUsed: c.lastUsed, computedAt: now,
+                                          timesProposed: c.attention.timesProposed,
+                                          familySkips: c.familySkips, bands: run.policy.grades)
+                sweepLog.debug("\(c.filename, privacy: .public): excluded — \(rejection.rawValue, privacy: .public)")
+            }
+        }
+        noteSlice(clock.now - t1)
+    }
+
+    /// Consolidation S3b: ONE classification over the whole set (copies
+    /// need every record at once), off the main actor — the inputs are
+    /// values. Every record gets its class, reasons, year and copies,
+    /// written back in main-actor slices (the same pacing as scoring).
+    /// nil = cancelled while classifying (nothing published).
+    private func classifyAll(_ run: inout SweepRun, _ cfg: Configuration, clock: ContinuousClock) async
+        -> (result: ArchiveAngelRecommendations.Result, seconds: Double)? {
         let classifyStart = clock.now
-        let classified = await Self.classifyOffMain(all, evidence: records, rules: policy.recommend, now: cfg.now())
-        if Task.isCancelled { status = enabled ? .idle : .disabled; return }
+        let classified = await Self.classifyOffMain(run.candidates, evidence: run.records,
+                                                    rules: run.policy.recommend, now: cfg.now())
+        if Task.isCancelled { endCancelled(); return nil }
         let classifySeconds = Self.seconds(clock.now - classifyStart)
-        // Written back in main-actor slices (the same pacing as scoring).
+        let sliceSize = max(1, cfg.sliceSize)
         var from = 0
         while from < classified.verdicts.count {
             let t = clock.now
             let to = min(classified.verdicts.count, from + sliceSize)
             for i in from..<to {
-                let v = classified.verdicts[i]
-                let id = all[i].id
-                guard var rec = records[id] else { continue }
-                rec.recommendation = v.kind
-                rec.reasons = v.reasons.isEmpty ? nil : v.reasons
-                rec.year = v.year
-                rec.copies = v.copies > 1 ? v.copies : nil
-                rec.copyKey = v.copyKey
-                records[id] = rec
+                Self.write(classified.verdicts[i], into: &run.records, id: run.candidates[i].id)
             }
             noteSlice(clock.now - t)
             from = to
             await Task.yield()
         }
+        return (classified, classifySeconds)
+    }
 
+    /// One classifier verdict onto the record it is for (a record the run
+    /// has no evidence for is left alone).
+    nonisolated static func write(_ v: ArchiveAngelRecommendations.Verdict,
+                                  into records: inout [UUID: ArchiveAngelEvidenceRecord], id: UUID) {
+        guard var rec = records[id] else { return }
+        rec.recommendation = v.kind
+        rec.reasons = v.reasons.isEmpty ? nil : v.reasons
+        rec.year = v.year
+        rec.copies = v.copies > 1 ? v.copies : nil
+        rec.copyKey = v.copyKey
+        records[id] = rec
+    }
+
+    /// The evidence file for what the run holds — the partial checkpoint
+    /// (`complete` false) and the finished file alike, stamped with the
+    /// snapshot's attention and catalog state.
+    private func evidenceFile(_ run: SweepRun, computedAt: Date, complete: Bool,
+                              considered: Int) -> ArchiveAngelEvidenceFile {
+        ArchiveAngelEvidenceFile(computedAt: computedAt, complete: complete,
+                                 considered: considered, eligible: run.eligible, records: run.records,
+                                 attentionRevision: run.attention.revision,
+                                 attentionLastEventAt: run.attention.lastEventAt,
+                                 policyFingerprint: store.policyFingerprint,
+                                 catalogRevision: run.catalog.revision, catalogLaunchToken: run.catalog.token)
+    }
+
+    /// Publish the finished file, save it, say what it holds (status, the
+    /// one "done" log line — "(evidence NOT saved)" when the save failed),
+    /// and, once after a rules change, the migration line.
+    private func publish(_ run: SweepRun, classified: ArchiveAngelRecommendations.Result, classifySeconds: Double,
+                         _ cfg: Configuration, reason: String,
+                         started: ContinuousClock.Instant, clock: ContinuousClock) async {
         let finishedAt = cfg.now()
-        let file = ArchiveAngelEvidenceFile(computedAt: finishedAt, complete: true,
-                                            considered: total, eligible: eligible, records: records,
-                                            attentionRevision: attention.revision,
-                                            attentionLastEventAt: attention.lastEventAt,
-                                            policyFingerprint: store.policyFingerprint,
-                                            catalogRevision: catalog.revision, catalogLaunchToken: catalog.token)
-        store.replace(with: file)
+        store.replace(with: evidenceFile(run, computedAt: finishedAt, complete: true, considered: run.total))
         let saved = await store.save()
         lastRunSeconds = Double((clock.now - started).components.seconds)
             + Double((clock.now - started).components.attoseconds) / 1e18
         let grades = store.gradeCounts()
-        let summary = "scored \(total.formatted()) · \(store.candidateCount.formatted()) candidates"
+        let summary = "scored \(run.total.formatted()) · \(store.candidateCount.formatted()) candidates"
             + (saved ? "" : " · (evidence not saved)")
         status = .done(summary: summary, at: finishedAt)
         let bands = ArchiveAngelGrade.allCases.map { g -> String in
@@ -464,16 +555,20 @@ final class ArchiveAngelSweep: ObservableObject {
                 + " (classified in \(String(format: "%.2f", classifySeconds)) s)"
                 + " in \(String(format: "%.1f", lastRunSeconds)) s"
                 + (saved ? "" : " (evidence NOT saved)"))
-        // Once, on the first run after a rules change: what the old
-        // surfaces said → what the one classifier says now.
-        if let old = store.olderRules {
-            store.olderRules = nil
-            let legacy = await Self.classifyOffMain(all.filter { !$0.isOnMasterArchive && !$0.hasArchivedDuplicate },
-                                                    evidence: [:], rules: .legacyNudge, now: finishedAt)
-            cfg.log(Self.migrationLine(fromVersion: old.rulesVersion, oldGrades: old.grades,
-                                       legacyCounts: legacy.counts, newCounts: classified.counts))
-        }
+        await logMigrationOnce(run, classified: classified, finishedAt: finishedAt, cfg)
         sweepLog.info("assessment \(reason, privacy: .public): \(summary, privacy: .public) in \(self.lastRunSeconds, privacy: .public)s")
+    }
+
+    /// Once, on the first run after a rules change: what the old surfaces
+    /// said → what the one classifier says now.
+    private func logMigrationOnce(_ run: SweepRun, classified: ArchiveAngelRecommendations.Result,
+                                  finishedAt: Date, _ cfg: Configuration) async {
+        guard let old = store.olderRules else { return }
+        store.olderRules = nil
+        let legacy = await Self.classifyOffMain(run.candidates.filter { !$0.isOnMasterArchive && !$0.hasArchivedDuplicate },
+                                                evidence: [:], rules: .legacyNudge, now: finishedAt)
+        cfg.log(Self.migrationLine(fromVersion: old.rulesVersion, oldGrades: old.grades,
+                                   legacyCounts: legacy.counts, newCounts: classified.counts))
     }
 
     // MARK: Classification helpers
