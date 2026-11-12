@@ -347,32 +347,19 @@ struct VerifyAudioVerdictTruthMediaTests {
                                           audioCodec: "pcm_s16le", videoDuration: 17, audioDuration: 12)
     }
 
-    @Test("Codex #286 F3: a WHOLE file whose sound starts 5 s in is a complete measurement (Matroska states the end timestamp, 17 s, for 12 s of sound) — and the same file cut short is still caught",
+    @Test("Codex #286 F3 / #287 F2, known and accepted: mov states the SOUND's length, so a whole late-starting track is a complete measurement; Matroska states the END timestamp (17 s for 12 s of sound), so the same whole track reads 'not checked' — never 'ok' by a guess",
           .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)))
-    func aLateStartIsNotAShortDecode() async throws {
+    func aLateStartingTrack() async throws {
         let dir = try VerifyAudioTestMedia.makeScratchDir("late")
         defer { try? FileManager.default.removeItem(at: dir) }
-        for (name, codec, args) in [("test_va_late.mkv", "ffv1", [String]()), ("test_va_late.mov", "prores", ["-movflags", "+faststart"])] {
-            let path = try lateStartFixture(dir, name, videoCodec: codec, videoArgs: args)
-            let analysis = try await AudioBalanceProbe.analyze(path: path)
-            // RED before the fix (mkv): 5.0 s "short" of 17.0 s.
-            #expect(analysis.shortDecode == nil, "\(name): \(String(describing: analysis.shortDecode))")
-            #expect(analysis.levelsComplete && analysis.measuredSilent == false, "\(name)")
-        }
-        let whole = try await VerifyAudioProbe.diagnose(path: dir.appendingPathComponent("test_va_late.mkv").path)
-        #expect(whole.levelsPass == .complete, "\(whole.levelsPass)")
-        if case .unchecked(let why) = PromoteSoundGate.finding(from: whole) { Issue.record("the gate would refuse a whole file: \(why)") }
+        let mov = try await AudioBalanceProbe.analyze(
+            path: try lateStartFixture(dir, "test_va_late.mov", videoCodec: "prores", videoArgs: ["-movflags", "+faststart"]))
+        #expect(mov.shortDecode == nil && mov.levelsComplete && mov.measuredSilent == false)
 
-        // Cut to 60 % of its bytes: the gap is taken off, and what is left is still short.
-        let path = dir.appendingPathComponent("test_va_late.mkv").path
-        let size = try #require((try FileManager.default.attributesOfItem(atPath: path))[.size] as? NSNumber).uint64Value
-        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
-        try handle.truncate(atOffset: size * 6 / 10)
-        try handle.close()
-        let cut = try await AudioBalanceProbe.analyze(path: path)
-        let short = try #require(cut.shortDecode, "a late-start file cut short must still be caught")
-        #expect(abs(short.statedSeconds - 12) < 0.01, "the stated SOUND is 12 s, not the 17 s end timestamp: \(short.statedSeconds)")
-        #expect(!cut.levelsComplete && cut.measuredSilent == nil)
+        let mkv = try await AudioBalanceProbe.analyze(path: try lateStartFixture(dir, "test_va_late.mkv", videoCodec: "ffv1", videoArgs: []))
+        let short = try #require(mkv.shortDecode, "if Matroska's stated length ever becomes the sound's, this pin and the comment in shortDecodeOfStream go")
+        #expect(abs(short.missingSeconds - 5) < 0.05 && abs(short.statedSeconds - 17) < 0.05, "\(short)")
+        #expect(!mkv.levelsComplete && mkv.measuredSilent == nil)
     }
 
     @Test("Codex #286 F2: stream 0's decode ends early, then stream 1 cannot be decoded at all — the answer stays 'the decode ended early' (a check that RAN), never 'could not be decoded', which the Archive-anyway tick may accept",
