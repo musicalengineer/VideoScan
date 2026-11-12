@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 afternoon (Wednesday, after the night of 11/10: twelve merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-11 late evening (Wednesday; the night's theme: clean up the lost branches and prove `main` stable). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -13,36 +13,49 @@
    `~/Library/Logs/VideoScan/testbed_latest.txt` on the M4). M4 04:00 coverage, 04:30 Swift 6 analysis lane, 05:30
    adversarial confirm. Weekly sanitizers on the M4: address Sat 07:00, thread Sun 05:00. Kick a full M4 run by hand:
    `ssh ricksm4.local 'launchctl kickstart gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min). The 14:00
-   guard now skips only when today's green run was for the commit `main` is at (`9aa5924a4`).
-2. **State of `main` on the testbed.** M5 Ultra nightly 11/11 02:00 on `f28a61c27` (every merge of the night but
-   the #470 card fix): **GREEN**, 13,579 passed, 0 failed, 65 skipped; Core 2,567 passed, 0 failed. M4 full run
-   finished 11/11 00:06 on `9aa5924a4`: app suite GREEN (13,533 passed, 0 failed), gauntlet **AMBER** (7 known
-   issues, 902 unadapted suites, ui not run — the expected state), script tests GREEN (2,079 passed). The 14:00
-   M4 run of 11/11 is the first gauntlet over the night's later merges.
-3. **Merged the night of 11/10, for Rick's spot test (Debug is fine; none of it is about speed):**
-   - `c30850610` **Promote sound gate.** Promote measures the sound of the proven bytes every time; it reads no
-     stored verdict and stores none. Refusals: no audio track, half of a pair, silent, damaged, could not check. The
-     only stored input is the owner tag "Silent — checked". "Archive anyway" passes only a file whose sound could not
-     be checked, and logs it (Rick 11/10: keep the override). Codex pass done (`docs/reviews/codex.md`); recovery
-     adoptions are not gated, declined with the reason there.
-   - `78c90ac37` **Verify Audio tells the truth (#467, #468, closed).** A sound verdict is stored only when the
-     measurement supports it; "not checked" is said, never OK or damaged. Check Media, Repair…, Balance Audio and
-     Archive Angel read it the same way.
-   - **Observations** (the C module): `092064a2c` a newer search or load always wins over an older one still running
-     (one `LatestWins` helper, was hand-rolled counters); `8bb9feaca` the frame index job reports each file as
-     indexed, unreadable or deferred, and writes through one writer; `b51f9819e` catalog rows are typed enums, not
-     strings compared in the views.
-   - **Testbed:** `a50d561b3` the sensor lane validates the gauntlet manifest first (#400, closed); `33121a067` a
-     known sanitizer finding is suppressed with its issue and reason, a test-only finding is grey, red means a new
-     product finding; `9aa5924a4` the guard change in item 1.
-   - `c40e8dd1b` #263 item 1: a test fixture that carried a real birth date now carries an invented one.
+   guard skips only when today's green run was for the commit `main` is at.
+2. **State of `main` on the testbed.** Before the night: M5 Ultra nightly 11/11 02:00 GREEN on
+   `f28a61c27` (13,579 passed, 0 failed, 65 skipped; Core 2,567); M4 full testbed 11/11 16:12 on `343bdd7b9`:
+   suite GREEN (13,586 of 13,653 passed, 0 failed), gauntlet AMBER (7 known issues, 903 unadapted suites, ui not
+   run — the expected state), script tests GREEN (2,101). **After the night's ten merges: runs started on both
+   Macs late 11/11; their results replace this sentence when they finish.** During the night every merge passed
+   the sensor lane on its exact tree (744 tests each: 719 app, 25 Core).
+3. **The night of 11/11: the workspace cleanup (Rick's theme).** Ten branches from 11/08 brought current with
+   `main` (each was 107+ commits behind), reviewed, proven and merged one at a time, each as one `--no-ff` merge;
+   every branch, worktree and DerivedData removed after its merge. Nothing here changes what Rick sees except the
+   words noted. Each merge commit carries its own table and counts.
+   - **Codex fixes (the 11/09 sweep), each re-proven by mutating the fix back on the merged tree:**
+     `ff25f8c73` gauntlet retention removes only the runner's own summarized runs, history appends are locked and
+     rolled back on failure (9 tests red unfixed; 157 passed). `2f3de98fd` an Analyze / Transcribe / Captions row
+     ends on what THIS run wrote (one test added in the merge: an older stamp on the asked-for channel is not this
+     run's work). `71863733d` the Background quit marker is unlinked as one file, never a tree, and a failed clear
+     is said (the log line now says "press Start"; the checkbox is gone). `b069c21f3` a future-dated check is no
+     proof; Update waits for checks and writers it did not start, saves before its check, claims a check only on
+     evidence (228 app + 110 Core).
+   - **Refactors, behaviour unchanged, each proven by its characterization suite run against main's OLD function
+     and against the split, plus one mutation seen red:** `6bd7de3b1` `floorFires` (CCN 33 → 6), `511509086`
+     `Sweep.perform` (39 → 5), `eba4b3ab7` `selectFromEvidence` (39 → 7), `c6f2179fb`
+     `ArchiveVolumeProtection.make` (31 → 6; data-risk: the 11/08 Codex pass, 0 findings, covers it — the merged
+     file is byte-identical to the one reviewed), `4320de57a` `prepare` (37 → 9), `a6d957a5d`
+     `Promoter.promote` (35 → 10; data-risk: a new Codex pass on the merged result, cycle #285, merge, 0
+     findings). CCN-15 excess 1605 → 1481; debt entries 360 → 354. Verdicts: `docs/reviews/codex.md`.
+   - **Two things the merges turned up, fixed in them:** the `prepare` golden's "already verified" scenario was
+     stale on `main` itself (its injected diagnosis has no measurement, which since #467/#468 stores nothing) —
+     the fixture now runs the real sound check and the golden was re-recorded on main's unsplit code; and no test
+     pinned that the access copy is cut from the BALANCED companion ("cut it from the original" passed all 617
+     Angel tests) — a test now does.
+   - **Also:** `docs/design/hallie-full-audio.md` committed, parked (Rick's brief of 11/08); the two cloud briefs
+     BACKLOG scheduled for retirement after 11/05 removed to stay under the 30-doc ceiling (tag
+     `pre-prune-2026-11-11`); `archive-grades-combined` (a trial merge of the six refactors, no code of its own;
+     tip `8a9463811`) and `codex-sweep` worktrees removed; three already-merged local branches deleted.
+     Evidence logs of the night and of the retired worktrees: `.scratch/night-2026-11-11/`.
+   - **Left alone:** `fix/469-sanitizer-host-crash` (local, 1 commit, superseded by what merged on 11/11 — Rick
+     deletes it or says keep); the `ultra-testbed` worktree (`m4_run.sh --host ultra` uses it).
 4. **Sanitizer triage, #469 (merged 11/11):** a relaunched test host is explained only by the report printed
-   immediately before it (by place in the log, no test line between), else it is red "host crashed" with the
-   running test named. Re-read with this rule, the M4's 10/31–11/08 logs attribute all 27 relaunches to #463 and
-   #423. The earlier attempt (`fix/469-sanitizer-host-crash`, local branch, unmerged) is superseded. **Watch
-   Saturday 11/14's address run:** the one run made with the #463 suppression in force showed no host exit but a
-   second report one frame down (`NSObject.hpp:112`), which the suppression does not cover — so Saturday may
-   read red "findings" for it. Widening the suppression is a #463 decision.
+   immediately before it, else it is red "host crashed" with the running test named. **Watch Saturday 11/14's
+   address run:** the one run made with the #463 suppression in force showed a second report one frame down
+   (`NSObject.hpp:112`), which the suppression does not cover — Saturday may read red "findings" for it. Widening
+   the suppression is a #463 decision.
 5. **P0/P1:** open P0 — #332, #327 (both wait on Rick). Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
    #338. Look fixed in the code, close after Rick's check — #327, #354, #353, #342, #345 (one real-data check). Not
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
@@ -54,18 +67,16 @@
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound, #470.** Done 11/11: a Check Media card whose sound was not checked no longer has the verdict OK (grey
-   "not run" icon; the log line and the tally no longer count it OK). **Not merged — a truncated decode that
-   exits 0 is still stored "ok"** (confirmed on mp4, mov, mkv, mxf cut to 60 %). The fix is written and seen
-   red then green (`.scratch/470-short-decode-2026-11-11/B-short-decode.patch`), but it changes what the Promote
-   sound gate decides, so it waits on Rick's ruling (below) and a Codex pass. The production-shape sound-gate
-   test needs a `.backup` of the live catalog and has not run.
+2. **Sound, #470 — approved, next to build** (DECISIONS 2026-11-11). A truncated decode that exits 0 is still
+   stored "ok" (confirmed on mp4, mov, mkv, mxf cut to 60 %). The fix is written and was seen red then green
+   (`.scratch/470-short-decode-2026-11-11/B-short-decode.patch`): a decode that ends early reads "not checked"
+   everywhere and Promote refuses it; per the ruling the "Archive anyway" tick must also refuse a check that ran
+   but came up short (that part is not in the patch yet). It changes what the Promote sound gate decides: Codex
+   pass before merge. The production-shape sound-gate test needs a `.backup` of the live catalog and has not run.
 3. **Second-opinion media tools (Rick 11/11; BACKLOG "Integrity and truth").** On both Macs: `sox_ng`, `mediaconch`,
-   `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`. bmx v1.6.2 (`mxf2raw`, for MXF incl. orphaned Avid files) is
-   built on the M5 Ultra at `~/dev/bmx/out/build` (its 120 tests pass) — not installed (`sudo cmake --build
-   ~/dev/bmx/out/build --target install`, Rick), not yet built on the M4. Configure flags that work:
-   `-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBMX_BUILD_URIPARSER_SOURCE=ON -DBMX_BUILD_EXPAT_SOURCE=ON`. First use:
-   a second decoder's sample count beside ffmpeg's for #470's short decode. Not designed; none is in a test.
+   `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`. The bmx source build is dropped (Rick 11/11); his clone at
+   `~/dev/bmx` is reference code for reading MXF. First use: a second decoder's sample count beside ffmpeg's for
+   #470's short decode. Not designed; none is in a test.
 4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
    suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
 5. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
@@ -81,20 +92,20 @@
    `CaptionRunnerError` on Avid MXF.
 
 ## Waiting on Rick
+- **Read the 11/11 DECISIONS line** ("Rick approves the sound-check choices as advised"): it records what your
+  approval was taken to cover. Correct it if you meant less.
+- **Open Codex findings the 11/09 sweep left for you** (unchanged by the merges; detail in each merge commit):
+  gauntlet N1/N2 — the retention ownership proof can be forged by someone already inside
+  `~/Library/Logs/VideoScan/gauntlet`: is that threat in scope? (also N5, N6, F4, F6, F7). Analyze #272 #2 — an
+  Analyze that banked captions but no transcript ends as success with "no transcript" said: success or failure?
+  Background — when the quit marker cannot be cleared the log says so but the Settings heading stops saying
+  "quit"; F1 Quit does not drain an in-flight journal batch; F4 the activity poll still launches the quit helper.
+  Catalog check — C1, C6 (both about a BACKWARD clock step), C7, #272 #4.
+- **`fix/469-sanitizer-host-crash`:** delete the superseded local branch?
+- **`run_catalog_tests.sh` prints RED with 0 failures** (Core: 5 known-issue tests and 1 env-gated skip are not
+  counted toward its floor of 433). Already carried below as "the AMBER rule" question; seen again 11/11.
 - **Spot test of item 3.** By eye only: the Frames Search button greys while a search runs and comes back; the sound
   gate's refusals on real files; the wording where sound was not checked.
-- **Sound gate:** should "Archive anyway" also pass a file measured silent? (Today no; tag it "Silent — checked".)
-- **Short decode (#470):** with the fix, a file whose sound decode ends early reads "not checked" everywhere, and
-  Promote refuses it (stricter). One corner goes the other way: such a file that is also silent, untagged and
-  un-probeable would pass on the "Archive anyway" tick, where today it is refused as silent. Accept that as what
-  the tick means, or have the tick refuse a check that ran but came up short? (Advice: the second.)
-- **Check Media tally:** a sound-not-checked card is now counted under "couldn't be checked". Own phrase instead?
-- **Ten unmerged branches from 11/08** (not from the 11/10 night; each has a worktree under
-  `~/dev/VideoScan-wt/`): six refactors — `refactor/angel-floorfires`, `-prepare`, `-promote`,
-  `-select-from-evidence`, `-sweep-perform`, `refactor/archive-volume-protection-make` (data-risk: Codex pass
-  first); four fixes — `fix/codex-sweep-analyze-evidence`, `-bg-quit`, `-catalog-check`, `-gauntlet-tidy`. (The
-  Hallie full-audio brief is committed, parked: `docs/design/hallie-full-audio.md`.) All but two conflict with `main` now (mostly manifest and baseline; real
-  code in angel-prepare, angel-promote, bg-quit). Bring them current and merge, or leave them parked?
 - **The archive sound check's findings:** the unplayable `Mark's-Bday-1984…` file; the silent CapeCodAndMuseum1991
   files, and whether to check the July recapture `CapeCod_1991-06-21_NV12`; the one-sided files.
 - **#263:** rewrite git history to remove the old fixture date, or leave it? (Advice: leave it.)
