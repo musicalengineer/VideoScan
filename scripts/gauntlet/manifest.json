@@ -5670,6 +5670,22 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzeJobEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AnalyzeJobEvidenceTests"
+      ],
+      "tests": [
+        "anOlderStampOnTheAskedChannelIsNotBanked",
+        "failedTranscriptionIsNotBanked",
+        "failuresKeepTheirWords",
+        "skippedCaptionsAreNotBanked",
+        "skippedTranscribeIsNotBanked",
+        "successNeedsThisRunsWrites"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzeJobWaitLoopTests.swift",
@@ -5680,7 +5696,8 @@
       "tests": [
         "cancelOwnBatchStillCancelsOrchestrator",
         "cancelWaitingJobDoesNotKillForeignBatch",
-        "waitingJobDoesNotHammerBusyOrchestrator"
+        "waitingJobDoesNotHammerBusyOrchestrator",
+        "writesWhileWaitingAreNotThisRuns"
       ]
     },
     {
@@ -39446,7 +39463,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 565,
+      "expected_floor": 571,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -39639,7 +39656,8 @@
         "VideoScanTests/VerifyAudioVerdictRepairDoorTests",
         "VideoScanTests/VerifyAudioVerdictBalanceGateTests",
         "VideoScanTests/VerifyAudioVerdictAngelReuseTests",
-        "VideoScanTests/VerifyAudioVerdictNoteWordingTests"
+        "VideoScanTests/VerifyAudioVerdictNoteWordingTests",
+        "VideoScanTests/AnalyzeJobEvidenceTests"
       ]
     },
     {

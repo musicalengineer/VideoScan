@@ -141,4 +141,30 @@ struct AnalyzeJobWaitLoopTests {
         }
         #expect(await stub.pathsCalled() == [rec.fullPath])
     }
+
+    @Test("RED Codex final #1: captions another batch wrote while this job WAITED are not this job's 'banked'")
+    func writesWhileWaitingAreNotThisRuns() async throws {
+        let model = VideoScanModel()
+        let (root, rec) = try makeTempClip(tag: "other-batch")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        model.records = [rec]
+        let stub = StubDossierRunner(modelID: "stub-vlm-other-batch")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        orch.currentStatus = .running(progress: 0.3, currentFile: "foreign.mov", etaSec: nil)
+        orch.currentVolumePrefix = "/Volumes/Foreign/"
+        let job = AnalyzeJob(record: rec, model: model, orchestrator: orch, stages: [.captions])
+        job.start()
+        try? await Task.sleep(for: .milliseconds(300))
+        // The batch that holds the orchestrator banks THIS file while the job waits.
+        let other = Date()
+        rec.sceneCaptionDate = other
+        rec.dossierProcessedAt = other
+        try? await Task.sleep(for: .milliseconds(50))
+        orch.currentStatus = .idle
+        orch.currentVolumePrefix = nil
+        #expect(await awaitTerminal(job))
+        #expect(await stub.pathsCalled().isEmpty, "the job's own batch skipped the already-analyzed file")
+        guard case .failed(let msg) = job.state else { Issue.record("claimed another batch's captions: \(job.state)"); return }
+        #expect(msg.contains("did not run"), Comment(rawValue: msg))
+    }
 }
