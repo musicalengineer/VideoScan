@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-12 15:10 (Thursday; the sound check's short-decode fix, #470, merged this afternoon on top of the night of 11/11's cleanup). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-12 18:00 (Thursday; the sound check's short-decode fix, #470, merged this afternoon; the same fix for Check Media's continuity rows merged this evening). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -85,16 +85,22 @@
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound, second slice (Rick 11/12: "do them in parts … I'd like to see the audio/sound issue solved soon").**
-   Not designed yet; BACKLOG "Sound over time, per channel". (a) Close the AVI gap: hold the decoded sound against
-   the picture's length where the stream states none. (b) Sound over time per channel — how much of the running
-   time carries sound and where it stops — from the levels pass already run, shown as evidence; Rick rules how much
-   silent running time is too much. (c) AVFoundation as a second decoder for mov/mp4 (`sox_ng` and `qcli` decode
-   through ffmpeg's libraries, so they are not a second opinion for video files; MP4Box / bento4 / mediainfo are
-   independent readers of the container's claim). Facts and agreeing witnesses at the Promote gate, never a
-   probability. Changes what the gate decides: safety-critical skill, Codex pass. Still open from #470: rows stored
-   damaged before #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test on a
-   `.backup` of the live catalog has not run.
+2. **Sound, second slice (Rick 11/12: "do them in parts … I'd like to see the audio/sound issue solved soon";
+   "do your best so we can catch 99% of the cases where audio is a problem").** Evidence first: 144 real catalogued
+   files read-only with ffmpeg and AVFoundation (`.scratch/470-sound-slice2-2026-11-12/survey2.jsonl`).
+   **Done 11/12 (`d1036b6cd`):** Check Media's full pass trusted ffmpeg's exit 0, so on a cut-short file its row
+   read "Every sample decoded"; the continuity row and the four level rows are now "not run" with the Sound row's
+   numbers (mov, mkv red → green; not data-risk, no Codex). **Next, one merge each:** (a) sound over time per
+   channel in that same pass — a channel that goes quiet for 10 s or more WHILE another carries sound is a Warning
+   (0 of 74 real stereo files do this); all channels quiet together is a shown fact only (12 of 74: tape tails,
+   pauses); no Promote refusal. (b) AVFoundation as a second decoder at the Promote gate for mov/mp4: where both
+   decode and disagree on length or level the file reads "not checked" (43 real tracks: all agree within 1 dB and
+   0.2 s; AVFoundation cannot decode QDesign or MP3-in-mov, 16 tracks). Data-risk: safety-critical skill, Codex pass.
+   (c) AVI: hold the decode against the header's sample / frame count (only 39 AVI files, 2 GB, in the catalog —
+   last). **Cannot be caught from the file alone:** a raw DV, MPEG or transport-stream file cut short before it
+   was catalogued states nothing about its original length. Still open from #470: rows stored damaged before
+   #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test on a `.backup` of the
+   live catalog has not run.
 3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
    Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
 4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
