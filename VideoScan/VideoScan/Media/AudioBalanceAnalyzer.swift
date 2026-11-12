@@ -221,6 +221,17 @@ enum AstatsOutputParser {
         return levels
     }
 
+    /// How many samples per channel astats was fed — the "Number of
+    /// samples:" line of its Overall section (GH #470). nil when the line is
+    /// absent or unreadable: never a guess. Pure.
+    static func samplesPerChannel(fromStderr text: String) -> Int64? {
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let payload = rawLine.range(of: "] ").map { rawLine[$0.upperBound...] } ?? rawLine
+            if let v = value(of: "Number of samples:", in: payload), let n = Int64(v), n >= 0 { return n }
+        }
+        return nil
+    }
+
     /// "Label: value" → "value" (trimmed), or nil when the line isn't
     /// that label.
     private static func value(of label: String, in payload: Substring) -> String? {

@@ -343,6 +343,7 @@ enum VerifyAudioRules {
         // Check Media's sound row): every stream, every declared channel,
         // every level readable.
         guard analysis.measuredSilent != nil else {
+            if let short = analysis.shortDecode { return .incomplete(reason: short.reason) }
             return .incomplete(reason: "the sound track was only partly measured")
         }
         return .complete

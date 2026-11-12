@@ -179,6 +179,66 @@ struct VerifyAudioIncompleteLevelsTests {
         let back = try JSONDecoder().decode(VideoRecord.self, from: Data(json.utf8))
         #expect(back.audioVerifyStatus == "" && back.audioVerifyDate == nil)
     }
+
+    // MARK: GH #470 — a decode that ended early (the pure rule)
+
+    @Test("#470: short means more than 1 s AND more than 2 % of the stated length is missing")
+    func theShortDecodeRule() {
+        func short(_ decodedSeconds: Double?, of stated: Double?, rate: Int? = 48_000) -> Double? {
+            AudioBalanceProbe.shortDecodeSeconds(decodedSamples: decodedSeconds.map { Int64($0 * 48_000) },
+                                                 sampleRateHz: rate, statedSeconds: stated)
+        }
+        // Whole, and inside the tolerance on both sides of each line.
+        #expect(short(12, of: 12) == nil)
+        #expect(short(11.1, of: 12) == nil, "0.9 s missing: under 1 s")
+        #expect(short(2, of: 2.9) == nil, "31 % missing but only 0.9 s")
+        #expect(short(7100, of: 7200) == nil, "100 s missing of two hours is 1.4 %: under 2 %")
+        #expect(short(13, of: 12) == nil, "more sound than stated is not a short decode")
+        // Beyond both.
+        #expect(short(7.2, of: 12).map { abs($0 - 4.8) < 0.001 } == true, "the 60 % cut")
+        #expect(short(10.9, of: 12) != nil, "1.1 s and 9 %")
+        #expect(short(7000, of: 7200) != nil, "200 s and 2.8 %")
+        #expect(short(0, of: 12) == 12, "nothing decoded")
+        // A stated length and no count: not evidence the decode finished.
+        #expect(short(nil, of: 12) == 12)
+        // Nothing to compare against: never a finding.
+        #expect(short(7.2, of: nil) == nil && short(7.2, of: 0) == nil)
+        #expect(short(7.2, of: 12, rate: nil) == nil && short(7.2, of: 12, rate: 0) == nil)
+        #expect(AudioBalanceProbe.shortDecodeToleranceSeconds == 1.0 && AudioBalanceProbe.shortDecodeToleranceFraction == 0.02)
+    }
+
+    @Test("#470: the sample count is astats' own line; a missing or unreadable line is nil, and the levels still parse")
+    func theSampleCountLine() {
+        let p = "[Parsed_astats_0 @ 0x7548c00d80] "
+        let stderr = p + "Channel: 1\n" + p + "Peak level dB: -21.07\n" + p + "RMS level dB: -24.08\n"
+            + p + "Channel: 2\n" + p + "Peak level dB: -21.07\n" + p + "RMS level dB: -24.08\n"
+            + p + "Overall\n" + p + "Number of samples: 220500\n"
+            + "size=N/A time=00:00:05.00 bitrate=N/A speed=1e+03x\n"
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: stderr) == 220_500)
+        let levels = AstatsOutputParser.perChannelLevels(fromStderr: stderr)
+        #expect(levels.count == 2 && levels.allSatisfy { $0.rmsMeasured && $0.rmsDBFS == -24.08 }, "the Overall section adds no channel")
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Channel: 1\n" + p + "RMS level dB: -24\n") == nil)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Number of samples: many\n") == nil)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: "") == nil)
+        #expect(AudioBalanceProbe.astatsFilter.contains("measure_overall=Number_of_samples"), "the pass asks for the count")
+    }
+
+    @Test("#470: the stated length is the stream's own — duration, else Matroska's DURATION tag, else unknown (never the container's)")
+    func theStatedLength() throws {
+        func infos(_ audio: String) throws -> [AudioBalanceStreamInfo] {
+            let json = #"{"streams":[{"index":0,"codec_type":"video","codec_name":"ffv1","duration":"99.0"},"# + audio
+                + #"],"format":{"format_name":"x","duration":"99.0"}}"#
+            return try AudioBalanceProbe.shape(fromProbeJSON: Data(json.utf8)).audioStreamInfos
+        }
+        let mov = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000","duration":"12.000000","tags":{}}"#)
+        #expect(mov.first?.statedSeconds == 12 && mov.first?.sampleRateHz == 48_000)
+        let mkv = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"44100","tags":{"DURATION":"01:02:03.500000000"}}"#)
+        #expect(mkv.first?.statedSeconds == 3723.5 && mkv.first?.sampleRateHz == 44_100)
+        let avi = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000"}"#)
+        #expect(avi.first?.statedSeconds == nil, "no stream length stated: the container's 99 s is not borrowed")
+        #expect(AudioBalanceProbe.seconds(fromDurationTag: "garbage") == nil && AudioBalanceProbe.seconds(fromDurationTag: nil) == nil)
+        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("sample_rate,duration:stream_tags=DURATION") })
+    }
 }
 
 // MARK: - #468: a failed read is not damage

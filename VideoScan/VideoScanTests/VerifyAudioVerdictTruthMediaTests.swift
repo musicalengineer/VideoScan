@@ -286,4 +286,69 @@ struct VerifyAudioVerdictTruthMediaTests {
         #expect(rec.audioVerifyStatus == "ok" && rec.audioVerifyNote == "" && rec.audioVerifyDate != nil)
         #expect(again.state == .finished(summary: "All is well — the audio track checked out."))
     }
+
+    // MARK: GH #470 — a decode that ends early and exits 0
+
+    /// Containers whose header still states the sound's full length after the
+    /// file's tail is cut off (mov/mp4 with the index in front, mkv, mxf).
+    /// avi is not here: its header states no length for the sound stream, so
+    /// there is nothing to compare the decode against.
+    nonisolated static let cutShortMatrix: [Container] = [
+        Container(name: "test_va_cut.mp4", videoCodec: "libx264", videoArgs: ["-preset", "ultrafast", "-movflags", "+faststart"],
+                  audioCodec: "aac", size: "320x240", rate: "25"),
+        Container(name: "test_va_cut.mov", videoCodec: "prores", videoArgs: ["-movflags", "+faststart"],
+                  audioCodec: "pcm_s16le", size: "320x240", rate: "25"),
+        Container(name: "test_va_cut.mkv", videoCodec: "ffv1", videoArgs: [],
+                  audioCodec: "pcm_s16le", size: "320x240", rate: "25"),
+        Container(name: "test_va_cut.mxf", videoCodec: "mpeg2video", videoArgs: ["-g", "15"],
+                  audioCodec: "pcm_s16le", size: "720x576", rate: "25"),
+    ]
+
+    @Test("#470: the file's tail is cut off, ffmpeg decodes what is left and exits 0 — not a complete measurement, nothing stored",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)), arguments: cutShortMatrix)
+    func aDecodeThatEndsEarlyIsNotStoredOk(_ c: Container) async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("cut")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(into: dir, name: c.name, videoCodec: c.videoCodec,
+                                                     extraVideoArgs: c.videoArgs, audioCodec: c.audioCodec,
+                                                     size: c.size, rate: c.rate, videoDuration: 12)
+        // Whole: a complete measurement, as before.
+        let whole = try await VerifyAudioProbe.diagnose(path: path)
+        #expect(whole.verdict == .ok && whole.levelsPass == .complete, "\(c.name) whole: \(whole.verdict)")
+
+        // Cut to 60 % of its bytes: the header still reads and still says 12 s.
+        let size = try #require((try FileManager.default.attributesOfItem(atPath: path))[.size] as? NSNumber).uint64Value
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        try handle.truncate(atOffset: size * 6 / 10)
+        try handle.close()
+
+        // The real probe, the real ffmpeg: it exits 0 on this file.
+        let cut = try await VerifyAudioProbe.diagnose(path: path)
+        #expect(cut.verdict != .ok, "\(c.name): a decode that stopped early was called a complete measurement")
+        #expect(cut.persistedStatus == "", "\(c.name): nothing may be stored — '\(cut.persistedStatus)'")
+        if case .incomplete = cut.levelsPass {} else { Issue.record("\(c.name): levels pass \(cut.levelsPass)") }
+        // The part that did decode carries sound; it is still not a verdict.
+        #expect(cut.balanceAnalysis?.measurements.channels.contains { $0.rmsDBFS > -20 } == true)
+        #expect(cut.balanceAnalysis?.measuredSilent == nil, "\(c.name): not a measurement of the whole track")
+
+        // Through the job: nothing stored, and it says could not check.
+        let model = VideoScanModel()
+        let rec = soundRecord(c.name, path: path)
+        model.records = [rec]
+        let job = await runVerify(rec, model: model, nil)
+        #expect(rec.audioVerifyStatus == "" && rec.audioVerifyDate == nil, "\(c.name): stored '\(rec.audioVerifyStatus)'")
+        #expect(failureMessage(job)?.hasPrefix("Could not check the audio — ") == true, "\(job.state)")
+    }
+
+    @Test("#470 unchanged: 12 s of whole, healthy sound in every matrix container is still a complete measurement",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)), arguments: matrix)
+    func aWholeFileIsStillComplete(_ c: Container) async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("whole")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(into: dir, name: c.name, videoCodec: c.videoCodec,
+                                                     extraVideoArgs: c.videoArgs, audioCodec: c.audioCodec,
+                                                     size: c.size, rate: c.rate, videoDuration: 12)
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        #expect(d.verdict == .ok && d.levelsPass == .complete && d.balanceAnalysis?.measuredSilent == false, "\(c.name): \(d.verdict)")
+    }
 }

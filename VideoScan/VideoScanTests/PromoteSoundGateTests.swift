@@ -257,6 +257,29 @@ struct PromoteSoundGateTests {
         #expect(Self.refusal(Self.decide(.unchecked("x"), mark: .accepted))?.code == .unchecked)
     }
 
+    @Test("GH #470: a decode that ended early is could-not-check with its numbers — never present, never silent — and is marked as a check that RAN; damage still comes first")
+    func aShortDecodeIsUncheckedAndRan() {
+        typealias S = MasterArchiveTestSupport
+        let short = AudioShortDecode(missingSeconds: 4.8, statedSeconds: 12)
+        let why = "the sound decode stopped early — 4.8 s of the 12.0 s the file's header states did not decode (the file may be cut short, or a read failed)"
+        #expect(short.reason == why)
+        for channels in [[-18.0, -20.0], [-68.0, -68.0], [-18.0, -.infinity]] as [[Double?]] {
+            let d = S.soundDiagnosis(channels: channels, shortDecode: short)
+            #expect(G.finding(from: d) == .unchecked(why), "\(channels): \(G.finding(from: d))")
+            #expect(G.ranButCameUpShort(d))
+            #expect(d.levelsPass == .incomplete(reason: why) && d.verdict != .ok && d.persistedStatus == "")
+        }
+        // Not a short decode: whole, partly measured, no track.
+        #expect(!G.ranButCameUpShort(S.soundDiagnosis(channels: [-18, -20])))
+        #expect(!G.ranButCameUpShort(S.soundDiagnosis(channels: [-18, nil])))
+        #expect(G.finding(from: S.soundDiagnosis(channels: [-18, nil])) == .unchecked("the sound track was only partly measured"))
+        #expect(!G.ranButCameUpShort(S.soundDiagnosis(channels: [], audioStreams: 0)))
+        // Measured damage outranks it.
+        let damaged = S.soundDiagnosis(channels: [-18, -20], shortDecode: short,
+                                       extraFindings: [.durationMismatch(audioSeconds: 2, videoSeconds: 10)])
+        if case .damaged = G.finding(from: damaged) {} else { Issue.record("\(G.finding(from: damaged))") }
+    }
+
     @Test("precedence: could not check, then damaged, then no track / silent, then present")
     func precedence() {
         // finding(from:) already orders damage over levels; decide never turns a refusal into a pass.

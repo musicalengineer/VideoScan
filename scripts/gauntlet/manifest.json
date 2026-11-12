@@ -35602,6 +35602,7 @@
         "PromoteSoundGateTests"
       ],
       "tests": [
+        "aShortDecodeIsUncheckedAndRan",
         "before1980",
         "edgeWords",
         "failedLevelsPassIsUncheckedNotDamaged",
@@ -35634,6 +35635,7 @@
       ],
       "tests": [
         "aPerfectStoredPassIsNeverReused",
+        "aShortDecodeIsRefusedTickedOrNot",
         "changedDuringMeasurementIsRefused",
         "couldNotCheckIsRefused",
         "damagedIsRefusedEvenTagged",
@@ -35685,6 +35687,7 @@
         "PromoteSoundGateMediaMatrixTests"
       ],
       "tests": [
+        "aFileCutShortIsNotPromoted",
         "avi",
         "missingFfmpegIsNotDamage",
         "mkv",
@@ -35765,7 +35768,10 @@
         "noLevelsPassNeeded",
         "nothingStoredMeansNoKeyOnDisk",
         "poisonedDiagnosesAreNotOk",
-        "theDiagnosisIsStillCached"
+        "theDiagnosisIsStillCached",
+        "theSampleCountLine",
+        "theShortDecodeRule",
+        "theStatedLength"
       ]
     },
     {
@@ -35779,7 +35785,9 @@
         "VerifyAudioVerdictTruthMediaTests"
       ],
       "tests": [
+        "aDecodeThatEndsEarlyIsNotStoredOk",
         "aSoundNotCheckedCardIsNotLoggedOrCountedOK",
+        "aWholeFileIsStillComplete",
         "anEarlierVerdictIsLeftAlone",
         "completeAndDamagedAreStored",
         "failedReadStoresNoSoundVerdict",
@@ -39678,7 +39686,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 590,
+      "expected_floor": 594,
       "name": "regression",
       "package_expected_floor": 334,
       "package_selectors": [

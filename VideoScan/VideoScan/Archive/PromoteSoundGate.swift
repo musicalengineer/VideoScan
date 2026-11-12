@@ -129,6 +129,7 @@ enum PromoteSoundGate {
         // a pass that skipped a stream or could not read a channel — the
         // answer, and the verdict stored from it, must be about every channel.
         guard let silent = analysis.measuredSilent else {
+            if let short = analysis.shortDecode { return .unchecked(short.reason) }
             return .unchecked("the sound track was only partly measured")
         }
         let channels = analysis.measurements.channels
@@ -137,6 +138,15 @@ enum PromoteSoundGate {
             return .silent(levels: line, loudestDBFS: channels.map(\.rmsDBFS).max() ?? -.infinity)
         }
         return .present(oneSided: oneSided(analysis), levels: line)
+    }
+
+    /// A check that RAN and came up short (GH #470): the decode exited 0
+    /// without delivering the sound the header states. It is "could not
+    /// check" like any incomplete pass, but it is not a measurement that
+    /// could not be MADE, so the owner's "Archive anyway" tick does not
+    /// accept it (DECISIONS 2026-11-11). Pure.
+    static func ranButCameUpShort(_ d: AudioVerifyDiagnosis) -> Bool {
+        d.balanceAnalysis?.shortDecode != nil
     }
 
     /// The codec of a levels pass that FAILED to run to the end, else nil.

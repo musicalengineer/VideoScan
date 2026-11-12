@@ -57,6 +57,13 @@ struct AudioBalanceStreamInfo: Sendable, Equatable {
     /// Declared bitrate in bits/s; nil when ffprobe doesn't report one
     /// (typical for PCM in MOV/MXF/DV).
     var bitRate: Int?
+    /// Declared sample rate in Hz; nil when ffprobe reports none.
+    var sampleRateHz: Int? = nil
+    /// How long the HEADER says this stream's sound runs, in seconds: the
+    /// stream's own `duration`, else Matroska's per-stream DURATION tag.
+    /// nil when the container states none for the stream (avi, raw dv) —
+    /// then there is nothing to hold the decode against (GH #470).
+    var statedSeconds: Double? = nil
 }
 
 /// What ffprobe says about the file's streams — consumed by the
@@ -115,13 +122,45 @@ extension AudioBalanceStreamShape {
     }
 }
 
+/// A levels pass that exited 0 without delivering the sound the header
+/// states (GH #470).
+struct AudioShortDecode: Sendable, Equatable {
+    /// Seconds of stated sound that did not decode.
+    var missingSeconds: Double
+    /// Seconds of sound the stream's header states.
+    var statedSeconds: Double
+
+    /// Why this is not a measurement, in the words every surface shows
+    /// (Verify Audio, Check Media's Sound row, Promote's refusal). Numbers
+    /// only: safe for logs.
+    /// The one with more sound missing (a file can carry several streams).
+    static func worse(_ a: AudioShortDecode?, _ b: AudioShortDecode?) -> AudioShortDecode? {
+        guard let a else { return b }
+        guard let b else { return a }
+        return b.missingSeconds > a.missingSeconds ? b : a
+    }
+
+    var reason: String {
+        "the sound decode stopped early — "
+            + String(format: "%.1f s of the %.1f s", missingSeconds, statedSeconds)
+            + " the file's header states did not decode (the file may be cut short, or a read failed)"
+    }
+}
+
 struct AudioBalanceAnalysis: Sendable, Equatable {
     var classification: AudioChannelClass
     /// True only when the levels pass measured EVERY audio stream and every
-    /// declared channel with a readable RMS (`levelsComplete(perStream:…)`).
+    /// declared channel with a readable RMS (`levelsComplete(perStream:…)`),
+    /// and no stream's decode ended short of the length its header states
+    /// (`shortDecodeSeconds`, GH #470).
     /// Defaults false: an analysis nobody proved complete is never silence
     /// evidence (Codex round 2, 2026-10-24).
     var levelsComplete: Bool = false
+    /// Set when a stream's decode RAN and ended short of the length its
+    /// header states (GH #470): the worst stream's numbers. A check that ran
+    /// and came up short is not "could not be made" — Promote's "Archive
+    /// anyway" tick does not accept it (DECISIONS 2026-11-11).
+    var shortDecode: AudioShortDecode? = nil
     /// Levels of the PROGRAM stream (the first stream when none, or
     /// more than one, carries program).
     var measurements: AudioBalanceMeasurements
@@ -235,12 +274,83 @@ enum AudioBalanceProbe {
         return true
     }
 
+    /// The whole completeness answer: every stream and channel was read
+    /// (above) AND no stream's decode ended early (GH #470). Pure.
+    static func levelsComplete(perStream: [[AudioChannelLevels]], declaredChannels: [Int],
+                               shortDecode: AudioShortDecode?) -> Bool {
+        shortDecode == nil && levelsComplete(perStream: perStream, declaredChannels: declaredChannels)
+    }
+
+    // MARK: A decode that ended early (GH #470)
+    //
+    // ffmpeg exits 0 when the file's tail is missing or a read fails partway:
+    // it decodes what it reached and stops (measured 2026-11-11, ffmpeg 9.0:
+    // mp4/aac, mov/pcm, mkv/pcm, mxf/pcm, wav, mp3 cut to 60 % of their bytes
+    // all exit 0). The levels then describe only the part that decoded. So a
+    // pass is complete only if the samples astats counted cover the length the
+    // header states for that stream.
+    //
+    // Tolerance: short means MORE than 1 s AND more than 2 % is missing. It is
+    // the tolerance Check Media's sample-count row already uses for the same
+    // comparison (CheckMediaRules.sampleCountTolerance + avToleranceSeconds),
+    // and 1 s is the repo's duration tolerance everywhere else (Verify Video,
+    // Balance / Rebuild output checks). On whole synthetic files the two
+    // numbers agree to the sample (mp4/aac, mov, mkv, mxf, avi/mp3: 0 missing),
+    // so the margin is for real headers that round or estimate a length, not
+    // for the decoder. What it does not catch: a decode that stops inside the
+    // last 2 % (or last second) of the track.
+
+    /// Missing sound under this many seconds is never "short".
+    static let shortDecodeToleranceSeconds: Double = 1.0
+    /// Missing sound under this fraction of the stated length is never "short".
+    static let shortDecodeToleranceFraction: Double = 0.02
+
+    /// Seconds of sound the header states that the decode did not deliver,
+    /// when that is beyond the tolerance; nil when the decode covered the
+    /// stream, or the header states no length / rate to compare against (an
+    /// unknown length never makes a finding). A stated length with NO sample
+    /// count is short by all of it: a count we asked for and could not read
+    /// is not evidence the decode finished. Pure.
+    static func shortDecodeSeconds(decodedSamples: Int64?, sampleRateHz: Int?, statedSeconds: Double?) -> Double? {
+        guard let statedSeconds, statedSeconds > 0, let sampleRateHz, sampleRateHz > 0 else { return nil }
+        guard let decodedSamples else { return statedSeconds }
+        let missing = statedSeconds - Double(decodedSamples) / Double(sampleRateHz)
+        return missing > max(shortDecodeToleranceSeconds, shortDecodeToleranceFraction * statedSeconds) ? missing : nil
+    }
+
+    /// One stream's levels pass held against the length its header states:
+    /// the short decode, logged, or nil when the decode covered the stream
+    /// (or the header states nothing to compare against).
+    static func shortDecodeOfStream(_ ordinal: Int, levelsStderr: String, shape: AudioBalanceStreamShape,
+                                    path: String) -> AudioShortDecode? {
+        guard ordinal < shape.audioStreamInfos.count else { return nil }
+        let info = shape.audioStreamInfos[ordinal]
+        let decoded = AstatsOutputParser.samplesPerChannel(fromStderr: levelsStderr)
+        guard let missing = shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: info.sampleRateHz,
+                                               statedSeconds: info.statedSeconds) else { return nil }
+        let stated = info.statedSeconds ?? 0
+        balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) audio stream \(ordinal) — ffmpeg exited 0 but the decode ended early: \(decoded.map(String.init) ?? "no", privacy: .public) samples counted, \(String(format: "%.1f", missing), privacy: .public) s short of the \(String(format: "%.1f", stated), privacy: .public) s the header states; the levels are not a complete measurement")
+        return AudioShortDecode(missingSeconds: missing, statedSeconds: stated)
+    }
+
+    /// Matroska's per-stream DURATION tag ("00:00:12.000000000") in seconds;
+    /// nil for anything else. Pure.
+    static func seconds(fromDurationTag tag: String?) -> Double? {
+        guard let parts = tag?.split(separator: ":"), parts.count == 3,
+              let h = Double(parts[0]), let m = Double(parts[1]), let s = Double(parts[2]),
+              h >= 0, m >= 0, s >= 0 else { return nil }
+        return h * 3600 + m * 60 + s
+    }
+
     // MARK: Pure argument builders (unit-tested, no I/O)
 
     /// astats measurement shared by all passes: per-channel RMS + peak
     /// only (keeps the stderr output tiny and the parse surface small).
+    /// `measure_overall=Number_of_samples` adds ONE line — how many samples
+    /// per channel the filter was fed — which is the only evidence that the
+    /// decode reached the end of the track (GH #470).
     static let astatsFilter =
-        "astats=measure_perchannel=Peak_level+RMS_level:measure_overall=none"
+        "astats=measure_perchannel=Peak_level+RMS_level:measure_overall=Number_of_samples"
 
     /// Levels pass — per-channel levels of ONE audio stream, selected
     /// by audio-ordinal (`0:a:N`, N = position among audio streams).
@@ -273,7 +383,8 @@ enum AudioBalanceProbe {
     static func shapeArgs(input: String) -> [String] {
         [
             "-v", "error",
-            "-show_entries", "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate,sample_rate,duration:stream_tags=DURATION",
             "-show_entries", "format=format_name,duration",
             "-of", "json",
             input
@@ -289,6 +400,9 @@ enum AudioBalanceProbe {
         let channels: Int?
         let bit_rate: String?
         let r_frame_rate: String?
+        let sample_rate: String?
+        let duration: String?
+        let tags: [String: String]?
     }
     private struct ProbedFormat: Decodable {
         let format_name: String?
@@ -318,7 +432,10 @@ enum AudioBalanceProbe {
                 absoluteIndex: s.index ?? position,
                 codec: s.codec_name ?? "",
                 channels: s.channels ?? 0,
-                bitRate: s.bit_rate.flatMap { Int($0) }))
+                bitRate: s.bit_rate.flatMap { Int($0) },
+                sampleRateHz: s.sample_rate.flatMap { Int($0) },
+                statedSeconds: s.duration.flatMap { Double($0) }
+                    ?? seconds(fromDurationTag: s.tags?["DURATION"])))
         }
         guard let firstAudio = audioInfos.first else {
             throw AudioBalanceProbeError.noAudioStream
@@ -397,6 +514,7 @@ enum AudioBalanceProbe {
         // ---- Per-channel levels of EVERY audio stream (audio-only
         // decode, one pass each — 12-bit DV tapes carry two pairs).
         var perStream: [[AudioChannelLevels]] = []
+        var shortDecode: AudioShortDecode?
         for ordinal in 0..<shape.audioStreams {
             let levelsResult = await ProcessRunner.runProcess(
                 executable: ffmpeg,
@@ -420,6 +538,9 @@ enum AudioBalanceProbe {
                     "astats produced no per-channel measurements for audio stream \(ordinal)")
             }
             perStream.append(channels)
+            // Exit 0 is not "decoded to the end" (GH #470).
+            shortDecode = AudioShortDecode.worse(shortDecode, shortDecodeOfStream(
+                ordinal, levelsStderr: levelsResult.stderr, shape: shape, path: path))
             try Task.checkCancellation()
         }
 
@@ -491,9 +612,11 @@ enum AudioBalanceProbe {
             programStreamCount: programOrdinals.count,
             programStreamIndex: absoluteIndex(chosenOrdinal),
             droppedStreamIndices: dropped)
+        analysis.shortDecode = shortDecode
         analysis.levelsComplete = levelsComplete(
             perStream: perStream,
-            declaredChannels: shape.declaredChannelsPerStream)
+            declaredChannels: shape.declaredChannelsPerStream,
+            shortDecode: shortDecode)
         return analysis
     }
 }

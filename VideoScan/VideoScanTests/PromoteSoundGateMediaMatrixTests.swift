@@ -176,6 +176,49 @@ struct PromoteSoundGateMediaMatrixTests {
         #expect(S.archivedFiles(sb).isEmpty)
     }
 
+    @Test("REFUSED — GH #470, real decode: a file whose tail is cut off (ffmpeg exits 0 on it, the part that decodes is loud) is not promoted — mov / prores + pcm and mkv / ffv1 + pcm; the whole twin beside it is",
+          .timeLimit(.minutes(5)))
+    func aFileCutShortIsNotPromoted() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let sb = try S.makeSandbox("sg_cut"); defer { sb.cleanup() }
+        let model = S.makeModel(sb)
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try S.initialize(model, in: sb)
+        func make(_ name: String, _ videoCodec: String, _ args: [String]) throws -> String {
+            try VerifyAudioTestMedia.generate(into: sb.sources, name: name, videoCodec: videoCodec, extraVideoArgs: args,
+                                              audioCodec: "pcm_s16le", videoDuration: 12)
+        }
+        var cut: [VideoRecord] = []
+        for (name, codec, args) in [("test_sg_cut.mov", "prores", ["-movflags", "+faststart"]), ("test_sg_cut.mkv", "ffv1", [])] {
+            let path = try make(name, codec, args)
+            let size = try #require((try FileManager.default.attributesOfItem(atPath: path))[.size] as? NSNumber).uint64Value
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+            try handle.truncate(atOffset: size * 6 / 10)
+            try handle.close()
+            // Catalogued AFTER the cut: the record describes the bytes Promote will prove.
+            let rec = await model.probeFile(url: URL(fileURLWithPath: path), skipHashing: true)
+            #expect(rec.streamTypeRaw == StreamType.videoAndAudio.rawValue, "\(name): the header still reads — \(rec.streamTypeRaw)")
+            model.records.append(rec)
+            cut.append(rec)
+        }
+        let wholePath = try make("test_sg_whole.mov", "prores", ["-movflags", "+faststart"])
+        let whole = await model.probeFile(url: URL(fileURLWithPath: wholePath), skipHashing: true)
+        model.records.append(whole)
+
+        let job = try #require(await S.promote(model, ids: cut.map(\.id) + [whole.id], measure: .live))
+        await job.completionTask?.value
+        for rec in cut {
+            let o = try #require(job.outcomes.first { $0.recordID == rec.id }, "\(rec.filename): no outcome")
+            #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(rec.filename): \(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+            #expect(o.detail.contains("the sound decode stopped early") && o.detail.contains("of the 12.0 s"), "\(o.detail)")
+            #expect(model.masterArchiveCopy(of: rec) == nil, "\(rec.filename) must not be archived")
+            #expect(rec.audioVerifyStatus == "" && rec.audioVerifyDate == nil, "the gate stores nothing")
+        }
+        let ok = try #require(job.outcomes.first { $0.recordID == whole.id })
+        #expect(ok.kind == .promoted, "the whole twin: \(ok.kind) — \(ok.detail)")
+        #expect(S.archivedFiles(sb).count == 1 && S.manifestRows(sb).count == 1, "\(S.archivedFiles(sb))")
+    }
+
     @Test("TRUTH: the −68 dBFS refusal carries the number the levels pass measured (mov / pcm)", .timeLimit(.minutes(5)))
     func theNumberIsTheMeasurement() async throws {
         try #require(VerifyAudioTestMedia.toolsAvailable)
