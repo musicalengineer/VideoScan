@@ -1,0 +1,179 @@
+== clean: job finished
+entry test_pc_clean.mp4 status ready failure - nomination -
+  step verifyAudio done | Both channels carry the same sound — already balanced. | out - | rec - | existing -
+  step balanceAudio skipped | Already balanced — both channels carry the same sound. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_clean.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_clean.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_clean.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_clean.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
+  log Archive Angel [1/1] test_pc_clean.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
+  log Archive Angel [1/1] test_pc_clean.mp4 — access copy: starting archival → test_pc_clean.vs.archive.mov
+  log Archive Angel [1/1] test_pc_clean.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_clean.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_clean.mp4 — ready to review with access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== mono: job finished
+entry test_pc_mono.mp4 status ready failure - nomination -
+  step verifyAudio done | Mono audio — one channel | out - | rec - | existing -
+  step balanceAudio done | Audio balanced (mono) | out test_pc_mono_balanced.mp4 | rec yes | existing -
+  step accessCopy done | HEVC access copy (from balanced audio) | out test_pc_mono.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_mono.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_mono.mp4 — preparing (60 KB, score 105)
+  log Archive Angel [1/1] test_pc_mono.mp4 — verify audio: done — Mono audio — one channel (t s)
+  log Archive Angel [1/1] test_pc_mono.mp4 — balanced audio: done — Audio balanced (mono) (t s)
+  log Archive Angel [1/1] test_pc_mono.mp4 — access copy: starting archival → test_pc_mono.vs.archive.mov
+  log Archive Angel [1/1] test_pc_mono.mp4 — access copy: done — HEVC access copy (from balanced audio) (t s, size)
+  log Archive Angel [1/1] test_pc_mono.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_mono.mp4 — ready to review with balanced audio, access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== videoOnly: job finished
+entry test_pc_silent.mp4 status ready failure - nomination -
+  step verifyAudio skipped | No audio track | out - | rec - | existing -
+  step balanceAudio skipped | No audio track | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_silent.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_silent.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_silent.mp4 — preparing (22 KB, score 105)
+  log Archive Angel [1/1] test_pc_silent.mp4 — verify audio: skipped — No audio track (t s)
+  log Archive Angel [1/1] test_pc_silent.mp4 — balanced audio: skipped — No audio track (t s)
+  log Archive Angel [1/1] test_pc_silent.mp4 — access copy: starting archival → test_pc_silent.vs.archive.mov
+  log Archive Angel [1/1] test_pc_silent.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_silent.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_silent.mp4 — ready to review with access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== verified (status ok): job finished
+entry test_pc_verified.mp4 status ready failure - nomination -
+  step verifyAudio skipped | Already verified: ok | out - | rec - | existing -
+  step balanceAudio skipped | Already balanced — both channels carry the same sound. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_verified.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_verified.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_verified.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_verified.mp4 — verify audio: skipped — Already verified: ok (t s)
+  log Archive Angel [1/1] test_pc_verified.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
+  log Archive Angel [1/1] test_pc_verified.mp4 — access copy: starting archival → test_pc_verified.vs.archive.mov
+  log Archive Angel [1/1] test_pc_verified.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_verified.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_verified.mp4 — ready to review with access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== oneSided: job finished
+entry test_pc_left.mov status ready failure - nomination -
+  step verifyAudio done | One-sided audio — left channel only | out - | rec - | existing -
+  step balanceAudio done | Audio balanced (leftOnly) | out test_pc_left_balanced.mov | rec yes | existing -
+  step accessCopy done | HEVC access copy (from balanced audio) | out test_pc_left.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_left.mov — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_left.mov — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_left.mov — verify audio: done — One-sided audio — left channel only (t s)
+  log Archive Angel [1/1] test_pc_left.mov — balanced audio: done — Audio balanced (leftOnly) (t s)
+  log Archive Angel [1/1] test_pc_left.mov — access copy: starting archival → test_pc_left.vs.archive.mov
+  log Archive Angel [1/1] test_pc_left.mov — access copy: done — HEVC access copy (from balanced audio) (t s, size)
+  log Archive Angel [1/1] test_pc_left.mov — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_left.mov — ready to review with balanced audio, access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== reuse: job finished
+entry test_pc_reuse.mp4 status ready failure - nomination -
+  step verifyAudio done | Both channels carry the same sound — already balanced. | out - | rec - | existing -
+  step balanceAudio done | Using existing balanced copy test_pc_reuse_balanced.mp4 | out - | rec yes | existing test_pc_reuse_balanced.mp4
+  step accessCopy done | HEVC access copy (from balanced audio) | out test_pc_reuse.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_reuse.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_reuse.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_reuse.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
+  log Archive Angel: test_pc_reuse.mp4 — using existing balanced copy test_pc_reuse_balanced.mp4
+  log Archive Angel [1/1] test_pc_reuse.mp4 — balanced audio: done — Using existing balanced copy test_pc_reuse_balanced.mp4 (t s)
+  log Archive Angel [1/1] test_pc_reuse.mp4 — access copy: starting archival → test_pc_reuse.vs.archive.mov
+  log Archive Angel [1/1] test_pc_reuse.mp4 — access copy: done — HEVC access copy (from balanced audio) (t s, size)
+  log Archive Angel [1/1] test_pc_reuse.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_reuse.mp4 — ready to review with balanced audio, access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== nominated: job finished
+entry test_pc_nom.mp4 status ready failure - nomination test_pc_nom_balanced.mp4
+  step verifyAudio done | Both channels carry the same sound — already balanced. | out - | rec - | existing -
+  step balanceAudio skipped | Already balanced — both channels carry the same sound. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_nom.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_nom.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_nom.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_nom.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
+  log Archive Angel: test_pc_nom.mp4 — an existing balanced copy may exist: test_pc_nom_balanced.mp4 — not used (no Balance Audio link to this original)
+  log Archive Angel [1/1] test_pc_nom.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
+  log Archive Angel [1/1] test_pc_nom.mp4 — access copy: starting archival → test_pc_nom.vs.archive.mov
+  log Archive Angel [1/1] test_pc_nom.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_nom.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
+  log Archive Angel [1/1] test_pc_nom.mp4 — ready to review with access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== losslessRisk: job finished
+entry test_pc_losslessRisk.mp4 status ready failure - nomination -
+  step verifyAudio done | Both channels carry the same sound — already balanced. | out - | rec - | existing -
+  step balanceAudio skipped | Already balanced — both channels carry the same sound. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_losslessRisk.vs.archive.mov | rec yes | existing -
+  step losslessCopy done | FFV1 preservation copy | out test_pc_losslessRisk.vs.preserve.mkv | rec yes | existing -
+  log Archive Angel: want 1, lossless on, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [120] test_pc_losslessRisk.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — preparing (90 KB, score 120)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — access copy: starting archival → test_pc_losslessRisk.vs.archive.mov
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — lossless copy: starting preservation → test_pc_losslessRisk.vs.preserve.mkv
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — lossless copy: done — FFV1 preservation copy (t s, size)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — ready to review with access copy, lossless copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== losslessFine: job finished
+entry test_pc_losslessFine.mp4 status ready failure - nomination -
+  step verifyAudio done | Both channels carry the same sound — already balanced. | out - | rec - | existing -
+  step balanceAudio skipped | Already balanced — both channels carry the same sound. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_losslessFine.vs.archive.mov | rec yes | existing -
+  step losslessCopy skipped | Lossless copy not needed — h264 original is the preservation master | out - | rec - | existing -
+  log Archive Angel: want 1, lossless on, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_losslessFine.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — access copy: starting archival → test_pc_losslessFine.vs.archive.mov
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — access copy: done — HEVC access copy (t s, size)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — lossless copy: skipped — Lossless copy not needed — h264 original is the preservation master (t s)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — ready to review with access copy
+  log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
+== noCenter: job finished
+entry test_pc_nocenter.mp4 status failed failure preparation stopped before Verify Audio ran — nothing was checked or made after that; prepare it again in a later batch. nomination -
+  step verifyAudio pending |  | out - | rec - | existing -
+  step balanceAudio pending |  | out - | rec - | existing -
+  step accessCopy pending |  | out - | rec - | existing -
+  step losslessCopy pending |  | out - | rec - | existing -
+  log Archive Angel: want 1, lossless off, buffer …/batch-T
+  log Archive Angel: preparing 1 of 1 selected record(s)
+  log Archive Angel pick 1/1 [105] test_pc_nocenter.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
+  log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
+  log Archive Angel [1/1] test_pc_nocenter.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_nocenter.mp4 — cannot prepare: the operations center or catalog went away
+  log Archive Angel [1/1] test_pc_nocenter.mp4 — not ready: preparation stopped before Verify Audio ran — nothing was checked or made after that; prepare it again in a later batch.
+  log Archive Angel: 0 ready to review · 0 rejected · 0 more would qualify
