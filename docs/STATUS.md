@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 late evening (Wednesday; the night's theme: clean up the lost branches and prove `main` stable). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-12 03:20 (Thursday, after the night of 11/11; the night's theme: clean up the lost branches and prove `main` stable). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -22,8 +22,9 @@
    32 min): **AMBER**, 0 failures (unit 4,584, regression 917, hallie 1,116, performance 83 passed); 8 known
    issues — the M4's 7 plus one timing miss, catalog search '1990s' at 100k rows 56.5 ms against a 50 ms budget
    (GH #208's band; 'donna' and 'mark dan grampa' sat at 47.9 and 49.7 ms, so that budget has no margin on the
-   Ultra; no merge of the night touches search). The M5 Ultra's 02:00 nightly suite of 11/12 runs on this commit; read its row on the
-   metrics page (it had not finished when this was written). Before the night, for comparison: M4
+   Ultra; no merge of the night touches search). M5 Ultra 02:00 nightly of 11/12 on `a9e613015` (the same code,
+   one STATUS commit later): **GREEN**, 13,667 passed, 0 failed, 65 skipped of 13,732; Core 2,577 passed, 0
+   failed; Hallie replay strict 56 of 56. Before the night, for comparison: M4
    11/11 16:12 on `343bdd7b9` suite GREEN 13,586 passed; every merge of the night also passed the sensor lane on
    its exact tree (744 tests: 719 app, 25 Core).
 3. **The night of 11/11: the workspace cleanup (Rick's theme).** Ten branches from 11/08 brought current with
