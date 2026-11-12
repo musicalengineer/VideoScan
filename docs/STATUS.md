@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-11 04:30 (Wednesday, after the night of 11/10: twelve merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-11 afternoon (Wednesday, after the night of 11/10: twelve merges for Rick's spot test). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -60,18 +60,24 @@
    red then green (`.scratch/470-short-decode-2026-11-11/B-short-decode.patch`), but it changes what the Promote
    sound gate decides, so it waits on Rick's ruling (below) and a Codex pass. The production-shape sound-gate
    test needs a `.backup` of the live catalog and has not run.
-3. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
+3. **Second-opinion media tools (Rick 11/11; BACKLOG "Integrity and truth").** On both Macs: `sox_ng`, `mediaconch`,
+   `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`. bmx v1.6.2 (`mxf2raw`, for MXF incl. orphaned Avid files) is
+   built on the M5 Ultra at `~/dev/bmx/out/build` (its 120 tests pass) — not installed (`sudo cmake --build
+   ~/dev/bmx/out/build --target install`, Rick), not yet built on the M4. Configure flags that work:
+   `-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBMX_BUILD_URIPARSER_SOURCE=ON -DBMX_BUILD_EXPAT_SOURCE=ON`. First use:
+   a second decoder's sample count beside ffmpeg's for #470's short decode. Not designed; none is in a test.
+4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
    suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
-4. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
+5. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
    there); Core tests fail inside the M4's 04:00 coverage build (timing); the Ultra's nightly builds Rick's checkout
    instead of a clean clone of `main`; the warning ratchet cannot see a warning behind a warm build; the M4's catalog
    copy is still schema 14.
-5. **#434** rescans throw away known whole-file hashes and re-hash unchanged files (TB per rescan). Catalog writer →
+6. **#434** rescans throw away known whole-file hashes and re-hash unchanged files (TB per rescan). Catalog writer →
    rule 8 writer tests + production-shape test on a `.backup` + Codex pass before merge.
-6. **Open P1s that need more than a fix:** #344 (needs a schema change — Rick approves), #338 (data-risk, Codex pass).
-7. **`tools/claude_review.py`**: a fresh-context reviewer on the Console key, twin of `tools/codex_review.py`, code and
+7. **Open P1s that need more than a fix:** #344 (needs a schema change — Rick approves), #338 (data-risk, Codex pass).
+8. **`tools/claude_review.py`**: a fresh-context reviewer on the Console key, twin of `tools/codex_review.py`, code and
    diffs only (rule 13), per-review cost cap. Parked until Rick says to spend the credit.
-8. Carried: #263 items 2 and 3; #435, #436, #439, #418, #408, #463; the worker records its exit signal;
+9. Carried: #263 items 2 and 3; #435, #436, #439, #418, #408, #463; the worker records its exit signal;
    `CaptionRunnerError` on Avid MXF.
 
 ## Waiting on Rick
@@ -83,6 +89,12 @@
   un-probeable would pass on the "Archive anyway" tick, where today it is refused as silent. Accept that as what
   the tick means, or have the tick refuse a check that ran but came up short? (Advice: the second.)
 - **Check Media tally:** a sound-not-checked card is now counted under "couldn't be checked". Own phrase instead?
+- **Eleven unmerged branches from 11/08** (not from the 11/10 night; each has a worktree under
+  `~/dev/VideoScan-wt/`): six refactors — `refactor/angel-floorfires`, `-prepare`, `-promote`,
+  `-select-from-evidence`, `-sweep-perform`, `refactor/archive-volume-protection-make` (data-risk: Codex pass
+  first); four fixes — `fix/codex-sweep-analyze-evidence`, `-bg-quit`, `-catalog-check`, `-gauntlet-tidy`; and
+  `docs/hallie-full-audio-20261108`. All but two conflict with `main` now (mostly manifest and baseline; real
+  code in angel-prepare, angel-promote, bg-quit). Bring them current and merge, or leave them parked?
 - **The archive sound check's findings:** the unplayable `Mark's-Bday-1984…` file; the silent CapeCodAndMuseum1991
   files, and whether to check the July recapture `CapeCod_1991-06-21_NV12`; the one-sided files.
 - **#263:** rewrite git history to remove the old fixture date, or leave it? (Advice: leave it.)
