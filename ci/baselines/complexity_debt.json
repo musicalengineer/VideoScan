@@ -827,8 +827,8 @@
    "nloc": 68
   },
   "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.analyze": {
-   "ccn": 16,
-   "nloc": 102
+   "ccn": 12,
+   "nloc": 88
   },
   "VideoScan/VideoScan/Media/AudioTranscriber.swift::PythonSubprocessAudioTranscriber.transcribe": {
    "ccn": 10,

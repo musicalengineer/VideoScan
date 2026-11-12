@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-12 03:20 (Thursday, after the night of 11/11; the night's theme: clean up the lost branches and prove `main` stable). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-12 15:10 (Thursday; the sound check's short-decode fix, #470, merged this afternoon on top of the night of 11/11's cleanup). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -14,7 +14,18 @@
    adversarial confirm. Weekly sanitizers on the M4: address Sat 07:00, thread Sun 05:00. Kick a full M4 run by hand:
    `ssh ricksm4.local 'launchctl kickstart gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min). The 14:00
    guard skips only when today's green run was for the commit `main` is at.
-2. **State of `main` on the testbed, after the night's ten merges (all on `29a0495e5`, the docs commit on top of
+2. **Sound, #470 — merged 11/12 (`3434eceff`), not yet on the testbed.** A sound decode that ends early (ffmpeg
+   exits 0 on a file whose tail is missing) now reads "not checked" with its numbers — "the sound decode stopped
+   early — N s of the M s the file's header states did not decode". Verify Audio stores nothing for it; the Promote
+   sound gate refuses it whether or not "Archive anyway" is ticked (DECISIONS 2026-11-11). Short = more than 1 s
+   AND more than 2 % missing. Each ffmpeg levels pass now names its filter with a fresh random tag and reads only
+   that filter's lines, so nothing a file prints can stand in for the measurement (closes #471). Codex: #286 fix
+   (3), #287 fix (2), #288 merge (0). Proof in the merge commit: 5 tests red unfixed, 622 audio tests and the
+   sensor lane (744) green, and 158 real catalogued files read-only — 0 wrongly called short (largest real gap
+   0.17 s). **What it does not catch, by design:** avi and raw dv state no sound length, so a cut-short AVI still
+   passes; a Matroska track that starts late reads "not checked" (refused, the safe side); a decode that stops in
+   the last 2 % or last second. First testbed run on it: the M5 Ultra's 02:00 nightly of 11/13.
+3. **State of `main` on the testbed BEFORE #470, after the night's ten merges (all on `29a0495e5`, the docs commit on top of
    the last merge `a6d957a5d`).** M4 full testbed, kicked by hand 23:05, done 01:15: suite **GREEN** (13,664
    passed, 0 failed, 67 skipped of 13,731; Core 2,577 passed, 0 failed), gauntlet **AMBER** (34 min: 7 known
    issues, all in regression, the same 7 as the afternoon run; 907 unadapted suites; ui not run — the expected
@@ -27,7 +38,7 @@
    failed; Hallie replay strict 56 of 56. Before the night, for comparison: M4
    11/11 16:12 on `343bdd7b9` suite GREEN 13,586 passed; every merge of the night also passed the sensor lane on
    its exact tree (744 tests: 719 app, 25 Core).
-3. **The night of 11/11: the workspace cleanup (Rick's theme).** Ten branches from 11/08 brought current with
+4. **The night of 11/11: the workspace cleanup (Rick's theme).** Ten branches from 11/08 brought current with
    `main` (each was 107+ commits behind), reviewed, proven and merged one at a time, each as one `--no-ff` merge;
    every branch, worktree and DerivedData removed after its merge. Nothing here changes what Rick sees except the
    words noted. Each merge commit carries its own table and counts.
@@ -58,12 +69,12 @@
      Evidence logs of the night and of the retired worktrees: `.scratch/night-2026-11-11/`.
    - **Left alone:** `fix/469-sanitizer-host-crash` (local, 1 commit, superseded by what merged on 11/11 — Rick
      deletes it or says keep); the `ultra-testbed` worktree (`m4_run.sh --host ultra` uses it).
-4. **Sanitizer triage, #469 (merged 11/11):** a relaunched test host is explained only by the report printed
+5. **Sanitizer triage, #469 (merged 11/11):** a relaunched test host is explained only by the report printed
    immediately before it, else it is red "host crashed" with the running test named. **Watch Saturday 11/14's
    address run:** the one run made with the #463 suppression in force showed a second report one frame down
    (`NSObject.hpp:112`), which the suppression does not cover — Saturday may read red "findings" for it. Widening
    the suppression is a #463 decision.
-5. **P0/P1:** open P0 — #332, #327 (both wait on Rick). Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
+6. **P0/P1:** open P0 — #332, #327 (both wait on Rick). Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
    #338. Look fixed in the code, close after Rick's check — #327, #354, #353, #342, #345 (one real-data check). Not
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
 
@@ -74,16 +85,18 @@
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound, #470 — approved, next to build** (DECISIONS 2026-11-11). A truncated decode that exits 0 is still
-   stored "ok" (confirmed on mp4, mov, mkv, mxf cut to 60 %). The fix is written and was seen red then green
-   (`.scratch/470-short-decode-2026-11-11/B-short-decode.patch`): a decode that ends early reads "not checked"
-   everywhere and Promote refuses it; per the ruling the "Archive anyway" tick must also refuse a check that ran
-   but came up short (that part is not in the patch yet). It changes what the Promote sound gate decides: Codex
-   pass before merge. The production-shape sound-gate test needs a `.backup` of the live catalog and has not run.
-3. **Second-opinion media tools (Rick 11/11; BACKLOG "Integrity and truth").** On both Macs: `sox_ng`, `mediaconch`,
-   `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`. The bmx source build is dropped (Rick 11/11); his clone at
-   `~/dev/bmx` is reference code for reading MXF. First use: a second decoder's sample count beside ffmpeg's for
-   #470's short decode. Not designed; none is in a test.
+2. **Sound, second slice (Rick 11/12: "do them in parts … I'd like to see the audio/sound issue solved soon").**
+   Not designed yet; BACKLOG "Sound over time, per channel". (a) Close the AVI gap: hold the decoded sound against
+   the picture's length where the stream states none. (b) Sound over time per channel — how much of the running
+   time carries sound and where it stops — from the levels pass already run, shown as evidence; Rick rules how much
+   silent running time is too much. (c) AVFoundation as a second decoder for mov/mp4 (`sox_ng` and `qcli` decode
+   through ffmpeg's libraries, so they are not a second opinion for video files; MP4Box / bento4 / mediainfo are
+   independent readers of the container's claim). Facts and agreeing witnesses at the Promote gate, never a
+   probability. Changes what the gate decides: safety-critical skill, Codex pass. Still open from #470: rows stored
+   damaged before #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test on a
+   `.backup` of the live catalog has not run.
+3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
+   Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
 4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
    suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
 5. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
@@ -99,8 +112,6 @@
    `CaptionRunnerError` on Avid MXF.
 
 ## Waiting on Rick
-- **Read the 11/11 DECISIONS line** ("Rick approves the sound-check choices as advised"): it records what your
-  approval was taken to cover. Correct it if you meant less.
 - **Open Codex findings the 11/09 sweep left for you** (unchanged by the merges; detail in each merge commit):
   gauntlet N1/N2 — the retention ownership proof can be forged by someone already inside
   `~/Library/Logs/VideoScan/gauntlet`: is that threat in scope? (also N5, N6, F4, F6, F7). Analyze #272 #2 — an
@@ -112,7 +123,7 @@
 - **`run_catalog_tests.sh` prints RED with 0 failures** (Core: 5 known-issue tests and 1 env-gated skip are not
   counted toward its floor of 433). Already carried below as "the AMBER rule" question; seen again 11/11.
 - **Spot test of item 3.** By eye only: the Frames Search button greys while a search runs and comes back; the sound
-  gate's refusals on real files; the wording where sound was not checked.
+  gate's refusals on real files (now including a file cut short: "the sound decode stopped early"); the wording where sound was not checked.
 - **The archive sound check's findings:** the unplayable `Mark's-Bday-1984…` file; the silent CapeCodAndMuseum1991
   files, and whether to check the July recapture `CapeCod_1991-06-21_NV12`; the one-sided files.
 - **#263:** rewrite git history to remove the old fixture date, or leave it? (Advice: leave it.)
