@@ -46,15 +46,35 @@ import Foundation
 /// is still running, and write a line to the one log sink.
 @MainActor
 protocol CatalogUpdateStepRunning {
-    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String)
+    /// Start the step; false when it was refused (busy, unavailable) — it
+    /// did not start, and the refusal was logged by the engine.
+    @discardableResult
+    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String) -> Bool
     func isRunning(_ cycler: AnalyzeCycler) -> Bool
     func note(_ line: String)
+    /// Land every pending catalog write (the debounced save) through the one
+    /// commit door and return its acknowledgment — called before the
+    /// catalog check, so the check judges what the earlier steps wrote.
+    func flushCatalog() -> Bool
+    /// After a started step ends: did it actually run? An engine may refuse
+    /// inside its own task after `runNow` returned (Validate Catalog on a
+    /// read-only catalog) — Codex sweep 11/09 re-review F5.
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool
 }
 
 extension AnalyzeRunner: CatalogUpdateStepRunning {
     func note(_ line: String) {
         model.log(line)
         appLog.write(line)
+    }
+
+    func flushCatalog() -> Bool { model.saveCatalogNow() }
+
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool {
+        guard cycler == .integrity else { return true }
+        // No evidence is not proof: fail closed (closing pass C3).
+        guard let job = refusal.lastValidate else { return false }
+        return !job.wasRefused
     }
 }
 
@@ -76,6 +96,22 @@ final class CatalogStatusUpdateQueue: ObservableObject {
     private var started: [AnalyzeCycler] = []
     /// True when Stop cleared steps that had not started.
     private var cleared = false
+    /// What became of the LAST catalog check this run asked for — the
+    /// OUTCOME's claim comes from here only (F3, F5; re-review: a later
+    /// refused check is never covered by an earlier one that ran).
+    private enum CheckState: Equatable { case started, ran, notRun(String) }
+    private var lastCheck: CheckState?
+    /// Steps that were refused (not started, not already running) — named in the OUTCOME (re-review N2).
+    private var refused: [AnalyzeCycler] = []
+    /// `current` is a step the queue did NOT start: it was already running
+    /// when its turn came (re-review N1) — waited for, never "started".
+    private var currentIsElsewhere = false
+    /// The queue waited for a writer it did not start: its save must be
+    /// flushed before the check too (closing pass C5).
+    private var waitedOnWriter = false
+    private var saidWaitingForWriter = false
+    /// The "waiting for a check started elsewhere" line, said once per wait.
+    private var saidWaiting = false
 
     static let source = "update everything stale"
     static let logPrefix = "Catalog status: update everything stale"
@@ -155,26 +191,111 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             let inGrace = now.timeIntervalSince(startedAt) < graceSeconds
             guard !inGrace, !runner.isRunning(c) else { return }
             current = nil
+            stepEnded(c, runner: runner)
         }
         guard !pending.isEmpty else {
-            if !started.isEmpty || cleared { finish() }
+            if hasSomethingToReport { finish() }
             return
         }
+        guard !waitsForACheckElsewhere(runner), !checkWaitsForAWriter(runner) else { return }
         let next = pending.removeFirst()
-        current = next
+        // The check judges what the earlier steps wrote — this queue's or a
+        // writer it waited for (closing pass C5): their debounced save lands
+        // first, acknowledged, or the check does not run (F3).
+        if next == Self.finalCheck, !started.isEmpty || waitedOnWriter, !runner.flushCatalog() {
+            notStarted(next, why: "the catalog could not be saved first")
+            return
+        }
         startedAt = now
+        guard runner.runNow(next, volume: nil, source: Self.source) else { return startRefused(next, runner: runner) }
+        current = next
         started.append(next)
-        runner.runNow(next, volume: nil, source: Self.source)
+        if next == Self.finalCheck { lastCheck = .started }
+    }
+
+    private var hasSomethingToReport: Bool { !started.isEmpty || cleared || lastCheck != nil || !refused.isEmpty }
+
+    /// What the end of a step proves: for the catalog check, ask the engine
+    /// whether it actually ran — it may refuse inside its own task after
+    /// runNow returned (re-review F5). A step the queue only waited for
+    /// (already running elsewhere) proves nothing about this run.
+    private func stepEnded(_ c: AnalyzeCycler, runner: any CatalogUpdateStepRunning) {
+        if c == Self.finalCheck, !currentIsElsewhere, lastCheck == .started {
+            lastCheck = runner.stepRan(c) ? .ran : .notRun("it was refused — see its line above")
+        }
+        currentIsElsewhere = false
+    }
+
+    /// The barrier against a catalog check (or file audit) this queue did
+    /// not start — the 03:30 daily check, a menu item: no step starts beside
+    /// it (Codex sweep 11/09 F2). Said once per wait.
+    private func waitsForACheckElsewhere(_ runner: any CatalogUpdateStepRunning) -> Bool {
+        guard let elsewhere = [Self.finalCheck, AnalyzeCycler.filePresence].first(where: runner.isRunning) else {
+            saidWaiting = false
+            return false
+        }
+        // An audit writes marks, and a writer may be running beside it: the
+        // save is flushed before our check either way (Codex final #272 #5).
+        waitedOnWriter = true
+        if !saidWaiting {
+            runner.note("\(Self.logPrefix) — waiting: \(elsewhere.title) is already running; the next step starts when it ends")
+            saidWaiting = true
+        }
+        return true
+    }
+
+    /// The check never starts beside a writer running elsewhere, whether or
+    /// not this Update asked for it (closing pass C4: a running kind is not
+    /// "stale", so it is not in the plan). Said once per wait.
+    private func checkWaitsForAWriter(_ runner: any CatalogUpdateStepRunning) -> Bool {
+        guard pending.first == Self.finalCheck,
+              let writer = AnalyzeCycler.allCases.first(where: { $0 != Self.finalCheck && runner.isRunning($0) }) else {
+            saidWaitingForWriter = false
+            return false
+        }
+        waitedOnWriter = true
+        if !saidWaitingForWriter {
+            runner.note("\(Self.logPrefix) — waiting: \(writer.title) is running; the catalog check starts when it ends")
+            saidWaitingForWriter = true
+        }
+        return true
+    }
+
+    /// runNow refused. Already running (started from the panel): its run is
+    /// still the barrier — wait for it, never counted as started (re-review
+    /// N1, #441's order). Otherwise it did not run (F5) and is named (N2).
+    private func startRefused(_ next: AnalyzeCycler, runner: any CatalogUpdateStepRunning) {
+        if runner.isRunning(next) {
+            current = next
+            currentIsElsewhere = true
+            waitedOnWriter = true
+            runner.note("\(Self.logPrefix) — \(next.title) is already running; waiting for it before the next step")
+            return
+        }
+        refused.append(next)
+        notStarted(next, why: "it was refused — see its line above")
+    }
+
+    /// A step that will not run: the check's claim records why; the run
+    /// ends when nothing is left.
+    private func notStarted(_ next: AnalyzeCycler, why: String) {
+        if next == Self.finalCheck { lastCheck = .notRun(why) }
+        if pending.isEmpty { finish() }
     }
 
     /// The one OUTCOME line; resets the run's bookkeeping.
     private func finish() {
-        defer { started = []; cleared = false }
-        guard let runner, !started.isEmpty || cleared else { return }
-        let checked = started.last == Self.finalCheck
-        let tail = checked ? "the catalog check ran last — its verdict is Catalog's colour"
-                           : "the catalog check did not run\(cleared ? " (the steps left were cleared)" : "")"
-        runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started)); \(tail)")
+        defer { started = []; cleared = false; lastCheck = nil; refused = []; saidWaiting = false; currentIsElsewhere = false; waitedOnWriter = false; saidWaitingForWriter = false }
+        guard let runner, hasSomethingToReport else { return }
+        // "Ran last" only on evidence: the last check asked for started,
+        // ended, and the engine says it ran — and nothing started after it.
+        let ranLast = lastCheck == .ran && started.last == Self.finalCheck
+        let why: String
+        if case .notRun(let reason) = lastCheck { why = " — \(reason)" } else { why = cleared ? " (the steps left were cleared)" : "" }
+        let tail = ranLast ? "the catalog check ran last — its verdict is Catalog's colour"
+                           : "the catalog check did not run\(why)"
+        let refusedWords = refused.isEmpty ? "" : "; refused (not started): \(Self.titles(refused))"
+        runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started))\(refusedWords); \(tail)")
     }
 
     private static func titles(_ kinds: [AnalyzeCycler]) -> String {

@@ -262,7 +262,7 @@ struct CatalogStatusLinesTruthTests {
         let line = CatalogStatusLinesPolicy.database(facts.integrity, now: now, date: d)
         let verdict = CatalogDatabaseInfoGather.integrity(catalogFile: catalog)
         let row: String
-        switch CatalogDatabaseInfoLines.validate(verdict, date: d) {
+        switch CatalogDatabaseInfoLines.validate(verdict, date: d, now: now) {
         case .known(let v): row = v
         case .unknown(let why): row = "unknown — " + why
         }

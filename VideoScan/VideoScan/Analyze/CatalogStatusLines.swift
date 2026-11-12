@@ -383,8 +383,11 @@ enum CatalogStatusLinesPolicy {
         if f.reality.measuredSilence > 0 { detail.append(VerifyCatalogTiers.measuredSilenceWords(f.reality.measuredSilence)) }
         detail += f.reality.information
         guard let at = f.lastCompleted else { return line(.yellow, "Yellow: not checked yet. \(checkNow)") }
-        if now.timeIntervalSince(at) <= CatalogRealityPolicy.freshFor {
-            return line(.green, "Integrity check passed\(when)", detail)
+        switch CatalogRealityPolicy.age(of: at, now: now) {
+        case .fresh: return line(.green, "Integrity check passed\(when)", detail)
+        case .future:
+            return line(.yellow, "Yellow: the last integrity check is dated in the future\(when) — no proof (a clock change or a copied record). Fix: Check Now… runs it again", detail)
+        case .stale: break
         }
         return line(.yellow, "Yellow: the last integrity check passed\(when) — older than \(CatalogRealityPolicy.freshForWords). Fix: Check Now… runs it again", detail)
     }
@@ -473,7 +476,11 @@ enum CatalogStatusLinesPolicy {
         func large(_ n: Int) -> Bool {
             tally.planned > 0 && Double(n) / Double(tally.planned) >= CatalogRealityPolicy.largeShareNotChecked
         }
-        let stale = presence.lastCompleted.map { now.timeIntervalSince($0) > CatalogRealityPolicy.freshFor } ?? true
+        let age = presence.lastCompleted.map { CatalogRealityPolicy.age(of: $0, now: now) } ?? .stale
+        if age == .future {
+            return line(.yellow, "Yellow: \(words) — dated in the future; no proof (a clock change or a copied record). Fix: Check Now… runs it again", detail)
+        }
+        let stale = age == .stale
         if large(unreachable) {
             return line(.yellow, "Yellow: \(words) — \(unreachable.formatted()) of \(tally.planned.formatted()) files could not be checked. Fix: Check Now… runs it again", detail)
         }

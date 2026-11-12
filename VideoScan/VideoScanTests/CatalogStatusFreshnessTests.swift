@@ -618,6 +618,8 @@ struct CatalogStatusUpdateQueueTests {
 
     /// GH #441: the order is the plan's (the catalog check once, last), not
     /// the order given — CatalogUpdateOrderTests pins the plan itself.
+    /// Codex sweep 11/09 F5: a REFUSED step is not "current" (it did not
+    /// start); the queue moves on and the OUTCOME never claims it ran.
     @Test func startsOneKindAtATimeInPlanOrder() {
         let model = VideoScanModel()
         let runner = AnalyzeRunner(model: model, orchestrator: nil, center: nil)
@@ -628,20 +630,20 @@ struct CatalogStatusUpdateQueueTests {
         queue.enqueue([.dateInference, .fullHashes, .dateInference], runner: runner, source: "test")
         #expect(queue.pending == [.fullHashes, .dateInference, .integrity], "duplicates dropped, planned, the check last")
         queue.advanceIfIdle(now: now)
-        #expect(queue.current == .fullHashes && queue.pending == [.dateInference, .integrity])
+        #expect(queue.current == nil && queue.pending == [.dateInference, .integrity], "Full Hashes refused (no center): not started")
         queue.advanceIfIdle(now: now.addingTimeInterval(1))
-        #expect(queue.current == .fullHashes, "inside the grace window nothing moves")
-        queue.advanceIfIdle(now: now.addingTimeInterval(3))
         #expect(queue.current == .dateInference && queue.pending == [.integrity])
+        queue.advanceIfIdle(now: now.addingTimeInterval(2))
+        #expect(queue.current == .dateInference, "inside the grace window nothing moves")
+        queue.advanceIfIdle(now: now.addingTimeInterval(4))
+        #expect(queue.current == nil && queue.pending.isEmpty, "the check was not started (refused, or the catalog not saved first)")
         queue.advanceIfIdle(now: now.addingTimeInterval(6))
-        #expect(queue.current == .integrity && queue.pending.isEmpty)
-        queue.advanceIfIdle(now: now.addingTimeInterval(9))
         #expect(queue.current == nil && !queue.isActive)
     }
 
     @Test func clearPendingKeepsTheKindInFlight() {
-        let model = VideoScanModel()
-        let runner = AnalyzeRunner(model: model, orchestrator: nil, center: nil)
+        let runner = ScriptedUpdateRunner()
+        runner.steps[.fullHashes] = { try? await Task.sleep(for: .seconds(5)) }
         let queue = CatalogStatusUpdateQueue()
         queue.enqueue([.dateInference, .fullHashes], runner: runner, source: "test")
         queue.advanceIfIdle(now: now)

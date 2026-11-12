@@ -434,7 +434,7 @@ struct IntegrityReportFacts: Sendable, Equatable {
         }
     }
 
-    static func from(report r: IntegrityReport) -> IntegrityReportFacts {
+    static func from(report r: IntegrityReport, now: Date = Date()) -> IntegrityReportFacts {
         let built = r.builtTiers
         // Tier 3 (the header against the sound print) is REVIEW for Catalog
         // Status — "Audio Tracks, But No Sound" under the band, never a
@@ -456,7 +456,7 @@ struct IntegrityReportFacts: Sendable, Equatable {
             f.outcome = .partial
         case .completed:
             f.outcome = .ok
-            f.lastCompleted = oldest(built)?.verifiedAt
+            f.lastCompleted = CatalogRealityPolicy.claimedCompletion(built.compactMap(\.verifiedAt) + [r.verifiedAt].compactMap { $0 }, now: now)
         }
         var gaps = built.compactMap { gap($0, rowsLive: r.rowsLive) }
         if let mismatch = r.generationMismatchWords {

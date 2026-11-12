@@ -715,6 +715,17 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/LateMeasurementAfterFinishTests.swift",
+      "stage": "regression",
+      "suites": [
+        "LateMeasurementAfterFinishTests"
+      ],
+      "tests": [
+        "lateMeasurementIsNotPublished"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/MachineEraResolverTests.swift",
       "stage": "unit",
       "suites": [
@@ -952,6 +963,18 @@
         "withinCadenceIsGreen",
         "worstOfOrderIsRedYellowGreenGrey",
         "yellowRowsCountTheThingsThatNeedARun"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogRealityFutureEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRealityFutureEvidenceTests"
+      ],
+      "tests": [
+        "freshnessRowFutureIsNotCurrent",
+        "futureValidate"
       ]
     },
     {
@@ -10260,6 +10283,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogFutureEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFutureEvidenceTests"
+      ],
+      "tests": [
+        "databaseFutureDated",
+        "filesFutureDated",
+        "schedulerSeesEachStep"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogGenerationProbeTests.swift",
@@ -12027,6 +12063,37 @@
         "planPinsTheCheckLast",
         "snapshotFollowsTheQueue",
         "theQueueStartsTheCheckAfterEverythingElse"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogUpdateQueueSweepTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogUpdateQueueSweepTests",
+        "CatalogUpdateQueueSweepReReviewTests",
+        "CatalogFutureEvidenceReadersTests",
+        "CatalogSweepClosingTests",
+        "CatalogSweepWaitLineTests",
+        "CatalogSweepFinalTests"
+      ],
+      "tests": [
+        "builderValidationClaimsTheFuture",
+        "busyWriterIsWaitedFor",
+        "checkWaitsForAnyRunningWriter",
+        "checkWaitsForTheSave",
+        "databaseInfoQualifiesTheFuture",
+        "databaseInfoReadsTheFacts",
+        "integrityFactsClaimTheFuture",
+        "lateRefusalIsNotClaimed",
+        "missingEvidenceFailsClosed",
+        "reAddedCheckRefusedIsSaid",
+        "refusedCheckIsNotClaimed",
+        "refusedStepIsNamed",
+        "waitLineOnce",
+        "waitedWriterIsFlushedToo",
+        "waitingBehindAnAuditFlushes",
+        "waitsForACheckRunningElsewhere"
       ]
     },
     {
@@ -39481,9 +39548,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 571,
+      "expected_floor": 590,
       "name": "regression",
-      "package_expected_floor": 331,
+      "package_expected_floor": 334,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -39537,7 +39604,9 @@
         "VideoScanCoreTests.EraJobConvergenceTests",
         "VideoScanCoreTests.EraJobMediaMatrixTests",
         "VideoScanCoreTests.EraJobRetryReviewTests",
-        "VideoScanCoreTests.BackgroundQuitMarkerSweepTests"
+        "VideoScanCoreTests.BackgroundQuitMarkerSweepTests",
+        "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
+        "VideoScanCoreTests.LateMeasurementAfterFinishTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -39676,7 +39745,14 @@
         "VideoScanTests/VerifyAudioVerdictBalanceGateTests",
         "VideoScanTests/VerifyAudioVerdictAngelReuseTests",
         "VideoScanTests/VerifyAudioVerdictNoteWordingTests",
-        "VideoScanTests/AnalyzeJobEvidenceTests"
+        "VideoScanTests/AnalyzeJobEvidenceTests",
+        "VideoScanTests/CatalogFutureEvidenceTests",
+        "VideoScanTests/CatalogUpdateQueueSweepTests",
+        "VideoScanTests/CatalogUpdateQueueSweepReReviewTests",
+        "VideoScanTests/CatalogFutureEvidenceReadersTests",
+        "VideoScanTests/CatalogSweepClosingTests",
+        "VideoScanTests/CatalogSweepWaitLineTests",
+        "VideoScanTests/CatalogSweepFinalTests"
       ]
     },
     {

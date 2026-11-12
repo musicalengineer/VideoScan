@@ -125,12 +125,12 @@ struct DailyFileCheckPolicyTests {
             FreshnessRow(kind: "k", title: "t", eligible: 1, covered: 1, offline: 0, lastCompleted: date, lastOutcome: outcome)
         }
         let a = at(4, 0), b = at(4, 20)
-        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, a), integrity: row(.ok, b)) == a)
-        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.ok, a)) == a)
-        #expect(DailyFileCheckPolicy.lastFinished(files: row(.partial, b), integrity: row(.ok, b)) == nil, "a stopped file check is no finished check")
-        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.failed, b)) == nil)
-        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.neverRan, nil)) == nil)
-        #expect(DailyFileCheckPolicy.lastFinished(files: nil, integrity: row(.ok, b)) == nil)
+        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, a), integrity: row(.ok, b), now: at(5, 0)) == a)
+        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.ok, a), now: at(5, 0)) == a)
+        #expect(DailyFileCheckPolicy.lastFinished(files: row(.partial, b), integrity: row(.ok, b), now: at(5, 0)) == nil, "a stopped file check is no finished check")
+        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.failed, b), now: at(5, 0)) == nil)
+        #expect(DailyFileCheckPolicy.lastFinished(files: row(.ok, b), integrity: row(.neverRan, nil), now: at(5, 0)) == nil)
+        #expect(DailyFileCheckPolicy.lastFinished(files: nil, integrity: row(.ok, b), now: at(5, 0)) == nil)
     }
 }
 
@@ -283,7 +283,7 @@ struct DailyFileCheckSchedulerTests {
         // The scheduler's own reading of the same evidence: no finished check.
         let filesRow = CatalogFreshnessRows.row(.filePresence, report: AnalyzeCoverageReport(), facts: facts, running: [])
         let integrityRow = CatalogFreshnessRows.row(.integrity, report: AnalyzeCoverageReport(), facts: facts, running: [])
-        app.last = .some(DailyFileCheckPolicy.lastFinished(files: filesRow, integrity: integrityRow))
+        app.last = .some(DailyFileCheckPolicy.lastFinished(files: filesRow, integrity: integrityRow, now: Date()))
         #expect(app.last == .some(nil))
         app.now = at(5, 0)
         #expect(s.tick() == .wait, "not restarted this slot")

@@ -1395,7 +1395,7 @@ struct VerifyCatalogSensorTests {
         // Rick 2026-10-20 (one verb): the Integrity row runs Validate
         // Catalog — the files first, then this job — never Verify alone;
         // the menu has no Verify item (ValidateCatalogMenuSensorTests).
-        #expect(runner.contains("_ = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)"))
+        #expect(runner.contains("c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)"))
         #expect(!runner.contains("startVerifyCatalog("))
         let snapshot = try SourceTree.appSource(named: "CatalogFreshnessSnapshot.swift")
         #expect(snapshot.contains("else if job is VerifyCatalogJob { s.insert(.integrity) }"))

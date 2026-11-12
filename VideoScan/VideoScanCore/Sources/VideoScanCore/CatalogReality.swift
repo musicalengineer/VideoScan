@@ -108,6 +108,9 @@ public enum CatalogRealityReason: Sendable, Equatable {
     case neverValidated
     case validatePartial
     case validateOverdue(lastCompleted: Date)
+    /// The last Validate is dated after now (beyond `futureSlack`): a copied
+    /// record or a clock that stepped back — no proof (Codex sweep 11/09 F1).
+    case validateFutureDated(lastCompleted: Date)
     case largeShareNotChecked(notChecked: Int, of: Int)
     case unsettled(CatalogRealityCount)
 
@@ -116,7 +119,7 @@ public enum CatalogRealityReason: Sendable, Equatable {
     public var shortWords: String {
         switch self {
         case .unreadable, .validateFailed, .integrityBreak: return "Needs attention…"
-        case .neverValidated, .validatePartial, .validateOverdue: return "Needs validation"
+        case .neverValidated, .validatePartial, .validateOverdue, .validateFutureDated: return "Needs validation"
         case .largeShareNotChecked: return "Drives offline"
         case .unsettled: return "Needs a look"
         }
@@ -125,7 +128,7 @@ public enum CatalogRealityReason: Sendable, Equatable {
     public var colour: FreshnessColour {
         switch self {
         case .unreadable, .validateFailed, .integrityBreak: return .red
-        case .neverValidated, .validatePartial, .validateOverdue, .largeShareNotChecked, .unsettled: return .yellow
+        case .neverValidated, .validatePartial, .validateOverdue, .validateFutureDated, .largeShareNotChecked, .unsettled: return .yellow
         }
     }
 }
@@ -261,6 +264,28 @@ public enum CatalogRealityPolicy {
     public static let freshFor: TimeInterval = 7 * 86_400
     /// `freshFor` in the words the lines say ("older than 7 days").
     public static let freshForWords = "7 days"
+    /// Clock skew tolerated before a check record dated after now stops
+    /// counting as proof (a copied record, a clock that stepped back).
+    public static let futureSlack: TimeInterval = 5 * 60
+
+    /// How a completed check's date stands against `now` — the ONE rule the
+    /// band, the Database and Files lines and the daily scheduler read
+    /// (Codex sweep 11/09 F1: a negative age used to read as fresh).
+    public enum Age: Equatable, Sendable { case fresh, stale, future }
+
+    /// The one date a check made of several steps / tiers may claim: the
+    /// oldest — unless any of them is dated in the future, then the newest,
+    /// so `age(of:)` reads it as future (no proof) instead of letting one
+    /// future date hide behind an older one (Codex sweep 11/09 re-review F1).
+    public static func claimedCompletion(_ dates: [Date], now: Date) -> Date? {
+        dates.contains { age(of: $0, now: now) == .future } ? dates.max() : dates.min()
+    }
+
+    public static func age(of completed: Date, now: Date) -> Age {
+        let seconds = now.timeIntervalSince(completed)
+        if seconds < -futureSlack { return .future }
+        return seconds <= freshFor ? .fresh : .stale
+    }
     /// A share of rows the file check could not reach at or above this is
     /// "a large share" — yellow. Below it the rows are simply not asked.
     public static let largeShareNotChecked = 0.10
@@ -290,8 +315,13 @@ public enum CatalogRealityPolicy {
         switch facts.validation {
         case .neverRan: out.append(.neverValidated)
         case .partial: out.append(.validatePartial)
-        case .completed(let at) where now.timeIntervalSince(at) > freshFor: out.append(.validateOverdue(lastCompleted: at))
-        case .completed, .failed: break
+        case .completed(let at):
+            switch age(of: at, now: now) {
+            case .fresh: break
+            case .stale: out.append(.validateOverdue(lastCompleted: at))
+            case .future: out.append(.validateFutureDated(lastCompleted: at))
+            }
+        case .failed: break
         }
         if isLargeShare(facts.rowsNotChecked, of: facts.rowsToCheck) {
             out.append(.largeShareNotChecked(notChecked: facts.rowsNotChecked, of: facts.rowsToCheck))
@@ -340,6 +370,8 @@ public enum CatalogRealityPolicy {
         case .validatePartial: return "the last Validate Catalog stopped part way — run it again"
         case .validateOverdue(let at):
             return "the last Validate Catalog was \(age(now.timeIntervalSince(at))) ago — run it again"
+        case .validateFutureDated:
+            return "the last Validate Catalog is dated in the future (a clock change or a copied record) — no proof; run it again"
         case .largeShareNotChecked(let n, let total):
             return "\(n.formatted()) of \(total.formatted()) files could not be checked (drives not connected?)"
         case .unsettled(let c): return c.words

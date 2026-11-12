@@ -49,19 +49,32 @@ final class ScriptedUpdateRunner: CatalogUpdateStepRunning {
     private var inFlight: Set<AnalyzeCycler> = []
     private(set) var lines: [String] = []
 
-    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String) {
+    /// A check (or audit) started somewhere else — the daily file check, a
+    /// menu item — that this queue did not start (Codex sweep 11/09 F2).
+    var runningElsewhere: Set<AnalyzeCycler> = []
+    /// What `flushCatalog` answers, and `started.count` at each flush.
+    var flushAcknowledged = true
+    private(set) var flushes: [Int] = []
+
+    @discardableResult
+    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String) -> Bool {
         started.append(cycler)
-        runningAtStart[cycler] = inFlight
-        guard let step = steps[cycler] else { return }
+        runningAtStart[cycler] = inFlight.union(runningElsewhere)
+        guard let step = steps[cycler] else { return false }
         inFlight.insert(cycler)
         Task { @MainActor in
             await step()
             self.inFlight.remove(cycler)
         }
+        return true
     }
 
-    func isRunning(_ cycler: AnalyzeCycler) -> Bool { inFlight.contains(cycler) }
+    func isRunning(_ cycler: AnalyzeCycler) -> Bool { inFlight.contains(cycler) || runningElsewhere.contains(cycler) }
     func note(_ line: String) { lines.append(line) }
+    func flushCatalog() -> Bool { flushes.append(started.count); return flushAcknowledged }
+    /// Steps that start, then refuse inside their own task (re-review F5).
+    var refusedLater: Set<AnalyzeCycler> = []
+    func stepRan(_ cycler: AnalyzeCycler) -> Bool { !refusedLater.contains(cycler) }
 }
 
 @MainActor

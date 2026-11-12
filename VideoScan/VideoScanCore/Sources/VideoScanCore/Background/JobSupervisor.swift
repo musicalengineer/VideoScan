@@ -130,6 +130,8 @@ public actor JobSupervisor {
     private var holdsLoaded = false
     /// The last plan size per kind (status: "N files to analyze").
     private var planned: [String: Int] = [:]
+    /// Per kind: bumped when a job of it finishes; a measurement from an older epoch is dropped.
+    private var planEpoch: [String: Int] = [:]
     /// Words last logged per kind for a plan that could not be made.
     private var planProblem: [String: String] = [:]
     /// Scheduling ticks that planned (tests).
@@ -471,14 +473,22 @@ public actor JobSupervisor {
     /// 100k rows; status must still answer). nil when it could not plan (said once).
     private func planSize(_ k: JobSchedule.Kind) async -> Int? {
         let name = k.kind.rawValue
+        // A measurement belongs to the plan epoch it started in: `finish()`
+        // starts a new epoch, and a measurement still in flight from before
+        // it (begun under an older hold) must not publish its pre-run size
+        // over the post-run one (Codex sweep 11/09 F4). ≈ a generation
+        // counter checked after the await, like a seqlock reader.
+        let epoch = planEpoch[name, default: 0]
         do {
             let plan = k.planSize
             let size = try await Task.detached(priority: .utility) { try plan() }.value
+            guard planEpoch[name, default: 0] == epoch else { return nil }
             if planProblem.removeValue(forKey: name) != nil { log.write("schedule: planning \(name) works again") }
             if planned[name] != size { log.write("schedule: plan \(name) — \(size) unit(s) to do") }
             planned[name] = size
             return size
         } catch {
+            guard planEpoch[name, default: 0] == epoch else { return nil }
             let words = (error as? Refusal)?.words ?? String(describing: error)
             if planProblem[name] != words { log.write("schedule: could not plan \(name) — \(words)") }
             planProblem[name] = words
@@ -918,6 +928,7 @@ public actor JobSupervisor {
             // rather than at the next poll (30 s in production).
             measureOnly.insert(run.request.kind)
             planned[run.request.kind.rawValue] = nil
+            planEpoch[run.request.kind.rawValue, default: 0] += 1
             lastPlanAt = nil
             if scheduleTask != nil { Task { await self.scheduleTick() } }
         }
