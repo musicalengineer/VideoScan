@@ -236,7 +236,8 @@ extension PromoteToArchiveJob {
     /// every channel, or a file whose stamp moved during the read is
     /// "could not check" — never a pass. Nothing is written anywhere.
     /// `couldNotBeMade`: the file held still and the probe gave no answer
-    /// (the one case the owner's "Archive anyway" tick may accept).
+    /// (the one case the owner's "Archive anyway" tick may accept). A decode
+    /// that ran and ended short of the header's length is not that case.
     private func measureSound(path: String, before: FileIdentityStamp?) async throws
         -> (finding: PromoteSoundGate.Finding, couldNotBeMade: Bool) {
         var thrown: PromoteSoundGate.Finding?
@@ -256,7 +257,8 @@ extension PromoteToArchiveJob {
         if let thrown { return (thrown, true) }
         guard let diagnosis else { return (.unchecked("the check failed to run"), true) }
         let finding = PromoteSoundGate.finding(from: diagnosis)
-        if case .unchecked = finding { return (finding, true) }
+        // A decode that ran and ended early is refused, ticked or not (#470).
+        if case .unchecked = finding { return (finding, !PromoteSoundGate.ranButCameUpShort(diagnosis)) }
         return (finding, false)
     }
 

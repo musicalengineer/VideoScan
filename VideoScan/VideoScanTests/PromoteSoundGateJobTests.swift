@@ -259,6 +259,47 @@ struct PromoteSoundGateJobTests {
         #expect(o.kind == .promoted, "\(o.kind) — \(o.detail)")
     }
 
+    @Test("REFUSED — GH #470, owner ruling 2026-11-11: a sound decode that RAN and ended early is refused with its numbers, and “Archive anyway” does not accept it — loud or silent, tagged or not; a check that could not be MADE still passes on the tick")
+    func aShortDecodeIsRefusedTickedOrNot() async throws {
+        let (sb, model) = try H.setup("sg_short"); defer { sb.cleanup() }
+        let short = AudioShortDecode(missingSeconds: 4.8, statedSeconds: 12)
+        func run(_ rec: VideoRecord, ticked: Bool, _ d: AudioVerifyDiagnosis) async throws -> PromoteToArchiveJob.FileOutcome {
+            let job = try H.job(model, ids: [rec.id]) { $0.allowUnprobeable = ticked }
+            job.soundMeasure = S.measure(d)
+            job.start(); await job.task?.value; await job.completionTask?.value
+            await Self.consoleSettled()
+            return try #require(H.outcome(job, rec.id))
+        }
+        let words = "the sound decode stopped early — 4.8 s of the 12.0 s the file's header states did not decode"
+
+        // An ordinary file: the part that decoded is loud; still not a pass.
+        let plain = try H.source(sb, model, name: "test_short_plain.mov", seed: 681)
+        let before = ArchiveSnapshot.take(sb)
+        var o = try await run(plain, ticked: false, S.soundDiagnosis(channels: [-18, -20], shortDecode: short))
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+        #expect(o.detail.contains(words) && o.detail.contains("Could not check is not a pass"), "\(o.detail)")
+        #expect(Self.lines(model, "refused [sound-unchecked]").contains { $0.contains("4.8 s of the 12.0 s") && !$0.contains("test_short") })
+
+        // An un-probeable file with the tick: loud part, silent part, and silent + tagged.
+        let ticked = try H.source(sb, model, name: "test_short_ticked.mov", seed: 682)
+        ticked.streamTypeRaw = StreamType.ffprobeFailed.rawValue; ticked.isPlayable = "ffprobe failed"
+        for channels in [[-18.0, -20.0], [-68.0, -68.0]] as [[Double?]] {
+            o = try await run(ticked, ticked: true, S.soundDiagnosis(channels: channels, shortDecode: short))
+            #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "\(channels): \(o.kind) \(o.refusalCode ?? "nil") — \(o.detail)")
+            #expect(o.detail.contains(words), "\(o.detail)")
+        }
+        ticked.tags = [WorkflowTags.silentChecked]
+        o = try await run(ticked, ticked: true, S.soundDiagnosis(channels: [-68, -68], shortDecode: short))
+        #expect(o.kind == .failed && o.refusalCode == "sound-unchecked", "the tag accepts a MEASURED silence, never a short check: \(o.kind)")
+        #expect(ArchiveSnapshot.take(sb) == before, "nothing reached the archive")
+        #expect(model.masterArchiveCopy(of: ticked) == nil && model.masterArchiveCopy(of: plain) == nil)
+        ticked.tags = []
+
+        // Unchanged: a pass that could not read a channel (no short decode) is still the tick's to accept.
+        o = try await run(ticked, ticked: true, S.soundDiagnosis(channels: [-.infinity, nil]))
+        #expect(o.kind == .promoted, "\(o.kind) \(o.refusalCode ?? "") — \(o.detail)")
+    }
+
     @Test("REFUSED — Codex #283 P2: the words follow the catalog's CURRENT record — a pairing removed while the sound was measured is not named in the refusal")
     func refusalWordsFollowTheCurrentRecord() async throws {
         let (sb, model) = try H.setup("sg_words"); defer { sb.cleanup() }

@@ -156,6 +156,7 @@ enum MasterArchiveTestSupport {
     /// `audioStreams: 0` = no audio track.
     static func soundDiagnosis(channels: [Double?], audioStreams: Int = 1,
                                levelsComplete: Bool = true,
+                               shortDecode: AudioShortDecode? = nil,
                                extraFindings: [AudioVerifyFinding] = [],
                                programStreamCount: Int? = nil) -> AudioVerifyDiagnosis {
         var vshape = AudioVerifyShape()
@@ -181,7 +182,9 @@ enum MasterArchiveTestSupport {
         var analysis = AudioBalanceAnalysis(
             classification: AudioBalanceClassifier.classify(measurements), measurements: measurements, shape: shape,
             programStreamCount: programStreamCount ?? (live ? 1 : 0), programStreamIndex: 1, droppedStreamIndices: [])
-        analysis.levelsComplete = levelsComplete
+        // As the probe sets them: a short decode is never a complete pass.
+        analysis.shortDecode = shortDecode
+        analysis.levelsComplete = levelsComplete && shortDecode == nil
         let findings = extraFindings + VerifyAudioRules.findings(shape: vshape, referencedPaths: [],
                                                                  levels: .success(analysis))
         return AudioVerifyDiagnosis(findings: findings, shape: vshape, balanceAnalysis: analysis)

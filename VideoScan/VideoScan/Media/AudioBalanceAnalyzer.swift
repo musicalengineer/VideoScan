@@ -174,21 +174,39 @@ enum AudioBalanceClassifier {
 /// to silence (−inf) — a parse gap must never inflate a level.
 enum AstatsOutputParser {
 
-    /// Parse the collected stderr text of an astats pass.
-    static func perChannelLevels(fromStderr text: String) -> [AudioChannelLevels] {
+    /// A name for ONE run's astats filter instance: "vs" + 32 random hex
+    /// digits. The filter is declared as `astats@<tag>`, so every line it
+    /// logs starts "[astats@<tag> @ 0x…] ". ffmpeg prints the file's own
+    /// metadata — values AND keys, which may hold newlines — on the same
+    /// stream; a file written before the run cannot know the tag, so it
+    /// cannot forge a line of the measurement (Codex #286 F1, #287 F1).
+    static func newRunTag() -> String {
+        "vs" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+
+    /// The payloads of the lines THIS run's astats instance logged, in order.
+    static func taggedPayloads(fromStderr text: String, runTag: String) -> [Substring] {
+        let prefix = "[astats@\(runTag) @ "
+        return text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { line in
+            guard line.hasPrefix(prefix), let close = line.range(of: "] ") else { return nil }
+            return line[close.upperBound...]
+        }
+    }
+
+    /// Parse the collected stderr text of an astats pass. With a `runTag`
+    /// (every production pass has one) only that run's own lines are read;
+    /// without one, any "[…] "-prefixed or bare line is (canned test text).
+    static func perChannelLevels(fromStderr text: String, runTag: String? = nil) -> [AudioChannelLevels] {
         var levels: [AudioChannelLevels] = []
         var currentIndex: Int?          // 0-based index into `levels`
         var inOverall = false
 
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = String(rawLine)
-            // Strip the "[Parsed_astats_N @ 0x…] " prefix if present.
-            let payload: Substring
-            if let close = line.range(of: "] ") {
-                payload = line[close.upperBound...]
-            } else {
-                payload = Substring(line)
+        let payloads: [Substring] = runTag.map { taggedPayloads(fromStderr: text, runTag: $0) }
+            ?? text.split(separator: "\n", omittingEmptySubsequences: true).map { line in
+                // Strip the "[Parsed_astats_N @ 0x…] " prefix if present.
+                line.range(of: "] ").map { line[$0.upperBound...] } ?? line
             }
+        for payload in payloads {
 
             if let channelValue = value(of: "Channel:", in: payload) {
                 inOverall = false
@@ -219,6 +237,21 @@ enum AstatsOutputParser {
             }
         }
         return levels
+    }
+
+    /// How many samples per channel astats was fed — the "Number of
+    /// samples:" line of its Overall section (GH #470). nil when the line is
+    /// absent or unreadable: never a guess. Only a line THIS run's astats
+    /// instance logged counts (`newRunTag`); one pass has one instance, so
+    /// two different counts are not an answer. Pure.
+    static func samplesPerChannel(fromStderr text: String, runTag: String) -> Int64? {
+        var counts = Set<Int64>()
+        for payload in taggedPayloads(fromStderr: text, runTag: runTag) {
+            guard let v = value(of: "Number of samples:", in: payload) else { continue }
+            guard let n = Int64(v), n >= 0 else { return nil }
+            counts.insert(n)
+        }
+        return counts.count == 1 ? counts.first : nil
     }
 
     /// "Label: value" → "value" (trimmed), or nil when the line isn't
