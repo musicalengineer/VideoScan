@@ -33242,6 +33242,26 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_gauntlet_sweep_1109.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_sweep_1109.py"
+      ],
+      "tests": [
+        "test_f1_an_owned_old_run_with_its_summary_row_is_still_removed",
+        "test_f1_retention_never_removes_a_directory_the_runner_did_not_make",
+        "test_f2_an_old_run_with_no_summary_row_keeps_its_record_and_loses_only_build_products",
+        "test_f3_two_concurrent_history_writers_lose_no_line",
+        "test_f5_a_failed_package_build_fixes_nothing",
+        "test_f5_a_failure_beyond_the_name_cap_is_not_fixed",
+        "test_g1_a_row_whose_fsync_failed_is_rolled_back_and_authorizes_nothing",
+        "test_n3_an_unterminated_summary_row_does_not_authorize_deletion_and_survives_the_next_append",
+        "test_n4_concurrent_large_rows_never_interleave"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_gedcom_pulls.py",
@@ -39359,6 +39379,10 @@
         },
         {
           "name": "tests/test_gauntlet_run_tidy.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_gauntlet_sweep_1109.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

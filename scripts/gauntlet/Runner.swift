@@ -40,13 +40,49 @@ func write(_ data: Data, to path: URL, root: URL) throws {
     let safe = try guarded(path, under: root)
     try data.write(to: safe, options: .atomic)
 }
-func append(_ data: Data, to path: URL, root: URL, sync: Bool = false) throws {
+/// Appends with O_APPEND: the kernel places each write(2) at the end of the
+/// file at the moment of the write, so two runners appending to one
+/// history.jsonl never overwrite each other's row (Codex sweep 11/09 F3; the
+/// old seek-to-end + write let a second writer land on the first's bytes).
+func append(_ data: Data, to path: URL, root: URL, sync: Bool = false, syncer: (Int32) -> Int32 = { fsync($0) }) throws {
     let safe = try guarded(path, under: root)
-    if !fm.fileExists(atPath: safe.path) { try write(Data(), to: safe, root: root) }
-    let handle = try FileHandle(forWritingTo: safe)
-    defer { try? handle.close() }
-    try handle.seekToEnd(); try handle.write(contentsOf: data)
-    if sync { try handle.synchronize() }                               // fsync
+    let fd = open(safe.path, O_RDWR | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+    guard fd >= 0 else { throw RunError("cannot open \(safe.path) for append: \(String(cString: strerror(errno)))") }
+    defer { close(fd) }
+    // One writer at a time for the whole record, so a short write can never
+    // let another runner's row land inside this one (re-review N4); the lock
+    // is released when fd closes (≈ a scoped std::lock_guard on the file).
+    guard flock(fd, LOCK_EX) == 0 else { throw RunError("lock \(safe.path): \(String(cString: strerror(errno)))") }
+    // A torn last line (a crash mid-append) is sealed with a newline first,
+    // so this row is never glued onto it (re-review N3).
+    // The tail must be known: a tail that cannot be read is refused rather
+    // than risk gluing this row onto a torn one (closing pass G2).
+    var data = data
+    var st = stat()
+    guard fstat(fd, &st) == 0 else { throw RunError("stat \(safe.path): \(String(cString: strerror(errno)))") }
+    let sizeBefore = st.st_size
+    if sizeBefore > 0 {
+        var last: UInt8 = 0
+        guard pread(fd, &last, 1, sizeBefore - 1) == 1 else { throw RunError("read the tail of \(safe.path): \(String(cString: strerror(errno)))") }
+        if last != 0x0A { data.insert(0x0A, at: 0) }
+    }
+    do {
+        try data.withUnsafeBytes { raw in
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if n < 0 { if errno == EINTR { continue }; throw RunError("append \(safe.path): \(String(cString: strerror(errno)))") }
+                offset += n
+            }
+        }
+        if sync, syncer(fd) != 0 { throw RunError("fsync \(safe.path): \(String(cString: strerror(errno)))") }
+    } catch {
+        // A row that is not durable must not stay visible — a retention
+        // reader would take it as the run's summary (closing pass G1). Roll
+        // the file back to its size before this append (still under the lock).
+        _ = ftruncate(fd, sizeBefore)
+        throw error
+    }
 }
 struct CommandResult { var code: Int32; var timedOut = false; var contaminated = false; var elapsed: Double }
 // Same ownership protocol as nightly_local_tests.sh: private process group,
@@ -429,13 +465,18 @@ func xcodeNames(summary: [String: Any]?, tests: Any?) -> TestNames {
 }
 
 /// Each history.jsonl row in turn, one line in memory at a time (like a getline loop in C).
-func forEachHistoryRow(_ history: URL, _ body: ([String: Any]) -> Void) {
+/// `terminatedOnly`: skip a last line with no newline — an append that never
+/// finished is not a durable row (Codex sweep 11/09 re-review N3).
+func forEachHistoryRow(_ history: URL, terminatedOnly: Bool = false, _ body: ([String: Any]) -> Void) {
     guard let file = fopen(history.path, "r") else { return }
     defer { fclose(file) }
     var buffer: UnsafeMutablePointer<CChar>?; var capacity = 0
     defer { free(buffer) }
-    while getline(&buffer, &capacity, file) > 0 {
-        guard let buffer, let row = try? JSONSerialization.jsonObject(with: Data(String(cString: buffer).utf8)) as? [String: Any] else { continue }
+    while true {
+        let n = getline(&buffer, &capacity, file)
+        guard n > 0, let buffer else { break }
+        if terminatedOnly, buffer[n - 1] != 0x0A { continue }
+        guard let row = try? JSONSerialization.jsonObject(with: Data(String(cString: buffer).utf8)) as? [String: Any] else { continue }
         body(row)
     }
 }
@@ -449,7 +490,7 @@ func previousRow(history: URL, machine: String) -> [String: Any]? {
 
 func historyHasRun(_ history: URL, runID: String) -> Bool {
     var found = false
-    forEachHistoryRow(history) { if $0["run_id"] as? String == runID { found = true } }
+    forEachHistoryRow(history, terminatedOnly: true) { if $0["run_id"] as? String == runID { found = true } }
     return found
 }
 
@@ -471,7 +512,12 @@ func failureChanges(current: [String: Any], previous: [String: Any]?) -> [String
         for test in failing {
             if wasFailing.contains(test) { firstFailed[test] = since[test] ?? previous?["ts"] as? String ?? ts } else { newFailures.insert(test); firstFailed[test] = ts }
         }
-        if stage["passed"] is NSNumber {
+        // No evidence, no "fixed" (Codex sweep 11/09 F5): a stage whose name
+        // lists were truncated, or a run whose package build failed (its
+        // tests supplied no names), proves nothing about a missing name.
+        let truncated = ["failed_tests", "skipped_tests", "incomplete_tests"].contains { (stage[$0 + "_truncated"] as? Int ?? 0) > 0 }
+        let packageBuildFailed = (current["package_build_exit_code"] as? NSNumber).map { $0.intValue != 0 } ?? false
+        if stage["passed"] is NSNumber, !truncated, !packageBuildFailed {
             fixed.formUnion(wasFailing.subtracting(failing).subtracting(list(stage, "skipped_tests")).subtracting(list(stage, "incomplete_tests")))
         }
     }
@@ -517,8 +563,11 @@ let buildScratchNames = ["DerivedData", "PackageBuild", "swift-cache"]
 let retentionDays = 3
 
 /// "2026-11-08T20-19-00Z-1A2B3C4D" (prepareRoots' runID) -> its UTC start; nil = not a run dir.
+/// The WHOLE name must have that shape (Codex sweep 11/09 F1: a timestamp
+/// prefix alone let "…Z-family-backup" pass).
 func runDate(fromName name: String) -> Date? {
-    guard name.count > 21, name[name.index(name.startIndex, offsetBy: 20)] == "-" else { return nil }
+    guard name.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z-[0-9A-Z]{8}$"#, options: .regularExpression) != nil
+    else { return nil }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "UTC")
     formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
@@ -599,12 +648,32 @@ func tidyBuildScratch(run: URL, keepBuild: Bool, publishReaped: Bool) -> String 
     return "GAUNTLET TIDY removed build products (\(gb) GB) from \(run.path)" + (problems.isEmpty ? "" : " warning=\"\(problems.joined(separator: "; "))\"")
 }
 
-/// The results root's real run dirs (no symlinks, no files) and whether each has result.json.
+/// The marker prepareRoots writes into every run dir it makes: the run's own id.
+let runMarkerName = ".gauntlet-run"
+
+func isRegularFile(_ url: URL) -> Bool {
+    var st = stat()
+    return lstat(url.path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+}
+
+/// Proof the runner made `dir` (Codex sweep 11/09 F1): its marker names it, or —
+/// runs made before the marker — the runner's own `.write-probe` files sit in
+/// its home, tmp and catalog roots. A directory without that proof is never removed.
+func runnerOwns(_ dir: URL) -> Bool {
+    let marker = dir.appendingPathComponent(runMarkerName)
+    if isRegularFile(marker) {
+        let text = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text == dir.lastPathComponent
+    }
+    return ["home", "tmp", "catalog"].allSatisfy { isRegularFile(dir.appendingPathComponent($0).appendingPathComponent(".write-probe")) }
+}
+
+/// The results root's real run dirs (no symlinks, no files, made by the runner) and whether each has result.json.
 func runEntries(_ resultsRoot: URL) -> [(name: String, finished: Bool)] {
     ((try? fm.contentsOfDirectory(atPath: resultsRoot.path)) ?? []).sorted().compactMap { name in
         let dir = resultsRoot.appendingPathComponent(name)
         var isDir: ObjCBool = false
-        guard !isSymlink(dir), fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard !isSymlink(dir), fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue, runnerOwns(dir) else { return nil }
         return (name, fm.fileExists(atPath: dir.appendingPathComponent("result.json").path))
     }
 }
@@ -614,15 +683,35 @@ func runEntries(_ resultsRoot: URL) -> [(name: String, finished: Bool)] {
 /// Rick 2026-11-08: "delete them all, once we have the summary data" -- history.jsonl keeps every
 /// run's summary row, so these run dirs are removed outright rather than moved to .trash (his
 /// explicit exception, for gauntlet run dirs only; DECISIONS). history.jsonl and pending-metrics* are never touched.
+/// Codex sweep 11/09 F2: "once we have the summary data" — a run whose summary
+/// row is NOT in history.jsonl (a crash before the row) keeps its logs and
+/// result.json, the only record of it; only its regenerable build products go.
 func retainFinishedRuns(resultsRoot: URL, now: Date) -> [String] {
-    retentionCandidates(runEntries(resultsRoot), now: now).map { name in
+    let history = resultsRoot.appendingPathComponent("history.jsonl")
+    return retentionCandidates(runEntries(resultsRoot), now: now).map { name in
         let dir = resultsRoot.appendingPathComponent(name)
+        guard historyHasRun(history, runID: name) else {
+            return "GAUNTLET RETENTION kept \(dir.path) (no summary row in history.jsonl — its logs are the only record); "
+                + removeBuildScratch(run: dir)
+        }
         do {
             _ = try guarded(dir, under: resultsRoot)
             try fm.removeItem(at: dir)
-            return "GAUNTLET RETENTION removed \(dir.path) (run older than \(retentionDays) days)"
+            return "GAUNTLET RETENTION removed \(dir.path) (run older than \(retentionDays) days; summary in history.jsonl)"
         } catch { return "GAUNTLET RETENTION warning: could not remove \(dir.path): \(error)" }
     }
+}
+
+/// Removes the run's own build products (never a symlink, never outside the run); the words to print.
+func removeBuildScratch(run: URL) -> String {
+    var bytes: Int64 = 0
+    var problems: [String] = []
+    for target in buildScratchNames.map({ run.appendingPathComponent($0) }) where fm.fileExists(atPath: target.path) {
+        guard !isSymlink(target), (try? guarded(target, under: run)) != nil else { problems.append("skipped \(target.lastPathComponent)"); continue }
+        let size = allocatedBytes(target)
+        do { try fm.removeItem(at: target); bytes += size } catch { problems.append("\(target.lastPathComponent): \(error.localizedDescription)") }
+    }
+    return "removed build products (\(String(format: "%.2f", Double(bytes) / 1e9)) GB)" + (problems.isEmpty ? "" : " warning=\"\(problems.joined(separator: "; "))\"")
 }
 
 // A value-type run context; mutating methods are like non-const C++ members.
@@ -737,6 +826,7 @@ struct GauntletRunner {
         runID = stamp.replacingOccurrences(of: ":", with: "-") + "-" + UUID().uuidString.prefix(8)
         run = try guarded(resultsRoot.appendingPathComponent(runID), under: resultsRoot)
         try fm.createDirectory(at: run, withIntermediateDirectories: false)
+        try write(Data(runID.utf8), to: run.appendingPathComponent(runMarkerName), root: run)   // ownership proof for retention
         totalStart = monotonic()
         environment = ProcessInfo.processInfo.environment.filter { key, _ in
             !key.hasPrefix("VS_") && !key.hasPrefix("VIDEOSCAN_") && !key.hasPrefix("TEST_RUNNER_") && !key.hasPrefix("XCTest")
@@ -1115,6 +1205,22 @@ func main() throws -> Int32 {
     }
     if arguments.first == "--retain", arguments.count == 3 {
         retainFinishedRuns(resultsRoot: URL(fileURLWithPath: arguments[1]), now: isoNow(arguments[2])).forEach { print($0) }
+        return 0
+    }
+    // Test seam (Codex sweep 11/09 F3): append <n> lines "<tag> <i>" to <file> through `append`, as the history writer does.
+    if arguments.first == "--append-lines", arguments.count == 4, let n = Int(arguments[3]) {
+        let file = URL(fileURLWithPath: arguments[1])
+        for i in 0..<n { try append(Data("{\"tag\": \"\(arguments[2])\", \"i\": \(i)}\n".utf8), to: file, root: file.deletingLastPathComponent(), sync: false) }
+        return 0
+    }
+    // Test seam (closing pass G1): one append whose fsync fails (EIO) — the row must not stay.
+    if arguments.first == "--append-fail-sync", arguments.count == 3 {
+        let file = URL(fileURLWithPath: arguments[1])
+        do {
+            try append(Data("{\"tag\": \"\(arguments[2])\"}\n".utf8), to: file, root: file.deletingLastPathComponent(), sync: true,
+                       syncer: { _ in errno = EIO; return -1 })
+            print("APPENDED")
+        } catch { print("THREW \(error)") }
         return 0
     }
     if arguments.first == "--tidy-run", arguments.count >= 3 {
