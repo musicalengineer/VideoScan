@@ -20,6 +20,13 @@ import Foundation
 //     (after `asettb=1/sr`, so pts is in samples, exact): gaps and
 //     overlaps between consecutive frames.
 //
+//   * QuietStretchTracker — sound over time, per channel (Rick 2026-11-12):
+//     stretches of 10 s or more where a channel stays under −60 dBFS. A
+//     channel quiet WHILE another carries sound is a finding (one side
+//     dropped out); every channel quiet together is a shown fact only (a
+//     tape's tail, a pause). Measured on 74 real stereo files, 2026-11-12:
+//     none had a one-sided stretch, 12 had all-quiet ones.
+//
 // The first and last 100 ms are ignored (start-up and end-of-take edges);
 // events are held in a small pending queue until the decode is 100 ms past
 // them, so the tail can be dropped without knowing the length up front.
@@ -57,6 +64,13 @@ struct SoundContinuityReport: Sendable, Equatable {
     var clicks = MediaEventLog()
     var timingJumps = MediaEventLog()
     var largestTimingJumpSeconds: Double = 0
+    /// Stretches (≥ 10 s) where every channel stayed under −60 dBFS.
+    var allQuiet = QuietLog()
+    /// Per channel: stretches (≥ 10 s) where it stayed under −60 dBFS while
+    /// other channels carried sound for at least 10 s of the stretch. Empty
+    /// logs for a channel that never sounds at all (that is the channels
+    /// row's finding).
+    var oneSidedQuiet: [QuietLog] = []
     /// DC offset, clipping runs, channel relation, loudness (SoundLevels.swift).
     var levels = SoundLevelReport()
 
@@ -64,7 +78,126 @@ struct SoundContinuityReport: Sendable, Equatable {
     var stutterEvents: Int { dropouts.occurrences + repeatedBlocks.occurrences + timingJumps.occurrences }
 }
 
+/// Counted quiet stretches plus the longest one.
+struct QuietLog: Sendable, Equatable {
+    var stretches = 0
+    var totalSeconds = 0.0
+    var longestSeconds = 0.0
+    var longestStartSeconds = 0.0
+
+    mutating func note(start: Double, seconds: Double) {
+        stretches += 1
+        totalSeconds += seconds
+        if seconds > longestSeconds {
+            longestSeconds = seconds
+            longestStartSeconds = start
+        }
+    }
+}
+
 // MARK: Detectors
+
+/// Sound over time, per channel. Works in 100 ms blocks: a channel is quiet
+/// in a block when its peak there is under −60 dBFS. State is a few numbers
+/// per channel, whatever the file's length.
+struct QuietStretchTracker {
+    /// −60 dBFS of s32 full scale: the program floor the Sound row uses
+    /// (AudioBalanceClassifier.programFloorDBFS), as a sample peak.
+    static let quietPeak: UInt32 = 2_147_483
+    static let blockSeconds = 0.1
+    /// Shorter quiet is ordinary programme (a pause, a breath).
+    static let minimumSeconds = 10.0
+
+    private let channels: Int
+    private let blockFrames: Int
+    private let sampleRate: Int
+    private var peak: [UInt32]
+    private var framesInBlock = 0
+    private var frame = 0
+    /// Per channel: the frame its current quiet run began at, and how many
+    /// frames of that run some other channel sounded in.
+    private var runStart: [Int?]
+    private var othersSounding: [Int]
+    private var allStart: Int?
+    private var everSounded: [Bool]
+    private var oneSided: [QuietLog]
+    private var all = QuietLog()
+
+    init(channels: Int, sampleRate: Int) {
+        self.channels = channels
+        self.sampleRate = sampleRate
+        blockFrames = max(1, Int(Self.blockSeconds * Double(sampleRate)))
+        peak = Array(repeating: 0, count: channels)
+        runStart = Array(repeating: nil, count: channels)
+        othersSounding = Array(repeating: 0, count: channels)
+        everSounded = Array(repeating: false, count: channels)
+        oneSided = Array(repeating: QuietLog(), count: channels)
+    }
+
+    mutating func observe(_ x: Int32, channel: Int) {
+        let m = x.magnitude
+        if m > peak[channel] { peak[channel] = m }
+    }
+
+    mutating func endFrame() {
+        framesInBlock += 1
+        frame += 1
+        if framesInBlock == blockFrames { closeBlock() }
+    }
+
+    private func seconds(_ frames: Int) -> Double { Double(frames) / Double(sampleRate) }
+
+    private mutating func closeBlock() {
+        let blockStart = frame - framesInBlock
+        var sounding = 0
+        for c in 0..<channels where peak[c] >= Self.quietPeak {
+            sounding += 1
+            everSounded[c] = true
+        }
+        if sounding == 0 {
+            if allStart == nil { allStart = blockStart }
+        } else {
+            endAllQuiet(at: blockStart)
+        }
+        for c in 0..<channels {
+            if peak[c] < Self.quietPeak {
+                if runStart[c] == nil { runStart[c] = blockStart; othersSounding[c] = 0 }
+                if sounding > 0 { othersSounding[c] += framesInBlock }
+            } else {
+                endRun(c, at: blockStart)
+            }
+            peak[c] = 0
+        }
+        framesInBlock = 0
+    }
+
+    private mutating func endAllQuiet(at end: Int) {
+        guard let start = allStart else { return }
+        allStart = nil
+        let length = seconds(end - start)
+        if length >= Self.minimumSeconds { all.note(start: seconds(start), seconds: length) }
+    }
+
+    private mutating func endRun(_ c: Int, at end: Int) {
+        guard let start = runStart[c] else { return }
+        runStart[c] = nil
+        let length = seconds(end - start)
+        if length >= Self.minimumSeconds, seconds(othersSounding[c]) >= Self.minimumSeconds {
+            oneSided[c].note(start: seconds(start), seconds: length)
+        }
+    }
+
+    /// End of stream: close the open block and every open run.
+    mutating func finish() -> (allQuiet: QuietLog, oneSided: [QuietLog]) {
+        if framesInBlock > 0 { closeBlock() }
+        endAllQuiet(at: frame)
+        for c in 0..<channels {
+            endRun(c, at: frame)
+            if !everSounded[c] { oneSided[c] = QuietLog() }
+        }
+        return (all, oneSided)
+    }
+}
 
 /// Exact digital-zero runs across every channel.
 struct SilenceRunTracker {
@@ -211,6 +344,7 @@ struct SoundContinuityAnalyzer {
     private var clickers: [ClickTracker]
     private var timeline = SoundTimeline()
     private var levels: SoundLevelTracker
+    private var quiet: QuietStretchTracker
     private var loudness = LoudnessSummary()
     private var carry = Data()
     private var frame = 0
@@ -224,6 +358,7 @@ struct SoundContinuityAnalyzer {
         blocks = BlockRepeatTracker(channels: self.channels)
         clickers = Array(repeating: ClickTracker(sampleRate: self.sampleRate), count: self.channels)
         levels = SoundLevelTracker(channels: self.channels)
+        quiet = QuietStretchTracker(channels: self.channels, sampleRate: self.sampleRate)
     }
 
     private var edgeFrames: Int { Int(Self.edgeSeconds * Double(sampleRate)) }
@@ -258,8 +393,10 @@ struct SoundContinuityAnalyzer {
             if blocks.append(x) { repeated = true }
             if clickers[ch].observe(x) { click = true }
             levels.observe(x, channel: ch, at: seconds(frame))
+            quiet.observe(x, channel: ch)
         }
         levels.endFrame()
+        quiet.endFrame()
         if let run = silence.observe(silent: silent, at: frame) { noteSilence(run) }
         if repeated { enqueue(.repeated, frame + 1 - BlockRepeatTracker.blockFrames, frame + 1) }
         if click, frame - lastClickFrame > sampleRate / 20 {   // ≤ one click per 50 ms
@@ -322,6 +459,7 @@ struct SoundContinuityAnalyzer {
     mutating func finish() -> SoundContinuityReport {
         report.seconds = seconds(frame)
         report.levels = levels.report(loudness: loudness)
+        (report.allQuiet, report.oneSidedQuiet) = quiet.finish()
         pending.removeAll()
         return report
     }
@@ -373,6 +511,14 @@ extension CheckMediaRules {
         }
         let evidence = continuityEvidence(r)
         let found = continuityFindings(r)
+        let quietSides = oneSidedQuietFindings(r)
+        if found.isEmpty, !quietSides.isEmpty {
+            return MediaCheck(kind: .soundContinuity, verdict: .warning,
+                              sentence: "One side goes quiet while the other carries on: "
+                                  + quietSides.map { "the \($0.channel) channel for \($0.span)" }.joined(separator: "; ") + ".",
+                              evidence: evidence,
+                              fix: "Listen at the times shown. If one side drops out there, look for another copy.")
+        }
         guard !found.isEmpty else {
             return MediaCheck(kind: .soundContinuity, verdict: .ok,
                               sentence: "Every sample decoded: no dropouts, no replayed sound, no clicks, no timing gaps.",
@@ -380,7 +526,9 @@ extension CheckMediaRules {
         }
         let verdict: MediaCheckVerdict = r.stutterEvents >= continuityProblemEvents ? .problem : .warning
         return MediaCheck(kind: .soundContinuity, verdict: verdict,
-                          sentence: "The sound breaks up: \(found.joined(separator: "; ")).",
+                          sentence: "The sound breaks up: "
+                              + (found + quietSides.map { "the \($0.channel) channel is quiet for \($0.span)" })
+                                  .joined(separator: "; ") + ".",
                           evidence: evidence,
                           fix: "Listen at the times shown. If it skips there, look for another copy; dropouts and replays can't be repaired without the original.")
     }
@@ -392,6 +540,21 @@ extension CheckMediaRules {
         if r.timingJumps.occurrences >= 1 { out.append(countWords(r.timingJumps.occurrences, "jump", "in the sound's timing")) }
         if r.clicks.occurrences >= 1 { out.append(countWords(r.clicks.occurrences, "click", "")) }
         return out
+    }
+
+    /// Channels with a one-sided quiet stretch: (name, "64 s from 00:16:14 (2 stretches)").
+    private static func oneSidedQuietFindings(_ r: SoundContinuityReport) -> [(channel: String, span: String)] {
+        r.oneSidedQuiet.enumerated().compactMap { index, log in
+            guard log.stretches > 0 else { return nil }
+            let more = log.stretches > 1 ? " (\(V.groupedInt(log.stretches)) stretches)" : ""
+            return (channelName(index, of: r.oneSidedQuiet.count).lowercased(),
+                    "\(V.durationText(log.longestSeconds)) from \(V.timecode(log.longestStartSeconds))\(more)")
+        }
+    }
+
+    private static func quietText(_ log: QuietLog) -> String {
+        "\(V.groupedInt(log.stretches)) \(log.stretches == 1 ? "stretch" : "stretches"), \(V.durationText(log.totalSeconds)) in all; "
+            + "longest \(V.durationText(log.longestSeconds)) from \(V.timecode(log.longestStartSeconds))"
     }
 
     private static func countWords(_ n: Int, _ noun: String, _ tail: String) -> String {
@@ -410,6 +573,10 @@ extension CheckMediaRules {
             e.append(MediaEvidence("Longest dropout", String(format: "%.0f ms", r.longestDropoutSeconds * 1000)))
         }
         if r.silentPassages > 0 { e.append(MediaEvidence("Silent passages (≥ 2 s)", V.groupedInt(r.silentPassages))) }
+        for (index, log) in r.oneSidedQuiet.enumerated() where log.stretches > 0 {
+            e.append(MediaEvidence("\(channelName(index, of: r.oneSidedQuiet.count)) quiet, others not (≥ 10 s)", quietText(log)))
+        }
+        if r.allQuiet.stretches > 0 { e.append(MediaEvidence("All channels quiet (≥ 10 s)", quietText(r.allQuiet))) }
         return e
     }
 }
