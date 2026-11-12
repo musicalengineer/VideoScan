@@ -12442,6 +12442,7 @@
         "CheckMediaLayoutRealFileTests"
       ],
       "tests": [
+        "aDecodeThatEndsEarlyIsNotEverySample",
         "allSoundAtTheEndIsAProblem",
         "argumentsAreReadOnlyAndNamed",
         "cleanToneHasNothing",
@@ -12461,6 +12462,8 @@
         "replayedBlockIsFoundAtAnyAlignment",
         "ruleWording",
         "tenMinutesStreamInBudget",
+        "theContinuityShortDecodeRule",
+        "theStatedSoundLength",
         "thresholdsArePinned",
         "throughFFmpeg",
         "timingGapsAndOverlapsFromShowInfo"

@@ -353,6 +353,76 @@ struct CheckMediaSoundContinuityTests {
         let click = try await run(PCM.withClick(tone, atFrame: 96_000), name: "test_cm_click.wav")
         #expect(click.verdict == .warning && click.sentence.contains("click"), "\(click.sentence)")
     }
+
+    // MARK: GH #470 — the continuity decode ends early and ffmpeg exits 0
+
+    /// (name, video codec, extra video args): containers whose header still
+    /// states the sound's full length after the file's tail is cut off.
+    static let cutShort: [(String, String, [String])] = [
+        ("test_cm_cut.mov", "prores", ["-movflags", "+faststart"]),
+        ("test_cm_cut.mkv", "ffv1", []),
+    ]
+
+    @Test("#470: a file cut to 60 % — the continuity and level rows are 'not run' with the numbers, never 'Every sample decoded'",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)), arguments: [0, 1])
+    func aDecodeThatEndsEarlyIsNotEverySample(_ which: Int) async throws {
+        let (name, codec, args) = Self.cutShort[which]
+        let dir = try VerifyAudioTestMedia.makeScratchDir("cmcut")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(into: dir, name: name, videoCodec: codec, extraVideoArgs: args,
+                                                     audioCodec: "pcm_s16le", videoDuration: 12)
+        // Whole: every sample decoded.
+        let wholeFacts = try #require(try? await CheckMediaProbe.facts(path: path).get())
+        let whole = R.checkSoundContinuity(try await CheckMediaProbe.soundContinuity(path: path, facts: wholeFacts),
+                                           facts: wholeFacts)
+        #expect(whole.verdict == .ok, "\(name) whole: \(whole.sentence)")
+
+        let size = try #require((try FileManager.default.attributesOfItem(atPath: path))[.size] as? NSNumber).uint64Value
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        try handle.truncate(atOffset: size * 6 / 10)
+        try handle.close()
+
+        let facts = try #require(try? await CheckMediaProbe.facts(path: path).get())
+        let result = try await CheckMediaProbe.soundContinuity(path: path, facts: facts)
+        let row = R.checkSoundContinuity(result, facts: facts)
+        guard case .notRun(let reason) = row.verdict else {
+            Issue.record("\(name): a decode that stopped early read '\(row.sentence)'"); return
+        }
+        #expect(reason.hasPrefix("the sound decode stopped early — "), "\(reason)")
+        #expect(reason.contains("of the 12.0 s"), "\(reason)")
+        // The level rows ride the same decode: none of them is a measurement either.
+        for check in R.levelChecks(result, facts: facts) {
+            if case .notRun = check.verdict {} else { Issue.record("\(name): \(check.kind) read '\(check.sentence)'") }
+        }
+    }
+
+    @Test("the short-decode rule on the continuity pass: more than 1 s AND more than 2 % missing; an unstated length never makes a finding")
+    func theContinuityShortDecodeRule() {
+        let short = { (decoded: Double, stated: Double?) in
+            CheckMediaProbe.shortDecode(report: SoundContinuityReport(seconds: decoded), sampleRate: 48_000, statedSeconds: stated)
+        }
+        #expect(short(7.2, 12) == AudioShortDecode(missingSeconds: 4.8, statedSeconds: 12))
+        #expect(short(12, 12) == nil && short(11.2, 12) == nil, "0.8 s missing is inside the 1 s tolerance")
+        #expect(short(3_540, 3_600) == nil, "60 s of an hour is 1.7 %: inside the 2 % tolerance")
+        #expect(short(3_500, 3_600) != nil)
+        #expect(short(13, 12) == nil, "more sound than stated is not short")
+        #expect(short(0, 12)?.missingSeconds == 12)
+        #expect(short(5, nil) == nil)
+    }
+
+    @Test("the stated sound length: the stream's own duration, else Matroska's DURATION tag, else none")
+    func theStatedSoundLength() throws {
+        let json = { (stream: String) in
+            Data(#"{"streams":[{"index":0,"codec_type":"audio","sample_rate":"48000"\#(stream)}],"format":{}}"#.utf8)
+        }
+        let own = try MediaFacts.parse(probeJSON: json(#","duration":"12.5","tags":{"DURATION":"00:00:20.000000000"}"#))
+        #expect(own.audio?.statedSeconds == 12.5)
+        let tagged = try MediaFacts.parse(probeJSON: json(#","tags":{"DURATION":"00:01:02.500000000"}"#))
+        #expect(tagged.audio?.durationSeconds == nil && tagged.audio?.statedSeconds == 62.5)
+        let none = try MediaFacts.parse(probeJSON: json(#","tags":{"DURATION":"soon"}"#))
+        #expect(none.audio?.statedSeconds == nil)
+        #expect(MediaFacts.probeEntries.contains("stream_tags=creation_time,timecode,DURATION"))
+    }
 }
 
 private extension MediaFacts {

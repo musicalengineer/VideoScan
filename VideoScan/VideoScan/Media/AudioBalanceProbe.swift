@@ -342,10 +342,7 @@ enum AudioBalanceProbe {
     /// Matroska's per-stream DURATION tag ("00:00:12.000000000") in seconds;
     /// nil for anything else. Pure.
     static func seconds(fromDurationTag tag: String?) -> Double? {
-        guard let parts = tag?.split(separator: ":"), parts.count == 3,
-              let h = Double(parts[0]), let m = Double(parts[1]), let s = Double(parts[2]),
-              h >= 0, m >= 0, s >= 0 else { return nil }
-        return h * 3600 + m * 60 + s
+        MediaFacts.seconds(fromDurationTag: tag)
     }
 
     // MARK: Pure argument builders (unit-tested, no I/O)

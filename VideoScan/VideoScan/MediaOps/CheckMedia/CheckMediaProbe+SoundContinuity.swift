@@ -11,6 +11,10 @@ import Foundation
 // stderr = one `ashowinfo` line per decoded frame (pts in samples), the
 // timing check and the progress bar.
 //
+// ffmpeg exits 0 on a file whose tail is missing, so the pass is a
+// measurement only when the samples it received cover the length the header
+// states (GH #470); otherwise every row that rides this decode is "not run".
+//
 // Read-only on the media. Reads only the sound for mov/mp4 (the demuxer
 // skips discarded picture samples by index); for mxf/mkv/avi it reads the
 // whole file once.
@@ -61,7 +65,26 @@ extension CheckMediaProbe {
         guard r.exitCode == 0 else {
             return .failure(CheckMediaSkip(reason: "ffmpeg could not decode the sound (exit \(r.exitCode))"))
         }
-        return .success(tally.finish())
+        // Exit 0 is not "decoded to the end" (GH #470): ffmpeg decodes what a
+        // cut-short file still holds and stops. The samples that reached the
+        // analyzer are held against the length the header states — the same
+        // rule, tolerance and words as the Sound row's levels pass.
+        let report = tally.finish()
+        if let short = shortDecode(report: report, sampleRate: rate, statedSeconds: audio.statedSeconds) {
+            return .failure(CheckMediaSkip(reason: short.reason))
+        }
+        return .success(report)
+    }
+
+    /// The continuity decode held against the stream's stated length: the
+    /// short decode, or nil when it covered the stream (or the header states
+    /// no length — then there is nothing to compare against). Pure.
+    static func shortDecode(report: SoundContinuityReport, sampleRate: Int, statedSeconds: Double?) -> AudioShortDecode? {
+        let decoded = Int64((report.seconds * Double(sampleRate)).rounded())
+        guard let statedSeconds,
+              let missing = AudioBalanceProbe.shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: sampleRate,
+                                                                 statedSeconds: statedSeconds) else { return nil }
+        return AudioShortDecode(missingSeconds: missing, statedSeconds: statedSeconds)
     }
 
     /// Throttled progress: reports only when the fraction moves ≥ 0.5 %.
