@@ -89,11 +89,11 @@
   un-probeable would pass on the "Archive anyway" tick, where today it is refused as silent. Accept that as what
   the tick means, or have the tick refuse a check that ran but came up short? (Advice: the second.)
 - **Check Media tally:** a sound-not-checked card is now counted under "couldn't be checked". Own phrase instead?
-- **Eleven unmerged branches from 11/08** (not from the 11/10 night; each has a worktree under
+- **Ten unmerged branches from 11/08** (not from the 11/10 night; each has a worktree under
   `~/dev/VideoScan-wt/`): six refactors — `refactor/angel-floorfires`, `-prepare`, `-promote`,
   `-select-from-evidence`, `-sweep-perform`, `refactor/archive-volume-protection-make` (data-risk: Codex pass
-  first); four fixes — `fix/codex-sweep-analyze-evidence`, `-bg-quit`, `-catalog-check`, `-gauntlet-tidy`; and
-  `docs/hallie-full-audio-20261108`. All but two conflict with `main` now (mostly manifest and baseline; real
+  first); four fixes — `fix/codex-sweep-analyze-evidence`, `-bg-quit`, `-catalog-check`, `-gauntlet-tidy`. (The
+  Hallie full-audio brief is committed, parked: `docs/design/hallie-full-audio.md`.) All but two conflict with `main` now (mostly manifest and baseline; real
   code in angel-prepare, angel-promote, bg-quit). Bring them current and merge, or leave them parked?
 - **The archive sound check's findings:** the unplayable `Mark's-Bday-1984…` file; the silent CapeCodAndMuseum1991
   files, and whether to check the July recapture `CapeCod_1991-06-21_NV12`; the one-sided files.

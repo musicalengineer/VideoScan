@@ -340,3 +340,5 @@ tests/test_adversarial_morning_line.py
 # directories emptied by the 2026-10-23 retirement (cited as folders)
 docs/briefs/local/
 docs/ops/analysis
+docs/briefs/cloud/NIGHTLY.md
+docs/briefs/cloud/README.md
