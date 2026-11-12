@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 361,
+ "entry_count": 359,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -17,10 +17,6 @@
   "VideoScan/VideoScan/Analyze/AnalyzeReclaimable.swift::ReclaimableCalculator.compute": {
    "ccn": 18,
    "nloc": 43
-  },
-  "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::AnalyzeRunner.runNow": {
-   "ccn": 16,
-   "nloc": 49
   },
   "VideoScan/VideoScan/App/BundleImporter.swift::BundleImporter.installPOIs": {
    "ccn": 12,
@@ -209,10 +205,6 @@
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelRecommendations.swift::ArchiveAngelRecommendations.verdict": {
    "ccn": 24,
    "nloc": 65
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.floorFires": {
-   "ccn": 33,
-   "nloc": 44
   },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.signal": {
    "ccn": 28,

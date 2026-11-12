@@ -6637,6 +6637,29 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelFloorFiresCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelFloorFiresCharacterizationTests"
+      ],
+      "tests": [
+        "appCacheByFolderAndAPersonsNameIsNot",
+        "archivedCopyPrefersTheByteCopyReason",
+        "cleanCandidatePassesEveryKind",
+        "eachFloorFiresAloneWithItsOwnReason",
+        "junkScoreFiresAtTheFloor",
+        "noSoundReadsTheVerifyAudioNote",
+        "notPlayableReadsTheProbeWordsCaseInsensitively",
+        "proxyStreamNeedsADurationAndASizeAndIsStrictlyUnderTheRate",
+        "recentPhoneClipNeedsAPhoneAndARecentOrUnknownDate",
+        "restingNeedsEnoughRecentPasses",
+        "signalKindsAndMatchNeverRejectEvenWhenEveryFloorWould",
+        "thresholdsAndSwitchesComeFromThePolicyPassedIn",
+        "tooShortIsStrictlyUnderTheMinimum"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelLifecycleCompanionTests.swift",
@@ -38440,7 +38463,7 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3653,
+      "expected_floor": 3666,
       "name": "unit",
       "package_expected_floor": 900,
       "package_selectors": [
@@ -38572,6 +38595,7 @@
         "VideoScanTests/ArchiveAngelDownloadCapTests",
         "VideoScanTests/ArchiveAngelEvidenceTests",
         "VideoScanTests/ArchiveAngelExplicitPickTests",
+        "VideoScanTests/ArchiveAngelFloorFiresCharacterizationTests",
         "VideoScanTests/ArchiveAngelFloorTests",
         "VideoScanTests/ArchiveAngelPhoneClipTests",
         "VideoScanTests/ArchiveAngelReadinessExplanationTests",
