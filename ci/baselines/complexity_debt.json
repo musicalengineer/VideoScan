@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 357,
+ "entry_count": 356,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -89,10 +89,6 @@
   "VideoScan/VideoScan/Archive/ArchiveView.swift::ArchiveView.masterArchivePanel": {
    "ccn": 7,
    "nloc": 81
-  },
-  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift::ArchiveVolumeProtection.make": {
-   "ccn": 31,
-   "nloc": 88
   },
   "VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift::BindFixityToVolumeJob.run": {
    "ccn": 16,

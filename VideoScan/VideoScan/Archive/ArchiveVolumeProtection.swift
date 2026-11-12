@@ -192,27 +192,7 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         // A "/Volumes/X" whose mount point reads as the boot disk is an
         // empty leftover directory of an unmounted volume — not the archive.
         let mounted = identity(spelled).flatMap { isBootMountPoint($0.mountPoint) && spelledRoot != nil ? nil : $0 }
-
-        // ── Boot folder or external volume: from the mount, not the text.
-        let external: Bool
-        if spelledRoot != nil {
-            external = true
-        } else if let mounted, !isBootMountPoint(mounted.mountPoint) {
-            external = true
-        } else if let uuid = d.volumeUUID {
-            // On the boot disk now, or not resolvable: only the boot
-            // disk's own UUID makes it a folder archive (a custom mount's
-            // leftover directory reads as the boot disk while unmounted).
-            if let boot = probe("/") {
-                external = boot != uuid
-            } else {
-                // Boot UUID unreadable (never seen in production): trust
-                // the mount when there is one; unresolvable → external.
-                external = mounted == nil
-            }
-        } else {
-            external = false   // no UUID: the path is the whole identity
-        }
+        let external = isExternalVolume(spelledRoot: spelledRoot, mounted: mounted, uuid: d.volumeUUID, probe: probe)
 
         // No UUID and nothing at that path right now: a boot folder that is
         // gone OR an unmounted custom mount — the disk cannot say which, so
@@ -230,71 +210,136 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
             return makeBootFolder(spelled: spelled, mounted: mounted, uuid: d.volumeUUID,
                                   aliasCandidates: aliasCandidates, identity: identity, networkRoots: networkRoots)
         }
+        return makeExternalVolume(spelled: spelled, spelledRoot: spelledRoot, mounted: mounted, uuid: d.volumeUUID,
+                                  aliasCandidates: aliasCandidates, mountedRoots: mountedRoots, probe: probe,
+                                  identity: identity, networkRoots: networkRoots)
+    }
 
-        // ── External volume.
-        var roots = Set<String>()
-        var aliases: [String] = []
-        func addRoot(_ p: String) {
-            let c = canonical(p)
-            if let r = externalVolumeRoot(of: c) { roots.insert(r.lowercased()) }
-            else if !aliases.contains(c.lowercased()) { aliases.append(c.lowercased()) }
-        }
-        addRoot(spelledRoot ?? spelled)   // the designated spelling (refuse over guess)
+    /// Boot folder or external volume: from the MOUNT, not the text. A
+    /// /Volumes spelling, or a path mounted anywhere but the boot disk, is
+    /// an external volume. On the boot disk now, or not resolvable: only
+    /// the boot disk's own UUID makes it a folder archive (a custom mount's
+    /// leftover directory reads as the boot disk while unmounted). No UUID:
+    /// the path is the whole identity (a folder).
+    private static func isExternalVolume(spelledRoot: String?, mounted: MountIdentity?, uuid: String?,
+                                         probe: (String) -> String?) -> Bool {
+        if spelledRoot != nil { return true }
+        if let mounted, !isBootMountPoint(mounted.mountPoint) { return true }
+        guard let uuid else { return false }
+        if let boot = probe("/") { return boot != uuid }
+        // Boot UUID unreadable (never seen in production): trust the mount
+        // when there is one; unresolvable → external.
+        return mounted == nil
+    }
+
+    /// An external archive volume: every spelling of it the disk can prove
+    /// (the designated one always — refuse over guess), found by its UUID
+    /// where it is designated or, failing that, among the mounted volumes;
+    /// then the scan targets whose real mount is the archive's.
+    private static func makeExternalVolume(spelled: String, spelledRoot: String?, mounted: MountIdentity?,
+                                           uuid: String?, aliasCandidates: [String],
+                                           mountedRoots: () -> [String], probe: (String) -> String?,
+                                           identity: (String) -> MountIdentity?,
+                                           networkRoots: () -> [String]) -> ArchiveVolumeProtection {
+        var found = ExternalVolumeSearch()
+        found.add(spelledRoot ?? spelled)   // the designated spelling (refuse over guess)
         // Never the boot disk's mount point: an external archive that reads
         // as "on the boot disk" is an unmounted custom mount's directory.
         let mountedPoint = mounted.flatMap { isBootMountPoint($0.mountPoint) ? nil : canonical($0.mountPoint) }
-        let expected = d.volumeUUID ?? mountedPoint.flatMap { probe($0) }
-        var resolved = false
-        var archiveMounts = Set<String>()   // lower-cased mount points proven to be the archive
-        // The usual case costs ONE read: the designated mount carries the
-        // UUID, so no other volume can.
-        if let mountedPoint {
-            if let expected, probe(mountedPoint) == expected {
-                addRoot(mountedPoint); archiveMounts.insert(mountedPoint.lowercased()); resolved = true
-            } else if expected == nil {
-                addRoot(mountedPoint); archiveMounts.insert(mountedPoint.lowercased())
-            }
-        } else if let root = spelledRoot, let expected, probe(root) == expected {
-            archiveMounts.insert(root.lowercased()); resolved = true
+        let expected = uuid ?? mountedPoint.flatMap { probe($0) }
+        found.checkDesignatedMount(mountedPoint: mountedPoint, spelledRoot: spelledRoot, expected: expected, probe: probe)
+        if !found.resolved, let expected {
+            found.searchMountedVolumes(for: expected, skipping: [spelledRoot?.lowercased(), mountedPoint?.lowercased()],
+                                       mountedRoots: mountedRoots, probe: probe)
         }
+        if expected == nil { found.resolved = true }   // no UUID: the path is the whole identity
+        if !found.archiveMounts.isEmpty {
+            found.addScanTargetAliases(aliasCandidates, identity: identity, networkRoots: networkRoots)
+        }
+        let labelSource = spelledRoot ?? mountedPoint ?? spelled
+        return ArchiveVolumeProtection(label: (labelSource as NSString).lastPathComponent,
+                                       placement: .externalVolume, archiveRoots: found.roots,
+                                       aliasRoots: found.aliases, protectedFolders: [], expectedUUID: expected,
+                                       isResolved: found.resolved, provenOtherRoots: found.others,
+                                       isProvisional: false)
+    }
+
+    /// What the build has proven about an external archive so far: its
+    /// "/Volumes/<name>" roots and other spellings (lower-cased; aliases in
+    /// the order found), the mount points proven to BE it, whether it was
+    /// found by UUID, and the mounted volumes proven to be OTHER drives.
+    /// Filled step by step by `makeExternalVolume` (≈ a small builder object
+    /// on the stack; the probes are passed in, never stored).
+    private struct ExternalVolumeSearch {
+        private typealias Rules = ArchiveVolumeProtection   // the outer type's pure path rules
+        var roots = Set<String>()
+        var aliases: [String] = []
+        var archiveMounts = Set<String>()
+        var resolved = false
         var others = Set<String>()
-        if !resolved, let expected {
-            // Renamed / remounted / offline: read every mounted volume once.
+
+        /// One spelling of the archive: a /Volumes root, else an alias prefix.
+        mutating func add(_ p: String) {
+            let c = Rules.canonical(p)
+            if let r = Rules.externalVolumeRoot(of: c) { roots.insert(r.lowercased()) }
+            else if !aliases.contains(c.lowercased()) { aliases.append(c.lowercased()) }
+        }
+
+        /// The usual case costs ONE read: the designated mount carries the
+        /// UUID, so no other volume can. With no UUID to look for, the
+        /// designated mount IS the archive (the path is the whole identity).
+        mutating func checkDesignatedMount(mountedPoint: String?, spelledRoot: String?, expected: String?,
+                                           probe: (String) -> String?) {
+            if let mountedPoint {
+                if let expected, probe(mountedPoint) == expected {
+                    add(mountedPoint); archiveMounts.insert(mountedPoint.lowercased()); resolved = true
+                } else if expected == nil {
+                    add(mountedPoint); archiveMounts.insert(mountedPoint.lowercased())
+                }
+            } else if let root = spelledRoot, let expected, probe(root) == expected {
+                archiveMounts.insert(root.lowercased()); resolved = true
+            }
+        }
+
+        /// Renamed / remounted / offline: read every mounted volume once
+        /// (never the boot disk, never a spelling already read). The
+        /// archive's UUID makes it a root; any other UUID proves a different
+        /// drive; no UUID proves nothing.
+        mutating func searchMountedVolumes(for expected: String, skipping: [String?],
+                                           mountedRoots: () -> [String], probe: (String) -> String?) {
             for m in mountedRoots() {
-                let c = canonical(m)
-                guard !isBootMountPoint(c) else { continue }
-                let key = externalVolumeRoot(of: c) ?? c
+                let c = Rules.canonical(m)
+                guard !Rules.isBootMountPoint(c) else { continue }
+                let key = Rules.externalVolumeRoot(of: c) ?? c
                 let lower = key.lowercased()
-                if lower == spelledRoot?.lowercased() || lower == mountedPoint?.lowercased() { continue }
+                if skipping.contains(lower) { continue }
                 switch probe(key) {
-                case expected?: addRoot(key); archiveMounts.insert(lower); resolved = true
+                case expected?: add(key); archiveMounts.insert(lower); resolved = true
                 case .some: others.insert(lower)
                 case nil: break                                   // no UUID → cannot prove
                 }
             }
         }
-        if expected == nil { resolved = true }   // no UUID: the path is the whole identity
-        // Scan targets whose real mount IS the archive's (a symlinked scan
-        // root, a firmlink spelling): rows spelled through them are on it.
-        if !archiveMounts.isEmpty {
-            let network = networkRoots().map { canonical($0).lowercased() }
-            for c in aliasCandidates {
-                let spelledC = canonical(c)
+
+        /// Scan targets whose real mount IS the archive's (a symlinked scan
+        /// root, a firmlink spelling): rows spelled through them are on it.
+        /// Network mounts are never resolved (a hung server); a target
+        /// already under a known spelling is not read again.
+        mutating func addScanTargetAliases(_ candidates: [String], identity: (String) -> MountIdentity?,
+                                           networkRoots: () -> [String]) {
+            let network = networkRoots().map { Rules.canonical($0).lowercased() }
+            for c in candidates {
+                let spelledC = Rules.canonical(c)
                 let lower = spelledC.lowercased()
                 guard !lower.isEmpty, lower != "/",
-                      !network.contains(where: { isInsideLexically(path: lower, root: $0) }) else { continue }
-                if let r = externalVolumeRoot(of: spelledC)?.lowercased(), roots.contains(r) { continue }
-                if aliases.contains(where: { isInsideLexically(path: lower, root: $0) }) { continue }
+                      !network.contains(where: { Rules.isInsideLexically(path: lower, root: $0) }) else { continue }
+                if let r = Rules.externalVolumeRoot(of: spelledC)?.lowercased(), roots.contains(r) { continue }
+                if aliases.contains(where: { Rules.isInsideLexically(path: lower, root: $0) }) { continue }
                 guard let cid = identity(spelledC),
-                      archiveMounts.contains(canonical(cid.mountPoint).lowercased()) else { continue }
+                      archiveMounts.contains(Rules.canonical(cid.mountPoint).lowercased()) else { continue }
                 aliases.append(lower)
             }
         }
-        let labelSource = spelledRoot ?? mountedPoint ?? spelled
-        return ArchiveVolumeProtection(label: (labelSource as NSString).lastPathComponent,
-                                       placement: .externalVolume, archiveRoots: roots, aliasRoots: aliases,
-                                       protectedFolders: [], expectedUUID: expected, isResolved: resolved,
-                                       provenOtherRoots: others, isProvisional: false)
     }
 
     private static func makeBootFolder(spelled: String, mounted: MountIdentity?, uuid: String?,
