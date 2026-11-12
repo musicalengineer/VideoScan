@@ -57,13 +57,23 @@ struct BackgroundServiceQuitTests {
         let (store, r) = S.make(enabled: true, agent: S.FakeAgent(.enabled))
         var markerOnDisk: BackgroundQuitMarker? = Self.marker
         store.readQuit = { markerOnDisk }
-        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk }
+        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk.map { .cleared($0) } ?? .nothing }
         store.start()
         store.stop()
         #expect(markerOnDisk == nil)
         #expect(r.lines.filter { $0.contains("quit from its menu bar") && $0.contains("VideoScan opened") }.count == 1, "\(r.lines)")
         await store.refresh()
         #expect(r.statusAsks >= 1)
+    }
+
+    @Test("Codex sweep 11/09 F3: a marker that could not be removed is said — never 'the helper starts again'")
+    func failedClearIsSaid() {
+        let (store, r) = S.make(enabled: true, agent: S.FakeAgent(.enabled))
+        store.clearQuit = { .failed("Permission denied") }
+        store.start()
+        store.stop()
+        #expect(r.lines.contains { $0.contains("could not be cleared") && $0.contains("Permission denied") && $0.contains("stays down") }, "\(r.lines)")
+        #expect(!r.lines.contains { $0.contains("starts again") }, "\(r.lines)")
     }
 
     @Test("no marker at launch: nothing is logged about Quit")
@@ -78,7 +88,7 @@ struct BackgroundServiceQuitTests {
     func checkboxOnClears() {
         let (store, r) = S.make(enabled: false, agent: S.FakeAgent(.notRegistered))
         var markerOnDisk: BackgroundQuitMarker? = Self.marker
-        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk }
+        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk.map { .cleared($0) } ?? .nothing }
         store.setEnabled(true)
         #expect(markerOnDisk == nil)
         #expect(r.lines.contains { $0.contains("Start was pressed") }, "\(r.lines)")

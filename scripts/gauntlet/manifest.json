@@ -376,6 +376,22 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerSweepTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BackgroundQuitMarkerSweepTests"
+      ],
+      "tests": [
+        "clockCorrectionKeepsTheQuit",
+        "directoryIsNeverRemovedRecursively",
+        "failedRemovalIsSaid",
+        "realBootSession",
+        "staleMarkerFailedRemovalIsSaid",
+        "symlinkAndOversizeAreRefused"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundQuitMarkerTests.swift",
       "stage": "unit",
       "suites": [
@@ -383,6 +399,7 @@
       ],
       "tests": [
         "clearRemovesAndReturns",
+        "legacyMarkerUsesBootSeconds",
         "noBootTime",
         "noFileReadsNone",
         "otherBootIsStaleAndRemoved",
@@ -9032,6 +9049,7 @@
       "tests": [
         "checkboxOnClears",
         "disabledIgnoresMarker",
+        "failedClearIsSaid",
         "pollAsksWithoutMarker",
         "pollDoesNotAskWhileQuit",
         "presentation",
@@ -38355,9 +38373,9 @@
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         }
       ],
-      "expected_floor": 3652,
+      "expected_floor": 3653,
       "name": "unit",
-      "package_expected_floor": 899,
+      "package_expected_floor": 900,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -39465,7 +39483,7 @@
       ],
       "expected_floor": 571,
       "name": "regression",
-      "package_expected_floor": 325,
+      "package_expected_floor": 331,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -39518,7 +39536,8 @@
         "VideoScanCoreTests.EraJobFailFastTests",
         "VideoScanCoreTests.EraJobConvergenceTests",
         "VideoScanCoreTests.EraJobMediaMatrixTests",
-        "VideoScanCoreTests.EraJobRetryReviewTests"
+        "VideoScanCoreTests.EraJobRetryReviewTests",
+        "VideoScanCoreTests.BackgroundQuitMarkerSweepTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

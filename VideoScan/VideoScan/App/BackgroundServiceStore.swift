@@ -71,8 +71,8 @@ final class BackgroundServiceStore: ObservableObject {
     var bundledHelperBuild: () -> String? = { nil }
     /// The helper's quit marker for this boot (nil: none, stale or torn).
     var readQuit: () -> BackgroundQuitMarker? = { nil }
-    /// Removes the marker; returns it when there was a readable one.
-    var clearQuit: () -> BackgroundQuitMarker? = { nil }
+    /// Removes the marker; says what it did (nothing / cleared / failed and why).
+    var clearQuit: () -> BackgroundQuitStore.ClearOutcome = { .nothing }
     /// Restart waits this long between unregister and register, so launchd
     /// has let go of the old helper (a person's off-and-on took about this).
     var restartPause: Duration = .seconds(1)
@@ -265,8 +265,16 @@ final class BackgroundServiceStore: ObservableObject {
     /// Opening VideoScan starts the helper again (Rick 2026-11-08): the
     /// marker goes, and the next status ask lets launchd start it.
     private func clearQuitMarker(reason: String) {
-        if let was = clearQuit() {
-            log("background service: quit from its menu bar at \(was.quitWords()) — cleared (\(reason)); the helper starts again")
+        switch clearQuit() {
+        case .nothing:
+            break
+        case .cleared(let was):
+            let when = was.map { " at \($0.quitWords())" } ?? ""
+            log("background service: quit from its menu bar\(when) — cleared (\(reason)); the helper starts again")
+        case .failed(let why):
+            // Codex sweep 11/09 F3: never "starts again" when the marker stayed.
+            log("background service: the quit marker could not be cleared (\(why)) — the helper stays down; "
+                + "remove ~/Library/Application Support/VideoScan/background/quit.json, then press Start")
         }
         quit = nil
     }

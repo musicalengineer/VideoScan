@@ -23,17 +23,17 @@ struct BackgroundQuitMarkerTests {
     }
 
     @Test func noFileReadsNone() throws {
-        let store = BackgroundQuitStore(url: try root().appendingPathComponent("quit.json"), bootSeconds: { 100 })
+        let store = BackgroundQuitStore(url: try root().appendingPathComponent("quit.json"), bootSeconds: { 100 }, bootSession: { "S1" })
         #expect(store.read() == .none)
         #expect(store.active() == nil)
-        #expect(store.clear() == nil)
+        #expect(store.clear() == .nothing)
     }
 
     @Test func sameBootIsActive() throws {
-        let store = BackgroundQuitStore(url: try root().appendingPathComponent("quit.json"), bootSeconds: { 100 })
+        let store = BackgroundQuitStore(url: try root().appendingPathComponent("quit.json"), bootSeconds: { 100 }, bootSession: { "S1" })
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let m = try store.write(now: at)
-        #expect(m == BackgroundQuitMarker(quitAt: at, bootSeconds: 100))
+        #expect(m == BackgroundQuitMarker(quitAt: at, bootSeconds: 100, bootSession: "S1"))
         #expect(store.read() == .active(m))
         #expect(store.active() == m, "read does not consume an active marker")
     }
@@ -41,18 +41,30 @@ struct BackgroundQuitMarkerTests {
     @Test func otherBootIsStaleAndRemoved() throws {
         let url = try root().appendingPathComponent("quit.json")
         let at = Date(timeIntervalSince1970: 1_800_000_000)
-        let before = try BackgroundQuitStore(url: url, bootSeconds: { 100 }).write(now: at)
-        let afterReboot = BackgroundQuitStore(url: url, bootSeconds: { 200 })
+        let before = try BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "S1" }).write(now: at)
+        let afterReboot = BackgroundQuitStore(url: url, bootSeconds: { 200 }, bootSession: { "S2" })
         #expect(afterReboot.read() == .stale(before))
         #expect(!FileManager.default.fileExists(atPath: url.path), "a stale marker is removed")
         #expect(afterReboot.read() == .none)
     }
 
+    @Test("a marker written before the boot session id (11/08) falls back to the boot seconds")
+    func legacyMarkerUsesBootSeconds() throws {
+        let url = try root().appendingPathComponent("quit.json")
+        try Data("{\"quitAt\":\"2026-11-08T20:41:00Z\",\"bootSeconds\":100}".utf8).write(to: url)
+        guard case .active = BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "S1" }).read() else {
+            Issue.record("same boot seconds, no session in the file: active"); return
+        }
+        guard case .stale = BackgroundQuitStore(url: url, bootSeconds: { 200 }, bootSession: { "S1" }).read() else {
+            Issue.record("other boot seconds: stale"); return
+        }
+    }
+
     @Test func clearRemovesAndReturns() throws {
         let url = try root().appendingPathComponent("quit.json")
-        let store = BackgroundQuitStore(url: url, bootSeconds: { 100 })
+        let store = BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "S1" })
         let m = try store.write()
-        #expect(store.clear() == m)
+        #expect(store.clear() == .cleared(m))
         #expect(!FileManager.default.fileExists(atPath: url.path))
         #expect(store.active() == nil)
     }
@@ -60,17 +72,17 @@ struct BackgroundQuitMarkerTests {
     @Test func tornFileReadsUnreadableAndClears() throws {
         let url = try root().appendingPathComponent("quit.json")
         try Data("{\"quitAt\": \"2026-11".utf8).write(to: url)
-        let store = BackgroundQuitStore(url: url, bootSeconds: { 100 })
+        let store = BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "S1" })
         guard case .unreadable(let why) = store.read() else { Issue.record("expected unreadable"); return }
         #expect(why.contains("quit.json"))
         #expect(store.active() == nil, "a torn marker never keeps the helper down")
-        #expect(store.clear() == nil)
+        #expect(store.clear() == .cleared(nil))
         #expect(!FileManager.default.fileExists(atPath: url.path), "clear removes a torn file too")
     }
 
     @Test func noBootTime() throws {
         let url = try root().appendingPathComponent("quit.json")
-        try BackgroundQuitStore(url: url, bootSeconds: { 100 }).write()
+        try BackgroundQuitStore(url: url, bootSeconds: { 100 }, bootSession: { "S1" }).write()
         let blind = BackgroundQuitStore(url: url, bootSeconds: { nil })
         #expect(blind.read() == .noBootTime)
         #expect(blind.active() == nil)
@@ -79,7 +91,7 @@ struct BackgroundQuitMarkerTests {
 
     @Test func writeCreatesTheStateRoot() throws {
         let url = try root().appendingPathComponent("not-yet/quit.json")
-        try BackgroundQuitStore(url: url, bootSeconds: { 1 }).write()
+        try BackgroundQuitStore(url: url, bootSeconds: { 1 }, bootSession: { "S1" }).write()
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 

@@ -213,7 +213,7 @@ struct BackgroundServiceControlTests {
         let (store, r) = S.make(enabled: true, agent: agent)
         var markerOnDisk: BackgroundQuitMarker? = BackgroundQuitMarker(quitAt: Date(timeIntervalSince1970: 1_794_188_460), bootSeconds: 7)
         store.readQuit = { markerOnDisk }
-        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk }
+        store.clearQuit = { defer { markerOnDisk = nil }; return markerOnDisk.map { .cleared($0) } ?? .nothing }
         await store.refresh()
         #expect(r.statusAsks == 0 && store.control.action == .start)
         await store.perform(.start)
