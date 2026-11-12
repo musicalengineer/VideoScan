@@ -30,6 +30,9 @@ public struct MediaStreamFacts: Sendable, Equatable, Identifiable {
     /// Duration in `timeBase` ticks (for audio = the sample count when the
     /// time base is 1/sample_rate).
     public var durationTicks: Int64?
+    /// Matroska's per-stream DURATION tag in seconds (that container states
+    /// no stream `duration`); nil when absent or unreadable.
+    public var tagDurationSeconds: Double?
     public var bitRate: Int64?
     /// nb_frames — nil when the container doesn't record it (Matroska).
     public var frameCount: Int?
@@ -67,6 +70,11 @@ public struct MediaStreamFacts: Sendable, Equatable, Identifiable {
 
     public var rFrameRate: Double { MediaFacts.parseRate(rFrameRateText) }
     public var avgFrameRate: Double { MediaFacts.parseRate(avgFrameRateText) }
+
+    /// How long the HEADER says this stream runs: its own duration, else
+    /// Matroska's DURATION tag; nil when the container states neither. What
+    /// a full decode is held against (GH #470).
+    public var statedSeconds: Double? { durationSeconds ?? tagDurationSeconds }
 
     /// Sample count when ffprobe gives one: duration ticks in a 1/rate
     /// time base. nil otherwise (never guessed).
@@ -143,9 +151,18 @@ public struct MediaFacts: Sendable, Equatable {
         + "avg_frame_rate,nb_frames,time_base,start_time,duration,duration_ts,bit_rate,"
         + "sample_rate,channels,channel_layout,sample_fmt,bits_per_sample,bits_per_raw_sample,"
         + "color_range,color_space,color_transfer,color_primaries"
-        + ":stream_disposition=attached_pic:stream_tags=creation_time,timecode"
+        + ":stream_disposition=attached_pic:stream_tags=creation_time,timecode,DURATION"
         + ":format=format_name,format_long_name,duration,size,bit_rate,start_time"
         + ":format_tags=encoder,creation_time,timecode"
+
+    /// Matroska's per-stream DURATION tag ("00:00:12.000000000") in seconds;
+    /// nil for anything else. Pure.
+    public static func seconds(fromDurationTag tag: String?) -> Double? {
+        guard let parts = tag?.split(separator: ":"), parts.count == 3,
+              let h = Double(parts[0]), let m = Double(parts[1]), let s = Double(parts[2]),
+              h >= 0, m >= 0, s >= 0 else { return nil }
+        return h * 3600 + m * 60 + s
+    }
 
     public enum ParseError: Error, Equatable { case unreadable }
 
@@ -183,6 +200,7 @@ public struct MediaFacts: Sendable, Equatable {
         m.startTimeSeconds = s.start_time.flatMap(Double.init)
         m.durationSeconds = s.duration.flatMap(Double.init)
         m.durationTicks = s.duration_ts
+        m.tagDurationSeconds = seconds(fromDurationTag: s.tags?["DURATION"])
         m.bitRate = s.bit_rate.flatMap { Int64($0) }
         m.frameCount = s.nb_frames.flatMap { Int($0) }.flatMap { $0 > 0 ? $0 : nil }
         m.creationTime = s.tags?["creation_time"] ?? ""
