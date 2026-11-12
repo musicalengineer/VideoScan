@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-11T12:18:17Z",
- "sha": "343bdd7b",
+ "ts": "2026-11-12T13:27:44Z",
+ "sha": "de34e74d",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 372,
- "baseline_before": 361,
- "baseline_after": 361,
+ "offenders": 366,
+ "baseline_before": 354,
+ "baseline_after": 354,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
@@ -25,6 +25,14 @@
    "function": "AnalyzeDossierVerdict.init",
    "ccn": 18,
    "nloc": 17,
+   "lang": "swift"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::AnalyzeRunner.startRun",
+   "file": "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift",
+   "function": "AnalyzeRunner.startRun",
+   "ccn": 16,
+   "nloc": 52,
    "lang": "swift"
   },
   {

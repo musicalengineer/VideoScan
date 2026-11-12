@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-11T12:18:49Z",
- "sha": "343bdd7b",
+ "ts": "2026-11-12T13:28:04Z",
+ "sha": "de34e74d",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -858,6 +858,167 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceBand",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceBand",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceBand.isPast",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceBand.isPast",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceBand.noteArrival",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceBand.noteArrival",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceBand.noteCollected",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceBand.noteCollected",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.GroupStep",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.GroupStep",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.RowPick",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.RowPick",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.RowPick.groupCandidate",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.RowPick.groupCandidate",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.RowPick.groupKind",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.RowPick.groupKind",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.RowStep",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.RowStep",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.armActive",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.armActive",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.extraLooks",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.extraLooks",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.freshCollected",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.freshCollected",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.freshSkips",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.freshSkips",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.freshWanted",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.freshWanted",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.groupIndex",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.groupIndex",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.groupStep",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.groupStep",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.init",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.liveCandidate",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.liveCandidate",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.noteNotRecommended",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.noteNotRecommended",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.seenGroups",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.seenGroups",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.settledGroups",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.settledGroups",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.EvidenceScan.stoppedEarly",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "name": "ArchiveAngelJob.EvidenceScan.stoppedEarly",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.KeptCompanion",
    "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift",
    "name": "VideoScanModel.KeptCompanion",
@@ -865,9 +1026,86 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.PromoteSelection",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.PromoteSelection",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.addRow",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.addRow",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.gatherSelected",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.gatherSelected",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.journalAndAnnounce",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.journalAndAnnounce",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.notPromotedWords",
    "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
    "name": "ArchiveAngelPromoter.notPromotedWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.noteSkips",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.noteSkips",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.settlePreviousUndo",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.settlePreviousUndo",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.stampFamilyFacts",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift",
+   "name": "ArchiveAngelPromoter.stampFamilyFacts",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.custodyFloorFires",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift",
+   "name": "ArchiveAngelScorer.custodyFloorFires",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.judgementFloorFires",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift",
+   "name": "ArchiveAngelScorer.judgementFloorFires",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.materialFloorFires",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift",
+   "name": "ArchiveAngelScorer.materialFloorFires",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelSweep.swift::ArchiveAngelSweep.floorRecord",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelSweep.swift",
+   "name": "ArchiveAngelSweep.floorRecord",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -6360,6 +6598,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundQuitMarker.swift::BackgroundQuitStore.maxBytes",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundQuitMarker.swift",
+   "name": "BackgroundQuitStore.maxBytes",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift::EraCounters.isCached",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift",
    "name": "EraCounters.isCached",
@@ -6510,13 +6755,6 @@
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/CatalogFreshness.swift::FreshnessPolicy.isOverdue",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/CatalogFreshness.swift",
    "name": "FreshnessPolicy.isOverdue",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/CatalogFreshness.swift::FreshnessPolicy.staleness",
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/CatalogFreshness.swift",
-   "name": "FreshnessPolicy.staleness",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -8012,8 +8250,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 163,
+ "fixed": 167,
  "baseline_before": 2456,
- "baseline_after": 2293,
+ "baseline_after": 2289,
  "shrink_skipped": false
 }

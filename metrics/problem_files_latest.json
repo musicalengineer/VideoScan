@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-11T12:18:57Z",
- "sha": "343bdd7b",
+ "ts": "2026-11-12T13:28:08Z",
+ "sha": "de34e74d",
  "formula_version": 1,
- "files_scored": 867,
+ "files_scored": 868,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -61,28 +61,6 @@
    "score": 31.4
   },
   {
-   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
-   "offenders": 2,
-   "worst_ccn": 24,
-   "new_or_worse": 1,
-   "lines": 1372,
-   "could_be_private": 10,
-   "widened_for_split": 0,
-   "churn_7d": 3,
-   "score": 29.9
-  },
-  {
-   "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
-   "offenders": 3,
-   "worst_ccn": 23,
-   "new_or_worse": 0,
-   "lines": 2223,
-   "could_be_private": 11,
-   "widened_for_split": 4,
-   "churn_7d": 2,
-   "score": 29.7
-  },
-  {
    "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
    "offenders": 0,
    "worst_ccn": 0,
@@ -103,6 +81,28 @@
    "widened_for_split": 4,
    "churn_7d": 4,
    "score": 26.4
+  },
+  {
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "offenders": 2,
+   "worst_ccn": 24,
+   "new_or_worse": 1,
+   "lines": 1372,
+   "could_be_private": 10,
+   "widened_for_split": 0,
+   "churn_7d": 2,
+   "score": 26.1
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+   "offenders": 3,
+   "worst_ccn": 23,
+   "new_or_worse": 0,
+   "lines": 2223,
+   "could_be_private": 11,
+   "widened_for_split": 4,
+   "churn_7d": 1,
+   "score": 25.5
   },
   {
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
@@ -127,6 +127,17 @@
    "score": 25.0
   },
   {
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 727,
+   "could_be_private": 39,
+   "widened_for_split": 0,
+   "churn_7d": 1,
+   "score": 23.4
+  },
+  {
    "file": "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift",
    "offenders": 2,
    "worst_ccn": 17,
@@ -136,17 +147,6 @@
    "widened_for_split": 1,
    "churn_7d": 5,
    "score": 21.7
-  },
-  {
-   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",
-   "offenders": 4,
-   "worst_ccn": 27,
-   "new_or_worse": 1,
-   "lines": 878,
-   "could_be_private": 11,
-   "widened_for_split": 0,
-   "churn_7d": 0,
-   "score": 21.3
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",

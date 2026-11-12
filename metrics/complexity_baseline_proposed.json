@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 361,
+ "entry_count": 354,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -17,10 +17,6 @@
   "VideoScan/VideoScan/Analyze/AnalyzeReclaimable.swift::ReclaimableCalculator.compute": {
    "ccn": 18,
    "nloc": 43
-  },
-  "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::AnalyzeRunner.runNow": {
-   "ccn": 16,
-   "nloc": 49
   },
   "VideoScan/VideoScan/App/BundleImporter.swift::BundleImporter.installPOIs": {
    "ccn": 12,
@@ -94,10 +90,6 @@
    "ccn": 7,
    "nloc": 81
   },
-  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift::ArchiveVolumeProtection.make": {
-   "ccn": 31,
-   "nloc": 88
-  },
   "VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift::BindFixityToVolumeJob.run": {
    "ccn": 16,
    "nloc": 52
@@ -150,14 +142,6 @@
    "ccn": 9,
    "nloc": 82
   },
-  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.selectFromEvidence": {
-   "ccn": 39,
-   "nloc": 140
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::ArchiveAngelJob.prepare": {
-   "ccn": 37,
-   "nloc": 127
-  },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::ArchiveAngelJob.prepareEntries": {
    "ccn": 17,
    "nloc": 62
@@ -169,10 +153,6 @@
   "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.reconcileArchiveAngelBufferAtLaunch": {
    "ccn": 18,
    "nloc": 64
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.promote": {
-   "ccn": 35,
-   "nloc": 140
   },
   "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::ArchiveAngelPromoter.settle": {
    "ccn": 16,
@@ -210,17 +190,9 @@
    "ccn": 24,
    "nloc": 65
   },
-  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.floorFires": {
-   "ccn": 33,
-   "nloc": 44
-  },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.signal": {
    "ccn": 28,
    "nloc": 58
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelSweep.swift::ArchiveAngelSweep.perform": {
-   "ccn": 39,
-   "nloc": 168
   },
   "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelAssessmentPanel.swift::ArchiveAngelAssessmentPanel.body": {
    "ccn": 6,
