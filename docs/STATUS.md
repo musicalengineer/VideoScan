@@ -90,13 +90,16 @@
    files read-only with ffmpeg and AVFoundation (`.scratch/470-sound-slice2-2026-11-12/survey2.jsonl`).
    **Done 11/12 (`d1036b6cd`):** Check Media's full pass trusted ffmpeg's exit 0, so on a cut-short file its row
    read "Every sample decoded"; the continuity row and the four level rows are now "not run" with the Sound row's
-   numbers (mov, mkv red → green; not data-risk, no Codex). **Next, one merge each:** (a) sound over time per
-   channel in that same pass — a channel that goes quiet for 10 s or more WHILE another carries sound is a Warning
-   (0 of 74 real stereo files do this); all channels quiet together is a shown fact only (12 of 74: tape tails,
-   pauses); no Promote refusal. (b) AVFoundation as a second decoder at the Promote gate for mov/mp4: where both
+   numbers (mov, mkv red → green; not data-risk, no Codex). **Done 11/12, second merge:** sound over time per channel in that same pass — 100 ms blocks, quiet = peak
+   under −60 dBFS, stretches of 10 s or more. A channel quiet WHILE another carries sound for 10 s of the stretch
+   is a Warning on the continuity row ("One side goes quiet while the other carries on: the right channel for
+   64 s from 00:16:14"); all channels quiet together is evidence only; a side that never sounds is still the
+   channels row's finding. No Promote refusal. From the survey's silence intervals: 0 of 74 real stereo files have
+   a one-sided stretch, 12 have all-quiet ones (tape tails, pauses). The row's words are Rick's to change.
+   **Next, one merge each:** (a) AVFoundation as a second decoder at the Promote gate for mov/mp4: where both
    decode and disagree on length or level the file reads "not checked" (43 real tracks: all agree within 1 dB and
    0.2 s; AVFoundation cannot decode QDesign or MP3-in-mov, 16 tracks). Data-risk: safety-critical skill, Codex pass.
-   (c) AVI: hold the decode against the header's sample / frame count (only 39 AVI files, 2 GB, in the catalog —
+   (b) AVI: hold the decode against the header's sample / frame count (only 39 AVI files, 2 GB, in the catalog —
    last). **Cannot be caught from the file alone:** a raw DV, MPEG or transport-stream file cut short before it
    was catalogued states nothing about its original length. Still open from #470: rows stored damaged before
    #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test on a `.backup` of the

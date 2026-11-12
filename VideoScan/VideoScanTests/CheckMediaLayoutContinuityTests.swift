@@ -196,6 +196,14 @@ private enum PCM {
         return s
     }
 
+    /// One channel (0 = left, 1 = right) set to digital zero over a stretch.
+    static func withQuietSide(_ s: [Int16], channel: Int, from: Double, seconds: Double) -> [Int16] {
+        var s = s
+        let start = Int(from * Double(rate)), n = Int(seconds * Double(rate))
+        for f in start..<min(start + n, s.count / 2) { s[2 * f + channel] = 0 }
+        return s
+    }
+
     /// Int16 → the s32le bytes ffmpeg would pipe.
     static func s32le(_ s: [Int16]) -> Data {
         var d = Data(capacity: s.count * 4)
@@ -352,6 +360,90 @@ struct CheckMediaSoundContinuityTests {
         #expect(replay.verdict.rank >= MediaCheckVerdict.warning.rank && replay.sentence.contains("replayed"), "\(replay.sentence)")
         let click = try await run(PCM.withClick(tone, atFrame: 96_000), name: "test_cm_click.wav")
         #expect(click.verdict == .warning && click.sentence.contains("click"), "\(click.sentence)")
+        let side = try await run(PCM.withQuietSide(PCM.tone(seconds: 30), channel: 0, from: 8, seconds: 14), name: "test_cm_side.wav")
+        #expect(side.verdict == .warning && side.sentence.contains("the left channel for 14 s from 00:00:08"), "\(side.sentence)")
+    }
+
+    // MARK: Sound over time, per channel (Rick 2026-11-12)
+
+    @Test("one side quiet for 12 s while the other carries on: counted for that channel, with where and how long")
+    func oneSideGoesQuiet() {
+        let r = PCM.analyze(PCM.withQuietSide(PCM.tone(seconds: 40), channel: 1, from: 20, seconds: 12))
+        #expect(r.oneSidedQuiet.count == 2 && r.oneSidedQuiet[0].stretches == 0)
+        let right = r.oneSidedQuiet[1]
+        #expect(right.stretches == 1, "\(right)")
+        #expect(abs(right.longestStartSeconds - 20) <= 0.11 && abs(right.longestSeconds - 12) <= 0.21, "\(right)")
+        #expect(abs(right.totalSeconds - 12) <= 0.21)
+        #expect(r.allQuiet.stretches == 0)
+    }
+
+    @Test("under 10 s on one side is not a stretch; both sides quiet together is 'all quiet', never one-sided")
+    func shortAndSharedQuietAreNotOneSided() {
+        var s = PCM.withQuietSide(PCM.tone(seconds: 60), channel: 0, from: 5, seconds: 9)      // 9 s: too short
+        s = PCM.withQuietSide(s, channel: 0, from: 30, seconds: 15)                            // both quiet 30…45
+        s = PCM.withQuietSide(s, channel: 1, from: 30, seconds: 15)
+        let r = PCM.analyze(s)
+        #expect(r.oneSidedQuiet.allSatisfy { $0.stretches == 0 }, "\(r.oneSidedQuiet)")
+        #expect(r.allQuiet.stretches == 1 && abs(r.allQuiet.longestSeconds - 15) <= 0.21
+                && abs(r.allQuiet.longestStartSeconds - 30) <= 0.11, "\(r.allQuiet)")
+    }
+
+    @Test("the other side's pauses do not break a one-sided stretch; a side that never sounds at all is the channels row's finding, not this one")
+    func pausesAndAWhollySilentSide() {
+        // Right quiet 10…50; left pauses for 2 s at 20 and at 35 (both quiet there).
+        var s = PCM.withQuietSide(PCM.tone(seconds: 60), channel: 1, from: 10, seconds: 40)
+        s = PCM.withQuietSide(s, channel: 0, from: 20, seconds: 2)
+        s = PCM.withQuietSide(s, channel: 0, from: 35, seconds: 2)
+        let r = PCM.analyze(s)
+        #expect(r.oneSidedQuiet[1].stretches == 1 && abs(r.oneSidedQuiet[1].longestSeconds - 40) <= 0.21, "\(r.oneSidedQuiet[1])")
+        #expect(r.allQuiet.stretches == 0, "2 s pauses are under 10 s")
+
+        // Left only, start to end: the right channel never sounds.
+        let leftOnly = PCM.analyze(PCM.withQuietSide(PCM.tone(seconds: 30), channel: 1, from: 0, seconds: 30))
+        #expect(leftOnly.oneSidedQuiet.allSatisfy { $0.stretches == 0 }, "\(leftOnly.oneSidedQuiet)")
+
+        // A tail where the left ticks once: the right was quiet 64 s, the left sounded 0.1 s of it.
+        var tail = PCM.withQuietSide(PCM.tone(seconds: 100), channel: 0, from: 36, seconds: 64)
+        tail = PCM.withQuietSide(tail, channel: 1, from: 36, seconds: 64)
+        tail[2 * 48_000 * 70] = 9_000
+        let t = PCM.analyze(tail)
+        #expect(t.oneSidedQuiet.allSatisfy { $0.stretches == 0 }, "\(t.oneSidedQuiet)")
+        #expect(t.allQuiet.stretches == 2 && abs(t.allQuiet.totalSeconds - 63.9) <= 0.31, "\(t.allQuiet)")
+    }
+
+    @Test("quiet is a level (under −60 dBFS peak), not digital zero")
+    func quietIsALevel() {
+        var s = PCM.tone(seconds: 30)
+        for f in (10 * 48_000)..<(22 * 48_000) { s[2 * f + 1] = Int16(f % 2 == 0 ? 20 : -20) }   // ≈ −64 dBFS
+        let r = PCM.analyze(s)
+        #expect(r.oneSidedQuiet[1].stretches == 1, "\(r.oneSidedQuiet[1])")
+        #expect(r.silentPassages == 0, "not digital silence")
+    }
+
+    @Test("the row: one side quiet is a Warning with its own words; all channels quiet is evidence only")
+    func quietRuleWording() {
+        let facts = MediaFacts.withAudio()
+        var r = SoundContinuityReport(seconds: 1_200)
+        r.allQuiet.note(start: 1_100, seconds: 100)
+        r.oneSidedQuiet = [QuietLog(), QuietLog()]
+        let tail = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(tail.verdict == .ok, "\(tail.sentence)")
+        #expect(tail.evidence.contains(MediaEvidence("All channels quiet (≥ 10 s)", "1 stretch, 100 s in all; longest 100 s from 00:18:20")))
+
+        r.oneSidedQuiet[1].note(start: 974, seconds: 64)
+        r.oneSidedQuiet[1].note(start: 300, seconds: 12)
+        let one = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(one.verdict == .warning)
+        #expect(one.sentence == "One side goes quiet while the other carries on: the right channel for 64 s from 00:16:14 (2 stretches).",
+                "\(one.sentence)")
+        #expect(one.evidence.contains(MediaEvidence("Right quiet, others not (≥ 10 s)", "2 stretches, 76 s in all; longest 64 s from 00:16:14")))
+        #expect(one.fix.contains("Listen"))
+
+        r.dropouts.note(4.2)
+        let both = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(both.sentence == "The sound breaks up: 1 dropout to digital silence; the right channel is quiet for 64 s from 00:16:14 (2 stretches).",
+                "\(both.sentence)")
+        #expect(both.verdict == .warning, "a quiet side is not a stutter event")
     }
 
     // MARK: GH #470 — the continuity decode ends early and ffmpeg exits 0
