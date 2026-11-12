@@ -85,37 +85,45 @@ extension ArchiveAngelJob {
         guard attentionIsCurrent(store: store, changedAt: attentionChangedAt, revision: attentionRevision),
               coverageIsCurrent(stampedToken: store.catalogLaunchToken, stampedRevision: store.catalogRevision,
                                 currentToken: launchToken, currentRevision: catalogRevision, coverage: policy.coverage) else { return nil }
-        let coverage = policy.coverage
+        var scan = EvidenceScan(store: store, count: count, now: now, policy: policy, excluding: excluding,
+                                birthdays: birthdays)
+        let ranked = store.rankedPrepareIDs(scan.prepare)
+        scan.noteNotRecommended(ranked.skipped)
+        rows: for (id, rowTier, arrivalScore) in ranked.ids {
+            switch scan.read(id: id, rowTier: rowTier, arrivalScore: arrivalScore, project: project) {
+            case .next: continue
+            case .walk: return nil
+            case .stop: scan.stoppedEarly = true; break rows   // rows remain unread
+            }
+        }
+        return scan.finish(rankedCount: ranked.ids.count)
+    }
+
+    /// One evidence pick in progress: the rows collected so far and every
+    /// counter the cut-offs read. `selectFromEvidence` feeds it the ranked
+    /// rows one at a time (`read`), then asks for the batch (`finish`).
+    /// (≈ a small state-machine object on the caller's stack; the store and
+    /// the policy are read, never written.)
+    @MainActor
+    struct EvidenceScan {
+        let store: ArchiveAngelEvidenceStore
+        let count: Int
+        let now: Date
+        let policy: AngelRecommendationPolicy
+        let excluding: Set<UUID>
+        let coverage: AngelCoverageRules
+        let weights: ArchiveAngelWeights
+        let prepare: [ArchiveAngelRecommendationClass]
         // Rules v14: the per-record projections carry no event key; the arm
         // and the cut resolve them under the SAME labels and birthdays the
         // walk's pre-pass uses, so the cache and the walk agree.
-        let events = ArchiveAngelEventContext(coverage: coverage, birthdays: birthdays)
-        let weights = policy.weights
+        let events: ArchiveAngelEventContext
+        let freshWanted: Int
         var collected: [ArchiveAngelPick] = []
         var tiers: [UUID: Int] = [:]
-        collected.reserveCapacity(count)
-        var rejected = store.rejectionCounts()
+        var rejected: [ArchiveAngelRejection: Int]
         var projections = 0
-        // The band: the count-th best (class tier, score) among the
-        // distinct-group picks ACTUALLY collected so far. Rows arrive in
-        // (tier, arrival score) order, and a row's arrival key is an upper
-        // bound on what it can add (a copy group arrives at its best
-        // eligible member — `rankedPrepareIDs`). So once a row arrives
-        // strictly below the band, nothing later can enter the batch —
-        // except the explore arm: past the band only never-proposed
-        // records that clear `freshMinimumScore` are projected, until
-        // `freshWanted` new files are in hand or the scan budget is spent.
-        // The cut falls between whole arrival bands, so which rows are
-        // read never depends on the order of equal keys (record ids) —
-        // codex #1643 A4 ruling, 2026-09-23: before it, a group whose live
-        // Keep scored below its cached row lowered the band to that Keep's
-        // score and ~1 run in 5 walked the whole file.
-        var bandGroups: Set<UUID> = []
-        var best: [(tier: Int, score: Int)] = []     // best-first, at most `count`
-        // QA on S3: the band is (class tier, score) — Ready before Worth a
-        // look whatever the scores (Prepare agrees with the numbers).
-        var bandKey: (tier: Int, score: Int)? = nil
-        let freshWanted = min(count, Int((Double(count) * weights.freshShare).rounded(.up)))
+        var band = EvidenceBand()
         // Fresh files counted the way the batch will see them: AFTER the
         // one-per-duplicate-group and one-per-family filters. A fresh
         // variant whose family (or group) already has a better-ranked
@@ -124,137 +132,234 @@ extension ArchiveAngelJob {
         var freshCollected = 0
         var seenGroups: Set<UUID> = []
         var seenFamilies: Set<String> = []
-        var pastBand = false
         var extraLooks = 0
         var freshSkips = 0                      // rules v13: rows the fresh arm skipped on their evidence year alone
-        let prepare = policy.recommend.prepareClasses
-        let ranked = store.rankedPrepareIDs(prepare)
-        rejected[.notRecommendedNow, default: 0] += ranked.skipped
-        if rejected[.notRecommendedNow] == 0 { rejected[.notRecommendedNow] = nil }
         // codex #1643 A4: copy key → members (built on first use; O(records)).
         var groupIndex: [String: [UUID]]?
         var settledGroups: Set<String> = []
         // Rules v13 — the COVERAGE ARM (CoverageArm below): past the band,
         // rows whose year still has room are read too.
-        var arm = CoverageArm(coverage: coverage, count: count, now: now, events: events)
-        let armActive = arm.active               // hoisted: rules v12 (every key off) touches the arm nowhere in the loop
+        var arm: CoverageArm
+        let armActive: Bool                     // hoisted: rules v12 (every key off) touches the arm nowhere in the loop
         var stoppedEarly = false                // the loop broke out; rows remain unread
-        for (id, rowTier, arrivalScore) in ranked.ids {
-            guard let evidence = store.record(for: id) else { continue }
-            if let band = bandKey, rowTier > band.tier || (rowTier == band.tier && arrivalScore < band.score) { pastBand = true }
+
+        init(store: ArchiveAngelEvidenceStore, count: Int, now: Date, policy: AngelRecommendationPolicy,
+             excluding: Set<UUID>, birthdays: [FamilyBirthday]) {
+            self.store = store
+            self.count = count
+            self.now = now
+            self.policy = policy
+            self.excluding = excluding
+            coverage = policy.coverage
+            events = ArchiveAngelEventContext(coverage: coverage, birthdays: birthdays)
+            weights = policy.weights
+            collected.reserveCapacity(count)
+            rejected = store.rejectionCounts()
+            freshWanted = min(count, Int((Double(count) * weights.freshShare).rounded(.up)))
+            prepare = policy.recommend.prepareClasses
+            arm = CoverageArm(coverage: coverage, count: count, now: now, events: events)
+            armActive = arm.active
+        }
+
+        /// Rows the class filter dropped before ranking.
+        mutating func noteNotRecommended(_ skipped: Int) {
+            rejected[.notRecommendedNow, default: 0] += skipped
+            if rejected[.notRecommendedNow] == 0 { rejected[.notRecommendedNow] = nil }
+        }
+
+        enum RowStep { case next, stop, walk }
+
+        /// One ranked row: past the band, both arms decide whether it is
+        /// read at all (`.stop` = neither wants more); its copy group is
+        /// decided live (`.walk` = the cache is declined); then the row's
+        /// pick is projected, checked, and collected.
+        mutating func read(id: UUID, rowTier: Int, arrivalScore: Int,
+                           project: (UUID) -> ArchiveAngelCandidate?) -> RowStep {
+            guard let evidence = store.record(for: id) else { return .next }
+            band.noteArrival(tier: rowTier, score: arrivalScore)
             if armActive { arm.noteArrival(tier: rowTier, score: arrivalScore) }
             var forCoverage = false                  // this row is read for the coverage arm (its budget pays)
-            if pastBand {
+            if band.isPast {
                 // Both arms' verdict on a row past the band (nil = neither
                 // arm wants anything more: stop; read = false: skip).
-                guard let want = Self.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
-                                                    freshCollected: freshCollected, freshWanted: freshWanted,
-                                                    extraLooks: &extraLooks, freshSkips: &freshSkips,
-                                                    weights: weights, arm: &arm) else {
-                    stoppedEarly = true
-                    break
-                }
-                if !want.read { continue }
+                guard let want = ArchiveAngelJob.pastBandWants(evidence, tier: rowTier, arrivalScore: arrivalScore,
+                                                               freshCollected: freshCollected, freshWanted: freshWanted,
+                                                               extraLooks: &extraLooks, freshSkips: &freshSkips,
+                                                               weights: weights, arm: &arm) else { return .stop }
+                if !want.read { return .next }
                 forCoverage = want.forCoverage
             }
-            // The copies of this recording, reclassified LIVE: the pick is
-            // the group's live choice (the new Keep, not the cached one).
-            var pickID = id
-            var pickEvidence = evidence
-            var tier = rowTier
+            let row: RowPick
+            switch groupStep(id: id, evidence: evidence, rowTier: rowTier, arrivalScore: arrivalScore,
+                             forCoverage: forCoverage, project: project) {
+            case .pick(let picked): row = picked
+            case .skip: return .next
+            case .walk: return .walk
+            }
+            guard let candidate = liveCandidate(row, forCoverage: forCoverage, project: project) else { return .next }
+            if let reason = ArchiveAngelScorer.hardFloor(candidate, policy: policy, now: now) {
+                rejected[reason, default: 0] += 1
+                return .next
+            }
+            collect(candidate, row)
+            return .next
+        }
+
+        /// The row's pick: the row itself, or — when it is one of a copy
+        /// group's members — the group's live choice.
+        struct RowPick {
+            var id: UUID
+            var evidence: ArchiveAngelEvidenceRecord
+            var tier: Int
             var groupCandidate: ArchiveAngelCandidate?
             var groupKind: ArchiveAngelRecommendationClass?
-            var rowProjections = 1                   // a singleton; a group's members below
-            switch Self.groupOutcome(id: id, evidence: evidence, rowTier: rowTier, arrivalScore: arrivalScore,
-                                     store: store, policy: policy, now: now, excluding: excluding, prepare: prepare,
-                                     forCoverage: forCoverage, arm: &arm, groupIndex: &groupIndex,
-                                     settledGroups: &settledGroups, rejected: &rejected, project: project) {
+            var projections = 1                      // a singleton; a group's members below
+        }
+
+        enum GroupStep { case pick(RowPick), skip, walk }
+
+        /// The copies of this recording, reclassified LIVE: the pick is the
+        /// group's live choice (the new Keep, not the cached one).
+        mutating func groupStep(id: UUID, evidence: ArchiveAngelEvidenceRecord, rowTier: Int, arrivalScore: Int,
+                                forCoverage: Bool, project: (UUID) -> ArchiveAngelCandidate?) -> GroupStep {
+            switch ArchiveAngelJob.groupOutcome(id: id, evidence: evidence, rowTier: rowTier, arrivalScore: arrivalScore,
+                                                store: store, policy: policy, now: now, excluding: excluding,
+                                                prepare: prepare, forCoverage: forCoverage, arm: &arm,
+                                                groupIndex: &groupIndex, settledGroups: &settledGroups,
+                                                rejected: &rejected, project: project) {
             case .notGrouped:
-                break
+                return .pick(RowPick(id: id, evidence: evidence, tier: rowTier))
             case .skip(let spent):
                 projections += spent
                 if forCoverage { arm.charge(spent) }
-                continue
+                return .skip
             case .walk:
-                return nil
+                return .walk
             case .pick(id: let id, evidence: let evidence, candidate: let candidate, kind: let kind,
                        tier: let pickTier, projections: let pickProjections):
-                pickID = id; pickEvidence = evidence; groupCandidate = candidate; groupKind = kind
-                tier = pickTier
-                rowProjections = pickProjections
                 projections += pickProjections
+                return .pick(RowPick(id: id, evidence: evidence, tier: pickTier, groupCandidate: candidate,
+                                     groupKind: kind, projections: pickProjections))
             }
-            // THE effective class (codex #1643 A3): in a batch → skipped;
-            // refused live (gone, purged, set aside, superseded, promoted)
-            // → skipped; else projected once.
+        }
+
+        /// THE effective class (codex #1643 A3): in a batch → skipped;
+        /// refused live (gone, purged, set aside, superseded, promoted) →
+        /// skipped; else projected once. nil = not collected.
+        mutating func liveCandidate(_ row: RowPick, forCoverage: Bool,
+                                    project: (UUID) -> ArchiveAngelCandidate?) -> ArchiveAngelCandidate? {
             var liveProjection: ArchiveAngelCandidate?
             var askedLive = false
             let effective = ArchiveAngelRecommendationSummary.effective(
-                stored: groupKind ?? pickEvidence.recommendation,
-                prepared: excluding.contains(pickID), promoted: false,
+                stored: row.groupKind ?? row.evidence.recommendation,
+                prepared: excluding.contains(row.id), promoted: false,
                 live: {
                     askedLive = true
-                    liveProjection = groupCandidate ?? project(pickID)
+                    liveProjection = row.groupCandidate ?? project(row.id)
                     return liveProjection.map(\.filename)
                 })
-            if effective?.kind == .prepared { rejected[.inAnotherBatch, default: 0] += 1; continue }
-            if !askedLive { liveProjection = groupCandidate ?? project(pickID) }
+            if effective?.kind == .prepared { rejected[.inAnotherBatch, default: 0] += 1; return nil }
+            if !askedLive { liveProjection = row.groupCandidate ?? project(row.id) }
             // codex final F4: the coverage arm pays for what was ACTUALLY
             // projected — the group's members, or this one file.
-            if forCoverage { arm.charge(rowProjections) }
-            guard var candidate = liveProjection else { continue }
-            if groupCandidate == nil { projections += 1 }
+            if forCoverage { arm.charge(row.projections) }
+            guard var candidate = liveProjection else { return nil }
+            if row.groupCandidate == nil { projections += 1 }
             // The projection is per record; the family pass ran in the
             // sweep. Its result is current: this evidence is only used
             // when no attention event happened since it was scored.
-            candidate.familySkips = pickEvidence.familySkips
-            if let reason = ArchiveAngelScorer.hardFloor(candidate, policy: policy, now: now) {
-                rejected[reason, default: 0] += 1
-                continue
-            }
-            collected.append(.init(candidate: candidate, score: pickEvidence.score, evidence: pickEvidence.lines))
-            tiers[pickID] = tier
+            candidate.familySkips = row.evidence.familySkips
+            return candidate
+        }
+
+        /// A pick that cleared the floor: into the batch, counted by the
+        /// coverage arm, the fresh-share count and the band.
+        mutating func collect(_ candidate: ArchiveAngelCandidate, _ row: RowPick) {
+            collected.append(.init(candidate: candidate, score: row.evidence.score, evidence: row.evidence.lines))
+            tiers[row.id] = row.tier
             let survivesCoverage = arm.noteCollected(candidate)
             let groupIsNew = candidate.duplicateGroupID.map { seenGroups.insert($0).inserted } ?? true
             let familyIsNew = seenFamilies.insert(candidate.resolvedFamilyKey).inserted
             if candidate.isFreshToPerson, groupIsNew, familyIsNew, survivesCoverage { freshCollected += 1 }
-            if !pastBand, candidate.duplicateGroupID.map({ bandGroups.insert($0).inserted }) ?? true {
-                let key = (tier: tier, score: pickEvidence.score)
-                let at = best.firstIndex { key.tier < $0.tier || (key.tier == $0.tier && key.score > $0.score) } ?? best.count
-                if at < count {
-                    best.insert(key, at: at)
-                    if best.count > count { best.removeLast() }
-                }
-                if best.count == count { bandKey = best[count - 1] }
+            band.noteCollected(tier: row.tier, score: row.evidence.score, groupID: candidate.duplicateGroupID, count: count)
+        }
+
+        /// The batch: the scorer's ONE order (class tier, then `rank`), one
+        /// per duplicate group, one per family, then the same POST-band
+        /// coverage passes the walk applies and the fresh slots. nil =
+        /// declined (the job walks).
+        mutating func finish(rankedCount: Int) -> EvidencePick? {
+            let tables = policy.tables
+            let tiers = self.tiers
+            let order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { a, b in
+                let ta = tiers[a.id] ?? .max, tb = tiers[b.id] ?? .max
+                return ta != tb ? ta < tb : ArchiveAngelScorer.rank(a, b, tables: tables)
             }
+            collected.sort(by: order)
+            var kept = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected,
+                                                               collapseBy: policy.recommend.copies.batchCollapseBy)
+            kept = ArchiveAngelScorer.onePerFamily(kept, rejected: &rejected)
+            // Rules v13 coverage: the same POST-band passes the walk applies
+            // (never a band mutation — codex #1643 A4). A top-up is only the
+            // walk's top-up when the cache read the WHOLE ranked list and
+            // skipped nothing on its year alone; otherwise rows it never read
+            // could rank above the ones it would put back — decline, the job
+            // walks. The same when a coverage budget ran out short.
+            let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now,
+                                                     events: events, by: order)
+            kept = cut.picks
+            let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
+            let declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
+                || ArchiveAngelJob.freshShareShort(picks, coverage: coverage, stoppedEarly: stoppedEarly,
+                                                   freshCollected: freshCollected, freshWanted: freshWanted)
+            // Evidence that no longer yields a full batch is not trusted — walk.
+            guard !declined, picks.count == count else { return nil }
+            let overflow = max(0, rankedCount - projections) + (kept.count - picks.count)
+            return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
+                                computedAt: store.computedAt ?? now, projections: projections)
         }
-        let tables = policy.tables
-        let order: (ArchiveAngelPick, ArchiveAngelPick) -> Bool = { a, b in
-            let ta = tiers[a.id] ?? .max, tb = tiers[b.id] ?? .max
-            return ta != tb ? ta < tb : ArchiveAngelScorer.rank(a, b, tables: tables)
+    }
+
+    /// The band: the count-th best (class tier, score) among the
+    /// distinct-group picks ACTUALLY collected so far. Rows arrive in
+    /// (tier, arrival score) order, and a row's arrival key is an upper
+    /// bound on what it can add (a copy group arrives at its best
+    /// eligible member — `rankedPrepareIDs`). So once a row arrives
+    /// strictly below the band, nothing later can enter the batch —
+    /// except the explore arm: past the band only never-proposed
+    /// records that clear `freshMinimumScore` are projected, until
+    /// `freshWanted` new files are in hand or the scan budget is spent.
+    /// The cut falls between whole arrival bands, so which rows are
+    /// read never depends on the order of equal keys (record ids) —
+    /// codex #1643 A4 ruling, 2026-09-23: before it, a group whose live
+    /// Keep scored below its cached row lowered the band to that Keep's
+    /// score and ~1 run in 5 walked the whole file.
+    /// QA on S3: the band is (class tier, score) — Ready before Worth a
+    /// look whatever the scores (Prepare agrees with the numbers).
+    struct EvidenceBand {
+        private(set) var isPast = false
+        private var groups: Set<UUID> = []
+        private var best: [(tier: Int, score: Int)] = []     // best-first, at most `count`
+        private var key: (tier: Int, score: Int)?
+
+        /// A row arrived: once one arrives strictly below the band, every
+        /// later row is past it too.
+        mutating func noteArrival(tier: Int, score: Int) {
+            if let band = key, tier > band.tier || (tier == band.tier && score < band.score) { isPast = true }
         }
-        collected.sort(by: order)
-        var kept = ArchiveAngelScorer.onePerDuplicateGroup(collected, rejected: &rejected,
-                                                           collapseBy: policy.recommend.copies.batchCollapseBy)
-        kept = ArchiveAngelScorer.onePerFamily(kept, rejected: &rejected)
-        // Rules v13 coverage: the same POST-band passes the walk applies
-        // (never a band mutation — codex #1643 A4). A top-up is only the
-        // walk's top-up when the cache read the WHOLE ranked list and
-        // skipped nothing on its year alone; otherwise rows it never read
-        // could rank above the ones it would put back — decline, the job
-        // walks. The same when a coverage budget ran out short.
-        let cut = ArchiveAngelScorer.coverageCut(kept, coverage: coverage, count: count, rejected: &rejected, now: now,
-                                                 events: events, by: order)
-        kept = cut.picks
-        let picks = ArchiveAngelScorer.withFreshSlots(kept, count: count, weights: weights, by: order)
-        let declined = arm.incomplete || (cut.toppedUp > 0 && (stoppedEarly || arm.skipped > 0))
-            || Self.freshShareShort(picks, coverage: coverage, stoppedEarly: stoppedEarly,
-                                    freshCollected: freshCollected, freshWanted: freshWanted)
-        // Evidence that no longer yields a full batch is not trusted — walk.
-        guard !declined, picks.count == count else { return nil }
-        let overflow = max(0, ranked.ids.count - projections) + (kept.count - picks.count)
-        return EvidencePick(selection: .init(picks: picks, overflow: overflow, rejected: rejected),
-                            computedAt: store.computedAt ?? now, projections: projections)
+
+        /// A pick was collected before the band was passed: it may raise
+        /// the band (one place per duplicate group).
+        mutating func noteCollected(tier: Int, score: Int, groupID: UUID?, count: Int) {
+            guard !isPast, groupID.map({ groups.insert($0).inserted }) ?? true else { return }
+            let entry = (tier: tier, score: score)
+            let at = best.firstIndex { entry.tier < $0.tier || (entry.tier == $0.tier && entry.score > $0.score) } ?? best.count
+            if at < count {
+                best.insert(entry, at: at)
+                if best.count > count { best.removeLast() }
+            }
+            if best.count == count { key = best[count - 1] }
+        }
     }
 
     /// Past the band, one row, both arms: nil when neither arm wants any

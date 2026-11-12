@@ -1,0 +1,240 @@
+seed 1 n=196 count=23: nil
+seed 2 n=82 count=18: picks [43:159,58:154,14:130,16:116,55:107,32:107,31:99,67:90,25:80,36:76,66:71,11:70,22:49,64:22,74:16,72:10,37:9,61:149] overflow 0 rejected [inAnotherBatch=1,notRecommendedNow=40,duplicateOfPick=3,tooShort=11] projections 32 at 1789996400.0
+seed 3 n=34 count=18: nil
+seed 4 n=39 count=18: nil
+seed 5 n=91 count=2: picks [24:145,27:129] overflow 34 rejected [notRecommendedNow=52,tooShort=3] projections 2 at 1789996400.0
+seed 6 n=100 count=18: picks [96:154,80:154,28:148,71:148,38:141,26:135,36:124,43:121,41:121,46:120,90:115,42:115,84:102,97:98,39:72,44:70,94:68,69:65] overflow 26 rejected [inAnotherBatch=2,sameEventAsPick=1,notRecommendedNow=41,duplicateOfPick=1,tooShort=12] projections 23 at 1789996400.0
+seed 7 n=135 count=10: picks [58:154,117:146,16:140,114:127,87:102,48:85,67:72,59:68,62:67,26:93] overflow 31 rejected [inAnotherBatch=2,yearCoverage=5,notRecommendedNow=68,duplicateOfPick=3,tooShort=9] projections 27 at 1789996400.0
+seed 8 n=61 count=7: nil
+seed 9 n=174 count=5: picks [18:149,152:147,58:144,21:139,139:139] overflow 69 rejected [inAnotherBatch=1,notRecommendedNow=72,duplicateOfPick=2,tooShort=18] projections 18 at 1789996400.0
+seed 10 n=135 count=13: picks [37:159,17:151,0:150,115:147,104:145,31:138,14:136,90:135,41:132,94:127,75:125,64:120,54:116] overflow 39 rejected [inAnotherBatch=2,notRecommendedNow=62,duplicateOfPick=2,tooShort=11] projections 23 at 1789996400.0
+seed 11 n=98 count=7: nil
+seed 12 n=121 count=20: picks [87:148,99:115,105:105,92:65,98:53,84:48,90:28,110:17,77:17,0:16,79:131,80:119,113:115,85:110,78:107,3:99,83:84,93:78,89:41,112:4] overflow 27 rejected [inAnotherBatch=3,notRecommendedNow=60,duplicateOfPick=1,tooShort=11] projections 23 at 1789996400.0
+seed 13 n=35 count=15: nil
+seed 14 n=65 count=14: picks [23:152,8:135,14:121,60:90,54:87,3:78,29:69,40:63,61:55,64:45,42:34,38:30,24:19,22:8] overflow 5 rejected [inAnotherBatch=2,notRecommendedNow=32,duplicateOfPick=2,tooShort=7] projections 21 at 1789996400.0
+seed 15 n=150 count=22: nil
+seed 16 n=65 count=26: nil
+seed 17 n=103 count=28: nil
+seed 18 n=158 count=29: nil
+seed 19 n=80 count=3: picks [64:154,52:153,73:152] overflow 30 rejected [notRecommendedNow=40,duplicateOfPick=1,tooShort=4] projections 6 at 1789996400.0
+seed 20 n=118 count=15: nil
+seed 21 n=148 count=6: picks [50:156,28:156,97:154,25:153,19:152,93:145] overflow 31 rejected [notRecommendedNow=88,duplicateOfPick=2,tooShort=12] projections 18 at 1789996400.0
+seed 22 n=182 count=27: nil
+seed 23 n=170 count=2: picks [100:158,113:156] overflow 58 rejected [notRecommendedNow=90,duplicateOfPick=1,tooShort=14] projections 9 at 1789996400.0
+seed 24 n=88 count=30: picks [58:139,60:138,41:137,86:130,44:125,13:119,4:115,19:105,72:97,82:89,66:77,64:73,30:28,37:19,9:12,77:12,5:10,0:152,69:148,43:132,79:120,21:107,45:98,53:95,24:90,34:85,16:83,81:79,35:73,62:44] overflow 0 rejected [inAnotherBatch=2,notRecommendedNow=43,duplicateOfPick=3,tooShort=8] projections 42 at 1789996400.0
+seed 25 n=181 count=23: picks [167:159,74:155,157:154,146:151,115:150,104:146,3:146,40:144,61:142,53:142,16:139,69:137,83:133,12:127,141:127,54:126,110:122,82:121,128:120,5:120,149:112,130:109,60:109] overflow 49 rejected [inAnotherBatch=2,notRecommendedNow=81,duplicateOfPick=3,tooShort=17] projections 34 at 1789996400.0
+seed 26 n=35 count=12: nil
+seed 27 n=97 count=21: nil
+seed 28 n=64 count=26: nil
+seed 29 n=135 count=27: nil
+seed 30 n=64 count=5: picks [15:143,33:138,51:128,19:124,41:116] overflow 27 rejected [inAnotherBatch=1,notRecommendedNow=24,tooShort=8] projections 5 at 1789996400.0
+seed 31 n=191 count=2: picks [99:157,46:154] overflow 76 rejected [notRecommendedNow=94,duplicateOfPick=2,tooShort=14] projections 8 at 1789996400.0
+seed 32 n=187 count=12: nil
+seed 33 n=172 count=19: picks [122:156,139:139,56:138,93:135,47:131,166:129,169:123,149:123,154:117,121:117,132:113,112:111,63:93,25:87,87:83,11:82,26:78,77:78,108:78] overflow 41 rejected [inAnotherBatch=4,sameEventAsPick=1,notRecommendedNow=88,duplicateOfPick=5,tooShort=15] projections 30 at 1789996400.0
+seed 34 n=90 count=7: picks [75:150,86:124,21:115,13:105,70:97,22:52,5:35] overflow 25 rejected [inAnotherBatch=4,notRecommendedNow=42,duplicateOfPick=3,tooShort=5] projections 21 at 1789996400.0
+seed 35 n=185 count=28: nil
+seed 36 n=28 count=5: picks [15:158,3:157,22:94,17:86,21:81] overflow 7 rejected [notRecommendedNow=14,duplicateOfPick=1] projections 7 at 1789996400.0
+seed 37 n=193 count=28: nil
+seed 38 n=104 count=14: picks [90:159,78:141,102:138,38:131,69:125,19:101,54:99,87:98,26:95,11:94,1:91,58:73,98:68,18:63] overflow 14 rejected [inAnotherBatch=1,notRecommendedNow=50,duplicateOfPick=2,tooShort=14] projections 29 at 1789996400.0
+seed 39 n=140 count=24: picks [139:153,95:152,91:151,81:136,102:136,51:128,74:125,23:120,122:118,114:117,101:99,2:94,121:93,1:90,124:80,131:77,57:74,118:66,16:60,34:57,109:51,10:41,42:31,60:27] overflow 10 rejected [notRecommendedNow=70,duplicateOfPick=5,tooShort=20] projections 42 at 1789996400.0
+seed 40 n=154 count=22: nil
+seed 41 n=133 count=1: picks [127:156] overflow 71 rejected [notRecommendedNow=49,tooShort=9] projections 4 at 1789996400.0
+seed 42 n=55 count=18: picks [2:157,33:142,45:129,42:127,40:119,51:119,29:86,13:73,18:70,17:57,5:55,9:33,27:23,46:19,15:18,4:3,21:155,48:147] overflow 0 rejected [notRecommendedNow=19,duplicateOfPick=2,tooShort=8] projections 28 at 1789996400.0
+seed 43 n=63 count=15: nil
+seed 44 n=129 count=13: picks [11:150,93:146,116:141,118:135,40:130,21:129,68:110,114:108,76:108,104:107,53:98,10:95,0:76] overflow 36 rejected [inAnotherBatch=4,notRecommendedNow=56,duplicateOfPick=2,tooShort=13] projections 27 at 1789996400.0
+seed 45 n=133 count=28: nil
+seed 46 n=142 count=1: nil
+seed 47 n=199 count=18: nil
+seed 48 n=116 count=15: nil
+seed 49 n=140 count=11: picks [13:159,133:155,62:155,5:154,80:152,134:151,114:147,49:139,76:134,93:127,127:120] overflow 36 rejected [inAnotherBatch=3,notRecommendedNow=72,duplicateOfPick=2,tooShort=12] projections 21 at 1789996400.0
+seed 50 n=99 count=16: nil
+seed 51 n=144 count=9: picks [53:152,59:152,86:150,40:138,88:130,5:125,61:108,141:106,81:102] overflow 36 rejected [inAnotherBatch=1,notRecommendedNow=83,duplicateOfPick=3,tooShort=6] projections 21 at 1789996400.0
+seed 52 n=145 count=15: nil
+seed 53 n=104 count=24: nil
+seed 54 n=34 count=8: nil
+seed 55 n=186 count=19: nil
+seed 56 n=65 count=17: nil
+seed 57 n=145 count=6: picks [36:157,89:139,19:130,99:94,5:93,43:99] overflow 39 rejected [inAnotherBatch=4,yearCoverage=7,notRecommendedNow=72,duplicateOfPick=1,tooShort=14] projections 22 at 1789996400.0
+seed 58 n=84 count=28: picks [41:149,11:144,70:141,18:126,12:126,67:111,31:98,56:88,7:67,4:52,27:36,76:35,28:32,59:30,46:26,23:9,47:7,45:6,32:6,3:145,68:144,38:138,5:131,57:115,82:114,83:93,58:46,26:30] overflow 1 rejected [inAnotherBatch=2,notRecommendedNow=39,duplicateOfPick=2,tooShort=9] projections 36 at 1789996400.0
+seed 59 n=58 count=30: nil
+seed 60 n=117 count=20: picks [35:158,100:144,93:135,1:129,83:119,64:116,50:103,18:103,49:92,111:89,30:87,56:81,96:76,14:68,112:64,12:44,54:16,41:5,45:3,4:142] overflow 2 rejected [notRecommendedNow=68,duplicateOfPick=4,tooShort=8] projections 43 at 1789996400.0
+seed 61 n=88 count=8: picks [52:150,14:144,77:143,25:127,37:122,31:114,44:109,57:22] overflow 19 rejected [yearCoverage=2,notRecommendedNow=48,duplicateOfPick=1,tooShort=5] projections 16 at 1789996400.0
+seed 62 n=95 count=10: picks [74:155,83:141,91:134,26:134,18:129,38:127,51:112,56:111,21:111,49:91] overflow 32 rejected [inAnotherBatch=3,notRecommendedNow=34,duplicateOfPick=4,tooShort=9] projections 21 at 1789996400.0
+seed 63 n=195 count=26: nil
+seed 64 n=96 count=7: picks [89:158,27:150,62:141,17:138,41:128,66:119,58:117] overflow 29 rejected [notRecommendedNow=44,duplicateOfPick=3,tooShort=6] projections 19 at 1789996400.0
+seed 65 n=24 count=9: nil
+seed 66 n=68 count=20: nil
+seed 67 n=183 count=23: nil
+seed 68 n=64 count=21: picks [43:154,38:152,46:138,49:133,60:124,37:123,56:111,41:106,21:92,45:69,35:63,51:42,23:34,33:21,19:17,58:10,22:8,36:130,44:113,11:96,8:89] overflow 0 rejected [inAnotherBatch=2,notRecommendedNow=34,duplicateOfPick=4,tooShort=5] projections 29 at 1789996400.0
+seed 69 n=158 count=17: picks [12:148,60:138,4:133,51:114,10:110,80:107,8:103,29:103,152:101,16:101,84:98,30:92,144:88,136:85,112:85,67:82,140:74] overflow 43 rejected [inAnotherBatch=4,notRecommendedNow=83,duplicateOfPick=3,tooShort=10] projections 23 at 1789996400.0
+seed 70 n=61 count=24: nil
+seed 71 n=189 count=12: nil
+seed 72 n=79 count=23: nil
+seed 73 n=33 count=19: nil
+seed 74 n=133 count=23: nil
+seed 75 n=24 count=27: nil
+seed 76 n=113 count=11: nil
+seed 77 n=99 count=26: nil
+seed 78 n=75 count=22: picks [42:143,39:142,46:135,27:122,31:115,74:107,43:95,68:78,44:42,0:40,45:25,24:19,29:158,1:149,58:136,18:131,59:112,57:106,36:78,16:73,54:68,70:49] overflow 7 rejected [inAnotherBatch=4,notRecommendedNow=29,duplicateOfPick=1,tooShort=12] projections 32 at 1789996400.0
+seed 79 n=112 count=16: picks [51:154,10:154,46:152,75:142,49:122,85:100,13:92,32:84,52:70,50:66,26:61,5:53,93:47,1:44,77:12,110:10] overflow 24 rejected [inAnotherBatch=5,notRecommendedNow=53,duplicateOfPick=2,tooShort=9] projections 28 at 1789996400.0
+seed 80 n=119 count=20: picks [43:146,36:137,80:125,112:120,4:119,33:114,94:111,102:108,47:103,15:101,56:97,61:79,28:43,42:36,79:28,72:22,68:15,73:8,3:6,5:142] overflow 23 rejected [inAnotherBatch=3,notRecommendedNow=65,duplicateOfPick=1,tooShort=9] projections 24 at 1789996400.0
+seed 81 n=25 count=2: picks [19:114,11:106] overflow 6 rejected [notRecommendedNow=10,tooShort=1] projections 9 at 1789996400.0
+seed 82 n=187 count=20: picks [165:157,44:150,2:135,171:135,91:128,52:123,27:110,85:109,163:106,140:103,19:101,157:100,80:95,161:94,112:93,39:93,98:90,181:83,130:79,144:74] overflow 34 rejected [inAnotherBatch=5,notRecommendedNow=94,duplicateOfPick=4,tooShort=17] projections 47 at 1789996400.0
+seed 83 n=54 count=27: nil
+seed 84 n=104 count=15: nil
+seed 85 n=87 count=19: picks [1:148,24:116,4:111,2:107,52:106,80:99,9:53,60:52,18:34,23:16,31:159,85:158,45:156,44:134,33:126,56:112,20:89,58:24,70:17] overflow 0 rejected [inAnotherBatch=1,yearCoverage=6,notRecommendedNow=44,duplicateOfPick=4,tooShort=7] projections 40 at 1789996400.0
+seed 86 n=82 count=30: nil
+seed 87 n=47 count=15: nil
+seed 88 n=58 count=6: nil
+seed 89 n=184 count=30: picks [32:157,134:150,177:148,114:145,163:140,18:135,21:134,49:127,19:124,14:119,150:116,81:113,129:111,142:110,55:108,70:103,48:101,57:100,161:94,147:91,44:90,82:88,143:88,39:76,10:75,64:75,6:74,95:63,24:48,29:39] overflow 23 rejected [inAnotherBatch=1,notRecommendedNow=100,duplicateOfPick=3,tooShort=20] projections 42 at 1789996400.0
+seed 90 n=79 count=14: nil
+seed 91 n=78 count=17: picks [43:144,26:131,67:128,36:114,73:113,37:112,66:112,77:100,49:91,74:84,51:74,58:72,60:65,38:62,56:58,3:44,44:0] overflow 11 rejected [inAnotherBatch=2,notRecommendedNow=35,duplicateOfPick=2,tooShort=10] projections 24 at 1789996400.0
+seed 92 n=93 count=16: picks [26:150,32:149,27:146,54:125,87:123,59:120,71:119,8:118,92:109,76:109,7:93,23:80,62:75,77:59,60:41,66:16] overflow 2 rejected [inAnotherBatch=1,yearCoverage=3,notRecommendedNow=52,duplicateOfPick=5,tooShort=6] projections 34 at 1789996400.0
+seed 93 n=142 count=16: picks [85:154,62:145,6:141,32:135,125:126,80:126,114:123,37:123,103:121,72:119,43:116,83:116,50:104,106:104,101:102,112:98] overflow 34 rejected [inAnotherBatch=1,notRecommendedNow=68,duplicateOfPick=3,tooShort=11] projections 30 at 1789996400.0
+seed 94 n=60 count=16: picks [1:152,41:151,31:133,24:122,20:109,2:100,21:95,57:83,3:58,16:55,6:19,5:138,44:99,56:95,49:65,37:16] overflow 0 rejected [inAnotherBatch=4,yearCoverage=1,notRecommendedNow=27,duplicateOfPick=1,tooShort=9] projections 24 at 1789996400.0
+seed 95 n=55 count=28: nil
+seed 96 n=132 count=7: picks [115:157,12:151,55:151,66:150,92:147,52:146,64:139] overflow 29 rejected [notRecommendedNow=71,duplicateOfPick=5,tooShort=14] projections 21 at 1789996400.0
+seed 97 n=66 count=3: nil
+seed 98 n=139 count=9: picks [28:157,107:152,35:139,97:137,88:135,34:115,115:113,125:90,7:63] overflow 44 rejected [inAnotherBatch=1,yearCoverage=3,notRecommendedNow=65,duplicateOfPick=3,tooShort=8] projections 22 at 1789996400.0
+seed 99 n=142 count=22: nil
+seed 100 n=76 count=29: nil
+seed 101 n=30 count=15: nil
+seed 102 n=53 count=30: nil
+seed 103 n=189 count=17: nil
+seed 104 n=51 count=30: nil
+seed 105 n=128 count=3: picks [121:159,18:153,63:151] overflow 54 rejected [yearCoverage=1,notRecommendedNow=61,tooShort=6] projections 7 at 1789996400.0
+seed 106 n=54 count=6: nil
+seed 107 n=150 count=23: picks [31:158,91:156,116:155,20:152,136:151,16:148,107:146,32:144,45:137,63:124,4:117,140:108,23:107,124:99,133:92,8:84,5:80,70:79,42:77,17:63,2:60,81:60,97:51] overflow 25 rejected [notRecommendedNow=82,duplicateOfPick=5,tooShort=5] projections 42 at 1789996400.0
+seed 108 n=157 count=3: nil
+seed 109 n=66 count=19: picks [38:130,5:113,55:113,52:91,16:81,19:64,18:58,21:55,43:50,33:34,15:14,28:5,25:2,1:113,65:84,4:67,54:55,48:43,14:18] overflow 1 rejected [inAnotherBatch=3,notRecommendedNow=36,duplicateOfPick=1,tooShort=4] projections 25 at 1789996400.0
+seed 110 n=136 count=7: picks [75:156,36:146,102:144,72:139,116:137,68:135,56:127] overflow 45 rejected [yearCoverage=2,notRecommendedNow=64,duplicateOfPick=1,tooShort=9] projections 18 at 1789996400.0
+seed 111 n=115 count=6: picks [14:153,49:149,27:149,22:142,51:102,73:100] overflow 33 rejected [inAnotherBatch=4,yearCoverage=10,notRecommendedNow=44,duplicateOfPick=5,tooShort=6] projections 33 at 1789996400.0
+seed 112 n=80 count=8: picks [22:157,57:150,6:135,2:128,37:117,46:112,10:108,24:104] overflow 21 rejected [inAnotherBatch=1,notRecommendedNow=38,duplicateOfPick=2,tooShort=6] projections 15 at 1789996400.0
+seed 113 n=104 count=19: nil
+seed 114 n=152 count=9: picks [83:150,42:146,58:145,96:136,25:135,16:132,51:112,117:109,5:89] overflow 45 rejected [inAnotherBatch=2,yearCoverage=3,notRecommendedNow=73,duplicateOfPick=2,tooShort=11] projections 23 at 1789996400.0
+seed 115 n=32 count=10: picks [22:150,6:143,3:101,5:95,16:68,19:53,9:123,13:72,11:69,20:62] overflow 5 rejected [inAnotherBatch=2,notRecommendedNow=14,duplicateOfPick=1,tooShort=1] projections 12 at 1789996400.0
+seed 116 n=108 count=13: nil
+seed 117 n=90 count=21: nil
+seed 118 n=184 count=12: picks [134:152,84:149,74:140,115:139,52:135,37:133,142:131,25:130,32:128,29:126,89:125,178:119] overflow 43 rejected [inAnotherBatch=4,notRecommendedNow=95,duplicateOfPick=6,tooShort=22] projections 26 at 1789996400.0
+seed 119 n=83 count=12: nil
+seed 120 n=107 count=5: picks [76:148,101:145,58:140,93:123,75:123] overflow 40 rejected [inAnotherBatch=1,yearCoverage=1,notRecommendedNow=54,duplicateOfPick=1,tooShort=4] projections 9 at 1789996400.0
+seed 121 n=77 count=30: nil
+seed 122 n=92 count=21: picks [91:153,33:146,5:143,68:143,25:135,47:125,60:114,82:109,42:108,29:101,38:100,15:69,27:64,32:57,6:48,90:47,77:40,48:37,70:32,46:22,89:21] overflow 8 rejected [inAnotherBatch=1,notRecommendedNow=43,duplicateOfPick=3,tooShort=10] projections 32 at 1789996400.0
+seed 123 n=192 count=22: nil
+seed 124 n=197 count=27: nil
+seed 125 n=167 count=14: nil
+seed 126 n=181 count=25: picks [156:155,130:149,29:146,135:146,164:144,61:143,137:139,160:133,139:129,38:128,173:126,47:126,77:124,116:123,53:116,115:111,30:111,94:111,44:101,109:99,125:99,69:95,140:83,157:79,71:75] overflow 43 rejected [inAnotherBatch=5,notRecommendedNow=87,duplicateOfPick=6,tooShort=13] projections 39 at 1789996400.0
+seed 127 n=174 count=17: nil
+seed 128 n=176 count=10: picks [29:135,87:134,136:133,67:132,101:123,79:122,48:121,106:78,41:74,25:64] overflow 50 rejected [inAnotherBatch=6,yearCoverage=3,notRecommendedNow=91,duplicateOfPick=2,tooShort=14] projections 22 at 1789996400.0
+seed 129 n=99 count=19: nil
+seed 130 n=39 count=26: nil
+seed 131 n=82 count=30: picks [75:131,38:129,58:124,74:124,61:122,11:95,39:95,0:86,9:65,14:62,49:61,66:52,23:50,77:40,19:23,80:9,31:7,27:6,16:5,46:158,5:150,50:142,4:142,3:124,24:118,43:116,17:100,60:94,47:94,42:33] overflow 2 rejected [inAnotherBatch=3,sameEventAsPick=1,notRecommendedNow=42,duplicateOfPick=1,tooShort=3] projections 35 at 1789996400.0
+seed 132 n=73 count=2: picks [37:147,4:145] overflow 19 rejected [notRecommendedNow=40,tooShort=7] projections 9 at 1789996400.0
+seed 133 n=124 count=1: picks [83:155] overflow 44 rejected [inAnotherBatch=1,notRecommendedNow=67,duplicateOfPick=1,tooShort=9] projections 5 at 1789996400.0
+seed 134 n=189 count=19: nil
+seed 135 n=146 count=12: nil
+seed 136 n=116 count=24: picks [68:155,89:151,71:148,25:142,115:138,103:128,27:122,35:112,67:105,39:101,49:90,53:88,8:86,84:83,45:82,60:71,2:66,75:65,30:62,10:55,72:54,19:53,15:52,64:49] overflow 16 rejected [inAnotherBatch=2,notRecommendedNow=51,duplicateOfPick=3,tooShort=11] projections 38 at 1789996400.0
+seed 137 n=153 count=7: picks [99:132,84:131,67:130,117:127,102:125,25:115,106:111] overflow 38 rejected [inAnotherBatch=1,notRecommendedNow=87,duplicateOfPick=1,tooShort=13] projections 17 at 1789996400.0
+seed 138 n=82 count=17: picks [9:157,24:139,76:134,45:132,0:128,36:109,18:104,58:102,61:90,47:75,48:58,49:56,65:41,57:32,75:16,3:16,68:11] overflow 11 rejected [notRecommendedNow=45,tooShort=7] projections 19 at 1789996400.0
+seed 139 n=33 count=25: nil
+seed 140 n=21 count=28: nil
+seed 141 n=45 count=6: picks [15:158,20:148,28:136,7:131,44:126,25:80] overflow 10 rejected [notRecommendedNow=21,duplicateOfPick=2,tooShort=4] projections 10 at 1789996400.0
+seed 142 n=172 count=4: picks [28:154,27:152,88:145,94:142] overflow 72 rejected [inAnotherBatch=3,notRecommendedNow=79,duplicateOfPick=1,tooShort=15] projections 7 at 1789996400.0
+seed 143 n=178 count=11: picks [96:158,126:149,123:148,77:147,144:130,168:126,127:109,177:103,108:94,75:94,122:91] overflow 65 rejected [inAnotherBatch=2,notRecommendedNow=82,duplicateOfPick=3,tooShort=10] projections 24 at 1789996400.0
+seed 144 n=143 count=14: picks [95:156,89:146,4:142,81:138,140:127,94:96,90:92,101:80,117:52,129:51,135:38,78:28,136:20,134:13] overflow 34 rejected [inAnotherBatch=2,notRecommendedNow=77,duplicateOfPick=2,tooShort=13] projections 23 at 1789996400.0
+seed 145 n=40 count=1: nil
+seed 146 n=95 count=20: picks [74:144,16:125,19:120,85:100,33:94,6:81,57:80,47:73,72:73,1:72,43:30,80:17,44:14,4:10,90:157,52:154,5:146,30:116,0:94,29:94] overflow 12 rejected [inAnotherBatch=1,notRecommendedNow=47,duplicateOfPick=2,tooShort=5] projections 34 at 1789996400.0
+seed 147 n=157 count=22: picks [42:159,28:155,85:154,20:142,104:136,3:136,74:129,75:129,29:126,81:119,15:115,7:114,134:103,154:102,27:101,35:99,150:98,151:88,19:64,141:55,69:53,33:52] overflow 17 rejected [inAnotherBatch=4,notRecommendedNow=82,duplicateOfPick=5,tooShort=15] projections 46 at 1789996400.0
+seed 148 n=146 count=13: nil
+seed 149 n=73 count=15: picks [29:154,46:152,18:149,22:134,49:121,16:118,71:118,44:114,45:111,40:106,4:91,33:90,26:67,28:63,43:62] overflow 16 rejected [inAnotherBatch=1,notRecommendedNow=31,tooShort=7] projections 20 at 1789996400.0
+seed 150 n=89 count=23: picks [25:152,33:138,4:130,44:126,83:126,75:106,42:104,40:101,3:100,2:100,63:95,15:74,43:71,13:53,55:43,47:18,81:10,20:7,19:143,10:124,84:124,41:121,22:114] overflow 2 rejected [inAnotherBatch=2,notRecommendedNow=46,duplicateOfPick=1,tooShort=11] projections 33 at 1789996400.0
+seed 151 n=45 count=17: nil
+seed 152 n=174 count=17: picks [104:152,62:150,93:146,66:144,63:142,91:139,83:132,88:132,24:130,17:128,120:125,118:124,146:120,9:120,5:120,161:117,13:116] overflow 34 rejected [inAnotherBatch=3,notRecommendedNow=95,duplicateOfPick=5,tooShort=6] projections 42 at 1789996400.0
+seed 153 n=185 count=25: picks [25:158,100:148,155:144,67:141,15:137,85:131,97:126,124:119,142:119,16:109,104:103,36:99,183:97,127:95,64:93,18:92,53:90,170:89,29:87,35:84,110:79,111:64,9:58,7:54,149:52] overflow 44 rejected [inAnotherBatch=5,notRecommendedNow=91,duplicateOfPick=1,tooShort=18] projections 33 at 1789996400.0
+seed 154 n=36 count=3: picks [23:143,29:129,25:116] overflow 14 rejected [inAnotherBatch=1,notRecommendedNow=14,tooShort=3] projections 5 at 1789996400.0
+seed 155 n=58 count=5: picks [14:146,24:140,55:136,35:97,13:90] overflow 12 rejected [inAnotherBatch=1,yearCoverage=1,notRecommendedNow=32,duplicateOfPick=1,tooShort=5] projections 11 at 1789996400.0
+seed 156 n=94 count=24: picks [28:153,70:150,66:134,62:133,17:130,20:129,13:128,24:124,67:120,15:112,38:106,89:103,22:95,92:85,3:75,83:66,82:59,10:53,60:47,30:46,29:23,84:13,41:9,27:8] overflow 8 rejected [inAnotherBatch=1,notRecommendedNow=39,duplicateOfPick=3,tooShort=10] projections 38 at 1789996400.0
+seed 157 n=75 count=28: nil
+seed 158 n=106 count=20: picks [6:146,15:143,93:136,68:113,101:106,58:106,57:95,13:93,95:93,51:84,65:81,11:72,49:53,42:49,61:41,66:27,28:20,76:17,41:13,81:1] overflow 11 rejected [inAnotherBatch=2,notRecommendedNow=58,duplicateOfPick=2,tooShort=9] projections 29 at 1789996400.0
+seed 159 n=33 count=6: picks [22:139,24:129,12:83,7:55,15:47,1:140] overflow 4 rejected [notRecommendedNow=18,duplicateOfPick=1,tooShort=1] projections 10 at 1789996400.0
+seed 160 n=118 count=26: nil
+seed 161 n=27 count=25: nil
+seed 162 n=113 count=28: picks [18:151,37:145,20:132,27:131,69:124,101:124,11:124,90:123,40:121,47:120,6:108,25:103,56:80,0:78,33:77,72:70,93:56,111:55,45:47,55:44,67:20,92:18,16:14,49:0,19:139,12:122,82:121,84:92] overflow 2 rejected [inAnotherBatch=1,notRecommendedNow=65,duplicateOfPick=3,tooShort=6] projections 41 at 1789996400.0
+seed 163 n=80 count=22: picks [70:158,39:134,11:129,57:121,78:113,20:101,21:97,32:70,31:40,30:37,64:34,28:17,0:8,44:1,25:128,54:101,76:97,50:84,26:80,77:69,16:63,72:42] overflow 0 rejected [inAnotherBatch=3,notRecommendedNow=36,duplicateOfPick=6,tooShort=11] projections 38 at 1789996400.0
+seed 164 n=124 count=30: picks [89:154,87:149,37:145,122:143,60:143,93:143,120:142,1:129,42:123,48:118,50:115,23:107,45:106,104:97,21:89,25:89,102:89,72:74,76:62,94:52,27:49,112:46,84:44,53:42,31:41,32:39,111:38,78:20,11:0,6:0] overflow 0 rejected [inAnotherBatch=1,notRecommendedNow=66,duplicateOfPick=8,tooShort=9] projections 52 at 1789996400.0
+seed 165 n=139 count=29: nil
+seed 166 n=192 count=7: picks [180:155,40:152,184:148,140:142,116:142,157:141,0:140] overflow 74 rejected [inAnotherBatch=1,notRecommendedNow=93,duplicateOfPick=1,tooShort=15] projections 10 at 1789996400.0
+seed 167 n=35 count=16: nil
+seed 168 n=99 count=11: picks [69:159,53:145,24:145,26:144,46:135,40:132,55:128,88:108,51:105,27:102,41:101] overflow 23 rejected [notRecommendedNow=49,duplicateOfPick=2,tooShort=6] projections 24 at 1789996400.0
+seed 169 n=96 count=24: nil
+seed 170 n=187 count=8: picks [177:158,29:149,8:146,169:146,23:146,43:143,157:133,92:131] overflow 58 rejected [inAnotherBatch=4,notRecommendedNow=103,duplicateOfPick=1,tooShort=11] projections 16 at 1789996400.0
+seed 171 n=154 count=26: picks [1:155,68:150,79:147,115:147,150:138,107:136,13:135,65:133,146:130,147:123,120:118,39:102,94:97,22:86,53:78,112:61,82:61,44:57,133:55,71:54,106:49,69:44,111:40,113:34,23:27,124:25] overflow 29 rejected [inAnotherBatch=2,notRecommendedNow=68,duplicateOfPick=5,tooShort=17] projections 42 at 1789996400.0
+seed 172 n=95 count=16: picks [86:155,37:155,81:152,79:145,19:141,9:140,59:127,17:123,89:122,0:111,52:111,85:110,83:105,56:103,50:103,29:99] overflow 29 rejected [inAnotherBatch=4,notRecommendedNow=40,duplicateOfPick=2,tooShort=7] projections 19 at 1789996400.0
+seed 173 n=80 count=16: nil
+seed 174 n=193 count=14: picks [69:158,10:157,106:156,104:156,94:155,3:148,189:145,56:145,72:144,73:144,150:143,180:141,37:139,54:137] overflow 65 rejected [inAnotherBatch=2,notRecommendedNow=90,duplicateOfPick=3,tooShort=12] projections 26 at 1789996400.0
+seed 175 n=48 count=5: nil
+seed 176 n=129 count=1: picks [39:157] overflow 61 rejected [notRecommendedNow=55,tooShort=12] projections 1 at 1789996400.0
+seed 177 n=48 count=23: nil
+seed 178 n=68 count=20: nil
+seed 179 n=69 count=6: picks [51:145,56:135,62:127,12:114,23:102,24:100] overflow 15 rejected [notRecommendedNow=38,duplicateOfPick=2,tooShort=5] projections 12 at 1789996400.0
+seed 180 n=71 count=2: picks [1:95,50:88] overflow 22 rejected [notRecommendedNow=42,tooShort=5] projections 3 at 1789996400.0
+seed 181 n=83 count=21: nil
+seed 182 n=128 count=18: picks [124:159,1:144,69:142,109:139,105:135,110:134,17:134,47:117,6:116,39:109,75:107,0:106,116:102,16:87,5:87,28:86,35:82,63:68] overflow 24 rejected [inAnotherBatch=4,notRecommendedNow=61,duplicateOfPick=5,tooShort=6] projections 40 at 1789996400.0
+seed 183 n=82 count=26: picks [21:157,60:141,78:112,53:109,24:102,65:98,57:85,58:85,8:85,54:62,49:54,47:46,9:46,0:41,45:21,2:19,42:0,30:138,28:108,7:104,44:103,76:90,36:27,75:22,39:21,15:9] overflow 0 rejected [inAnotherBatch=5,notRecommendedNow=43,duplicateOfPick=1,tooShort=6] projections 34 at 1789996400.0
+seed 184 n=182 count=21: picks [97:159,22:142,20:142,172:141,155:140,111:135,65:134,69:132,48:128,43:120,24:120,51:119,112:116,151:115,159:114,122:110,168:108,35:106,54:103,124:100,58:90] overflow 38 rejected [inAnotherBatch=1,notRecommendedNow=90,duplicateOfPick=5,tooShort=15] projections 42 at 1789996400.0
+seed 185 n=82 count=1: picks [16:135] overflow 36 rejected [notRecommendedNow=36,duplicateOfPick=1,tooShort=6] projections 5 at 1789996400.0
+seed 186 n=138 count=2: picks [6:155,90:155] overflow 54 rejected [notRecommendedNow=73,duplicateOfPick=1,tooShort=7] projections 4 at 1789996400.0
+seed 187 n=50 count=14: nil
+seed 188 n=74 count=23: nil
+seed 189 n=148 count=8: picks [43:158,34:156,50:148,46:145,86:136,10:134,25:133,67:129] overflow 53 rejected [notRecommendedNow=71,duplicateOfPick=1,tooShort=11] projections 16 at 1789996400.0
+seed 190 n=137 count=17: nil
+seed 191 n=178 count=15: nil
+seed 192 n=159 count=18: nil
+seed 193 n=162 count=17: nil
+seed 194 n=112 count=7: picks [65:156,58:156,0:150,16:143,18:141,82:130,64:108] overflow 32 rejected [inAnotherBatch=1,yearCoverage=1,notRecommendedNow=50,duplicateOfPick=2,tooShort=15] projections 15 at 1789996400.0
+seed 195 n=177 count=1: nil
+seed 196 n=188 count=14: nil
+seed 197 n=131 count=23: picks [77:158,74:144,57:141,112:133,93:123,126:115,78:103,100:89,89:88,45:87,14:83,106:80,94:76,129:63,124:61,29:48,103:48,87:42,80:36,102:31,85:25,68:8,79:6] overflow 19 rejected [inAnotherBatch=5,notRecommendedNow=66,duplicateOfPick=1,tooShort=13] projections 39 at 1789996400.0
+seed 198 n=36 count=30: nil
+seed 199 n=60 count=29: nil
+seed 200 n=128 count=15: picks [30:157,94:156,27:145,28:142,77:140,1:139,34:127,35:126,124:124,16:124,90:123,117:122,26:121,71:115,23:113] overflow 32 rejected [inAnotherBatch=1,yearCoverage=1,notRecommendedNow=61,duplicateOfPick=3,tooShort=7] projections 29 at 1789996400.0
+seed 201 n=30 count=27: nil
+seed 202 n=112 count=14: nil
+seed 203 n=167 count=1: nil
+seed 204 n=130 count=6: picks [12:158,55:151,37:151,78:143,107:137,68:128] overflow 44 rejected [yearCoverage=1,notRecommendedNow=59,tooShort=15] projections 12 at 1789996400.0
+seed 205 n=21 count=19: nil
+seed 206 n=189 count=20: nil
+seed 207 n=166 count=7: picks [114:159,138:158,4:157,26:149,135:141,29:122,77:115] overflow 61 rejected [inAnotherBatch=3,yearCoverage=2,notRecommendedNow=89,duplicateOfPick=1,tooShort=6] projections 10 at 1789996400.0
+seed 208 n=53 count=22: nil
+seed 209 n=131 count=29: nil
+seed 210 n=105 count=24: nil
+seed 211 n=114 count=17: nil
+seed 212 n=120 count=13: picks [16:158,59:155,114:152,69:129,29:128,15:122,14:122,5:115,32:108,10:105,23:105,73:85,6:84] overflow 40 rejected [inAnotherBatch=1,notRecommendedNow=55,tooShort=9] projections 17 at 1789996400.0
+seed 213 n=94 count=2: nil
+seed 214 n=81 count=1: picks [30:154] overflow 28 rejected [notRecommendedNow=47,tooShort=5] projections 1 at 1789996400.0
+seed 215 n=47 count=25: nil
+seed 216 n=176 count=22: picks [79:154,110:150,19:143,173:136,77:129,59:127,154:116,30:111,54:109,171:109,41:108,91:107,172:104,42:103,46:102,152:100,139:96,150:92,163:90,133:89,29:74,175:68] overflow 34 rejected [inAnotherBatch=2,notRecommendedNow=96,duplicateOfPick=4,tooShort=11] projections 38 at 1789996400.0
+seed 217 n=182 count=11: picks [132:151,12:148,138:148,44:147,151:145,107:142,129:136,174:130,19:130,134:125,106:123] overflow 59 rejected [inAnotherBatch=2,notRecommendedNow=88,duplicateOfPick=3,tooShort=17] projections 18 at 1789996400.0
+seed 218 n=137 count=4: picks [116:149,135:141,79:128,33:119] overflow 46 rejected [yearCoverage=3,notRecommendedNow=63,duplicateOfPick=2,tooShort=14] projections 15 at 1789996400.0
+seed 219 n=30 count=18: nil
+seed 220 n=123 count=2: picks [36:156,94:156] overflow 41 rejected [notRecommendedNow=61,duplicateOfPick=2,tooShort=15] projections 7 at 1789996400.0
+seed 221 n=85 count=16: picks [15:150,38:125,16:107,72:105,22:79,79:67,78:59,4:40,24:39,21:38,57:35,33:28,13:21,29:18,74:10,75:155] overflow 17 rejected [inAnotherBatch=2,notRecommendedNow=44,tooShort=5] projections 20 at 1789996400.0
+seed 222 n=124 count=20: picks [96:157,97:156,123:143,53:142,51:140,42:130,13:114,88:86,65:80,104:73,22:69,69:67,12:62,1:31,28:23,113:16,81:15,105:14,115:6,2:121] overflow 15 rejected [inAnotherBatch=3,notRecommendedNow=63,duplicateOfPick=2,tooShort=17] projections 30 at 1789996400.0
+seed 223 n=139 count=22: picks [51:157,94:140,102:140,4:139,101:137,76:134,103:134,130:128,42:128,124:124,115:117,58:115,16:107,80:104,2:102,47:101,116:100,39:94,41:91,135:86,32:86,74:81] overflow 32 rejected [inAnotherBatch=1,notRecommendedNow=68,duplicateOfPick=3,tooShort=8] projections 35 at 1789996400.0
+seed 224 n=196 count=5: picks [118:157,43:156,176:154,182:154,71:151] overflow 83 rejected [inAnotherBatch=1,notRecommendedNow=88,duplicateOfPick=1,tooShort=17] projections 8 at 1789996400.0
+seed 225 n=60 count=4: picks [9:157,4:150,53:147,52:131] overflow 20 rejected [inAnotherBatch=1,notRecommendedNow=30,tooShort=3] projections 7 at 1789996400.0
+seed 226 n=49 count=3: picks [6:150,31:143,15:122] overflow 12 rejected [notRecommendedNow=26,duplicateOfPick=1,tooShort=4] projections 7 at 1789996400.0
+seed 227 n=126 count=23: picks [7:159,36:150,116:149,14:148,104:147,123:142,121:138,48:136,56:135,42:131,34:128,30:124,120:110,68:108,85:91,78:84,77:82,54:67,86:66,111:63,29:48,57:48,6:46] overflow 16 rejected [inAnotherBatch=2,notRecommendedNow=64,duplicateOfPick=2,tooShort=11] projections 38 at 1789996400.0
+seed 228 n=91 count=4: picks [43:159,34:158,30:119,66:112] overflow 18 rejected [notRecommendedNow=55,duplicateOfPick=1,tooShort=11] projections 7 at 1789996400.0
+seed 229 n=34 count=23: nil
+seed 230 n=115 count=28: nil
+seed 231 n=168 count=17: picks [34:155,118:148,115:140,56:138,95:131,0:125,37:120,11:111,78:110,161:103,151:100,164:98,96:97,82:96,131:94,67:91,133:86] overflow 44 rejected [inAnotherBatch=2,notRecommendedNow=84,duplicateOfPick=4,tooShort=14] projections 29 at 1789996400.0
+seed 232 n=141 count=12: nil
+seed 233 n=28 count=28: nil
+seed 234 n=25 count=29: nil
+seed 235 n=85 count=15: picks [32:159,33:158,28:154,41:150,70:144,60:142,80:141,1:137,79:130,64:129,22:111,3:111,63:107,81:97,40:85] overflow 8 rejected [notRecommendedNow=40,duplicateOfPick=4,tooShort=11] projections 28 at 1789996400.0
+seed 236 n=54 count=28: nil
+seed 237 n=79 count=21: picks [16:154,38:153,54:150,47:149,13:128,43:118,8:110,20:95,45:90,60:88,30:88,6:86,1:80,24:69,51:56,25:52,78:44,59:33,73:11,2:155,31:140] overflow 13 rejected [sameEventAsPick=1,notRecommendedNow=36,duplicateOfPick=2,tooShort=4] projections 26 at 1789996400.0
+seed 238 n=22 count=5: nil
+seed 239 n=122 count=25: picks [113:158,33:157,53:155,120:154,6:140,90:136,12:131,51:128,65:128,59:109,108:104,30:100,74:93,79:92,109:76,110:74,57:74,89:73,5:68,116:61,49:56,106:51,101:48,111:36,48:34] overflow 11 rejected [inAnotherBatch=2,notRecommendedNow=61,duplicateOfPick=3,tooShort=9] projections 43 at 1789996400.0
+seed 240 n=87 count=27: nil
