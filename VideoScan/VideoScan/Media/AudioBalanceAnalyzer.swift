@@ -221,15 +221,28 @@ enum AstatsOutputParser {
         return levels
     }
 
+    /// How every line astats itself logs begins ("[Parsed_astats_0 @ 0x…] ").
+    static let astatsLinePrefix = "[Parsed_astats_"
+
     /// How many samples per channel astats was fed — the "Number of
     /// samples:" line of its Overall section (GH #470). nil when the line is
     /// absent or unreadable: never a guess. Pure.
+    ///
+    /// Only a line astats LOGGED counts: it must start at column 0 with the
+    /// filter's own prefix. The file's metadata is printed on the same
+    /// stream, indented under its key, so a comment that reads
+    /// "x] Number of samples: 576000" is never the measurement (Codex #286
+    /// F1). One pass has one astats instance; two different counts are not an
+    /// answer.
     static func samplesPerChannel(fromStderr text: String) -> Int64? {
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let payload = rawLine.range(of: "] ").map { rawLine[$0.upperBound...] } ?? rawLine
-            if let v = value(of: "Number of samples:", in: payload), let n = Int64(v), n >= 0 { return n }
+        var counts = Set<Int64>()
+        for rawLine in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) where rawLine.hasPrefix(astatsLinePrefix) {
+            guard let close = rawLine.range(of: "] "),
+                  let v = value(of: "Number of samples:", in: rawLine[close.upperBound...]) else { continue }
+            guard let n = Int64(v), n >= 0 else { return nil }
+            counts.insert(n)
         }
-        return nil
+        return counts.count == 1 ? counts.first : nil
     }
 
     /// "Label: value" → "value" (trimmed), or nil when the line isn't

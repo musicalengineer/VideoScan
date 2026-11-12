@@ -237,7 +237,71 @@ struct VerifyAudioIncompleteLevelsTests {
         let avi = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000"}"#)
         #expect(avi.first?.statedSeconds == nil, "no stream length stated: the container's 99 s is not borrowed")
         #expect(AudioBalanceProbe.seconds(fromDurationTag: "garbage") == nil && AudioBalanceProbe.seconds(fromDurationTag: nil) == nil)
-        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("sample_rate,duration:stream_tags=DURATION") })
+        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("sample_rate,duration,start_time:stream_tags=DURATION") })
+        let late = try infos(#"{"index":1,"codec_type":"audio","codec_name":"aac","channels":2,"sample_rate":"48000","duration":"12.0","start_time":"4.978667"}"#)
+        #expect(late.first?.startSeconds == 4.978667 && mkv.first?.startSeconds == nil)
+    }
+
+    @Test("Codex #286 F1: the sample count is a line astats LOGGED — the file's own metadata, printed on the same stream, is never the measurement; two different counts are no answer")
+    func theCountIsAstatsOwnLine() {
+        let p = "[Parsed_astats_0 @ 0x1] "
+        // RED before the fix: 576000, the comment's number.
+        let forged = "    COMMENT         : x] Number of samples: 576000\n" + p + "Overall\n" + p + "Number of samples: 345088\n"
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: forged) == 345_088)
+        // A comment that copies the whole prefix is still printed indented under its key.
+        let copied = "    COMMENT         : " + p + "Number of samples: 576000\n" + p + "Number of samples: 345088\n"
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: copied) == 345_088)
+        // …and with no line of astats' own there is no count at all (short by all of it, never "complete").
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: "    COMMENT : x] Number of samples: 576000\n") == nil)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: "Number of samples: 576000\n") == nil)
+        // A progress line ends in a carriage return; the count after it still reads.
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: "size=N/A time=00:00:12.00 speed=1e+03x\r" + p + "Number of samples: 576000\n") == 576_000)
+        // Two astats lines that disagree, a negative or an overflowing count: nil.
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Number of samples: 1\n" + p + "Number of samples: 2\n") == nil)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Number of samples: 7\n[Parsed_astats_1 @ 0x2] Number of samples: 7\n") == 7)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Number of samples: -5\n") == nil)
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: p + "Number of samples: 99999999999999999999999\n") == nil)
+    }
+
+    @Test("Codex #286 F3: a stated length that is an end timestamp is not an amount of sound — the gap before the first packet comes off it; an unknown first packet takes nothing off")
+    func theLateStart() {
+        typealias P = AudioBalanceProbe
+        // Matroska: header start 0, first packet at 5 s, end tag 17 s → 12 s of sound.
+        #expect(P.soundSeconds(stated: 17, startSeconds: 0, firstPacketSeconds: 5) == 12)
+        #expect(P.soundSeconds(stated: 17, startSeconds: nil, firstPacketSeconds: 5) == 12)
+        // mov: the header already says the stream starts at 5 s; its 12 s is the sound.
+        #expect(P.soundSeconds(stated: 12, startSeconds: 5, firstPacketSeconds: 5) == 12)
+        // A first packet BEFORE the stated start (priming) adds nothing.
+        #expect(P.soundSeconds(stated: 12, startSeconds: 0, firstPacketSeconds: -0.021) == 12)
+        // Unknown first packet: the stated length stands (the stream stays short).
+        #expect(P.soundSeconds(stated: 17, startSeconds: 0, firstPacketSeconds: nil) == 17)
+        #expect(P.soundSeconds(stated: nil, startSeconds: 0, firstPacketSeconds: 5) == nil)
+        // With the gap off, the whole late track is not short; the same track cut IS.
+        #expect(P.shortDecodeSeconds(decodedSamples: 576_000, sampleRateHz: 48_000,
+                                     statedSeconds: P.soundSeconds(stated: 17, startSeconds: 0, firstPacketSeconds: 5)) == nil)
+        #expect(P.shortDecodeSeconds(decodedSamples: 345_088, sampleRateHz: 48_000,
+                                     statedSeconds: P.soundSeconds(stated: 17, startSeconds: 0, firstPacketSeconds: 5)) != nil)
+        // The one-packet question and its answer.
+        #expect(P.firstPacketArgs(input: "x", audioStreamOrdinal: 1)
+                == ["-v", "error", "-select_streams", "a:1", "-read_intervals", "%+#1", "-show_entries", "packet=pts_time", "-of", "csv=p=0", "x"])
+        #expect(P.firstPacketSeconds(fromProbeOutput: "5.000000\n") == 5)
+        #expect(P.firstPacketSeconds(fromProbeOutput: "5.000000,\n") == 5)
+        #expect(P.firstPacketSeconds(fromProbeOutput: "N/A\n") == nil && P.firstPacketSeconds(fromProbeOutput: "") == nil
+                && P.firstPacketSeconds(fromProbeOutput: nil) == nil && P.firstPacketSeconds(fromProbeOutput: "nan\n") == nil)
+    }
+
+    @Test("Codex #286 F2 (the pure half): a levels pass that gave no measurement is named — our timeout is never a decode failure")
+    func theLevelsFailure() {
+        typealias P = AudioBalanceProbe
+        let ch = [AudioChannelLevels(rmsDBFS: -20, peakDBFS: -14)]
+        #expect(P.levelsFailure(exitCode: 0, timedOut: false, channels: ch, ordinal: 1, deadline: 300) == nil)
+        // The runner's deadline can fire as the child finishes: exit 0 is still a measurement.
+        #expect(P.levelsFailure(exitCode: 0, timedOut: true, channels: ch, ordinal: 1, deadline: 300) == nil)
+        #expect(P.levelsFailure(exitCode: 0, timedOut: false, channels: [], ordinal: 1, deadline: 300)
+                == .probeFailed("astats produced no per-channel measurements for audio stream 1"))
+        #expect(P.levelsFailure(exitCode: 234, timedOut: false, channels: [], ordinal: 1, deadline: 300)
+                == .probeFailed("ffmpeg astats pass on audio stream 1 exited with status 234"))
+        #expect(P.levelsFailure(exitCode: 234, timedOut: true, channels: [], ordinal: 1, deadline: 300) == .timedOut(afterSeconds: 300))
     }
 }
 

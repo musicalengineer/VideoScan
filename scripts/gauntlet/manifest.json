@@ -35768,7 +35768,10 @@
         "noLevelsPassNeeded",
         "nothingStoredMeansNoKeyOnDisk",
         "poisonedDiagnosesAreNotOk",
+        "theCountIsAstatsOwnLine",
         "theDiagnosisIsStillCached",
+        "theLateStart",
+        "theLevelsFailure",
         "theSampleCountLine",
         "theShortDecodeRule",
         "theStatedLength"
@@ -35786,6 +35789,8 @@
       ],
       "tests": [
         "aDecodeThatEndsEarlyIsNotStoredOk",
+        "aLateStartIsNotAShortDecode",
+        "aLaterFailureDoesNotEraseAShortDecode",
         "aSoundNotCheckedCardIsNotLoggedOrCountedOK",
         "aWholeFileIsStillComplete",
         "anEarlierVerdictIsLeftAlone",
@@ -39686,7 +39691,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 594,
+      "expected_floor": 597,
       "name": "regression",
       "package_expected_floor": 334,
       "package_selectors": [

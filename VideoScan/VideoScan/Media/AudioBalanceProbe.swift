@@ -64,6 +64,9 @@ struct AudioBalanceStreamInfo: Sendable, Equatable {
     /// nil when the container states none for the stream (avi, raw dv) —
     /// then there is nothing to hold the decode against (GH #470).
     var statedSeconds: Double? = nil
+    /// Where the header says this stream's clock starts, in seconds
+    /// (ffprobe `start_time`); nil when it reports none.
+    var startSeconds: Double? = nil
 }
 
 /// What ffprobe says about the file's streams — consumed by the
@@ -321,16 +324,57 @@ enum AudioBalanceProbe {
     /// One stream's levels pass held against the length its header states:
     /// the short decode, logged, or nil when the decode covered the stream
     /// (or the header states nothing to compare against).
+    ///
+    /// A stated length can be an END TIMESTAMP rather than an amount of
+    /// sound: Matroska's is the last packet's end, so a whole track that
+    /// starts 5 s into the file states 5 s more than it holds (Codex #286
+    /// F3). So before a stream is called short, the first sound packet's
+    /// timestamp is read (one packet, `firstPacketArgs`) and whatever lies
+    /// between the header's start and that packet is taken off the stated
+    /// length. Asked only on the suspicious path; when it cannot be read the
+    /// stream stays short (toward "not checked", never toward "ok").
     static func shortDecodeOfStream(_ ordinal: Int, levelsStderr: String, shape: AudioBalanceStreamShape,
-                                    path: String) -> AudioShortDecode? {
+                                    path: String, ffprobe: String, control: ProcessControl?) async -> AudioShortDecode? {
         guard ordinal < shape.audioStreamInfos.count else { return nil }
         let info = shape.audioStreamInfos[ordinal]
         let decoded = AstatsOutputParser.samplesPerChannel(fromStderr: levelsStderr)
+        guard shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: info.sampleRateHz,
+                                 statedSeconds: info.statedSeconds) != nil else { return nil }
+        let first = await ProcessRunner.runProcess(
+            executable: ffprobe, arguments: firstPacketArgs(input: path, audioStreamOrdinal: ordinal),
+            stdoutLimitBytes: 4096, deadlineSeconds: 60, control: control)
+        let firstPacket = first.exitCode == 0 ? firstPacketSeconds(fromProbeOutput: first.stdout) : nil
+        let stated = soundSeconds(stated: info.statedSeconds, startSeconds: info.startSeconds,
+                                  firstPacketSeconds: firstPacket)
         guard let missing = shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: info.sampleRateHz,
-                                               statedSeconds: info.statedSeconds) else { return nil }
-        let stated = info.statedSeconds ?? 0
-        balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) audio stream \(ordinal) — ffmpeg exited 0 but the decode ended early: \(decoded.map(String.init) ?? "no", privacy: .public) samples counted, \(String(format: "%.1f", missing), privacy: .public) s short of the \(String(format: "%.1f", stated), privacy: .public) s the header states; the levels are not a complete measurement")
-        return AudioShortDecode(missingSeconds: missing, statedSeconds: stated)
+                                               statedSeconds: stated) else { return nil }
+        balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) audio stream \(ordinal) — ffmpeg exited 0 but the decode ended early: \(decoded.map(String.init) ?? "no", privacy: .public) samples counted, \(String(format: "%.1f", missing), privacy: .public) s short of the \(String(format: "%.1f", stated ?? 0), privacy: .public) s the header states; the levels are not a complete measurement")
+        return AudioShortDecode(missingSeconds: missing, statedSeconds: stated ?? 0)
+    }
+
+    /// The amount of sound a stated length stands for: the stated length
+    /// less any gap between where the header says the stream starts and
+    /// where its first packet actually is. An unknown first packet takes
+    /// nothing off. Pure.
+    static func soundSeconds(stated: Double?, startSeconds: Double?, firstPacketSeconds: Double?) -> Double? {
+        guard let stated, let firstPacketSeconds else { return stated }
+        let lateBy = firstPacketSeconds - (startSeconds ?? 0)
+        return lateBy > 0 ? stated - lateBy : stated
+    }
+
+    /// ffprobe: the timestamp of ONE packet, the first of audio stream N.
+    static func firstPacketArgs(input: String, audioStreamOrdinal: Int) -> [String] {
+        ["-v", "error", "-select_streams", "a:\(audioStreamOrdinal)", "-read_intervals", "%+#1",
+         "-show_entries", "packet=pts_time", "-of", "csv=p=0", input]
+    }
+
+    /// The first packet's timestamp from `firstPacketArgs` output; nil when
+    /// it is not one plain number. Pure.
+    static func firstPacketSeconds(fromProbeOutput text: String?) -> Double? {
+        guard let line = text?.split(whereSeparator: \.isNewline).first else { return nil }
+        let field = line.split(separator: ",").first.map(String.init) ?? ""
+        guard let v = Double(field.trimmingCharacters(in: .whitespaces)), v.isFinite else { return nil }
+        return v
     }
 
     /// Matroska's per-stream DURATION tag ("00:00:12.000000000") in seconds;
@@ -384,7 +428,7 @@ enum AudioBalanceProbe {
         [
             "-v", "error",
             "-show_entries",
-            "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate,sample_rate,duration:stream_tags=DURATION",
+            "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate,sample_rate,duration,start_time:stream_tags=DURATION",
             "-show_entries", "format=format_name,duration",
             "-of", "json",
             input
@@ -402,6 +446,7 @@ enum AudioBalanceProbe {
         let r_frame_rate: String?
         let sample_rate: String?
         let duration: String?
+        let start_time: String?
         let tags: [String: String]?
     }
     private struct ProbedFormat: Decodable {
@@ -435,7 +480,8 @@ enum AudioBalanceProbe {
                 bitRate: s.bit_rate.flatMap { Int($0) },
                 sampleRateHz: s.sample_rate.flatMap { Int($0) },
                 statedSeconds: s.duration.flatMap { Double($0) }
-                    ?? seconds(fromDurationTag: s.tags?["DURATION"])))
+                    ?? seconds(fromDurationTag: s.tags?["DURATION"]),
+                startSeconds: s.start_time.flatMap { Double($0) }))
         }
         guard let firstAudio = audioInfos.first else {
             throw AudioBalanceProbeError.noAudioStream
@@ -453,6 +499,58 @@ enum AudioBalanceProbe {
             audioStreamInfos: audioInfos,
             containerFormat: report.format?.format_name ?? "",
             videoRFrameRate: video?.r_frame_rate)
+    }
+
+    // MARK: Levels of every stream (I/O)
+
+    /// Why one stream's levels pass gave no measurement, else nil. Pure.
+    static func levelsFailure(exitCode: Int32, timedOut: Bool, channels: [AudioChannelLevels], ordinal: Int,
+                              deadline: TimeInterval) -> AudioBalanceProbeError? {
+        guard exitCode == 0 else {
+            // OUR deadline killed ffmpeg — says nothing about the file.
+            // Distinct case so callers can never mistake it for decode
+            // failure (GH #136).
+            return timedOut
+                ? .timedOut(afterSeconds: Int(deadline))
+                : .probeFailed("ffmpeg astats pass on audio stream \(ordinal) exited with status \(exitCode)")
+        }
+        return channels.isEmpty
+            ? .probeFailed("astats produced no per-channel measurements for audio stream \(ordinal)") : nil
+    }
+
+    /// One astats levels pass per audio stream. Exit 0 is not "decoded to
+    /// the end" (GH #470): each pass is held against its stream's stated
+    /// length, and the worst short decode is returned beside the levels.
+    ///
+    /// Once a stream came up short, a LATER stream's failure does not throw
+    /// (Codex #286 F2): the answer is already "the decode ended early", and
+    /// throwing would turn it into "could not be decoded" — which Promote's
+    /// "Archive anyway" tick may accept. The loop stops there; the streams
+    /// measured so far are returned and the pass is incomplete.
+    static func measureLevels(path: String, shape: AudioBalanceStreamShape, ffmpeg: String, ffprobe: String,
+                              deadline: TimeInterval, control: ProcessControl?) async throws
+        -> (perStream: [[AudioChannelLevels]], shortDecode: AudioShortDecode?) {
+        var perStream: [[AudioChannelLevels]] = []
+        var shortDecode: AudioShortDecode?
+        for ordinal in 0..<shape.audioStreams {
+            let result = await ProcessRunner.runProcess(
+                executable: ffmpeg,
+                arguments: levelsArgs(input: path, audioStreamOrdinal: ordinal),
+                deadlineSeconds: deadline,
+                control: control)
+            let channels = result.exitCode == 0 ? AstatsOutputParser.perChannelLevels(fromStderr: result.stderr) : []
+            if let failure = levelsFailure(exitCode: result.exitCode, timedOut: result.timedOut, channels: channels,
+                                           ordinal: ordinal, deadline: deadline) {
+                guard shortDecode != nil else { throw failure }
+                balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) audio stream \(ordinal) gave no measurement after an earlier stream's decode ended early; the short decode stands")
+                break
+            }
+            perStream.append(channels)
+            shortDecode = AudioShortDecode.worse(shortDecode, await shortDecodeOfStream(
+                ordinal, levelsStderr: result.stderr, shape: shape, path: path, ffprobe: ffprobe, control: control))
+            try Task.checkCancellation()
+        }
+        return (perStream, shortDecode)
     }
 
     // MARK: Full analysis (I/O)
@@ -513,36 +611,8 @@ enum AudioBalanceProbe {
 
         // ---- Per-channel levels of EVERY audio stream (audio-only
         // decode, one pass each — 12-bit DV tapes carry two pairs).
-        var perStream: [[AudioChannelLevels]] = []
-        var shortDecode: AudioShortDecode?
-        for ordinal in 0..<shape.audioStreams {
-            let levelsResult = await ProcessRunner.runProcess(
-                executable: ffmpeg,
-                arguments: levelsArgs(input: path, audioStreamOrdinal: ordinal),
-                deadlineSeconds: passDeadline,
-                control: control)
-            guard levelsResult.exitCode == 0 else {
-                if levelsResult.timedOut {
-                    // OUR deadline killed ffmpeg — says nothing about the
-                    // file. Distinct case so callers can never mistake it
-                    // for decode failure (GH #136).
-                    throw AudioBalanceProbeError.timedOut(afterSeconds: Int(passDeadline))
-                }
-                throw AudioBalanceProbeError.probeFailed(
-                    "ffmpeg astats pass on audio stream \(ordinal) exited with status \(levelsResult.exitCode)")
-            }
-            let channels = AstatsOutputParser.perChannelLevels(
-                fromStderr: levelsResult.stderr)
-            guard !channels.isEmpty else {
-                throw AudioBalanceProbeError.probeFailed(
-                    "astats produced no per-channel measurements for audio stream \(ordinal)")
-            }
-            perStream.append(channels)
-            // Exit 0 is not "decoded to the end" (GH #470).
-            shortDecode = AudioShortDecode.worse(shortDecode, shortDecodeOfStream(
-                ordinal, levelsStderr: levelsResult.stderr, shape: shape, path: path))
-            try Task.checkCancellation()
-        }
+        let (perStream, shortDecode) = try await measureLevels(
+            path: path, shape: shape, ffmpeg: ffmpeg, ffprobe: ffprobe, deadline: passDeadline, control: control)
 
         // ---- Program-stream selection (the analyze-time decision).
         // A stream "carries program" when ANY of its channels clears the
@@ -573,7 +643,10 @@ enum AudioBalanceProbe {
         // ---- Difference pass, only when the dual-mono question is live
         // (single program stream, 2 channels, both above the floor).
         var difference: Double?
-        if programOrdinals.count == 1, channels.count == 2,
+        // Not after a short decode (Codex #286 F2): the class of a partial
+        // measurement is never used, and a failure here must not replace
+        // "the decode ended early" with "could not be decoded".
+        if shortDecode == nil, programOrdinals.count == 1, channels.count == 2,
            AudioBalanceClassifier.carriesProgram(channels[0]),
            AudioBalanceClassifier.carriesProgram(channels[1]) {
             let diffResult = await ProcessRunner.runProcess(

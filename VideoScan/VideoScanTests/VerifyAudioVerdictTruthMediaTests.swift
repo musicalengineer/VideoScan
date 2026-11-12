@@ -340,6 +340,73 @@ struct VerifyAudioVerdictTruthMediaTests {
         #expect(failureMessage(job)?.hasPrefix("Could not check the audio — ") == true, "\(job.state)")
     }
 
+    /// 17 s of picture, 12 s of sound that starts 5 s in.
+    private func lateStartFixture(_ dir: URL, _ name: String, videoCodec: String, videoArgs: [String]) throws -> String {
+        try VerifyAudioTestMedia.generate(into: dir, name: name, videoCodec: videoCodec,
+                                          extraVideoArgs: videoArgs + ["-af", "asetpts=PTS+5/TB"],
+                                          audioCodec: "pcm_s16le", videoDuration: 17, audioDuration: 12)
+    }
+
+    @Test("Codex #286 F3: a WHOLE file whose sound starts 5 s in is a complete measurement (Matroska states the end timestamp, 17 s, for 12 s of sound) — and the same file cut short is still caught",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)))
+    func aLateStartIsNotAShortDecode() async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("late")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, codec, args) in [("test_va_late.mkv", "ffv1", [String]()), ("test_va_late.mov", "prores", ["-movflags", "+faststart"])] {
+            let path = try lateStartFixture(dir, name, videoCodec: codec, videoArgs: args)
+            let analysis = try await AudioBalanceProbe.analyze(path: path)
+            // RED before the fix (mkv): 5.0 s "short" of 17.0 s.
+            #expect(analysis.shortDecode == nil, "\(name): \(String(describing: analysis.shortDecode))")
+            #expect(analysis.levelsComplete && analysis.measuredSilent == false, "\(name)")
+        }
+        let whole = try await VerifyAudioProbe.diagnose(path: dir.appendingPathComponent("test_va_late.mkv").path)
+        #expect(whole.levelsPass == .complete, "\(whole.levelsPass)")
+        if case .unchecked(let why) = PromoteSoundGate.finding(from: whole) { Issue.record("the gate would refuse a whole file: \(why)") }
+
+        // Cut to 60 % of its bytes: the gap is taken off, and what is left is still short.
+        let path = dir.appendingPathComponent("test_va_late.mkv").path
+        let size = try #require((try FileManager.default.attributesOfItem(atPath: path))[.size] as? NSNumber).uint64Value
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        try handle.truncate(atOffset: size * 6 / 10)
+        try handle.close()
+        let cut = try await AudioBalanceProbe.analyze(path: path)
+        let short = try #require(cut.shortDecode, "a late-start file cut short must still be caught")
+        #expect(abs(short.statedSeconds - 12) < 0.01, "the stated SOUND is 12 s, not the 17 s end timestamp: \(short.statedSeconds)")
+        #expect(!cut.levelsComplete && cut.measuredSilent == nil)
+    }
+
+    @Test("Codex #286 F2: stream 0's decode ends early, then stream 1 cannot be decoded at all — the answer stays 'the decode ended early' (a check that RAN), never 'could not be decoded', which the Archive-anyway tick may accept",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)))
+    func aLaterFailureDoesNotEraseAShortDecode() async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("short_then_bad")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("test_va_two.mkv").path
+        try CleanupTestMedia.runFFmpeg([
+            "-f", "lavfi", "-i", "testsrc=duration=12:size=320x240:rate=25",
+            "-f", "lavfi", "-i", "aevalsrc=\(VerifyAudioTestMedia.trueStereoExpr):s=48000:d=12",
+            "-f", "lavfi", "-i", "aevalsrc=\(VerifyAudioTestMedia.trueStereoExpr):s=48000:d=12",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "ffv1", "-c:a", "pcm_s16le"], output: path)
+        // The SECOND track's codec id becomes one no decoder knows (same length), then the tail is cut off.
+        var bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let id = Data("A_PCM/INT/LIT".utf8)
+        let first = try #require(bytes.range(of: id))
+        let second = try #require(bytes.range(of: id, in: first.upperBound..<bytes.endIndex), "two PCM tracks expected")
+        bytes.replaceSubrange(second, with: Data("A_BAD/INT/LIT".utf8))
+        try bytes.prefix(bytes.count * 6 / 10).write(to: URL(fileURLWithPath: path))
+
+        // The probe: no throw; the short decode of stream 0 is carried.
+        let analysis = try await AudioBalanceProbe.analyze(path: path)   // RED before the fix: throws probeFailed
+        #expect(analysis.shortDecode != nil && !analysis.levelsComplete && analysis.measuredSilent == nil)
+        // Verify Audio and the Promote gate read it as a check that ran and came up short.
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        #expect(PromoteSoundGate.ranButCameUpShort(d), "the tick must not be eligible")
+        guard case .unchecked(let why) = PromoteSoundGate.finding(from: d) else {
+            Issue.record("\(PromoteSoundGate.finding(from: d))"); return
+        }
+        #expect(why.hasPrefix("the sound decode stopped early"), "\(why)")
+        #expect(d.verdict != .ok && d.persistedStatus == "")
+    }
+
     @Test("#470 unchanged: 12 s of whole, healthy sound in every matrix container is still a complete measurement",
           .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(3)), arguments: matrix)
     func aWholeFileIsStillComplete(_ c: Container) async throws {
