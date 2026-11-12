@@ -14,12 +14,18 @@
    adversarial confirm. Weekly sanitizers on the M4: address Sat 07:00, thread Sun 05:00. Kick a full M4 run by hand:
    `ssh ricksm4.local 'launchctl kickstart gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min). The 14:00
    guard skips only when today's green run was for the commit `main` is at.
-2. **State of `main` on the testbed.** Before the night: M5 Ultra nightly 11/11 02:00 GREEN on
-   `f28a61c27` (13,579 passed, 0 failed, 65 skipped; Core 2,567); M4 full testbed 11/11 16:12 on `343bdd7b9`:
-   suite GREEN (13,586 of 13,653 passed, 0 failed), gauntlet AMBER (7 known issues, 903 unadapted suites, ui not
-   run — the expected state), script tests GREEN (2,101). **After the night's ten merges: runs started on both
-   Macs late 11/11; their results replace this sentence when they finish.** During the night every merge passed
-   the sensor lane on its exact tree (744 tests each: 719 app, 25 Core).
+2. **State of `main` on the testbed, after the night's ten merges (all on `29a0495e5`, the docs commit on top of
+   the last merge `a6d957a5d`).** M4 full testbed, kicked by hand 23:05, done 01:15: suite **GREEN** (13,664
+   passed, 0 failed, 67 skipped of 13,731; Core 2,577 passed, 0 failed), gauntlet **AMBER** (34 min: 7 known
+   issues, all in regression, the same 7 as the afternoon run; 907 unadapted suites; ui not run — the expected
+   state), script tests **GREEN** (2,110 passed). M5 Ultra deep gauntlet (`m4_run.sh deep --host ultra`, 23:05,
+   32 min): **AMBER**, 0 failures (unit 4,584, regression 917, hallie 1,116, performance 83 passed); 8 known
+   issues — the M4's 7 plus one timing miss, catalog search '1990s' at 100k rows 56.5 ms against a 50 ms budget
+   (GH #208's band; 'donna' and 'mark dan grampa' sat at 47.9 and 49.7 ms, so that budget has no margin on the
+   Ultra; no merge of the night touches search). The M5 Ultra's 02:00 nightly suite of 11/12 runs on this commit; read its row on the
+   metrics page (it had not finished when this was written). Before the night, for comparison: M4
+   11/11 16:12 on `343bdd7b9` suite GREEN 13,586 passed; every merge of the night also passed the sensor lane on
+   its exact tree (744 tests: 719 app, 25 Core).
 3. **The night of 11/11: the workspace cleanup (Rick's theme).** Ten branches from 11/08 brought current with
    `main` (each was 107+ commits behind), reviewed, proven and merged one at a time, each as one `--no-ff` merge;
    every branch, worktree and DerivedData removed after its merge. Nothing here changes what Rick sees except the
