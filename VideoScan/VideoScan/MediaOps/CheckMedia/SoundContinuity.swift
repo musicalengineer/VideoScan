@@ -573,7 +573,10 @@ extension CheckMediaRules {
     /// lost feed, so the words say what was measured and the owner listens.
     private static func soundStopsFinding(_ r: SoundContinuityReport) -> String? {
         let log = r.allQuiet
-        guard log.stretches > 0, log.totalSeconds < r.seconds - 1 else { return nil }
+        // Wholly quiet = one stretch from the first sample to the last (the
+        // tracker and the report count the same frames, so this is exact).
+        let whollyQuiet = log.stretches == 1 && log.longestStartSeconds == 0 && log.longestSeconds >= r.seconds
+        guard log.stretches > 0, !whollyQuiet else { return nil }
         let more = log.stretches > 1 ? " (\(V.groupedInt(log.stretches)) stretches)" : ""
         return "\(V.durationText(log.longestSeconds)) from \(V.timecode(log.longestStartSeconds))\(more)"
     }

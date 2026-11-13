@@ -107,6 +107,9 @@
    so a cut-short AVI reads "not checked" and is refused like the other containers (all 38 catalogued AVI files
    decoded in full: 0 called short). (c) Check Media compares picture and sound lengths in mkv (DURATION tags)
    and avi; every catalogued mkv and avi header read: one real mkv is flagged, 61 min of sound on a 96 min picture.
+   Codex #289 on the commit: fix (2, both P2, both in Check Media rows, none at the gate) — a cut AVI read
+   "the sound runs 16 s longer" (counts are now compared with counts) and a track with under 1 s of sound was
+   treated as wholly quiet; each closed by its red test.
    **Shelved, not merged:** AVFoundation as a second decoder at the gate. Over 73 real mov/mp4 files and 46
    generated fault cells it never disagreed with ffmpeg once, so there is no example of "two decoders disagree"
    to show; the work is a patch in `.scratch/470-sound-slice2-2026-11-12/second-decoder-shelved.patch`.

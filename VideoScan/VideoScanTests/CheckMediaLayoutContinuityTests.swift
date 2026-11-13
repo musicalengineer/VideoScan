@@ -442,6 +442,16 @@ struct CheckMediaSoundContinuityTests {
                 "\(withDropout.sentence)")
         #expect(withDropout.verdict == .warning, "a stop is not a stutter event")
 
+        // Codex #289 F2 — half a second of sound, then nothing: not a wholly quiet track.
+        var brief = SoundContinuityReport(seconds: 30)
+        brief.oneSidedQuiet = [QuietLog(), QuietLog()]
+        brief.allQuiet.note(start: 0.5, seconds: 29.5)
+        #expect(R.checkSoundContinuity(.success(brief), facts: facts).verdict == .warning)
+        // Through the analyzer: digital zero from end to end is one stretch the length of the track.
+        let zero = PCM.analyze([Int16](repeating: 0, count: 2 * 20 * PCM.rate))
+        #expect(zero.allQuiet.stretches == 1 && zero.allQuiet.longestSeconds == zero.seconds, "\(zero.allQuiet) of \(zero.seconds)")
+        #expect(R.checkSoundContinuity(.success(zero), facts: facts).verdict == .ok)
+
         // Quiet from the first sample to the last: "silent" is the Sound row's word.
         var silent = SoundContinuityReport(seconds: 1_200)
         silent.oneSidedQuiet = [QuietLog(), QuietLog()]
@@ -583,11 +593,29 @@ struct CheckMediaSoundContinuityTests {
         #expect(row.verdict == .problem && row.sentence.hasPrefix("The picture runs 20 s longer"), "\(row.verdict) \(row.sentence)")
 
         let avi = try MediaFacts.parse(probeJSON: Data(#"""
-            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"40.0"},
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"40.0","nb_frames":"1000","avg_frame_rate":"25/1"},
                         {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"1920000"}],
              "format":{"format_name":"avi","duration":"40.0"}}
             """#.utf8))
         #expect(R.checkAVDuration(CheckMediaQuickInputs(facts: avi, videoFacts: VideoVerifyFacts())).verdict == .ok)
+
+        // Codex #289 F1 — an AVI cut short: ffprobe recomputes the picture's duration from what is
+        // left (24 s) while both header counts still state 40 s. Counts are compared with counts, so
+        // the row does not claim 16 s of extra sound; the short decode is the Sound row's finding.
+        let cut = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"24.0","nb_frames":"1000","r_frame_rate":"25/1","avg_frame_rate":"25/1"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"1920000"}],
+             "format":{"format_name":"avi","duration":"24.0"}}
+            """#.utf8))
+        let cutRow = R.checkAVDuration(CheckMediaQuickInputs(facts: cut, videoFacts: VideoVerifyFacts()))
+        #expect(cutRow.verdict == .ok, "\(cutRow.verdict) \(cutRow.sentence)")
+        // Half the sound, by the counts: still a Problem.
+        let half = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"40.0","nb_frames":"1000","r_frame_rate":"25/1","avg_frame_rate":"25/1"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"960000"}],
+             "format":{"format_name":"avi","duration":"40.0"}}
+            """#.utf8))
+        #expect(R.checkAVDuration(CheckMediaQuickInputs(facts: half, videoFacts: VideoVerifyFacts())).verdict == .problem)
 
         // Nothing stated: still "not run", never a guess.
         let bare = try MediaFacts.parse(probeJSON: Data(#"""

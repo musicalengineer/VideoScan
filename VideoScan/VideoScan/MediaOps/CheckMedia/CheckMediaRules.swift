@@ -216,7 +216,7 @@ enum CheckMediaRules {
         // Each stream's own stated length — its duration, else Matroska's tag,
         // else AVI's PCM sample count (2026-11-12: sound half as long as the
         // picture read "the file doesn't record separate lengths" in mkv and avi).
-        guard let v = video.statedSeconds, let a = audio.statedSeconds, v > 0, a > 0 else {
+        guard let (v, a) = statedLengths(picture: video, sound: audio), v > 0, a > 0 else {
             return .notRun(.avDuration, because: "the file doesn't record separate picture and sound lengths")
         }
         let diff = abs(v - a), longer = max(v, a)
@@ -239,6 +239,22 @@ enum CheckMediaRules {
         return MediaCheck(kind: .avDuration, verdict: .ok,
                           sentence: "Picture and sound are the same length.",
                           evidence: evidence)
+    }
+
+    /// The two lengths the header states, read the same way on both sides.
+    /// Where the sound's only statement is AVI's sample count, the picture's
+    /// is its frame count over its frame rate: ffprobe recomputes an AVI's
+    /// `duration` from what is left of a cut file, the counts it leaves alone
+    /// (Codex #289 — a cut AVI read "the sound runs 16 s longer"). nil when
+    /// either side states nothing.
+    static func statedLengths(picture: MediaStreamFacts, sound: MediaStreamFacts) -> (Double, Double)? {
+        if sound.durationSeconds == nil, sound.tagDurationSeconds == nil, let counted = sound.countedSeconds {
+            let fps = picture.avgFrameRate > 0 ? picture.avgFrameRate : picture.rFrameRate
+            guard let frames = picture.frameCount, fps > 0 else { return nil }
+            return (Double(frames) / fps, counted)
+        }
+        guard let v = picture.statedSeconds, let a = sound.statedSeconds else { return nil }
+        return (v, a)
     }
 
     // 5. Sound speed: sample count vs length × sample rate.
