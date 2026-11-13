@@ -12451,6 +12451,7 @@
         "fiftyMsGapIsADropout",
         "fullPassMaySayHealthy",
         "legacyQuickCardDisplaysTheNewSentence",
+        "lengthsInMatroskaAndAVI",
         "longLowBitrateChunksAreAWarning",
         "newKindsAreAdditive",
         "nonInterleavedRealFile",
@@ -12468,7 +12469,9 @@
         "shortAndSharedQuietAreNotOneSided",
         "tenMinutesStreamInBudget",
         "theContinuityShortDecodeRule",
+        "theSoundStops",
         "theStatedSoundLength",
+        "theStatedSoundLengthInAVI",
         "thresholdsArePinned",
         "throughFFmpeg",
         "timingGapsAndOverlapsFromShowInfo"
@@ -35844,6 +35847,20 @@
         "theVerdictSurvivesARoundTrip",
         "undecodableTrackStillOpensRepair"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundFaultMatrixTests.swift",
+      "stage": "integration",
+      "suites": [
+        "SoundFaultMatrixTests"
+      ],
+      "tests": [
+        "fault",
+        "healthy",
+        "theTableAddsUp"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -40059,6 +40076,10 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/SoundFaultMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 6,

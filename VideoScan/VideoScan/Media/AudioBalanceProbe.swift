@@ -395,7 +395,7 @@ enum AudioBalanceProbe {
         [
             "-v", "error",
             "-show_entries",
-            "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate,sample_rate,duration:stream_tags=DURATION",
+            "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate,sample_rate,duration,nb_frames:stream_tags=DURATION",
             "-show_entries", "format=format_name,duration",
             "-of", "json",
             input
@@ -413,6 +413,7 @@ enum AudioBalanceProbe {
         let r_frame_rate: String?
         let sample_rate: String?
         let duration: String?
+        let nb_frames: String?
         let tags: [String: String]?
     }
     private struct ProbedFormat: Decodable {
@@ -446,7 +447,11 @@ enum AudioBalanceProbe {
                 bitRate: s.bit_rate.flatMap { Int($0) },
                 sampleRateHz: s.sample_rate.flatMap { Int($0) },
                 statedSeconds: s.duration.flatMap { Double($0) }
-                    ?? seconds(fromDurationTag: s.tags?["DURATION"])))
+                    ?? seconds(fromDurationTag: s.tags?["DURATION"])
+                    ?? MediaFacts.countedPCMSeconds(formatName: report.format?.format_name ?? "",
+                                                    codec: s.codec_name ?? "",
+                                                    frameCount: s.nb_frames.flatMap { Int($0) },
+                                                    sampleRate: s.sample_rate.flatMap { Int($0) })))
         }
         guard let firstAudio = audioInfos.first else {
             throw AudioBalanceProbeError.noAudioStream

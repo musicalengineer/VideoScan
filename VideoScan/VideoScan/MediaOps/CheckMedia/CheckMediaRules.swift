@@ -213,7 +213,10 @@ enum CheckMediaRules {
         guard let video = i.facts.video, let audio = i.facts.audio else {
             return .notRun(.avDuration, because: "it needs both a picture and a sound track")
         }
-        guard let v = video.durationSeconds, let a = audio.durationSeconds, v > 0, a > 0 else {
+        // Each stream's own stated length — its duration, else Matroska's tag,
+        // else AVI's PCM sample count (2026-11-12: sound half as long as the
+        // picture read "the file doesn't record separate lengths" in mkv and avi).
+        guard let v = video.statedSeconds, let a = audio.statedSeconds, v > 0, a > 0 else {
             return .notRun(.avDuration, because: "the file doesn't record separate picture and sound lengths")
         }
         let diff = abs(v - a), longer = max(v, a)

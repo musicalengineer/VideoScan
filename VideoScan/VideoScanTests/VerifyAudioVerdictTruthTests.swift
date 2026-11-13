@@ -226,7 +226,7 @@ struct VerifyAudioIncompleteLevelsTests {
         #expect(AudioBalanceProbe.astatsFilter.contains("measure_overall=Number_of_samples"), "the pass asks for the count")
     }
 
-    @Test("#470: the stated length is the stream's own — duration, else Matroska's DURATION tag, else unknown (never the container's)")
+    @Test("#470: the stated length is the stream's own — duration, else Matroska's DURATION tag, else AVI's PCM sample count, else unknown (never the container's)")
     func theStatedLength() throws {
         func infos(_ audio: String) throws -> [AudioBalanceStreamInfo] {
             let json = #"{"streams":[{"index":0,"codec_type":"video","codec_name":"ffv1","duration":"99.0"},"# + audio
@@ -237,10 +237,10 @@ struct VerifyAudioIncompleteLevelsTests {
         #expect(mov.first?.statedSeconds == 12 && mov.first?.sampleRateHz == 48_000)
         let mkv = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"44100","tags":{"DURATION":"01:02:03.500000000"}}"#)
         #expect(mkv.first?.statedSeconds == 3723.5 && mkv.first?.sampleRateHz == 44_100)
-        let avi = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000"}"#)
+        let avi = try infos(#"{"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000"}"#)   // no count either
         #expect(avi.first?.statedSeconds == nil, "no stream length stated: the container's 99 s is not borrowed")
         #expect(AudioBalanceProbe.seconds(fromDurationTag: "garbage") == nil && AudioBalanceProbe.seconds(fromDurationTag: nil) == nil)
-        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("sample_rate,duration:stream_tags=DURATION") })
+        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("sample_rate,duration,nb_frames:stream_tags=DURATION") })
     }
 
     @Test("Codex #286 F1 / #287 F1: only a line THIS run's astats instance logged is the measurement — the file's own metadata (values and multi-line keys) is printed on the same stream and cannot know the run's tag")
