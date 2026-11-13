@@ -71,10 +71,16 @@ public struct MediaStreamFacts: Sendable, Equatable, Identifiable {
     public var rFrameRate: Double { MediaFacts.parseRate(rFrameRateText) }
     public var avgFrameRate: Double { MediaFacts.parseRate(avgFrameRateText) }
 
+    /// AVI's header count of PCM samples, in seconds (that container states
+    /// no stream `duration` for its sound, and its count survives a cut
+    /// file); nil for anything else. See `MediaFacts.countedPCMSeconds`.
+    public var countedSeconds: Double?
+
     /// How long the HEADER says this stream runs: its own duration, else
-    /// Matroska's DURATION tag; nil when the container states neither. What
-    /// a full decode is held against (GH #470).
-    public var statedSeconds: Double? { durationSeconds ?? tagDurationSeconds }
+    /// Matroska's DURATION tag, else AVI's PCM sample count; nil when the
+    /// container states none of them. What a full decode is held against
+    /// (GH #470).
+    public var statedSeconds: Double? { durationSeconds ?? tagDurationSeconds ?? countedSeconds }
 
     /// Sample count when ffprobe gives one: duration ticks in a 1/rate
     /// time base. nil otherwise (never guessed).
@@ -164,6 +170,22 @@ public struct MediaFacts: Sendable, Equatable {
         return h * 3600 + m * 60 + s
     }
 
+    /// AVI's stated length of a PCM sound stream: the header's count
+    /// (`nb_frames`, which for PCM in AVI is samples per channel) over the
+    /// sample rate. nil unless the container is AVI, the codec is PCM and
+    /// both numbers are there — for a compressed codec the count is packets,
+    /// and other containers state a duration of their own. Pure.
+    ///
+    /// Measured 2026-11-12: on 12 real catalogued AVI files the count equals
+    /// the decoded sample count exactly; on a file cut at 60 % it still
+    /// states the full length while ffprobe's `duration` shrinks to fit.
+    public static func countedPCMSeconds(formatName: String, codec: String,
+                                         frameCount: Int?, sampleRate: Int?) -> Double? {
+        guard formatName.split(separator: ",").contains("avi"), codec.hasPrefix("pcm_"),
+              let frameCount, frameCount > 0, let sampleRate, sampleRate > 0 else { return nil }
+        return Double(frameCount) / Double(sampleRate)
+    }
+
     public enum ParseError: Error, Equatable { case unreadable }
 
     /// ffprobe JSON → facts. Throws only when the JSON itself is unreadable.
@@ -184,7 +206,12 @@ public struct MediaFacts: Sendable, Equatable {
             f.timecode = fmt.tags?["timecode"] ?? ""
         }
         f.streams = (report.streams ?? []).enumerated().map { offset, s in
-            stream(from: s, fallbackIndex: offset)
+            var m = stream(from: s, fallbackIndex: offset)
+            if m.kind == .audio {
+                m.countedSeconds = countedPCMSeconds(formatName: f.formatName, codec: m.codec,
+                                                     frameCount: m.frameCount, sampleRate: m.sampleRate)
+            }
+            return m
         }
         return f
     }

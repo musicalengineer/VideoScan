@@ -420,18 +420,58 @@ struct CheckMediaSoundContinuityTests {
         #expect(r.silentPassages == 0, "not digital silence")
     }
 
-    @Test("the row: one side quiet is a Warning with its own words; all channels quiet is evidence only")
+    @Test("the row: every channel quiet for 10 s or more in a track that has sound is a Warning that says where and how long; a wholly quiet track is the Sound row's finding, not this one's")
+    func theSoundStops() {
+        let facts = MediaFacts.withAudio()
+        var r = SoundContinuityReport(seconds: 1_200)
+        r.oneSidedQuiet = [QuietLog(), QuietLog()]
+        r.allQuiet.note(start: 1_100, seconds: 100)
+        let tail = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(tail.verdict == .warning)
+        #expect(tail.sentence == "The sound stops on every channel for 100 s from 00:18:20.", "\(tail.sentence)")
+        #expect(tail.fix.contains("Listen"))
+        #expect(tail.evidence.contains(MediaEvidence("All channels quiet (≥ 10 s)", "1 stretch, 100 s in all; longest 100 s from 00:18:20")))
+
+        r.allQuiet.note(start: 200, seconds: 15)
+        let two = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(two.sentence == "The sound stops on every channel for 100 s from 00:18:20 (2 stretches).", "\(two.sentence)")
+
+        r.dropouts.note(4.2)
+        let withDropout = R.checkSoundContinuity(.success(r), facts: facts)
+        #expect(withDropout.sentence == "The sound breaks up: 1 dropout to digital silence; every channel is quiet for 100 s from 00:18:20 (2 stretches).",
+                "\(withDropout.sentence)")
+        #expect(withDropout.verdict == .warning, "a stop is not a stutter event")
+
+        // Codex #289 F2 — half a second of sound, then nothing: not a wholly quiet track.
+        var brief = SoundContinuityReport(seconds: 30)
+        brief.oneSidedQuiet = [QuietLog(), QuietLog()]
+        brief.allQuiet.note(start: 0.5, seconds: 29.5)
+        #expect(R.checkSoundContinuity(.success(brief), facts: facts).verdict == .warning)
+        // Through the analyzer: digital zero from end to end is one stretch the length of the track.
+        let zero = PCM.analyze([Int16](repeating: 0, count: 2 * 20 * PCM.rate))
+        #expect(zero.allQuiet.stretches == 1 && zero.allQuiet.longestSeconds == zero.seconds, "\(zero.allQuiet) of \(zero.seconds)")
+        #expect(R.checkSoundContinuity(.success(zero), facts: facts).verdict == .ok)
+
+        // Quiet from the first sample to the last: "silent" is the Sound row's word.
+        var silent = SoundContinuityReport(seconds: 1_200)
+        silent.oneSidedQuiet = [QuietLog(), QuietLog()]
+        silent.allQuiet.note(start: 0, seconds: 1_200)
+        let whole = R.checkSoundContinuity(.success(silent), facts: facts)
+        #expect(whole.verdict == .ok, "\(whole.sentence)")
+    }
+
+    @Test("the row: one side quiet is a Warning with its own words, and names a stop on every channel beside it")
     func quietRuleWording() {
         let facts = MediaFacts.withAudio()
         var r = SoundContinuityReport(seconds: 1_200)
-        r.allQuiet.note(start: 1_100, seconds: 100)
         r.oneSidedQuiet = [QuietLog(), QuietLog()]
-        let tail = R.checkSoundContinuity(.success(r), facts: facts)
-        #expect(tail.verdict == .ok, "\(tail.sentence)")
-        #expect(tail.evidence.contains(MediaEvidence("All channels quiet (≥ 10 s)", "1 stretch, 100 s in all; longest 100 s from 00:18:20")))
-
         r.oneSidedQuiet[1].note(start: 974, seconds: 64)
         r.oneSidedQuiet[1].note(start: 300, seconds: 12)
+        var withStop = r
+        withStop.allQuiet.note(start: 1_100, seconds: 100)
+        let sideAndStop = R.checkSoundContinuity(.success(withStop), facts: facts)
+        #expect(sideAndStop.sentence == "One side goes quiet while the other carries on: the right channel for 64 s from 00:16:14 (2 stretches); every channel for 100 s from 00:18:20.",
+                "\(sideAndStop.sentence)")
         let one = R.checkSoundContinuity(.success(r), facts: facts)
         #expect(one.verdict == .warning)
         #expect(one.sentence == "One side goes quiet while the other carries on: the right channel for 64 s from 00:16:14 (2 stretches).",
@@ -514,6 +554,78 @@ struct CheckMediaSoundContinuityTests {
         let none = try MediaFacts.parse(probeJSON: json(#","tags":{"DURATION":"soon"}"#))
         #expect(none.audio?.statedSeconds == nil)
         #expect(MediaFacts.probeEntries.contains("stream_tags=creation_time,timecode,DURATION"))
+    }
+
+    @Test("AVI states its PCM sound's length as a sample count: that is the stated length there, for PCM only, and nowhere else")
+    func theStatedSoundLengthInAVI() throws {
+        let json = { (format: String, codec: String, more: String) in
+            Data(#"{"streams":[{"index":0,"codec_type":"audio","codec_name":"\#(codec)","sample_rate":"48000"\#(more)}],"format":{"format_name":"\#(format)"}}"#.utf8)
+        }
+        let avi = try MediaFacts.parse(probeJSON: json("avi", "pcm_s16le", #","nb_frames":"1920000""#))
+        #expect(avi.audio?.durationSeconds == nil && avi.audio?.statedSeconds == 40)
+        // A compressed codec's count is packets, not samples.
+        #expect(try MediaFacts.parse(probeJSON: json("avi", "mp3", #","nb_frames":"1500""#)).audio?.statedSeconds == nil)
+        // Other containers state a duration of their own; a bare count there is not read as samples.
+        #expect(try MediaFacts.parse(probeJSON: json("mpeg", "pcm_dvd", #","nb_frames":"1920000""#)).audio?.statedSeconds == nil)
+        // The stream's own duration still wins.
+        #expect(try MediaFacts.parse(probeJSON: json("avi", "pcm_s16le", #","nb_frames":"1920000","duration":"12.5""#)).audio?.statedSeconds == 12.5)
+        #expect(MediaFacts.countedPCMSeconds(formatName: "avi", codec: "pcm_u8", frameCount: 0, sampleRate: 8000) == nil)
+        #expect(MediaFacts.countedPCMSeconds(formatName: "avi", codec: "pcm_u8", frameCount: 8000, sampleRate: nil) == nil)
+
+        // The levels pass (what the Promote gate reads) states the same length.
+        let shape = try AudioBalanceProbe.shape(fromProbeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"24.0","nb_frames":"1000"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","channels":2,"sample_rate":"48000","nb_frames":"1920000"}],
+             "format":{"format_name":"avi","duration":"24.0"}}
+            """#.utf8))
+        #expect(shape.audioStreamInfos.first?.statedSeconds == 40)
+        #expect(AudioBalanceProbe.shapeArgs(input: "x").contains { $0.contains("nb_frames") })
+    }
+
+    @Test("picture and sound lengths are compared wherever the header states them: Matroska's tags and AVI's count too")
+    func lengthsInMatroskaAndAVI() throws {
+        let mkv = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"ffv1","tags":{"DURATION":"00:00:40.000000000"}},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","tags":{"DURATION":"00:00:20.000000000"}}],
+             "format":{"format_name":"matroska,webm","duration":"40.0"}}
+            """#.utf8))
+        let row = R.checkAVDuration(CheckMediaQuickInputs(facts: mkv, videoFacts: VideoVerifyFacts()))
+        #expect(row.verdict == .problem && row.sentence.hasPrefix("The picture runs 20 s longer"), "\(row.verdict) \(row.sentence)")
+
+        let avi = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"40.0","nb_frames":"1000","avg_frame_rate":"25/1"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"1920000"}],
+             "format":{"format_name":"avi","duration":"40.0"}}
+            """#.utf8))
+        #expect(R.checkAVDuration(CheckMediaQuickInputs(facts: avi, videoFacts: VideoVerifyFacts())).verdict == .ok)
+
+        // Codex #289 F1 — an AVI cut short: ffprobe recomputes the picture's duration from what is
+        // left (24 s) while both header counts still state 40 s. Counts are compared with counts, so
+        // the row does not claim 16 s of extra sound; the short decode is the Sound row's finding.
+        let cut = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"24.0","nb_frames":"1000","r_frame_rate":"25/1","avg_frame_rate":"25/1"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"1920000"}],
+             "format":{"format_name":"avi","duration":"24.0"}}
+            """#.utf8))
+        let cutRow = R.checkAVDuration(CheckMediaQuickInputs(facts: cut, videoFacts: VideoVerifyFacts()))
+        #expect(cutRow.verdict == .ok, "\(cutRow.verdict) \(cutRow.sentence)")
+        // Half the sound, by the counts: still a Problem.
+        let half = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg4","duration":"40.0","nb_frames":"1000","r_frame_rate":"25/1","avg_frame_rate":"25/1"},
+                        {"index":1,"codec_type":"audio","codec_name":"pcm_s16le","sample_rate":"48000","nb_frames":"960000"}],
+             "format":{"format_name":"avi","duration":"40.0"}}
+            """#.utf8))
+        #expect(R.checkAVDuration(CheckMediaQuickInputs(facts: half, videoFacts: VideoVerifyFacts())).verdict == .problem)
+
+        // Nothing stated: still "not run", never a guess.
+        let bare = try MediaFacts.parse(probeJSON: Data(#"""
+            {"streams":[{"index":0,"codec_type":"video","codec_name":"mpeg2video"},
+                        {"index":1,"codec_type":"audio","codec_name":"mp2","sample_rate":"48000"}],
+             "format":{"format_name":"mpeg","duration":"40.0"}}
+            """#.utf8))
+        if case .notRun = R.checkAVDuration(CheckMediaQuickInputs(facts: bare, videoFacts: VideoVerifyFacts())).verdict {} else {
+            Issue.record("a file that states no stream lengths got a length verdict")
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-12 18:00 (Thursday; the sound check's short-decode fix, #470, merged this afternoon; the same fix for Check Media's continuity rows merged this evening). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-12 23:00 (Thursday; #470 merged this afternoon; this evening Check Media's continuity fix, sound over time per channel, and the sound fault matrix with three fixes it drove). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -22,8 +22,8 @@
    that filter's lines, so nothing a file prints can stand in for the measurement (closes #471). Codex: #286 fix
    (3), #287 fix (2), #288 merge (0). Proof in the merge commit: 5 tests red unfixed, 622 audio tests and the
    sensor lane (744) green, and 158 real catalogued files read-only — 0 wrongly called short (largest real gap
-   0.17 s). **What it does not catch, by design:** avi and raw dv state no sound length, so a cut-short AVI still
-   passes; a Matroska track that starts late reads "not checked" (refused, the safe side); a decode that stops in
+   0.17 s). **What it does not catch, by design:** raw dv states no sound length (AVI was closed 11/12, Next item 2);
+   a Matroska track that starts late reads "not checked" (refused, the safe side); a decode that stops in
    the last 2 % or last second. First testbed run on it: the M5 Ultra's 02:00 nightly of 11/13.
 3. **State of `main` on the testbed BEFORE #470, after the night's ten merges (all on `29a0495e5`, the docs commit on top of
    the last merge `a6d957a5d`).** M4 full testbed, kicked by hand 23:05, done 01:15: suite **GREEN** (13,664
@@ -85,25 +85,42 @@
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound, second slice (Rick 11/12: "do them in parts … I'd like to see the audio/sound issue solved soon";
-   "do your best so we can catch 99% of the cases where audio is a problem").** Evidence first: 144 real catalogued
-   files read-only with ffmpeg and AVFoundation (`.scratch/470-sound-slice2-2026-11-12/survey2.jsonl`).
-   **Done 11/12 (`d1036b6cd`):** Check Media's full pass trusted ffmpeg's exit 0, so on a cut-short file its row
-   read "Every sample decoded"; the continuity row and the four level rows are now "not run" with the Sound row's
-   numbers (mov, mkv red → green; not data-risk, no Codex). **Done 11/12, second merge:** sound over time per channel in that same pass — 100 ms blocks, quiet = peak
-   under −60 dBFS, stretches of 10 s or more. A channel quiet WHILE another carries sound for 10 s of the stretch
-   is a Warning on the continuity row ("One side goes quiet while the other carries on: the right channel for
-   64 s from 00:16:14"); all channels quiet together is evidence only; a side that never sounds is still the
-   channels row's finding. No Promote refusal. From the survey's silence intervals: 0 of 74 real stereo files have
-   a one-sided stretch, 12 have all-quiet ones (tape tails, pauses). The row's words are Rick's to change.
-   **Next, one merge each:** (a) AVFoundation as a second decoder at the Promote gate for mov/mp4: where both
-   decode and disagree on length or level the file reads "not checked" (43 real tracks: all agree within 1 dB and
-   0.2 s; AVFoundation cannot decode QDesign or MP3-in-mov, 16 tracks). Data-risk: safety-critical skill, Codex pass.
-   (b) AVI: hold the decode against the header's sample / frame count (only 39 AVI files, 2 GB, in the catalog —
-   last). **Cannot be caught from the file alone:** a raw DV, MPEG or transport-stream file cut short before it
-   was catalogued states nothing about its original length. Still open from #470: rows stored damaged before
-   #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test on a `.backup` of the
-   live catalog has not run.
+2. **Sound: the fault matrix (Rick 11/12: "create a matrix with test cases to demonstrate all the reasonable
+   cases … backed up by evidence and testing").** `SoundFaultMatrixTests` generates 19 kinds of wrong sound in
+   5 containers (mov, mp4, mkv, mxf, avi; tones, no family media) and takes each file through the real Promote
+   sound gate and Check Media's sound rows. Each of the 94 cells is pinned to one class, and the totals here are
+   pinned by `theTableAddsUp`: **26 refused at the gate, 57 promoted with a Check Media Warning or Problem,
+   11 promoted with nothing said** (it was 24 before the three changes below). A healthy file is clean in all 5.
+   This is a count of fault KINDS, each weighted the same — not a probability about the collection.
+   **Refused:** no sound track; silent or under −60 dBFS all through; file cut at 60 % (all 5 containers);
+   sound half as long as the picture (mov, mp4); 10 % of the bytes zeroed (mp4, mkv, mxf, avi).
+   **Flagged in Check Media, still promotes:** one channel dead all through, or dying halfway, or out 12 s;
+   both channels dying halfway or out 12 s; a 50 ms dropout; clipping; DC offset; an inverted channel; very quiet;
+   hiss only; sound half as long as the picture in mkv and avi.
+   **The 11 not caught:** mains hum only, 5 cells (level is present; telling hum from programme needs a spectrum
+   measure — BACKLOG); one channel out for 5 s, 5 cells (under the 10 s rule, by design); zeroed bytes in a PCM
+   mov, 1 cell (decodes as 3 s of digital silence: longer than a dropout's 2 s, shorter than a 10 s stop).
+   **Built for it 11/12:** (a) every channel quiet for 10 s or more, in a track that has sound, is a Warning on
+   the continuity row ("The sound stops on every channel for 15 s from 00:00:15") — it was evidence only. On 88
+   real files with sound, 8 have such a stretch (3 mid-file, 6 to the end), so about 1 real file in 11 will show
+   it; the constant and the words are Rick's. (b) AVI: the header's PCM sample count is the stated sound length,
+   so a cut-short AVI reads "not checked" and is refused like the other containers (all 38 catalogued AVI files
+   decoded in full: 0 called short). (c) Check Media compares picture and sound lengths in mkv (DURATION tags)
+   and avi; every catalogued mkv and avi header read: one real mkv is flagged, 61 min of sound on a 96 min picture.
+   Codex #289 on the commit: fix (2, both P2, both in Check Media rows, none at the gate) — a cut AVI read
+   "the sound runs 16 s longer" (counts are now compared with counts) and a track with under 1 s of sound was
+   treated as wholly quiet; each closed by its red test.
+   **Shelved, not merged:** AVFoundation as a second decoder at the gate. Over 73 real mov/mp4 files and 46
+   generated fault cells it never disagreed with ffmpeg once, so there is no example of "two decoders disagree"
+   to show; the work is a patch in `.scratch/470-sound-slice2-2026-11-12/second-decoder-shelved.patch`.
+   **For Rick to rule:** should "sound shorter than the picture" in mkv/avi also be a stored Damaged verdict and
+   a Promote refusal, as it is for mov/mp4 (one real file affected)? Should a 10 s stop on every channel, or one
+   dead side, be more than a Warning?
+   **Cannot be caught from the file alone:** a raw DV, MPEG or transport-stream file cut short before it was
+   catalogued; a file re-wrapped after it lost sound (its header is consistent); wrong speed or pitch from a
+   mislabelled rate outside the known ratios; sound out of step with the picture. Still open from #470: rows
+   stored damaged before #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test
+   on a `.backup` of the live catalog has not run.
 3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
    Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
 4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423

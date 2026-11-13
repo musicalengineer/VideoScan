@@ -512,12 +512,20 @@ extension CheckMediaRules {
         let evidence = continuityEvidence(r)
         let found = continuityFindings(r)
         let quietSides = oneSidedQuietFindings(r)
+        let stops = soundStopsFinding(r)
         if found.isEmpty, !quietSides.isEmpty {
             return MediaCheck(kind: .soundContinuity, verdict: .warning,
                               sentence: "One side goes quiet while the other carries on: "
-                                  + quietSides.map { "the \($0.channel) channel for \($0.span)" }.joined(separator: "; ") + ".",
+                                  + (quietSides.map { "the \($0.channel) channel for \($0.span)" }
+                                      + (stops.map { ["every channel for \($0)"] } ?? [])).joined(separator: "; ") + ".",
                               evidence: evidence,
                               fix: "Listen at the times shown. If one side drops out there, look for another copy.")
+        }
+        if found.isEmpty, let stops {
+            return MediaCheck(kind: .soundContinuity, verdict: .warning,
+                              sentence: "The sound stops on every channel for \(stops).",
+                              evidence: evidence,
+                              fix: "Listen at the time shown. A pause in the recording is normal; sound that cuts out while the picture carries on is not — if it does, look for another copy.")
         }
         guard !found.isEmpty else {
             return MediaCheck(kind: .soundContinuity, verdict: .ok,
@@ -527,7 +535,8 @@ extension CheckMediaRules {
         let verdict: MediaCheckVerdict = r.stutterEvents >= continuityProblemEvents ? .problem : .warning
         return MediaCheck(kind: .soundContinuity, verdict: verdict,
                           sentence: "The sound breaks up: "
-                              + (found + quietSides.map { "the \($0.channel) channel is quiet for \($0.span)" })
+                              + (found + quietSides.map { "the \($0.channel) channel is quiet for \($0.span)" }
+                                  + (stops.map { ["every channel is quiet for \($0)"] } ?? []))
                                   .joined(separator: "; ") + ".",
                           evidence: evidence,
                           fix: "Listen at the times shown. If it skips there, look for another copy; dropouts and replays can't be repaired without the original.")
@@ -550,6 +559,26 @@ extension CheckMediaRules {
             return (channelName(index, of: r.oneSidedQuiet.count).lowercased(),
                     "\(V.durationText(log.longestSeconds)) from \(V.timecode(log.longestStartSeconds))\(more)")
         }
+    }
+
+    /// Every channel quiet together for 10 s or more, somewhere in a track
+    /// that does have sound: "15 s from 00:00:15 (2 stretches)". nil when
+    /// there is no such stretch, and nil when the whole track is quiet —
+    /// that is the Sound row's finding ("silent"), not a stop.
+    ///
+    /// A Warning since 2026-11-12 (the sound fault matrix: sound that died
+    /// halfway on both channels promoted with every row green). Measured on
+    /// 88 real catalogued files with sound: 8 have such a stretch (3 mid-file,
+    /// 6 running to the end) — tape tails and long pauses read the same as a
+    /// lost feed, so the words say what was measured and the owner listens.
+    private static func soundStopsFinding(_ r: SoundContinuityReport) -> String? {
+        let log = r.allQuiet
+        // Wholly quiet = one stretch from the first sample to the last (the
+        // tracker and the report count the same frames, so this is exact).
+        let whollyQuiet = log.stretches == 1 && log.longestStartSeconds == 0 && log.longestSeconds >= r.seconds
+        guard log.stretches > 0, !whollyQuiet else { return nil }
+        let more = log.stretches > 1 ? " (\(V.groupedInt(log.stretches)) stretches)" : ""
+        return "\(V.durationText(log.longestSeconds)) from \(V.timecode(log.longestStartSeconds))\(more)"
     }
 
     private static func quietText(_ log: QuietLog) -> String {
