@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-12T13:28:04Z",
- "sha": "de34e74d",
+ "ts": "2026-11-13T12:43:51Z",
+ "sha": "79a973aa",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -3532,6 +3532,20 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift::AstatsOutputParser.taggedPayloads",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift",
+   "name": "AstatsOutputParser.taggedPayloads",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.measureLevels",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
+   "name": "AudioBalanceProbe.measureLevels",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceStreamShape.declaredChannelsPerStream",
    "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
    "name": "AudioBalanceStreamShape.declaredChannelsPerStream",
@@ -4211,6 +4225,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/CheckMedia/CheckMediaRules.swift::CheckMediaRules.statedLengths",
+   "file": "VideoScan/VideoScan/MediaOps/CheckMedia/CheckMediaRules.swift",
+   "name": "CheckMediaRules.statedLengths",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/CheckMedia/CheckMediaRules.swift::CheckMediaRules.stepText",
    "file": "VideoScan/VideoScan/MediaOps/CheckMedia/CheckMediaRules.swift",
    "name": "CheckMediaRules.stepText",
@@ -4362,6 +4383,34 @@
    "file": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift",
    "name": "ClickTracker.init",
    "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift::QuietStretchTracker.blockSeconds",
+   "file": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift",
+   "name": "QuietStretchTracker.blockSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift::QuietStretchTracker.init",
+   "file": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift",
+   "name": "QuietStretchTracker.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift::QuietStretchTracker.minimumSeconds",
+   "file": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift",
+   "name": "QuietStretchTracker.minimumSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift::QuietStretchTracker.quietPeak",
+   "file": "VideoScan/VideoScan/MediaOps/CheckMedia/SoundContinuity.swift",
+   "name": "QuietStretchTracker.quietPeak",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {
@@ -8250,8 +8299,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 167,
+ "fixed": 169,
  "baseline_before": 2456,
- "baseline_after": 2289,
+ "baseline_after": 2287,
  "shrink_skipped": false
 }
