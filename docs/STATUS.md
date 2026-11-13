@@ -121,6 +121,21 @@
    mislabelled rate outside the known ratios; sound out of step with the picture. Still open from #470: rows
    stored damaged before #468's fix; full cards saved before `78c90ac37`; the production-shape sound-gate test
    on a `.backup` of the live catalog has not run.
+2a. **Picture: the same matrix (overnight 11/12–13, test only, no production change).** `PictureFaultMatrixTests`
+   takes 20 kinds of wrong picture in the 5 containers through Check Media's quick and full tiers; 86 cells, totals
+   pinned by its `theTableAddsUp`: **50 flagged, 2 unopenable, 4 "not checked" (no picture track), 30 not caught.**
+   Promote has no picture gate, so nothing is "refused". **The 30 not caught, by cause:** a freeze that lasts to
+   the end of the file is never counted (the probe reads only `freeze_duration`, which ffmpeg prints when the
+   picture moves again), 5 cells — a measurement fix; black for exactly the second half reads 49.9 %, one frame
+   under the 50 % rule, 5 cells — a measurement fix; black or frozen for 40 % of the file is under the 50 % rule
+   by design, 10 cells — Rick's rule; an 18 s freeze in mp4 is counted from the next keyframe (47 %), 1 cell; an
+   AVI cut at 60 % or with 10 % zeroed has every picture row OK ("The file is whole", "Every frame decoded
+   cleanly"), 2 cells — nothing holds the packets present against the header's frame count; a 1:1 shape flag on a
+   4:3 picture, 4 cells, and a picture starved of bits, 3 cells — no rule. **Also found:** the cut AVI's Frame rate
+   row reads "41.67 frames per second, as a camera records" for a 25 fps file (header frames over the seconds
+   left) — a wrong shown fact; a cut mkv or mxf is flagged only as "1 decode error (minor glitches)", no row says
+   it is 40 % short; the interlace row trusts ffmpeg's idet outright (a generated test pattern with one-pixel
+   lines read "interlaced"). None of these is fixed yet; the first three are the next picture work.
 3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
    Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
 4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
