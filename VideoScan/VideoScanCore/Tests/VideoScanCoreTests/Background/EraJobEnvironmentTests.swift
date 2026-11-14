@@ -142,7 +142,6 @@ struct BackgroundMenuFailedJobTests {
         #expect(p.jobs.map(\.words) == ["Machine era (8B) — 5 of 523 · failed: 5 units in a row failed: the worker raised X"])
         #expect(p.jobs.allSatisfy { !$0.canPause && !$0.canResume })
         #expect(p.icon == .idle)
-        #expect(p.tooltip.contains("failed: 5 units in a row failed"), "\(p.tooltip)")
         // A newer job of the same kind replaces it.
         var newer = BackgroundMenuPresentationTests.job(.running, done: 1, total: 518)
         newer.startedAt = Date().addingTimeInterval(60)

@@ -9080,6 +9080,7 @@
       ],
       "tests": [
         "helperHasItsOwnIcon",
+        "menuBarItemHasNoTooltip",
         "plistKeepAliveKeys",
         "schemeBuildsTheHelperAlone"
       ]
@@ -38679,7 +38680,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3684,
+      "expected_floor": 3685,
       "name": "unit",
       "package_expected_floor": 903,
       "package_selectors": [
