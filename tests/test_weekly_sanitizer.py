@@ -305,7 +305,7 @@ def test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_r
     tsan = ws.load_suppressions(ws.SUPP_DIR / "tsan.supp")
     assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 423)]
     ubsan = ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp")
-    assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "*mlx/backend/metal/device.cpp", 463)]
+    assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "mlx::core::metal::Device::get_kernel_", 463)]
 
 
 @pytest.mark.parametrize("text, why", [
@@ -564,6 +564,9 @@ def _passed(name):
 MLX_PATH = "/Users/x/Library/Caches/VideoScan/sanitizer-dd/address/SourcePackages/checkouts/mlx-swift/Source/Cmlx"
 UBSAN_MLX = (f"{MLX_PATH}/mlx/mlx/backend/metal/device.cpp:717:21: runtime error: member call on null pointer of type "
              "'NS::Referencing<MTL::LinkedFunctions>'\n"
+             "    #0 0x00012ba03314 in mlx::core::metal::Device::get_kernel_(std::__1::basic_string<char> const&, MTL::Library*)+0x868 "
+             "(/Users/x/Library/Caches/VideoScan/sanitizer-dd/address/Build/Products/Debug/VideoScan.app/Contents/MacOS/"
+             "VideoScan.debug.dylib:arm64+0xc85b2e8)\n"
              f"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior {MLX_PATH}/mlx/mlx/backend/metal/device.cpp:717:21 \n")
 UBSAN_MLX_CALLEE = (f"{MLX_PATH}/metal-cpp/Foundation/NSObject.hpp:112:49: runtime error: member call on null pointer of type "
                     "'NS::Referencing<MTL::LinkedFunctions> *'\n"
@@ -712,7 +715,8 @@ def test_a_printed_report_is_known_only_when_an_entry_matches_its_check_and_its_
     ub, ts = _known("ubsan.supp"), _known("tsan.supp")
     assert ws.known_entry_for(UBSAN_MLX, ub)["issue"] == 463
     assert ws.known_entry_for(TSAN_GRDB, ts)["issue"] == 423
-    # The verify-2026-11-08 run: the same null call reported one frame down is NOT the entry's file.
+    # The same null call reported one frame down (verify-2026-11-08), printed WITHOUT its stack: no
+    # function to match and not the entry's file. With its stack it is #463 (2026-11-14, below).
     assert ws.known_entry_for(UBSAN_MLX_CALLEE, ub) is None
     assert _status(HOST_START + _started(HAPPY) + UBSAN_MLX_CALLEE + "✔ Test x passed after 0.155 seconds.\n" + GREEN_LOG, ub) == "findings"
     # Another check in the same file, the other sanitizer's entries, an unknown check word: never grey.
@@ -728,6 +732,8 @@ def test_a_printed_report_is_known_only_when_an_entry_matches_its_check_and_its_
     assert ws.known_entry_for(elsewhere, ts) is None
     assert ws.known_entry_for(elsewhere.replace(f"T2:\n    #0 {PRODUCT_FRAME}", f"T2:\n    #0 {GRDB_FRAME}"), ts)["issue"] == 423
     assert ws.known_entry_for(UBSAN_MLX, [{"check": "vptr", "pattern": "*device.cpp", "issue": 1, "code": "x"}]) is None
+    # A file entry still matches the report's own location, as in the runtime.
+    assert ws.known_entry_for(UBSAN_MLX, [{"check": "null", "pattern": "*mlx/backend/metal/device.cpp", "issue": 463, "code": "x"}])["issue"] == 463
     # The runtime's template: a substring unless anchored; * is any run.
     assert ws.template_matches("DatabasePool.close", "in GRDB.DatabasePool.close() throws")
     assert ws.template_matches("*mlx/backend/metal/device.cpp", f"{MLX_PATH}/mlx/mlx/backend/metal/device.cpp")
@@ -819,3 +825,92 @@ def test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget():
     assert (p["host_restarts"], p["known_reports"], p["unexplained_restarts"]) == (15, 15, 0)
     assert [r["during"] for r in p["restarts"]] == [f"racy{i}()" for i in range(15)]
     assert ws.status_for(p, timed_out=False) == "ok"
+
+
+# ── 2026-11-14: the address run read red for the known #463 and named no failed test ──
+# RED 1: ubsan.supp held `null:*mlx/backend/metal/device.cpp`. It silenced the check at
+# device.cpp:717; the next check of the SAME null call, inside the inlined release()
+# (metal-cpp NSObject.hpp:112:49), printed and matched nothing, so the row said
+# "findings" for a known finding. The entry now names the function both checks are
+# in (frame #0 of both reports), and the runner reads a printed report the same way.
+# RED 2: three tests failed and the row said "failed_tests": []. FAILED_TEST knew only
+# `✘ Test name() failed`; these are Swift Testing tests with display names, and
+# xcodebuild's own "Failing tests:" block was never read.
+# The fixtures are the M4's 2026-11-14-address.log: the report block whole, and the
+# ✘ lines plus the log's tail (the expectation dumps and os_log lines left out).
+
+LOGS = ROOT / "tests" / "fixtures" / "logs"
+REPORT_1114 = (LOGS / "sanitizer-2026-11-14-address-ubsan-463.txt").read_text()
+FAILURES_1114 = (LOGS / "sanitizer-2026-11-14-address-failures.txt").read_text()
+FAILED_1114 = ["ArchiveAngelBufferHygieneClearTests.secondClearOfAStaleSnapshotIsIdempotent()",
+               "PromoteSoundGateTests.scale()",
+               "VerifyArchiveCopiesIsolationTests.isolation()"]
+GET_KERNEL = "mlx::core::metal::Device::get_kernel_("
+
+
+def test_the_1114_report_one_frame_down_is_the_known_463_and_the_run_is_not_red():
+    ub = _known("ubsan.supp")
+    assert REPORT_1114.count(": runtime error: ") == 1 and "NSObject.hpp:112:49" in REPORT_1114.splitlines()[1]
+    (block, summary), = ws.report_blocks(REPORT_1114)
+    assert ws.known_entry_for(block, ub)["issue"] == 463
+    p = ws.parse_log(HOST_START + REPORT_1114 + GREEN_LOG, ub)
+    assert (p["reports"], p["known_reports"], p["unique_findings"], p["host_restarts"]) == (1, 1, [], 0)
+    assert ws.status_for(p, timed_out=False) == "ok"
+    assert "🔴" not in "".join(alert.lines_for(_row("ok", **p, suppressed=[{"code": "mlx-null-linked-functions", "issue": 463,
+                                                                          "hits": None}]), NOW, 8))
+
+
+def test_one_entry_covers_both_report_sites_of_463_and_nothing_else_in_metal_cpp():
+    ub = _known("ubsan.supp")
+    assert len(ub) == 1 and ub[0]["check"] == "null" and GET_KERNEL.startswith(ub[0]["pattern"])
+    assert "NSObject" not in ub[0]["pattern"] and "metal-cpp" not in ub[0]["pattern"], "the header is shared by all of metal-cpp"
+    assert ws.known_entry_for(UBSAN_MLX, ub)["issue"] == 463                 # device.cpp:717, the first check
+    (block, _), = ws.report_blocks(REPORT_1114)                             # NSObject.hpp:112, the second
+    assert GET_KERNEL in block.splitlines()[1]
+    # The same header line reached from any other function is a NEW finding.
+    elsewhere = block.replace(GET_KERNEL, "mlx::core::metal::Device::get_library_(")
+    assert ws.known_entry_for(elsewhere, ub) is None
+    assert _status(HOST_START + elsewhere + "\n" + GREEN_LOG, ub) == "findings"
+    # Only frame #0 counts (the runtime matches the reporting PC): get_kernel_ as a caller is not it.
+    lines = block.splitlines()
+    as_caller = "\n".join([lines[0], lines[1].replace(GET_KERNEL, "NS::Object::sendMessage("),
+                           lines[2].replace("Device::get_kernel(", GET_KERNEL)] + lines[3:])
+    assert GET_KERNEL in as_caller and ws.known_entry_for(as_caller, ub) is None
+    # Another check in get_kernel_ is not the null call; a report with no stack names no function.
+    assert ws.known_entry_for(block.replace("member call on null pointer of type", "signed integer overflow in"), ub) is None
+    assert ws.known_entry_for(lines[0] + "\n" + lines[-1], ub) is None
+    assert ws.known_entry_for(UBSAN_MLX_CALLEE, ub) is None
+
+
+def test_the_1114_failing_tests_are_named_from_xcodebuilds_own_list():
+    p = ws.parse_log(FAILURES_1114)
+    assert p["failed_tests"] == FAILED_1114
+    assert p["tests_outcome"] == "failed" and ws.status_for(p, timed_out=False) == "tests-failed"
+    line = alert.lines_for(_row("tests-failed", **p), NOW, 8)[0]
+    assert all(name in line for name in FAILED_1114)
+
+
+def test_without_xcodebuilds_list_a_display_named_failure_is_still_named():
+    """swift test, or a run stopped before its summary: only the ✘ lines exist."""
+    cut = FAILURES_1114.split("Failing tests:")[0]
+    names = ws.parse_log(cut)["failed_tests"]
+    assert len(names) == 3 and all(len(n) <= ws.MAX_NAME for n in names)
+    assert names[2] == '"SCALE: 100,000 files through finding + mark + decide in under a second"'
+    assert names[0].startswith('"ISOLATION (poisoned-state): a poisoned shared designation') and names[0].endswith("…")
+    assert names[1].startswith('"QA RED: clearing the same plan snapshot twice')
+    # The shapes already read stay read; the run line and a suite line are not tests.
+    old = ("✘ Test fooBar() failed after 0.1 seconds.\n✘ Test withArgs(row:) recorded an issue at X.swift:1:1: no\n"
+           "✘ Suite \"S\" failed after 1 seconds with 1 issue.\n"
+           "Test Case '-[VideoScanCoreTests.GRDBTests testOpen]' failed (0.1 seconds).\n"
+           "✘ Test run with 3 tests in 1 suite failed after 1 seconds.\n")
+    assert ws.parse_log(old)["failed_tests"] == ["fooBar", "testOpen", "withArgs"]
+
+
+def test_xcodebuilds_list_ends_at_its_blank_line_and_is_bounded():
+    many = "Failing tests:\n" + "".join(f"\tS.t{i:02d}()\n" for i in range(30)) + "\n** TEST FAILED **\n\tnot.a.test()\n"
+    got = ws.parse_log(many)["failed_tests"]
+    assert got == [f"S.t{i:02d}()" for i in range(20)]
+    grouped = "Failing tests:\n\tVideoScanTests:\n\t\tS.a()\n\t\tS.b(row:)\n\n"
+    assert ws.parse_log(grouped)["failed_tests"] == ["S.a()", "S.b(row:)"]
+    # An empty list falls back to the ✘ lines rather than naming nothing.
+    assert ws.parse_log("✘ Test fooBar() failed after 0.1 seconds.\nFailing tests:\n\n")["failed_tests"] == ["fooBar"]
