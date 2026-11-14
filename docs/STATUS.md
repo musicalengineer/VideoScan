@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-12 23:00 (Thursday; #470 merged this afternoon; this evening Check Media's continuity fix, sound over time per channel, and the sound fault matrix with three fixes it drove). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-13 22:00 (Friday; the sound and picture fault matrices merged overnight and passed the 02:00 nightly; today Rick closed #327 and #332 and rested the sound work; this evening the machine's era estimate reached the File Journey and the Catalog's folder view). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -14,7 +14,7 @@
    adversarial confirm. Weekly sanitizers on the M4: address Sat 07:00, thread Sun 05:00. Kick a full M4 run by hand:
    `ssh ricksm4.local 'launchctl kickstart gui/$(id -u)/com.videoscan.nightly-tests'` (about 2 h 10 min). The 14:00
    guard skips only when today's green run was for the commit `main` is at.
-2. **Sound, #470 — merged 11/12 (`3434eceff`), not yet on the testbed.** A sound decode that ends early (ffmpeg
+2. **Sound, #470 — merged 11/12 (`3434eceff`); on the testbed and GREEN: M5 Ultra nightly 11/13 02:00 on `79a973aa8` (both fault matrices in) 13,697 passed, 0 failed, 65 skipped, Core 2,577 passed, Hallie replay strict 56 of 56; M4 full testbed 11/12 23:51 on `a129cd991` suite 13,687 passed, 0 failed, gauntlet AMBER (the same 7 known regression issues), script tests 2,110 passed.** A sound decode that ends early (ffmpeg
    exits 0 on a file whose tail is missing) now reads "not checked" with its numbers — "the sound decode stopped
    early — N s of the M s the file's header states did not decode". Verify Audio stores nothing for it; the Promote
    sound gate refuses it whether or not "Archive anyway" is ticked (DECISIONS 2026-11-11). Short = more than 1 s
@@ -74,18 +74,30 @@
    address run:** the one run made with the #463 suppression in force showed a second report one frame down
    (`NSObject.hpp:112`), which the suppression does not cover — Saturday may read red "findings" for it. Widening
    the suppression is a #463 decision.
-6. **P0/P1:** open P0 — #332, #327 (both wait on Rick). Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
-   #338. Look fixed in the code, close after Rick's check — #327, #354, #353, #342, #345 (one real-data check). Not
+6. **P0/P1:** open P0 — none (Rick closed #327 and #332 on 11/13; #332 was closed on his own use, not re-tested).
+   Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
+   #338. Look fixed in the code, close after Rick's check — #354, #353, #342, #345 (one real-data check). Not
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
 
 ## Next (in order)
+0. **Machine era estimate as a help (Rick 11/13; DECISIONS 2026-11-13) — merged 11/13, waiting on Rick's use.** (a) The
+   File Journey has a line per content with a machine era: "Estimated era: 1980–1995 — the 8B model's guess from the
+   pictures alone, not confirmed." (b) Catalog ▸ Show ▸ **Folders by Machine Estimate**: the folder table filled with
+   the era job's guesses — a decade folder by the range's midpoint, or a year folder when the range is at most a year
+   wide (an on-screen date) — read-only, nothing stored, off restores Rick's folders. 4,471 contents have an era today;
+   by midpoint: 1980s 211, 1990s 641, 2000s 1,202, 2010s 2,173; about 125 have a year. Most ranges are 10–20 years
+   wide, so the decade is coarse; whether it helps is what Rick is finding out. Codex #290: fix, 4 × P2, three fixed,
+   one declined and pinned (a version made from an estimated recording folds under it). Not spot-tested by an agent.
+   Rick rules: the menu name; keep or remove. Parked: machine-estimated EVENT folders (BACKLOG). Found on the way: the
+   File Journey's "Estimated: original capture of a VHS tape…" line (DECISIONS 11/10) shows nothing because Archive ▸
+   Estimate Provenance… has never been run on the live catalog (0 role / carrier rows) — it is a job Rick starts.
 1. **Observations, what is left for an A in design:** the `mockup:` parameter stays in the production views for now —
    the offscreen renderer that makes Rick's mockup PNGs cannot draw a text field, button or scroll view, so the
    views carry static stand-ins (tried 11/11; removing it needs a different mockup tool, Rick's call); one read
    door for a session; a Frames window re-opened while Index Frames runs is not handed the job's later saves.
    Done 11/11: the frame index is latest-wins and comes from the job's own snapshot, not a second disk read.
    Test coverage is 41.6 % (the C).
-2. **Sound: the fault matrix (Rick 11/12: "create a matrix with test cases to demonstrate all the reasonable
+2. **Sound: the fault matrix — RESTED by Rick 11/13 ("let this issue rest a while, exposing it to real world use"); the open questions below wait for what real files show. (Rick 11/12: "create a matrix with test cases to demonstrate all the reasonable
    cases … backed up by evidence and testing").** `SoundFaultMatrixTests` generates 19 kinds of wrong sound in
    5 containers (mov, mp4, mkv, mxf, avi; tones, no family media) and takes each file through the real Promote
    sound gate and Check Media's sound rows. Each of the 94 cells is pinned to one class, and the totals here are
