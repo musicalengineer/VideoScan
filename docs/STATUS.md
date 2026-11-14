@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-14 15:00 (Saturday; the 02:00 nightly on `42b0d0ede`, the machine-estimate merge, was GREEN: 13,713 passed, 0 failed, 65 skipped, Core 2,580, Hallie strict 56 of 56. Today: the catalog-close race Thread Sanitizer found, #423, is fixed and its suppression retired; the weekly sanitizer lane reads the known mlx finding as known and names failed tests). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-14 17:30 (Saturday; M4 14:00 testbed on `42b0d0ede`: suite GREEN 13,708 passed, 0 failed, script tests GREEN 2,110, gauntlet RED on one Core test, `StateRootLockTests/secondSupervisorWaitsForTheFirst` — first failure in the history, 0 of 40 repeats on the idle M4, filed #475, failing line unknown because the run log was tidied. File Journey wording merged (`1289b6253`): a removed copy reads "the copy on Projects", never "this copy". the 02:00 nightly on `42b0d0ede`, the machine-estimate merge, was GREEN: 13,713 passed, 0 failed, 65 skipped, Core 2,580, Hallie strict 56 of 56. Today: the catalog-close race Thread Sanitizer found, #423, is fixed and its suppression retired; the weekly sanitizer lane reads the known mlx finding as known and names failed tests). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -157,8 +157,12 @@
    lines read "interlaced"). None of these is fixed yet; the first three are the next picture work.
 3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
    Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
-4. **Sanitizers:** read Sunday 11/15's thread run (first with no suppression) and close #423 if it is clean; run
-   the owed targeted address check on the M4; then #472–#474. Dropping the #463 suppression altogether needs the
+4. **Sanitizers:** read Sunday 11/15's thread run (first with no suppression; the M4 checkout was fast-forwarded
+   to main on 11/14 so the run has the fix) and close #423 if it is clean. The targeted address check on the M4
+   is DONE (11/14, `9ffb0fefd`: MLXSafetyTests 5 tests, 0 reports — the function-keyed #463 suppression is
+   honoured; 8.2 GB of its build output sits in `~/san463` on the M4, Rick to say if it moves to `.trash`). Then
+   #472–#475. Not established: what marked the archive rows "removed (purged)" in bulk on 10/22 (546) and 11/05
+   (647) — 647 of 676 archive paths have more than one row. Dropping the #463 suppression altogether needs the
    mlx-swift bump to 0.33.0 (#463). A script test leaves `sleep 300` processes behind (which one: unknown).
 5. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
    there); Core tests fail inside the M4's 04:00 coverage build (timing); the Ultra's nightly builds Rick's checkout
