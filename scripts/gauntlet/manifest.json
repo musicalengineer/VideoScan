@@ -4176,6 +4176,21 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseDrainTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCloseDrainTests"
+      ],
+      "tests": [
+        "closeWaitsForTheReadInsideAndRefusesNewOnes",
+        "aSecondCloseWaitsForTheFirst",
+        "readsRacingCloseHaveOnlyTwoEndings",
+        "closeDrainsTwoThousandReads",
+        "everyActorReadIsAdmitted"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitArchiveProvenanceTests.swift",
       "stage": "regression",
       "suites": [
@@ -39772,7 +39787,7 @@
       ],
       "expected_floor": 597,
       "name": "regression",
-      "package_expected_floor": 334,
+      "package_expected_floor": 339,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -39828,7 +39843,8 @@
         "VideoScanCoreTests.EraJobRetryReviewTests",
         "VideoScanCoreTests.BackgroundQuitMarkerSweepTests",
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
-        "VideoScanCoreTests.LateMeasurementAfterFinishTests"
+        "VideoScanCoreTests.LateMeasurementAfterFinishTests",
+        "VideoScanCoreTests.CatalogCloseDrainTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
