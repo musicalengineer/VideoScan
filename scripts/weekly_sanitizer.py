@@ -303,7 +303,6 @@ def report_blocks(text: str) -> List[tuple]:
 #                    one of the two racing accesses ("Write of size…", "Previous
 #                    read of size…"), not of where the memory or a thread was made
 #   null:<template>  a UBSan "null pointer" report whose own location (the
-#                    file before ": runtime error:") matches <template>
 #                    file before ": runtime error:") matches <template>, or
 #                    whose frame #0 does (its function or its binary). The UBSan
 #                    runtime matches exactly those: the check's file, then the

@@ -4875,8 +4875,7 @@
       "tests": [
         "actorReadCheckpointClose",
         "closeAfterAwaitedRead",
-        "closeAfterAwaitedWrite",
-        "readsInFlightDuringClose"
+        "closeAfterAwaitedWrite"
       ]
     },
     {

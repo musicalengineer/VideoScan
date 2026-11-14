@@ -162,9 +162,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// pool call is where the actor is released, and that is why GRDB could
     /// see a read START while close ran (its `readerPool` is unsynchronised).
     /// C++: a reader count plus a condition variable; close is the waiter.
-    private var closing = false
-    private var readsInFlight = 0
-    private var drained: CheckedContinuation<Void, Never>?
+    fileprivate var closing = false
+    fileprivate var readsInFlight = 0
+    fileprivate var drained: CheckedContinuation<Void, Never>?
     /// A second close() that arrives while the first runs waits for it.
     private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -828,25 +828,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     // MARK: - Read
 
-    /// GH #423: counts one read in, or says no because close has begun. Every
-    /// `pool.read` in this actor sits between `admitRead()` and `readReturned()`.
-    private func admitRead() -> Bool {
-        guard !closing else { return false }
-        readsInFlight += 1
-        return true
-    }
-
-    private func readReturned() {
-        readsInFlight -= 1
-        if readsInFlight == 0, let waiter = drained {
-            drained = nil
-            waiter.resume()
-        }
-    }
-
-    /// Test seam (#423): the two numbers close's drain runs on.
-    var closeDrainState: (closing: Bool, readsInFlight: Int) { (closing, readsInFlight) }
-
     public func read<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
         guard let pool, admitRead() else { throw CatalogRepositoryError.notOpen }
         defer { readReturned() }
@@ -1107,6 +1088,30 @@ extension GRDBCatalogRepository {
         }
         return result
     }
+}
+
+// MARK: - Read admission (GH #423)
+
+extension GRDBCatalogRepository {
+
+    /// GH #423: counts one read in, or says no because close has begun. Every
+    /// `pool.read` in this actor sits between `admitRead()` and `readReturned()`.
+    fileprivate func admitRead() -> Bool {
+        guard !closing else { return false }
+        readsInFlight += 1
+        return true
+    }
+
+    fileprivate func readReturned() {
+        readsInFlight -= 1
+        if readsInFlight == 0, let waiter = drained {
+            drained = nil
+            waiter.resume()
+        }
+    }
+
+    /// Test seam (#423): the two numbers close's drain runs on.
+    var closeDrainState: (closing: Bool, readsInFlight: Int) { (closing, readsInFlight) }
 }
 
 // MARK: - Close's decision, after the writer drains (codex #117 F2)

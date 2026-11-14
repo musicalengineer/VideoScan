@@ -1,3 +1,8 @@
+# TEST FIXTURE since 2026-11-14 — not in force. This was scripts/sanitizer/tsan.supp until #423 was
+# fixed (GRDBCatalogRepository.close stops admitting reads, drains, then closes); the weekly Thread
+# Sanitizer run now has NO suppression. tests/test_weekly_sanitizer.py reads it as the worked example
+# of a known finding.
+#
 # Thread Sanitizer suppressions for scripts/weekly_sanitizer.py (TSAN_OPTIONS=suppressions=<this file>).
 #
 # Every entry is a KNOWN finding with an open issue: a `# known:` line (code, issue,
