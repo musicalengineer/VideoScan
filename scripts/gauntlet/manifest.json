@@ -35895,6 +35895,8 @@
         "aCopyFoldsUnderItsRecordingInsideTheEstimateFolder",
         "aRowFilesUnderItsDecadeOrItsYearAndTheRestStayLoose",
         "aSampledHashNeverMatchesAndAnUppercaseDigestDoes",
+        "aVersionWithNoEraFollowsTheRecordingItWasMadeFrom",
+        "anEstimateFolderIDCanNeverBeOneOfRicks",
         "everyFolderEditRefusesWhileTheFoldersAreEstimates",
         "folderIDsAreStableAndAYearIsNotItsDecade",
         "hundredThousandRowsUnderBudget",

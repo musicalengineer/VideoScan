@@ -55,16 +55,32 @@ enum MachineEstimateFolders {
     }
 
     /// A stable id per folder: the same year gives the same id on every
-    /// launch. The prefix is fixed and not a random-UUID shape Rick's own
-    /// folders could collide with by accident (theirs are UUID()).
+    /// launch. Its version and variant fields are zero, which `UUID()` (a
+    /// version-4 UUID: version nibble 4, variant bits 10) can never produce,
+    /// so an estimate folder's id can never equal one of Rick's (Codex #290).
     static func folderID(_ folder: MachineEraResolver.EstimateFolder) -> UUID {
         let tag: Int
         switch folder {
         case .year: tag = 1
         case .decade: tag = 2
         }
-        let text = String(format: "E57A0000-0000-4000-8000-%04d%08d", tag, max(0, folder.firstYear))
-        return UUID(uuidString: text) ?? UUID()
+        let year = min(max(0, folder.firstYear), 99_999_999)
+        let text = idPrefix + String(format: "%04d%08d", tag, year)
+        return UUID(uuidString: text) ?? unknownFolderID
+    }
+
+    static let idPrefix = "E57A0000-0000-0000-0000-"
+    /// What an unformattable year would get: still inside the namespace.
+    static let unknownFolderID = UUID(uuid: (0xE5, 0x7A, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF))
+
+    /// Is `id` an estimate folder's? Asked of the ROW's id by every folder
+    /// edit path, so a synthetic row still on screen while the join swaps
+    /// back to Rick's folders is refused too (Codex #290): the row's own id
+    /// answers, never a flag that may have moved ahead of the display.
+    static func isEstimateFolder(_ id: UUID) -> Bool {
+        let b = id.uuid
+        return b.0 == 0xE5 && b.1 == 0x7A && b.2 == 0 && b.3 == 0 && b.4 == 0 && b.5 == 0
+            && b.6 == 0 && b.7 == 0 && b.8 == 0 && b.9 == 0
     }
 }
 
@@ -75,7 +91,7 @@ enum MachineEstimateWords {
     static let help = "Group the files by the era the machine guessed from the pictures (1980s, 1990s, or a year it read on screen). A view only: nothing is filed, dated or changed, and your own folders come back when you switch it off."
     static let pill = "By machine estimate"
     static let folderDateWords = "machine estimate, not confirmed"
-    static let legend = "Folders are the machine's guess of the era, from the pictures alone — not confirmed. A file with no guess stays outside."
+    static let legend = "Folders are the machine's guess of the era, from the pictures alone — not confirmed. A file with no guess stays outside, unless it was made from one inside."
     static let readOnlyMenuNote = "A machine estimate — not one of your folders"
     static let dropRefused = "a drop on a folder did nothing — this folder is a machine estimate, not one of your folders. Use Add to Folder to file it in one of yours."
 }

@@ -100,7 +100,41 @@ struct MachineEstimateFoldersLogicTests {
         #expect(decade == MachineEstimateFolders.folderID(.decade(1990)), "the same folder has the same id on every launch")
         #expect(decade != MachineEstimateFolders.folderID(.year(1990)))
         #expect(decade != MachineEstimateFolders.folderID(.decade(1980)))
-        #expect(decade.uuidString.hasPrefix("E57A0000-0000-4000-8000-"))
+    }
+
+    /// Codex #290: an estimate folder's id must be one `UUID()` cannot make,
+    /// and every one of them — and none of Rick's — answers the id test.
+    @Test func anEstimateFolderIDCanNeverBeOneOfRicks() {
+        let made: [UUID] = [.year(0), .year(1991), .decade(1800), .decade(2200), .year(-5), .decade(99_999_999), .year(Int.max)]
+            .map(MachineEstimateFolders.folderID)
+        for id in made + [MachineEstimateFolders.unknownFolderID] {
+            #expect(MachineEstimateFolders.isEstimateFolder(id), "\(id)")
+            let b = id.uuid
+            #expect(b.6 >> 4 != 4, "never a version-4 UUID: \(id)")
+            #expect(b.8 >> 6 != 0b10, "never the RFC variant UUID() uses: \(id)")
+        }
+        for _ in 0..<10_000 { #expect(!MachineEstimateFolders.isEstimateFolder(UUID())) }
+        // The shape the first cut used — a valid v4 UUID Rick's store could hold — is not ours.
+        let v4Shaped = UUID(uuidString: "E57A0000-0000-4000-8000-000100001991")
+        #expect(v4Shaped.map(MachineEstimateFolders.isEstimateFolder) == false)
+    }
+
+    /// Codex #290, declined as a defect and pinned as the design: a version
+    /// made from an estimated recording (a transcode, a trim) is the same
+    /// footage and folds under it, as in any folder — the legend says so.
+    /// Unrelated content with no era stays loose.
+    @Test func aVersionWithNoEraFollowsTheRecordingItWasMadeFrom() {
+        let parent = row("source.mov", digest: hex(1))
+        var child = row("clip.mov", digest: hex(2))
+        child.derivedFrom = parent.id
+        let stranger = row("other.mov", digest: hex(3))
+        let rows = [parent, child, stranger]
+        let events = MachineEstimateFolders.events(rows: rows, eras: [hex(1): [era(1980, 1995)]])
+        let index = FootageFolders.index(rows: rows, events: events)
+        #expect(events.first?.contentKeys == [parent.contentKey], "only the content with an era is filed")
+        #expect(index.folder(containing: child.id)?.title == "1980s (estimated)", "its version rides with it")
+        #expect(index.folders(of: stranger.id).isEmpty)
+        #expect(MachineEstimateWords.legend.contains("unless it was made from one inside"))
     }
 
     @Test func theIndexSaysItIsEstimatedOnlyWhenTold() {
@@ -259,12 +293,16 @@ struct MachineEstimateFoldersSensorTests {
 
     @Test func everyFolderEditRefusesWhileTheFoldersAreEstimates() throws {
         let drop = try code("CatalogContent+FolderDrop.swift")
-        #expect(drop.contains("guard !model.footageFolders.index.estimated else"), "a drop on an estimate folder files nothing")
+        #expect(drop.contains("guard !MachineEstimateFolders.isEstimateFolder(folderID) else"), "a drop on an estimate folder files nothing")
         let labels = try code("CatalogContent+FolderLabels.swift")
-        #expect(labels.contains("if model.footageFolders.index.estimated"), "an estimate folder's menu offers Open only")
+        #expect(labels.contains("if MachineEstimateFolders.isEstimateFolder(id)"), "an estimate folder's menu offers Open only")
         let table = try code("CatalogContent+FolderTable.swift")
-        #expect(table.contains("guard showFootageFolders, !model.footageFolders.index.estimated else { return nil }"),
+        #expect(table.contains("return folder.flatMap { MachineEstimateFolders.isEstimateFolder($0) ? nil : $0 }"),
                 "no Move from / Remove from an estimate folder")
+        // Codex #290: the gates ask the ROW's id, never a flag that can move ahead of the display.
+        for source in [drop, labels] { #expect(!source.contains("index.estimated")) }
+        #expect(try code("ContentView.swift").contains("model.setFootageFoldersEstimated(false)"),
+                "showing one of Rick's own folders leaves the estimate view")
     }
 
     @Test func theJoinTakesRicksFoldersOrTheEstimatesNeverBoth() throws {

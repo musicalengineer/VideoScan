@@ -401,9 +401,12 @@ extension CatalogContent {
     private func rowsFolder(_ ids: Set<UUID>) -> UUID? {
         // Under machine-estimate folders a row is in none of Rick's: Add to
         // Folder ▸ only, never Move from / Remove from an estimate.
-        guard showFootageFolders, !model.footageFolders.index.estimated else { return nil }
-        if case .event(let id)? = tableState.folderScope { return id }
-        return FolderRowSelection.commonFolder(of: ids, refs: tableState.folderRowRefs)
+        guard showFootageFolders else { return nil }
+        let folder: UUID?
+        if case .event(let id)? = tableState.folderScope { folder = id } else {
+            folder = FolderRowSelection.commonFolder(of: ids, refs: tableState.folderRowRefs)
+        }
+        return folder.flatMap { MachineEstimateFolders.isEstimateFolder($0) ? nil : $0 }
     }
 
     /// Double-click / Return: a folder opens (the Finder); rows open as

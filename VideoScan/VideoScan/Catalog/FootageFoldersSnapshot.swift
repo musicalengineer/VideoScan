@@ -64,8 +64,11 @@ final class FootageFoldersSnapshot: ObservableObject {
 
     /// Show ▸ Folders by Machine Estimate: the folders are the era job's
     /// guesses instead of Rick's own (MachineEstimateFolders.swift).
-    /// Remembered per user; the model re-joins when it flips.
-    @Published private(set) var estimated = MachineEstimateFolders.isOn()
+    /// Remembered per user; the model re-joins when it flips. Read as on
+    /// only with the folder view's own setting: a stored "on" beside a
+    /// folder view that is off must not turn Rick's folders into estimates
+    /// the next time he opens them.
+    @Published private(set) var estimated = MachineEstimateFolders.isOn() && CatalogFootageFoldersSetting.isOn()
 
     /// false = nothing changed.
     func setEstimated(_ on: Bool) -> Bool {

@@ -1547,6 +1547,9 @@ struct CatalogView: View {
         focusMatchScore = nil
         namedFocusLabel = nil
         model.focusedMediaIDs = []
+        // Both callers reveal one of Rick's OWN folders: the estimate view
+        // does not hold it, so it steps aside (Codex #290).
+        model.setFootageFoldersEstimated(false)
         showFootageFolders = true
     }
 

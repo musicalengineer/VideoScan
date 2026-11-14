@@ -87,7 +87,7 @@ extension CatalogContent {
     /// Files dropped on a folder row. An event handler, never a body;
     /// O(n log n + the folders' members), n = dropped ids.
     func dropOnFolder(_ folderID: UUID, items strings: [String]) {
-        guard !model.footageFolders.index.estimated else {
+        guard !MachineEstimateFolders.isEstimateFolder(folderID) else {
             model.eventsNote(MachineEstimateWords.dropRefused)
             return
         }
