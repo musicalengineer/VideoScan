@@ -39,9 +39,25 @@ final class LedgerNarratorTests: XCTestCase {
         XCTAssertEqual(one(e(.approval, by: .rick, at: d, detail: ["count": "15", "files": "a.mov\nb.mov"])),
                        "You approved 15 copies to the Trash on Sep 12, 2026: a.mov, b.mov.")
         XCTAssertEqual(one(e(.copyDeleted, by: .rick, at: d, detail: ["volume": "LaCie"])),
-                       "You deleted this copy permanently on Sep 12, 2026 (the copy on LaCie).")
+                       "You deleted the copy on LaCie permanently on Sep 12, 2026.")
         XCTAssertEqual(one(e(.copyTrashed, by: .rick, at: d)),
-                       "You moved this copy to the Trash on Sep 12, 2026.")
+                       "You moved a copy to the Trash on Sep 12, 2026.")
+    }
+
+    /// Rick, 2026-11-14: an archived file's journey said "You moved this copy
+    /// to the Trash … (the copy on Projects)". The journey is the CONTENT's
+    /// history across every copy, so the sentence must name the copy the
+    /// event happened to and never call it "this copy".
+    func testCopyRemovalNamesTheCopyAndNeverSaysThisCopy() {
+        let d = Date(timeIntervalSince1970: 1_789_243_200)   // Sep 12, 2026 UTC
+        XCTAssertEqual(one(e(.copyTrashed, by: .rick, at: d, detail: ["volume": "Projects"])),
+                       "You moved the copy on Projects to the Trash on Sep 12, 2026.")
+        for kind in [MediaLedgerEvent.Kind.copyTrashed, .copyDeleted] {
+            for detail in [[:], ["volume": "Projects"]] as [[String: String]] {
+                let s = one(e(kind, by: .rick, at: d, detail: detail))
+                XCTAssertFalse(s.contains("this copy"), s)
+            }
+        }
     }
 
     func testEveryKindHasASentence() {

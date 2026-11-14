@@ -187,7 +187,7 @@ struct MediaLedgerTests {
         await ledger.append([event(.copyTrashed, id: id, at: 20)])?.value
         #expect(ledger.narratedCacheCount == 0)
         let again = await ledger.narrated(recordID: id, contentKey: "h:v1:a", filename: "a.mov", timeZone: utc)
-        #expect(again.count == 3 && again[0].hasPrefix("You moved this copy to the Trash"))
+        #expect(again.count == 3 && again[0].hasPrefix("You moved a copy to the Trash"))
         // Bounded: more records than the limit never grow past it.
         for _ in 0..<(MediaLedger.cacheLimit + 10) {
             _ = await ledger.narrated(recordID: UUID(), contentKey: "", filename: "", timeZone: utc)
