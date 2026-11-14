@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-13T12:43:51Z",
- "sha": "79a973aa",
+ "ts": "2026-11-14T11:52:30Z",
+ "sha": "42b0d0ed",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -1516,6 +1516,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift::CatalogShowingSummary.folderPills",
+   "file": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift",
+   "name": "CatalogShowingSummary.folderPills",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift::CatalogShowingSummary.selectedVolumes",
    "file": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift",
    "name": "CatalogShowingSummary.selectedVolumes",
@@ -2048,24 +2055,10 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Catalog/FootageFolders.swift::FootageFolders.Index.foldersOf",
-   "file": "VideoScan/VideoScan/Catalog/FootageFolders.swift",
-   "name": "FootageFolders.Index.foldersOf",
-   "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Catalog/FootageFolders.swift::FootageFolders.Row.copyIsByteForByte",
    "file": "VideoScan/VideoScan/Catalog/FootageFolders.swift",
    "name": "FootageFolders.Row.copyIsByteForByte",
    "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/Catalog/FootageFolders.swift::FootageFolders.Row.wholeFileDigest",
-   "file": "VideoScan/VideoScan/Catalog/FootageFolders.swift",
-   "name": "FootageFolders.Row.wholeFileDigest",
-   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -2146,9 +2139,23 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift::FootageFoldersSnapshot.setEstimated",
+   "file": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift",
+   "name": "FootageFoldersSnapshot.setEstimated",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift::FootageFoldersSnapshot.watchDecisions",
    "file": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift",
    "name": "FootageFoldersSnapshot.watchDecisions",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift::FootageFoldersSnapshot.watchEras",
+   "file": "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift",
+   "name": "FootageFoldersSnapshot.watchEras",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -2185,6 +2192,20 @@
    "file": "VideoScan/VideoScan/Catalog/MachineEraStore.swift",
    "name": "MachineEraStore.mayHaveEra",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/MachineEstimateFolders.swift::MachineEstimateFolders.idPrefix",
+   "file": "VideoScan/VideoScan/Catalog/MachineEstimateFolders.swift",
+   "name": "MachineEstimateFolders.idPrefix",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/MachineEstimateFolders.swift::MachineEstimateWords.toggleTitle",
+   "file": "VideoScan/VideoScan/Catalog/MachineEstimateFolders.swift",
+   "name": "MachineEstimateWords.toggleTitle",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {

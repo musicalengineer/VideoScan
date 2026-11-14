@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-13T12:43:26Z",
- "sha": "79a973aa",
+ "ts": "2026-11-14T11:52:11Z",
+ "sha": "42b0d0ed",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -48,7 +48,7 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "CatalogView.withCatalogObservers",
    "ccn": 15,
-   "nloc": 84,
+   "nloc": 85,
    "lang": "swift"
   },
   {

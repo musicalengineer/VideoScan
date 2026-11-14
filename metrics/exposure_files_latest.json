@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-13T12:43:51Z",
- "sha": "79a973aa",
+ "ts": "2026-11-14T11:52:30Z",
+ "sha": "42b0d0ed",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -355,7 +355,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/ContentView.swift": {
-   "lines": 1962,
+   "lines": 1967,
    "decls": 46,
    "could_be_private": [
     "CatalogView.volumeShowFilterDidChange",
@@ -1933,7 +1933,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogContent+FolderDrop.swift": {
-   "lines": 125,
+   "lines": 129,
    "decls": 13,
    "could_be_private": [
     "CatalogRecordDrag.folderSeparator"
@@ -1944,7 +1944,7 @@
    ]
   },
   "VideoScan/VideoScan/Catalog/CatalogContent+FolderLabels.swift": {
-   "lines": 323,
+   "lines": 335,
    "decls": 17,
    "could_be_private": [
     "CatalogContent.setFolderKind",
@@ -1956,7 +1956,7 @@
    ]
   },
   "VideoScan/VideoScan/Catalog/CatalogContent+FolderTable.swift": {
-   "lines": 805,
+   "lines": 810,
    "decls": 28,
    "could_be_private": [
     "CatalogContent.dragPayload",
@@ -2278,12 +2278,13 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift": {
-   "lines": 492,
-   "decls": 53,
+   "lines": 501,
+   "decls": 55,
    "could_be_private": [
     "CatalogShowingSummary.Pill.Emphasis",
     "CatalogShowingSummary.unnamedVolume",
     "CatalogShowingSummary.selectedVolumes",
+    "CatalogShowingSummary.folderPills",
     "CatalogFilterToken.accessibilityHint"
    ],
    "widened_for_split": []
@@ -2408,7 +2409,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogToolbar.swift": {
-   "lines": 808,
+   "lines": 817,
    "decls": 50,
    "could_be_private": [
     "CatalogToolbar.searchLeftInset",
@@ -2716,13 +2717,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/FootageFolders.swift": {
-   "lines": 813,
-   "decls": 114,
+   "lines": 817,
+   "decls": 115,
    "could_be_private": [
     "FootageFolders.Sort.comparators",
-    "FootageFolders.Row.wholeFileDigest",
     "FootageFolders.Row.copyIsByteForByte",
-    "FootageFolders.Index.foldersOf",
     "FootageFolders.ownEvents",
     "FootageFolders.leaders",
     "FootageFolders.descendsFromGroup",
@@ -2739,9 +2738,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/FootageFoldersSnapshot.swift": {
-   "lines": 225,
-   "decls": 21,
+   "lines": 276,
+   "decls": 26,
    "could_be_private": [
+    "FootageFoldersSnapshot.setEstimated",
+    "FootageFoldersSnapshot.watchEras",
     "FootageFoldersSnapshot.watchDecisions"
    ],
    "widened_for_split": []
@@ -2870,10 +2871,19 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/MachineEraStore.swift": {
-   "lines": 216,
-   "decls": 19,
+   "lines": 225,
+   "decls": 20,
    "could_be_private": [
     "MachineEraStore.mayHaveEra"
+   ],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/Catalog/MachineEstimateFolders.swift": {
+   "lines": 117,
+   "decls": 18,
+   "could_be_private": [
+    "MachineEstimateFolders.idPrefix",
+    "MachineEstimateWords.toggleTitle"
    ],
    "widened_for_split": []
   },
@@ -3107,7 +3117,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift": {
-   "lines": 775,
+   "lines": 785,
    "decls": 11,
    "could_be_private": [
     "VideoScanModel.ParsedNoteEvent"
@@ -8542,8 +8552,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Model/ProvenanceTypes.swift": {
-   "lines": 350,
-   "decls": 61,
+   "lines": 367,
+   "decls": 63,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -10765,7 +10775,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/MachineEraResolver.swift": {
-   "lines": 324,
+   "lines": 379,
    "decls": 2,
    "could_be_private": [],
    "widened_for_split": []
