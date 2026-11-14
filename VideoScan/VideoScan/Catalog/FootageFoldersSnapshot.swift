@@ -60,6 +60,28 @@ final class FootageFoldersSnapshot: ObservableObject {
     private(set) var request: Request?
     private var composeTask: Task<Void, Never>?
     private var decisionsWatch: AnyCancellable?
+    private var erasWatch: AnyCancellable?
+
+    /// Show ▸ Folders by Machine Estimate: the folders are the era job's
+    /// guesses instead of Rick's own (MachineEstimateFolders.swift).
+    /// Remembered per user; the model re-joins when it flips.
+    @Published private(set) var estimated = MachineEstimateFolders.isOn()
+
+    /// false = nothing changed.
+    func setEstimated(_ on: Bool) -> Bool {
+        guard on != estimated else { return false }
+        estimated = on
+        MachineEstimateFolders.set(on)
+        return true
+    }
+
+    /// Follow the machine eras while the estimate view may show them: a
+    /// journal pass that lands new eras re-files the rows.
+    func watchEras(_ store: MachineEraStore, onChange: @escaping @MainActor () -> Void) {
+        erasWatch = store.$eras.dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { _ in onChange() }
+    }
 
     init() {}
 
@@ -101,6 +123,7 @@ final class FootageFoldersSnapshot: ObservableObject {
     /// and the display; the index stays until the next pass replaces it.
     func stop() {
         decisionsWatch = nil
+        erasWatch = nil
         composeTask?.cancel()
         request = nil
         publish(display: .empty)
@@ -156,6 +179,10 @@ extension VideoScanModel {
         footageFolders.watchDecisions(EventsDecisionStore.shared) { [weak self] in
             self?.scheduleFootageFoldersRefresh()
         }
+        footageFolders.watchEras(machineEras) { [weak self] in
+            guard let self, self.footageFolders.estimated else { return }
+            self.scheduleFootageFoldersRefresh()
+        }
         if !EventsDecisionStore.shared.hasLoaded {
             // The load bumps the store's revision → the watch above refreshes.
             Task { await EventsDecisionStore.shared.load() }
@@ -169,14 +196,35 @@ extension VideoScanModel {
         guard footageFoldersWanted else { return }
         footageFoldersTask?.cancel()
         let rows = footageFolderRows()
-        let events = FootageFolders.Event.events(in: EventsDecisionStore.shared.snapshot())
+        // Rick's folders, or (Show ▸ Folders by Machine Estimate) the era
+        // job's guesses — one join either way; the index says which.
+        let estimated = footageFolders.estimated
+        let eras = estimated ? machineEras.eras : [:]
+        let own = estimated ? [] : FootageFolders.Event.events(in: EventsDecisionStore.shared.snapshot())
         footageFoldersTask = Task { [weak self] in
             let index = await Task.detached(priority: .utility) {
-                FootageFolders.index(rows: rows, events: events)
+                let events = estimated ? MachineEstimateFolders.events(rows: rows, eras: eras) : own
+                var index = FootageFolders.index(rows: rows, events: events)
+                index.estimated = estimated
+                return index
             }.value
             guard !Task.isCancelled, let self else { return }
             self.footageFolders.publish(index: index)
         }
+    }
+
+    /// Show ▸ Folders by Machine Estimate flipped: remember it and re-join.
+    func setFootageFoldersEstimated(_ on: Bool) {
+        guard footageFolders.setEstimated(on) else { return }
+        log("Catalog folders: " + (on ? "showing the machine's era estimates as folders (a view; nothing is filed or dated)"
+                                      : "showing your own folders again"))
+        scheduleFootageFoldersRefresh()
+    }
+
+    /// The folder view itself flipped: off takes the estimate view with it,
+    /// so turning folders back on shows Rick's own.
+    func footageFolderViewChanged(on: Bool) {
+        if !on { setFootageFoldersEstimated(false) }
     }
 
     /// The ONE O(records) projection — Sendable rows for the join.

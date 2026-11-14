@@ -287,6 +287,61 @@ public enum MachineEraResolver {
         return line
     }
 
+    /// The File Journey's line (Rick 2026-11-13): "Estimated era: 1980–1995
+    /// — the 8B model's guess from the pictures alone, not confirmed", with
+    /// the on-screen years it read, and "It disagrees with your date." when
+    /// Rick's year is known and the era is not close enough. A guess in its
+    /// own words; never a date.
+    public static func journeySentence(era: MachineEra, rickYear: Int?) -> String {
+        var line = "Estimated era: \(era.rangeText) — the \(era.modelShortName) model's guess from the pictures alone, not confirmed."
+        if !era.burnedInYears.isEmpty {
+            line += " On-screen years read: \(era.burnedInYears.map(String.init).joined(separator: ", "))."
+        }
+        if let rickYear, !closeEnough(era: era, rickYear: rickYear) { line += " It disagrees with your date." }
+        return line
+    }
+
+    // MARK: The estimate folders' rule (Catalog ▸ Show ▸ Folders by Machine Estimate)
+
+    /// An era this narrow names its year; anything wider names a decade.
+    public static let yearFolderMaxWidth = 1
+
+    /// Where one era files in the estimate view: its own year when the
+    /// range is at most `yearFolderMaxWidth` wide (in practice an on-screen
+    /// date the model read), else the decade its midpoint falls in. So
+    /// 1991 → year 1991; 1980–1995 (midpoint 1987.5) → the 1980s;
+    /// 1980–2000 (midpoint 1990) → the 1990s.
+    public enum EstimateFolder: Sendable, Hashable, Comparable {
+        case year(Int)
+        case decade(Int)
+
+        /// The first year the folder covers (its sort position).
+        public var firstYear: Int {
+            switch self {
+            case .year(let y), .decade(let y): return y
+            }
+        }
+
+        /// "1991 (estimated)" / "1990s (estimated)".
+        public var title: String {
+            switch self {
+            case .year(let y): return "\(y) (estimated)"
+            case .decade(let d): return "\(d)s (estimated)"
+            }
+        }
+
+        public static func < (a: Self, b: Self) -> Bool {
+            if a.firstYear != b.firstYear { return a.firstYear < b.firstYear }
+            if case .decade = a, case .year = b { return true }   // "1990s" before "1990"
+            return false
+        }
+    }
+
+    public static func estimateFolder(era: MachineEra) -> EstimateFolder {
+        if era.width <= yearFolderMaxWidth { return .year(era.lo) }
+        return .decade(decade(Int(era.midpoint.rounded(.down))))
+    }
+
     /// The tooltip: what the model saw and who said it.
     public static func inspectorHelp(era: MachineEra, others: [MachineEra] = []) -> String {
         var parts: [String] = []

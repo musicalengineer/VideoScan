@@ -313,6 +313,10 @@ enum FootageFolders {
         var foldersOf: [UUID: [UUID]] = [:]
         var folders: [UUID: Folder] = [:]
         var keysOf: [UUID: SortKeys] = [:]
+        /// The folders are the machine's era guesses (Show ▸ Folders by
+        /// Machine Estimate), not Rick's: read-only, no store knows their
+        /// ids. Set by the model after the join; false for Rick's folders.
+        var estimated = false
 
         static let empty = Index()
 

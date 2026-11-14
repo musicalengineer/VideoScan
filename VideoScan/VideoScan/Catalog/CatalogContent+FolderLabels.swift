@@ -164,6 +164,18 @@ extension CatalogContent {
     /// A folder row's menu: Open, Rename…, Folder Kind ▸, Delete Folder….
     @ViewBuilder
     func folderRowMenu(_ id: UUID) -> some View {
+        if model.footageFolders.index.estimated {
+            // A machine-estimate folder: nothing to rename, recolour or delete.
+            Button(FootageFolderWords.openFolder) { enterFolder(id) }
+            Divider()
+            Text(MachineEstimateWords.readOnlyMenuNote)
+        } else {
+            ownFolderRowMenu(id)
+        }
+    }
+
+    @ViewBuilder
+    private func ownFolderRowMenu(_ id: UUID) -> some View {
         let store = folderStore
         let refusal = store.writeRefusal
         let current = store.event(id: id)?.kind ?? .event

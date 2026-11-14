@@ -39,6 +39,43 @@ struct MachineEraResolverTests {
 
     static func era(_ lo: Int, _ hi: Int) -> MachineEra { MachineEra(lo: lo, hi: hi, by: by8, at: 0, seq: 1) }
 
+    // MARK: The File Journey's sentence and the estimate folders' rule (Rick 2026-11-13)
+
+    @Test func theJourneySentenceIsAGuessInItsOwnWords() {
+        let plain = MachineEraResolver.journeySentence(era: Self.era(1980, 1995), rickYear: nil)
+        #expect(plain == "Estimated era: 1980–1995 — the 8B model's guess from the pictures alone, not confirmed.")
+        let read = MachineEra(lo: 1991, hi: 1991, by: Self.by8, at: 0, seq: 1, burnedInYears: [1991])
+        #expect(MachineEraResolver.journeySentence(era: read, rickYear: nil)
+                == "Estimated era: 1991 — the 8B model's guess from the pictures alone, not confirmed. On-screen years read: 1991.")
+        #expect(MachineEraResolver.journeySentence(era: Self.era(1991, 1995), rickYear: 1993).hasSuffix("not confirmed."),
+                "close enough to Rick's date: nothing more to say")
+        #expect(MachineEraResolver.journeySentence(era: Self.era(1991, 1995), rickYear: 1970).hasSuffix("It disagrees with your date."))
+        #expect(MachineEraResolver.journeySentence(era: Self.era(1980, 1995), rickYear: 1987).hasSuffix("It disagrees with your date."),
+                "a 15-year range is too wide to agree with anything (the review page's rule)")
+    }
+
+    @Test(arguments: [
+        (1991, 1991, MachineEraResolver.EstimateFolder.year(1991)),      // an on-screen date
+        (1991, 1992, .year(1991)),                                       // one year wide: still a year
+        (1991, 1993, .decade(1990)),                                     // two wide: a decade
+        (1980, 1995, .decade(1980)),                                     // midpoint 1987.5
+        (1980, 2000, .decade(1990)),                                     // midpoint 1990: the decade it starts
+        (1985, 1995, .decade(1990)),                                     // midpoint 1990
+        (1985, 1994, .decade(1980)),                                     // midpoint 1989.5
+        (2010, 2025, .decade(2010)),
+        (1895, 1905, .decade(1900)),
+    ])
+    func anEraFilesUnderItsYearOrTheDecadeOfItsMidpoint(lo: Int, hi: Int, folder: MachineEraResolver.EstimateFolder) {
+        #expect(MachineEraResolver.estimateFolder(era: Self.era(lo, hi)) == folder)
+    }
+
+    @Test func estimateFoldersSortOldestFirstAndADecadeLeadsItsFirstYear() {
+        let folders: [MachineEraResolver.EstimateFolder] = [.year(1991), .decade(2000), .year(1990), .decade(1990), .decade(1980)]
+        #expect(folders.sorted() == [.decade(1980), .decade(1990), .year(1990), .year(1991), .decade(2000)])
+        #expect(MachineEraResolver.EstimateFolder.decade(1990).title == "1990s (estimated)")
+        #expect(MachineEraResolver.EstimateFolder.year(1991).title == "1991 (estimated)")
+    }
+
     // MARK: Rows → eras
 
     @Test func theNewestFusedRowPerByWinsBySeqNotByAt() {

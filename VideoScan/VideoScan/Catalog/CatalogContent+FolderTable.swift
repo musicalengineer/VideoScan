@@ -354,7 +354,7 @@ extension CatalogContent {
     /// Under the table while the option is on.
     var footageFolderLegend: some View {
         HStack(spacing: 8) {
-            Text(FootageFolderWords.legend)
+            Text(model.footageFolders.index.estimated ? MachineEstimateWords.legend : FootageFolderWords.legend)
                 .font(FootageFolderWords.legendFont)
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -399,7 +399,9 @@ extension CatalogContent {
     /// folder; at the top, the one folder all of them are under. nil for
     /// loose files, a mix, or the plain list.
     private func rowsFolder(_ ids: Set<UUID>) -> UUID? {
-        guard showFootageFolders else { return nil }
+        // Under machine-estimate folders a row is in none of Rick's: Add to
+        // Folder ▸ only, never Move from / Remove from an estimate.
+        guard showFootageFolders, !model.footageFolders.index.estimated else { return nil }
         if case .event(let id)? = tableState.folderScope { return id }
         return FolderRowSelection.commonFolder(of: ids, refs: tableState.folderRowRefs)
     }

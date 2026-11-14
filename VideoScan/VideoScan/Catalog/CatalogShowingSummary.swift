@@ -62,6 +62,8 @@ enum CatalogShowingSummary {
         var footageFolders = false
         /// Show ▸ Folders Only — its pill stands in for "As folders".
         var foldersOnly = false
+        /// Show ▸ Folders by Machine Estimate — its own pill beside the folder one.
+        var estimateFolders = false
         /// A Master Archive is designated — without one "archived" is
         /// meaningless and the archive pill is omitted entirely.
         var hasMasterArchive = false
@@ -200,6 +202,13 @@ enum CatalogShowingSummary {
     /// The pills, in reading order: selected volume(s) · the chosen person
     /// · then the box's pills. Focus mode overrides every filter, the volume
     /// and person ones included.
+    /// The folder view's pills: "As folders" / "Folders only", and "By
+    /// machine estimate" beside it while the folders are the machine's guesses.
+    static func folderPills(_ s: State) -> [Pill] {
+        let shape = Pill(FootageFolderWords.showingPill(foldersOnly: s.foldersOnly))
+        return s.estimateFolders ? [shape, Pill(MachineEstimateWords.pill)] : [shape]
+    }
+
     static func pills(for s: State) -> [Pill] {
         guard s.focusLabel == nil else { return boxPills(for: s) }
         let tokens = [volumePill(labels: s.selectedVolumeLabels), personPill(name: s.selectedPersonName)]
@@ -234,7 +243,7 @@ enum CatalogShowingSummary {
             out.append(Pill(words(for: f)))
         }
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
-        if s.footageFolders { out.append(Pill(FootageFolderWords.showingPill(foldersOnly: s.foldersOnly))) }
+        if s.footageFolders { out.append(contentsOf: folderPills(s)) }
 
         out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives",
                         action: .toggleDrives))

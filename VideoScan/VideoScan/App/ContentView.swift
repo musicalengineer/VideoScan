@@ -1030,6 +1030,8 @@ struct CatalogView: View {
             }
             .onChange(of: showFootageFolders) {
                 CatalogFootageFoldersSetting.set(showFootageFolders)
+                // The folder view off turns the estimate view off with it.
+                model.footageFolderViewChanged(on: showFootageFolders)
                 showFoldersOnly = CatalogFoldersOnlyRule.foldersOnly(afterFolders: showFootageFolders, foldersOnly: showFoldersOnly)
             }
             .onChange(of: showFoldersOnly) {
