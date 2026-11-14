@@ -9,6 +9,9 @@ import SwiftUI
 
 struct CatalogToolbar<Dashboard: View>: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Bumped when Show ▸ Folders by Machine Estimate flips, so the Showing
+    /// box (which reads the folder store, not a binding) is drawn again.
+    @State private var estimateFoldersRevision = 0
     @Environment(\.openWindow) private var openWindow
     let isScanning: Bool
     let isCombining: Bool
@@ -123,6 +126,8 @@ struct CatalogToolbar<Dashboard: View>: View {
             showSuperseded: showSuperseded,
             footageFolders: showFootageFolders,
             foldersOnly: showFoldersOnly,
+            // Reading the revision is what makes a flip redraw this box.
+            estimateFolders: estimateFoldersRevision >= 0 && showFootageFolders && model.footageFolders.estimated,
             hasMasterArchive: model.masterArchive != nil,
             selectedVolumeLabels: selectedVolumeLabels,
             selectedPersonName: selectedPerson?.name)
@@ -419,6 +424,10 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Section("Show files — as folders") {
                     FootageFoldersShowToggle(isOn: $showFootageFolders)
                     FoldersOnlyShowToggle(isOn: $showFoldersOnly)
+                    MachineEstimateFoldersToggle(folders: model.footageFolders, foldersOn: $showFootageFolders) {
+                        model.setFootageFoldersEstimated($0)
+                        estimateFoldersRevision &+= 1   // the Showing box's pill reads the store: draw again
+                    }
                 }
                 Section("Show files — hidden records") {
                     Toggle(isOn: $showRemoved) {

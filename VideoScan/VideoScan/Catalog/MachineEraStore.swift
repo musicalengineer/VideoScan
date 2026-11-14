@@ -206,6 +206,15 @@ final class MachineEraStore: ObservableObject {
         return Self.shown(list, userDate: pfRecordHasConfirmedDate(record) ? record.userDate : nil)
     }
 
+    /// The File Journey's event for `record` — O(1); nil when the content
+    /// has no fused era (the journey then says nothing about an era).
+    func journey(for record: VideoRecord) -> JourneyMachineEra? {
+        guard let digest = CatalogCommit.digest(of: record), let era = eras[digest]?.first else { return nil }
+        let year = pfRecordHasConfirmedDate(record) ? MachineEraResolver.rickYear(record.userDate) : nil
+        return JourneyMachineEra(sentence: MachineEraResolver.journeySentence(era: era, rickYear: year),
+                                 observed: Date(timeIntervalSince1970: TimeInterval(era.at)))
+    }
+
     /// Pure: the newest era's line; Rick's year (when he has one) decides
     /// "disagrees with your date"; the help names windows, frames, the `by`.
     static func shown(_ eras: [MachineEra], userDate: String?) -> Shown? {

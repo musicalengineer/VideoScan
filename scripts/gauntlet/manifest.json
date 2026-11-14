@@ -732,9 +732,11 @@
         "MachineEraResolverTests"
       ],
       "tests": [
+        "anEraFilesUnderItsYearOrTheDecadeOfItsMidpoint",
         "closeEnoughBoundaries",
         "closeEnoughHalfYearEdges",
         "convergenceCountsContentsWithBothAndIsAbsentAtZero",
+        "estimateFoldersSortOldestFirstAndADecadeLeadsItsFirstYear",
         "frameTimesAreCappedAndTheRestCounted",
         "frameTimesComeFromTheSameRunsWindowRowsAndTheWindowsFromTheFusedRow",
         "malformedRowsNeverBecomeAnEra",
@@ -745,6 +747,7 @@
         "searchWordsNeverCarryTheTechnicalForm",
         "theBulkReadReturnsWhatTheDoorStoredKeyedByDigest",
         "theInspectorLineSaysUnconfirmedAndDisagreementInWords",
+        "theJourneySentenceIsAGuessInItsOwnWords",
         "theModelShortNameIsTheParameterCount",
         "theNewestFusedRowPerByWinsBySeqNotByAt",
         "theThirdEdges"
@@ -27905,8 +27908,8 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
-      "stage": "integration",
       "path": "VideoScan/VideoScanTests/RelocateRunCharacterizationTests.swift",
+      "stage": "integration",
       "suites": [
         "RelocateRunCharacterizationTests"
       ],
@@ -35875,6 +35878,39 @@
         "healthy",
         "theTableAddsUp"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MachineEstimateFoldersTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MachineEstimateFoldersLogicTests",
+        "MachineEstimateFoldersIsolationTests",
+        "FileJourneyMachineEraTests",
+        "MachineEstimateFoldersScaleTests",
+        "MachineEstimateFoldersSensorTests"
+      ],
+      "tests": [
+        "aCopyFoldsUnderItsRecordingInsideTheEstimateFolder",
+        "aRowFilesUnderItsDecadeOrItsYearAndTheRestStayLoose",
+        "aSampledHashNeverMatchesAndAnUppercaseDigestDoes",
+        "aVersionWithNoEraFollowsTheRecordingItWasMadeFrom",
+        "anEstimateFolderIDCanNeverBeOneOfRicks",
+        "everyFolderEditRefusesWhileTheFoldersAreEstimates",
+        "folderIDsAreStableAndAYearIsNotItsDecade",
+        "hundredThousandRowsUnderBudget",
+        "noEraNoLine",
+        "noErasMeansNoFolders",
+        "theEstimateViewWritesNothing",
+        "theIndexSaysItIsEstimatedOnlyWhenTold",
+        "theJoinTakesRicksFoldersOrTheEstimatesNeverBoth",
+        "theLineShowsWhenAnEraIsHandedInAndSaysNotConfirmed",
+        "theNewestEraDecides",
+        "theSettingIsOffUnlessStoredOn",
+        "theShowMenuHasTheToggleAndThePill",
+        "theStoreAnswersOnlyForAContentWithAnEra"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -38617,11 +38653,15 @@
         {
           "name": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
           "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/MachineEstimateFoldersTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 3684,
       "name": "unit",
-      "package_expected_floor": 900,
+      "package_expected_floor": 903,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",

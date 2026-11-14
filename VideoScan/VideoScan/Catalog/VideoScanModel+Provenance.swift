@@ -419,6 +419,7 @@ extension VideoScanModel {
         resolveVolumeSafety: VolumeSafetyResolver,
         archivedCopy: VideoRecord? = nil,
         provenance: JourneyProvenance? = nil,
+        machineEra: JourneyMachineEra? = nil,
         probe: (String) -> JourneyPresence = { JourneyPresence.probe($0) }
     ) -> FileJourney {
         // The CONTENT this row stands for may live on in its archived copy
@@ -441,6 +442,14 @@ extension VideoScanModel {
             events.append(JourneyEvent(timestamp: provenance.captured, displayStamp: friendlyStamp(provenance.captured),
                                        icon: JourneyEventKind.provenance.defaultIcon, kind: .provenance,
                                        sentence: provenance.sentence))
+        }
+
+        // The machine's guess of the era, dated when it was made — a guess
+        // in its own words, never a date (Rick 2026-11-13). Passed in.
+        if let machineEra {
+            events.append(JourneyEvent(timestamp: machineEra.observed, displayStamp: friendlyStamp(machineEra.observed),
+                                       icon: JourneyEventKind.machineEstimate.defaultIcon, kind: .machineEstimate,
+                                       sentence: machineEra.sentence))
         }
 
         // 2. Each parsed note event becomes a timeline event. Combines
@@ -761,7 +770,8 @@ extension VideoScanModel {
             // not this file's archived copy, so it never ticks the ladder
             // or names "the archived copy is at …".
             archivedCopy: provenArchivedCopy(of: rec),
-            provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles)
+            provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles),
+            machineEra: machineEras.journey(for: rec)
         )
     }
 

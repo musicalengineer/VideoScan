@@ -178,6 +178,11 @@ enum JourneyEventKind: String, Equatable {
     /// "Provenance confirmed by Rick." — dated at the capture. Teal: its
     /// own family, never the yellow of Promote or the green of "here".
     case provenance
+    /// The machine's guess of the era (Rick 2026-11-13): "Estimated era:
+    /// 1980–1995 — … not confirmed", dated when the machine made it.
+    /// Secondary grey with a question-shaped calendar: a guess never wears
+    /// the colour of a fact.
+    case machineEstimate
 
     var color: Color {
         switch self {
@@ -193,6 +198,7 @@ enum JourneyEventKind: String, Equatable {
         case .notAtPath:    return .orange
         case .presenceUnknown: return .secondary
         case .provenance:   return .teal
+        case .machineEstimate: return .secondary
         }
     }
 
@@ -210,6 +216,7 @@ enum JourneyEventKind: String, Equatable {
         case .notAtPath:    return "mappin.slash"
         case .presenceUnknown: return "questionmark.circle"
         case .provenance:   return ProvenanceEstimateMark.journeyIcon
+        case .machineEstimate: return MachineEstimateWords.symbol
         }
     }
 }
@@ -221,6 +228,16 @@ struct JourneyProvenance: Equatable {
     let sentence: String
     /// The capture date (the file's embedded creation date); nil = unknown, the event is undated.
     let captured: Date?
+}
+
+/// The era job's guess for this content, as the File Journey says it
+/// (Rick 2026-11-13) — built by the caller from MachineEraStore's O(1)
+/// lookup; the journey builder reads no catalog.
+struct JourneyMachineEra: Equatable {
+    /// "Estimated era: 1980–1995 — the 8B model's guess … not confirmed."
+    let sentence: String
+    /// When the machine made the guess (the assertion's `at`).
+    let observed: Date
 }
 
 /// One known copy of this file at some other location. Renders in the

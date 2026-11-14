@@ -1030,6 +1030,8 @@ struct CatalogView: View {
             }
             .onChange(of: showFootageFolders) {
                 CatalogFootageFoldersSetting.set(showFootageFolders)
+                // The folder view off turns the estimate view off with it.
+                model.footageFolderViewChanged(on: showFootageFolders)
                 showFoldersOnly = CatalogFoldersOnlyRule.foldersOnly(afterFolders: showFootageFolders, foldersOnly: showFoldersOnly)
             }
             .onChange(of: showFoldersOnly) {
@@ -1545,6 +1547,9 @@ struct CatalogView: View {
         focusMatchScore = nil
         namedFocusLabel = nil
         model.focusedMediaIDs = []
+        // Both callers reveal one of Rick's OWN folders: the estimate view
+        // does not hold it, so it steps aside (Codex #290).
+        model.setFootageFoldersEstimated(false)
         showFootageFolders = true
     }
 
