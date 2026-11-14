@@ -98,7 +98,18 @@ MATCHED_HEADER = re.compile(r"^ThreadSanitizer: Matched \d+ suppressions? \(pid=
 MATCHED_LINE = re.compile(r"^\s*(\d+) ([a-z_]+:\S+)\s*$")
 RUN_LINE = re.compile(r"Test run with (\d+) tests? in (\d+) suites? (passed|failed)")
 XCTEST_EXECUTED = re.compile(r"^\s*Executed (\d+) tests?, with (\d+) failures?", re.M)
-FAILED_TEST = re.compile(r"✘ Test (\S+?)\(\) (?:failed|recorded an issue)|^Test Case '-\[\S+ (\w+)\]' failed", re.M)
+# A failed test, three shapes: Swift Testing by function (`✘ Test name() failed`,
+# `✘ Test name(arg:) recorded an issue`), Swift Testing by display name
+# (`✘ Test "what it proves" failed after…`; the function is not in the line),
+# XCTest (`Test Case '-[Module.Class testName]' failed`). "✘ Test run with…"
+# and "✘ Suite…" are neither.
+FAILED_TEST = re.compile(r"^✘ Test (?:(\"[^\n]+\")|(\S+?)\([^\s()]*\)) (?:failed|recorded an issue)"
+                         r"|^Test Case '-\[\S+ (\w+)\]' failed", re.M)
+# xcodebuild's own list at the end of a failed run: "Failing tests:", then one
+# indented `Suite.function()` per line (under a `Target:` line in some Xcodes),
+# closed by a blank line. It names a display-named test by its function, and
+# covers every launch of the host, so where it exists it is the list.
+FAILING_BLOCK = re.compile(r"^Failing tests:\n((?:[ \t]+\S[^\n]*\n)+)", re.M)
 
 
 # Which suppression file each kind's runtimes read, and the environment variable
@@ -293,10 +304,18 @@ def report_blocks(text: str) -> List[tuple]:
 #                    read of size…"), not of where the memory or a thread was made
 #   null:<template>  a UBSan "null pointer" report whose own location (the
 #                    file before ": runtime error:") matches <template>
-# The 11/08 verification run printed the same mlx null call one frame down
-# (metal-cpp NSObject.hpp:112:49); that is not device.cpp and stays a finding.
+#                    file before ": runtime error:") matches <template>, or
+#                    whose frame #0 does (its function or its binary). The UBSan
+#                    runtime matches exactly those: the check's file, then the
+#                    module and the function of the reporting PC. Deeper frames
+#                    never count, and a report printed without its stack names
+#                    no function (print_stacktrace=1 is always asked for).
+# 2026-11-14: #463 is one null call checked twice (device.cpp:717, then inside
+# the inlined release() at metal-cpp NSObject.hpp:112:49). What the two reports
+# share is frame #0, get_kernel_; the header is shared by all of metal-cpp.
 CHECK_WORDS = {"race": "ThreadSanitizer: data race", "null": "null pointer"}
 ACCESS_HEADER = re.compile(r"^\s+(?:Previous )?(?:[Aa]tomic )?(?:[Rr]ead|[Ww]rite) of size \d+ ")
+FRAME_ZERO = re.compile(r"^\s*#0\s+(?:0x[0-9a-fA-F]+ in )?(.*)$", re.M)
 
 
 def access_frames(lines: List[str]) -> List[str]:
@@ -335,7 +354,8 @@ def known_entry_for(block: str, entries) -> Optional[dict]:
         if e["check"] == "race":
             places = access_frames(lines)
         else:
-            places = [first.split(": runtime error: ", 1)[0]]
+            top = FRAME_ZERO.search(block)
+            places = [first.split(": runtime error: ", 1)[0]] + ([top.group(1)] if top else [])
         if any(template_matches(e["pattern"], place) for place in places):
             return e
     return None
@@ -413,6 +433,18 @@ def restart_accounts(text: str, reports: List[tuple]) -> List[dict]:
     return out
 
 
+def failed_test_names(text: str) -> List[str]:
+    """Pure: the failed tests, sorted. xcodebuild's "Failing tests:" list when the
+    log has one (FAILING_BLOCK); otherwise the ✘ / Test Case lines (swift test, or
+    a run stopped before its summary), a display name cut to MAX_NAME."""
+    listed = {line.strip() for block in FAILING_BLOCK.findall(text) for line in block.splitlines()
+              if not line.rstrip().endswith(":")}
+    if listed:
+        return sorted(listed)
+    names = {a or b or c for a, b, c in FAILED_TEST.findall(text)}
+    return sorted(n if len(n) <= MAX_NAME else n[:MAX_NAME - 1] + "…" for n in names)
+
+
 def parse_log(text: str, known=()) -> dict:
     """Pure: everything the row needs, from an xcodebuild or swift test log.
     `known` = the suppression entries in force (sanitizer_env): a printed
@@ -455,7 +487,7 @@ def parse_log(text: str, known=()) -> dict:
         tests += int(xct[-1][0])
         if int(xct[-1][1]) > 0 and outcome != "failed":
             outcome = "failed"
-    failed_tests = sorted({a or b for a, b in FAILED_TEST.findall(text)})
+    failed_tests = failed_test_names(text)
     return {
         "host_restarts": len(restarts),
         "unexplained_restarts": sum(1 for r in restarts if r["explained_by"] is None),

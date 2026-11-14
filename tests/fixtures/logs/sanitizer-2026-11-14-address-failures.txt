@@ -1,0 +1,29 @@
+✘ Test "QA RED: clearing the same plan snapshot twice writes ONE angelCleared line per row, not two (VideoScanModel+ArchiveAngelBufferHygiene.swift:80-90)" recorded an issue at ArchiveAngelBufferHygieneTests.swift:469:9: Expectation failed: during.refusal == .live || during.refusal == .gone
+✘ Test "QA RED: clearing the same plan snapshot twice writes ONE angelCleared line per row, not two (VideoScanModel+ArchiveAngelBufferHygiene.swift:80-90)" failed after 0.072 seconds with 1 issue.
+✘ Suite "Archive Angel — clearArchiveAngelBatch, the one clear verb" failed after 4.315 seconds with 1 issue.
+◇ Test "SCALE: 100,000 files through finding + mark + decide in under a second" started.
+✘ Test "SCALE: 100,000 files through finding + mark + decide in under a second" recorded an issue at PromoteSoundGateTests.swift:364:9: Expectation failed: elapsed < 1.0
+✘ Test "SCALE: 100,000 files through finding + mark + decide in under a second" failed after 1.957 seconds with 1 issue.
+✘ Suite "Promote sound gate — the rule (pure)" failed after 1.986 seconds with 1 issue.
+✘ Test "ISOLATION (poisoned-state): a poisoned shared designation is not inherited; UserDefaults VALUES and the real App Support tree are byte-for-byte unchanged by a full verify run" recorded an issue at VerifyArchiveCopiesTests.swift:910:9: Expectation failed: after.filter { !skip.contains($0.key) } == appSupportBefore.filter { !skip.contains($0.key) }
+✘ Test "ISOLATION (poisoned-state): a poisoned shared designation is not inherited; UserDefaults VALUES and the real App Support tree are byte-for-byte unchanged by a full verify run" failed after 4.559 seconds with 1 issue.
+✘ Suite "Verify Archive Copies — isolation & sensor" failed after 5.006 seconds with 1 issue.
+◇ Test legacyCodecBanner_modernCodecsReturnsNil() started.
+✔ Test legacyCodecBanner_modernCodecsReturnsNil() passed after 0.001 seconds.
+✔ Suite WorkspaceImportTests passed after 0.017 seconds.
+✘ Test run with 13589 tests in 2163 suites failed after 5050.107 seconds with 16 issues (including 13 known issues).
+2026-11-14 08:29:18.293 xcodebuild[52626:6623736] [MT] IDETestOperationsObserverDebug: 5187.155 elapsed -- Testing started completed.
+2026-11-14 08:29:18.293 xcodebuild[52626:6623736] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-14 08:29:18.293 xcodebuild[52626:6623736] [MT] IDETestOperationsObserverDebug: 5187.155 sec, +5187.155 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/rickb/Library/Caches/VideoScan/sanitizer-dd/address/Logs/Test/Test-VideoScan-2026.11.14_07-00-09--0500.xcresult
+
+Failing tests:
+	ArchiveAngelBufferHygieneClearTests.secondClearOfAStaleSnapshotIsIdempotent()
+	PromoteSoundGateTests.scale()
+	VerifyArchiveCopiesIsolationTests.isolation()
+
+** TEST FAILED **
+
+Testing started

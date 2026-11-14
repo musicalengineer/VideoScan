@@ -8,4 +8,13 @@
 # reason: get_linked_functions_() returned nullptr (a kernel with no linked functions).
 # reason: The body is objc_msgSend(nil, release): a no-op at runtime, formally UB.
 # reason: Not a missing Metal device. Gone in mlx-swift 0.33.0 (smart pointers).
-null:*mlx/backend/metal/device.cpp
+# reason: UBSan checks that one call twice: at device.cpp:717, then inside the inlined
+# reason: release() at metal-cpp Foundation/NSObject.hpp:112:49 (the 2026-11-14 run read
+# reason: red for the second while a device.cpp file pattern silenced only the first).
+# reason: Matched by FUNCTION, the reporting PC of both (frame #0): any null-pointer
+# reason: check in get_kernel_, nothing else in device.cpp, nothing else in metal-cpp
+# reason: (NSObject.hpp is every metal-cpp object's release; a file pattern on it would
+# reason: hide any null release anywhere). A build whose symbolizer resolves the inlined
+# reason: frame (frame #0 = NS::Referencing<…>::release) will print the second report
+# reason: again: that reads red, never hidden.
+null:mlx::core::metal::Device::get_kernel_

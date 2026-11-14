@@ -35246,10 +35246,13 @@
         "test_merge_adds_the_restart_accounts_of_each_target",
         "test_merge_folds_targets_findings_win_and_counts_add",
         "test_morning_digest_falls_back_to_the_published_rows",
+        "test_one_entry_covers_both_report_sites_of_463_and_nothing_else_in_metal_cpp",
         "test_published_rows_older_than_the_window_or_green_are_quiet",
         "test_published_rows_reach_a_mac_without_the_local_files",
         "test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget",
         "test_status_precedence_without_findings",
+        "test_the_1114_failing_tests_are_named_from_xcodebuilds_own_list",
+        "test_the_1114_report_one_frame_down_is_the_known_463_and_the_run_is_not_red",
         "test_the_address_log_of_1107_reads_as_the_known_mlx_finding_not_as_a_crash",
         "test_the_digest_is_quiet_for_a_run_that_is_ok_apart_from_known_findings",
         "test_the_digest_shows_test_code_findings_grey_not_red",
@@ -35262,6 +35265,8 @@
         "test_ubsan_runtime_errors_count_as_findings",
         "test_what_the_real_logs_put_between_report_and_restart_does_not_break_the_rule",
         "test_without_a_known_entry_the_same_log_is_a_new_finding_and_its_restarts_are_crashes",
+        "test_without_xcodebuilds_list_a_display_named_failure_is_still_named",
+        "test_xcodebuilds_list_ends_at_its_blank_line_and_is_bounded",
         "test_xctest_executed_line_adds_to_the_count_and_an_xctest_failure_is_a_failure"
       ]
     },
