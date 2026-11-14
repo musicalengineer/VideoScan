@@ -225,13 +225,18 @@ public enum LedgerNarrator {
 
     /// A copy left the disk — split out (2026-09-27) to keep `sentence`
     /// under the lint complexity ceiling when Refile's kinds arrived.
+    ///
+    /// The journey is the CONTENT's history across every copy, and it is shown
+    /// on whichever copy is selected — often the archive file, which was never
+    /// in the Trash. So the sentence names the copy the event happened to and
+    /// never says "this copy" (Rick, 2026-11-14).
     static func copyRemovedSentence(_ kind: MediaLedgerEvent.Kind, who: String, dateText d: String,
                                     detail: [String: String]) -> String {
         let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-        let whereText = vol.isEmpty ? "" : " (the copy on \(vol))"
+        let copy = vol.isEmpty ? "a copy" : "the copy on \(vol)"
         return kind == .copyTrashed
-            ? "\(who) moved this copy to the Trash on \(d)\(whereText)."
-            : "\(who) deleted this copy permanently on \(d)\(whereText)."
+            ? "\(who) moved \(copy) to the Trash on \(d)."
+            : "\(who) deleted \(copy) permanently on \(d)."
     }
 
     /// Update… (2026-09-27) — split out like Family Music.
