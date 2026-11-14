@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-13 22:00 (Friday; the sound and picture fault matrices merged overnight and passed the 02:00 nightly; today Rick closed #327 and #332 and rested the sound work; this evening the machine's era estimate reached the File Journey and the Catalog's folder view). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-14 15:00 (Saturday; the 02:00 nightly on `42b0d0ede`, the machine-estimate merge, was GREEN: 13,713 passed, 0 failed, 65 skipped, Core 2,580, Hallie strict 56 of 56. Today: the catalog-close race Thread Sanitizer found, #423, is fixed and its suppression retired; the weekly sanitizer lane reads the known mlx finding as known and names failed tests). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
@@ -70,12 +70,19 @@
    - **Left alone:** `fix/469-sanitizer-host-crash` (local, 1 commit, superseded by what merged on 11/11 — Rick
      deletes it or says keep); the `ultra-testbed` worktree (`m4_run.sh --host ultra` uses it).
 5. **Sanitizer triage, #469 (merged 11/11):** a relaunched test host is explained only by the report printed
-   immediately before it, else it is red "host crashed" with the running test named. **Watch Saturday 11/14's
-   address run:** the one run made with the #463 suppression in force showed a second report one frame down
-   (`NSObject.hpp:112`), which the suppression does not cover — Saturday may read red "findings" for it. Widening
-   the suppression is a #463 decision.
+   immediately before it, else it is red "host crashed" with the running test named. **Saturday 11/14's address run
+   (on `79a973aa8`) was the first complete one:** 13,594 tests, 0 host restarts, 0 memory errors. It read red for
+   one UBSan report, the known #463 one frame down (`NSObject.hpp:112`), and listed none of its three failed
+   tests. Both gaps are fixed (merged 11/14): #463 is matched by function (`get_kernel_`, narrower than the file
+   pattern), and failed tests are named. The three failures are filed: #472 (a 1 s budget under a sanitizer),
+   #473 (Archive Angel: wrong refusal words mid-removal, nothing written), #474 (the real
+   `audio-fingerprints.sqlite-shm` changed during the suite on the M4; cause not established). **Owed:** one
+   targeted address run on the M4 to prove its UBSan runtime honours the function pattern (if it does not, the
+   lane reads red, never hidden). **#423 fixed (merged 11/14, Codex #291 merge, 0 findings):** catalog close
+   stops admitting reads, drains, then closes; `tsan.supp` is retired, so **Sunday 11/15's 05:00 thread run has
+   no suppression — read it: any race at close is a real red.**
 6. **P0/P1:** open P0 — none (Rick closed #327 and #332 on 11/13; #332 was closed on his own use, not re-tested).
-   Still bugs — #423, #413, #412, #357, #356, #351, #344, #339,
+   Still bugs — #474, #473, #472, #413, #412, #357, #356, #351, #344, #339,
    #338. Look fixed in the code, close after Rick's check — #354, #353, #342, #345 (one real-data check). Not
    bugs as filed — #360, #343, #337. Notes: `.scratch/p0-p1-triage-2026-11-10.md`.
 
@@ -150,8 +157,9 @@
    lines read "interlaced"). None of these is fixed yet; the first three are the next picture work.
 3. **Second-opinion tools on both Macs:** `sox_ng`, `mediaconch`, `qcli`, `gpac` (MP4Box), `bento4`, `libebur128`;
    Rick's bmx clone at `~/dev/bmx` is reference code for reading MXF. None is in a test yet.
-4. **Sanitizers:** read Saturday 11/14's address run (item 4 above) and decide #463's suppression; narrow the #423
-   suppression after the 11/15 thread run. A script test leaves `sleep 300` processes behind (which one: unknown).
+4. **Sanitizers:** read Sunday 11/15's thread run (first with no suppression) and close #423 if it is clean; run
+   the owed targeted address check on the M4; then #472–#474. Dropping the #463 suppression altogether needs the
+   mlx-swift bump to 0.33.0 (#463). A script test leaves `sleep 300` processes behind (which one: unknown).
 5. **Testbed, carried (BACKLOG 11/10 lines):** the M4 adversarial review has been off since 11/07 (`claude` exits 1
    there); Core tests fail inside the M4's 04:00 coverage build (timing); the Ultra's nightly builds Rick's checkout
    instead of a clean clone of `main`; the warning ratchet cannot see a warning behind a warm build; the M4's catalog
