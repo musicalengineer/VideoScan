@@ -34,8 +34,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.delegate = self
         menu.autoenablesItems = false
         item.menu = menu
+        // No tooltip on the button (Rick 2026-11-14): the words are the menu's first line.
         item.button?.image = StatusMenuIcon.image(.idle)
-        item.button?.toolTip = "VideoScan Background"
         item.button?.setAccessibilityIdentifier("background.menuBar")
     }
 
@@ -56,7 +56,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             let p = BackgroundMenuPresentation.from(status)
             await MainActor.run {
                 if p.icon != self.presentation?.icon { self.item.button?.image = StatusMenuIcon.image(p.icon) }
-                self.item.button?.toolTip = p.tooltip
                 self.presentation = p
             }
         }

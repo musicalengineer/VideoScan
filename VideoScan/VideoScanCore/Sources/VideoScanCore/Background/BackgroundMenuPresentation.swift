@@ -45,8 +45,6 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
     /// The first, disabled line: "VideoScan Background — full speed".
     public var headline: String
     public var jobs: [JobLine]
-    /// The tooltip on the menu bar item.
-    public var tooltip: String
 
     public static func from(_ s: ServiceStatus) -> Self {
         let active = s.jobs.filter { $0.state.isActive }
@@ -61,15 +59,7 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
         let headline = "VideoScan Background — "
             + (icon == .waiting ? (waiting.isEmpty ? "held after a failure" : "queued")
                                 : backoffWords(s.backoff, jobs: active.count))
-        let first: String?
-        switch icon {
-        case .idle: first = failures.first?.words ?? "idle, nothing queued"
-        case .working: first = moving.first.map { jobLine($0).words } ?? "working"
-        case .paused: first = "paused"
-        case .waiting: first = waiting.first.map { jobLine($0).words } ?? held.first?.words ?? "waiting"
-        }
-        return Self(icon: icon, headline: headline, jobs: active.map(jobLine) + held + failures,
-                    tooltip: "VideoScan Background — " + (first ?? ""))
+        return Self(icon: icon, headline: headline, jobs: active.map(jobLine) + held + failures)
     }
 
     /// Per kind, the newest job (by start, else finish) when it FAILED — a

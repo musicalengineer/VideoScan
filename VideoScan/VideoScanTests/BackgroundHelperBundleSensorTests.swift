@@ -39,6 +39,18 @@ struct BackgroundHelperBundleSensorTests {
         }
     }
 
+    /// The menu bar item has no tooltip (Rick 2026-11-14). It was reassigned
+    /// every 5 s; AppKit orphaned the showing tooltip window, which then
+    /// followed the pointer over every app for as long as the helper ran. A
+    /// background agent's state reads in its menu, not in a hover.
+    @Test("SENSOR: the menu bar item sets no tooltip on its button")
+    func menuBarItemHasNoTooltip() throws {
+        let source = try String(contentsOf: Self.projectRoot.appendingPathComponent(
+            "VideoScanBackground/StatusMenuController.swift"), encoding: .utf8)
+        let setters = source.split(separator: "\n").filter { $0.contains("button?.toolTip") }
+        #expect(setters.isEmpty, "the status item's button must have no tooltip: \(setters)")
+    }
+
     /// The bundled launchd plist (Rick 2026-11-04; launchd.plist(5)): kept
     /// alive by launchd — restart on a crash or an error exit, stay down after
     /// a clean exit 0 — and not classed Background/Standard, which throttle CPU

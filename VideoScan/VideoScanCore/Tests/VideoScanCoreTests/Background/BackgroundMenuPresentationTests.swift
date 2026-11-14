@@ -23,7 +23,6 @@ struct BackgroundMenuPresentationTests {
         #expect(p.icon == .idle)
         #expect(p.headline == "VideoScan Background — idle")
         #expect(p.jobs.isEmpty)
-        #expect(p.tooltip == "VideoScan Background — idle, nothing queued")
     }
 
     @Test("working: filled glyph, the backoff in plain words, the snapshot's own numbers, Pause offered")
@@ -33,7 +32,6 @@ struct BackgroundMenuPresentationTests {
         #expect(p.headline == "VideoScan Background — full speed", "an older helper's .trickle reads full speed: no keyboard backoff since 11/04")
         #expect(p.jobs.map(\.words) == ["Machine era (8B) — 1,203 of 4,709 · running"])
         #expect(p.jobs[0].canPause && !p.jobs[0].canResume)
-        #expect(p.tooltip.contains("1,203 of 4,709"))
         let away = BackgroundMenuPresentation.from(Self.status(.full, [Self.job(.running)]))
         #expect(away.headline == "VideoScan Background — full speed", "no 'you're away': the helper runs whether or not Rick is at the Mac")
     }
