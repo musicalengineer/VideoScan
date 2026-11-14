@@ -289,6 +289,10 @@ def test_morning_digest_falls_back_to_the_published_rows():
 
 import pytest  # noqa: E402
 
+# The #423 entry as it was in force 2026-11-08 … 2026-11-14 (scripts/sanitizer/tsan.supp then). #423 is
+# fixed, so the live folder holds no thread suppression; the entry stays here as the worked example.
+RETIRED = Path(__file__).resolve().parent / "fixtures" / "sanitizer"
+
 TSAN_SUPPRESSED_TAIL = ("ThreadSanitizer: Matched 1 suppressions (pid=60898):\n"
                         "15 race:DatabasePool.close\n")
 
@@ -298,11 +302,15 @@ def test_the_real_suppression_files_are_all_known_findings_with_an_issue_and_a_r
     code_re = re.compile(r"^[a-z][a-z0-9-]{0,31}$")         # publishable as a metrics code
     for kind, files in ws.SUPPRESSION_FILES.items():
         for _var, name, _extra in files:
+            if not (ws.SUPP_DIR / name).exists():
+                continue                                     # no known finding of that kind: no file
             entries = ws.load_suppressions(ws.SUPP_DIR / name)
-            assert entries, f"{name} is empty: drop it from SUPPRESSION_FILES instead"
+            assert entries, f"{name} is empty: remove the file instead"
             for e in entries:
                 assert code_re.match(e["code"]) and e["issue"] > 0 and len(e["reason"]) > 40, e
-    tsan = ws.load_suppressions(ws.SUPP_DIR / "tsan.supp")
+    assert not (ws.SUPP_DIR / "tsan.supp").exists(), "#423 is fixed: the thread run has no suppression in force"
+    assert ws.sanitizer_env("thread", {})[1] == []
+    tsan = ws.load_suppressions(RETIRED / "tsan.supp")
     assert [(e["check"], e["pattern"], e["issue"]) for e in tsan] == [("race", "DatabasePool.close", 423)]
     ubsan = ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp")
     assert [(e["check"], e["pattern"], e["issue"]) for e in ubsan] == [("null", "mlx::core::metal::Device::get_kernel_", 463)]
@@ -325,8 +333,8 @@ def test_an_unexplained_suppression_is_refused(tmp_path, text, why):
 
 
 def test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process(tmp_path):
-    env, known = ws.sanitizer_env("thread", {"PATH": "/bin", "TSAN_OPTIONS": "halt_on_error=0"})
-    supp = ws.SUPP_DIR / "tsan.supp"
+    env, known = ws.sanitizer_env("thread", {"PATH": "/bin", "TSAN_OPTIONS": "halt_on_error=0"}, RETIRED)
+    supp = RETIRED / "tsan.supp"
     assert env["TSAN_OPTIONS"] == f"halt_on_error=0:suppressions={supp}:print_suppressions=1"
     assert env["TEST_RUNNER_TSAN_OPTIONS"] == f"suppressions={supp}:print_suppressions=1"
     assert "UBSAN_OPTIONS" not in env and [e["code"] for e in known] == ["grdb-close-read-race"]
@@ -349,7 +357,7 @@ def test_a_run_whose_only_race_was_suppressed_is_ok_and_says_what_was_held_back(
     restart, the matched block at exit."""
     p = ws.parse_log(GREEN_LOG + TSAN_SUPPRESSED_TAIL)
     assert ws.status_for(p, timed_out=False) == "ok" and p["reports"] == 0
-    rows = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "tsan.supp"), p["suppressed_hits"], "thread")
+    rows = ws.suppression_rows(ws.load_suppressions(RETIRED / "tsan.supp"), p["suppressed_hits"], "thread")
     assert [(r["code"], r["issue"], r["hits"]) for r in rows] == [("grdb-close-read-race", 423, 15)]
     ub = ws.suppression_rows(ws.load_suppressions(ws.SUPP_DIR / "ubsan.supp"), {}, "address")
     assert [(r["code"], r["hits"]) for r in ub] == [("mlx-null-linked-functions", None)], "UBSan hits are not observable: null, never 0"
@@ -375,11 +383,11 @@ def test_main_passes_the_suppressions_and_records_each_with_its_hits(tmp_path, m
                                        "** TEST SUCCEEDED **\\nThreadSanitizer: Matched 1 suppressions (pid=9):\\n4 race:DatabasePool.close\\n")
     logdir = tmp_path / "logs"
     assert ws.main(["--sanitizer", "thread", "--no-wait", "--log-dir", str(logdir), "--dd-root", str(tmp_path / "dd"),
-                    "--timeout-hours", "0.01"]) == 0
+                    "--timeout-hours", "0.01", "--suppressions-dir", str(RETIRED)]) == 0
     row = json.loads((logdir / "latest-thread.json").read_text())
     assert row["status"] == "ok" and row["tests"] == 12
     assert [(s["code"], s["issue"], s["hits"]) for s in row["suppressed"]] == [("grdb-close-read-race", 423, 4)]
-    assert f"suppressions={ws.SUPP_DIR / 'tsan.supp'}" in (tmp_path / "env.txt").read_text()
+    assert f"suppressions={RETIRED / 'tsan.supp'}" in (tmp_path / "env.txt").read_text()
 
 
 def test_main_with_an_unexplained_suppression_writes_a_config_error_row_and_runs_nothing(tmp_path, monkeypatch):
@@ -591,7 +599,7 @@ THREAD_1108 = (HOST_START + _started("notesTypedDuringTheScanReachCatalogSQLite(
 
 
 def _known(name):
-    return ws.load_suppressions(ws.SUPP_DIR / name)
+    return ws.load_suppressions((RETIRED if name == "tsan.supp" else ws.SUPP_DIR) / name)
 
 
 def _status(log, known=()):

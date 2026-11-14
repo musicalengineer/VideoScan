@@ -154,6 +154,19 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// checks passed and the pool exists, before the open's first write —
     /// the window in which another connection can change the checked file.
     private var admittedHook: Seam?
+    /// GH #423 — close is "stop admitting, drain, then close". Once `closing`
+    /// is set no read is admitted (`notOpen`); close waits until the reads
+    /// already admitted have returned, and only then touches the pool. All
+    /// three are actor state, read and written with no `await` between the
+    /// check and the change, so the actor's own lock protects them — the
+    /// pool call is where the actor is released, and that is why GRDB could
+    /// see a read START while close ran (its `readerPool` is unsynchronised).
+    /// C++: a reader count plus a condition variable; close is the waiter.
+    fileprivate var closing = false
+    fileprivate var readsInFlight = 0
+    fileprivate var drained: CheckedContinuation<Void, Never>?
+    /// A second close() that arrives while the first runs waits for it.
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(host: String = GRDBCatalogRepository.defaultHost,
                 durability: Durability = .archival) {
@@ -816,7 +829,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
     // MARK: - Read
 
     public func read<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
-        guard let pool else { throw CatalogRepositoryError.notOpen }
+        guard let pool, admitRead() else { throw CatalogRepositoryError.notOpen }
+        defer { readReturned() }
         return try await pool.read { db in
             let generation = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
             return try body(GRDBReader(generation: generation, db: db))
@@ -826,7 +840,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
     // MARK: - Verify
 
     public func verify() async -> CatalogVerifyOutcome {
-        guard let pool, let databaseURL else { return .problems(["not open"]) }
+        guard let pool, let databaseURL, admitRead() else { return .problems(["not open"]) }
+        defer { readReturned() }
         var problems: [String] = []
         var generation = session.generation
         var highWater = generation
@@ -898,9 +913,12 @@ public actor GRDBCatalogRepository: CatalogRepository {
             return .refused(reason: "nothing to adopt: generation \(from) is not below \(highWater)")
         }
         let witnesses: HighWaterWitnesses
+        guard admitRead() else { return .refused(reason: "not open") }
         do {
             witnesses = try await pool.read { db in try HighWaterWitnesses.read(db, besideDatabaseAt: databaseURL) }
+            readReturned()
         } catch {
+            readReturned()
             return .refused(reason: Self.words(error))
         }
         if let problem = Self.confirmAdoptable(highWater, witnesses: witnesses)
@@ -936,6 +954,25 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func close() async {
         guard let pool else { return }
+        // GH #423: stop admitting, drain, then close. A second close waits
+        // for the first; it does not run the checkpoint and the pool's close
+        // a second time beside it.
+        if closing {
+            await withCheckedContinuation { closeWaiters.append($0) }
+            return
+        }
+        closing = true
+        if readsInFlight > 0 {
+            let waiting = readsInFlight
+            storeLog.notice("catalog store CLOSE waits for \(waiting, privacy: .public) read(s) in flight")
+            await withCheckedContinuation { drained = $0 }
+        }
+        defer {
+            closing = false
+            let waiters = closeWaiters
+            closeWaiters = []
+            for waiter in waiters { waiter.resume() }
+        }
         // GH #359 — decided by the DATABASE AT THE PATH, not by the stop
         // (QA r2-1), and only AFTER the writer queue drains (codex #117 F2):
         // a swap while close waits behind a writer must be seen.
@@ -1051,6 +1088,30 @@ extension GRDBCatalogRepository {
         }
         return result
     }
+}
+
+// MARK: - Read admission (GH #423)
+
+extension GRDBCatalogRepository {
+
+    /// GH #423: counts one read in, or says no because close has begun. Every
+    /// `pool.read` in this actor sits between `admitRead()` and `readReturned()`.
+    fileprivate func admitRead() -> Bool {
+        guard !closing else { return false }
+        readsInFlight += 1
+        return true
+    }
+
+    fileprivate func readReturned() {
+        readsInFlight -= 1
+        if readsInFlight == 0, let waiter = drained {
+            drained = nil
+            waiter.resume()
+        }
+    }
+
+    /// Test seam (#423): the two numbers close's drain runs on.
+    var closeDrainState: (closing: Bool, readsInFlight: Int) { (closing, readsInFlight) }
 }
 
 // MARK: - Close's decision, after the writer drains (codex #117 F2)
@@ -1373,7 +1434,8 @@ extension GRDBCatalogRepository {
     /// The pragmas as the engine reports them on a reader connection
     /// (internal: the pragma test queries them back).
     func pragmas() async throws -> [String: String] {
-        guard let pool else { throw CatalogRepositoryError.notOpen }
+        guard let pool, admitRead() else { throw CatalogRepositoryError.notOpen }
+        defer { readReturned() }
         return try await pool.read { db in try Self.reportPragmas(db) }
     }
 
