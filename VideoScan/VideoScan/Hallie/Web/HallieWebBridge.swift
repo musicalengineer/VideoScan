@@ -655,7 +655,7 @@ extension HallieAppTurnCoordinator.Dependencies {
     /// owner, so the owner's no-self-compliment rule still recognises Rick
     /// when he greets from the web.
     func replacingSpeakers(_ speakers: HallieTurnExecutor.Speakers) -> HallieAppTurnCoordinator.Dependencies {
-        HallieAppTurnCoordinator.Dependencies(
+        var copy = HallieAppTurnCoordinator.Dependencies(
             startLocalBrain: startLocalBrain,
             translateAST: translateAST,
             interpretTurn: interpretTurn,
@@ -679,6 +679,10 @@ extension HallieAppTurnCoordinator.Dependencies {
             composeAnswer: composeAnswer,
             loadKindWords: loadKindWords,
             loadAppOwner: loadAppOwner)
+        // Not an init parameter: carried over, or a web turn's log line
+        // would name no brain.
+        copy.selectedBrainLabel = selectedBrainLabel
+        return copy
     }
 }
 

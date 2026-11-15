@@ -16,6 +16,20 @@ private let decodingLog = Logger(subsystem: "Rick-Breen.VideoScan",
 
 enum HallieBrainDecoding {
 
+    /// A dropped year changes what was searched, so it is in videoscan.log,
+    /// not only the unified log. The note holds a field name and a number,
+    /// never the question.
+    static func logDroppedYears(_ notes: [String]) {
+        for note in notes where note.hasPrefix("dropped payload.year") {
+            appLog.write("[hallie] translation: \(note)")
+        }
+    }
+
+    /// How much of a rejected reply rides in the error. 120 stopped short of
+    /// the offending field whenever a list came first (2026-11-15); a whole
+    /// QueryAST reply is rarely longer than this.
+    static let replyExcerpt = 300
+
     /// v1 NLQuerySpec, strict wire decode.
     static func spec(content: String, data: Data) throws -> NLQuerySpec {
         do {
@@ -24,7 +38,7 @@ enum HallieBrainDecoding {
             throw NLTranslatorError.badResponse(
                 "content is not a strict NLQuerySpec "
                     + "(\(OllamaQueryTranslator.decodeFailureDetail(error))): "
-                    + String(content.prefix(120)))
+                    + String(content.prefix(Self.replyExcerpt)))
         }
     }
 
@@ -33,18 +47,20 @@ enum HallieBrainDecoding {
     /// Genuinely malformed shapes still fail here.
     static func ast(content: String, data: Data, question: String) throws -> ArchivistQueryAST {
         do {
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(data)
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(
+                data, question: question)
             if !decoded.notes.isEmpty {
                 let notes = decoded.notes.joined(separator: "; ")
                 decodingLog.notice(
                     "translator output normalized: \(notes, privacy: .public)")
+                Self.logDroppedYears(decoded.notes)
             }
             return OllamaQueryTranslator.repairPossessiveSpeakerPronoun(
                 in: decoded.ast, originalQuestion: question)
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict ArchivistQueryAST "
-                    + "(\(OllamaQueryTranslator.decodeFailureDetail(error))): \(content.prefix(120))")
+                    + "(\(OllamaQueryTranslator.decodeFailureDetail(error))): \(content.prefix(Self.replyExcerpt))")
         }
     }
 
@@ -60,10 +76,12 @@ enum HallieBrainDecoding {
                 return .conversation(
                     try HallieTurnInterpretation.decodeConversation(data))
             }
-            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(data)
+            let decoded = try ArchivistQueryAST.decodeTranslatorOutput(
+                data, question: question)
             if !decoded.notes.isEmpty {
                 decodingLog.notice(
                     "turn interpretation normalized: \(decoded.notes.joined(separator: "; "), privacy: .public)")
+                Self.logDroppedYears(decoded.notes)
             }
             return .archive(OllamaQueryTranslator.repairPossessiveSpeakerPronoun(
                 in: decoded.ast, originalQuestion: question))
@@ -72,7 +90,7 @@ enum HallieBrainDecoding {
         } catch {
             throw NLTranslatorError.badResponse(
                 "content is not a strict Hallie turn interpretation "
-                    + "(\(OllamaQueryTranslator.decodeFailureDetail(error))): \(content.prefix(120))")
+                    + "(\(OllamaQueryTranslator.decodeFailureDetail(error))): \(content.prefix(Self.replyExcerpt))")
         }
     }
 }

@@ -43,8 +43,12 @@ struct HallieBrainProviderSection: View {
                 .fixedSize()
                 .accessibilityIdentifier("archivist.brainProvider")
                 .onChange(of: provider) { _, chosen in
+                    // Only a real change is a line: opening the pane assigns
+                    // the stored value and must not read as a switch.
+                    let before = HallieBrainSettings.provider(defaultsStore)
                     HallieBrainSettings.setProvider(chosen, defaultsStore)
-                    appLog.write("[hallie] brain provider set to \(chosen.rawValue)")
+                    if before != chosen { appLog.write(HallieBrainLog.selectionLine(
+                        brain: HallieBrainLog.selectedLabel(defaults: defaultsStore, allowCloud: true))) }
                     refreshKey()
                 }
                 Spacer()
@@ -79,7 +83,12 @@ struct HallieBrainProviderSection: View {
             .fixedSize()
             .accessibilityIdentifier("archivist.cloudModel")
             .onChange(of: cloudModel) { _, chosen in
+                // Sonnet → Haiku → Opus left no line at all (2026-11-15).
+                let before = HallieBrainSettings.cloudModel(defaultsStore)
                 HallieBrainSettings.setCloudModel(chosen, defaultsStore)
+                guard before != chosen else { return }
+                appLog.write(HallieBrainLog.selectionLine(
+                    brain: HallieBrainLog.selectedLabel(defaults: defaultsStore, allowCloud: true)))
             }
             Spacer()
         }

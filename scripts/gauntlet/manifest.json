@@ -18423,6 +18423,48 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieBrainLogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieBrainLogTests"
+      ],
+      "tests": [
+        "afterFailureLine",
+        "cancellationIsNamed",
+        "failedCloudCallSaysWhy",
+        "failureAndPhrasedLines",
+        "labels",
+        "liveQuestionPassesOnCloud",
+        "poisonedSettings",
+        "reasonIsBounded",
+        "recordedResponder",
+        "residentLines",
+        "scale",
+        "selectedFollowsSettings"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieUnstatedYearDecodingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieUnstatedYearDecodingTests"
+      ],
+      "tests": [
+        "astDecoderToo",
+        "everyYearCarryingShape",
+        "inRangeYearsSurvive",
+        "noQuestionNoTolerance",
+        "nonIntegerYearStillRejected",
+        "nonsenseYears",
+        "outOfRangeUnstatedYearsAreDropped",
+        "statedTimeStaysStrict",
+        "theDropIsNoted",
+        "treeModeAnswersTheBiography"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieBrotherTimPeopleTabKinshipTests.swift",
@@ -38800,7 +38842,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3732,
+      "expected_floor": 3754,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39519,7 +39561,9 @@
         "VideoScanTests/FileJourneyBuilderRobustnessTests",
         "VideoScanTests/FileJourneyReviewRedTests",
         "VideoScanTests/FileJourneyCodexFindingsTests",
-        "VideoScanTests/FileJourneyNonsenseDataTests"
+        "VideoScanTests/FileJourneyNonsenseDataTests",
+        "VideoScanTests/HallieBrainLogTests",
+        "VideoScanTests/HallieUnstatedYearDecodingTests"
       ]
     },
     {

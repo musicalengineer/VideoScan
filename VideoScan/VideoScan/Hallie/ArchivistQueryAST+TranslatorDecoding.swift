@@ -34,6 +34,9 @@ import Foundation
 ///   * `limit` is presentation, not evidence: kept for aggregate (where the
 ///     contract defines it), dropped elsewhere.
 ///   * `null` for an optional field means absent; the key is dropped.
+///   * An out-of-range `yearStart` / `yearEnd` on a question that states no
+///     time is dropped and noted (2026-11-15); with a stated time it is
+///     still rejected. Needs the question, so only callers that pass it.
 ///   * List quirks are normalized: entries are trimmed, empty entries and
 ///     stopword-only people/keywords ("videos", "the") are dropped. A
 ///     required list that ends up empty is still rejected downstream.
@@ -89,7 +92,12 @@ extension ArchivistQueryAST {
         "anchorPeople",
     ]
 
-    static func decodeTranslatorOutput(_ data: Data) throws -> TranslatorDecoding {
+    /// `question` is the reader's own sentence when the caller has it; it
+    /// is what lets an out-of-range year the question never states be
+    /// dropped instead of failing the turn (`droppingUnstatedYears`).
+    static func decodeTranslatorOutput(
+        _ data: Data, question: String? = nil
+    ) throws -> TranslatorDecoding {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               var top = object as? [String: Any] else {
             // Not a JSON object at all: let the strict decoder produce the
@@ -119,12 +127,48 @@ extension ArchivistQueryAST {
             if shape == "graph" {
                 payload = canonicalGraphPayload(payload, notes: &notes)
             }
+            if let question {
+                payload = droppingUnstatedYears(payload, question: question, notes: &notes)
+            }
             top["payload"] = payload
         }
 
         let cleaned = try JSONSerialization.data(withJSONObject: top)
         let ast = try JSONDecoder().decode(ArchivistQueryAST.self, from: cleaned)
         return TranslatorDecoding(ast: ast, notes: notes)
+    }
+
+    /// A `yearStart` / `yearEnd` outside the contract's range, on a question
+    /// that states no time at all, is the model decorating a name — not a
+    /// constraint the reader asked for. Live 2026-11-15: "tell me of thankful
+    /// pratt" came back from all three cloud models with years outside
+    /// 1900...2099 (the cloud copy of the schema carries no numeric bounds),
+    /// and the strict decoder failed the whole turn, repair retry included.
+    ///
+    /// Dropped only under the same conservative test the presence lane uses
+    /// for an in-range invention (`HallieInventedPresenceYears`): the
+    /// question has no digit and no word that can carry a time. "videos from
+    /// 1850" still reaches the strict decoder and is refused — dropping THAT
+    /// year would widen the search to every year, which is a different
+    /// question. A value that is not a whole number is never touched.
+    private static func droppingUnstatedYears(
+        _ payload: [String: Any],
+        question: String,
+        notes: inout [String]
+    ) -> [String: Any] {
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !HallieInventedPresenceYears.questionMentionsTime(question) else { return payload }
+        var result = payload
+        for key in ["yearEnd", "yearStart"] {
+            guard let number = payload[key] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  let year = payload[key] as? Int,
+                  !yearRange.contains(year) else { continue }
+            result[key] = nil
+            notes.append("dropped payload.\(key) \(year): outside \(yearRange) "
+                + "and the question states no time")
+        }
+        return result
     }
 
     /// Rewrites (a) and (b) from the doc comment above: a catalog-wide shape

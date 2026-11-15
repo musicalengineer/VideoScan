@@ -431,7 +431,12 @@ struct ArchivistEndpointSettings: View {
         let tag = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !tag.isEmpty else { return }
         model = tag
+        let changed = defaultsStore.string(forKey: Self.modelKey) != tag
         defaultsStore.set(tag, forKey: Self.modelKey)
+        if changed {
+            appLog.write("[hallie] local model set to \(tag); answering brain is "
+                + HallieBrainLog.selectedLabel(defaults: defaultsStore, allowCloud: true))
+        }
     }
 
     /// Ask the first host that answers what it has installed. First

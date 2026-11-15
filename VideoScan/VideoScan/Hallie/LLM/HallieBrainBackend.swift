@@ -185,7 +185,10 @@ extension OllamaFailoverTranslator: HallieBrainBackend {
 }
 
 /// START/OUTCOME for every brain call, through the one log sink, naming the
-/// brain — never the question, the prompt or the reply.
+/// brain — never the question or the prompt. A FAILED call's reason is kept
+/// whole (HallieBrainLog.reasonLimit): a decoder rejection carries the
+/// offending field and the first 120 characters of the model's reply, which
+/// is what says why it failed.
 struct HallieLoggedBrain: HallieBrainBackend {
     let inner: any HallieBrainBackend
     /// Injected so tests can read the lines; production writes appLog.
@@ -195,9 +198,13 @@ struct HallieLoggedBrain: HallieBrainBackend {
     var provider: HallieBrainProvider { inner.provider }
     var modelName: String { inner.modelName }
 
-    var brainLabel: String {
-        provider == .cloud ? "Cloud · \(modelName)" : "\(modelName) (local)"
-    }
+    /// After a failed call: one more line saying what the answering server
+    /// holds in memory (local brains only; nil for Cloud and in tests). Runs
+    /// detached, so it never delays the failure reaching the caller and is
+    /// not cancelled with it.
+    var afterFailure: (@Sendable () async -> String?)?
+
+    var brainLabel: String { HallieBrainLog.label(provider: provider, model: modelName) }
 
     private func logged<T>(_ op: String, _ body: () async throws -> T) async throws -> T {
         let clock = ContinuousClock()
@@ -210,8 +217,14 @@ struct HallieLoggedBrain: HallieBrainBackend {
             return value
         } catch {
             let ms = Int((clock.now - started) / .milliseconds(1))
-            let reason = String(error.localizedDescription.prefix(160))
+            let reason = HallieBrainLog.failureReason(error, afterMs: ms)
             write("[hallie] brain OUTCOME op=\(op) brain=\(brainLabel) failed ms=\(ms) reason=\(reason)")
+            if let afterFailure {
+                let write = write
+                Task.detached(priority: .utility) {
+                    if let line = await afterFailure() { write(line) }
+                }
+            }
             throw error
         }
     }

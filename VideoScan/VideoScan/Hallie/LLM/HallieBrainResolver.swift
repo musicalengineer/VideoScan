@@ -62,6 +62,10 @@ struct HallieBrainResolver {
     /// The shell's explicit `--cloud` (an explicit choice, like the setting);
     /// nil = read the setting.
     var providerOverride: HallieBrainProvider?
+    /// After a failed LOCAL call, ask the first host what it holds in memory
+    /// and log it. Off in a test host: a test never opens a socket for a
+    /// log line.
+    var probeResidentAfterFailure: Bool = !TestHostDetection.isTestHost
     /// Where START/OUTCOME lines go.
     var log: @Sendable (String) -> Void = { appLog.write($0) }
 
@@ -93,12 +97,22 @@ struct HallieBrainResolver {
         onResponder: (@Sendable (String) -> Void)? = nil
     ) throws -> any HallieBrainBackend {
         let inner: any HallieBrainBackend
+        var afterFailure: (@Sendable () async -> String?)?
         switch provider {
         case .local:
             var template = OllamaQueryTranslator()
             template.model = localModel
             inner = OllamaFailoverTranslator(hosts: hosts, template: template,
                                              onResponder: onResponder)
+            if probeResidentAfterFailure, let first = hosts.first {
+                var probe = template
+                probe.host = first
+                afterFailure = { [probe] in
+                    return HallieBrainLog.residentLine(
+                        host: first, wanted: localModel,
+                        resident: await probe.residentModelFacts())
+                }
+            }
         case .cloud:
             guard let key = AnthropicKeyLocator.locate(in: keychain) else {
                 log("[hallie] brain OUTCOME op=resolve brain=Cloud · "
@@ -109,6 +123,8 @@ struct HallieBrainResolver {
                                    key: key, session: cloudSession,
                                    onResponder: onResponder)
         }
-        return HallieLoggedBrain(inner: inner, write: log)
+        var logged = HallieLoggedBrain(inner: inner, write: log)
+        logged.afterFailure = afterFailure
+        return logged
     }
 }
