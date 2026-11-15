@@ -4,11 +4,11 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 354,
+ "entry_count": 353,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
-   "nloc": 61
+   "nloc": 59
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::AnalyzeRowStateRule.state": {
    "ccn": 18,
@@ -81,10 +81,6 @@
   "VideoScan/VideoScan/Archive/ArchiveUpdateSheet.swift::ArchiveUpdateSheet.body": {
    "ccn": 16,
    "nloc": 79
-  },
-  "VideoScan/VideoScan/Archive/ArchiveView+DetailSheet.swift::ArchiveDetailSheet.body": {
-   "ccn": 16,
-   "nloc": 96
   },
   "VideoScan/VideoScan/Archive/ArchiveView.swift::ArchiveView.masterArchivePanel": {
    "ccn": 7,
