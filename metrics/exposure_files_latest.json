@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-14T11:52:30Z",
- "sha": "42b0d0ed",
+ "ts": "2026-11-15T12:23:23Z",
+ "sha": "325afb62",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -19,8 +19,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
-   "lines": 624,
-   "decls": 82,
+   "lines": 638,
+   "decls": 83,
    "could_be_private": [
     "AnalyzeCoverageInput.inDossierPool",
     "AnalyzeCoverageInput.soundGaveUpCount",
@@ -28,7 +28,6 @@
     "AnalyzeCoverageReport.coverageUnknown",
     "AnalyzeDossierVerdict.transcribeObserved",
     "AnalyzeDossierVerdict.withoutTranscript",
-    "AnalyzeDossierVerdict.init",
     "AnalyzePerFileTally.offlineByRoot"
    ],
    "widened_for_split": []
@@ -772,14 +771,6 @@
    ],
    "widened_for_split": []
   },
-  "VideoScan/VideoScan/Archive/ArchiveView+DetailSheet.swift": {
-   "lines": 253,
-   "decls": 8,
-   "could_be_private": [
-    "ArchiveDetailWords.VolumeFact"
-   ],
-   "widened_for_split": []
-  },
   "VideoScan/VideoScan/Archive/ArchiveView+Doors.swift": {
    "lines": 74,
    "decls": 3,
@@ -796,7 +787,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Archive/ArchiveView+Table.swift": {
-   "lines": 501,
+   "lines": 494,
    "decls": 8,
    "could_be_private": [
     "ArchiveView.archiveViewModeTabs",
@@ -820,14 +811,13 @@
    ]
   },
   "VideoScan/VideoScan/Archive/ArchiveView.swift": {
-   "lines": 735,
-   "decls": 32,
+   "lines": 727,
+   "decls": 31,
    "could_be_private": [
     "ArchiveView.localFieldsMatch"
    ],
    "widened_for_split": [
     "ArchiveView.selectedCategory",
-    "ArchiveView.archiveDetailRecord",
     "ArchiveView.timelineItemMemo",
     "ArchiveView.archiveStorageTotals",
     "ArchiveView.archiveViewMode",
@@ -935,13 +925,10 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Archive/PreservationChecklist.swift": {
-   "lines": 288,
-   "decls": 19,
+   "lines": 348,
+   "decls": 43,
    "could_be_private": [
-    "PreservationStep.titleOverride",
-    "PreservationChecklist.sampledSignatureTitle",
-    "PreservationChecklist.sampledSignatureTodo",
-    "PreservationChecklist.localArchive"
+    "JourneyAnalysis.coveredCount"
    ],
    "widened_for_split": []
   },
@@ -2650,8 +2637,43 @@
    ],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/Catalog/FileJourneyBuilder.swift": {
+   "lines": 815,
+   "decls": 64,
+   "could_be_private": [
+    "FileJourneyBuilder.Extras.resolvePath",
+    "FileJourneyBuilder.contradictsItself",
+    "FileJourneyBuilder.escapesArchive",
+    "FileJourneyBuilder.appDates",
+    "FileJourneyBuilder.cataloguedEvent",
+    "FileJourneyBuilder.passTitle",
+    "FileJourneyBuilder.analysisEvents",
+    "FileJourneyBuilder.verifyWords",
+    "FileJourneyBuilder.reviewEvents",
+    "FileJourneyBuilder.archivePlace",
+    "FileJourneyBuilder.contradictionTodo",
+    "FileJourneyBuilder.linkTodo",
+    "FileJourneyBuilder.archiveDay",
+    "FileJourneyBuilder.ArchiveProof",
+    "FileJourneyBuilder.isInArchive",
+    "FileJourneyBuilder.humanNote",
+    "FileJourneyBuilder.copyNotOnDiskTodo",
+    "FileJourneyBuilder.archiveEvents",
+    "FileJourneyBuilder.archiveRelativePath",
+    "FileJourneyBuilder.readinessWords",
+    "FileJourneyBuilder.NoteLines",
+    "FileJourneyBuilder.NoteLines.init",
+    "FileJourneyBuilder.NoteLines.updatePrefix",
+    "FileJourneyBuilder.NoteLines.sentenceCase",
+    "FileJourneyBuilder.originEvent",
+    "FileJourneyBuilder.currentStateEvent",
+    "FileJourneyBuilder.friendlyStamp",
+    "FileJourneyBuilder.friendlyDay"
+   ],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/Catalog/FileJourneySheet.swift": {
-   "lines": 201,
+   "lines": 250,
    "decls": 1,
    "could_be_private": [],
    "widened_for_split": []
@@ -2863,8 +2885,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/JourneyPresence.swift": {
-   "lines": 211,
-   "decls": 9,
+   "lines": 228,
+   "decls": 10,
    "could_be_private": [
     "JourneyPresence.deviceNumber"
    ],
@@ -3117,10 +3139,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift": {
-   "lines": 785,
-   "decls": 11,
+   "lines": 641,
+   "decls": 13,
    "could_be_private": [
-    "VideoScanModel.ParsedNoteEvent"
+    "VideoScanModel.ParsedNoteEvent",
+    "VideoScanModel.journeyExtras"
    ],
    "widened_for_split": []
   },
@@ -8552,8 +8575,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Model/ProvenanceTypes.swift": {
-   "lines": 367,
-   "decls": 63,
+   "lines": 476,
+   "decls": 70,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -10678,7 +10701,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift": {
-   "lines": 126,
+   "lines": 116,
    "decls": 5,
    "could_be_private": [
     "BackgroundMenuPresentation.lastFailures",
@@ -11853,7 +11876,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LedgerNarrator.swift": {
-   "lines": 293,
+   "lines": 298,
    "decls": 13,
    "could_be_private": [
     "LedgerNarrator.catalogedSentence",
@@ -12765,10 +12788,9 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift": {
-   "lines": 1695,
-   "decls": 49,
+   "lines": 1757,
+   "decls": 50,
    "could_be_private": [
-    "GRDBCatalogRepository.decideAtClose",
     "GRDBCatalogRepository.unverifiedWords",
     "GRDBCatalogRepository.leftAsFoundWords",
     "GRDBCatalogRepository.changedDuringOpenWords",
