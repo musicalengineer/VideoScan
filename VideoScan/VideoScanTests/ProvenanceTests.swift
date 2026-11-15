@@ -211,9 +211,12 @@ struct ProvenanceTests {
             allRecords: [rec],
             resolveVolumeSafety: resolver([:])
         )
-        // 1 origin + 2 reconcile + 1 current = 4 events
-        #expect(journey.events.count == 4)
+        // 1 origin + 1 catalogued + 2 reconcile + 1 current = 5 events. The
+        // catalogued line (2026-11-14) is dated by the earliest stamp the
+        // catalog holds for the file — here the 10:00 reconcile.
+        #expect(journey.events.count == 5)
         #expect(journey.events.first?.kind == .origin)
+        #expect(journey.events.dropFirst().first?.kind == .catalogued)
         #expect(journey.events.last?.kind == .currentState)
         // Reconcile events should be ascending in time.
         let reconciles = journey.events.filter { $0.kind == .reconcile }

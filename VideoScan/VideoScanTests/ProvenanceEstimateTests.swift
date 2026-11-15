@@ -906,10 +906,11 @@ struct ProvenanceEstimateSensorTests {
         #expect(flip.contains("archivePromotionIndex.copy(withDigest: digest"), "the master's name is the archive copy's")
         let journey = try SourceTree.appCode(named: "Catalog/VideoScanModel+Provenance.swift")
         #expect(journey.contains("provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles)"))
-        let start = try #require(journey.range(of: "static func buildFileJourney("))
-        let end = try #require(journey.range(of: "static func hashStatusLine("))
-        let builder = journey[start.lowerBound..<end.lowerBound]
-        for token in ["provenanceEstimates", "repository", "catalogCutover"] {
+        // The builder is FileJourneyBuilder since 2026-11-14: the whole file is
+        // pure over what it is handed — no store, no repository, no ledger.
+        #expect(journey.contains("FileJourneyBuilder.build(for: rec, allRecords: allRecords"))
+        let builder = try SourceTree.appCode(named: "Catalog/FileJourneyBuilder.swift")
+        for token in ["provenanceEstimates", "repository", "catalogCutover", "mediaLedger", "machineEras"] {
             #expect(!builder.contains(token), "the journey builder reads the catalog (\(token))")
         }
     }

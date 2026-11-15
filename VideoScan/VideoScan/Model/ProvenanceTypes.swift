@@ -183,8 +183,35 @@ enum JourneyEventKind: String, Equatable {
     /// Secondary grey with a question-shaped calendar: a guess never wears
     /// the colour of a fact.
     case machineEstimate
+    /// The ladder's own milestones as timeline events (Rick 2026-11-14):
+    /// when the footage came into the catalog, a machine pass that left a
+    /// dated result, an act of the person's own, the day it was archived,
+    /// and a later full read-back of the archived copy.
+    case catalogued
+    case analysis
+    case review
+    case archived
+    case archiveChecked
 
-    var color: Color {
+    /// The ladder's milestones have their own small table (`milestone`);
+    /// every other kind is in the switches below.
+    var color: Color { milestone?.color ?? baseColor }
+
+    var defaultIcon: String { milestone?.icon ?? baseIcon }
+
+    /// Colour and icon of the five ladder milestones; nil for the rest.
+    private var milestone: (color: Color, icon: String)? {
+        switch self {
+        case .catalogued:     return (.blue, "tray.and.arrow.down")
+        case .analysis:       return (.indigo, "sparkles")
+        case .review:         return (.teal, "person.fill.checkmark")
+        case .archived:       return (.green, "archivebox.fill")
+        case .archiveChecked: return (.green, "checkmark.seal")
+        default:              return nil
+        }
+    }
+
+    private var baseColor: Color {
         switch self {
         case .origin:       return .blue
         case .reconcile:    return .mint
@@ -199,10 +226,34 @@ enum JourneyEventKind: String, Equatable {
         case .presenceUnknown: return .secondary
         case .provenance:   return .teal
         case .machineEstimate: return .secondary
+        case .catalogued, .analysis, .review, .archived, .archiveChecked: return .secondary   // see `milestone`
         }
     }
 
-    var defaultIcon: String {
+    /// The colour of the event's DATE (Rick 2026-11-14: "the dates should
+    /// stand out, I don't want to squint"): the icon's colour, except where
+    /// that colour does not carry text — grey and yellow read as primary.
+    var stampColor: Color {
+        switch self {
+        case .freeForm, .presenceUnknown, .machineEstimate, .promote: return .primary
+        default: return color
+        }
+    }
+
+    /// Order among events that share one instant: the ladder's order.
+    var rank: Int {
+        switch self {
+        case .origin: return 0
+        case .catalogued: return 1
+        case .analysis, .machineEstimate, .provenance: return 2
+        case .review: return 3
+        case .archived, .promote: return 4
+        case .archiveChecked: return 5
+        default: return 3
+        }
+    }
+
+    private var baseIcon: String {
         switch self {
         case .origin:       return "scope"
         case .reconcile:    return "checkmark.shield"
@@ -217,6 +268,7 @@ enum JourneyEventKind: String, Equatable {
         case .presenceUnknown: return "questionmark.circle"
         case .provenance:   return ProvenanceEstimateMark.journeyIcon
         case .machineEstimate: return MachineEstimateWords.symbol
+        case .catalogued, .analysis, .review, .archived, .archiveChecked: return "circle"   // see `milestone`
         }
     }
 }
@@ -254,13 +306,30 @@ struct KnownCopy: Identifiable, Equatable {
     var isSafe: Bool { VolumeSafety(role: role, trust: trust, isRetired: isRetired).isSafe }
 }
 
+/// One labelled fact in the sheet's detail sections ("Duration" / "12:04").
+struct JourneyDetailRow: Identifiable, Equatable {
+    let label: String
+    let value: String
+    var id: String { label }
+}
+
+/// One detail section under the timeline — the progressively less important
+/// part of the sheet (Rick 2026-11-14). Rows, or a block of text, or both.
+struct JourneyDetailSection: Identifiable, Equatable {
+    let title: String
+    var rows: [JourneyDetailRow] = []
+    /// Free text shown under the rows (the person's note, machine notes).
+    var text: String = ""
+    /// Machine text is drawn monospaced and grey; a person's note is not.
+    var isMachineText: Bool = false
+    var id: String { title }
+}
+
 /// Full payload for the File Journey sheet.
 struct FileJourney: Identifiable, Equatable {
     let id = UUID()
     let recordID: UUID
     let filename: String
-    /// "partialMD5: abc12345…" — hash line at the top.
-    let hashStatusLine: String
     /// True when the record is currently marked deleted from the catalog
     /// (`.manuallyDeleted`). Shifts the "current state" event to use the
     /// retire icon + friendlier "marked deleted" copy.
@@ -275,6 +344,10 @@ struct FileJourney: Identifiable, Equatable {
     /// is built so the sheet stays a pure function of one value, and so
     /// the checklist can never disagree with the history beneath it.
     var preservation: [PreservationStep] = []
+    /// The sections under the timeline, most useful first: the file's own
+    /// facts, its status, the person's note, machine notes. Built with the
+    /// journey — the view computes nothing over records.
+    var details: [JourneyDetailSection] = []
 }
 
 // MARK: - Migration Overview (View 3)

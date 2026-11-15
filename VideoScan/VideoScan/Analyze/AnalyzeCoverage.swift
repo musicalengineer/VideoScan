@@ -497,6 +497,28 @@ enum AnalyzeCoverageCalculator {
         }
     }
 
+    // MARK: One file's content analyzers
+
+    /// The content analyzers' verdict on ONE file, in `contentAnalyzers`
+    /// order: does it apply, is its stamp present, the stamp's date where the
+    /// row carries one, and the row's secondary tally. The catalog-wide count
+    /// below and the File Journey's "Analyzed" tick both read this, so they
+    /// cannot disagree (rule 4). Hashes, sound prints and signatures: anything
+    /// with bytes. Duplicates: every active record. Captions, OCR, Transcribe:
+    /// the dossier batch's own verdict. A non-escaping closure, so nothing is
+    /// allocated per record (≈ a C++ template visitor).
+    static func forEachContentAnalyzer(_ r: AnalyzeCoverageInput, dossier: AnalyzeDossierVerdict,
+                                       _ body: (_ cycler: AnalyzeCycler, _ applies: Bool, _ covered: Bool,
+                                                _ stamp: Date?, _ secondary: Bool) -> Void) {
+        body(.fullHashes, r.hasBytes, r.hasFullDigest, r.fullDigestAt, false)
+        body(.soundPrints, r.soundApplies, r.soundObserved, r.soundStampAt, false)
+        body(.duplicates, true, r.dupStamped, nil, false)
+        body(.sceneCaptions, dossier.video, r.hasCaptions || r.dossierStamped, nil, false)
+        body(.ocr, dossier.video, r.dossierStamped, nil, r.hasOCRText)
+        body(.transcribe, dossier.audio, dossier.transcribeObserved, nil, dossier.withoutTranscript)
+        body(.fileSignatures, r.hasBytes, r.hasHash, nil, false)
+    }
+
     // MARK: Entry point
 
     /// `volumes`: every scan target's root + reachability. `mountedRoots`:
@@ -565,15 +587,18 @@ enum AnalyzeCoverageCalculator {
             // prints: anything with bytes, like Signatures.
             tally(.filePresence, root: root, reachable: reachable, applies: true, covered: false)
             tally(.integrity, root: root, reachable: reachable, applies: true, covered: false)
-            tally(.fullHashes, root: root, reachable: reachable, applies: r.hasBytes,
-                  covered: r.hasFullDigest, stamp: r.fullDigestAt)
-            tally(.soundPrints, root: root, reachable: reachable, applies: r.soundApplies,
-                  covered: r.soundObserved, stamp: r.soundStampAt)
             report.soundGaveUp += r.soundGaveUpCount
             report.soundNoDigest += r.soundNoDigestCount
 
-            // Duplicates: every active record is a candidate.
-            tally(.duplicates, root: root, reachable: reachable, applies: true, covered: r.dupStamped)
+            // The seven content analyzers (hashes, sound prints, duplicates,
+            // captions, OCR, transcribe, signatures): one rule per file,
+            // shared with the File Journey's "Analyzed" tick.
+            let dossier = AnalyzeDossierVerdict(r, scope: scope)
+            forEachContentAnalyzer(r, dossier: dossier) { cycler, applies, covered, stamp, secondary in
+                // "observed without a transcript" is counted on connected drives only.
+                tally(cycler, root: root, reachable: reachable, applies: applies, covered: covered, stamp: stamp,
+                      secondary: cycler == .transcribe ? (reachable && secondary) : secondary)
+            }
 
             // Footage: only MEMBERS carry a stamp — tracked as `secondary`
             // (grouped) plus the newest run; `eligible`/`covered` are still
@@ -582,14 +607,6 @@ enum AnalyzeCoverageCalculator {
                   covered: r.footageScannedAt != nil, stamp: r.footageScannedAt,
                   secondary: r.footageScannedAt != nil)
 
-            // Scene Captions / OCR / Transcribe: one engine, one verdict.
-            let dossier = AnalyzeDossierVerdict(r, scope: scope)
-            tally(.sceneCaptions, root: root, reachable: reachable, applies: dossier.video,
-                  covered: r.hasCaptions || r.dossierStamped)
-            tally(.ocr, root: root, reachable: reachable, applies: dossier.video,
-                  covered: r.dossierStamped, secondary: r.hasOCRText)
-            tally(.transcribe, root: root, reachable: reachable, applies: dossier.audio,
-                  covered: dossier.transcribeObserved, secondary: reachable && dossier.withoutTranscript)
             if reachable && dossier.cannotDecode { report.cannotDecode += 1 }
 
             // Correlate: pairs and the unpaired A/V-only candidates.
@@ -599,9 +616,6 @@ enum AnalyzeCoverageCalculator {
                 else if stream == .videoOnly { corr.unpairedVideoOnly += 1 }
                 else { corr.unpairedAudioOnly += 1 }
             }
-
-            // Signatures: anything with bytes.
-            tally(.fileSignatures, root: root, reachable: reachable, applies: r.hasBytes, covered: r.hasHash)
 
             // Embedded dates: ffprobe-failed rows can't be probed.
             tally(.embeddedDates, root: root, reachable: reachable,

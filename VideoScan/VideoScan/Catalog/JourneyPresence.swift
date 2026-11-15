@@ -194,6 +194,23 @@ enum JourneyPresence: Equatable {
         return head + " — presence unknown" + tail
     }
 
+    /// Another copy of the footage — the one the archive copy was made
+    /// from — in its own words, named by where it is ("the copy on
+    /// Projects"), never "this copy" or "the original".
+    static func otherCopyWords(path: String, presence: JourneyPresence) -> String {
+        let name = path.hasPrefix("/Volumes/") ? "the copy on \(volumeName(path))" : "the copy it was made from"
+        switch presence {
+        case .regularFile, .regularFileThroughLink, .linkToFile:
+            return "\(name) is still at \(path)"
+        case .volumeOffline(let volume):
+            return "\(name) could not be checked — \(volume) is not connected"
+        case .unknown(let reason), .linkTargetUnknown(_, let reason):
+            return "\(name) could not be checked at \(path): \(reason)"
+        case .brokenLink, .missing, .notAFile:
+            return "\(name) is no longer at \(path)"
+        }
+    }
+
     /// The archived copy's presence in ITS words — on an unplugged drive,
     /// unreadable, there, or not at its path. Never "not there either".
     static func copyWords(_ copy: ArchivedCopy) -> String {

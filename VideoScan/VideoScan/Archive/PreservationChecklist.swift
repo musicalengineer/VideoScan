@@ -1,288 +1,348 @@
 // PreservationChecklist.swift
-// "Is this file safe yet?" — the journey, scored.
+// "Where does this footage stand?" — the ladder at the top of the File
+// Journey sheet (Rick 2026-11-14, replacing the 2026-08-12 four: Catalogued
+// / Signed / Archived locally / Archived offsite).
 //
-// Rick's idea, 2026-08-12: the File Journey sheet already tells a file's
-// history, but history is passive. Turning the end of it into a row of
-// checkmarks makes the sheet ask a question instead — *what is still
-// missing before this video is actually safe?* — and an unchecked box
-// is a nudge in a way a paragraph never is.
+//   Catalogued   it is in the catalog — since when
+//   Analyzed     the machine's passes that apply have all run
+//   Reviewed     the person did something to it: a date, a note, a name
+//   Archived     a copy is in the archive, on disk, checked bit for bit
+//   Offsite      shown only once the person has answered the question
 //
-// THE ONE RULE THAT KEEPS IT HONEST: every unchecked box must represent
-// REAL WORK TO DO. Rick's first sketch included "migrated" as a step,
-// and it was the one to leave out — most files never need migrating, so
-// that box would sit grey forever on perfectly safe media and teach the
-// eye to ignore the whole widget. A checklist that cries wolf is worse
-// than no checklist. Migrations, combines, and repairs still appear in
-// the timeline below as history; they are simply not SCORED.
+// THREE RULES KEEP IT HONEST.
 //
-// So the four steps are the 3-2-1 spine (see [[project_archive_strategy]]),
-// each one genuinely actionable:
+// 1. A tick comes from evidence, never from a field standing in for a check
+//    (hard rule 1). Archived needs the copy ON DISK (one stat, by the
+//    caller) AND a whole-file SHA-256. A sampled signature, an MD5, a copy
+//    record whose file is gone, the legacy stage stamp, a recorded
+//    BackupEntry — none of them tick anything.
 //
-//   Catalogued        we know the file exists
-//   Signed            it has a whole-file SHA-256 — the prerequisite for
-//                     verified copying. A sampled `v1:` signature (three
-//                     1 MiB windows) is NOT this: the step then reads
-//                     "Sampled signature — not verified" and stays open
-//                     (GH #327, Rick 2026-10-23).
-//   Archived locally  a second copy on local archival media
-//   Archived offsite  a third copy somewhere the house fire is not
+// 2. An open circle is real work for the person (the 2026-08-12 rule: a
+//    checklist that cries wolf is worse than none). So the machine's own
+//    backlog is not drawn as the person's to-do — Analyzed that is not
+//    finished reads "in the queue" — and Offsite is absent until the person
+//    has said yes or no.
 //
-// Signed sits second on purpose: it is the step that makes the two
-// archive steps trustworthy. Copying a file you cannot verify afterwards
-// is how silent corruption gets promoted to "backed up".
+// 3. The app cannot see a cloud or an off-site copy. Offsite is the person's
+//    WORD (BackupAttestation), drawn apart from the green ticks and left out
+//    of "N of M": the count is what the app can prove.
 //
-// THE SECOND RULE (integrity_first §2, codex 2026-10-16): a tick comes
-// from evidence, never from a row field standing in for a check. The
-// archived copy proves "Archived locally" only when it is ON DISK (the
-// caller probes it) AND known by a whole-file SHA-256 — the same proof
-// Signed demands. An MD5, an absent fixity, or a copy whose file is not
-// at its path leaves the box open and names the next door.
+// The ladder answers for the FOOTAGE, not the row: FileJourneyBuilder reads
+// the row, its archived copy and that copy's source together, and hands the
+// result here as `PreservationEvidence`. Scoring is pure — no record, no
+// disk — so the truth table is pinned by tests.
 //
-// Pure over a VideoRecord plus the probe's answer, no I/O — so the sheet
-// can render it and tests can pin the truth table.
+// (For Rick: `PreservationEvidence` is a plain struct of facts; `steps(from:)`
+// is a pure function over it, like a C++ free function taking a const POD.)
 
 import Foundation
 import SwiftUI
 
-/// One scored step in a file's preservation journey.
+// MARK: - Evidence (what the builder found)
+
+/// When the footage came into the catalog. `isExact` is false when the first
+/// day was never recorded and `date` is only the earliest date the catalog
+/// holds for it — shown "by …", never as the day itself.
+struct JourneyCatalogued: Equatable {
+    var date: Date?
+    var isExact: Bool = false
+}
+
+/// One machine pass that applies to this footage.
+struct JourneyAnalysisItem: Equatable {
+    let title: String
+    let covered: Bool
+    /// When its stamp was written, where the record carries one.
+    let at: Date?
+}
+
+/// The content analyzers that apply to this footage, and which have run —
+/// the same per-file rule Catalog Status counts.
+struct JourneyAnalysis: Equatable {
+    var items: [JourneyAnalysisItem] = []
+
+    var done: Bool { !items.isEmpty && items.allSatisfy(\.covered) }
+    var latest: Date? { items.compactMap(\.at).max() }
+    var waiting: [String] { items.filter { !$0.covered }.map(\.title) }
+    var coveredCount: Int { items.filter(\.covered).count }
+}
+
+/// What the person has done to this footage. `acts` are short nouns in the
+/// order found ("date set", "2 people confirmed", "note").
+struct JourneyReview: Equatable {
+    var acts: [String] = []
+    /// The latest of the acts that carry a date (several carry none).
+    var latest: Date?
+
+    var done: Bool { !acts.isEmpty }
+}
+
+/// Where the footage stands with the archive.
+enum JourneyArchiveStanding: Equatable {
+    /// No copy of it is in the archive.
+    case notArchived
+    /// A copy is in the archive, on disk now, known by a whole-file SHA-256.
+    /// `checkedAt`: the latest full read-back that matched, when later.
+    case archived(place: String, at: Date?, checkedAt: Date?)
+    /// A copy record exists but the tick is not earned; `todo` names why.
+    case unproven(todo: String)
+}
+
+/// The person's word about a copy out of the building.
+struct JourneyOffsite: Equatable {
+    /// true = "yes, there is one"; false = "no".
+    let exists: Bool
+    /// "iCloud", "Tim's house" — what the person typed, or the kind's word.
+    let label: String
+    let at: Date
+}
+
+/// Everything the ladder is scored from.
+struct PreservationEvidence: Equatable {
+    var catalogued = JourneyCatalogued()
+    var analysis = JourneyAnalysis()
+    var review = JourneyReview()
+    var archive = JourneyArchiveStanding.notArchived
+    /// nil = the person has not answered (or said "not applicable"): no step.
+    var offsite: JourneyOffsite?
+}
+
+// MARK: - A step
+
+/// One step of the ladder, already scored.
 struct PreservationStep: Identifiable, Equatable {
     enum Kind: String, CaseIterable {
-        case catalogued, signed, archivedLocally, archivedOffsite
+        case catalogued, analyzed, reviewed, archived, offsite
+    }
+
+    enum State: Equatable {
+        /// Proven: the green tick.
+        case done
+        /// Not done, and it is the person's move (`todo` says what).
+        case open
+        /// Not done, and it is the machine's move: nothing for the person.
+        case waiting
+        /// The person's word, which the app cannot check: drawn apart.
+        case attested
     }
 
     let kind: Kind
-    let done: Bool
-    /// When it happened, when we know. Absent is not failure — plenty of
-    /// history predates our recording it — so the UI shows the tick
-    /// without a date rather than implying the step is incomplete.
-    let date: Date?
-    /// What to do about it, shown when the step is NOT done. This is the
-    /// difference between a scold and an instruction.
-    let todo: String
-    /// Words that replace the title when the evidence is weaker than the
-    /// step — "Sampled signature — not verified" for Signed (GH #327).
-    var titleOverride: String? = nil
+    let state: State
+    /// When it happened, when we know. Absent is not failure.
+    var date: Date?
+    /// "by " when `date` is a bound and not the day itself.
+    var datePrefix: String = ""
+    /// The small line under the title: where, how many, whose word.
+    var detail: String = ""
+    /// What to do about it — the person's move (`.open`), or what the
+    /// machine still has to run (`.waiting`). Empty when done.
+    var todo: String = ""
 
     var id: String { kind.rawValue }
+    var done: Bool { state == .done }
 
     var title: String {
-        if let titleOverride { return titleOverride }
         switch kind {
-        case .catalogued:      return "Catalogued"
-        case .signed:          return "Signed"
-        case .archivedLocally: return "Archived locally"
-        case .archivedOffsite: return "Archived offsite"
+        case .catalogued: return "Catalogued"
+        case .analyzed:   return "Analyzed"
+        case .reviewed:   return "Reviewed"
+        case .archived:   return "Archived"
+        case .offsite:    return "Offsite"
         }
     }
 
-    var icon: String { done ? "checkmark.circle.fill" : "circle" }
-    var color: Color { done ? .green : .secondary }
+    var icon: String {
+        switch state {
+        case .done:     return "checkmark.circle.fill"
+        case .open:     return "circle"
+        case .waiting:  return "clock"
+        case .attested: return "person.crop.circle.badge.checkmark"
+        }
+    }
+
+    var color: Color {
+        switch state {
+        case .done:     return .green
+        case .attested: return .blue
+        case .open, .waiting: return .secondary
+        }
+    }
 }
+
+// MARK: - Scoring (pure)
 
 enum PreservationChecklist {
 
-    /// One step's verdict with its evidence date and its next door.
-    struct Verdict: Equatable {
-        let done: Bool
-        let date: Date?
-        let todo: String
+    static let reviewTodo = "Open it and confirm its date, name who is in it, or write a note."
+    static let archiveTodo = "Promote to Archive — copy it to the archive."
+    static let offsiteTodo = "Get a copy out of the building."
+
+    /// The ladder, in order. Offsite is present only when the person answered.
+    static func steps(from e: PreservationEvidence) -> [PreservationStep] {
+        var out = [catalogued(e.catalogued), analyzed(e.analysis), reviewed(e.review), archived(e.archive)]
+        if let offsite = e.offsite { out.append(self.offsite(offsite)) }
+        return out
     }
 
-    /// Score one record — for the CONTENT it stands for (Rick 2026-10-16).
-    /// `archivedCopy` is the row's promoted archive copy when it has one
-    /// (`VideoScanModel.archivedCopy(of:)`); `archivedCopyPresence` is what
-    /// the disk said about that copy (`JourneyPresence.probe`) — nil means
-    /// nobody looked, which is not the same as "there".
-    /// Cloud and offsite both satisfy "not in this building". A named
-    /// predicate, not an inline `||` in a closure: CI's Xcode 26.3 cannot
-    /// type-check that shape "in reasonable time" (2026-10-16).
-    private static func isAway(_ entry: BackupEntry) -> Bool {
-        entry.kind == .cloud || entry.kind == .offsite
+    /// Holding the record is the proof; the date is the day, or a bound.
+    static func catalogued(_ c: JourneyCatalogued) -> PreservationStep {
+        PreservationStep(kind: .catalogued, state: .done, date: c.date,
+                         datePrefix: c.date != nil && !c.isExact ? "by " : "")
     }
 
-    static func steps(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
-                      archivedCopyPresence: JourneyPresence? = nil) -> [PreservationStep] {
-        // Cloud and offsite both satisfy "not in this building", which
-        // is the only property that matters against fire and theft.
-        let away = rec.backupDestinations.first { Self.isAway($0) }
-        let signature = contentSignature(of: rec, archivedCopy: archivedCopy)
-        // Only a sampled `v1:` signature: say so, never "Signed" (GH #327).
-        let sampledOnly = !signature.done && rec.hasContentSignature
-        let local = localArchive(of: rec, archivedCopy: archivedCopy, presence: archivedCopyPresence)
-
-        return [
-            PreservationStep(
-                kind: .catalogued,
-                done: true,   // holding the record is the proof
-                date: rec.scanContext.scannedAt ?? rec.dateModifiedRaw,
-                todo: ""),
-            PreservationStep(
-                kind: .signed,
-                done: signature.done,
-                date: signature.date,
-                todo: sampledOnly ? sampledSignatureTodo
-                    : "Compute a file signature so copies can be verified "
-                    + "and duplicates found.",
-                titleOverride: sampledOnly ? sampledSignatureTitle : nil),
-            PreservationStep(
-                kind: .archivedLocally,
-                done: local.done,
-                date: local.date,
-                todo: local.todo),
-            PreservationStep(
-                kind: .archivedOffsite,
-                done: away != nil,
-                date: away?.date,
-                todo: "Get a copy out of the building."),
-        ]
+    /// Ticked when every analyzer that applies has run. Otherwise it is the
+    /// machine's queue — never an open circle for the person. A file nothing
+    /// applies to (no bytes, retired) has nothing waiting and no tick.
+    static func analyzed(_ a: JourneyAnalysis) -> PreservationStep {
+        if a.done {
+            return PreservationStep(kind: .analyzed, state: .done, date: a.latest,
+                                    detail: "\(a.items.count) of \(a.items.count) passes")
+        }
+        guard !a.items.isEmpty else {
+            return PreservationStep(kind: .analyzed, state: .waiting, detail: "nothing to analyze")
+        }
+        return PreservationStep(kind: .analyzed, state: .waiting,
+                                detail: "\(a.coveredCount) of \(a.items.count) passes · in the queue",
+                                todo: "Content Analysis still has to run: \(a.waiting.joined(separator: ", ")).")
     }
 
-    /// The Signed step's words when the row carries only a sampled `v1:`
-    /// signature (GH #327, Rick 2026-10-23).
-    static let sampledSignatureTitle = "Sampled signature — not verified"
-    static let sampledSignatureTodo = "Read the whole file for a full SHA-256 (Fill In Full Hashes: Content Analysis ▸ Full Hashes ▸ Run now) — "
-        + "a sampled signature reads only three small pieces of it."
-
-    /// Signed answers for the CONTENT, by a WHOLE-FILE SHA-256 only: this
-    /// row's own (its content fixity), else its archived copy's — the
-    /// read-back digest Promote recorded, or the copy's whole-file fixity.
-    /// The sampled `v1:` signature never signs (GH #327). Pure; no disk.
-    static func contentSignature(of rec: VideoRecord, archivedCopy: VideoRecord?) -> (done: Bool, date: Date?) {
-        for holder in [rec, archivedCopy].compactMap({ $0 })
-        where ArchivePromotionIndex.verifiedDigest(of: holder) != nil {
-            return (true, holder.archiveFixity?.verifiedAt ?? holder.contentFixity?.computedAt)
-        }
-        return (false, nil)
+    static func reviewed(_ r: JourneyReview) -> PreservationStep {
+        guard r.done else { return PreservationStep(kind: .reviewed, state: .open, todo: reviewTodo) }
+        return PreservationStep(kind: .reviewed, state: .done, date: r.latest, detail: summary(r.acts))
     }
 
-    /// "Archived locally" answers for a copy that is ON DISK and known by
-    /// a whole-file SHA-256 (`ArchivePromotionIndex.verifiedDigest`). A
-    /// recorded local BackupEntry or the archived stage still count —
-    /// older bookkeeping, not a promise about a copy record. When the box
-    /// stays open, the todo names why: the fixity, or the copy's absence.
-    static func localArchive(of rec: VideoRecord, archivedCopy: VideoRecord?,
-                             presence: JourneyPresence?) -> Verdict {
-        if let local = rec.backupDestinations.first(where: { $0.kind == .local }) {
-            return Verdict(done: true, date: local.date, todo: "")
-        }
-        if rec.archiveStage == .archived { return Verdict(done: true, date: nil, todo: "") }
-        guard let archivedCopy else {
-            return Verdict(done: false, date: nil, todo: "Copy to archival storage — the master RAID.")
-        }
-        guard let presence, presence.isPresent else {
-            return Verdict(done: false, date: nil, todo: copyNotOnDiskTodo(presence))
-        }
-        guard ArchivePromotionIndex.verifiedDigest(of: archivedCopy) != nil else {
-            return Verdict(done: false, date: nil, todo: "Verify Archive (record a SHA-256 fixity).")
-        }
-        return Verdict(done: true,
-                       date: archivedCopy.archiveFixity?.verifiedAt ?? archivedCopy.contentFixity?.computedAt,
-                       todo: "")
+    /// "date set · note" — the first two acts, then how many more.
+    static func summary(_ acts: [String]) -> String {
+        let shown = acts.prefix(2).joined(separator: " · ")
+        return acts.count > 2 ? shown + " · +\(acts.count - 2)" : shown
     }
 
-    /// The next door when the copy record exists but its file was not
-    /// seen: unplugged, unreadable, unchecked, or simply not there.
-    private static func copyNotOnDiskTodo(_ presence: JourneyPresence?) -> String {
-        switch presence {
-        case .volumeOffline(let volume)?:
-            return "Connect \(volume) — the archived copy could not be checked."
-        case .unknown(let reason)?, .linkTargetUnknown(_, let reason)?:
-            return "The archived copy could not be checked (\(reason)) — then run Verify Archive."
-        case nil:
-            return "Run Verify Archive — the archived copy has not been checked on disk."
-        default:
-            return "Run Verify Archive — the archived copy is not at its path."
+    static func archived(_ s: JourneyArchiveStanding) -> PreservationStep {
+        switch s {
+        case .notArchived:
+            return PreservationStep(kind: .archived, state: .open, todo: archiveTodo)
+        case .unproven(let todo):
+            return PreservationStep(kind: .archived, state: .open, todo: todo)
+        case .archived(let place, let at, let checkedAt):
+            var detail = place
+            // A later full read-back is worth its own words; the promote's
+            // own read-back is the archive date itself. With no archive day
+            // on record, the check is all there is — said as a check, never
+            // shown as the day it was archived.
+            if let checkedAt, at.map({ checkedAt.timeIntervalSince($0) > 86_400 }) ?? true {
+                detail += "\nchecked \(shortDate(checkedAt))"   // its own line: never wrapped mid-date
+            }
+            return PreservationStep(kind: .archived, state: .done, date: at, detail: detail)
         }
     }
 
-    /// How far along, 0…1. Drives the summary line.
-    static func completion(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
-                           archivedCopyPresence: JourneyPresence? = nil) -> Double {
-        let all = steps(for: rec, archivedCopy: archivedCopy, archivedCopyPresence: archivedCopyPresence)
-        guard !all.isEmpty else { return 0 }
-        return Double(all.filter(\.done).count) / Double(all.count)
+    /// The person's word: "yes" is drawn apart (never the green tick), "no"
+    /// is an open step with its door.
+    static func offsite(_ o: JourneyOffsite) -> PreservationStep {
+        guard o.exists else {
+            return PreservationStep(kind: .offsite, state: .open, date: nil, detail: "you said: none", todo: offsiteTodo)
+        }
+        return PreservationStep(kind: .offsite, state: .attested, date: o.at, detail: "your word · \(o.label)")
     }
 
-    /// The next thing worth doing, or nil when the file is safe.
-    static func nextAction(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
-                           archivedCopyPresence: JourneyPresence? = nil) -> String? {
-        steps(for: rec, archivedCopy: archivedCopy, archivedCopyPresence: archivedCopyPresence)
-            .first { !$0.done }?.todo
+    // MARK: Summary
+
+    /// "3 of 4" counts what the app can PROVE: the person's word is not in
+    /// the numerator or the denominator.
+    static func tally(_ steps: [PreservationStep]) -> (done: Int, of: Int) {
+        let provable = steps.filter { $0.state != .attested }
+        return (provable.filter(\.done).count, provable.count)
+    }
+
+    /// The next thing worth saying: the person's first open step; with none,
+    /// what the machine still has to run; nil when nothing is left.
+    static func nextAction(_ steps: [PreservationStep]) -> String? {
+        if let open = steps.first(where: { $0.state == .open && !$0.todo.isEmpty }) { return open.todo }
+        return steps.first { $0.state == .waiting && !$0.todo.isEmpty }?.todo
+    }
+
+    /// The line under the ladder. "Next:" is said only of the person's own
+    /// move; the machine's queue is stated as it is, never as their to-do.
+    static func nextLine(_ steps: [PreservationStep]) -> String? {
+        guard let action = nextAction(steps) else { return nil }
+        let isPersons = steps.contains { $0.state == .open && !$0.todo.isEmpty }
+        return isPersons ? "Next: \(action)" : action
+    }
+
+    static func shortDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d ''yy"
+        return f.string(from: date)
     }
 }
 
 // MARK: - View
 
-/// The checklist strip shown at the top of the File Journey sheet.
-///
-/// Takes already-scored steps rather than a record: the sheet is a pure
-/// function of one `FileJourney` value, and scoring at build time means
-/// the checklist and the timeline below it can never describe different
-/// states of the same file.
+/// The ladder strip at the top of the File Journey sheet. Takes scored
+/// steps, never a record: the sheet is a pure function of one `FileJourney`,
+/// so the ladder and the timeline under it cannot describe different states.
 struct PreservationChecklistStrip: View {
     let steps: [PreservationStep]
 
-    private var complete: Bool { steps.allSatisfy(\.done) }
-    private var nextAction: String? { steps.first { !$0.done }?.todo }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let tally = PreservationChecklist.tally(steps)
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 Text("PRESERVATION")
-                    .font(.system(size: 10, weight: .heavy))
-                    .kerning(0.6)
+                    .font(.system(size: 12, weight: .heavy))
+                    .kerning(0.8)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text(complete
-                     ? "safe"
-                     : "\(steps.filter(\.done).count) of \(steps.count)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(complete ? .green : .secondary)
+                Text("\(tally.done) of \(tally.of)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(tally.done == tally.of ? .green : .secondary)
+                    .accessibilityIdentifier("fileJourney.ladder.tally")
             }
 
-            // Horizontal, because the steps are a sequence and reading
-            // left-to-right makes the gap obvious at a glance — which is
-            // the entire purpose of scoring them.
-            HStack(alignment: .top, spacing: 14) {
+            // Left to right, because the steps are a sequence and the gap
+            // shows at a glance. Each takes an equal share of the width.
+            HStack(alignment: .top, spacing: 8) {
                 ForEach(steps) { step in
-                    VStack(spacing: 3) {
-                        Image(systemName: step.icon)
-                            .font(.system(size: 15))
-                            .foregroundColor(step.color)
-                        Text(step.title)
-                            .font(.system(size: 10))
-                            .foregroundColor(step.done ? .primary : .secondary)
-                            .multilineTextAlignment(.center)
-                        if let date = step.date, step.done {
-                            Text(Self.shortDate(date))
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .frame(minWidth: 74)
-                    .help(step.done ? step.title : step.todo)
+                    stepColumn(step)
                 }
-                Spacer(minLength: 0)
             }
 
-            // Say what to do next, not merely that something is missing.
-            if let next = nextAction {
-                Text("Next: \(next)")
-                    .font(.system(size: 11))
+            if let next = PreservationChecklist.nextLine(steps) {
+                Text(next)
+                    .font(.system(size: 13))
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("fileJourney.ladder.next")
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+    }
+
+    private func stepColumn(_ step: PreservationStep) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: step.icon)
+                .font(.system(size: 30))
+                .foregroundColor(step.color)
+            Text(step.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(step.state == .open || step.state == .waiting ? .secondary : .primary)
+            if let date = step.date {
+                Text(step.datePrefix + PreservationChecklist.shortDate(date))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(step.color)
+            }
+            if !step.detail.isEmpty {
+                Text(step.detail)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.07))
-        )
-    }
-
-    private static func shortDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d ''yy"
-        return f.string(from: date)
+        .frame(maxWidth: .infinity)
+        .help(step.todo.isEmpty ? step.title : step.todo)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("fileJourney.ladder.\(step.kind.rawValue)")
     }
 }

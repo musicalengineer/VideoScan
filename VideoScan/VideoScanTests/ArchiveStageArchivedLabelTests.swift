@@ -35,11 +35,17 @@ struct ArchiveStageArchivedLabelTests {
         #expect(sentence == "Its archive stage says Archived.")
     }
 
-    @Test("the Archive detail sheet's pipeline row is labelled from the display name, not \"Master Assigned\"")
+    /// The Archive detail sheet and its stage pipeline were retired on
+    /// 2026-11-14: Archive Details is the File Journey sheet, whose ladder
+    /// has one step for this and calls it "Archived" — never "Master".
+    @Test("Archive Details (the File Journey sheet's ladder) says Archived, never Master or \"Master Assigned\"")
     func detailSheetPipelineSaysArchived() throws {
-        let code = try SourceTree.appCode(named: "Archive/ArchiveView+DetailSheet.swift")
-        #expect(!code.contains("pipelineRow(\"Master Assigned\""))
-        #expect(code.contains("pipelineRow(ArchiveStage.masterAssigned.displayName"))
+        #expect(PreservationStep(kind: .archived, state: .done).title == "Archived")
+        for file in ["Archive/PreservationChecklist.swift", "Catalog/FileJourneySheet.swift"] {
+            let code = try SourceTree.appCode(named: file)
+            #expect(!code.contains("Master Assigned") && !code.contains("pipelineRow("), "\(file) brings the stage pipeline back")
+            #expect(!code.contains("archiveStage"), "\(file) reads the legacy stage stamp")
+        }
     }
 
     @Test("Hallie never calls an archived file \"master assigned, not yet archived\"")

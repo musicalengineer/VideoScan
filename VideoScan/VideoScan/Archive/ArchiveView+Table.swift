@@ -358,12 +358,16 @@ extension ArchiveView {
 
         Divider()
 
+        // One sheet (Rick 2026-11-14): Archive Details IS the file's journey —
+        // the ladder on top, the timeline, then the file's own facts. Built
+        // once here, at the click; the sheet computes nothing over records.
         Button {
-            archiveDetailRecord = recs.first
+            if let rec = recs.first { fileJourneyPayload = model.makeFileJourney(for: rec) }
         } label: {
             Label("Show Archive Details", systemImage: "info.circle")
         }
         .disabled(count != 1)
+        .accessibilityIdentifier("archive.row.showJourney")
 
         // Update… (Rick 2026-09-27): change an ARCHIVED file's name and/or
         // date; the folder follows the date. One file at a time; nothing is
@@ -391,17 +395,6 @@ extension ArchiveView {
         // engine is ProvenanceEstimateStore; only PROVEN archived rows count.
         ProvenanceEstimateMenuItems(store: model.provenanceEstimates, roles: model.provenanceRoles,
                                     targets: ProvenanceRoleTargets(records: recs.filter { model.isProvenArchived($0) }))
-
-        // File Journey (Rick 2026-08-19): in the archive the journey IS
-        // the provenance — origin, repairs, promote, rename — so the
-        // timeline belongs on this menu too.
-        Button {
-            if let rec = recs.first { fileJourneyPayload = model.makeFileJourney(for: rec) }
-        } label: {
-            Label("Show this file's journey", systemImage: "mappin.and.ellipse")
-        }
-        .disabled(count != 1)
-        .accessibilityIdentifier("archive.row.showJourney")
 
         Button {
             if let rec = recs.first {

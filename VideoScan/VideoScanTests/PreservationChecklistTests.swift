@@ -3,134 +3,170 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-// MARK: - Preservation checklist (Rick's idea, 2026-08-12)
+// MARK: - The preservation ladder (Rick 2026-11-14)
 //
-// The sheet's job changed from "here is what happened" to "here is what
-// is still missing", so these tests pin the two properties that decide
-// whether it stays useful:
+// Catalogued · Analyzed · Reviewed · Archived, and Offsite once the person
+// has answered. These pin the scoring — pure over `PreservationEvidence` —
+// and the three rules in PreservationChecklist.swift's header:
 //
-//   * The scoring is HONEST — a green tick means the file really has
-//     that protection, so "safe" cannot be reached on three copies that
-//     are all in the same building.
-//   * The scoring does not CRY WOLF — no step can sit unchecked on a
-//     file where there is nothing to do, because a checklist that is
-//     permanently incomplete gets ignored, and then it protects nothing.
+//   * HONEST   — a green tick is proven; the person's word about an off-site
+//                copy is drawn apart and is not in "N of M".
+//   * NO WOLF  — an open circle is the person's real work: the machine's
+//                queue is "waiting", and Offsite is absent until answered.
+//   * COMPLETE — a fully protected file can reach N of N; no step is
+//                unreachable.
 
-/// `signature` is the SAMPLED `v1:` content hash; `fullHash` adds a
-/// whole-file SHA-256 content fixity — the only thing that signs (GH #327).
-private func pcRec(
-    signature: String = "",
-    fullHash: Bool = false,
-    stage: ArchiveStage = .none,
-    backups: [BackupEntry] = []
-) -> VideoRecord {
-    let r = VideoRecord()
-    r.filename = "clip.mov"
-    r.fullPath = "/Volumes/V/clip.mov"
-    r.sizeBytes = 1_000
-    r.contentHash = signature
-    if fullHash {
-        r.contentFixity = ContentFixity(digest: String(repeating: "b", count: 64), byteCount: 1_000,
-                                        stamp: FileIdentityStamp(device: 1, inode: 1, size: 1_000, mtimeNs: 1))
-    }
-    r.archiveStage = stage
-    r.backupDestinations = backups
-    return r
-}
-
-private let sig = "v1:" + String(repeating: "a", count: 64)
-
-@Suite("Preservation checklist — scoring")
+@Suite("Preservation ladder — scoring")
 struct PreservationChecklistTests {
 
-    /// A freshly catalogued file: known, but nothing else yet. Exactly
-    /// one box ticked, and the next action names the very next step.
-    @Test func freshRecordIsCataloguedOnly() {
-        let steps = PreservationChecklist.steps(for: pcRec())
-        #expect(steps.count == 4)
-        #expect(steps[0].done, "holding the record IS being catalogued")
-        #expect(!steps[1].done)
-        #expect(!steps[2].done)
-        #expect(!steps[3].done)
-        #expect(PreservationChecklist.nextAction(for: pcRec())?.contains("signature") == true)
+    private static let sep23 = Date(timeIntervalSince1970: 1_790_000_000)
+    private static let oct15 = sep23.addingTimeInterval(22 * 86_400)
+
+    private static func analysis(_ covered: [Bool]) -> JourneyAnalysis {
+        JourneyAnalysis(items: covered.enumerated().map {
+            JourneyAnalysisItem(title: "pass \($0.offset + 1)", covered: $0.element, at: $0.element ? sep23 : nil)
+        })
     }
 
-    @Test func aWholeFileSHA256TicksTheSignedStep() {
-        let steps = PreservationChecklist.steps(for: pcRec(signature: sig, fullHash: true))
-        #expect(steps[1].done)
-        #expect(steps[1].title == "Signed")
-        #expect(PreservationChecklist.completion(for: pcRec(signature: sig, fullHash: true)) == 0.5)
+    /// Everything proven: the shape a kept family video ends in.
+    private static var complete: PreservationEvidence {
+        PreservationEvidence(catalogued: JourneyCatalogued(date: sep23, isExact: false),
+                             analysis: analysis([true, true, true]),
+                             review: JourneyReview(acts: ["date set", "note"], latest: oct15),
+                             archive: .archived(place: "FamilyArchive", at: sep23, checkedAt: oct15),
+                             offsite: nil)
     }
 
-    /// GH #327 (Rick 2026-10-23): a sampled `v1:` signature reads three
-    /// small pieces of the file — it is named for what it is, and Signed
-    /// stays open until the whole file is read.
-    @Test func aSampledSignatureIsNotSigned() {
-        let step = PreservationChecklist.steps(for: pcRec(signature: sig))[1]
-        #expect(!step.done)
-        #expect(step.title == "Sampled signature — not verified")
-        #expect(step.todo.contains("Fill In Full Hashes"))
-        #expect(PreservationChecklist.completion(for: pcRec(signature: sig)) == 0.25)
+    // MARK: Logic
+
+    @Test("a fresh file: Catalogued only, four steps, and the next move is the person's")
+    func freshFile() {
+        let steps = PreservationChecklist.steps(from: PreservationEvidence(analysis: Self.analysis([false, false])))
+        #expect(steps.map(\.kind) == [.catalogued, .analyzed, .reviewed, .archived], "no Offsite until the person answers")
+        #expect(steps.map(\.done) == [true, false, false, false])
+        #expect(steps.map(\.state) == [.done, .waiting, .open, .open])
+        #expect(PreservationChecklist.tally(steps).done == 1 && PreservationChecklist.tally(steps).of == 4)
+        #expect(PreservationChecklist.nextAction(steps) == PreservationChecklist.reviewTodo)
     }
 
-    /// THE honesty test. Three copies that never leave the house are not
-    /// a 3-2-1 backup — a fire takes all of them. A local copy must
-    /// never satisfy the offsite step.
-    @Test func localCopiesAloneNeverReachSafe() {
-        let rec = pcRec(signature: sig, fullHash: true, backups: [
-            BackupEntry(name: "LTA_Crucial", kind: .local, date: Date()),
-            BackupEntry(name: "Master RAID", kind: .local, date: Date()),
-        ])
-        let steps = PreservationChecklist.steps(for: rec)
-        #expect(steps[2].done, "local archive satisfied")
-        #expect(!steps[3].done, "offsite must NOT be satisfied by local copies")
-        let allDone = steps.filter(\.done).count == steps.count
-        #expect(!allDone)
+    @Test("a fully protected file reaches 4 of 4 with nothing left to say")
+    func completeFile() {
+        let steps = PreservationChecklist.steps(from: Self.complete)
+        #expect(steps.allSatisfy { $0.done })
+        #expect(PreservationChecklist.tally(steps).done == 4 && PreservationChecklist.tally(steps).of == 4)
+        #expect(PreservationChecklist.nextAction(steps) == nil)
+        #expect(steps.allSatisfy { $0.todo.isEmpty }, "a done step carries no to-do")
     }
 
-    /// Cloud and offsite are the same claim — "not in this building" —
-    /// which is the only property that matters against fire and theft.
-    @Test func cloudOrOffsiteBothSatisfyTheAwayCopy() {
-        for kind in [BackupEntry.BackupKind.cloud, .offsite] {
-            let rec = pcRec(signature: sig, fullHash: true, backups: [
-                BackupEntry(name: "local", kind: .local, date: Date()),
-                BackupEntry(name: "away", kind: kind, date: Date()),
-            ])
-            let steps = PreservationChecklist.steps(for: rec)
-            let allDone = steps.filter(\.done).count == steps.count
-            #expect(allDone, "\(kind) should complete the journey")
-            #expect(PreservationChecklist.nextAction(for: rec) == nil)
-        }
+    @Test("Catalogued: an inexact date is shown 'by …', an exact one bare, and no date is still a tick")
+    func cataloguedDate() {
+        let bound = PreservationChecklist.catalogued(JourneyCatalogued(date: Self.sep23, isExact: false))
+        #expect(bound.done && bound.date == Self.sep23 && bound.datePrefix == "by ")
+        let exact = PreservationChecklist.catalogued(JourneyCatalogued(date: Self.sep23, isExact: true))
+        #expect(exact.datePrefix.isEmpty)
+        let unknown = PreservationChecklist.catalogued(JourneyCatalogued())
+        #expect(unknown.done && unknown.date == nil && unknown.datePrefix.isEmpty, "holding the record is the proof")
     }
 
-    /// A record already marked archived counts as locally archived even
-    /// with no BackupEntry — older records predate that bookkeeping, and
-    /// nagging someone to redo work they already did is how a checklist
-    /// loses their trust.
-    @Test func archivedStageSatisfiesLocalWithoutABackupEntry() {
-        let steps = PreservationChecklist.steps(for: pcRec(signature: sig, fullHash: true, stage: .archived))
-        #expect(steps[2].done)
+    @Test("Analyzed: ticked only when every pass that applies has run; otherwise it is the machine's queue, named")
+    func analyzed() {
+        let done = PreservationChecklist.analyzed(Self.analysis([true, true]))
+        #expect(done.state == .done && done.date == Self.sep23 && done.detail == "2 of 2 passes")
+
+        let partial = PreservationChecklist.analyzed(Self.analysis([true, false, false]))
+        #expect(partial.state == .waiting, "the machine's backlog is never an open circle for the person")
+        #expect(partial.detail == "1 of 3 passes · in the queue")
+        #expect(partial.todo == "Content Analysis still has to run: pass 2, pass 3.")
+
+        let nothing = PreservationChecklist.analyzed(JourneyAnalysis())
+        #expect(nothing.state == .waiting && !nothing.done && nothing.todo.isEmpty && nothing.detail == "nothing to analyze")
     }
 
-    /// SENSOR — the design rule. "Migrated" was in Rick's first sketch
-    /// and was deliberately left out: most files never migrate, so the
-    /// box would sit grey forever on perfectly safe media. Every SCORED
-    /// step must be one a fully-protected file can actually complete.
-    @Test func aFullyProtectedFileScoresOneHundredPercent() {
-        let rec = pcRec(signature: sig, fullHash: true, stage: .archived, backups: [
-            BackupEntry(name: "Master RAID", kind: .local, date: Date()),
-            BackupEntry(name: "Backblaze", kind: .cloud, date: Date()),
-        ])
-        #expect(PreservationChecklist.completion(for: rec) == 1.0,
-                "no step may be unreachable — an always-grey box teaches the eye to ignore all of them")
-        #expect(PreservationChecklist.nextAction(for: rec) == nil)
+    @Test("Reviewed: any act of the person's ticks it; the detail names the first two and counts the rest")
+    func reviewed() {
+        let none = PreservationChecklist.reviewed(JourneyReview())
+        #expect(none.state == .open && none.todo == PreservationChecklist.reviewTodo)
+        let one = PreservationChecklist.reviewed(JourneyReview(acts: ["note"], latest: nil))
+        #expect(one.done && one.date == nil && one.detail == "note", "an undated act still ticks, without a date")
+        let many = PreservationChecklist.reviewed(JourneyReview(acts: ["date set", "note", "place set", "2 people confirmed"],
+                                                                latest: Self.oct15))
+        #expect(many.detail == "date set · note · +2" && many.date == Self.oct15)
     }
 
-    /// Every incomplete step must say what to DO. A box that reports a
-    /// gap without naming the fix is a scold, not an instruction.
-    @Test func everyIncompleteStepCarriesAnAction() {
-        for step in PreservationChecklist.steps(for: pcRec()) where !step.done {
+    @Test("Archived: the day it was archived, the place, and a LATER read-back in words")
+    func archived() {
+        let open = PreservationChecklist.archived(.notArchived)
+        #expect(open.state == .open && open.todo == PreservationChecklist.archiveTodo)
+
+        let unproven = PreservationChecklist.archived(.unproven(todo: "Connect FamilyArchive — the archived copy could not be checked."))
+        #expect(!unproven.done && unproven.todo.hasPrefix("Connect FamilyArchive"))
+
+        let checked = PreservationChecklist.archived(.archived(place: "FamilyArchive", at: Self.sep23, checkedAt: Self.oct15))
+        #expect(checked.done && checked.date == Self.sep23, "the date is the archive day, not the last check")
+        #expect(checked.detail == "FamilyArchive\nchecked \(PreservationChecklist.shortDate(Self.oct15))")
+
+        let sameDay = PreservationChecklist.archived(.archived(place: "FamilyArchive", at: Self.sep23, checkedAt: Self.sep23))
+        #expect(sameDay.detail == "FamilyArchive", "the promote's own read-back is not a second check")
+
+        let undated = PreservationChecklist.archived(.archived(place: "FamilyArchive", at: nil, checkedAt: Self.oct15))
+        #expect(undated.done && undated.date == nil, "a check is never shown as the day it was archived")
+        #expect(undated.detail == "FamilyArchive\nchecked \(PreservationChecklist.shortDate(Self.oct15))")
+    }
+
+    // MARK: Truth — the person's word is not proof
+
+    @Test("TRUTH: 'yes, there is an off-site copy' is drawn apart, never a green tick, and is not in N of M")
+    func offsiteYesIsTheirWord() {
+        var evidence = Self.complete
+        evidence.offsite = JourneyOffsite(exists: true, label: "iCloud", at: Self.oct15)
+        let steps = PreservationChecklist.steps(from: evidence)
+        let offsite = steps[4]
+        #expect(offsite.kind == .offsite && offsite.state == .attested && !offsite.done)
+        #expect(offsite.color != PreservationStep(kind: .archived, state: .done).color, "never the green of a proven tick")
+        #expect(offsite.detail == "your word · iCloud" && offsite.date == Self.oct15)
+        #expect(PreservationChecklist.tally(steps).done == 4 && PreservationChecklist.tally(steps).of == 4,
+                "the count is what the app can prove")
+        #expect(PreservationChecklist.nextAction(steps) == nil)
+    }
+
+    @Test("'no off-site copy' is an open step with its door")
+    func offsiteNo() {
+        var evidence = Self.complete
+        evidence.offsite = JourneyOffsite(exists: false, label: "off-site", at: Self.oct15)
+        let steps = PreservationChecklist.steps(from: evidence)
+        #expect(steps[4].state == .open && steps[4].todo == PreservationChecklist.offsiteTodo)
+        #expect(PreservationChecklist.tally(steps).done == 4 && PreservationChecklist.tally(steps).of == 5)
+        #expect(PreservationChecklist.nextAction(steps) == PreservationChecklist.offsiteTodo)
+    }
+
+    // MARK: Sensors — the design rules
+
+    @Test("SENSOR: the next action is the person's first open step; only when none is open does it name the machine's queue")
+    func nextActionPrefersThePerson() {
+        var evidence = Self.complete
+        evidence.analysis = Self.analysis([true, false])
+        evidence.archive = .notArchived
+        #expect(PreservationChecklist.nextAction(PreservationChecklist.steps(from: evidence)) == PreservationChecklist.archiveTodo)
+        evidence.archive = .archived(place: "FamilyArchive", at: Self.sep23, checkedAt: nil)
+        let machineOnly = PreservationChecklist.steps(from: evidence)
+        #expect(PreservationChecklist.nextAction(machineOnly) == "Content Analysis still has to run: pass 2.")
+        #expect(PreservationChecklist.nextLine(machineOnly) == "Content Analysis still has to run: pass 2.",
+                "the machine's queue is never called the person's Next")
+        evidence.review = JourneyReview()
+        #expect(PreservationChecklist.nextLine(PreservationChecklist.steps(from: evidence))
+                == "Next: \(PreservationChecklist.reviewTodo)")
+        #expect(PreservationChecklist.nextLine(PreservationChecklist.steps(from: Self.complete)) == nil)
+    }
+
+    @Test("SENSOR: every open step says what to do, and no step is titled Signed or shows a hash")
+    func everyOpenStepCarriesAnAction() {
+        var evidence = PreservationEvidence(analysis: Self.analysis([false]))
+        evidence.offsite = JourneyOffsite(exists: false, label: "cloud", at: Self.oct15)
+        let steps = PreservationChecklist.steps(from: evidence)
+        for step in steps where step.state == .open {
             #expect(!step.todo.isEmpty, "\(step.kind) has no next action")
         }
+        #expect(PreservationStep.Kind.allCases.map(\.rawValue) == ["catalogued", "analyzed", "reviewed", "archived", "offsite"])
+        #expect(steps.map(\.title) == ["Catalogued", "Analyzed", "Reviewed", "Archived", "Offsite"])
     }
 }
