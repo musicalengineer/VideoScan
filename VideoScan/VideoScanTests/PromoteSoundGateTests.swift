@@ -350,17 +350,24 @@ struct PromoteSoundGateTests {
         let diagnoses = [S.soundDiagnosis(channels: [-18, -20]), S.soundDiagnosis(channels: [-18, -.infinity]),
                          S.soundDiagnosis(channels: [-68, -68]), S.soundDiagnosis(channels: [], audioStreams: 0),
                          S.soundDiagnosis(channels: [-70, -72, -.infinity, -90, -75, -80]), S.soundDiagnosis(channels: [-18, nil])]
-        let start = Date()
+        // Through the one timing rule (TimingBudget): a raw `elapsed < 1.0` failed the M4
+        // Thread Sanitizer run of 2026-11-15, where instrumented code runs many times
+        // slower by design. The helper scales the budget under a sanitizer, lists a
+        // busy-machine miss as a known issue, and still fails a hang.
+        let load = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
         var promoted = 0, refused = 0
-        for i in 0..<100_000 {
-            let finding = G.finding(from: diagnoses[i % diagnoses.count])
-            let mark = G.mark(tags: i % 11 == 0 ? ["Silent — checked"] : ["Gold"], storedFixity: fixity,
-                              provenDigest: Self.digest, recordSizeBytes: 4_096, provenSizeBytes: 4_096)
-            if G.decide(finding: finding, mark: mark, soundPartnerName: nil, recordedYear: 1994,
-                        digestPrefix: "aaaaaaaaaaaa").isRefusal { refused += 1 } else { promoted += 1 }
+        let elapsed = clock.measure {
+            for i in 0..<100_000 {
+                let finding = G.finding(from: diagnoses[i % diagnoses.count])
+                let mark = G.mark(tags: i % 11 == 0 ? ["Silent — checked"] : ["Gold"], storedFixity: fixity,
+                                  provenDigest: Self.digest, recordSizeBytes: 4_096, provenSizeBytes: 4_096)
+                if G.decide(finding: finding, mark: mark, soundPartnerName: nil, recordedYear: 1994,
+                            digestPrefix: "aaaaaaaaaaaa").isRefusal { refused += 1 } else { promoted += 1 }
+            }
         }
-        let elapsed = -start.timeIntervalSinceNow
         #expect(promoted + refused == 100_000 && promoted > 0 && refused > 0)
-        #expect(elapsed < 1.0, "100k decisions took \(String(format: "%.2f", elapsed))s")
+        expectWithinTimingBudget("Promote sound gate: 100k files through finding + mark + decide", measured: elapsed,
+                                 budget: PerformanceLane.debugCeiling(.seconds(1)), loadBefore: load)
     }
 }
