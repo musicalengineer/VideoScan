@@ -35996,12 +35996,14 @@
       ],
       "tests": [
         "aBadFirstDateDoesNotHideARealOne",
+        "aBadlyDatedDecisionDoesNotHideARealOne",
         "aCopyThatContradictsItselfProvesNothing",
         "aKeptPromoteNoteIsNotTheRawLine",
         "aLinkIsNotAnArchiveCopy",
         "aMissingHandPlacedFileIsNotInTheArchive",
         "aPurgedRowIsNotArchived",
         "aSameDiskFolderLinkIsNotContainment",
+        "anAmbiguousPromoteNoteNamesNoPath",
         "anUnreadableSiblingAnywhereInTheCatalogCounts",
         "copiedFromIsNeverTheSourcesLaterPath",
         "differentBytesAreNotTheFamily",
@@ -36009,7 +36011,8 @@
         "malformedArchiveFixityIsNotAReadBack",
         "migratesOriginIsNotPromotesSource",
         "promoteNotePathsAreReadWhole",
-        "theLogLineIsBounded"
+        "theLogLineIsBounded",
+        "theWholeLogLineIsBounded"
       ]
     },
     {
@@ -38774,7 +38777,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3729,
+      "expected_floor": 3732,
       "name": "unit",
       "package_expected_floor": 903,
       "package_selectors": [

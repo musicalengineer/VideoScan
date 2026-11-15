@@ -322,6 +322,68 @@ struct FileJourneyCodexFindingsTests {
         #expect(journey.logLine.hasSuffix("…"))
     }
 
+    // MARK: Codex cycle #294 (third pass, on 4e867ea88..85af6b543: "fix", 1 P1 + 2 P2; each seen RED on 85af6b543).
+    // The loop stops here (PROCESS §5: findings fell to P2 and the core path is covered); no fourth pass was run.
+
+    // #294 F1 — a folder whose NAME contains " · sha256 <64 hex>" made the lazy parse stop early.
+    @Test("#294 F1 TRUTH: a promote note that can be read two ways names no path; the copy's own field, confirmed by the note, does")
+    func anAmbiguousPromoteNoteNamesNoPath() throws {
+        let path = "/Projects/Tape · sha256 \(Self.sha)/clip.mov"
+        let tails = [" · sha256 \(Self.sha) · readiness: audio verified · original filename: clip.mov · appears to be from iMovie",
+                     " (source record \(UUID().uuidString) no longer in the catalog) · sha256 \(Self.sha)"]
+        for tail in tails {
+            let note = "Promote 2026-09-23T17:47:00Z: promoted from \(path)\(tail)"
+            let parsed = FileJourneyBuilder.promotedFrom(inNotes: note)
+            #expect(parsed == nil || parsed == path, "never a truncated path: \(parsed ?? "nil")")
+
+            let copy = Self.row("/Archive/clip.mov")
+            copy.derivationKind = ArchivePromotion.derivationKind
+            copy.notes = note
+            // No field to settle it: nothing is said.
+            let unsaid = try #require(Self.journey(copy).events.first { $0.kind == .archived })
+            #expect(!unsaid.sentence.contains("Copied from /Projects/Tape."), Comment(rawValue: unsaid.sentence))
+            #expect(FileJourneyBuilder.promoteSource(of: copy) == nil)
+            // Promote's own field, which this very note names: the whole path. (The sheet then
+            // names it once — in its first line, "found … at <path>" — and not again.)
+            copy.originalFullPath = path
+            #expect(FileJourneyBuilder.promoteSource(of: copy) == path)
+            let first = try #require(Self.journey(copy).events.first)
+            #expect(first.sentence.contains("at \(path)"), Comment(rawValue: first.sentence))
+            // A field the note does NOT name (Migrate rewrote it) settles nothing.
+            copy.originalFullPath = "/Archive/old.mov"
+            #expect(FileJourneyBuilder.promoteSource(of: copy) == nil)
+            copy.originalFullPath = nil
+        }
+    }
+
+    // #294 F2 — the impossible answer used up the pair before its date was checked.
+    @Test("#294 F2 TRUTH: an impossibly dated same-footage answer never hides the real one about the same file")
+    func aBadlyDatedDecisionDoesNotHideARealOne() {
+        let source = Self.row("/Projects/source.mov")
+        source.contentFixity = Self.fullHash()
+        let copy = Self.row("/Archive/copy.mov")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.derivedFrom = source.id
+        copy.archiveFixity = ArchiveFixity(digest: Self.sha, verifiedAt: Self.now, sizeBytes: 4096)
+        let other = Self.row("/Projects/other.mov")
+        source.footageDecisions = [FootageDecision(otherID: other.id, verdict: .same, decidedAt: Self.now.addingTimeInterval(86_400))]
+        copy.footageDecisions = [FootageDecision(otherID: other.id, verdict: .same, decidedAt: Self.now)]
+
+        let j = Self.journey(source, [source, copy, other])
+        #expect(j.events.contains { $0.kind == .review && $0.timestamp == Self.now && $0.sentence.contains("other.mov") },
+                "\(j.events.map(\.sentence))")
+    }
+
+    // #294 F3 — only the to-do was cut; a 20,000-character path went to the log whole.
+    @Test("#294 F3 LOGGING: the whole log line is bounded, whatever the name, the to-do and the path are")
+    func theWholeLogLineIsBounded() {
+        let path = "/Projects/" + String(repeating: "x", count: 20_000) + "/" + String(repeating: "n", count: 5_000) + ".mov"
+        let j = Self.journey(Self.row(path), presence: .unknown(reason: "File name too long"))
+        #expect(j.logLine.utf8.count <= 4096, "\(j.logLine.utf8.count) bytes")
+        #expect(j.logLine.hasPrefix("file journey: "))
+        #expect(j.logLine.contains("Catalogued ✓"), "the ladder is always there, whole")
+    }
+
     // Found by FileJourneyNonsenseDataTests (52 of 1,000 cases): a promote note on a row with no
     // archive-copy record still put the raw log line, hash and all, in the timeline.
     @Test("TRUTH: a promote note shown as history is a sentence — never the log line with its hash")

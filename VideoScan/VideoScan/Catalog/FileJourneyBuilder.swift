@@ -385,7 +385,10 @@ enum FileJourneyBuilder {
             out.append(event(.review, at: entry.at, "You confirmed \(names) \(entry.names.count == 1 ? "is" : "are") in this."))
         }
         var seenPairs = Set<UUID>()
-        for decision in family.members.flatMap(\.footageDecisions) where seenPairs.insert(decision.otherID).inserted {
+        // The date is checked BEFORE the pair is used up, so an impossible
+        // answer never hides a real one about the same file (Codex #294 F2).
+        for decision in family.members.flatMap(\.footageDecisions)
+        where real(decision.decidedAt, now: now) != nil && seenPairs.insert(decision.otherID).inserted {
             let other = allRecords.first { $0.id == decision.otherID }?.filename ?? "another file"
             out.append(event(.review, at: decision.decidedAt, decision.verdict == .same
                 ? "You said this is the same footage as \(other)."
@@ -505,7 +508,7 @@ enum FileJourneyBuilder {
         // (it fills a missing one with the moving row's former path), so the
         // note outranks it and a path inside the archive is never a source
         // (Codex #293 F4).
-        if promoted, let from = promotedFrom(inNotes: copy.notes) ?? copy.originalFullPath, from != copy.fullPath, from != foundAt,
+        if promoted, let from = promoteSource(of: copy), from != copy.fullPath, from != foundAt,
            !isInArchive(from, root: extras.archiveRootPath) {
             sentence += " Copied from \(from)."
         }
@@ -541,6 +544,23 @@ enum FileJourneyBuilder {
     /// The path in the copy's own promote note ("Promote <ISO>: promoted from
     /// <path> · sha256 …", or "… <path> (source record … no longer in the
     /// catalog) · …") — what Promote read, as Promote wrote it down.
+    /// The path Promote read, as far as the copy's own record can say:
+    ///   1. `originalFullPath` when the copy's promote note names that very
+    ///      path — two records of Promote's agree;
+    ///   2. else the path read out of the promote note, when the note reads
+    ///      only one way;
+    ///   3. else `originalFullPath` when there is no promote note to consult.
+    /// A note that names some OTHER path than the field (Migrate rewrote the
+    /// field), or that can be read two ways, settles nothing by itself.
+    static func promoteSource(of copy: VideoRecord) -> String? {
+        let lines = copy.notes.split(whereSeparator: \.isNewline).filter { $0.hasPrefix("Promote ") && $0.contains(": promoted from ") }
+        if let field = copy.originalFullPath, lines.contains(where: { $0.contains(": promoted from \(field) ") || $0.hasSuffix(": promoted from \(field)") }) {
+            return field
+        }
+        if let parsed = promotedFrom(inNotes: copy.notes) { return parsed }
+        return lines.isEmpty ? copy.originalFullPath : nil
+    }
+
     static func promotedFrom(inNotes notes: String) -> String? {
         // The path is everything up to the note's exact tails — the orphan
         // clause with its UUID, then " · sha256 <64 hex>" — so a path that
@@ -548,8 +568,11 @@ enum FileJourneyBuilder {
         // (A plain string, not a regex literal: the source sensors read this file.)
         let pattern = "^Promote \\S+: promoted from (.+?)(?: \\(source record [0-9A-Fa-f-]{36} no longer in the catalog\\))?"
             + "(?: · sha256 [0-9A-Fa-f]{64}.*)?$"
-        guard let shape = try? Regex(pattern) else { return nil }
+        guard let shape = try? Regex(pattern), let tail = try? Regex(" · sha256 [0-9A-Fa-f]{64}") else { return nil }
         for line in notes.split(whereSeparator: \.isNewline) {
+            // More than one hash tail on the line (a folder NAMED like one): the
+            // line reads two ways, and no path is taken from it (Codex #294 F1).
+            guard String(line).matches(of: tail).count <= 1 else { continue }
             guard let match = String(line).wholeMatch(of: shape), let found = match.output[1].substring else { continue }
             let path = found.trimmingCharacters(in: .whitespaces)
             // A line whose hash is not a hash did not end where it should: no path is read from it.

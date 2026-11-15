@@ -357,17 +357,23 @@ struct FileJourney: Identifiable, Equatable {
     ///     | Archived: Connect FamilyArchive — … | now: Not at /Volumes/…
     var logLine: String {
         let ladder = preservation.map { "\($0.title) \(Self.mark($0.state))" }.joined(separator: " · ")
-        var parts = ["file journey: \(filename) — \(ladder)"]
+        var parts = ["file journey: \(Self.clip(filename, 200)) — \(ladder)"]
         // An open Archived step with anything but the plain "not archived yet" door is a finding.
         for step in preservation where step.kind == .archived && step.state == .open
             && step.todo != PreservationChecklist.archiveTodo {
-            // Bounded: the words are the sheet's own, but a log line is not a place for 20,000 of them.
-            parts.append("\(step.title): \(step.todo.count > 300 ? String(step.todo.prefix(300)) + "…" : step.todo)")
+            parts.append("\(step.title): \(Self.clip(step.todo, 300))")
         }
         if let last = events.last, last.kind == .notAtPath || last.kind == .presenceUnknown {
-            parts.append("now: \(last.sentence)")
+            parts.append("now: \(Self.clip(last.sentence, 600))")
         }
         return parts.joined(separator: " | ")
+    }
+
+    /// Every variable part of the log line is bounded (Codex #293 / #294): the
+    /// words are the sheet's own, but a log line is not a place for a
+    /// 20,000-character name, to-do or path. Cut by characters, marked "…".
+    private static func clip(_ text: String, _ limit: Int) -> String {
+        text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
 
     private static func mark(_ state: PreservationStep.State) -> String {
