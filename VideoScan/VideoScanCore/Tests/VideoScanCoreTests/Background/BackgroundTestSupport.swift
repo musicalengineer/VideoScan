@@ -184,6 +184,10 @@ final class UnitGate: @unchecked Sendable {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(5))
         }
+        // The loop can leave on "open" with the task already cancelled (the
+        // sleep had ended before the cancel landed, GH #475): a dead process
+        // finishes nothing, so look once more on the way out.
+        try Task.checkCancellation()
     }
 }
 

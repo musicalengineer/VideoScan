@@ -791,6 +791,7 @@
         "StateRootLockTests"
       ],
       "tests": [
+        "aCancelledUnitNeverPassesAnOpenGate",
         "lockWordsNameTheHolder",
         "secondSupervisorWaitsForTheFirst",
         "uncontestedRootIsTransparent"
@@ -38779,7 +38780,7 @@
       ],
       "expected_floor": 3732,
       "name": "unit",
-      "package_expected_floor": 903,
+      "package_expected_floor": 904,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
