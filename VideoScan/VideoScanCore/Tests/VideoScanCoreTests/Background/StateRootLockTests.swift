@@ -78,6 +78,25 @@ struct StateRootLockTests {
         #expect(await service.ownershipRefusal == nil)
     }
 
+    /// GH #475: the test above failed twice in three deep gauntlets and never
+    /// on an idle machine. Its double let a dead process finish a unit: the
+    /// held unit's 5 ms sleep had already ended when the test cancelled the
+    /// lane and opened the gate, so the loop saw "open" and returned without
+    /// looking at the cancellation. This puts the double in that exact state.
+    @Test("the gate double: a unit of a dead process never passes the gate, even when the gate opens at the same moment (GH #475)")
+    func aCancelledUnitNeverPassesAnOpenGate() async {
+        let recorder = UnitRecorder()
+        let gate = UnitGate()
+        gate.open()
+        let job = GatedJob(unitCount: 3, recorder: recorder, gate: gate, heldUnit: 1, sleepPerUnit: .zero)
+        let unit = Task { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await job.runUnit(1); return true } catch { return false }
+        }
+        #expect(await unit.value == false, "a cancelled unit returned .done through the open gate")
+        #expect(recorder.completedUnits.isEmpty, "a dead process completed a unit: \(recorder.completedUnits)")
+    }
+
     @Test("the lock names its holder; a released lock is free again")
     func lockWordsNameTheHolder() throws {
         let dir = try BackgroundFixtures.scratch("lock-words")
