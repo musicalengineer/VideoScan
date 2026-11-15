@@ -80,4 +80,8 @@ if out:
     print("\n".join(out))
 PY
 
+# 4. The Hallie replay of the newest nightly on this Mac (2026-11-15): the lane
+#    cannot touch the nightly's status, so a replay that did not run is said here.
+python3 "$REPO_ROOT/scripts/hallie_replay_alert.py" 2>/dev/null || true
+
 echo "=== end. Read docs/STATUS.md fully before changing code; park ideas in docs/BACKLOG.md. ==="
