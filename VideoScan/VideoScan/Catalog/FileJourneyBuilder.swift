@@ -468,8 +468,13 @@ enum FileJourneyBuilder {
     /// The person's own lines of `userNotes` — machine text that once leaked
     /// in there (GH #176) is not theirs.
     static func humanNote(_ r: VideoRecord) -> String {
-        ArchiveAngelCandidate.humanNoteLines(r.userNotes).joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // The one classifier is Core's MachineNote; the Archive Angel's view of
+        // it is the Angel's own (ArchiveAngelBoundarySensorTests: code outside
+        // ArchiveAngel/ names only its public surface).
+        r.userNotes.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !MachineNote.isMachineLine($0) }
+            .joined(separator: "\n")
     }
 
     /// The copy record exists but its file was not seen: unplugged,
