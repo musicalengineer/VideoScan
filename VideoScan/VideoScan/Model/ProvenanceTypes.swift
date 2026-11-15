@@ -348,6 +348,42 @@ struct FileJourney: Identifiable, Equatable {
     /// facts, its status, the person's note, machine notes. Built with the
     /// journey — the view computes nothing over records.
     var details: [JourneyDetailSection] = []
+
+    /// One line for videoscan.log each time the sheet opens (checklist:
+    /// LOGGING — every failure the user can see is also logged, with why
+    /// and where). The ladder as shown, then each thing the sheet says is
+    /// wrong or unknown, in the sheet's own words:
+    ///   file journey: clip.mov — Catalogued ✓ · Analyzed waiting · Reviewed open · Archived open
+    ///     | Archived: Connect FamilyArchive — … | now: Not at /Volumes/…
+    var logLine: String {
+        let ladder = preservation.map { "\($0.title) \(Self.mark($0.state))" }.joined(separator: " · ")
+        var parts = ["file journey: \(Self.clip(filename, 200)) — \(ladder)"]
+        // An open Archived step with anything but the plain "not archived yet" door is a finding.
+        for step in preservation where step.kind == .archived && step.state == .open
+            && step.todo != PreservationChecklist.archiveTodo {
+            parts.append("\(step.title): \(Self.clip(step.todo, 300))")
+        }
+        if let last = events.last, last.kind == .notAtPath || last.kind == .presenceUnknown {
+            parts.append("now: \(Self.clip(last.sentence, 600))")
+        }
+        return parts.joined(separator: " | ")
+    }
+
+    /// Every variable part of the log line is bounded (Codex #293 / #294): the
+    /// words are the sheet's own, but a log line is not a place for a
+    /// 20,000-character name, to-do or path. Cut by characters, marked "…".
+    private static func clip(_ text: String, _ limit: Int) -> String {
+        text.count > limit ? String(text.prefix(limit)) + "…" : text
+    }
+
+    private static func mark(_ state: PreservationStep.State) -> String {
+        switch state {
+        case .done:     return "✓"
+        case .open:     return "open"
+        case .waiting:  return "waiting"
+        case .attested: return "(their word)"
+        }
+    }
 }
 
 // MARK: - Migration Overview (View 3)

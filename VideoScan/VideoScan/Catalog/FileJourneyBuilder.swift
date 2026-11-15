@@ -38,6 +38,9 @@ enum FileJourneyBuilder {
         var archiveName: String?
         /// The person confirmed the estimated provenance of this footage.
         var provenanceConfirmed = false
+        /// A path with every link in it resolved (realpath), nil when the
+        /// disk will not say. Injectable for tests.
+        var resolvePath: (String) -> String? = FileJourneyBuilder.realPath
         var now = Date()
     }
 
@@ -55,15 +58,21 @@ enum FileJourneyBuilder {
         // Each path is asked of the disk ONCE; the answers feed both the
         // ladder and the last event, so the two cannot disagree.
         let recPresence = probe(rec.fullPath)
-        let copyPresence: JourneyPresence? = family.copy.map { $0.id == rec.id ? recPresence : probe($0.fullPath) }
+        var copyPresence: JourneyPresence? = family.copy.map { $0.id == rec.id ? recPresence : probe($0.fullPath) }
+        // A regular file whose REAL location is outside the archive's real
+        // folder was reached through a link, whatever disk it is on (Codex #293 F1).
+        if let copy = family.copy, copyPresence == .regularFile, let root = extras.archiveRootPath,
+           escapesArchive(copy.fullPath, root: root, resolve: extras.resolvePath) {
+            copyPresence = .regularFileThroughLink(at: root)
+        }
         let place = archivePlace(family.copy, extras: extras)
-        let notes = NoteLines(rec: rec, copy: family.copy)
+        let notes = NoteLines(rec: rec, copy: family.copy, now: extras.now)
 
         let evidence = PreservationEvidence(
             catalogued: catalogued(family, notes: notes, now: extras.now),
-            analysis: analysis(family, scope: extras.analysisScope),
+            analysis: analysis(family, scope: extras.analysisScope, catalog: allRecords, now: extras.now),
             review: review(family, notes: notes, extras: extras),
-            archive: archiveStanding(family.copy, presence: copyPresence, place: place),
+            archive: archiveStanding(family.copy, presence: copyPresence, place: place, now: extras.now),
             offsite: offsite(family))
 
         var events: [JourneyEvent] = []
@@ -74,10 +83,16 @@ enum FileJourneyBuilder {
         if let machineEra {
             events.append(event(.machineEstimate, at: machineEra.observed, machineEra.sentence))
         }
-        events += analysisEvents(family)
-        events += reviewEvents(family, notes: notes, allRecords: allRecords)
-        events += archiveEvents(family, place: place, extras: extras)
+        events += analysisEvents(family, now: extras.now)
+        events += reviewEvents(family, notes: notes, allRecords: allRecords, now: extras.now)
+        events += archiveEvents(family, place: place, presence: copyPresence, extras: extras)
         events += notes.events
+        // A date from before the app existed, or from the future, dates nothing
+        // (Codex #292 F6): the event is not shown rather than shown at a false time.
+        // (The provenance line is dated at the footage's CAPTURE — 1994 is a fine capture year.)
+        events.removeAll { event in
+            event.kind != .provenance && (event.timestamp.map { real($0, now: extras.now) == nil } ?? false)
+        }
 
         let isMarkedDeleted = rec.archiveStage == .manuallyDeleted
         var ordered = [originEvent(for: rec)] + sorted(events)
@@ -114,14 +129,20 @@ enum FileJourneyBuilder {
             let isPromotedCopy = rec.derivationKind == ArchivePromotion.derivationKind
             let inArchive = FileJourneyBuilder.isInArchive(rec.fullPath, root: extras.archiveRootPath)
             if isPromotedCopy || inArchive {
-                copy = rec
+                // A purged row is not a copy of anything, opened directly or not (Codex #292 F2).
+                copy = rec.isPurged ? nil : rec
             } else {
-                copy = archivedCopy ?? allRecords.first {
-                    $0.derivedFrom == rec.id && $0.derivationKind == ArchivePromotion.derivationKind && !$0.isPurged
+                let candidate = archivedCopy ?? allRecords.first {
+                    $0.derivedFrom == rec.id && $0.derivationKind == ArchivePromotion.derivationKind
                 }
+                // The promote link says what the copy was MADE from, not what
+                // the row holds today: bytes that differ are other footage, and
+                // the archive does not hold this row's (Codex #292 F3).
+                copy = candidate.flatMap { !$0.isPurged && FileJourneyBuilder.sameFootage(rec, $0) ? $0 : nil }
             }
             let sourceID = isPromotedCopy ? rec.derivedFrom : nil
             source = sourceID.flatMap { id in allRecords.first { $0.id == id } }
+                .flatMap { FileJourneyBuilder.sameFootage(rec, $0) ? $0 : nil }
             var all = [rec]
             for other in [copy, source].compactMap({ $0 }) where !all.contains(where: { $0.id == other.id }) {
                 all.append(other)
@@ -136,15 +157,58 @@ enum FileJourneyBuilder {
         }
     }
 
+    /// Are two rows the same footage, as far as the catalog can tell? Both
+    /// whole-file hashes known: they must be equal. Otherwise the promote
+    /// link stands unless the sizes already differ. (A row is itself.)
+    static func sameFootage(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
+        if a.id == b.id { return true }
+        // A row whose own two hashes disagree is known to be in doubt: it is
+        // the same footage as nothing until it is verified (Codex #293 F2).
+        if contradictsItself(a) || contradictsItself(b) { return false }
+        if let left = ArchivePromotionIndex.verifiedDigest(of: a), let right = ArchivePromotionIndex.verifiedDigest(of: b) {
+            return left == right
+        }
+        return a.sizeBytes == b.sizeBytes
+    }
+
+    /// Both whole-file hashes on record, and they differ: the archive fixity
+    /// says one thing and a later full read of the file says another.
+    static func contradictsItself(_ r: VideoRecord) -> Bool {
+        guard let archive = r.archiveFixity, archive.algorithm == ContentFixity.sha256, ArchiveDigestIndex.isSHA256(archive.digest),
+              let content = r.contentFixity, content.algorithm == ContentFixity.sha256, ArchiveDigestIndex.isSHA256(content.digest)
+        else { return false }
+        return archive.digest.lowercased() != content.digest.lowercased()
+    }
+
+    /// realpath(3): every link resolved. nil when nothing is there to resolve.
+    nonisolated static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// The path reads as inside the archive, and its real location is not.
+    /// When the disk will not resolve either path, nothing is concluded.
+    static func escapesArchive(_ path: String, root: String, resolve: (String) -> String?) -> Bool {
+        guard isInArchive(path, root: root), let real = resolve(path), let realRoot = resolve(root) else { return false }
+        return !isInArchive(real, root: realRoot)
+    }
+
+    /// A date the app could have written: 2000-01-01 … now. Anything else
+    /// (the 1970 loader default, a clock set wrong, a poisoned row) is not
+    /// evidence of when something happened — or that it happened.
+    static func real(_ date: Date?, now: Date) -> Date? {
+        guard let date, date <= now, date.timeIntervalSince1970 >= 946_684_800 else { return nil }
+        return date
+    }
+
     // MARK: - Catalogued
 
     /// The earliest date the catalog holds for the footage. The first day
     /// itself was never recorded (`files.catalogued_at` is NULL), so this is
     /// a bound and is said to be one — `isExact` false.
     static func catalogued(_ family: Family, notes: NoteLines, now: Date) -> JourneyCatalogued {
-        var dates = family.members.flatMap(appDates) + notes.stamps
-        // A stamp from before the app existed, or from the future, is not evidence.
-        dates.removeAll { $0 > now || $0.timeIntervalSince1970 < 946_684_800 }
+        let dates = (family.members.flatMap(appDates) + notes.stamps).compactMap { real($0, now: now) }
         return JourneyCatalogued(date: dates.min(), isExact: false)
     }
 
@@ -177,13 +241,16 @@ enum FileJourneyBuilder {
     /// The content analyzers over the family, by Catalog Status's own
     /// per-file rule: an analyzer applies when it applies to any copy, and
     /// has run when any copy carries its stamp (the copies are one footage).
-    static func analysis(_ family: Family, scope: AnalysisScope) -> JourneyAnalysis {
+    static func analysis(_ family: Family, scope: AnalysisScope, catalog: [VideoRecord]? = nil,
+                         now: Date = Date()) -> JourneyAnalysis {
         var applies: [AnalyzeCycler: Bool] = [:]
         var covered: [AnalyzeCycler: Bool] = [:]
         var at: [AnalyzeCycler: Date] = [:]
-        // Bytes one copy proved undecodable are undecodable in every copy —
-        // the batch skips them, so nothing is "in the queue" for them.
-        let unreadable = UnreadableContentIndex(records: family.members)
+        // Bytes ANY copy in the catalog proved undecodable are undecodable in
+        // every copy — the batch skips them, so nothing is "in the queue" for
+        // them. The whole catalog, as Catalog Status builds it (Codex #292 F9):
+        // one pass, at sheet open.
+        let unreadable = UnreadableContentIndex(records: catalog ?? family.members)
         for member in family.members {
             let input = AnalyzeCoverageInput(record: member, unreadable: unreadable)
             let dossier = AnalyzeDossierVerdict(input, scope: scope)
@@ -191,7 +258,7 @@ enum FileJourneyBuilder {
                 if isFor { applies[cycler] = true }
                 guard has else { return }
                 covered[cycler] = true
-                if let when = stamp ?? stampDate(cycler, member), at[cycler].map({ when < $0 }) ?? true {
+                if let when = real(stamp ?? stampDate(cycler, member), now: now), at[cycler].map({ when < $0 }) ?? true {
                     at[cycler] = when
                 }
             }
@@ -229,29 +296,32 @@ enum FileJourneyBuilder {
     }
 
     /// The machine passes that left a dated result worth a line.
-    static func analysisEvents(_ family: Family) -> [JourneyEvent] {
+    static func analysisEvents(_ family: Family, now: Date = Date()) -> [JourneyEvent] {
         var out: [JourneyEvent] = []
-        if let (at, count) = family.first({ r in r.sceneCaptionDate.map { ($0, r.sceneCaptions.count) } }) {
+        // The first family member with a REAL date answers: an impossible one
+        // on the opened row never hides its other copy's (Codex #293 F6).
+        func ok(_ date: Date?) -> Date? { real(date, now: now) }
+        if let (at, count) = family.first({ r in ok(r.sceneCaptionDate).map { ($0, r.sceneCaptions.count) } }) {
             out.append(event(.analysis, at: at, count == 0
                 ? "The machine looked for scenes to describe and found none."
                 : "The machine described \(count) scene\(count == 1 ? "" : "s")."))
         }
-        if let (at, text) = family.first({ r in r.audioTranscriptDate.map { ($0, r.audioTranscript ?? "") } }) {
+        if let (at, text) = family.first({ r in ok(r.audioTranscriptDate).map { ($0, r.audioTranscript ?? "") } }) {
             out.append(event(.analysis, at: at, text.isEmpty
                 ? "The machine listened for speech and heard none."
                 : "The machine transcribed the speech."))
         }
         if let (at, status, note) = family.first({ r in
-            r.audioVerifyStatus.isEmpty ? nil : r.audioVerifyDate.map { ($0, r.audioVerifyStatus, r.audioVerifyNote) }
+            r.audioVerifyStatus.isEmpty ? nil : ok(r.audioVerifyDate).map { ($0, r.audioVerifyStatus, r.audioVerifyNote) }
         }) {
             out.append(event(.analysis, at: at, verifyWords("Sound check", status: status, note: note)))
         }
         if let (at, status, note) = family.first({ r in
-            r.videoVerifyStatus.isEmpty ? nil : r.videoVerifyDate.map { ($0, r.videoVerifyStatus, r.videoVerifyNote) }
+            r.videoVerifyStatus.isEmpty ? nil : ok(r.videoVerifyDate).map { ($0, r.videoVerifyStatus, r.videoVerifyNote) }
         }) {
             out.append(event(.analysis, at: at, verifyWords("Picture check", status: status, note: note)))
         }
-        if let card = family.first(\.mediaReportCard) {
+        if let card = family.first({ r in r.mediaReportCard.flatMap { ok($0.checkedAt) == nil ? nil : $0 } }) {
             // "Media check", not the retired menu verb (it is "Verify…" since 2026-10-08).
             out.append(event(.analysis, at: card.checkedAt, "Media check (\(card.tier.rawValue)): \(card.headline)"))
         }
@@ -284,7 +354,8 @@ enum FileJourneyBuilder {
             acts.append("same-footage answer")
             dates += decisions.map(\.decidedAt)
         }
-        if let repaired = family.first(\.repairConfirmedDate) {
+        // The date IS the record of this act: one that cannot be real records nothing.
+        if let repaired = family.first({ real($0.repairConfirmedDate, now: extras.now) }) {
             acts.append("repair confirmed")
             dates.append(repaired)
         }
@@ -293,11 +364,12 @@ enum FileJourneyBuilder {
             dates += notes.updates.compactMap(\.at)
         }
         if extras.provenanceConfirmed { acts.append("provenance confirmed") }
-        return JourneyReview(acts: acts, latest: dates.max())
+        return JourneyReview(acts: acts, latest: dates.compactMap { real($0, now: extras.now) }.max())
     }
 
     /// The dated ones, as timeline lines.
-    static func reviewEvents(_ family: Family, notes: NoteLines, allRecords: [VideoRecord]) -> [JourneyEvent] {
+    static func reviewEvents(_ family: Family, notes: NoteLines, allRecords: [VideoRecord],
+                             now: Date = Date()) -> [JourneyEvent] {
         var out: [JourneyEvent] = []
         // People confirmed on one day read as one line.
         var byDay: [Date: (at: Date, names: [String])] = [:]
@@ -313,13 +385,16 @@ enum FileJourneyBuilder {
             out.append(event(.review, at: entry.at, "You confirmed \(names) \(entry.names.count == 1 ? "is" : "are") in this."))
         }
         var seenPairs = Set<UUID>()
-        for decision in family.members.flatMap(\.footageDecisions) where seenPairs.insert(decision.otherID).inserted {
+        // The date is checked BEFORE the pair is used up, so an impossible
+        // answer never hides a real one about the same file (Codex #294 F2).
+        for decision in family.members.flatMap(\.footageDecisions)
+        where real(decision.decidedAt, now: now) != nil && seenPairs.insert(decision.otherID).inserted {
             let other = allRecords.first { $0.id == decision.otherID }?.filename ?? "another file"
             out.append(event(.review, at: decision.decidedAt, decision.verdict == .same
                 ? "You said this is the same footage as \(other)."
                 : "You said this is not the same footage as \(other)."))
         }
-        if let repaired = family.first(\.repairConfirmedDate) {
+        if let repaired = family.first({ real($0.repairConfirmedDate, now: now) }) {
             out.append(event(.review, at: repaired, "You confirmed the repaired copy."))
         }
         for update in notes.updates {
@@ -342,14 +417,25 @@ enum FileJourneyBuilder {
 
     /// Ticked only for a copy that is ON DISK (the stat's answer) and known
     /// by a whole-file SHA-256. Otherwise the reason is the to-do.
-    static func archiveStanding(_ copy: VideoRecord?, presence: JourneyPresence?, place: String) -> JourneyArchiveStanding {
-        guard let copy else { return .notArchived }
+    static func archiveStanding(_ copy: VideoRecord?, presence: JourneyPresence?, place: String,
+                                now: Date = Date()) -> JourneyArchiveStanding {
+        guard let copy, !copy.isPurged else { return .notArchived }
         guard let presence, presence.isPresent else { return .unproven(todo: copyNotOnDiskTodo(presence)) }
+        // The bytes themselves, at that path: a link — or a folder link onto
+        // another disk — means they are somewhere else, and removing THAT file
+        // removes "the archive copy" (Codex #292 F1).
+        guard presence == .regularFile else { return .unproven(todo: linkTodo) }
+        guard !contradictsItself(copy) else { return .unproven(todo: contradictionTodo) }
         guard ArchivePromotionIndex.verifiedDigest(of: copy) != nil else {
             return .unproven(todo: "Run Verify Archive — no whole-file check (SHA-256) is recorded for the archived copy.")
         }
-        return .archived(place: place, at: archiveDay(copy), checkedAt: copy.archiveFixity?.verifiedAt)
+        return .archived(place: place, at: real(archiveDay(copy), now: now),
+                         checkedAt: archiveProof(copy) == .readBack ? real(copy.archiveFixity?.verifiedAt, now: now) : nil)
     }
+
+    static let contradictionTodo = "The archived copy's two whole-file hashes disagree — run Verify Archive before trusting it."
+
+    static let linkTodo = "The archived copy's path is a link, not the file itself — the archive does not hold these bytes. Run Verify Archive."
 
     /// The day Promote archived it: its own stamp, else the copy's promote
     /// note. NEVER the fixity's date — that moves with every Verify, and a
@@ -362,13 +448,16 @@ enum FileJourneyBuilder {
     /// How the copy's bytes are known. A copy Promote made was READ BACK and
     /// compared (its archive fixity); any other file in the archive has at
     /// most a fingerprint of itself — nothing was compared to anything.
-    enum ArchiveProof { case readBack, fingerprintOnly, none }
+    enum ArchiveProof { case readBack, fingerprintOnly, contradictory, none }
 
     static func archiveProof(_ copy: VideoRecord) -> ArchiveProof {
+        if contradictsItself(copy) { return .contradictory }
         guard ArchivePromotionIndex.verifiedDigest(of: copy) != nil else { return .none }
         let promoted = copy.derivationKind == ArchivePromotion.derivationKind
-        let hasArchiveFixity = copy.archiveFixity.map { $0.algorithm == ContentFixity.sha256 } ?? false
-        return promoted && hasArchiveFixity ? .readBack : .fingerprintOnly
+        // The ARCHIVE fixity itself must be a whole-file SHA-256: a malformed
+        // one beside a valid fingerprint is a fingerprint (Codex #292 F4).
+        let readBack = copy.archiveFixity.map { $0.algorithm == ContentFixity.sha256 && ArchiveDigestIndex.isSHA256($0.digest) } ?? false
+        return promoted && readBack ? .readBack : .fingerprintOnly
     }
 
     /// One rule for "inside the archive": the model's own.
@@ -400,31 +489,40 @@ enum FileJourneyBuilder {
 
     /// "Archived to FamilyArchive as …" from the COPY RECORD (its date, its
     /// digest), never the note string; then a later read-back, if there was one.
-    static func archiveEvents(_ family: Family, place: String, extras: Extras) -> [JourneyEvent] {
+    static func archiveEvents(_ family: Family, place: String, presence: JourneyPresence?,
+                              extras: Extras) -> [JourneyEvent] {
         guard let copy = family.copy else { return [] }
-        let at = archiveDay(copy)
+        let at = real(archiveDay(copy), now: extras.now)
         let promoted = copy.derivationKind == ArchivePromotion.derivationKind
-        // "Archived to" is Promote's act; a file that is simply in the
-        // archive's folder is said to be there, nothing more.
+        // "Archived to" is Promote's act, and stays true as history. A file
+        // that is simply in the archive's folder is said to be THERE — a
+        // statement about now, made only when the disk agrees (Codex #292 F7).
+        if !promoted, presence != .regularFile { return [] }
         var sentence = "\(promoted ? "Archived to" : "In") \(place) as \(archiveRelativePath(copy, root: extras.archiveRootPath))."
-        // Where Promote copied it from: the path the COPY recorded, else the
-        // row the promote link names — never a look-alike row's present path.
+        // Where Promote copied it from: what Promote itself RECORDED — on the
+        // copy, else in the copy's promote note. Never a row's present path,
+        // which Migrate moves (Codex #292 F8); with no record, nothing is said.
         // Left out when the first line of the timeline already names it.
-        let linked = family.members.first { $0.id == copy.derivedFrom && $0.id != copy.id }
         let foundAt = family.rec.originalFullPath ?? family.rec.fullPath
-        if promoted, let from = copy.originalFullPath ?? linked?.fullPath, from != copy.fullPath, from != foundAt {
+        // The note is Promote's own line; `originalFullPath` can be Migrate's
+        // (it fills a missing one with the moving row's former path), so the
+        // note outranks it and a path inside the archive is never a source
+        // (Codex #293 F4).
+        if promoted, let from = promoteSource(of: copy), from != copy.fullPath, from != foundAt,
+           !isInArchive(from, root: extras.archiveRootPath) {
             sentence += " Copied from \(from)."
         }
         switch archiveProof(copy) {
         case .readBack:        sentence += " The copy was read back and matched, bit for bit."
         case .fingerprintOnly: sentence += " A whole-file fingerprint is recorded for it."
+        case .contradictory:   sentence += " Its two whole-file hashes now disagree."
         case .none:            sentence += " No whole-file check is recorded for the copy."
         }
         if let readiness = readinessWords(inNotes: copy.notes) {
             sentence += " Checked before archiving: \(readiness)."
         }
         var out = [event(.archived, at: at, sentence)]
-        if archiveProof(copy) == .readBack, let checked = copy.archiveFixity?.verifiedAt {
+        if archiveProof(copy) == .readBack, let checked = real(copy.archiveFixity?.verifiedAt, now: extras.now) {
             if let at, checked.timeIntervalSince(at) > 86_400 {
                 out.append(event(.archiveChecked, at: checked, "The archived copy was read in full again and still matches."))
             } else if at == nil {
@@ -441,6 +539,46 @@ enum FileJourneyBuilder {
         }
         let relative = copy.fullPath.dropFirst(root.count).drop { $0 == "/" }
         return relative.isEmpty ? copy.filename : String(relative)
+    }
+
+    /// The path in the copy's own promote note ("Promote <ISO>: promoted from
+    /// <path> · sha256 …", or "… <path> (source record … no longer in the
+    /// catalog) · …") — what Promote read, as Promote wrote it down.
+    /// The path Promote read, as far as the copy's own record can say:
+    ///   1. `originalFullPath` when the copy's promote note names that very
+    ///      path — two records of Promote's agree;
+    ///   2. else the path read out of the promote note, when the note reads
+    ///      only one way;
+    ///   3. else `originalFullPath` when there is no promote note to consult.
+    /// A note that names some OTHER path than the field (Migrate rewrote the
+    /// field), or that can be read two ways, settles nothing by itself.
+    static func promoteSource(of copy: VideoRecord) -> String? {
+        let lines = copy.notes.split(whereSeparator: \.isNewline).filter { $0.hasPrefix("Promote ") && $0.contains(": promoted from ") }
+        if let field = copy.originalFullPath, lines.contains(where: { $0.contains(": promoted from \(field) ") || $0.hasSuffix(": promoted from \(field)") }) {
+            return field
+        }
+        if let parsed = promotedFrom(inNotes: copy.notes) { return parsed }
+        return lines.isEmpty ? copy.originalFullPath : nil
+    }
+
+    static func promotedFrom(inNotes notes: String) -> String? {
+        // The path is everything up to the note's exact tails — the orphan
+        // clause with its UUID, then " · sha256 <64 hex>" — so a path that
+        // itself contains " · " or " (source record " is read whole (Codex #293 F5).
+        // (A plain string, not a regex literal: the source sensors read this file.)
+        let pattern = "^Promote \\S+: promoted from (.+?)(?: \\(source record [0-9A-Fa-f-]{36} no longer in the catalog\\))?"
+            + "(?: · sha256 [0-9A-Fa-f]{64}.*)?$"
+        guard let shape = try? Regex(pattern), let tail = try? Regex(" · sha256 [0-9A-Fa-f]{64}") else { return nil }
+        for line in notes.split(whereSeparator: \.isNewline) {
+            // More than one hash tail on the line (a folder NAMED like one): the
+            // line reads two ways, and no path is taken from it (Codex #294 F1).
+            guard String(line).matches(of: tail).count <= 1 else { continue }
+            guard let match = String(line).wholeMatch(of: shape), let found = match.output[1].substring else { continue }
+            let path = found.trimmingCharacters(in: .whitespaces)
+            // A line whose hash is not a hash did not end where it should: no path is read from it.
+            if path.hasPrefix("/"), !path.contains(" · sha256 ") { return path }
+        }
+        return nil
     }
 
     /// "audio verified, codec archival-safe" out of the copy's promote note
@@ -492,11 +630,16 @@ enum FileJourneyBuilder {
         /// Every date a history line carries (evidence for "catalogued by").
         var stamps: [Date] = []
 
-        init(rec: VideoRecord, copy: VideoRecord?) {
+        init(rec: VideoRecord, copy: VideoRecord?, now: Date = Date()) {
             for raw in rec.notes.split(whereSeparator: \.isNewline) {
                 let line = String(raw)
-                if let update = Self.update(line) {
-                    updates.append(update)
+                if line.hasPrefix(Self.updatePrefix) {
+                    // An Update line with a date that cannot be real is kept as text, not as an act.
+                    if let update = Self.update(line), FileJourneyBuilder.real(update.at, now: now) != nil {
+                        updates.append(update)
+                    } else {
+                        technical.append(line)
+                    }
                     continue
                 }
                 guard let parsed = VideoScanModel.parseRelocateEventsFromNotes(line).first else { continue }
@@ -512,25 +655,32 @@ enum FileJourneyBuilder {
                     break
                 default:
                     let at = parsed.timestamp ?? (parsed.kind == .combine ? rec.dateCreatedRaw : nil)
-                    events.append(FileJourneyBuilder.event(parsed.kind, at: at, Self.sentenceCase(parsed.sentence),
-                                                           icon: parsed.icon))
+                    // A promote note is a log line ("… · sha256 … · readiness: …"):
+                    // only its first clause is a sentence.
+                    let words = parsed.kind == .promote
+                        ? String(parsed.sentence.range(of: " · ").map { parsed.sentence[..<$0.lowerBound] } ?? parsed.sentence[...])
+                        : parsed.sentence
+                    events.append(FileJourneyBuilder.event(parsed.kind, at: at, Self.sentenceCase(words), icon: parsed.icon))
                 }
             }
             // An Update is written on the archive copy; a source row's sheet
             // still says the person made it.
             if let copy, copy.id != rec.id {
                 for raw in copy.notes.split(whereSeparator: \.isNewline) {
-                    if let update = Self.update(String(raw)) { updates.append(update) }
+                    if let update = Self.update(String(raw)), FileJourneyBuilder.real(update.at, now: now) != nil {
+                        updates.append(update)
+                    }
                 }
             }
             stamps += updates.compactMap(\.at)
         }
 
         /// "promote: Update <ISO>: <reason> · <from> → <to> · sha256 verified…"
+        static let updatePrefix = "promote: Update "
+
         static func update(_ line: String) -> Update? {
-            let prefix = "promote: Update "
-            guard line.hasPrefix(prefix) else { return nil }
-            let rest = line.dropFirst(prefix.count)
+            guard line.hasPrefix(updatePrefix) else { return nil }
+            let rest = line.dropFirst(updatePrefix.count)
             guard let separator = rest.range(of: ": ") else { return nil }
             let body = rest[separator.upperBound...]
             let reason = (body.range(of: " · ").map { body[..<$0.lowerBound] } ?? body).trimmingCharacters(in: .whitespaces)

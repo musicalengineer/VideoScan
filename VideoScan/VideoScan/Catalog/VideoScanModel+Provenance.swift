@@ -599,9 +599,10 @@ extension VideoScanModel {
         )
     }
 
-    /// MainActor wrapper around `buildFileJourney`.
+    /// MainActor wrapper around `buildFileJourney` — the one door both
+    /// menus use, and the one place the sheet's opening is logged.
     func makeFileJourney(for rec: VideoRecord) -> FileJourney {
-        Self.buildFileJourney(
+        let journey = Self.buildFileJourney(
             for: rec,
             allRecords: records,
             resolveVolumeSafety: makeVolumeSafetyResolver(),
@@ -613,6 +614,8 @@ extension VideoScanModel {
             machineEra: machineEras.journey(for: rec),
             extras: journeyExtras(for: rec)
         )
+        appLog.write(journey.logLine)
+        return journey
     }
 
     /// What the stores know that the records do not carry: the Analysis

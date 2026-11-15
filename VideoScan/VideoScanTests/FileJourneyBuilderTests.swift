@@ -438,6 +438,37 @@ struct FileJourneyBuilderRobustnessTests {
         #expect(journey.events.last?.sentence == "Now at \(copy.fullPath)", "nothing is said about a row that is not there")
     }
 
+    @Test("LOGGING: opening the sheet logs one line — the ladder as shown, and every failure it shows, in its own words")
+    func theLogLine() throws {
+        let dir = try LadderFixture.scratch("logline")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (source, copy, root) = try LadderFixture.pair(in: dir)
+        let extras = LadderFixture.extras(root: root)
+
+        let healthy = LadderFixture.journey(copy, [source, copy], extras: extras)
+        #expect(healthy.logLine == "file journey: \(copy.filename) — Catalogued ✓ · Analyzed waiting · Reviewed open · Archived ✓")
+        #expect(!healthy.logLine.contains("|"), "nothing is wrong: nothing more is said")
+
+        // The archive copy's file is gone: the ladder's reason and the last line's words are both logged.
+        try FileManager.default.removeItem(atPath: copy.fullPath)
+        let broken = LadderFixture.journey(copy, [source, copy], extras: extras)
+        #expect(broken.logLine.hasPrefix("file journey: \(copy.filename) — Catalogued ✓ · Analyzed waiting · Reviewed open · Archived open"))
+        #expect(broken.logLine.contains(" | Archived: Run Verify Archive — the archived copy is not at its path."))
+        #expect(broken.logLine.contains(" | now: Not at \(copy.fullPath)"))
+        // The sheet shows these same words.
+        #expect(try LadderFixture.step(.archived, broken).todo == "Run Verify Archive — the archived copy is not at its path.")
+        #expect(broken.events.last?.sentence.hasPrefix("Not at \(copy.fullPath)") == true)
+
+        // A plain "not archived yet" is not a failure, and is not logged as one.
+        let plain = LadderFixture.journey(source, [source])
+        #expect(!plain.logLine.contains("| Archived:"), Comment(rawValue: plain.logLine))
+
+        // Sensor: the model's one door writes that line, once.
+        let wrapper = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/Catalog/VideoScanModel+Provenance.swift"), encoding: .utf8)
+        #expect(wrapper.components(separatedBy: "appLog.write(journey.logLine)").count == 2, "logged exactly once, at the one door")
+    }
+
     @Test("SENSOR: the sheet shows no hash line and no 'Signed'; the builder reads no store, ledger or catalog")
     func sourceSensors() throws {
         let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
