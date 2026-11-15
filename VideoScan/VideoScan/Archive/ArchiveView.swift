@@ -24,7 +24,6 @@ struct ArchiveView: View {
     @State var selectedIDs: Set<UUID> = []
     @State var searchText: String = ""
     @State var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
-    @State var archiveDetailRecord: VideoRecord?
     /// "Show this file's journey" from the Archive tab (Rick 2026-08-19)
     /// — same FileJourneySheet the catalog uses.
     @State var fileJourneyPayload: FileJourney?
@@ -133,13 +132,6 @@ struct ArchiveView: View {
         }
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
-        }
-        .sheet(item: $archiveDetailRecord) { rec in
-            // The file facts follow the same door as play / reveal
-            // (one stat, at sheet open — never in body).
-            ArchiveDetailSheet(record: rec, allRecords: model.records,
-                               playable: model.archivePlayableRecord(for: rec),
-                               rowPresence: JourneyPresence.probe(rec.fullPath))
         }
         .sheet(item: $updatePreview) { preview in
             ArchiveUpdateSheet(preview: preview)

@@ -411,8 +411,10 @@ extension VideoScanModel {
 
     // MARK: - File Journey (View 2)
 
-    /// Build the payload for "Following <filename>". Pure — same MainActor
-    /// wrapper pattern as `buildVolumeProvenance`.
+    /// Build the File Journey sheet's payload. Pure — same MainActor wrapper
+    /// pattern as `buildVolumeProvenance`. The work is FileJourneyBuilder's
+    /// (Rick 2026-11-14: the ladder and the timeline answer for the footage —
+    /// this row, its archived copy and that copy's source — not for the row).
     @MainActor static func buildFileJourney(
         for rec: VideoRecord,
         allRecords: [VideoRecord],
@@ -420,107 +422,17 @@ extension VideoScanModel {
         archivedCopy: VideoRecord? = nil,
         provenance: JourneyProvenance? = nil,
         machineEra: JourneyMachineEra? = nil,
+        extras: FileJourneyBuilder.Extras = FileJourneyBuilder.Extras(),
         probe: (String) -> JourneyPresence = { JourneyPresence.probe($0) }
     ) -> FileJourney {
-        // The CONTENT this row stands for may live on in its archived copy
-        // (Rick 2026-10-16): the model passes `archivedCopy(of:)`; the pure
-        // seam reads the promote link itself. Never the row itself.
-        let copy = (archivedCopy ?? promotedCopy(of: rec, in: allRecords))
-            .flatMap { $0.id == rec.id ? nil : $0 }
-
-        // 1. Origin event — every record has one. Its date is the FILE's
-        //    own clock (mtime, else ctime) and the sentence says so: that
-        //    date is not a scan (Rick 2026-10-16 — "Scanned on M4drive"
-        //    stamped Feb 2024 on a file catalogued Aug 2026). The catalog's
-        //    own date is its own event, when the record carries one.
-        let origin = originEvent(for: rec)
-        var events: [JourneyEvent] = []
-        if let catalogued = cataloguedEvent(for: rec) { events.append(catalogued) }
-        // What the content is (estimated or confirmed), dated at its capture.
-        // Passed in: this builder reads no catalog.
-        if let provenance {
-            events.append(JourneyEvent(timestamp: provenance.captured, displayStamp: friendlyStamp(provenance.captured),
-                                       icon: JourneyEventKind.provenance.defaultIcon, kind: .provenance,
-                                       sentence: provenance.sentence))
-        }
-
-        // The machine's guess of the era, dated when it was made — a guess
-        // in its own words, never a date (Rick 2026-11-13). Passed in.
-        if let machineEra {
-            events.append(JourneyEvent(timestamp: machineEra.observed, displayStamp: friendlyStamp(machineEra.observed),
-                                       icon: JourneyEventKind.machineEstimate.defaultIcon, kind: .machineEstimate,
-                                       sentence: machineEra.sentence))
-        }
-
-        // 2. Each parsed note event becomes a timeline event. Combines
-        //    use the record's `dateCreatedRaw` as their best-known
-        //    timestamp (combine writes a fresh record with that date).
-        let parsed = parseRelocateEventsFromNotes(rec.notes)
-        for evt in parsed {
-            let ts = evt.timestamp ?? (evt.kind == .combine ? rec.dateCreatedRaw : nil)
-            events.append(JourneyEvent(
-                timestamp: ts,
-                displayStamp: friendlyStamp(ts),
-                icon: evt.icon,
-                kind: evt.kind,
-                sentence: evt.sentence
-            ))
-        }
-
-        // Sort events: origin first (always), then by timestamp
-        // ascending; nil-timestamp events get pinned to the end so the
-        // current state is still last.
-        let rest = events.sorted { lhs, rhs in
-            switch (lhs.timestamp, rhs.timestamp) {
-            case let (l?, r?): return l < r
-            case (_?, nil):    return true
-            case (nil, _?):    return false
-            case (nil, nil):   return false
-            }
-        }
-        var ordered: [JourneyEvent] = [origin] + Array(rest)
-
-        // 3. Current state event — always last, and a VERIFIED presence
-        //    (JourneyPresence): the path is stat'ed, a link is called a
-        //    link, a gone file is "Not at …" with the archived copy's path.
-        let isMarkedDeleted = rec.archiveStage == .manuallyDeleted
-        // The archived copy is probed ONCE; its answer feeds both the last
-        // event's words and the ladder's "Archived locally" — a copy record
-        // alone, however it is stamped, proves nothing (codex 2026-10-16).
-        let archived = copy.map { JourneyPresence.ArchivedCopy(path: $0.fullPath, presence: probe($0.fullPath)) }
-        ordered.append(currentStateEvent(for: rec, archivedCopy: archived,
-                                         isMarkedDeleted: isMarkedDeleted, probe: probe))
-
-        // 4. Other known copies — every duplicate-group sibling AND every
-        //    Bucket E witness path, badged through the safety resolver.
-        let copies = knownCopies(of: rec, allRecords: allRecords, resolveVolumeSafety: resolveVolumeSafety)
-
-        return FileJourney(
-            recordID: rec.id,
-            filename: rec.filename,
-            hashStatusLine: hashStatusLine(for: rec),
-            isMarkedDeleted: isMarkedDeleted,
-            events: ordered,
-            otherKnownCopies: copies,
-            preservation: PreservationChecklist.steps(for: rec, archivedCopy: copy,
-                                                      archivedCopyPresence: archived?.presence)
-        )
-    }
-
-    /// Hash status line — prefer "verified" when we know the partial
-    /// MD5 was checked recently (we can't tell from the catalog
-    /// today, so just label it "Hash on file"). The view treats this
-    /// as a passthrough string.
-    @MainActor private static func hashStatusLine(for rec: VideoRecord) -> String {
-        if rec.partialMD5.isEmpty {
-            return "No hash recorded — re-scan to capture one."
-        }
-        return "partialMD5: \(rec.partialMD5.prefix(8))…"
+        FileJourneyBuilder.build(for: rec, allRecords: allRecords, resolveVolumeSafety: resolveVolumeSafety,
+                                 archivedCopy: archivedCopy, provenance: provenance, machineEra: machineEra,
+                                 extras: extras, probe: probe)
     }
 
     /// Every duplicate-group sibling and every Bucket E witness path,
     /// deduplicated by path, safe copies first then alphabetical.
-    @MainActor private static func knownCopies(of rec: VideoRecord, allRecords: [VideoRecord],
+    @MainActor static func knownCopies(of rec: VideoRecord, allRecords: [VideoRecord],
                                                resolveVolumeSafety: VolumeSafetyResolver) -> [KnownCopy] {
         var seenPaths: Set<String> = [rec.fullPath]
         var paths: [String] = []
@@ -555,79 +467,6 @@ extension VideoScanModel {
             if parts.count >= 2 { return String(parts[1]) }
         }
         return "/"
-    }
-
-    /// Date → friendly display string. Returns "" on nil so the view
-    /// can render a dash. ISO-like form keeps things sortable.
-    nonisolated private static func friendlyStamp(_ d: Date?) -> String {
-        guard let d else { return "" }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .short
-        fmt.timeZone = TimeZone.current
-        return fmt.string(from: d)
-    }
-
-    /// "Feb 22, 2024" — a day, no time: the file's own clock is a day's
-    /// worth of truth, not a minute's.
-    nonisolated private static func friendlyDay(_ d: Date) -> String {
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .none
-        fmt.timeZone = TimeZone.current
-        return fmt.string(from: d)
-    }
-
-    /// The archive copy promoted from `rec`, by the promote link alone (the
-    /// pure seam's reading; the model adds its content-hash fallbacks).
-    @MainActor private static func promotedCopy(of rec: VideoRecord, in all: [VideoRecord]) -> VideoRecord? {
-        all.first {
-            $0.derivedFrom == rec.id && $0.derivationKind == ArchivePromotion.derivationKind && !$0.isPurged
-        }
-    }
-
-    /// The first event: the file's own date, said to be exactly that.
-    @MainActor private static func originEvent(for rec: VideoRecord) -> JourneyEvent {
-        let vol = rec.originVolume ?? rec.volumeName
-        let path = rec.originalFullPath ?? rec.fullPath
-        let date = rec.dateModifiedRaw ?? rec.dateCreatedRaw
-        let whereWords = vol.isEmpty ? "at \(path)" : "on \(vol) at \(path)"
-        let sentence = date.map { "File dated \(friendlyDay($0)) (from the file's own clock) — first seen \(whereWords)" }
-            ?? "First seen \(whereWords) — the file carries no date of its own"
-        return JourneyEvent(timestamp: date, displayStamp: friendlyStamp(date),
-                            icon: JourneyEventKind.origin.defaultIcon, kind: .origin, sentence: sentence)
-    }
-
-    /// The catalog's own date — its own event, when the scanner recorded one.
-    @MainActor private static func cataloguedEvent(for rec: VideoRecord) -> JourneyEvent? {
-        guard let at = rec.scanContext.scannedAt else { return nil }
-        let host = rec.scanContext.scanHost
-        let sentence = host.isEmpty ? "Catalogued by VideoScan" : "Catalogued by VideoScan on \(host)"
-        return JourneyEvent(timestamp: at, displayStamp: friendlyStamp(at),
-                            icon: "tray.and.arrow.down", kind: .origin, sentence: sentence)
-    }
-
-    /// The last event: marked deleted (as before), else what the disk says
-    /// is at the path right now — and where the archived copy is.
-    @MainActor private static func currentStateEvent(for rec: VideoRecord, archivedCopy: JourneyPresence.ArchivedCopy?,
-                                                     isMarkedDeleted: Bool,
-                                                     probe: (String) -> JourneyPresence) -> JourneyEvent {
-        let now = Date()
-        if isMarkedDeleted {
-            let witnessCount = parseWitnessesFromNote(rec.notes).count
-            let sentence = witnessCount > 0
-                ? "Marked deleted — \(witnessCount) backup copy reference(s) on file."
-                : "Marked deleted from the catalog."
-            return JourneyEvent(timestamp: now, displayStamp: friendlyStamp(now),
-                                icon: JourneyEventKind.retire.defaultIcon, kind: .currentState, sentence: sentence)
-        }
-        let presence = probe(rec.fullPath)
-        // Unknown is drawn as a question, never as "gone" (codex 2026-10-16).
-        let kind: JourneyEventKind = presence.isPresent ? .currentState
-            : presence.isUnknown ? .presenceUnknown : .notAtPath
-        let sentence = JourneyPresence.currentSentence(path: rec.fullPath, presence: presence, archivedCopy: archivedCopy)
-        return JourneyEvent(timestamp: now, displayStamp: friendlyStamp(now),
-                            icon: kind.defaultIcon, kind: kind, sentence: sentence)
     }
 
     // MARK: - Migration Overview (View 3)
@@ -771,8 +610,22 @@ extension VideoScanModel {
             // or names "the archived copy is at …".
             archivedCopy: provenArchivedCopy(of: rec),
             provenance: provenanceEstimates.journey(for: rec, roles: provenanceRoles),
-            machineEra: machineEras.journey(for: rec)
+            machineEra: machineEras.journey(for: rec),
+            extras: journeyExtras(for: rec)
         )
+    }
+
+    /// What the stores know that the records do not carry: the Analysis
+    /// Scope, the archive's root and name, and whether the person confirmed
+    /// this footage's provenance (an O(1) lookup by digest).
+    func journeyExtras(for rec: VideoRecord) -> FileJourneyBuilder.Extras {
+        let digest = CatalogCommit.digest(of: rec)
+        var extras = FileJourneyBuilder.Extras()
+        extras.analysisScope = analyzeCoverageScope
+        extras.archiveRootPath = masterArchiveRootPath
+        extras.archiveName = masterArchive.map { VolumeReachability.displayLabel(forPath: $0.targetPath) }
+        extras.provenanceConfirmed = provenanceEstimates.shown(of: digest, roles: provenanceRoles)?.isConfirmed ?? false
+        return extras
     }
 
     /// MainActor wrapper around `buildMigrationOverview`.

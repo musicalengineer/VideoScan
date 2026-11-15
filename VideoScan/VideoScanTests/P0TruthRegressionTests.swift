@@ -72,17 +72,20 @@ struct P0TruthRegressionTests {
 
         let ladder = Self.journey(source, in: catalog).preservation
         let ticked = ladder.filter(\.done).map(\.title)
-        let next = ladder.first { !$0.done }
 
-        #expect(ticked == ["Catalogued", "Signed", "Archived locally"], "the copy's fixity signs the content: \(ladder.map { "\($0.title)=\($0.done)" })")
-        #expect(next?.title == "Archived offsite", "Next: follows from the ladder — only the offsite copy is open")
+        // The ladder since 2026-11-14: Catalogued · Analyzed · Reviewed · Archived
+        // ("Signed" is gone; the SHA-256 is what Archived is proven by).
+        #expect(ticked.contains("Catalogued") && ticked.contains("Archived"),
+                "the copy's fixity, on disk, archives the content: \(ladder.map { "\($0.title)=\($0.done)" })")
         #if !P0_RED_JOURNEY && !P0_RED_AUDIT && !P0_RED_COMPARE
-        let steps = PreservationChecklist.steps(for: source, archivedCopy: copy,
-                                                archivedCopyPresence: JourneyPresence.probe(copy.fullPath))
-        #expect(steps.map(\.done) == [true, true, true, false])
-        let action = PreservationChecklist.nextAction(for: source, archivedCopy: copy,
-                                                      archivedCopyPresence: JourneyPresence.probe(copy.fullPath))
-        #expect(action?.contains("out of the building") == true, "Next: \(action ?? "nil")")
+        #expect(ladder.map(\.title) == ["Catalogued", "Analyzed", "Reviewed", "Archived"], "no Offsite step until Rick answers")
+        let standing = FileJourneyBuilder.archiveStanding(copy, presence: JourneyPresence.probe(copy.fullPath), place: "the archive")
+        guard case .archived = standing else {
+            Issue.record("a copy on disk with a whole-file SHA-256 is archived: \(standing)")
+            return
+        }
+        let gone = FileJourneyBuilder.archiveStanding(copy, presence: .missing, place: "the archive")
+        #expect(gone == .unproven(todo: "Run Verify Archive — the archived copy is not at its path."))
         #else
         _ = copy
         #endif
@@ -324,9 +327,9 @@ struct P0TruthRegressionTests {
         // Journey + ladder (the model's own wrapper, as the sheet builds it).
         let journey = model.makeFileJourney(for: source)
         let ladder = journey.preservation.map { "\($0.title)=\($0.done)" }
-        let local = try #require(journey.preservation.first { $0.kind == .archivedLocally })
+        let local = try #require(journey.preservation.first { $0.kind == .archived })
         let last = try #require(journey.events.last)
-        #expect(!local.done, "Archived locally from a sampled match: \(ladder)")
+        #expect(!local.done, "Archived from a sampled match: \(ladder)")
         #expect(!last.sentence.contains(copy.fullPath), "the journey names another file as this one's archived copy: \(last.sentence)")
         #expect(last.sentence.hasPrefix("Now at \(source.fullPath)"), "the source's own file is there: \(last.sentence)")
 
@@ -480,10 +483,12 @@ struct P0TruthRegressionTests {
         }
     }
 
-    @Test("Source sensor (FileJourneySheet.swift, VideoScanModel+Provenance.swift): no path is rendered as presence without a stat")
+    @Test("Source sensor (FileJourneySheet.swift, FileJourneyBuilder.swift, VideoScanModel+Provenance.swift): no path is rendered as presence without a stat")
     func journeyRendersNoPathAsPresenceWithoutAStat() throws {
         let sheet = try Self.code("VideoScan/Catalog/FileJourneySheet.swift")
+        // The builder moved to FileJourneyBuilder.swift (2026-11-14); both files are read.
         let provenance = try Self.code("VideoScan/Catalog/VideoScanModel+Provenance.swift")
+            + Self.code("VideoScan/Catalog/FileJourneyBuilder.swift")
         let unverified = (sheet + provenance).filter(Self.statesPresenceUnverified)
         let scanned = provenance.filter { $0.contains("\"Scanned on") }
 

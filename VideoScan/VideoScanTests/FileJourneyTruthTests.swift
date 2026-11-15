@@ -12,10 +12,11 @@
 // Pins (RED on the old builder, all through the existing pure seam
 // `VideoScanModel.buildFileJourney(for:allRecords:resolveVolumeSafety:)`):
 //   * a source row with a dead link path + an archived copy with fixity →
-//     ladder 3 of 4 (Catalogued, Signed, Archived locally), first event
-//     "File dated…", a separate "Catalogued" event, last event
-//     "Not at … link … the archived copy is at …";
-//   * a plain live row → unchanged: 1 of 4, "Now at <path>", two events.
+//     Catalogued and Archived ticked (the ladder is Catalogued · Analyzed ·
+//     Reviewed · Archived since 2026-11-14), first event "File dated…", a
+//     separate "Catalogued" event, last event "Not at … link … the archived
+//     copy is at …";
+//   * a plain live row → 1 of 4, "Now at <path>", two events.
 
 import Testing
 import Foundation
@@ -85,7 +86,7 @@ private let neutralResolver: VolumeSafetyResolver = { _ in VolumeSafety.unknown 
 @MainActor
 struct FileJourneyTruthTests {
 
-    @Test func deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally() throws {
+    @Test func deadLinkSourceWithArchivedCopyIsArchived() throws {
         let dir = try JourneyFixture.scratch("deadlink")
         defer { try? FileManager.default.removeItem(at: dir) }
         let (source, copy) = try JourneyFixture.deadLinkSourceWithArchivedCopy(in: dir)
@@ -94,10 +95,12 @@ struct FileJourneyTruthTests {
                                                       resolveVolumeSafety: neutralResolver)
 
         let done = journey.preservation.filter(\.done).map(\.kind)
-        #expect(done == [.catalogued, .signed, .archivedLocally],
+        #expect(done == [.catalogued, .archived],
                 "ladder must answer for the CONTENT (its archived copy carries the SHA-256): \(journey.preservation.map { "\($0.kind)=\($0.done)" })")
-        #expect(journey.preservation.first { !$0.done }?.kind == .archivedOffsite,
-                "Next: must follow from the ladder — the only open step is the offsite copy")
+        #expect(journey.preservation.map(\.kind) == [.catalogued, .analyzed, .reviewed, .archived],
+                "no Offsite step until the person has answered")
+        #expect(PreservationChecklist.nextAction(journey.preservation) == PreservationChecklist.reviewTodo,
+                "Next: must follow from the ladder — the person's first open step")
     }
 
     @Test func firstEventIsTheFilesOwnDateNeverAScan() throws {
@@ -114,7 +117,10 @@ struct FileJourneyTruthTests {
         #expect(!first.sentence.hasPrefix("Scanned"), Comment(rawValue: first.sentence))
         let catalogued = journey.events.first { $0.sentence.hasPrefix("Catalogued") }
         #expect(catalogued != nil, "the catalog's own date is its own event: \(journey.events.map(\.sentence))")
-        #expect(catalogued?.timestamp == JourneyFixture.day(2026, 8, 12))
+        let when = try #require(catalogued?.timestamp)
+        #expect(Calendar.current.isDate(when, inSameDayAs: JourneyFixture.day(2026, 8, 12)))
+        #expect(catalogued?.displayStamp.hasPrefix("On or before ") == true,
+                "the first day was never recorded — the date is a bound and says so")
     }
 
     @Test func lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy() throws {
@@ -147,7 +153,7 @@ struct FileJourneyTruthTests {
         let journey = VideoScanModel.buildFileJourney(for: source, allRecords: [source, copy],
                                                       resolveVolumeSafety: neutralResolver)
 
-        let local = try #require(journey.preservation.first { $0.kind == .archivedLocally })
+        let local = try #require(journey.preservation.first { $0.kind == .archived })
         #expect(!local.done, "the copy's file is gone — a recorded digest is not a copy on disk")
         #expect(local.todo.contains("Verify Archive"), Comment(rawValue: local.todo))
         #expect(journey.preservation.filter(\.done).count < 3)
@@ -294,7 +300,7 @@ struct JourneyPresenceTests {
     }
 }
 
-@Suite("File Journey — the ladder answers for the content")
+@Suite("File Journey — Archived is a copy on disk with a whole-file SHA-256")
 @MainActor
 struct PreservationChecklistContentTests {
 
@@ -305,70 +311,60 @@ struct PreservationChecklistContentTests {
         return r
     }
 
-    @Test func archivedCopyFixitySignsAndArchivesTheSource() {
-        let source = rec("/Users/rickb/Movies/X.mov")
-        source.archiveStage = .masterAssigned
+    @Test func archivedCopyFixityOnDiskArchivesTheFootage() {
         let copy = rec("/Volumes/FamilyArchive/A/1990_X.mov")
         copy.archiveFixity = ArchiveFixity(digest: JourneyFixture.sha, verifiedAt: JourneyFixture.day(2026, 8, 12), sizeBytes: 10)
 
-        let steps = PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile)
-        #expect(steps.map(\.done) == [true, true, true, false])
-        #expect(steps[1].date == JourneyFixture.day(2026, 8, 12), "Signed carries the fixity's date")
-        #expect(steps[2].date == JourneyFixture.day(2026, 8, 12))
-        #expect(PreservationChecklist.completion(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile) == 0.75)
-        #expect(PreservationChecklist.nextAction(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile)?
-                    .contains("out of the building") == true)
-        // The same copy, not seen on disk: Signed still answers for the
-        // content; Archived locally does not tick on a record alone.
+        #expect(FileJourneyBuilder.archiveStanding(copy, presence: .regularFile, place: "FamilyArchive")
+                == .archived(place: "FamilyArchive", at: nil, checkedAt: JourneyFixture.day(2026, 8, 12)),
+                "with no archive day on record, the fixity's date is a check, not the day it was archived")
+        // The same copy, not seen on disk: a record alone ticks nothing.
         for presence in [JourneyPresence.missing, .volumeOffline(volume: "FamilyArchive"), .unknown(reason: "Permission denied")] {
-            let unseen = PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: presence)
-            #expect(unseen.map(\.done) == [true, true, false, false], "\(presence)")
-            #expect(!unseen[2].todo.isEmpty)
+            guard case .unproven(let todo) = FileJourneyBuilder.archiveStanding(copy, presence: presence, place: "FamilyArchive") else {
+                Issue.record("\(presence) ticked Archived")
+                continue
+            }
+            #expect(!todo.isEmpty)
         }
-        #expect(PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: .volumeOffline(volume: "FamilyArchive"))[2].todo
-                == "Connect FamilyArchive — the archived copy could not be checked.")
+        #expect(FileJourneyBuilder.archiveStanding(copy, presence: .volumeOffline(volume: "FamilyArchive"), place: "FamilyArchive")
+                == .unproven(todo: "Connect FamilyArchive — the archived copy could not be checked."))
+        #expect(FileJourneyBuilder.archiveStanding(copy, presence: nil, place: "FamilyArchive")
+                == .unproven(todo: "Run Verify Archive — the archived copy has not been checked on disk."))
     }
 
-    @Test func withoutACopyTheLadderIsAsBefore() {
-        let source = rec("/Users/rickb/Movies/X.mov")
-        #expect(PreservationChecklist.steps(for: source).map(\.done) == [true, false, false, false])
-        #expect(PreservationChecklist.nextAction(for: source)?.contains("signature") == true)
+    @Test func withoutACopyNothingIsArchived() {
+        #expect(FileJourneyBuilder.archiveStanding(nil, presence: nil, place: "the archive") == .notArchived)
     }
 
-    /// codex P1 (2026-10-16): a source with its own signature and an
-    /// offsite copy, whose archived copy carries only an MD5 — "Archived
-    /// locally" must stay open (the digest is not the proof Signed
-    /// demands), so the ladder can never read 4 of 4.
-    @Test func md5CopyNeverCompletesArchivedLocally() throws {
-        let source = rec("/Users/rickb/Movies/X.mov")
-        source.contentHash = "v1:" + JourneyFixture.sha
-        // Signed needs a WHOLE-FILE SHA-256 (GH #327, 2026-10-23); the v1:
-        // hash alone would leave Signed open too.
-        source.contentFixity = ContentFixity(digest: JourneyFixture.sha, byteCount: 0,
-                                             stamp: FileIdentityStamp(device: 1, inode: 1, size: 0, mtimeNs: 1))
-        source.backupDestinations = [BackupEntry(name: "Backblaze", kind: .cloud, date: Date())]
+    /// codex P1 (2026-10-16): an archived copy that carries only an MD5 —
+    /// or no fixity at all — proves nothing. The ladder must not tick on a
+    /// promise, whatever else the source row carries.
+    @Test func aCopyWithoutAWholeFileSHA256ProvesNothing() {
         let copy = rec("/Volumes/FamilyArchive/A/1990_X.mov")
+        let noCheck = JourneyArchiveStanding.unproven(
+            todo: "Run Verify Archive — no whole-file check (SHA-256) is recorded for the archived copy.")
+        #expect(FileJourneyBuilder.archiveStanding(copy, presence: .regularFile, place: "FamilyArchive") == noCheck)
         copy.archiveFixity = ArchiveFixity(algorithm: "md5", digest: "d41d8cd98f00b204e9800998ecf8427e", verifiedAt: Date(), sizeBytes: 10)
-
-        let steps = PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile)
-        let local = try #require(steps.first { $0.kind == .archivedLocally })
-        #expect(!local.done, "an MD5 fixity is not a whole-file SHA-256: \(steps.map { "\($0.kind)=\($0.done)" })")
-        #expect(steps.filter(\.done).count == 3, "Catalogued, Signed, Offsite — never 4 of 4")
-        #expect(PreservationChecklist.completion(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile) < 1.0)
-        #expect(PreservationChecklist.nextAction(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile)
-                == "Verify Archive (record a SHA-256 fixity).")
+        #expect(FileJourneyBuilder.archiveStanding(copy, presence: .regularFile, place: "FamilyArchive") == noCheck,
+                "an MD5 fixity is not a whole-file SHA-256")
     }
 
-    /// A copy whose fixity is not a whole-file SHA-256 (or absent) proves
-    /// nothing — the ladder must not tick on a promise.
-    @Test func aCopyWithoutFixityProvesNothing() {
-        let source = rec("/Users/rickb/Movies/X.mov")
-        let copy = rec("/Volumes/FamilyArchive/A/1990_X.mov")
-        #expect(PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile).map(\.done)
-                == [true, false, false, false])
-        copy.archiveFixity = ArchiveFixity(algorithm: "md5", digest: "abcd", verifiedAt: Date(), sizeBytes: 10)
-        let steps = PreservationChecklist.steps(for: source, archivedCopy: copy, archivedCopyPresence: .regularFile)
-        #expect(steps[1].done == false, "an md5 is not a whole-file SHA-256 signature")
-        #expect(steps[2].done == false, "nor is it the proof of a local archive copy")
+    /// The fields that once ticked "Archived locally" / "Archived offsite"
+    /// with no evidence behind them: the legacy stage stamp and a recorded
+    /// BackupEntry (neither has had a writer since 2026-09-22).
+    @Test func legacyStampsTickNothing() throws {
+        let dir = try JourneyFixture.scratch("legacy")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("clip.mov")
+        try Data(repeating: 1, count: 2048).write(to: url)
+        let row = JourneyFixture.record(path: url.path)
+        row.archiveStage = .archived
+        row.backupDestinations = [BackupEntry(name: "Master RAID", kind: .local, date: Date()),
+                                  BackupEntry(name: "Backblaze", kind: .cloud, date: Date())]
+
+        let journey = VideoScanModel.buildFileJourney(for: row, allRecords: [row], resolveVolumeSafety: neutralResolver)
+
+        #expect(journey.preservation.filter(\.done).map(\.kind) == [.catalogued])
+        #expect(!journey.preservation.contains { $0.kind == .offsite }, "a BackupEntry is not the person's answer")
     }
 }

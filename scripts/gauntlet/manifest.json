@@ -7639,13 +7639,10 @@
       "suites": [
         "ArchiveDoorSourceSensors",
         "ArchivePlayableRecordTests",
-        "ArchiveDetailSheetWordsTests",
         "ArchivePlayableRecordIsolationTests"
       ],
       "tests": [
-        "aLostFileShowsTheArchiveWords",
         "aRowWithNoArchivedCopyIsItselfEvenWhenGone",
-        "aSubstitutedCopyIsSaidSoWithBothPathsAndBothVolumes",
         "anArchiveCopyRowResolvesToItself",
         "bothGoneNamesTheArchivePathNeverTheSource",
         "copyGoneSourceOnDiskFallsBackToTheRow",
@@ -7653,9 +7650,7 @@
         "danglingSymlinkSourcePlaysTheRealCopy",
         "everyArchiveViewDoorGoesThroughTheResolver",
         "missingWordsArePureAndNameTheArchive",
-        "rowStateWordsCoverEveryPresence",
-        "sourceGoneCopyOnDiskPlaysTheCopy",
-        "theRowItselfKeepsItsOwnPathAndOneVolume"
+        "sourceGoneCopyOnDiskPlaysTheCopy"
       ]
     },
     {
@@ -17175,19 +17170,19 @@
         "PreservationChecklistContentTests"
       ],
       "tests": [
-        "aCopyWithoutFixityProvesNothing",
+        "aCopyWithoutAWholeFileSHA256ProvesNothing",
         "ancestorLinkOntoAnotherDiskIsNamed",
-        "archivedCopyFixitySignsAndArchivesTheSource",
+        "archivedCopyFixityOnDiskArchivesTheFootage",
         "archivedCopyGoneFromDiskDoesNotCompleteArchivedLocally",
         "archivedCopyPresenceIsSaidInItsOwnWords",
-        "deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally",
+        "deadLinkSourceWithArchivedCopyIsArchived",
         "firstEventIsTheFilesOwnDateNeverAScan",
         "lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy",
-        "md5CopyNeverCompletesArchivedLocally",
+        "legacyStampsTickNothing",
         "permissionDeniedIsUnknownNeverGone",
         "plainLiveRowIsUnchanged",
         "probeTellsARegularFileFromALinkFromNothing",
-        "withoutACopyTheLadderIsAsBefore",
+        "withoutACopyNothingIsArchived",
         "wordsNameTheLinkTheGapAndTheArchivedCopy"
       ]
     },
@@ -26294,14 +26289,16 @@
         "PreservationChecklistTests"
       ],
       "tests": [
-        "aFullyProtectedFileScoresOneHundredPercent",
-        "aSampledSignatureIsNotSigned",
-        "aWholeFileSHA256TicksTheSignedStep",
-        "archivedStageSatisfiesLocalWithoutABackupEntry",
-        "cloudOrOffsiteBothSatisfyTheAwayCopy",
-        "everyIncompleteStepCarriesAnAction",
-        "freshRecordIsCataloguedOnly",
-        "localCopiesAloneNeverReachSafe"
+        "analyzed",
+        "archived",
+        "cataloguedDate",
+        "completeFile",
+        "everyOpenStepCarriesAnAction",
+        "freshFile",
+        "nextActionPrefersThePerson",
+        "offsiteNo",
+        "offsiteYesIsTheirWord",
+        "reviewed"
       ]
     },
     {
@@ -35932,6 +35929,62 @@
         "theShowMenuHasTheToggleAndThePill",
         "theStoreAnswersOnlyForAContentWithAnEra"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyBuilderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileJourneyBuilderLadderTests",
+        "FileJourneyBuilderTruthTests",
+        "FileJourneyBuilderRobustnessTests"
+      ],
+      "tests": [
+        "aFileInsideTheArchiveRoot",
+        "aLaterReadBack",
+        "analyzedAgreesWithCatalogStatus",
+        "bothRowsOfOneFootageAgree",
+        "machineWritesAreNotReview",
+        "noCheckRecordedAndASourceThatIsGone",
+        "offsiteIsTheAttestation",
+        "oneSheetInAHundredThousand",
+        "orphanCopy",
+        "otherCopyWords",
+        "poisonedRecord",
+        "reviewEvidence",
+        "sourceSensors",
+        "theWholeTimeline",
+        "updateProvenanceAndRole"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyLadderRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FileJourneyLadderRegressionTests"
+      ],
+      "tests": [
+        "cataloguedIsNotTheLastScan",
+        "machineNotesAreNotEvents",
+        "theArchiveCopyIsArchived"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyReviewRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileJourneyReviewRedTests"
+      ],
+      "tests": [
+        "aHandPlacedFileWasNeverReadBack",
+        "analyzedAgreesWhenACopyCannotBeDecoded",
+        "copiedFromIsWhatPromoteRead",
+        "crlfNotesStillYieldTheUpdate",
+        "machineTextInUserNotesIsNotReview",
+        "trailingSlashRoot"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -38680,7 +38733,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3685,
+      "expected_floor": 3708,
       "name": "unit",
       "package_expected_floor": 903,
       "package_selectors": [
@@ -39393,7 +39446,11 @@
         "VideoScanTests/ProvenanceEstimateScaleTests",
         "VideoScanTests/ProvenanceEstimateSensorTests",
         "VideoScanTests/ProvenanceEstimateReviewTests",
-        "VideoScanTests/ProvenanceEstimateReviewFixTests"
+        "VideoScanTests/ProvenanceEstimateReviewFixTests",
+        "VideoScanTests/FileJourneyBuilderLadderTests",
+        "VideoScanTests/FileJourneyBuilderTruthTests",
+        "VideoScanTests/FileJourneyBuilderRobustnessTests",
+        "VideoScanTests/FileJourneyReviewRedTests"
       ]
     },
     {
@@ -39791,7 +39848,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 597,
+      "expected_floor": 600,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -39996,7 +40053,8 @@
         "VideoScanTests/CatalogFutureEvidenceReadersTests",
         "VideoScanTests/CatalogSweepClosingTests",
         "VideoScanTests/CatalogSweepWaitLineTests",
-        "VideoScanTests/CatalogSweepFinalTests"
+        "VideoScanTests/CatalogSweepFinalTests",
+        "VideoScanTests/FileJourneyLadderRegressionTests"
       ]
     },
     {

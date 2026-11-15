@@ -90,28 +90,31 @@ struct P0TruthRemainingTests {
 
     // MARK: 2. Signed = a whole-file SHA-256
 
-    @Test("Preservation ladder (PreservationChecklist.contentSignature): a sampled v1: signature is 'Sampled signature — not verified'; only a whole-file SHA-256 is 'Signed'")
+    @Test("Preservation ladder (FileJourneyBuilder.analysis / archiveStanding): a sampled v1: signature is never the whole-file fingerprint, and never archives")
     func sampledSignatureIsNeverSigned() throws {
         let catalog = try P0TruthFixtureCatalog.build("r2_signed")
         defer { catalog.cleanup() }
         let source = try catalog.require(.sampledMatchSource)
         #expect(source.contentHash.hasPrefix("v1:") && source.contentFixity == nil, "fixture: sampled only")
 
-        let signed = PreservationChecklist.steps(for: source)[1]
-        #expect(signed.kind == .signed)
-        #expect(!signed.done, "a sampled signature ticked Signed")
-        #expect(signed.title == "Sampled signature — not verified", Comment(rawValue: signed.title))
-        #expect(signed.todo.contains("Fill In Full Hashes"), Comment(rawValue: signed.todo))
-        let journeyStep = catalog.model.makeFileJourney(for: source).preservation.first { $0.kind == .signed }
-        #expect(journeyStep?.title == "Sampled signature — not verified", "the File Journey sheet's ladder")
+        // The ladder since 2026-11-14 has no "Signed" step. What it stood for
+        // lives on in two places: the whole-file fingerprint is one of the
+        // passes Analyzed waits for, and Archived needs a whole-file SHA-256.
+        func fingerprint(_ r: VideoRecord) throws -> JourneyAnalysisItem {
+            let family = FileJourneyBuilder.Family(rec: r, archivedCopy: nil, allRecords: [r], extras: .init())
+            return try #require(FileJourneyBuilder.analysis(family, scope: AnalysisScope()).items
+                .first { $0.title == "whole-file fingerprint" })
+        }
+        #expect(try !fingerprint(source).covered, "a sampled signature counted as the whole-file fingerprint")
+        let analyzed = try #require(catalog.model.makeFileJourney(for: source).preservation.first { $0.kind == .analyzed })
+        #expect(!analyzed.done && analyzed.todo.contains("whole-file fingerprint"), "the File Journey sheet's ladder: \(analyzed.todo)")
+        #expect(FileJourneyBuilder.archiveStanding(source, presence: .regularFile, place: "the archive")
+                == .unproven(todo: "Run Verify Archive — no whole-file check (SHA-256) is recorded for the archived copy."),
+                "a sampled signature archived a file")
 
-        // Control: the whole-file SHA-256 earns "Signed".
+        // Control: the whole-file SHA-256 is the fingerprint.
         source.contentFixity = try Self.fullFixity(source)
-        let proven = PreservationChecklist.steps(for: source)[1]
-        #expect(proven.done && proven.title == "Signed", "\(proven.title)=\(proven.done)")
-        // No signature at all: "Signed", open, the ordinary todo.
-        let bare = PreservationChecklist.steps(for: VideoRecord())[1]
-        #expect(!bare.done && bare.title == "Signed")
+        #expect(try fingerprint(source).covered)
     }
 
     // MARK: 3. Find Similar Footage — no "copy" from sampled equality
@@ -226,11 +229,13 @@ struct P0TruthRemainingTests {
                 || T.asksSampledArchivedCopy($0) }
             #expect(sampled.isEmpty, "\(site.function) counts a sampled match as archived: \(sampled)")
         }
-        // Item 2 — Signed never reads the sampled contentHash.
-        let signature = try T.body(of: "static func contentSignature(of", in: "VideoScan/Archive/PreservationChecklist.swift")
-        try #require(!signature.isEmpty, "contentSignature moved — update the sensor")
+        // Item 2 — Archived (which took Signed's place, 2026-11-14) is proven
+        // by the whole-file digest and never reads the sampled contentHash.
+        let signature = try T.body(of: "static func archiveStanding(", in: "VideoScan/Catalog/FileJourneyBuilder.swift")
+        try #require(!signature.isEmpty, "archiveStanding moved — update the sensor")
+        #expect(signature.contains { $0.contains("ArchivePromotionIndex.verifiedDigest(of:") }, "Archived must ask for the whole-file digest")
         #expect(!signature.contains { $0.contains("hasContentSignature") || $0.contains("contentHash") },
-                "Signed reads the sampled signature: \(signature)")
+                "Archived reads the sampled signature: \(signature)")
         // Item 3 — the footage "copy" role comes from proven bytes.
         let assemble = try T.body(of: "static func assembleGroup(", in: "VideoScan/FootageGroups/FootageGrouping.swift")
         try #require(!assemble.isEmpty, "assembleGroup moved — update the sensor")
