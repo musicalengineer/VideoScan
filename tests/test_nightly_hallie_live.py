@@ -84,6 +84,9 @@ class LiveReplayTests(unittest.TestCase):
         self.assertEqual(summary["hallie_advisory_pass"], 3)
         self.assertEqual(summary["hallie_strict_yellow"], 1)
         self.assertEqual(summary["hallie_advisory_yellow"], 2)
+        # 2026-11-15: the model is loaded before the lanes; a host that answered was not started.
+        self.assertIsInstance(summary["hallie_replay_model_load_s"], int)
+        self.assertIs(summary["hallie_replay_ollama_started"], False)
         self.assertIn(FLAG + "\n\n\n\n" + "=" * 64 + "\nDONE", result.stderr)
         self.assertEqual(result.stderr.count("DONE"), 1)
         self.assertLess(result.stderr.rindex(ANSWER), result.stderr.index("DONE"))

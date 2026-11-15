@@ -33754,6 +33754,24 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_hallie_replay_alert.py",
+      "stage": "unit",
+      "suites": [
+        "test_hallie_replay_alert.py"
+      ],
+      "tests": [
+        "test_a_nightly_with_no_replay_file_or_no_verdict_is_red",
+        "test_an_ok_replay_is_silent_even_after_a_bad_night",
+        "test_nonsense_never_raises_and_a_long_line_is_cut",
+        "test_progress_lines_before_an_ok_verdict_do_not_hide_it",
+        "test_strict_failures_and_incomplete_runs_are_red",
+        "test_the_command_exits_zero_and_the_banner_calls_it",
+        "test_the_real_line_of_2026_11_15_is_red"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_hallie_replay_reason.py",
       "stage": "unit",
       "suites": [
@@ -38752,6 +38770,10 @@
         {
           "name": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_hallie_replay_alert.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
           "name": "tests/test_hallie_replay_reason.py",

@@ -34,6 +34,8 @@
 #             a manual run against the M5; --host / --model outrank them.
 # Preflight: /api/tags must answer AND list that exact tag, or the row is
 # `failed` in seconds with a one-line reason naming host + tag.
+# A LOCAL host that is down is STARTED first (2026-11-15), and the model is
+# LOADED before the first question; see "THE LOCAL OLLAMA" below.
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
 # This script's own folder: its helpers ship beside it (REPO may be a test stub).
@@ -142,15 +144,94 @@ fi
 # but an hour of the night for a name. A host that does not answer, or a
 # model the host does not have, is `failed` with host + tag in the reason —
 # never a 900 s wait.
+#
+# THE LOCAL OLLAMA (Rick, 2026-11-15: "the testbed for hallie should ensure
+# the default model is loaded"). On the Ultra nothing keeps Ollama up: the app
+# starts it on a Hallie turn and it then lives until something stops it. The
+# nights of 11/05, 11/06 and 11/15 found it down and replayed nothing, and
+# every good night in between rode on a server someone had started days
+# before. So:
+#   1. A LOOPBACK host that does not answer is started here (`ollama serve`,
+#      its own session so it outlives this run, appended to the same
+#      ollama.log the app writes). Bound to loopback only: an unattended
+#      script does not open an unauthenticated port on the LAN (GH #181).
+#      VIDEOSCAN_HALLIE_REPLAY_OLLAMA_BIND=0.0.0.0 is the app's own bind.
+#      A remote host is never started from here. --dry-run starts nothing.
+#      VIDEOSCAN_HALLIE_REPLAY_START_OLLAMA=0 turns it off (the tests).
+#   2. The chosen model is LOADED (an empty /api/generate, the documented
+#      load call) before the lanes run, so the first strict question does not
+#      pay the load out of its own timeout, and a model that is listed but
+#      will not load is `failed` with the server's own words.
+# Both facts ride in the row: hallie_replay_ollama_started, hallie_replay_model_load_s.
 PREFLIGHT_REASON=""
-TAGS=$(curl -s --max-time 15 "$HOST/api/tags" 2>/dev/null \
-    | python3 -c 'import json,sys
+OLLAMA_STARTED=false; OLLAMA_NOTE=""; MODEL_LOAD_S=""
+host_alive() { curl -s -o /dev/null --max-time 5 "$HOST/api/version" 2>/dev/null; }
+tags_of() {
+    curl -s --max-time 15 "$HOST/api/tags" 2>/dev/null \
+        | python3 -c 'import json,sys
 try: print("\n".join(m["name"] for m in json.load(sys.stdin).get("models",[])))
-except Exception: pass' 2>/dev/null)
+except Exception: pass' 2>/dev/null
+}
+is_loopback() {
+    case "$1" in http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*) return 0 ;; esac
+    return 1
+}
+start_local_ollama() {
+    local bin="${VIDEOSCAN_HALLIE_REPLAY_OLLAMA_BIN:-}" c
+    if [ -z "$bin" ]; then
+        for c in /opt/homebrew/bin/ollama /usr/local/bin/ollama; do [ -x "$c" ] && { bin=$c; break; }; done
+    fi
+    if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+        OLLAMA_NOTE="it is down and there is no ollama executable to start (looked in /opt/homebrew/bin, /usr/local/bin)"; return 1
+    fi
+    local port=${HOST##*:}; port=${port%%/*}
+    case "$port" in ''|*[!0-9]*) port=11434 ;; esac
+    local log="${VIDEOSCAN_HALLIE_REPLAY_OLLAMA_LOG:-$HOME/Library/Logs/VideoScan/ollama.log}"
+    mkdir -p "$(dirname "$log")"
+    # Its own session (setsid): the nightly runs this script under a
+    # process-group watchdog, and the server must outlive the run.
+    OLLAMA_HOST="${VIDEOSCAN_HALLIE_REPLAY_OLLAMA_BIND:-127.0.0.1}:$port" nohup python3 -c \
+        'import os,sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' "$bin" serve >> "$log" 2>&1 < /dev/null &
+    local tenths=${VIDEOSCAN_HALLIE_REPLAY_START_WAIT_TENTHS:-300}
+    for _ in $(seq 1 "$tenths"); do
+        if host_alive; then OLLAMA_STARTED=true; echo "hallie replay: $HOST was down — started $bin serve (log: $log)"; return 0; fi
+        sleep 0.1
+    done
+    OLLAMA_NOTE="it was down; started $bin serve and it did not answer within $((tenths / 10)) s (see $log)"; return 1
+}
+# Loads $MODEL on $HOST; prints the seconds it took, or returns 1 with the
+# server's reason on stdout.
+load_model() {
+    local started=$(date +%s) body resp rc
+    body=$(MODEL="$MODEL" python3 -c 'import json,os; print(json.dumps({"model": os.environ["MODEL"], "keep_alive": "60m"}))')
+    resp=$(curl -s --max-time "${VIDEOSCAN_HALLIE_REPLAY_LOAD_SECONDS:-600}" -H 'Content-Type: application/json' \
+                -d "$body" "$HOST/api/generate" 2>/dev/null); rc=$?
+    if [ "$rc" != 0 ]; then echo "no answer to the load call (curl rc $rc)"; return 1; fi
+    local err
+    err=$(printf '%s' "$resp" | python3 -c 'import json,sys
+try:
+    lines = [json.loads(l) for l in sys.stdin.read().splitlines() if l.strip()]
+except ValueError:
+    lines = []
+print(next((str(d["error"])[:200] for d in lines if isinstance(d, dict) and d.get("error")), ""))' 2>/dev/null)
+    if [ -n "$err" ]; then echo "$err"; return 1; fi
+    echo $(( $(date +%s) - started ))
+}
+
+if [ "$DRY_RUN" != 1 ] && [ "${VIDEOSCAN_HALLIE_REPLAY_START_OLLAMA:-1}" = 1 ] && is_loopback "$HOST" && ! host_alive; then
+    start_local_ollama || true
+fi
+TAGS=$(tags_of)
 if [ -z "$TAGS" ]; then
-    PREFLIGHT_REASON="host $HOST did not answer /api/tags (or lists no models); wanted model $MODEL ($MODEL_SOURCE)"
+    PREFLIGHT_REASON="host $HOST did not answer /api/tags (or lists no models); wanted model $MODEL ($MODEL_SOURCE)${OLLAMA_NOTE:+ — $OLLAMA_NOTE}"
 elif ! printf '%s\n' "$TAGS" | grep -qx "$MODEL"; then
     PREFLIGHT_REASON="model $MODEL ($MODEL_SOURCE) is not on $HOST (has: $(printf '%s' "$TAGS" | tr '\n' ' '))"
+elif [ "$DRY_RUN" != 1 ]; then
+    if MODEL_LOAD_S=$(load_model); then
+        echo "hallie replay: $MODEL is loaded on $HOST (${MODEL_LOAD_S}s)"
+    else
+        PREFLIGHT_REASON="model $MODEL ($MODEL_SOURCE) is on $HOST but did not load: $MODEL_LOAD_S"; MODEL_LOAD_S=""
+    fi
 fi
 if [ -n "$GEDCOM" ] && [ ! -e "$GEDCOM" ]; then
     echo "--gedcom: no such file or folder: $GEDCOM" >&2; exit 66
@@ -161,10 +242,11 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 if [ -n "$PREFLIGHT_REASON" ]; then
     python3 - "$OUT" "$PREFLIGHT_REASON" "$HOST" "$MODEL" "$MODEL_SOURCE" "$(date +%Y%m%dT%H%M%S)" \
-        "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" "${GEDCOM:-}" <<'PYEOF'
+        "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" "${GEDCOM:-}" "$OLLAMA_STARTED" <<'PYEOF'
 import json, sys
 out, reason, host, model, source, stamp, sha, gedcom = sys.argv[1:9]
 row = {"hallie_replay_status": "failed", "hallie_replay_reason": reason,
+       "hallie_replay_ollama_started": sys.argv[9] == "true",
        "hallie_replay_elapsed_s": 0, "hallie_replay_stamp": stamp,
        "hallie_replay_git_sha": sha, "hallie_replay_host": host,
        "hallie_replay_model": model or None, "hallie_replay_model_source": source,
@@ -298,7 +380,7 @@ PYEOF
 
 python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$BIN" "$HOST" "$MODEL" "$TREE_GEN" \
         "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" "${GEDCOM:-}" \
-        "$GEDCOM_PULLS" <<'PYEOF'
+        "$GEDCOM_PULLS" "$OLLAMA_STARTED" "$MODEL_LOAD_S" <<'PYEOF'
 import json, os, sys, time
 out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp, source = sys.argv[1:15]
 def incomplete_count(s):
@@ -342,6 +424,9 @@ row = {"hallie_replay_status": status,
        "hallie_replay_host": host or None,
        "hallie_replay_model": model or None,
        "hallie_replay_model_source": source,
+       # 2026-11-15: did this run have to start the local Ollama, and how long the model took to load.
+       "hallie_replay_ollama_started": len(sys.argv) > 18 and sys.argv[18] == "true",
+       "hallie_replay_model_load_s": (int(sys.argv[19]) if len(sys.argv) > 19 and sys.argv[19].isdigit() else None),
        # Which family tree answered: "archive" (the promoted tree, as in the
        # app) or the explicit --gedcom a test host without the archive used.
        "hallie_replay_gedcom": (sys.argv[16] if len(sys.argv) > 16 and sys.argv[16] else "archive"),
