@@ -313,6 +313,7 @@ struct PreservationChecklistContentTests {
 
     @Test func archivedCopyFixityOnDiskArchivesTheFootage() {
         let copy = rec("/Volumes/FamilyArchive/A/1990_X.mov")
+        copy.derivationKind = ArchivePromotion.derivationKind   // Promote made it: its fixity is a read-back
         copy.archiveFixity = ArchiveFixity(digest: JourneyFixture.sha, verifiedAt: JourneyFixture.day(2026, 8, 12), sizeBytes: 10)
 
         #expect(FileJourneyBuilder.archiveStanding(copy, presence: .regularFile, place: "FamilyArchive")

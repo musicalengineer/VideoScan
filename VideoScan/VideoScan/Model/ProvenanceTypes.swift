@@ -348,6 +348,35 @@ struct FileJourney: Identifiable, Equatable {
     /// facts, its status, the person's note, machine notes. Built with the
     /// journey — the view computes nothing over records.
     var details: [JourneyDetailSection] = []
+
+    /// One line for videoscan.log each time the sheet opens (checklist:
+    /// LOGGING — every failure the user can see is also logged, with why
+    /// and where). The ladder as shown, then each thing the sheet says is
+    /// wrong or unknown, in the sheet's own words:
+    ///   file journey: clip.mov — Catalogued ✓ · Analyzed waiting · Reviewed open · Archived open
+    ///     | Archived: Connect FamilyArchive — … | now: Not at /Volumes/…
+    var logLine: String {
+        let ladder = preservation.map { "\($0.title) \(Self.mark($0.state))" }.joined(separator: " · ")
+        var parts = ["file journey: \(filename) — \(ladder)"]
+        // An open Archived step with anything but the plain "not archived yet" door is a finding.
+        for step in preservation where step.kind == .archived && step.state == .open
+            && step.todo != PreservationChecklist.archiveTodo {
+            parts.append("\(step.title): \(step.todo)")
+        }
+        if let last = events.last, last.kind == .notAtPath || last.kind == .presenceUnknown {
+            parts.append("now: \(last.sentence)")
+        }
+        return parts.joined(separator: " | ")
+    }
+
+    private static func mark(_ state: PreservationStep.State) -> String {
+        switch state {
+        case .done:     return "✓"
+        case .open:     return "open"
+        case .waiting:  return "waiting"
+        case .attested: return "(their word)"
+        }
+    }
 }
 
 // MARK: - Migration Overview (View 3)

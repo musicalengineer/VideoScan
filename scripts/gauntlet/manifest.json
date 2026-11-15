@@ -35953,6 +35953,7 @@
         "poisonedRecord",
         "reviewEvidence",
         "sourceSensors",
+        "theLogLine",
         "theWholeTimeline",
         "updateProvenanceAndRole"
       ]
@@ -35984,6 +35985,40 @@
         "crlfNotesStillYieldTheUpdate",
         "machineTextInUserNotesIsNotReview",
         "trailingSlashRoot"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyCodexFindingsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileJourneyCodexFindingsTests"
+      ],
+      "tests": [
+        "aKeptPromoteNoteIsNotTheRawLine",
+        "aLinkIsNotAnArchiveCopy",
+        "aMissingHandPlacedFileIsNotInTheArchive",
+        "aPurgedRowIsNotArchived",
+        "anUnreadableSiblingAnywhereInTheCatalogCounts",
+        "copiedFromIsNeverTheSourcesLaterPath",
+        "differentBytesAreNotTheFamily",
+        "impossibleDatesAreNotEvidence",
+        "malformedArchiveFixityIsNotAReadBack"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyNonsenseDataTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileJourneyNonsenseDataTests"
+      ],
+      "tests": [
+        "archivedOnlyWhenProven",
+        "datesTextAndDeterminism",
+        "itBuildsAndIsOrdered",
+        "reviewedAndOffsiteOnlyOnThePersonsWord",
+        "theyBuildQuickly"
       ]
     }
   ],
@@ -38733,7 +38768,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3708,
+      "expected_floor": 3723,
       "name": "unit",
       "package_expected_floor": 903,
       "package_selectors": [
@@ -39450,7 +39485,9 @@
         "VideoScanTests/FileJourneyBuilderLadderTests",
         "VideoScanTests/FileJourneyBuilderTruthTests",
         "VideoScanTests/FileJourneyBuilderRobustnessTests",
-        "VideoScanTests/FileJourneyReviewRedTests"
+        "VideoScanTests/FileJourneyReviewRedTests",
+        "VideoScanTests/FileJourneyCodexFindingsTests",
+        "VideoScanTests/FileJourneyNonsenseDataTests"
       ]
     },
     {
