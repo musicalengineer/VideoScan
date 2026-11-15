@@ -205,6 +205,10 @@ enum HallieAppTurnCoordinator {
         /// desktop the speaker IS the owner), so tests that inject speakers
         /// never read real UserDefaults for the owner either.
         let loadAppOwner: @Sendable () -> HallieTurnExecutor.Speakers
+        /// The brain the settings select for a turn (local model name in),
+        /// for the `[hallie] turn brain=` line. Default nil: a test with
+        /// stub dependencies asks no real brain, so it names none.
+        var selectedBrainLabel: @Sendable (String) -> String? = { _ in nil }
 
         init(
             startLocalBrain: @escaping @Sendable ([String]) async throws -> [String],
@@ -310,7 +314,7 @@ enum HallieAppTurnCoordinator {
         static let makeLive: @Sendable (URL?, HallieLiveAssetStoreFactory) -> Dependencies = { applicationSupportRoot, makeAssetStore in
             let roots = HallieLiveDependencyRoots(
                 applicationSupportRoot: applicationSupportRoot)
-            return Dependencies(
+            var live = Dependencies(
             startLocalBrain: { hosts in
                 _ = try await OllamaLocalServerBootstrap.shared
                     .ensureRunning(for: hosts)
@@ -467,11 +471,13 @@ enum HallieAppTurnCoordinator {
                 // Same brain as translation; loopback-routed so an
                 // already-running local Ollama is reused without a
                 // demand-start. The plan's data class goes to the gate.
+                let responder = HallieLiveResponderBox()
                 let brain = Result {
                     try HallieBrainResolver.live.backend(
                         hosts: OllamaLocalServerBootstrap
                             .routeLocalEndpointsToLoopback(hosts),
-                        localModel: modelName)
+                        localModel: modelName,
+                        onResponder: { responder.set($0) })
                 }
                 let composer = HallieGroundedComposer(
                     personaName: HallieCompositionSettings.personaName(),
@@ -479,12 +485,18 @@ enum HallieAppTurnCoordinator {
                         try await brain.get().composePlainText(
                             system: system, user: user, dataClass: plan.dataClass)
                     })
-                return await composer.compose(
+                var outcome = await composer.compose(
                     plan: plan,
                     history: HallieBrainHistoryPolicy.history(history, for: brain))
+                // Name the brain that was asked, answered or not (2026-11-15).
+                outcome.brain = HallieBrainLog.selectedLabel(localModel: modelName)
+                outcome.responder = outcome.composedBy == .model ? responder.value : nil
+                return outcome
             },
             loadKindWords: { HallieKindWordsStore.shared.book() },
             loadAppOwner: { HallieTurnExecutor.Speakers.fromDefaults() })
+            live.selectedBrainLabel = { HallieBrainLog.selectedLabel(localModel: $0) }
+            return live
         }
     }
 
@@ -647,6 +659,9 @@ enum HallieAppTurnCoordinator {
                 effectiveHosts = hosts
             }
             composeHosts = effectiveHosts
+            // Which brain this question goes to, before anything is asked —
+            // so a failure below is never a line without a model beside it.
+            dependencies.announceTurnBrain(localModel: modelName)
             try Task.checkCancellation()
             // DETERMINISTIC ROUTING. Swift decides whether this turn is
             // general knowledge; the model is only ever handed one of the
@@ -1232,6 +1247,11 @@ enum HallieAppTurnCoordinator {
             try Task.checkCancellation()
             var result = try await operation()
             try Task.checkCancellation()
+            // A turn that needed no translation ("tell me about …") but was
+            // PHRASED by a model was recorded as "local (no model)" — the
+            // 16:11:30 answer of 2026-11-15 was Cloud Sonnet's. The record
+            // names whoever wrote the words.
+            var responderHost = responderHost
 
             // Plan → phrase → verify, only after the deterministic answer is
             // complete and only for composable plans. The composer bounds its
@@ -1244,7 +1264,15 @@ enum HallieAppTurnCoordinator {
                         plan, composition.history,
                         composition.hosts, composition.modelName)
                     result = result.applying(outcome)
-                    appLog.write("Hallie: phrased \(HallieTurnExecutor.label(result.route))/\(HallieTurnExecutor.label(result.outcome)) by \(outcome.composedBy.rawValue) (\(outcome.note); dropped \(outcome.dropped.count))")
+                    responderHost = HallieBrainLog.recordedResponder(
+                        turn: responderHost, composedByModel: outcome.composedBy == .model,
+                        composer: outcome.responder)
+                    appLog.write(HallieBrainLog.phrasedLine(
+                        route: HallieTurnExecutor.label(result.route),
+                        outcome: HallieTurnExecutor.label(result.outcome),
+                        composedBy: outcome.composedBy.rawValue,
+                        brain: outcome.brain, note: outcome.note,
+                        dropped: outcome.dropped.count))
                     for line in HallieGroundedComposer.droppedLogLines(outcome.dropped, plan: plan) {
                         appLog.write(line)
                     }

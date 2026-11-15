@@ -28,6 +28,12 @@ enum ArchivistDiagnosticLine {
     static let focusRequested = "[family-tree] Hallie focus requested target=person-id"
     static let filmOfferSuppressed = "[hallie] film offer suppressed reason=person-predates-medium"
 
+    /// `brain` is the selected brain's label (configuration, not content);
+    /// with it the line says WHICH model the turn failed on (2026-11-15).
+    static func failure(_ operation: FailureOperation, error: Error, brain: String) -> String {
+        failure(operation, error: error) + " brain=\(brain)"
+    }
+
     static func failure(_ operation: FailureOperation, error: Error) -> String {
         let prefix = "[hallie] \(operation.rawValue) failed"
         if let brain = error as? HallieBrainError {
@@ -258,6 +264,18 @@ struct ArchivistChatWindow: View {
     /// otherwise (Rick 2026-08-12).
     @State private var lastResponder: String?
     @AppStorage("archivist.ollamaModel") private var ollamaModel = HallieBrain.defaultModel
+    /// The brain choice, observed so the label under Settings follows it.
+    @AppStorage(HallieBrainSettings.providerKey) private var brainProviderRaw = HallieBrainProvider.local.rawValue
+    @AppStorage(HallieBrainSettings.cloudModelKey) private var cloudModelName = HallieBrainSettings.defaultCloudModel
+
+    /// What the header shows under Settings. Goes through the same rule as
+    /// the resolver (anything but "cloud" is Local; a blank model falls back
+    /// to its default).
+    private var answeringBrainLabel: String {
+        _ = (brainProviderRaw, cloudModelName)   // observed: re-render on change
+        let chosen = HallieBrainLog.selected(localModel: ollamaModel)
+        return HallieBrainLog.windowLabel(provider: chosen.provider, model: chosen.model)
+    }
 
     @State private var messages: [ArchivistMessage] = []
     @State private var transcriptSessionID = UUID()
@@ -661,6 +679,17 @@ struct ArchivistChatWindow: View {
                 Text("Settings")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                // Rick 2026-11-15: which model answers, in plain sight. Read
+                // from the same settings the resolver reads per question, so
+                // it follows a change in Settings at once.
+                Text(answeringBrainLabel)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help("The model that answers your questions. Change it in Settings ▸ Hallie.")
+                    .accessibilityIdentifier("archivist.answeringBrain")
+                    .accessibilityLabel("Answering model: \(answeringBrainLabel)")
             }
             Image(systemName: "sparkles")
                 .font(.title3)
@@ -1216,7 +1245,9 @@ struct ArchivistChatWindow: View {
                 } catch {
                     guard !Task.isCancelled,
                           activeRequestID == requestID else { return }
-                    appLog.write(ArchivistDiagnosticLine.failure(.interpretation, error: error))
+                    appLog.write(ArchivistDiagnosticLine.failure(
+                        .interpretation, error: error,
+                        brain: HallieBrainLog.selectedLabel(localModel: ollamaModel)))
                     lastMatches = []
                     messages.append(ArchivistMessage(
                         role: .assistant,
@@ -1296,7 +1327,9 @@ struct ArchivistChatWindow: View {
             } catch {
                 guard !Task.isCancelled,
                       activeRequestID == requestID else { return }
-                appLog.write(ArchivistDiagnosticLine.failure(.continuation, error: error))
+                appLog.write(ArchivistDiagnosticLine.failure(
+                        .continuation, error: error,
+                        brain: HallieBrainLog.selectedLabel(localModel: ollamaModel)))
                 lastMatches = []
                 messages.append(ArchivistMessage(
                     role: .assistant,

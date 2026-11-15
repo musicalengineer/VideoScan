@@ -71,6 +71,13 @@ struct HallieGroundedComposer: Sendable {
         let restored: [Restored]
         /// One-line diagnostic: "model" or why the template was used.
         let note: String
+        /// The brain that was asked to phrase this answer — set by the live
+        /// wiring whether it phrased it or failed, so the log line and the
+        /// conversation record can name it. Nil when no brain was resolved.
+        var brain: String? = nil
+        /// Who actually replied (a host, or `cloud:<model>`); nil when the
+        /// template answered.
+        var responder: String? = nil
 
         init(displayText: String, transcriptText: String, composedBy: HallieComposedBy,
              dropped: [HallieCompositionVerifier.Dropped], restored: [Restored] = [],
