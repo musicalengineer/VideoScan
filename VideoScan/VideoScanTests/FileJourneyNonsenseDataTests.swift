@@ -209,9 +209,21 @@ private enum Nonsense {
         return nil
     }
 
+    /// The archive fixity and a later whole-file read both name a SHA-256, and not the same one.
+    static func contradicts(_ r: VideoRecord) -> Bool {
+        func hex(_ algorithm: String, _ digest: String) -> String? {
+            algorithm == "sha256" && digest.count == 64 && digest.allSatisfy(\.isHexDigit) ? digest.lowercased() : nil
+        }
+        guard let a = r.archiveFixity.flatMap({ hex($0.algorithm, $0.digest) }),
+              let f = r.contentFixity.flatMap({ hex($0.algorithm, $0.digest) }) else { return false }
+        return a != f
+    }
+
     /// Both hashes known: equal. Otherwise: not already different in size.
+    /// A row that contradicts itself is the same bytes as nothing but itself.
     static func sameBytes(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
         if a.id == b.id { return true }
+        if contradicts(a) || contradicts(b) { return false }
         if let x = sha256(a), let y = sha256(b) { return x == y }
         return a.sizeBytes == b.sizeBytes
     }
@@ -312,7 +324,9 @@ struct FileJourneyNonsenseDataTests {
             let archived = try #require(journey.preservation.first { $0.kind == .archived }, "case \(index)")
             let copy = Nonsense.copy(c)
             // The bytes themselves at that path — a link to them elsewhere is not a copy in the archive.
-            let proven = copy.map { c.probe($0.fullPath) == .regularFile && Nonsense.hasWholeFileSHA256($0) } ?? false
+            let proven = copy.map {
+                c.probe($0.fullPath) == .regularFile && Nonsense.hasWholeFileSHA256($0) && !Nonsense.contradicts($0)
+            } ?? false
             #expect(archived.done == proven, "case \(index): done=\(archived.done) oracle=\(proven) todo=\(archived.todo)")
             if archived.done { green += 1 } else { #expect(!archived.todo.isEmpty, "case \(index): an open step with no door") }
             // "Read back and matched" is Promote's read-back, never a lone fingerprint.

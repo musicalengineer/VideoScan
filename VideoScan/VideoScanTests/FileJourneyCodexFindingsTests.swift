@@ -198,6 +198,130 @@ struct FileJourneyCodexFindingsTests {
         #expect(try Self.step(.analyzed, Self.journey(r, [r, sibling])).done)
     }
 
+    // MARK: Codex cycle #293 (closing pass on f997a9146..4e867ea88: "fix", 6 findings; five pinned here,
+    // each seen RED on 4e867ea88). Its third (an analyzer stamp dated 1970 or in the future still counts as
+    // analyzed) is declined for the sheet: Analyzed must equal Catalog Status, which counts that stamp —
+    // the stamp is refused in ONE place, the shared rule, or nowhere (filed as an issue).
+
+    // #293 F1 — a folder link INSIDE the archive onto a folder outside it, on the same disk.
+    @Test("#293 F1 TRUTH: a file reached through a same-disk folder link out of the archive is not in the archive")
+    func aSameDiskFolderLinkIsNotContainment() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("test_journey_codex_\(UUID().uuidString.prefix(8))")
+        defer { try? fm.removeItem(at: base) }
+        let root = base.appendingPathComponent("Archive")
+        let outside = base.appendingPathComponent("Outside")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 4096).write(to: outside.appendingPathComponent("clip.mov"))
+        try fm.createSymbolicLink(atPath: root.appendingPathComponent("linked").path, withDestinationPath: outside.path)
+        // Control: a real file really inside the archive.
+        try Data(repeating: 0, count: 4096).write(to: root.appendingPathComponent("real.mov"))
+
+        func archived(_ name: String) throws -> PreservationStep {
+            let r = Self.row(root.appendingPathComponent(name).path)
+            r.contentFixity = Self.fullHash()
+            var extras = FileJourneyBuilder.Extras()
+            extras.archiveRootPath = root.path
+            extras.archiveName = "FamilyArchive"
+            extras.now = Self.now
+            return try Self.step(.archived, VideoScanModel.buildFileJourney(for: r, allRecords: [r],
+                                                                           resolveVolumeSafety: Self.neutral, extras: extras))
+        }
+        let linked = try archived("linked/clip.mov")
+        #expect(!linked.done, "removing the outside folder's file destroys this 'archive copy'")
+        #expect(linked.todo.contains("link"), Comment(rawValue: linked.todo))
+        #expect(try archived("real.mov").done, "control: a real file inside the archive still ticks")
+    }
+
+    // #293 F2 — the copy's archive fixity says A, a later whole-file read of it says B.
+    @Test("#293 F2 TRUTH: a copy whose two whole-file hashes disagree is not proven, and is the same footage as nothing")
+    func aCopyThatContradictsItselfProvesNothing() throws {
+        let source = Self.analyzedRow("/Projects/source.mov", digest: Self.sha)
+        source.userNotes = "Reviewed the source"
+        let copy = Self.row("/Archive/copy.mov")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.derivedFrom = source.id
+        copy.archiveFixity = ArchiveFixity(digest: Self.sha, verifiedAt: Self.day(2026, 9, 23), sizeBytes: 4096)
+        copy.contentFixity = Self.fullHash(Self.otherSHA)
+
+        #expect(!FileJourneyBuilder.sameFootage(source, copy))
+        #expect(try !Self.step(.archived, Self.journey(source, [source, copy])).done)
+        #expect(try !Self.step(.reviewed, Self.journey(copy, [source, copy])).done)
+        let own = try Self.step(.archived, Self.journey(copy, [source, copy]))
+        #expect(!own.done && own.todo.contains("disagree"), Comment(rawValue: own.todo))
+        #expect(!Self.journey(copy, [source, copy]).events.contains { $0.sentence.contains("read back and matched") })
+    }
+
+    // #293 F4 — Migrate fills a missing originalFullPath with the moving row's OWN former path.
+    @Test("#293 F4 TRUTH: the promote note outranks originalFullPath, and a path inside the archive is never 'Copied from'")
+    func migratesOriginIsNotPromotesSource() throws {
+        let source = Self.row("/Projects/source.mov")
+        let copy = Self.row("/Archive/old.mov")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.derivedFrom = source.id
+        copy.archiveFixity = ArchiveFixity(digest: Self.sha, verifiedAt: Self.now, sizeBytes: 4096)
+        copy.notes = "Promote 2026-09-23T17:47:00Z: promoted from \(source.fullPath) · sha256 \(Self.sha)"
+        copy.originalFullPath = copy.fullPath      // Migrate's branch for a missing field
+        copy.fullPath = "/Archive/moved.mov"
+
+        let fromSource = try #require(Self.journey(source, [source, copy]).events.first { $0.kind == .archived })
+        #expect(!fromSource.sentence.contains("/Archive/old.mov"), Comment(rawValue: fromSource.sentence))
+        // With no promote note at all, Migrate's value is all there is — and it is inside the archive: not said.
+        copy.notes = ""
+        let unsaid = try #require(Self.journey(copy, [source, copy]).events.first { $0.kind == .archived })
+        #expect(!unsaid.sentence.contains("Copied from"), Comment(rawValue: unsaid.sentence))
+    }
+
+    // #293 F5 — the note's own delimiters are legal in a path.
+    @Test("#293 F5 TRUTH: a source path containing ' · ' or ' (source record ' is read whole from the promote note")
+    func promoteNotePathsAreReadWhole() throws {
+        for path in ["/Projects/Tape · A/clip.mov", "/Projects/Tape (source record 7)/clip.mov", "/Projects/plain.mov"] {
+            let note = "Promote 2026-09-23T17:47:00Z: promoted from \(path) · sha256 \(Self.sha) · readiness: audio verified"
+            #expect(FileJourneyBuilder.promotedFrom(inNotes: note) == path)
+            let orphan = "Promote 2026-09-23T17:47:00Z: promoted from \(path) (source record \(UUID().uuidString) no longer in the catalog) · sha256 \(Self.sha)"
+            #expect(FileJourneyBuilder.promotedFrom(inNotes: orphan) == path)
+            let copy = Self.row("/Archive/clip.mov")
+            copy.derivationKind = ArchivePromotion.derivationKind
+            copy.notes = note
+            let event = try #require(Self.journey(copy).events.first { $0.kind == .archived })
+            #expect(event.sentence.contains("Copied from \(path)."), Comment(rawValue: event.sentence))
+        }
+        #expect(FileJourneyBuilder.promotedFrom(inNotes: "Promote 2026-09-23T17:47:00Z: promoted from /Projects/old.mov") == "/Projects/old.mov")
+        #expect(FileJourneyBuilder.promotedFrom(inNotes: "Promote 2026-09-23T17:47:00Z: promoted to Master Archive as x.mov") == nil)
+        #expect(FileJourneyBuilder.promotedFrom(inNotes: "Promote x: promoted from relative/path.mov · sha256 \(Self.sha)") == nil)
+    }
+
+    // #293 F6 — the first family member's impossible date was chosen, then dropped, hiding a real one.
+    @Test("#293 F6 TRUTH: an impossible date on the opened row never hides a real act or a real pass on its other copy")
+    func aBadFirstDateDoesNotHideARealOne() throws {
+        let source = Self.row("/Projects/source.mov")
+        source.contentFixity = Self.fullHash()
+        let confirmed = Self.day(2026, 10, 1)
+        source.repairConfirmedDate = confirmed
+        source.sceneCaptionDate = Self.day(2026, 10, 2)
+        let copy = Self.row("/Archive/copy.mov")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.derivedFrom = source.id
+        copy.archiveFixity = ArchiveFixity(digest: Self.sha, verifiedAt: Self.now, sizeBytes: 4096)
+        copy.repairConfirmedDate = Self.now.addingTimeInterval(86_400)
+        copy.sceneCaptionDate = Date(timeIntervalSince1970: 0)
+
+        let j = Self.journey(copy, [source, copy])
+        #expect(try Self.step(.reviewed, j).date == confirmed)
+        #expect(j.events.contains { $0.kind == .review && $0.timestamp == confirmed && $0.sentence == "You confirmed the repaired copy." })
+        #expect(j.events.contains { $0.kind == .analysis && $0.timestamp == Self.day(2026, 10, 2) })
+    }
+
+    @Test("#293 LOGGING: the log line is bounded — a huge to-do is cut, never written whole")
+    func theLogLineIsBounded() {
+        let huge = PreservationStep(kind: .archived, state: .open, todo: String(repeating: "x", count: 20_000))
+        let journey = FileJourney(recordID: UUID(), filename: "clip.mov", isMarkedDeleted: false, events: [],
+                                  otherKnownCopies: [], preservation: [huge])
+        #expect(journey.logLine.count < 700, "\(journey.logLine.count) characters")
+        #expect(journey.logLine.hasSuffix("…"))
+    }
+
     // Found by FileJourneyNonsenseDataTests (52 of 1,000 cases): a promote note on a row with no
     // archive-copy record still put the raw log line, hash and all, in the timeline.
     @Test("TRUTH: a promote note shown as history is a sentence — never the log line with its hash")

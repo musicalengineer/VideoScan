@@ -361,7 +361,8 @@ struct FileJourney: Identifiable, Equatable {
         // An open Archived step with anything but the plain "not archived yet" door is a finding.
         for step in preservation where step.kind == .archived && step.state == .open
             && step.todo != PreservationChecklist.archiveTodo {
-            parts.append("\(step.title): \(step.todo)")
+            // Bounded: the words are the sheet's own, but a log line is not a place for 20,000 of them.
+            parts.append("\(step.title): \(step.todo.count > 300 ? String(step.todo.prefix(300)) + "…" : step.todo)")
         }
         if let last = events.last, last.kind == .notAtPath || last.kind == .presenceUnknown {
             parts.append("now: \(last.sentence)")

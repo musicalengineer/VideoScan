@@ -35995,15 +35995,21 @@
         "FileJourneyCodexFindingsTests"
       ],
       "tests": [
+        "aBadFirstDateDoesNotHideARealOne",
+        "aCopyThatContradictsItselfProvesNothing",
         "aKeptPromoteNoteIsNotTheRawLine",
         "aLinkIsNotAnArchiveCopy",
         "aMissingHandPlacedFileIsNotInTheArchive",
         "aPurgedRowIsNotArchived",
+        "aSameDiskFolderLinkIsNotContainment",
         "anUnreadableSiblingAnywhereInTheCatalogCounts",
         "copiedFromIsNeverTheSourcesLaterPath",
         "differentBytesAreNotTheFamily",
         "impossibleDatesAreNotEvidence",
-        "malformedArchiveFixityIsNotAReadBack"
+        "malformedArchiveFixityIsNotAReadBack",
+        "migratesOriginIsNotPromotesSource",
+        "promoteNotePathsAreReadWhole",
+        "theLogLineIsBounded"
       ]
     },
     {
@@ -38768,7 +38774,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3723,
+      "expected_floor": 3729,
       "name": "unit",
       "package_expected_floor": 903,
       "package_selectors": [
