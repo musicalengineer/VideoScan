@@ -62,6 +62,10 @@ struct HallieBrainResolver {
     /// The shell's explicit `--cloud` (an explicit choice, like the setting);
     /// nil = read the setting.
     var providerOverride: HallieBrainProvider?
+    /// The shell's `--cloud-model`: which cloud model, for this process only
+    /// (a testbed compares models without touching Rick's setting);
+    /// nil = read the setting.
+    var cloudModelOverride: String?
     /// After a failed LOCAL call, ask the first host what it holds in memory
     /// and log it. Off in a test host: a test never opens a socket for a
     /// log line.
@@ -78,10 +82,19 @@ struct HallieBrainResolver {
 
     /// The headless shell: Local unless `--cloud` was passed — the shell is
     /// a diagnostic surface whose reference output is the local brain.
-    static func shell(_ provider: HallieBrainProvider) -> HallieBrainResolver {
+    static func shell(
+        _ provider: HallieBrainProvider, cloudModel: String? = nil
+    ) -> HallieBrainResolver {
         var resolver = live
         resolver.providerOverride = provider
+        resolver.cloudModelOverride = cloudModel
         return resolver
+    }
+
+    /// The cloud model this resolver asks: the override, else the setting.
+    var cloudModel: String {
+        let override = cloudModelOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return override.isEmpty ? HallieBrainSettings.cloudModel(defaults) : override
     }
 
     var provider: HallieBrainProvider {
@@ -116,10 +129,10 @@ struct HallieBrainResolver {
         case .cloud:
             guard let key = AnthropicKeyLocator.locate(in: keychain) else {
                 log("[hallie] brain OUTCOME op=resolve brain=Cloud · "
-                    + "\(HallieBrainSettings.cloudModel(defaults)) failed reason=no-key")
+                    + "\(cloudModel) failed reason=no-key")
                 throw HallieBrainError.noCloudKey
             }
-            inner = AnthropicBrain(model: HallieBrainSettings.cloudModel(defaults),
+            inner = AnthropicBrain(model: cloudModel,
                                    key: key, session: cloudSession,
                                    onResponder: onResponder)
         }

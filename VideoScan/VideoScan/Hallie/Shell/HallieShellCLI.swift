@@ -19,6 +19,14 @@ enum HallieShellCLI {
         /// otherwise; the shell never follows the app's provider setting
         /// silently, so a scripted eval cannot drift to the cloud.
         var brain: HallieBrainProvider = .local
+        /// `--cloud-model MODEL`: the Cloud brain on that model, for this
+        /// process only (implies `--cloud`; the app's setting is not read or
+        /// written). The testbed's way to compare cloud models.
+        var cloudModel: String?
+        /// The one place the shell turns its options into a brain choice.
+        var brainResolver: HallieBrainResolver {
+            HallieBrainResolver.shell(brain, cloudModel: cloudModel)
+        }
         var gedcomURL: URL?
         var once: String?
         /// `--compose`: let the model phrase composable answers (verified,
@@ -363,7 +371,7 @@ enum HallieShellCLI {
                 // One seam for both brains (HallieBrainResolver).
                 translateAST: { question, options in
                     let responder = LockedString()
-                    let translator = try HallieBrainResolver.shell(options.brain).backend(
+                    let translator = try options.brainResolver.backend(
                         hosts: options.hosts, localModel: options.model,
                         onResponder: { responder.set($0) })
                     let ast = try await translator.translateAST(question)
@@ -372,7 +380,7 @@ enum HallieShellCLI {
                 },
                 interpretTurn: { question, options in
                     let responder = LockedString()
-                    let brain = try HallieBrainResolver.shell(options.brain).backend(
+                    let brain = try options.brainResolver.backend(
                         hosts: options.hosts, localModel: options.model,
                         onResponder: { responder.set($0) })
                     let value = try await brain.interpretTurn(question)
@@ -383,7 +391,7 @@ enum HallieShellCLI {
                 composeConversation: { kind, question, history, options in
                     let responder = LockedString()
                     let brain = Result {
-                        try HallieBrainResolver.shell(options.brain).backend(
+                        try options.brainResolver.backend(
                             hosts: options.hosts, localModel: options.model,
                             onResponder: { responder.set($0) })
                     }
@@ -439,7 +447,7 @@ enum HallieShellCLI {
                 speakAnswer: { text in await speakNativeAnswer(text) },
                 composeAnswer: { plan, history, options in
                     let brain = Result {
-                        try HallieBrainResolver.shell(options.brain).backend(
+                        try options.brainResolver.backend(
                             hosts: options.hosts, localModel: options.model)
                     }
                     let composer = HallieGroundedComposer(
@@ -579,7 +587,7 @@ enum HallieShellCLI {
     Usage: VideoScan --hallie [--catalog PATH] [--host HOST[,HOST...]]
                      [--model MODEL] [--gedcom PATH] [--once QUESTION] [--compose]
                      [--no-actions] [--log-run-id ID] [--remember] [--diagnostics] [--speech]
-                     [--cloud]
+                     [--cloud] [--cloud-model MODEL]
     """
 
     static let help = """
@@ -617,7 +625,7 @@ enum HallieShellCLI {
                 continue
             }
             guard ["--catalog", "--host", "--model", "--gedcom", "--once",
-                   "--log-run-id"]
+                   "--log-run-id", "--cloud-model"]
                 .contains(argument) else { throw ParseError.unknownOption(argument) }
             guard index + 1 < arguments.count else {
                 throw ParseError.missingValue(argument)
@@ -635,6 +643,9 @@ enum HallieShellCLI {
             case "--gedcom": result.gedcomURL = URL(fileURLWithPath: value)
             case "--once": result.once = value
             case "--log-run-id": result.logRunID = value
+            case "--cloud-model":
+                result.brain = .cloud
+                result.cloudModel = value
             default: break
             }
             index += 2

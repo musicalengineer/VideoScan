@@ -317,6 +317,53 @@ struct HallieBrainChoiceIsolationTests {
         #expect(try HallieShellCLI.parse(arguments: ["--hallie", "--cloud"]).brain == .cloud)
         #expect(HallieShellCLI.usage.contains("--cloud"))
     }
+
+    @Test("--cloud-model picks the cloud model for this process and implies --cloud")
+    func shellCloudModel() throws {
+        let options = try HallieShellCLI.parse(
+            arguments: ["--hallie", "--cloud-model", " claude-haiku-5-5 "])
+        #expect(options.brain == .cloud)
+        #expect(options.cloudModel == "claude-haiku-5-5")
+        #expect(try HallieShellCLI.parse(arguments: ["--hallie", "--cloud"]).cloudModel == nil)
+        #expect(HallieShellCLI.usage.contains("--cloud-model MODEL"))
+        #expect(throws: HallieShellCLI.ParseError.self) {
+            try HallieShellCLI.parse(arguments: ["--hallie", "--cloud-model"])
+        }
+        #expect(throws: HallieShellCLI.ParseError.self) {
+            try HallieShellCLI.parse(arguments: ["--hallie", "--cloud-model", "  "])
+        }
+    }
+
+    @Test("a cloud-model override outranks the setting and never writes it")
+    func cloudModelOverride() throws {
+        let d = isolatedDefaults()
+        HallieBrainSettings.setCloudModel("claude-opus-5-5", d)
+        var chosen = resolver(d, keyedKeychain)
+        chosen.providerOverride = .cloud
+        chosen.cloudModelOverride = "claude-haiku-5-5"
+        let brain = try chosen.backend(hosts: ["RicksUltra.local"], localModel: "qwen")
+        #expect(brain.provider == .cloud)
+        #expect(brain.modelName == "claude-haiku-5-5")
+        #expect(HallieBrainSettings.cloudModel(d) == "claude-opus-5-5")
+
+        chosen.cloudModelOverride = "   "
+        #expect(try chosen.backend(hosts: [], localModel: "qwen").modelName == "claude-opus-5-5")
+        chosen.cloudModelOverride = nil
+        #expect(try chosen.backend(hosts: [], localModel: "qwen").modelName == "claude-opus-5-5")
+    }
+
+    @Test("a cloud-model override with no key names that model in the refusal line")
+    func cloudModelOverrideNoKey() {
+        let d = isolatedDefaults()
+        let sink = HallieLineSink()
+        var chosen = resolver(d, log: { sink.write($0) })
+        chosen.providerOverride = .cloud
+        chosen.cloudModelOverride = "claude-haiku-5-5"
+        #expect(throws: HallieBrainError.self) {
+            _ = try chosen.backend(hosts: [], localModel: "qwen")
+        }
+        #expect(sink.lines.contains { $0.contains("brain=Cloud · claude-haiku-5-5 failed reason=no-key") })
+    }
 }
 
 // MARK: - Request shape (URLProtocol stub; no network)

@@ -398,6 +398,12 @@ def run(args):
         cmd += ["--host", args.host]
     if args.model:
         cmd += ["--model", args.model]
+    # The Cloud brain on a named model, for this run only (the shell's
+    # --cloud-model; the app's setting is neither read nor written). Every
+    # question, and the facts used to phrase its answer, leave the Mac.
+    cloud_model = getattr(args, "cloud_model", None)
+    if cloud_model:
+        cmd += ["--cloud-model", cloud_model]
     # An explicit tree (file or folder of pulls) bypasses the compiled
     # artifact — measure a build whose compiled-tree codec has moved on
     # from what is installed (9/02: codec 5 → 6) without writing into
@@ -452,6 +458,7 @@ def run(args):
             "unmatchedTurns": len(unmatched),
             "liveReviewFlags": live_view.review_count if live_view is not None else None,
             "requestedModel": args.model,
+            "requestedCloudModel": cloud_model,
             "requestedHost": args.host,
             "buildSHA": getattr(args, "build_sha", None),
             "corpusSHA256": corpus_sha,
@@ -832,6 +839,9 @@ def main():
     pr.add_argument("--host")
     pr.add_argument("--model", default=configured_model(),
                     help="default: Settings > Archivist Brain, else the shipped brain")
+    pr.add_argument("--cloud-model",
+                    help="ask the Cloud brain on this model instead of the local one "
+                         "(questions and answer facts go to Anthropic)")
     pr.add_argument("--no-compose", action="store_true")
     pr.add_argument("--bin", help="pin this VideoScan binary (default: newest built)")
     pr.add_argument("--gedcom", help="tree file or folder of .ged pulls to parse instead of the compiled artifact")

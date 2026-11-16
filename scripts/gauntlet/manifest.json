@@ -18395,6 +18395,8 @@
       ],
       "tests": [
         "citationClasses",
+        "cloudModelOverride",
+        "cloudModelOverrideNoKey",
         "cloudResolves",
         "composeBody",
         "defaults",
@@ -18416,6 +18418,7 @@
         "repairRetry",
         "roundTrip",
         "routeClasses",
+        "shellCloudModel",
         "shellFlag",
         "structuredAnswerText",
         "testHostPinsLocal",
@@ -33668,6 +33671,35 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_hallie_compare.py",
+      "stage": "hallie",
+      "suites": [
+        "test_hallie_compare.py"
+      ],
+      "tests": [
+        "test_a_brain_that_phrased_nothing_is_called_out_under_the_table",
+        "test_a_cloud_brain_is_refused_without_allow_cloud_and_nothing_runs",
+        "test_a_defect_is_marked_and_named_and_a_missing_answer_is_said",
+        "test_a_hundred_thousand_records_measure_inside_the_budget",
+        "test_a_local_brain_gets_model_and_host_a_cloud_brain_gets_cloud_model_only",
+        "test_a_run_file_dropped_in_by_hand_counts_and_graded_copies_do_not",
+        "test_an_empty_folder_and_a_file_that_is_not_a_run_are_refused_in_words",
+        "test_an_incomplete_replay_is_reported_and_fails_the_run",
+        "test_an_ollama_that_does_not_answer_skips_local_brains_and_says_so",
+        "test_brains_run_one_after_another_and_a_missing_model_is_a_named_row",
+        "test_counts_match_the_nightly_grader_record_by_record",
+        "test_empty_duplicate_and_modelless_cloud_are_refused",
+        "test_local_tags_and_cloud_models_keep_their_order",
+        "test_no_records_measures_to_zeros_not_a_crash",
+        "test_the_default_output_folder_is_ignored_by_git",
+        "test_the_eval_harness_accepts_what_the_command_passes",
+        "test_the_replay_asks_the_same_ollama_the_tag_check_asked",
+        "test_two_brains_one_table_and_every_answer_under_its_question"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_hallie_eval.py",
       "stage": "hallie",
       "suites": [
@@ -33681,6 +33713,7 @@
         "test_an_orphan_after_a_reset_never_merges_into_the_previous_question",
         "test_batch_input_resets_between_scenarios_but_not_followup_turns",
         "test_canonical_corpus_expands_to_exact_balanced_200_turns",
+        "test_cloud_model_reaches_the_shell_and_the_run_record",
         "test_complete_run_records_requested_configuration_and_attested_build",
         "test_complete_sentence_starting_with_an_article_is_not_a_fragment",
         "test_corpus_edited_during_replay_does_not_change_attestation",
@@ -38842,7 +38875,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3754,
+      "expected_floor": 3757,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -40679,6 +40712,10 @@
         },
         {
           "name": "tests/test_hallie_e1.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_hallie_compare.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
