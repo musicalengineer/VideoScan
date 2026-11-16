@@ -163,6 +163,41 @@ class RunTests(unittest.TestCase):
             self.assertIn("3 (1 answered — INCOMPLETE)", (Path(directory) / "table.md").read_text())
 
 
+class ReachedTheBrainTests(unittest.TestCase):
+    """2026-11-15: the first real run asked the shell's DEFAULT hosts (the M4,
+    then the laptop) while the tag check asked the Ultra's own Ollama, so no
+    question reached either model and both rows came out identical."""
+
+    def test_the_replay_asks_the_same_ollama_the_tag_check_asked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls, asked = [], []
+
+            def call(cmd, **kwargs):
+                calls.append(cmd)
+                Path(cmd[cmd.index("--out") + 1]).write_text(
+                    json.dumps({"meta": {"questions": 1}}) + "\n" + json.dumps(record("q1")) + "\n")
+                return SimpleNamespace(returncode=0)
+
+            compare.run(run_args(directory, keep_loaded=True),
+                        tags=lambda host: asked.append(host) or ["alpha:1b"],
+                        call=call, say=lambda _: None)
+            self.assertEqual(asked, ["http://127.0.0.1:11434"])
+            self.assertEqual(calls[0][calls[0].index("--host") + 1], asked[0])
+
+    def test_a_brain_that_phrased_nothing_is_called_out_under_the_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, "alpha:1b", [
+                record("q1", composed="template"),
+                record("q2", route=None, outcome="interpretation-failed", composed=None)])
+            time.sleep(0.01)
+            write_run(directory, "beta:2b", [record("q1"), record("q2", composed="template")])
+            compare.table(argparse.Namespace(dir=directory), say=lambda _: None)
+            text = (Path(directory) / "table.md").read_text()
+            self.assertIn("**alpha:1b never phrased an answer** (0 of 1) and 1 turn got no answer: "
+                          "the model may never have been reached", text)
+            self.assertNotIn("**beta:2b never", text)
+
+
 class MeasureTests(unittest.TestCase):
     def measured(self, records):
         return compare.measure(records, hallie_eval.grade_record, hallie_eval.latency_summary)

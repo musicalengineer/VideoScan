@@ -33677,6 +33677,7 @@
         "test_hallie_compare.py"
       ],
       "tests": [
+        "test_a_brain_that_phrased_nothing_is_called_out_under_the_table",
         "test_a_cloud_brain_is_refused_without_allow_cloud_and_nothing_runs",
         "test_a_defect_is_marked_and_named_and_a_missing_answer_is_said",
         "test_a_hundred_thousand_records_measure_inside_the_budget",
@@ -33692,6 +33693,7 @@
         "test_no_records_measures_to_zeros_not_a_crash",
         "test_the_default_output_folder_is_ignored_by_git",
         "test_the_eval_harness_accepts_what_the_command_passes",
+        "test_the_replay_asks_the_same_ollama_the_tag_check_asked",
         "test_two_brains_one_table_and_every_answer_under_its_question"
       ]
     },

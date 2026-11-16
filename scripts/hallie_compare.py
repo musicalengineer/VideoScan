@@ -136,9 +136,9 @@ def eval_command(brain, args, out):
     if brain["kind"] == "cloud":
         cmd += ["--cloud-model", brain["model"]]
     else:
-        cmd += ["--model", brain["model"]]
-        if args.host:
-            cmd += ["--host", args.host]
+        # ALWAYS name the host: with none, the shell asks its own default
+        # list (the M4, then the laptop), not the Ollama the tag check asked.
+        cmd += ["--model", brain["model"], "--host", args.host or DEFAULT_HOST]
     for flag, value in (("--limit", args.limit), ("--bin", args.bin), ("--gedcom", args.gedcom)):
         if value:
             cmd += [flag, str(value)]
@@ -308,6 +308,20 @@ How to read it
 """
 
 
+def render_warnings(rows):
+    """A brain that worded nothing AND left turns unanswered was probably never
+    reached; its row then measures only Hallie's model-free answers."""
+    lines = []
+    for brain, _, row in rows:
+        if row and row["composable"] and not row["by_model"] and row["failed"]:
+            turns = "turn" if row["failed"] == 1 else "turns"
+            lines.append(f"- **{brain['label']} never phrased an answer** (0 of {row['composable']}) and "
+                         f"{row['failed']} {turns} got no answer: the model may never have been reached "
+                         f"(wrong host, not running, no key). Its row measures only Hallie's model-free "
+                         f"answers; check `[hallie] brain OUTCOME` in videoscan.log.")
+    return "\n".join(lines)
+
+
 def render_provenance(rows):
     lines = []
     for brain, meta, row in rows:
@@ -359,6 +373,9 @@ def table(args, *, say=announce):
         say(f"no runs in {directory}")
         return 2
     text = render_table(rows)
+    warnings = render_warnings(rows)
+    if warnings:
+        text += "\n\nNot a comparison yet\n" + warnings
     (directory / "table.md").write_text(
         "# Hallie brains compared\n\n" + text + "\n" + NOTES + "\nProvenance\n"
         + render_provenance(rows) + "\n", encoding="utf-8")
