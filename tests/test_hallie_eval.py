@@ -839,7 +839,8 @@ class NightlyReplayVerdictTests(unittest.TestCase):
             self.assertEqual(rows[0]["meta"]["paired"], 1)
             self.assertEqual(rows[1]["answer"], "Alpha was born in Ireland.")
 
-    def replay(self, returncode=0, turns=None, timeout=False, mutate_corpus=False, live=False):
+    def replay(self, returncode=0, turns=None, timeout=False, mutate_corpus=False, live=False,
+               cloud_model=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             corpus = root / "corpus.json"
@@ -853,12 +854,16 @@ class NightlyReplayVerdictTests(unittest.TestCase):
                                    host="http://fixture", model="fixture-model",
                                    bin=str(binary), timeout=1, out=str(output),
                                    build_sha="built-source-sha", live=live)
+            if cloud_model is not None:
+                args.cloud_model = cloud_model
+            self.replay_commands = []
             result = (hallie_eval.subprocess.TimeoutExpired("fixture", 1) if timeout
                       else SimpleNamespace(returncode=returncode, stdout="", stderr="fixture failure"))
             original_hash = hallie_eval.hashlib.sha256(corpus.read_bytes()).hexdigest()
             results = iter([result, SimpleNamespace(stdout="checkout-sha\n")])
 
             def invoke(*args, **kwargs):
+                self.replay_commands.append(args[0])
                 if mutate_corpus:
                     corpus.write_text('{"questions": []}')
                 response = next(results)
@@ -944,6 +949,19 @@ class NightlyReplayVerdictTests(unittest.TestCase):
         self.assertEqual(meta["buildSHA"], "built-source-sha")
         self.assertEqual(meta["git"], "checkout-sha")
         self.assertEqual(len(meta["corpusSHA256"]), 64)
+
+    def test_cloud_model_reaches_the_shell_and_the_run_record(self):
+        turns = [{"kind": "user", "text": "Where was Alpha born?"},
+                 {"kind": "assistant", "text": "Alpha was born in Ireland.",
+                  "route": "graph", "outcome": "answered"}]
+        code, meta = self.replay(turns=turns, cloud_model="claude-fixture")
+        self.assertEqual(code, 0)
+        shell = self.replay_commands[0]
+        self.assertEqual(shell[shell.index("--cloud-model") + 1], "claude-fixture")
+        self.assertEqual(meta["requestedCloudModel"], "claude-fixture")
+        _, meta = self.replay(turns=turns)
+        self.assertNotIn("--cloud-model", self.replay_commands[0])
+        self.assertIsNone(meta["requestedCloudModel"])
 
     def grade(self, records, meta, strict=True):
         with tempfile.TemporaryDirectory() as directory:

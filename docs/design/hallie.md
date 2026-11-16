@@ -682,3 +682,7 @@ LOGDIR=/Users/rickb/dev/VideoScan-wt/hallie-baselines-1029/.scratch/bench-logs \
 ```
 
 The row JSON carries pass/total, `hallie_<lane>_latency` {n, median_ms, p90_ms}, the SHAs and the tree generation. `scripts/hallie_eval.py grade --run <lane>.json` prints category and flag counts. For llama, swap the `--model` value. Before switching models, unload the old one (`/api/generate` with `keep_alive: 0`).
+
+#### Compare brains (2026-11-15)
+
+`scripts/hallie_compare.py run --brains qwen3.8:27b-mlx,llama3.3:70b,cloud:claude-sonnet-5-5 --allow-cloud [--corpus …] [--limit N]` replays one corpus on each brain in turn (local Ollama tags, or `cloud:<model>` through the shell's `--cloud-model`, which neither reads nor writes the app's setting) and writes `table.md` (clean overall and by Family Tree / catalog / conversation, declines, phrased by the model vs the template, no-answer turns, median and p90 time) and `answers.md` (each brain's words under each question) into `.scratch/hallie-compare/<stamp>/`. A `cloud:` brain is refused without `--allow-cloud`: every question and the facts behind its answer go to Anthropic and are billed. How natural an answer reads is not a column; read `answers.md`. `table DIR` rebuilds both files from the runs in a folder.
