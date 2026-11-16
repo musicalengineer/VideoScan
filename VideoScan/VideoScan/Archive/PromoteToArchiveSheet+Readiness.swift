@@ -18,7 +18,8 @@ extension PromoteToArchiveSheet {
                     // Counters — audio first, then format, then date, then un-probeable.
                     HStack(spacing: 12) {
                         counter(plan.audioProblemCount, "audio problem", color: .red, icon: "waveform.badge.exclamationmark")
-                        counter(plan.audioNotVerifiedCount, "audio not verified", color: .orange, icon: "waveform")
+                        counter(plan.audioUnbalancedCount, "one-sided audio", color: .orange, icon: "speaker.wave.1")
+                        counter(plan.audioNotVerifiedCount, "audio checked at promote", color: .secondary, icon: "waveform")
                         counter(plan.atRiskFormatCount, "at-risk format", color: .orange, icon: "film")
                         counter(plan.dateWarningCount, "undated / low-confidence", color: .secondary, icon: "calendar.badge.exclamationmark")
                         counter(plan.unprobeableCount, "un-probeable", color: .red, icon: "xmark.octagon")
@@ -38,8 +39,7 @@ extension PromoteToArchiveSheet {
                                         .truncationMode(.middle)
                                     Text(entry.readiness.sheetLine(dateLabel: entry.dateHint.filenamePrefix))
                                         .font(.system(size: 11))
-                                        .foregroundColor(entry.readiness.blocking ? .red
-                                                         : (entry.readiness.warnings.isEmpty ? .green : .secondary))
+                                        .foregroundColor(Self.lineColor(entry.readiness))
                                     // First (most important — audio-first) warning, if any.
                                     if let first = entry.readiness.warnings.first {
                                         Text(first)
@@ -73,6 +73,14 @@ extension PromoteToArchiveSheet {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    /// Red only for what stops a promotion (un-probeable, or sound the
+    /// gate refuses); green when there is nothing to say.
+    static func lineColor(_ r: ArchiveReadiness) -> Color {
+        if r.blocking { return .red }
+        if case .refusable = r.sound { return .red }
+        return r.warnings.isEmpty ? .green : .secondary
     }
 
     private func counter(_ n: Int, _ label: String, color: Color, icon: String) -> some View {

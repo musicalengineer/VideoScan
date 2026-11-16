@@ -84,6 +84,64 @@ struct ArchiveReadinessLogicTests {
         #expect(ArchiveReadiness.assess(inputs { $0.streamTypeRaw = StreamType.videoOnly.rawValue }).audio == .noAudioTrack)
     }
 
+    // Rick 2026-11-16: the Promote sheet showed a mono file as a red "1 audio
+    // problem / Audio ✗ mono audio" while the Promote gate passes mono
+    // (DECISIONS 2026-11-10). The sheet's sound standing must say what the
+    // gate will do: a fact about the recording is not a problem.
+    @Test("TRUTH: a fact about the recording (mono, surround, two live tracks) is not an audio problem",
+          arguments: ["mono audio", "surround audio (6 channels)", "2 live audio tracks",
+                      "surround audio (6 channels); 2 live audio tracks"])
+    func soundFactsAreNotProblems(note: String) {
+        let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note })
+        #expect(r.sound == .note(note))
+        #expect(r.warnings.isEmpty, "\(r.warnings)")
+        let line = r.sheetLine(dateLabel: "1992")
+        #expect(line.contains("Audio ✓ \(note)"), "\(line)")
+        #expect(!line.contains("✗"), "\(line)")
+    }
+
+    @Test("TRUTH: one-sided sound passes Promote but is flagged for balancing — amber, never the red problem",
+          arguments: ["one-sided audio (left only)", "one-sided audio (right only)", "channel imbalance",
+                      "one-sided audio (left only); 2 live audio tracks"])
+    func oneSidedIsFlaggedNotRefused(note: String) {
+        let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note })
+        #expect(r.sound == .unbalanced(note))
+        #expect(r.warnings.first?.hasPrefix("Sound is not balanced — \(note)") == true, "\(r.warnings)")
+        let line = r.sheetLine(dateLabel: "1992")
+        #expect(line.contains("Audio ⚠ \(note)"), "\(line)")
+        #expect(!line.contains("✗"), "\(line)")
+    }
+
+    @Test("TRUTH: only sound Promote refuses is an audio problem (damaged, silent, no stream)",
+          arguments: [("damaged", "Damaged audio — invalid codec (qdm2)"), ("damaged", ""),
+                      ("ok", "silent audio"), ("ok", "no audio stream"), ("ok", "silent audio; mono audio")])
+    func refusableSoundIsTheProblem(status: String, note: String) {
+        let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = status; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note })
+        guard case .refusable = r.sound else { Issue.record("\(status)/\(note) → \(r.sound)"); return }
+        #expect(r.warnings.first?.hasPrefix("Audio problem — ") == true, "\(r.warnings)")
+        #expect(r.warnings.first?.contains("Promote refuses") == true, "\(r.warnings)")
+        #expect(r.sheetLine(dateLabel: "1992").contains("Audio ✗"))
+    }
+
+    @Test("TRUTH: the sheet's red problem and the Angel's no-usable-sound floor are the same question")
+    func sheetAgreesWithTheNoSoundFloor() {
+        let notes = ["", "mono audio", "surround audio (6 channels)", "2 live audio tracks", "one-sided audio (left only)",
+                     "channel imbalance", "silent audio", "no audio stream", "silent audio; mono audio"]
+        for status in ["ok", "damaged"] {
+            for note in notes {
+                let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = status; $0.audioVerifyNote = note })
+                var red = false
+                if case .refusable = r.sound { red = true }
+                let floor = ArchiveReadiness.lacksUsableSound(streamTypeRaw: StreamType.videoAndAudio.rawValue,
+                                                              audioVerifyStatus: status, audioVerifyNote: note)
+                #expect(red == floor, "\(status)/\(note): sheet red=\(red), floor=\(floor)")
+            }
+        }
+        #expect(ArchiveReadiness.assess(inputs { _ in }).sound == .notChecked)
+        #expect(ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date() }).sound == .fine)
+        #expect(ArchiveReadiness.assess(inputs { $0.streamTypeRaw = StreamType.videoOnly.rawValue }).sound == .noTrack)
+    }
+
     @Test("date states: user date → known; inferred ≥0.6 → known; <0.6 → lowConfidence; nothing → undated")
     func dateStates() throws {
         #expect(ArchiveReadiness.assess(inputs { _ in }).date == .known)

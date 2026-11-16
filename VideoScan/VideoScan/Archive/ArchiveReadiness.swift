@@ -23,6 +23,28 @@ struct ArchiveReadiness: Equatable, Sendable {
         case notVerified
         case noAudioTrack
     }
+    /// What the stored sound check MEANS for Promote (Rick 2026-11-16: the
+    /// sheet showed a mono file as a red "audio problem" while the gate
+    /// passes mono). `Audio` says whether a check ran and left a note; this
+    /// says what kind of note, in the Promote gate's own terms (DECISIONS
+    /// 2026-11-10: mono and one-sided pass; missing, silent or damaged
+    /// sound is refused). Read from the stored verdict — the sheet's
+    /// forecast; the gate still measures the bytes itself at Promote.
+    /// (For Rick: an enum with payloads ≈ std::variant.)
+    enum SoundStanding: Equatable, Sendable {
+        /// Checked, nothing to say.
+        case fine
+        /// Checked; a fact about the recording (mono, surround, two live
+        /// tracks). Not a problem, nothing to do.
+        case note(String)
+        /// Checked; sound on one side only, or lopsided. Promote accepts
+        /// it; a balanced copy is the better thing to archive.
+        case unbalanced(String)
+        /// Checked; damaged, silent or no stream — Promote refuses it.
+        case refusable(String)
+        case notChecked
+        case noTrack
+    }
     enum Format: Equatable, Sendable {
         case archivalSafe
         case atRisk(String)
@@ -36,6 +58,9 @@ struct ArchiveReadiness: Equatable, Sendable {
 
     let playable: Bool
     let audio: Audio
+    /// What `audio` means for Promote — the sheet's colours and counters
+    /// read THIS, never "is there a note".
+    let sound: SoundStanding
     let format: Format
     let date: DateState
     /// Human sentences, audio first, then format, then date, then other.
@@ -142,6 +167,8 @@ struct ArchiveReadiness: Equatable, Sendable {
             audio = .notVerified
         }
 
+        let sound = soundStanding(audio: audio, audioVerifyStatus: i.audioVerifyStatus)
+
         // ---- Format
         let format = formatRisk(videoCodec: i.videoCodec, audioCodec: i.audioCodec, stream: stream)
 
@@ -160,9 +187,9 @@ struct ArchiveReadiness: Equatable, Sendable {
         let date = dateState(resolution)
 
         let warnings = composeWarnings(i, stream: stream, hasMedia: hasMedia, hasAudio: hasAudio,
-                                       blocking: blocking, audio: audio, format: format, date: date,
+                                       blocking: blocking, sound: sound, format: format, date: date,
                                        resolution: resolution)
-        return ArchiveReadiness(playable: playable, audio: audio, format: format, date: date,
+        return ArchiveReadiness(playable: playable, audio: audio, sound: sound, format: format, date: date,
                                 warnings: warnings, blocking: blocking)
     }
 
@@ -185,6 +212,32 @@ struct ArchiveReadiness: Equatable, Sendable {
     }
     private static let silentNoteFragment = VerifyAudioRules.noteFragment(for: .silentAudio)
     private static let noStreamNoteFragment = VerifyAudioRules.noteFragment(for: .noAudioStream)
+    /// The note fragments Balance Audio exists for: sound on one side, or
+    /// lopsided. Mono (a single-channel track) is NOT one of them — it is
+    /// how the recording was made.
+    private static let unbalancedNoteFragments: Set<String> = [
+        VerifyAudioRules.noteFragment(for: .channelImbalance(.leftOnly)),
+        VerifyAudioRules.noteFragment(for: .channelImbalance(.rightOnly)),
+        VerifyAudioRules.noteFragment(for: .channelImbalance(.trueStereo)),   // the generic "channel imbalance"
+    ]
+
+    /// THE reading of a stored sound verdict for the Promote sheet. The
+    /// worst fragment wins: refusable, then unbalanced, then a plain fact.
+    /// "Refusable" is the same rule as `lacksUsableSound` (a test pins the
+    /// two together). Pure.
+    static func soundStanding(audio: Audio, audioVerifyStatus: String) -> SoundStanding {
+        switch audio {
+        case .verifiedOK: return .fine
+        case .notVerified: return .notChecked
+        case .noAudioTrack: return .noTrack
+        case .verifiedProblem(let note):
+            if audioVerifyStatus == "damaged" { return .refusable(note) }
+            let fragments = note.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+            if fragments.contains(silentNoteFragment) || fragments.contains(noStreamNoteFragment) { return .refusable(note) }
+            if fragments.contains(where: unbalancedNoteFragments.contains) { return .unbalanced(note) }
+            return .note(note)
+        }
+    }
 
     /// Date state from a resolution:
     ///   • `.known` — Rick's own date (any precision: "1992" + I'm-sure means
@@ -202,9 +255,26 @@ struct ArchiveReadiness: Equatable, Sendable {
         return .lowConfidence
     }
 
+    /// The one sentence about the sound, or nil when there is nothing to
+    /// say (checked and fine, or a plain fact such as mono). Pure.
+    static func soundWarning(_ sound: SoundStanding, hasAudio: Bool, videoOnly: Bool) -> String? {
+        switch sound {
+        case .refusable(let note):
+            return "Audio problem — \(note) — Promote refuses it (it measures the sound again first)"
+        case .unbalanced(let note):
+            return "Sound is not balanced — \(note) — it can be archived as it is; a balanced copy plays on both sides (Repair… ▸ Balance Audio, or Prepare with Archive Angel)"
+        case .notChecked where hasAudio:
+            return "Sound not checked yet — Promote checks it before copying (missing, silent or damaged sound is refused)"
+        case .noTrack where videoOnly:
+            return "No audio track (video-only) — Promote refuses it unless it is tagged “\(WorkflowTags.silentChecked)”; combine it with its sound first"
+        default:
+            return nil
+        }
+    }
+
     /// Warning sentences — AUDIO FIRST, then format, then date, then other.
     private static func composeWarnings(_ i: Inputs, stream: StreamType, hasMedia: Bool, hasAudio: Bool,
-                                        blocking: Bool, audio: Audio, format: Format, date: DateState,
+                                        blocking: Bool, sound: SoundStanding, format: Format, date: DateState,
                                         resolution: RecordDateResolution) -> [String] {
         var warnings: [String] = []
         if blocking {
@@ -212,11 +282,8 @@ struct ArchiveReadiness: Equatable, Sendable {
                             ? "Un-probeable — ffprobe could not read this file; the archive would hold bytes nobody has decoded"
                             : "No audio or video streams found — nothing decodable to preserve")
         }
-        switch audio {
-        case .verifiedProblem(let note): warnings.append("Audio problem — \(note)")
-        case .notVerified where hasAudio: warnings.append("Sound not checked yet — Promote checks it before copying (missing, silent or damaged sound is refused)")
-        case .noAudioTrack where stream == .videoOnly: warnings.append("No audio track (video-only) — Promote refuses it unless it is tagged “\(WorkflowTags.silentChecked)”; combine it with its sound first")
-        default: break
+        if let sentence = soundWarning(sound, hasAudio: hasAudio, videoOnly: stream == .videoOnly) {
+            warnings.append(sentence)
         }
         if hasAudio, !i.audioCodec.isEmpty, let risk = atRiskAudioCodecs[i.audioCodec.lowercased()] {
             warnings.append("Audio codec \(risk) is legacy/lossy — plan a PCM access copy")
@@ -315,11 +382,13 @@ struct ArchiveReadiness: Equatable, Sendable {
     /// One-line sheet text: "Playable ✓ · Audio ✓ · Codec: DV (at-risk: plan an access copy) · Date: 1994 (low confidence)".
     func sheetLine(dateLabel: String) -> String {
         var parts: [String] = [playable ? "Playable ✓" : "Un-probeable ✗"]
-        switch audio {
-        case .verifiedOK: parts.append("Audio ✓")
-        case .verifiedProblem(let n): parts.append("Audio ✗ \(n)")
-        case .notVerified: parts.append("Audio — not verified")
-        case .noAudioTrack: parts.append("Audio —")
+        switch sound {
+        case .fine: parts.append("Audio ✓")
+        case .note(let n): parts.append("Audio ✓ \(n)")
+        case .unbalanced(let n): parts.append("Audio ⚠ \(n)")
+        case .refusable(let n): parts.append("Audio ✗ \(n)")
+        case .notChecked: parts.append("Audio — checked when you promote")
+        case .noTrack: parts.append("Audio —")
         }
         switch format {
         case .archivalSafe: parts.append("Codec: safe")
