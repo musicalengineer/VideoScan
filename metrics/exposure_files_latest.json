@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-15T12:23:23Z",
- "sha": "325afb62",
+ "ts": "2026-11-16T13:15:47Z",
+ "sha": "78224131",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -4300,7 +4300,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift": {
-   "lines": 2682,
+   "lines": 2715,
    "decls": 57,
    "could_be_private": [
     "ArchivistDiagnosticLine.FailureOperation",
@@ -4513,7 +4513,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/ArchivistQueryAST+TranslatorDecoding.swift": {
-   "lines": 426,
+   "lines": 470,
    "decls": 6,
    "could_be_private": [
     "ArchivistQueryAST.knownFieldNames",
@@ -4693,8 +4693,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift": {
-   "lines": 1371,
-   "decls": 72,
+   "lines": 1399,
+   "decls": 73,
    "could_be_private": [
     "HallieAppTurnCoordinator.Composition",
     "HallieAppTurnCoordinator.Composition.init"
@@ -5706,14 +5706,14 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/ArchivistEndpointSettings.swift": {
-   "lines": 759,
+   "lines": 764,
    "decls": 10,
    "could_be_private": [],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/HallieBrainBackend.swift": {
-   "lines": 258,
-   "decls": 9,
+   "lines": 271,
+   "decls": 10,
    "could_be_private": [
     "HallieBrainLabel.cloudPrefix",
     "HallieLoggedBrain.brainLabel"
@@ -5721,13 +5721,24 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/HallieBrainDecoding.swift": {
-   "lines": 78,
-   "decls": 3,
-   "could_be_private": [],
+   "lines": 96,
+   "decls": 5,
+   "could_be_private": [
+    "HallieBrainDecoding.logDroppedYears",
+    "HallieBrainDecoding.replyExcerpt"
+   ],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/Hallie/LLM/HallieBrainLog.swift": {
+   "lines": 140,
+   "decls": 11,
+   "could_be_private": [],
+   "widened_for_split": [
+    "HallieAppTurnCoordinator.Dependencies.announceTurnBrain"
+   ]
+  },
   "VideoScan/VideoScan/Hallie/LLM/HallieBrainProviderSection.swift": {
-   "lines": 100,
+   "lines": 109,
    "decls": 4,
    "could_be_private": [
     "HallieBrainProviderSection.cloudCaption"
@@ -5735,11 +5746,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift": {
-   "lines": 114,
-   "decls": 17,
+   "lines": 130,
+   "decls": 18,
    "could_be_private": [
-    "HallieBrainSettings.cloudModelKey",
-    "HallieBrainResolver.providerOverride"
+    "HallieBrainResolver.providerOverride",
+    "HallieBrainResolver.probeResidentAfterFailure"
    ],
    "widened_for_split": []
   },
@@ -5759,8 +5770,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/LLM/HallieGroundedComposer.swift": {
-   "lines": 558,
-   "decls": 38,
+   "lines": 565,
+   "decls": 40,
    "could_be_private": [
     "HallieCompositionSettings.defaultPersonaName",
     "HallieGroundedComposer.restoringMissingClaims",
@@ -5806,7 +5817,6 @@
    "lines": 1267,
    "decls": 43,
    "could_be_private": [
-    "OllamaQueryTranslator.ModelFacts",
     "OllamaQueryTranslator.structuredOutputUnsupportedLine",
     "OllamaQueryTranslator.astRelationValues"
    ],
@@ -6082,7 +6092,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/Web/HallieWebBridge.swift": {
-   "lines": 885,
+   "lines": 889,
    "decls": 53,
    "could_be_private": [
     "HallieWebBridge.AttachmentCapability",

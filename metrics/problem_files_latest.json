@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-15T12:23:30Z",
- "sha": "325afb62",
+ "ts": "2026-11-16T13:15:55Z",
+ "sha": "78224131",
  "formula_version": 1,
- "files_scored": 868,
+ "files_scored": 870,
  "rows": [
   {
    "file": "VideoScan/VideoScan/App/ContentView.swift",
@@ -43,11 +43,11 @@
    "offenders": 3,
    "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 2682,
+   "lines": 2715,
    "could_be_private": 7,
    "widened_for_split": 0,
    "churn_7d": 1,
-   "score": 30.9
+   "score": 31.0
   },
   {
    "file": "VideoScan/VideoScan/Catalog/FileJourneyBuilder.swift",
@@ -70,17 +70,6 @@
    "widened_for_split": 4,
    "churn_7d": 0,
    "score": 25.0
-  },
-  {
-   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 727,
-   "could_be_private": 39,
-   "widened_for_split": 0,
-   "churn_7d": 1,
-   "score": 23.4
   },
   {
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
@@ -169,6 +158,17 @@
    "widened_for_split": 0,
    "churn_7d": 0,
    "score": 20.6
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 2242,
+   "could_be_private": 25,
+   "widened_for_split": 2,
+   "churn_7d": 0,
+   "score": 20.2
   }
  ]
 }

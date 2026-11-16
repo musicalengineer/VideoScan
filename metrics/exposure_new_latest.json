@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-15T12:23:23Z",
- "sha": "325afb62",
+ "ts": "2026-11-16T13:15:47Z",
+ "sha": "78224131",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -3371,6 +3371,27 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainDecoding.swift::HallieBrainDecoding.logDroppedYears",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainDecoding.swift",
+   "name": "HallieBrainDecoding.logDroppedYears",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainDecoding.swift::HallieBrainDecoding.replyExcerpt",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainDecoding.swift",
+   "name": "HallieBrainDecoding.replyExcerpt",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainLog.swift::HallieAppTurnCoordinator.Dependencies.announceTurnBrain",
+   "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainLog.swift",
+   "name": "HallieAppTurnCoordinator.Dependencies.announceTurnBrain",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
    "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainProviderSection.swift::HallieBrainProviderSection.cloudCaption",
    "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainProviderSection.swift",
    "name": "HallieBrainProviderSection.cloudCaption",
@@ -3378,17 +3399,17 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainResolver.providerOverride",
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainResolver.probeResidentAfterFailure",
    "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift",
-   "name": "HallieBrainResolver.providerOverride",
+   "name": "HallieBrainResolver.probeResidentAfterFailure",
    "kind": "var",
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainSettings.cloudModelKey",
+   "key": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift::HallieBrainResolver.providerOverride",
    "file": "VideoScan/VideoScan/Hallie/LLM/HallieBrainResolver.swift",
-   "name": "HallieBrainSettings.cloudModelKey",
-   "kind": "let",
+   "name": "HallieBrainResolver.providerOverride",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -8481,8 +8502,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 170,
+ "fixed": 171,
  "baseline_before": 2456,
- "baseline_after": 2286,
+ "baseline_after": 2285,
  "shrink_skipped": false
 }
