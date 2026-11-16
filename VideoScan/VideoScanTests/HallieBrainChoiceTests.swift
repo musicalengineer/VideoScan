@@ -460,7 +460,11 @@ struct HallieCloudRequestShapeTests {
         }
     }
 
-    @Test("compose: no tools, 320 tokens, plain text back")
+    // 2026-11-16: the 5.5 models think by default and thinking is billed
+    // against max_tokens. At 320 tokens the thinking ate the whole allowance
+    // on 16 of Haiku's 24 phrasing calls (4 of Opus's, 1 of Sonnet's): no
+    // text block came back and the template answered instead.
+    @Test("compose: no tools, room to think and still answer, low effort, plain text back")
     func composeBody() async throws {
         let (session, token) = hallieCloudStubSession()
         HallieCloudStubLedger.shared.queue(
@@ -471,7 +475,53 @@ struct HallieCloudRequestShapeTests {
         let body = try json(try #require(HallieCloudStubLedger.shared.seen(token).first).body)
         #expect(body["tools"] == nil)
         #expect(body["tool_choice"] == nil)
-        #expect(body["max_tokens"] as? Int == 320)
+        #expect(body["thinking"] == nil, "a thinking override is a 400 on the 5.5 models")
+        #expect(body["max_tokens"] as? Int == AnthropicBrain.composeMaxTokens)
+        #expect(AnthropicBrain.composeMaxTokens >= 1024)
+        let config = try #require(body["output_config"] as? [String: Any], "compose sends no output_config")
+        #expect(config["effort"] as? String == "low")
+        #expect(config["format"] == nil, "compose is prose, not a schema")
+    }
+
+    @Test("compose: a reply that spent its allowance thinking is named as cut off, not as empty")
+    func composeThoughtItselfOut() async {
+        let (session, token) = hallieCloudStubSession()
+        HallieCloudStubLedger.shared.queue(
+            token, status: 200,
+            body: #"{"content":[{"type":"thinking","thinking":""}],"stop_reason":"max_tokens"}"#)
+        await #expect(throws: HallieBrainError.cloudTruncated) {
+            _ = try await hallieStubbedCloudBrain(session).composePlainText(
+                system: "You are Hallie.", user: "[c1] 12 videos.", dataClass: .familyText)
+        }
+        #expect(HallieCloudStubLedger.shared.seen(token).count == 1)
+    }
+
+    @Test("compose: an empty reply that was not cut off names its stop reason in the log")
+    func composeEmptyNamesStopReason() async {
+        let (session, token) = hallieCloudStubSession()
+        HallieCloudStubLedger.shared.queue(
+            token, status: 200, body: #"{"content":[],"stop_reason":"end_turn"}"#)
+        do {
+            _ = try await hallieStubbedCloudBrain(session).composePlainText(
+                system: "You are Hallie.", user: "[c1] 12 videos.", dataClass: .familyText)
+            Issue.record("an empty reply should throw")
+        } catch let error as NLTranslatorError {
+            guard case .badResponse(let why) = error else {
+                Issue.record("expected badResponse, got \(error)"); return
+            }
+            #expect(why.contains("stop_reason=end_turn"))
+        } catch { Issue.record("unexpected \(error)") }
+    }
+
+    @Test("compose: prose cut off at the limit is still prose")
+    func composeTruncatedProseKept() async throws {
+        let (session, token) = hallieCloudStubSession()
+        HallieCloudStubLedger.shared.queue(
+            token, status: 200,
+            body: #"{"content":[{"type":"text","text":"Donna is in 3 videos, and"}],"stop_reason":"max_tokens"}"#)
+        let text = try await hallieStubbedCloudBrain(session).composePlainText(
+            system: "You are Hallie.", user: "[c1] Donna is in 3 videos.", dataClass: .familyText)
+        #expect(text == "Donna is in 3 videos, and")
     }
 
     @Test("HTTP errors classify without echoing the key; overload retries once")

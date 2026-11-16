@@ -18399,6 +18399,9 @@
         "cloudModelOverrideNoKey",
         "cloudResolves",
         "composeBody",
+        "composeEmptyNamesStopReason",
+        "composeThoughtItselfOut",
+        "composeTruncatedProseKept",
         "defaults",
         "errors",
         "garbageIsLocal",
@@ -38875,7 +38878,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3757,
+      "expected_floor": 3760,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [

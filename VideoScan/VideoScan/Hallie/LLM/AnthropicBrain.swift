@@ -70,6 +70,16 @@ struct AnthropicBrain: HallieBrainBackend {
         }
     }
 
+    /// The 5.5 models think by default, thinking cannot be switched off on
+    /// Sonnet/Opus, and thinking tokens count against `max_tokens`. At the
+    /// old 320 the thinking used the whole allowance and no text came back
+    /// (2026-11-15 run: 16 of Haiku's 24 phrasing calls, 4 of Opus's, 1 of
+    /// Sonnet's). So: room for both, and low effort, since phrasing an
+    /// already-approved plan needs little thought. The prompt sets the
+    /// answer's length, not this ceiling; only tokens used are billed.
+    static let composeMaxTokens = 2048
+    static let composeEffort = "low"
+
     func composePlainText(system: String, user: String,
                           dataClass: HallieDataClass) async throws -> String {
         let request = RemoteRequest(
@@ -77,13 +87,20 @@ struct AnthropicBrain: HallieBrainBackend {
             system: [.text(system, .public)],
             user: [.text(user, dataClass)],
             outputSchema: nil,
-            maxTokens: 320)
+            maxTokens: Self.composeMaxTokens,
+            effort: Self.composeEffort)
         let root = try await send(request)
         // A refusal's text is not a composed answer; the composer falls back
-        // to its template. (Truncated prose at 320 tokens is still prose.)
-        if (root["stop_reason"] as? String) == "refusal" { throw HallieBrainError.cloudRefused }
+        // to its template. (Prose cut off at the limit is still prose.)
+        let stop = root["stop_reason"] as? String
+        if stop == "refusal" { throw HallieBrainError.cloudRefused }
         let text = Self.textBlocks(root)
-        guard !text.isEmpty else { throw NLTranslatorError.badResponse("empty message content") }
+        guard !text.isEmpty else {
+            // No text at the limit means the allowance went on thinking.
+            if stop == "max_tokens" { throw HallieBrainError.cloudTruncated }
+            throw NLTranslatorError.badResponse(
+                "empty message content (stop_reason=\(stop ?? "none"))")
+        }
         return text
     }
 

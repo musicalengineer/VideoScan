@@ -59,6 +59,9 @@ struct RemoteRequest: Sendable {
     /// Sendable; the body builder sends Anthropic a sanitized copy.
     var outputSchema: Data?
     var maxTokens: Int
+    /// `output_config.effort` ("low"…"max"); nil leaves the model's default.
+    /// This is the only thinking control the 5.5 models accept.
+    var effort: String?
 }
 
 enum RemoteSerializer {
@@ -115,14 +118,17 @@ enum RemoteSerializer {
         ]
         // Never `tools`/`tool_choice`, `temperature`/`top_p`/`top_k`, an
         // assistant prefill or a `thinking` override: each is a 400 on the
-        // 5.5 models. Thinking stays at the model default.
+        // 5.5 models. Thinking depth is steered by `effort` alone.
+        var outputConfig: [String: Any] = [:]
         if let schemaData = request.outputSchema {
             guard let schema = try JSONSerialization.jsonObject(with: schemaData) as? [String: Any] else {
                 throw CocoaError(.coderInvalidValue)
             }
-            body["output_config"] = ["format": ["type": "json_schema",
-                                                "schema": AnthropicSchemaSanitizer.sanitize(schema)]]
+            outputConfig["format"] = ["type": "json_schema",
+                                      "schema": AnthropicSchemaSanitizer.sanitize(schema)]
         }
+        if let effort = request.effort { outputConfig["effort"] = effort }
+        if !outputConfig.isEmpty { body["output_config"] = outputConfig }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
