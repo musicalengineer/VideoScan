@@ -272,20 +272,20 @@ struct VerifyAudioVerdictAngelReuseTests {
     @Test("an earlier stored ok + a newer cached not-checked diagnosis: verify again, do not reuse")
     func aNotCheckedDiagnosisIsNotReused() {
         for notChecked in [failedPassDiagnosis(), S.soundDiagnosis(channels: [-18, -20], levelsComplete: false)] {
-            #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: notChecked) == nil)
-            #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "damaged", cached: notChecked) == nil)
+            #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: notChecked, standing: .fine) == nil)
+            #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "damaged", cached: notChecked, standing: .fine) == nil)
         }
     }
 
     @Test("unchanged: a checked diagnosis behind a stored verdict is reused; no stored verdict or no diagnosis is not")
     func checkedDiagnosesAreReused() {
         let fine = S.soundDiagnosis(channels: [-18, -20])
-        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: fine)?.verdict == .ok)
+        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: fine, standing: .fine)?.verdict == .ok)
         let short = S.soundDiagnosis(channels: [-18, -20],
                                      extraFindings: [.durationMismatch(audioSeconds: 2, videoSeconds: 10)])
-        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "damaged", cached: short)?.verdict == .damaged)
-        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "", cached: fine) == nil)
-        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: nil) == nil)
+        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "damaged", cached: short, standing: .fine)?.verdict == .damaged)
+        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "", cached: fine, standing: .fine) == nil)
+        #expect(ArchiveAngelAudioOutcome.reusableDiagnosis(storedStatus: "ok", cached: nil, standing: .fine) == nil)
     }
 }
 

@@ -132,12 +132,26 @@ struct ArchivePromotePlan: Sendable {
     var allowUnprobeable: Bool = false
 
     // MARK: Readiness counters (O(selection))
-    var audioNotVerifiedCount: Int { entries.filter { $0.readiness.sound == .notChecked }.count }
-    /// Sound Promote will refuse (damaged, silent, no stream) — never a
-    /// fact about the recording such as mono (Rick 2026-11-16).
-    var audioProblemCount: Int { entries.filter { if case .refusable = $0.readiness.sound { return true }; return false }.count }
+    // The five audio counters are an exclusive partition of the selection
+    // (Codex #300 F5): each entry's sound is in exactly one
+    // ArchiveReadiness.SoundBucket, so they sum to `entries.count`.
+    private func audioCount(_ bucket: ArchiveReadiness.SoundBucket) -> Int {
+        entries.filter { $0.readiness.sound.bucket == bucket }.count
+    }
+    /// Promote measures it first (never checked, or the stored check does
+    /// not describe this file).
+    var audioNotVerifiedCount: Int { audioCount(.notChecked) }
+    /// Sound Promote will refuse (damaged, silent, no stream, a video with
+    /// no audio track and no accepting tag) — never a fact about the
+    /// recording such as mono (Rick 2026-11-16).
+    var audioProblemCount: Int { audioCount(.refused) }
     /// Sound on one side only / lopsided: passes, better balanced.
-    var audioUnbalancedCount: Int { entries.filter { if case .unbalanced = $0.readiness.sound { return true }; return false }.count }
+    var audioUnbalancedCount: Int { audioCount(.unbalanced) }
+    /// Said, not a problem: a layout note (surround, two live tracks), or
+    /// silence the owner's tag accepts.
+    var audioNotedCount: Int { audioCount(.noted) }
+    /// Checked and fine (plain, or mono).
+    var audioFineCount: Int { audioCount(.fine) }
     var atRiskFormatCount: Int { entries.filter { if case .atRisk = $0.readiness.format { return true }; return false }.count }
     var dateWarningCount: Int { entries.filter { $0.readiness.date != .known }.count }
     var unprobeableCount: Int { entries.filter { $0.readiness.blocking }.count }

@@ -55,7 +55,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         return ArchiveAngelReadinessExplanation(
             id: f.id,
             filename: f.filename,
-            statusWords: ArchiveAngelStatusWords.words(kind: f.kind, needs: needs),
+            statusWords: ArchiveAngelStatusWords.words(f, needs: needs),
             isReady: ready,
             whyChosen: whyChosen(f),
             missing: needs.map(step),
@@ -325,6 +325,21 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
     private static func soundValue(_ f: ArchiveAngelRowFacts) -> String {
         if f.audioVerifyStatus == "damaged" {
             return "Damaged — " + stripPrefix(f.audioVerifyNote, "Damaged audio — ", fallback: "the sound check found a problem")
+        }
+        // The standing first (Codex #300): what the check did NOT measure,
+        // a tag that accepts silence, and a stored note that does not
+        // describe this file are said here, never folded into "Checked".
+        switch f.soundStanding {
+        case .unmeasured(let note):
+            return "Checked — \(note). \(asSentence(ArchiveReadiness.notMeasuredWords)) Listen before you archive it."
+        case .accepted(let words):
+            return "\(words). \(ArchiveReadiness.acceptedConditionWords)."
+        case .notChecked:
+            // A stored note, yet "not checked": it was measured on something
+            // else (a "mono" note on a file that is not one channel).
+            if case .verifiedProblem = f.audio { return "Not checked — the stored sound check does not describe this file" }
+        case .fine, .note, .unbalanced, .refusable, .noTrack:
+            break
         }
         switch f.audio {
         case .verifiedOK: return "Checked — sounds fine"

@@ -91,11 +91,14 @@ struct ArchiveAngelBalanceNoteTests {
         // The decision is ArchiveAngelAudioOutcome.reusableDiagnosis (stored
         // verdict + cached diagnosis that is itself a verdict; its behaviour
         // is pinned in VerifyAudioVerdictAngelReuseTests) — the job asks it
-        // with the stored status and the Center's cache, nothing else.
-        #expect(job.contains("storedStatus: rec.audioVerifyStatus, cached: center.verifyDiagnosis(forRecordID: rec.id))"))
+        // with the stored status, the Center's cache, and (Codex #302) the
+        // standing ArchiveReadiness gives the record: a stored verdict that
+        // does not describe the file is not "already verified".
+        #expect(job.contains("storedStatus: rec.audioVerifyStatus, cached: center.verifyDiagnosis(forRecordID: rec.id),"))
+        #expect(job.contains("standing: ArchiveReadiness.assess(record: rec).sound)"))
         #expect(!job.contains("!rec.audioVerifyStatus.isEmpty, let cached"), "no second copy of the rule in the job")
         let outcome = try String(contentsOf: dir.appendingPathComponent("VideoScan/ArchiveAngel/Prepare/ArchiveAngelAudioOutcome.swift"), encoding: .utf8)
-        #expect(outcome.contains("guard !storedStatus.isEmpty, let cached else { return nil }"))
+        #expect(outcome.contains("guard !storedStatus.isEmpty, standing != .notChecked, let cached else { return nil }"))
         #expect(!job.contains("note: \"Audio OK — nothing to fix\")"), "the bare fallthrough is gone")
         // Audit #5: a failed plan save stops the loop and success cannot overwrite it.
         #expect(job.contains("if stopRequested || planSaveFailed { break }"))

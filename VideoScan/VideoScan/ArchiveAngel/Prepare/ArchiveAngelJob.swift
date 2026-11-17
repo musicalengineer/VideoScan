@@ -736,8 +736,12 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             step(idx, .verifyAudio, .skipped, note: "No audio track")
             return nil
         }
+        // The standing is the reading the row routed by (ArchiveReadiness):
+        // a stored verdict that does not describe this record is not
+        // "already verified" (Codex #302).
         if let cached = ArchiveAngelAudioOutcome.reusableDiagnosis(
-            storedStatus: rec.audioVerifyStatus, cached: center.verifyDiagnosis(forRecordID: rec.id)) {
+            storedStatus: rec.audioVerifyStatus, cached: center.verifyDiagnosis(forRecordID: rec.id),
+            standing: ArchiveReadiness.assess(record: rec).sound) {
             // Only with the diagnosis in hand (audit #6): it lives in an
             // in-memory cache, so after a restart it is gone and the file
             // is verified again below rather than assumed fine.

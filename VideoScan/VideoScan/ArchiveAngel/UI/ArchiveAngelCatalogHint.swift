@@ -76,6 +76,7 @@ struct ArchiveAngelCatalogHint: Equatable, Sendable {
         let readiness = ArchiveReadiness.assess(i.readiness)
         var f = ArchiveAngelRowFacts(id: i.id, filename: i.filename, fullPath: "", kind: i.kind)
         f.audio = readiness.audio
+        f.sound = readiness.sound
         f.audioVerifyStatus = i.readiness.audioVerifyStatus
         f.audioVerifyNote = i.readiness.audioVerifyNote
         f.date = readiness.date
@@ -84,7 +85,7 @@ struct ArchiveAngelCatalogHint: Equatable, Sendable {
         let needs = ArchiveAngelStatusWords.needs(f)
         let ready = ArchiveAngelStatusWords.isReady(kind: i.kind, needs: needs)
         let help = ready
-            ? readyHelp(i, audio: readiness.audio)
+            ? readyHelp(i, audio: readiness.audio, sound: readiness.sound)
             : pickHelp(i, words: ArchiveAngelStatusWords.words(f, needs: needs))
         return ArchiveAngelCatalogHint(kind: i.kind, isReady: ready, help: help)
     }
@@ -92,11 +93,17 @@ struct ArchiveAngelCatalogHint: Equatable, Sendable {
     // MARK: Words
 
     /// "Ready for archive — Archive Angel picked this one." + why, date, sound.
-    static func readyHelp(_ i: Input, audio: ArchiveReadiness.Audio) -> String {
+    static func readyHelp(_ i: Input, audio: ArchiveReadiness.Audio,
+                          sound: ArchiveReadiness.SoundStanding? = nil) -> String {
         var lines = ["Ready for archive — Archive Angel picked this one and it has everything it needs."]
         if let why = whyLine(i) { lines.append(why) }
         lines.append(dateLine(i.readiness))
-        lines.append(audio == .noAudioTrack ? "Sound: this file has no sound track." : "Sound: checked.")
+        if case .unmeasured(let note)? = sound {
+            // Codex #300 F1: a layout note is said, with what it leaves out.
+            lines.append("Sound: checked — \(note); \(ArchiveReadiness.notMeasuredWords).")
+        } else {
+            lines.append(audio == .noAudioTrack ? "Sound: this file has no sound track." : "Sound: checked.")
+        }
         lines.append("Not in the family archive yet — Promote to Archive copies it in; the original is never changed.")
         return lines.joined(separator: "\n")
     }

@@ -6076,6 +6076,7 @@
       ],
       "tests": [
         "aFailedLevelsPassIsNotDamage",
+        "aPartlyMeasuredTrackIsNeverCalledMono",
         "aSoundTrackThatWasNotMeasuredIsNotBalanced",
         "balanceStepRunsForOneSidedOnly",
         "damageFindingsStayDamaged",
@@ -6083,6 +6084,8 @@
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
+        "monoBesideAnyOtherFindingIsNotCalledFine",
+        "monoBesideDamageIsDamage",
         "monoIsNotSomethingToFix",
         "noAudioStreamIsItsOwnCase",
         "rightOnlyIsFixable",
@@ -6718,8 +6721,10 @@
         "everyClassHasWordsAndNoLetterGrade",
         "genuineDamageStillNeedsRepair",
         "hallieKeepsItsRegularButtons",
+        "layoutNotesStayReadyButSaySo",
         "locationWords",
         "missingFileOnAMountedVolumeIsNotDriveNotConnected",
+        "monoStaysReadyAndPromotesDirectly",
         "movAndMp4WithQuickTimeCodecsPlayInQuickTime",
         "needsDateClassSaysNeedsADate",
         "noAudioTrackIsNotANeed",
@@ -6735,7 +6740,6 @@
         "readyWithNothingMissingIsReadyToArchive",
         "rowCarriesWordsReadinessAndRouteTogether",
         "rowShowsNoGradeNoScoreAndAllFiveButtons",
-        "soundFactsStayReady",
         "tenRowsAPage",
         "tenThousandRowsBuildInsideTheBudget",
         "threeOrMoreNeedsSayAndMore",
@@ -7753,12 +7757,13 @@
         "dvPromotesWithToken",
         "familyDateStandsInForAnUndatedTwin",
         "headerCompatibility",
+        "layoutNotesAreNeutral",
+        "monoIsNotAProblem",
         "oneSidedIsFlaggedNotRefused",
         "refusableSoundIsTheProblem",
         "safeCodecs",
         "scale",
         "sheetAgreesWithTheNoSoundFloor",
-        "soundFactsAreNotProblems",
         "tokenAndSummary",
         "unknownCodec",
         "unprobeableNeedsOverride",
@@ -36140,6 +36145,41 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundStandingFollowsGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundStandingFollowsGateTests"
+      ],
+      "tests": [
+        "aLayoutNoteIsNotGreen",
+        "aStoredNoteNobodyRecognisesIsNeverGreen",
+        "aTagNotTiedToTheBytesAcceptsNothing",
+        "acceptedSilenceIsNotAProblem",
+        "damageOutranksTheTagEvenWithNoTrack",
+        "noStreamAndDamage",
+        "scale",
+        "silentSurroundIsSilent",
+        "soundBucketsPartitionTheSelection",
+        "staleMonoIsNotChecked",
+        "theAcceptedLineDoesNotPromise",
+        "theSheetFollowsTheGate"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelStaleSoundVerdictPrepareTests"
+      ],
+      "tests": [
+        "monoOnTheSecondStreamGoesThroughPrepareAndIsNotStuck",
+        "reuseNeedsAStandingVerdict",
+        "staleMonoIsVerifiedFreshAndBalanced"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ObservationsStoreBehaviourTests.swift",
       "stage": "unit",
       "suites": [
@@ -36236,16 +36276,43 @@
     },
     {
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FrameIndexMediaMatrixTests.swift",
-      "stage": "regression",
+      "path": "VideoScan/VideoScanTests/FrameIndexReopenTests.swift",
+      "stage": "unit",
       "suites": [
-        "FrameIndexMediaMatrixTests"
+        "FrameIndexReopenTests"
       ],
       "tests": [
-        "aFileThatIsNotAVideoIsTheFilesFaultAndADeletedOneIsNot",
-        "aThumbnailIsTheFrameAtThatTimeAtMostThreeHundredTwentyAcrossAndIsKept",
-        "everyAskedTimeDecodesToThePictureThatIsThere",
-        "theFiveContainersThroughTheJobAreFoundByColourAtTheRightTimes"
+        "aWindowOpenedMidRunShowsTheJobAndIsHandedItsSavesWithoutPressingAnything",
+        "aWindowOpenedMidRunThatPressesIndexFramesIsHandedTheLaterSaves",
+        "theProductionDoorJoinsThroughTheCenterItWasGiven",
+        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener",
+        "windowsOpenedAndClosedDuringAPausedRunLeaveNoListenerBehind"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchProductionDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameSearchProductionDoorTests"
+      ],
+      "tests": [
+        "aHitIsThisSessionsCatalogRowForTheIndexedContentAndTheReadCommitsNothing",
+        "aSessionWithNoCatalogOpenSaysSoAndItsJobRefusesAndWritesNothing",
+        "indexFramesThroughTheDoorRunsInTheGivenCenterOverTheSessionsFilesAndTheWindowsFolder",
+        "theAppBuildsOneLoaderPerModelAndItIsSigLIP"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ObservationsReadDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ObservationsReadDoorTests"
+      ],
+      "tests": [
+        "aSessionWithNoCatalogOpenRefusesInTheDoorsWordsAndTheBodyNeverRuns",
+        "theDoorIsTheSessionsOwnRepositoryACancelledReadNeverReachesItAndNothingIsCommitted"
       ]
     },
     {
@@ -36267,16 +36334,32 @@
     },
     {
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FrameSearchProductionDoorTests.swift",
-      "stage": "unit",
+      "path": "VideoScan/VideoScanTests/FrameSearchLifecycleTests.swift",
+      "stage": "regression",
       "suites": [
-        "FrameSearchProductionDoorTests"
+        "FrameSearchLifecycleTests"
       ],
       "tests": [
-        "aHitIsThisSessionsCatalogRowForTheIndexedContentAndTheReadCommitsNothing",
-        "aSessionWithNoCatalogOpenSaysSoAndItsJobRefusesAndWritesNothing",
-        "indexFramesThroughTheDoorRunsInTheGivenCenterOverTheSessionsFilesAndTheWindowsFolder",
-        "theAppBuildsOneLoaderPerModelAndItIsSigLIP"
+        "aClosedWindowNeverPublishesAgainEvenWhileSomethingStillHoldsIt",
+        "aRunCutWhileItReadsTheCatalogIsStoppedNotRefused",
+        "aSearchInFlightAgainstAnOlderIndexNeverPublishesUnderANewerOne",
+        "aWindowNeitherJoinsNorIsHandedAJobWritingAnotherIndex",
+        "everyEndingDropsTheRunsListeners",
+        "hitsAlreadyShownAreRecomputedWhenANewerIndexIsShown"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexMediaMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameIndexMediaMatrixTests"
+      ],
+      "tests": [
+        "aFileThatIsNotAVideoIsTheFilesFaultAndADeletedOneIsNot",
+        "aThumbnailIsTheFrameAtThatTimeAtMostThreeHundredTwentyAcrossAndIsKept",
+        "everyAskedTimeDecodesToThePictureThatIsThere",
+        "theFiveContainersThroughTheJobAreFoundByColourAtTheRightTimes"
       ]
     },
     {
@@ -36296,49 +36379,6 @@
         "theTinyModelThroughTheJobTheIndexOnDiskAndTheWindowsSearch",
         "warmingLoadsTheModelAndUnloadingDropsItUntilTheNextQuestion",
         "weightsThatCannotBeFoundKeepTheirOwnWordsAndAFailedLoadIsTriedAgain"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FrameIndexReopenTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FrameIndexReopenTests"
-      ],
-      "tests": [
-        "aWindowOpenedMidRunShowsTheJobAndIsHandedItsSavesWithoutPressingAnything",
-        "aWindowOpenedMidRunThatPressesIndexFramesIsHandedTheLaterSaves",
-        "theProductionDoorJoinsThroughTheCenterItWasGiven",
-        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener",
-        "windowsOpenedAndClosedDuringAPausedRunLeaveNoListenerBehind"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ObservationsReadDoorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ObservationsReadDoorTests"
-      ],
-      "tests": [
-        "aSessionWithNoCatalogOpenRefusesInTheDoorsWordsAndTheBodyNeverRuns",
-        "theDoorIsTheSessionsOwnRepositoryACancelledReadNeverReachesItAndNothingIsCommitted"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FrameSearchLifecycleTests.swift",
-      "stage": "regression",
-      "suites": [
-        "FrameSearchLifecycleTests"
-      ],
-      "tests": [
-        "aClosedWindowNeverPublishesAgainEvenWhileSomethingStillHoldsIt",
-        "aRunCutWhileItReadsTheCatalogIsStoppedNotRefused",
-        "aSearchInFlightAgainstAnOlderIndexNeverPublishesUnderANewerOne",
-        "aWindowNeitherJoinsNorIsHandedAJobWritingAnotherIndex",
-        "everyEndingDropsTheRunsListeners",
-        "hitsAlreadyShownAreRecomputedWhenANewerIndexIsShown"
       ]
     }
   ],
@@ -39096,7 +39136,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3828,
+      "expected_floor": 3846,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39818,16 +39858,18 @@
         "VideoScanTests/FileJourneyNonsenseDataTests",
         "VideoScanTests/HallieBrainLogTests",
         "VideoScanTests/HallieUnstatedYearDecodingTests",
+        "VideoScanTests/SoundStandingFollowsGateTests",
+        "VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests",
         "VideoScanTests/FrameIndexEngineTests",
         "VideoScanTests/FrameIndexJobBehaviourTests",
+        "VideoScanTests/FrameIndexReopenTests",
+        "VideoScanTests/FrameSearchProductionDoorTests",
         "VideoScanTests/FrameSearchStoreBehaviourTests",
         "VideoScanTests/LatestWinsTests",
         "VideoScanTests/ObservationsProductionDoorTests",
+        "VideoScanTests/ObservationsReadDoorTests",
         "VideoScanTests/ObservationsStoreBehaviourTests",
-        "VideoScanTests/SigLIPInputTests",
-        "VideoScanTests/FrameSearchProductionDoorTests",
-        "VideoScanTests/FrameIndexReopenTests",
-        "VideoScanTests/ObservationsReadDoorTests"
+        "VideoScanTests/SigLIPInputTests"
       ]
     },
     {
@@ -40433,8 +40475,8 @@
         "VideoScanTests/CatalogSweepFinalTests",
         "VideoScanTests/FileJourneyLadderRegressionTests",
         "VideoScanTests/FrameIndexMediaMatrixTests",
-        "VideoScanTests/FrameSearchRegressionTests",
-        "VideoScanTests/FrameSearchLifecycleTests"
+        "VideoScanTests/FrameSearchLifecycleTests",
+        "VideoScanTests/FrameSearchRegressionTests"
       ]
     },
     {
