@@ -25,6 +25,7 @@ extension ArchiveAngelRowFacts {
         f.audioCodec = r.audioCodec
         f.durationSeconds = r.durationSeconds
         f.audio = readiness.audio
+        f.sound = readiness.sound
         f.audioVerifyStatus = r.audioVerifyStatus
         f.audioVerifyNote = r.audioVerifyNote
         f.date = readiness.date

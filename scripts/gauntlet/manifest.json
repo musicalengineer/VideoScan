@@ -6076,6 +6076,7 @@
       ],
       "tests": [
         "aFailedLevelsPassIsNotDamage",
+        "aPartlyMeasuredTrackIsNeverCalledMono",
         "aSoundTrackThatWasNotMeasuredIsNotBalanced",
         "balanceStepRunsForOneSidedOnly",
         "damageFindingsStayDamaged",
@@ -6083,6 +6084,8 @@
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
+        "monoBesideAnyOtherFindingIsNotCalledFine",
+        "monoBesideDamageIsDamage",
         "monoIsNotSomethingToFix",
         "noAudioStreamIsItsOwnCase",
         "rightOnlyIsFixable",
@@ -6718,8 +6721,10 @@
         "everyClassHasWordsAndNoLetterGrade",
         "genuineDamageStillNeedsRepair",
         "hallieKeepsItsRegularButtons",
+        "layoutNotesStayReadyButSaySo",
         "locationWords",
         "missingFileOnAMountedVolumeIsNotDriveNotConnected",
+        "monoStaysReadyAndPromotesDirectly",
         "movAndMp4WithQuickTimeCodecsPlayInQuickTime",
         "needsDateClassSaysNeedsADate",
         "noAudioTrackIsNotANeed",
@@ -6735,7 +6740,6 @@
         "readyWithNothingMissingIsReadyToArchive",
         "rowCarriesWordsReadinessAndRouteTogether",
         "rowShowsNoGradeNoScoreAndAllFiveButtons",
-        "soundFactsStayReady",
         "tenRowsAPage",
         "tenThousandRowsBuildInsideTheBudget",
         "threeOrMoreNeedsSayAndMore",
@@ -7753,12 +7757,13 @@
         "dvPromotesWithToken",
         "familyDateStandsInForAnUndatedTwin",
         "headerCompatibility",
+        "layoutNotesAreNeutral",
+        "monoIsNotAProblem",
         "oneSidedIsFlaggedNotRefused",
         "refusableSoundIsTheProblem",
         "safeCodecs",
         "scale",
         "sheetAgreesWithTheNoSoundFloor",
-        "soundFactsAreNotProblems",
         "tokenAndSummary",
         "unknownCodec",
         "unprobeableNeedsOverride",
@@ -36136,6 +36141,41 @@
         "reviewedAndOffsiteOnlyOnThePersonsWord",
         "theyBuildQuickly"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundStandingFollowsGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundStandingFollowsGateTests"
+      ],
+      "tests": [
+        "aLayoutNoteIsNotGreen",
+        "aStoredNoteNobodyRecognisesIsNeverGreen",
+        "aTagNotTiedToTheBytesAcceptsNothing",
+        "acceptedSilenceIsNotAProblem",
+        "damageOutranksTheTagEvenWithNoTrack",
+        "noStreamAndDamage",
+        "scale",
+        "silentSurroundIsSilent",
+        "soundBucketsPartitionTheSelection",
+        "staleMonoIsNotChecked",
+        "theAcceptedLineDoesNotPromise",
+        "theSheetFollowsTheGate"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelStaleSoundVerdictPrepareTests"
+      ],
+      "tests": [
+        "monoOnTheSecondStreamGoesThroughPrepareAndIsNotStuck",
+        "reuseNeedsAStandingVerdict",
+        "staleMonoIsVerifiedFreshAndBalanced"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -38888,7 +38928,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3763,
+      "expected_floor": 3781,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39609,7 +39649,9 @@
         "VideoScanTests/FileJourneyCodexFindingsTests",
         "VideoScanTests/FileJourneyNonsenseDataTests",
         "VideoScanTests/HallieBrainLogTests",
-        "VideoScanTests/HallieUnstatedYearDecodingTests"
+        "VideoScanTests/HallieUnstatedYearDecodingTests",
+        "VideoScanTests/SoundStandingFollowsGateTests",
+        "VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests"
       ]
     },
     {

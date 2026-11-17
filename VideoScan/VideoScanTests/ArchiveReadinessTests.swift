@@ -88,16 +88,34 @@ struct ArchiveReadinessLogicTests {
     // problem / Audio ✗ mono audio" while the Promote gate passes mono
     // (DECISIONS 2026-11-10). The sheet's sound standing must say what the
     // gate will do: a fact about the recording is not a problem.
-    @Test("TRUTH: a fact about the recording (mono, surround, two live tracks) is not an audio problem",
-          arguments: ["mono audio", "surround audio (6 channels)", "2 live audio tracks",
-                      "surround audio (6 channels); 2 live audio tracks"])
-    func soundFactsAreNotProblems(note: String) {
-        let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note })
+    // Codex #300 (2026-11-16): green is for mono ALONE, on a record that
+    // itself has one channel. Surround and "N live audio tracks" are layout
+    // notes: the check measured that there is sound, not each track's
+    // balance, so they are said in neutral words and never "Audio ✓".
+    @Test("TRUTH: mono — one channel in the file — is not an audio problem")
+    func monoIsNotAProblem() {
+        let note = "mono audio"
+        let r = ArchiveReadiness.assess(inputs {
+            $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note; $0.audioChannels = "1"
+        })
         #expect(r.sound == .note(note))
         #expect(r.warnings.isEmpty, "\(r.warnings)")
         let line = r.sheetLine(dateLabel: "1992")
         #expect(line.contains("Audio ✓ \(note)"), "\(line)")
         #expect(!line.contains("✗"), "\(line)")
+    }
+
+    @Test("TRUTH: a layout note (surround, two live tracks) is neither a problem nor 'Audio ✓' — it says what was not measured",
+          arguments: ["surround audio (6 channels)", "2 live audio tracks",
+                      "surround audio (6 channels); 2 live audio tracks"])
+    func layoutNotesAreNeutral(note: String) {
+        let r = ArchiveReadiness.assess(inputs { $0.audioVerifyStatus = "ok"; $0.audioVerifyDate = Date(); $0.audioVerifyNote = note })
+        #expect(r.sound == .unmeasured(note))
+        #expect(r.sound.bucket == .noted)
+        #expect(r.warnings == ["Sound checked: \(note) — the balance of each track and channel was not measured; listen before you archive it"])
+        let line = r.sheetLine(dateLabel: "1992")
+        #expect(line.contains("Audio: \(note) (balance not measured)"), "\(line)")
+        #expect(!line.contains("✗") && !line.contains("✓ \(note)"), "\(line)")
     }
 
     @Test("TRUTH: one-sided sound passes Promote but is flagged for balancing — amber, never the red problem",

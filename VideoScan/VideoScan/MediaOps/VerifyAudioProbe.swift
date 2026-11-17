@@ -470,6 +470,12 @@ enum VerifyAudioRules {
     /// What a COMPLETE levels pass says about the channels: at most one
     /// finding. Callers check completeness first (`findings`). Pure.
     static func levelFindings(from analysis: AudioBalanceAnalysis) -> [AudioVerifyFinding] {
+        // Silence is a MEASUREMENT, whatever the layout (Codex #300 F1): six
+        // channels all under the floor used to be "surround audio (6
+        // channels)" because the classifier names any stream of more than
+        // two channels by its count. `measuredSilent` is the question
+        // Promote's gate asks, so the stored note and the gate agree.
+        if analysis.measuredSilent == true { return [.silentAudio] }
         if analysis.programStreamCount > 1 {
             return [.multipleProgramTracks(count: analysis.programStreamCount)]
         }

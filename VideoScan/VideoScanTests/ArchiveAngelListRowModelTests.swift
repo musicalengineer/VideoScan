@@ -64,13 +64,31 @@ struct ArchiveAngelStatusWordsTests {
         #expect(step.todo.contains("Prepare to Archive") && step.todo.contains("original is kept"))
     }
 
-    @Test("a fact about the recording stays Ready and promotes directly",
-          arguments: ["mono audio", "surround audio (6 channels)", "2 live audio tracks"])
-    func soundFactsStayReady(note: String) {
-        let f = facts(.ready, audio: .verifiedProblem(note))
+    // Codex #300: mono is plainly Ready when readiness confirmed it (a
+    // one-channel record). A layout note stays Ready and promotes directly,
+    // but the row says what the check did not measure.
+    @Test func monoStaysReadyAndPromotesDirectly() {
+        var f = facts(.ready, audio: .verifiedProblem("mono audio"))
+        f.sound = .note("mono audio")
         #expect(ArchiveAngelStatusWords.needs(f).isEmpty)
         #expect(ArchiveAngelStatusWords.words(f) == "Ready to archive")
-        #expect(ArchiveAngelPromoteRoute.route(kind: .ready, needs: []) == .direct)
+        #expect(ArchiveAngelListRowBuilder.row(f).route == .direct)
+        // Without readiness's confirmation a "mono" note is not taken on trust.
+        let unconfirmed = facts(.ready, audio: .verifiedProblem("mono audio"))
+        #expect(ArchiveAngelStatusWords.needs(unconfirmed) == [.audioCheck])
+        #expect(ArchiveAngelListRowBuilder.row(unconfirmed).route == .prepare)
+    }
+
+    @Test("a layout note stays Ready and promotes directly, and the row says the balance was not measured",
+          arguments: ["surround audio (6 channels)", "2 live audio tracks"])
+    func layoutNotesStayReadyButSaySo(note: String) {
+        let f = facts(.ready, audio: .verifiedProblem(note))
+        #expect(ArchiveAngelStatusWords.needs(f).isEmpty)
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready — sound balance not measured")
+        #expect(ArchiveAngelListRowBuilder.row(f).route == .direct)
+        // Only a READY row carries the qualifier; a row with needs names them.
+        let undated = facts(.needsDate, audio: .verifiedProblem(note), date: .undated)
+        #expect(ArchiveAngelStatusWords.words(undated) == "Needs a date")
     }
 
     @Test func oneSidedSortsAfterRepairAndBeforeTheDate() {
@@ -307,7 +325,7 @@ struct ArchiveAngelListQAFollowUpTests {
     @Test func okWithANoteIsNotAnAudioCheck() {
         let f = facts(.ready, audio: .verifiedProblem("surround audio (6 channels)"), audioStatus: "ok")
         #expect(!ArchiveAngelStatusWords.needs(f).contains(.audioCheck))
-        #expect(ArchiveAngelStatusWords.words(f) == "Ready to archive")
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready — sound balance not measured", "Codex #300 F1")
         #expect(ArchiveAngelListRowBuilder.row(f).route == .direct)
         let e = ArchiveAngelReadinessExplanation.make(f)
         let all = e.missing.flatMap { [$0.what, $0.todo] } + e.facts.map(\.value)

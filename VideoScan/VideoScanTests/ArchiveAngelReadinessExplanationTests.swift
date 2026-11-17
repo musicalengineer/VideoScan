@@ -192,7 +192,11 @@ struct ArchiveAngelReadinessSoundFactTests {
 
     @Test func soundFactForEachState() {
         #expect(sound(.verifiedOK, status: "ok") == "Checked — sounds fine")
-        #expect(sound(.verifiedProblem("2 live audio tracks"), status: "ok", note: "2 live audio tracks") == "Checked — 2 live audio tracks")
+        // Codex #300 F1: a layout note says what the check did not measure.
+        #expect(sound(.verifiedProblem("2 live audio tracks"), status: "ok", note: "2 live audio tracks")
+                == "Checked — 2 live audio tracks. The balance of each track and channel was not measured. Listen before you archive it.")
+        #expect(sound(.verifiedProblem("mono audio"), status: "ok", note: "mono audio")
+                == "Not checked — the stored sound check does not describe this file", "mono not confirmed by a one-channel record")
         #expect(sound(.notVerified, status: "") == "Not checked yet")
         #expect(sound(.noAudioTrack, status: "") == "No sound track (picture only)")
         #expect(sound(.verifiedProblem("Damaged audio — x"), status: "damaged", note: "Damaged audio — x")?.hasPrefix("Damaged") == true)

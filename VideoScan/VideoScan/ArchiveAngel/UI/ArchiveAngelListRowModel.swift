@@ -46,6 +46,11 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     /// The record's raw Verify Audio status ("", "ok", "damaged").
     var audioVerifyStatus: String = ""
     var audioVerifyNote: String = ""
+    /// ArchiveReadiness's reading of the sound for Promote
+    /// (`ArchiveReadiness.assess(...).sound` — it knows the record's channel
+    /// count and the owner's tag). nil = not supplied: `soundStanding`
+    /// derives it from `audio` on the cautious side.
+    var sound: ArchiveReadiness.SoundStanding?
     /// ArchiveReadiness's date state.
     var date: ArchiveReadiness.DateState = .known
     /// A friendly date ("1994", "12 July 1994"), nil when undated.
@@ -80,6 +85,12 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     /// Filled only when Archive Readiness is pressed
     /// (ArchiveAngelListActions.readiness); empty for the list rows.
     var occasions: [EventLabel] = []
+
+    /// What the sound check means for Promote — the ONE reading the row,
+    /// its route and the readiness sheet share.
+    var soundStanding: ArchiveReadiness.SoundStanding {
+        sound ?? ArchiveReadiness.soundStanding(audio: audio, audioVerifyStatus: audioVerifyStatus)
+    }
 }
 
 // MARK: - Where the file is
@@ -169,15 +180,24 @@ enum ArchiveAngelStatusWords {
         // left the file stuck. The sheet shows the note as information.
         if f.audioVerifyStatus == "damaged" {
             out.append(.audioRepair(note: f.audioVerifyNote))
-        } else if f.audio == .notVerified {
-            out.append(f.isBeingChecked ? .audioChecking : .audioCheck)
-        } else if case .unbalanced(let note) = ArchiveReadiness.soundStanding(audio: f.audio,
-                                                                              audioVerifyStatus: f.audioVerifyStatus) {
-            // One-sided sound: Ready would send the row straight to the
-            // plain Promote sheet (ArchiveAngelPromoteRoute.direct), past
-            // the Prepare step that balances it. Mono, surround and two
-            // live tracks are facts about the recording and stay Ready.
-            out.append(.audioBalance(note: note))
+        } else {
+            switch f.soundStanding {
+            case .notChecked:
+                // Never verified — or (Codex #300 F2) a stored "mono" on a
+                // file that is not one channel: the stored check does not
+                // describe this file, so Prepare checks it; never `.direct`.
+                out.append(f.isBeingChecked ? .audioChecking : .audioCheck)
+            case .unbalanced(let note):
+                // One-sided sound: Ready would send the row straight to the
+                // plain Promote sheet (ArchiveAngelPromoteRoute.direct), past
+                // the Prepare step that balances it.
+                out.append(.audioBalance(note: note))
+            case .fine, .note, .unmeasured, .refusable, .accepted, .noTrack:
+                // Mono is a fact about the recording and stays Ready. A
+                // layout note (surround, two live tracks) stays Ready too,
+                // but the row says what was not measured (`words`).
+                break
+            }
         }
         switch f.videoVerifyStatus {
         case "broken": out.append(.videoRepair(note: f.videoVerifyNote))
@@ -223,10 +243,18 @@ enum ArchiveAngelStatusWords {
 
     /// As above, plus the video-only note on a Ready file (QA P3: a
     /// picture-only file should not look like one with checked sound).
+    ///
+    /// Codex #300 F1: a Ready file whose sound check left only a layout note
+    /// (surround, two live tracks) is not PLAINLY ready — the check did not
+    /// measure each track's balance, and the row says so.
     static func words(_ f: ArchiveAngelRowFacts, needs: [ArchiveAngelNeed]) -> String {
-        if isReady(kind: f.kind, needs: needs), f.audio == .noAudioTrack { return "Ready — no sound track" }
+        if isReady(kind: f.kind, needs: needs) {
+            if f.audio == .noAudioTrack { return "Ready — no sound track" }
+            if case .unmeasured = f.soundStanding { return readyBalanceNotMeasuredWords }
+        }
         return words(kind: f.kind, needs: needs)
     }
+    static let readyBalanceNotMeasuredWords = "Ready — sound balance not measured"
 
     /// Ready means: the Angel says Ready AND nothing is missing.
     static func isReady(kind: ArchiveAngelRecommendationClass, needs: [ArchiveAngelNeed]) -> Bool {
