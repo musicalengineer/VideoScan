@@ -91,11 +91,15 @@ struct FrameSearchLoader {
         return loader
     }
 
+    /// The loader over `model`'s session. The app calls this through `production(model:)` with the defaults —
+    /// SigLIP 2, the index folder in Application Support, the app's MFO center. A test names all three (a stub
+    /// model, a temp folder, its own center), so everything the window does through this door is tested as built.
+    /// The job is started over the SAME `root` the window reads, by construction.
     @MainActor
-    private static func make(model: VideoScanModel) -> FrameSearchLoader {
+    static func make(model: VideoScanModel, embedder: any FrameEmbedding = SigLIPEmbedder.shared,
+                     root: URL = FrameIndexStore.productionRoot,
+                     center: @escaping @MainActor () -> MediaFileOperationsCenter? = { FrameIndexHost.center }) -> FrameSearchLoader {
         let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
-        let embedder = SigLIPEmbedder.shared
-        let root = FrameIndexStore.productionRoot
         let files: Files = { [weak model] scope in
             let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
             guard let repository else { throw notOpen }
@@ -113,9 +117,9 @@ struct FrameSearchLoader {
             prewarm: { try await embedder.prewarm() },
             thumbnail: { path, seconds in await FrameThumbnails.shared.image(path: path, seconds: seconds) },
             startIndex: { scope, onSaved in
-                guard let center = FrameIndexHost.center else { return nil }
+                guard let center = center() else { return nil }
                 return center.startedByUser {
-                    $0.startFrameIndex(scope: scope, loadFiles: files, embedder: embedder, note: note, onSaved: onSaved)
+                    $0.startFrameIndex(scope: scope, loadFiles: files, embedder: embedder, root: root, note: note, onSaved: onSaved)
                 }
             },
             reveal: { [weak model] id in

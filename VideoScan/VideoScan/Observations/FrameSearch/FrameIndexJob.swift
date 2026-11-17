@@ -637,13 +637,15 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
 
 extension MediaFileOperationsCenter {
 
-    /// Start "Index frames (SigLIP 2)" over `scope`. One job at a time: a second request while one runs returns the running one.
+    /// Start "Index frames (SigLIP 2)" over `scope`, writing the index under `root`. One job at a time: a second request while one runs returns the running one.
     /// `onSaved` is given the index exactly as each save wrote it (a job already running keeps the `onSaved` it started with).
     @discardableResult
     func startFrameIndex(scope: ObservationsScope, loadFiles: @escaping FrameIndexJob.LoadFiles, embedder: any FrameEmbedding,
+                         root: URL = FrameIndexStore.productionRoot,
                          note: @escaping @MainActor (String) -> Void, onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexJob {
         if let running = jobs.lazy.compactMap({ $0 as? FrameIndexJob }).first(where: { $0.state.isActive }) { return running }
         let job = FrameIndexJob(scope: scope, loadFiles: loadFiles, embedder: embedder)
+        job.root = root
         job.note = note
         job.onSaved = onSaved
         guard add(job) else {
