@@ -450,10 +450,10 @@ struct FrameIndexJobBehaviourTests {
             while !release.isSet { try await Task.sleep(for: .milliseconds(5)) }
             return rows
         }
-        let first = center.startFrameIndex(scope: .folder("/V"), loadFiles: load, embedder: ObsStubEmbedder(), note: { notes.lines.append($0) }, onSaved: nil)
-        first.root = root
+        let first = center.startFrameIndex(scope: .folder("/V"), loadFiles: load, embedder: ObsStubEmbedder(), root: root, note: { notes.lines.append($0) }, onSaved: nil)
+        #expect(first.root == root)
         #expect(first.state == .running && center.jobs.contains { $0.id == first.id })
-        let second = center.startFrameIndex(scope: .everything, loadFiles: { _ in [] }, embedder: ObsStubEmbedder(), note: { _ in }, onSaved: nil)
+        let second = center.startFrameIndex(scope: .everything, loadFiles: { _ in [] }, embedder: ObsStubEmbedder(), root: root, note: { _ in }, onSaved: nil)
         #expect(second === first && center.jobs.count == 1, "a second request while one runs is the running one — never two writers of one index")
         release.set()
         await first.task?.value
@@ -461,8 +461,7 @@ struct FrameIndexJobBehaviourTests {
         #expect(notes.lines.first?.hasPrefix("index frames: Index frames (SigLIP 2) — the folder /V — 1 file to index") == true, "\(notes.lines)")
         #expect(ObsFixture.onDisk(root) == .notBuilt)
 
-        let third = center.startFrameIndex(scope: .everything, loadFiles: { _ in [] }, embedder: ObsStubEmbedder(), note: { _ in }, onSaved: nil)
-        third.root = root
+        let third = center.startFrameIndex(scope: .everything, loadFiles: { _ in [] }, embedder: ObsStubEmbedder(), root: root, note: { _ in }, onSaved: nil)
         #expect(third !== first && center.jobs.count == 2, "the first one ended: a new request is a new job")
         await third.task?.value
         #expect(third.outcome == .finished && third.subtitle == "Nothing to index")

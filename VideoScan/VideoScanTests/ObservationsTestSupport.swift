@@ -78,7 +78,7 @@ enum ObsFixture {
                             files: @escaping FrameSearchLoader.Files = { _ in [] },
                             embedText: @escaping @Sendable (String) async throws -> [Float] = { try await ObsStubEmbedder().embed(text: $0) },
                             prewarm: @escaping @Sendable () async throws -> Void = {},
-                            startIndex: @escaping @MainActor (ObservationsScope, @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob? = { _, _ in nil },
+                            startIndex: @escaping @MainActor (ObservationsScope, @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexWatch? = { _, _ in nil },
                             reveal: @escaping @MainActor (UUID) -> Bool = { _ in true },
                             notes: FrameIndexJobTests.Notes? = nil) -> FrameSearchLoader {
         FrameSearchLoader(modelID: ObsStubEmbedder().modelID, loadIndex: index, files: files, embedText: embedText, prewarm: prewarm,

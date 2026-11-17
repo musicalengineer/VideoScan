@@ -36175,7 +36175,7 @@
         "aHitCarriesItsRowsFactsAndOneThatIsNotARecordHereSaysWhy",
         "aJobIsStartedOverTheWindowsScopeWatchedUntilItEndsAndItsSavesAreShown",
         "aModelThatCannotWarmUpIsNotTheWindowsProblemAndClosingCancelsAWarmUp",
-        "aSearchBeforeTheIndexIsReadAsksNothingAndFindsOnceItIs",
+        "aSearchBeforeTheIndexIsReadAsksNothingAndIsAnsweredWhenTheIndexArrives",
         "aSimilarityBelowZeroIsShownAsItIs",
         "anIndexDamagedOnDiskAfterItWasShownIsNotBuiltAtTheNextOpenAndNeverStaleHits",
         "indexFramesWithNoOperationsCenterSaysSo",
@@ -36309,7 +36309,8 @@
         "aWindowOpenedMidRunShowsTheJobAndIsHandedItsSavesWithoutPressingAnything",
         "aWindowOpenedMidRunThatPressesIndexFramesIsHandedTheLaterSaves",
         "theProductionDoorJoinsThroughTheCenterItWasGiven",
-        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener"
+        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener",
+        "windowsOpenedAndClosedDuringAPausedRunLeaveNoListenerBehind"
       ]
     },
     {
@@ -36322,6 +36323,22 @@
       "tests": [
         "aSessionWithNoCatalogOpenRefusesInTheDoorsWordsAndTheBodyNeverRuns",
         "theDoorIsTheSessionsOwnRepositoryACancelledReadNeverReachesItAndNothingIsCommitted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchLifecycleTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameSearchLifecycleTests"
+      ],
+      "tests": [
+        "aClosedWindowNeverPublishesAgainEvenWhileSomethingStillHoldsIt",
+        "aRunCutWhileItReadsTheCatalogIsStoppedNotRefused",
+        "aSearchInFlightAgainstAnOlderIndexNeverPublishesUnderANewerOne",
+        "aWindowNeitherJoinsNorIsHandedAJobWritingAnotherIndex",
+        "everyEndingDropsTheRunsListeners",
+        "hitsAlreadyShownAreRecomputedWhenANewerIndexIsShown"
       ]
     }
   ],
@@ -39079,7 +39096,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3827,
+      "expected_floor": 3828,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -40208,7 +40225,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 611,
+      "expected_floor": 617,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40416,7 +40433,8 @@
         "VideoScanTests/CatalogSweepFinalTests",
         "VideoScanTests/FileJourneyLadderRegressionTests",
         "VideoScanTests/FrameIndexMediaMatrixTests",
-        "VideoScanTests/FrameSearchRegressionTests"
+        "VideoScanTests/FrameSearchRegressionTests",
+        "VideoScanTests/FrameSearchLifecycleTests"
       ]
     },
     {

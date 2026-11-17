@@ -109,6 +109,9 @@ struct FrameSearchProductionDoorTests {
         await job.task?.value
         #expect(job.wasRefused && job.state == .failed(message: "Refused — the catalog could not be read: \(Self.notOpen)"))
         #expect(ObsFixture.onDisk(root) == before, "a refused job leaves the index as it was")
+        // Codex #302 finding 6: the refusal arrived AFTER the window began watching the job; its reason must not vanish with it.
+        try await FrameIndexJobTests.until("the refused job leaves the window") { store.job == nil }
+        #expect(store.jobLine == "Refused — the catalog could not be read: \(Self.notOpen)", "the button recovers AND the line says why: \(store.jobLine ?? "nil")")
     }
 
     @Test func theAppBuildsOneLoaderPerModelAndItIsSigLIP() throws {

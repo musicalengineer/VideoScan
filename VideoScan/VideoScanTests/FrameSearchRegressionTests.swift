@@ -95,7 +95,7 @@ struct FrameSearchRegressionTests {
         let reason = "Index Frames runs on the Mac that holds the catalog — this one is a viewer."
         let refused = FrameIndexJob(scope: .everything, loadFiles: { _ in [] }, embedder: ObsStubEmbedder())
         refused.refuseToStart(reason: reason)
-        let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(startIndex: { _, _ in refused }))
+        let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(startIndex: { _, _ in refused.watched(by: nil) }))
         store.buildIndex()
         #expect(store.job == nil, "a job that is already over is nothing to watch: the button must not read 'Indexing…' for ever")
         #expect(store.jobLine == reason, "and the window says why: \(store.jobLine ?? "nil")")
@@ -139,6 +139,26 @@ struct FrameSearchRegressionTests {
         #expect(FailureWords.of(ns) == "The operation could not be completed")
         #expect(FailureWords.of(SigLIPError.weightsMissing("offline")) == "SigLIP 2 weights are not on this Mac (offline)")
         #expect(!FailureWords.of(Refusal(notOpen)).contains("couldn’t be completed"))
+
+        // Codex #302 finding 7: a Foundation error whose sentence is generic keeps its reason and its underlying error's words.
+        let codec = NSError(domain: "AVFoundationErrorDomain", code: -11_833, userInfo: [NSLocalizedDescriptionKey: "Cannot Decode"])
+        let wrapped = NSError(domain: "AVFoundationErrorDomain", code: -11_800,
+                              userInfo: [NSLocalizedDescriptionKey: "The operation could not be completed",
+                                         NSLocalizedFailureReasonErrorKey: "An unknown error occurred (-12909)",
+                                         NSUnderlyingErrorKey: codec, NSFilePathErrorKey: "/Volumes/Tapes/secret/path.mov"])
+        #expect(FailureWords.of(wrapped) == "The operation could not be completed — An unknown error occurred (-12909) (Cannot Decode)")
+        #expect(!FailureWords.of(wrapped).contains("/Volumes") && !FailureWords.of(wrapped).contains("Error Domain"), "no userInfo dump, no path that was not in the sentence")
+        let reasonOnly = NSError(domain: "X", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not open", NSLocalizedFailureReasonErrorKey: "the codec is not supported"])
+        #expect(FailureWords.of(reasonOnly) == "Could not open — the codec is not supported")
+        let underlyingRefusal = NSError(domain: "X", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not read", NSUnderlyingErrorKey: Refusal("the drive spun down")])
+        #expect(FailureWords.of(underlyingRefusal) == "Could not read (the drive spun down)", "the underlying error in ITS own words, one level")
+        let echo = NSError(domain: "X", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not read: disk full", NSLocalizedFailureReasonErrorKey: "disk full"])
+        #expect(FailureWords.of(echo) == "Could not read: disk full", "a reason the sentence already says is not said twice")
+        struct Reasoned: LocalizedError {
+            var errorDescription: String? { "the index could not be saved" }
+            var failureReason: String? { "the volume is read-only" }
+        }
+        #expect(FailureWords.of(Reasoned()) == "the index could not be saved — the volume is read-only")
     }
 
     @Test func aDecoderOrModelRefusalIsRecordedInItsOwnWords() async {

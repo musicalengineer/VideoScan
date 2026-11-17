@@ -136,13 +136,36 @@ struct ObservationsLoader {
 /// ("catalog.sqlite is not open in this session — there is nothing to read"). A Foundation error (Cocoa,
 /// POSIX, AVFoundation) keeps Foundation's sentence.
 ///
+///
+/// The reason is kept (Codex #302): a `failureReason` the sentence does not already say is added after a dash,
+/// and a Foundation error's underlying error is added in ITS own words in brackets — one level down, never a
+/// `userInfo` dump, so no path or key appears that the sentences themselves do not carry.
+///
 /// (For Rick: `what()` for three families of exception that each keep their message somewhere else. A Swift
 /// error with no NSError bridging of its own is given its type's name as its NSError domain; that is the test.)
 enum FailureWords {
     static func of(_ error: any Error) -> String {
+        if let localized = error as? any LocalizedError, let said = localized.errorDescription {
+            return joined(said, reason: localized.failureReason, underlying: nil)
+        }
+        let ns = error as NSError
+        guard ns.domain != String(reflecting: type(of: error)) else { return "\(error)" }
+        return joined(error.localizedDescription, reason: ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String,
+                      underlying: (ns.userInfo[NSUnderlyingErrorKey] as? any Error).map(sentence))
+    }
+
+    /// One error's own sentence and nothing below it.
+    private static func sentence(_ error: any Error) -> String {
         if let said = (error as? any LocalizedError)?.errorDescription { return said }
         let plainSwift = (error as NSError).domain == String(reflecting: type(of: error))
         return plainSwift ? "\(error)" : error.localizedDescription
+    }
+
+    private static func joined(_ sentence: String, reason: String?, underlying: String?) -> String {
+        var words = sentence
+        if let reason, !reason.isEmpty, !words.contains(reason) { words += " — " + reason }
+        if let underlying, !underlying.isEmpty, !words.contains(underlying) { words += " (" + underlying + ")" }
+        return words
     }
 }
 

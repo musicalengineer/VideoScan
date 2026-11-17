@@ -51,7 +51,7 @@ struct FrameSearchStoreBehaviourTests {
         #expect(store.query == nil && store.hits.isEmpty && store.timing == nil && !store.searching, "clearing the field clears the page")
     }
 
-    @Test func aSearchBeforeTheIndexIsReadAsksNothingAndFindsOnceItIs() async {
+    @Test func aSearchBeforeTheIndexIsReadAsksNothingAndIsAnsweredWhenTheIndexArrives() async {
         let embeds = ObsCounter(), reads = ObsCounter()
         let notes = Notes()
         let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(
@@ -62,8 +62,8 @@ struct FrameSearchStoreBehaviourTests {
         #expect(store.hits.isEmpty && store.failure == nil && store.timing == nil && !store.searching)
         #expect(embeds.value == 0 && reads.value == 0 && notes.lines.isEmpty, "no index: neither the model nor the catalog is asked, nothing is logged")
         await store.loadIndex()
-        await store.search("axis 3")
-        #expect(store.hits.first?.filename == "three.mov" && embeds.value == 1 && reads.value == 1)
+        #expect(store.hits.first?.filename == "three.mov" && embeds.value == 1 && reads.value == 1,
+                "the index arrived: the words already in the field are answered from it, once, without being typed again")
     }
 
     @Test func theScopesFilesAreReadOncePerScope() async {
@@ -168,9 +168,9 @@ struct FrameSearchStoreBehaviourTests {
                 started.append(scope)
                 let job = ObsFixture.job(rows, root: root)
                 job.checkpointFiles = 1
-                job.onSaved = onSaved
+                let watch = job.watched(by: onSaved)
                 job.start()
-                return job
+                return watch
             }))
         await store.loadIndex()
         guard case .notBuilt = store.indexState else { Issue.record("an empty folder must read as not built: \(store.indexState)"); return }
