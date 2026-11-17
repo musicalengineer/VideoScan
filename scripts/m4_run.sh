@@ -182,6 +182,13 @@ if [ -e "\$last/run.log" ]; then
   grep -E '^(START|OUTCOME)' "\$last/run.log" | sed 's/^/  /'
   [ -f "\$last/summary.txt" ] && sed 's/^/  /' "\$last/summary.txt"
   grep -q '^OUTCOME' "\$last/run.log" || echo "  now: \$(tail -1 "\$last/run.log")"
+  # A live suite run: its runner's last step, and how many tests have finished in each lane.
+  if [ -f "\$last/suite.log" ] && ! grep -q '^OUTCOME' "\$last/run.log"; then
+    echo "  step: \$(grep -E '^\[[0-9:]+\] ' "\$last/suite.log" | grep -v 'Core lane machine' | tail -1)"
+    for lane in core app; do
+      [ -f "\$last/suite-\$lane-test.log" ] && echo "  \$lane tests finished so far: \$(grep -E '(✔|✘|━) Test .* (passed|failed) after |^Test Case .* (passed|failed) \(' "\$last/suite-\$lane-test.log" | grep -cvE 'Test run with [0-9]+ test| recorded an issue ')"
+    done
+  fi
 else
   echo "no run recorded under $H_ROOT"
 fi

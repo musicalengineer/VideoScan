@@ -341,8 +341,26 @@ class HostSuiteLaneTests(Testbed):
         text = read_back()
         self.assertIn(f'last run: {self.root}/out/s2-ui', text)
         self.assertIn(f'last suite run: {out}', text)
-        self.assertIn(f'  START', text)
+        self.assertIn('  START', text)
         self.assertIn('suite: GREEN app 5 passed', text)
+        self.assertNotIn('step:', text, 'progress lines belong to a live run only')
+
+    def test_status_of_a_live_suite_run_shows_the_step_and_the_tests_finished(self):
+        out = self.root / 'out' / 'live-suite'
+        out.mkdir(parents=True)
+        (out / 'run.log').write_text(f'START 2026-11-17 17:33:58 host=M4 lane=suite sha={self.sha}\n')
+        (out / 'suite.log').write_text('[17:33:58] Core results: 4p / 0f / 0s\n[17:40:00] Core lane machine: load 3\n'
+                                       '[17:41:00] Running ALL tests (Release) with coverage...\n')
+        (out / 'suite-core-test.log').write_text(app_log(passed=4, skipped=0, xctest_passed=0))
+        (out / 'suite-app-test.log').write_text(app_log(passed=3, failed=('x()',)))
+        os.symlink(out, self.root / 'latest')
+        status = run('status', '--host', 'm4', '--dry-run', env=self.env).stdout
+        snippet = status.split("+ ssh ricksm4.local <<'SH'", 1)[1].split('\n  SH', 1)[0]
+        snippet = '\n'.join(line[4:] if line.startswith('    ') else line for line in snippet.splitlines())
+        text = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True, env=self.env, timeout=30).stdout
+        self.assertIn('  step: [17:41:00] Running ALL tests (Release) with coverage...', text)
+        self.assertIn('  core tests finished so far: 4', text)
+        self.assertIn('  app tests finished so far: 6', text)
 
 
 class SuiteVerdictTests(unittest.TestCase):

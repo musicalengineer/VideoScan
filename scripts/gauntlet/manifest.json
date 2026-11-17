@@ -34044,6 +34044,7 @@
         "test_green_run_counts_both_lanes_and_publishes_nothing",
         "test_machine_setup_is_norun",
         "test_names_reduce_to_what_the_sources_declare",
+        "test_status_of_a_live_suite_run_shows_the_step_and_the_tests_finished",
         "test_status_shows_the_last_suite_run_also_after_another_lane",
         "test_the_lane_never_passes_a_publish_or_metrics_flag",
         "test_the_machine_preflight_is_norun_not_a_test_result",
