@@ -206,6 +206,17 @@ extension ArchiveAngelScorer {
 
     // MARK: Signals
 
+    /// "Audio: … — will balance", said only of what Prepare actually
+    /// balances: sound on one side. Mono, surround and two live tracks are
+    /// facts, not problems (Rick 2026-11-16), and a silent or damaged track
+    /// is the noSound floor's business. Pure.
+    static func audioProblemLine(_ c: ArchiveAngelCandidate) -> ArchiveAngelEvidence? {
+        guard let problem = c.audioProblem,
+              case .unbalanced = ArchiveReadiness.soundStanding(audio: .verifiedProblem(problem),
+                                                                audioVerifyStatus: c.audioVerifyStatus) else { return nil }
+        return .init(points: 0, line: "Audio: \(problem) — will balance")
+    }
+
     /// One signal's evidence line, or nil when it has nothing to say.
     /// The built-in kinds read their numbers from `weights`; `match` adds
     /// the rule's own points and line. The cap and fatigue act on `lines`
@@ -256,8 +267,7 @@ extension ArchiveAngelScorer {
             return c.volumeRole == .unassigned
                 ? .init(points: w.riskyVolume, line: "Lives on \(c.volumeName) (no role assigned)") : nil
         case .audioProblem:
-            guard let problem = c.audioProblem, !problem.isEmpty else { return nil }
-            return .init(points: 0, line: "Audio: \(problem) — will balance")
+            return audioProblemLine(c)
         case .backlogBonus:
             return backlogBonusLine(c, coverage: p.coverage)
         case .downloadCap:

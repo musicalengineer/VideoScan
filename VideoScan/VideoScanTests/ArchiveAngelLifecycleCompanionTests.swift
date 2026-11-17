@@ -55,7 +55,11 @@ struct ArchiveAngelLifecycleCompanionTests {
             arguments: ["-hide_banner", "-loglevel", "error", "-y",
                         "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=4",
                         "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", url.path],
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        // Sound on the left only, so Prepare makes a balanced
+                        // copy as well as an access copy (2026-11-16: a mono
+                        // clip is no longer balanced).
+                        "-af", "pan=stereo|c0=c0|c1=0*c0", "-c:a", "aac", "-ac", "2", "-shortest", url.path],
             deadlineSeconds: 120)
         try #require(r.exitCode == 0, "fixture \(name): \(r.stderr)")
         return url
@@ -133,7 +137,7 @@ struct ArchiveAngelLifecycleCompanionTests {
         }
         let dirA = entryDir(job, recA.id), dirB = entryDir(job, recB.id)
         // The Balance and Transcode jobs catalogued each row's companions
-        // (the mono test clip gets a balanced copy AND an access copy; the
+        // (the left-only test clip gets a balanced copy AND an access copy; the
         // access copy is derived from the balanced one, so match by folder).
         let compsA = b.model.records.filter { $0.fullPath.hasPrefix(dirA.path + "/") }
         let compsB = b.model.records.filter { $0.fullPath.hasPrefix(dirB.path + "/") }

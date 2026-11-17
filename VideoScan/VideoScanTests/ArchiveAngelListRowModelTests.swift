@@ -47,6 +47,37 @@ struct ArchiveAngelStatusWordsTests {
         #expect(ArchiveAngelStatusWords.words(f) == "Needs audio checked")
     }
 
+    // Rick 2026-11-16: a left-only file was "Ready", so its Promote button
+    // went straight to the plain Promote sheet and past the Prepare step
+    // that balances it. One-sided sound is a need; Prepare is the fix.
+    @Test("one-sided sound is not Ready: the row says Needs audio balanced and Promote goes through Prepare",
+          arguments: ["one-sided audio (left only)", "one-sided audio (right only)", "channel imbalance"])
+    func oneSidedNeedsBalancing(note: String) {
+        let f = facts(.ready, audio: .verifiedProblem(note))
+        let needs = ArchiveAngelStatusWords.needs(f)
+        #expect(needs == [.audioBalance(note: note)])
+        #expect(ArchiveAngelStatusWords.words(f) == "Needs audio balanced")
+        #expect(!ArchiveAngelStatusWords.isReady(kind: .ready, needs: needs))
+        #expect(ArchiveAngelPromoteRoute.route(kind: .ready, needs: needs) == .prepare)
+        let step = ArchiveAngelReadinessExplanation.step(.audioBalance(note: note))
+        #expect(step.what.contains("one side only") && step.what.contains(note))
+        #expect(step.todo.contains("Prepare to Archive") && step.todo.contains("original is kept"))
+    }
+
+    @Test("a fact about the recording stays Ready and promotes directly",
+          arguments: ["mono audio", "surround audio (6 channels)", "2 live audio tracks"])
+    func soundFactsStayReady(note: String) {
+        let f = facts(.ready, audio: .verifiedProblem(note))
+        #expect(ArchiveAngelStatusWords.needs(f).isEmpty)
+        #expect(ArchiveAngelStatusWords.words(f) == "Ready to archive")
+        #expect(ArchiveAngelPromoteRoute.route(kind: .ready, needs: []) == .direct)
+    }
+
+    @Test func oneSidedSortsAfterRepairAndBeforeTheDate() {
+        let f = facts(.needsDate, audio: .verifiedProblem("one-sided audio (left only)"), date: .undated)
+        #expect(ArchiveAngelStatusWords.words(f) == "Needs audio balanced and a date")
+    }
+
     @Test func aFileAngelChecksIsHandlingSaysCheckingNotNeeds() {
         var f = facts(.ready, audio: .notVerified, audioStatus: "")
         f.isBeingChecked = true

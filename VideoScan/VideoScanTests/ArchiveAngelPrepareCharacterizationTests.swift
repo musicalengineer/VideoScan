@@ -13,7 +13,8 @@
 //   verified     sound already checked this launch (the cached diagnosis)
 //   oneSided     sound on the left only → Balance Audio runs, the access copy
 //                is cut from the balanced companion
-//   mono         one-channel sound → Balance Audio runs (mono)
+//   mono         one-channel sound → NOT balanced (2026-11-16: mono plays on
+//                both sides; the access copy is cut from the original)
 //   reuse        a catalogued Balance Audio output linked to the original →
 //                reused, never re-balanced
 //   nominated    a same-name `_balanced` file NOT linked → named in Review,

@@ -231,6 +231,9 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case .audioRepair(let note):
             return Step(what: "The sound check found a problem: \(stripPrefix(note, "Damaged audio — ", fallback: "damaged sound")).",
                         todo: "Play it and listen. Prepare to Archive makes a repaired copy of the sound; the original is kept exactly as it is.")
+        case .audioBalance(let note):
+            return Step(what: "Its sound is on one side only (\(note)).",
+                        todo: "Press Prepare to Archive — Archive Angel makes a copy with the sound on both sides, checks it, and offers that copy for the archive. The original is kept exactly as it is.")
         case .videoRepair(let note):
             return Step(what: "The picture check found a problem: \(stripPrefix(note, "Broken video — ", fallback: "damaged picture")).",
                         todo: "Play it to judge whether it is still worth keeping. The original is archived as it is; a repaired copy can be made later.")

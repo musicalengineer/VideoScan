@@ -89,15 +89,34 @@ struct ArchiveAngelAudioOutcomeTests {
         #expect(o.headline == verdict)
     }
 
-    @Test func rightOnlyAndMonoAreFixable() {
+    @Test func rightOnlyIsFixable() {
         let right = AudioVerifyDiagnosis(findings: [.channelImbalance(.rightOnly)], shape: verifyShape(),
                                          balanceAnalysis: analysis(.rightOnly))
+        guard case .fixable(_, let rv) = ArchiveAngelAudioOutcome.from(right) else { Issue.record("right"); return }
+        #expect(rv == "One-sided audio — right channel only")
+    }
+
+    // Rick 2026-11-16: mono (one channel) plays on both sides and is how the
+    // recording was made. Prepare used to widen it to two channels and
+    // promote that copy; it is not something to fix.
+    @Test func monoIsNotSomethingToFix() {
         let mono = AudioVerifyDiagnosis(findings: [.channelImbalance(.mono)], shape: verifyShape(),
                                         balanceAnalysis: analysis(.mono))
-        guard case .fixable(_, let rv) = ArchiveAngelAudioOutcome.from(right) else { Issue.record("right"); return }
-        guard case .fixable(_, let mv) = ArchiveAngelAudioOutcome.from(mono) else { Issue.record("mono"); return }
-        #expect(rv == "One-sided audio — right channel only")
-        #expect(mv == "Mono audio — one channel")
+        let o = ArchiveAngelAudioOutcome.from(mono)
+        #expect(o == .balanced(ArchiveAngelAudioOutcome.monoIsFineNote), "got \(o)")
+        #expect(o.headline.contains("plays on both sides"))
+    }
+
+    @Test("the Angel's balance step runs for one-sided sound only — never for mono, stereo, dual mono, silence or surround")
+    func balanceStepRunsForOneSidedOnly() {
+        #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis(.leftOnly)) == nil)
+        #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis(.rightOnly)) == nil)
+        #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis(.mono)) == ArchiveAngelAudioOutcome.monoIsFineNote)
+        for c in [AudioChannelClass.trueStereo, .dualMono, .silent, .multichannel] {
+            #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis(c)) != nil, "\(c)")
+        }
+        // Balance Audio itself (Repair…, on Rick's say-so) still accepts mono.
+        #expect(BalanceAudioFix.refusalReason(for: analysis(.mono)) == nil)
     }
 
     @Test func healthyStereoAndDualMonoAreBalanced() {

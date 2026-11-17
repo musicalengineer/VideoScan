@@ -163,6 +163,21 @@ struct ArchiveAngelEvidenceTests {
         #expect(text.contains("Audio: channel imbalance — will balance"))
     }
 
+    // Rick 2026-11-16: "will balance" is said only of what Prepare balances.
+    @Test("'will balance' is said of one-sided sound only — never of mono, surround or two live tracks")
+    func willBalanceOnlyForOneSided() {
+        func lines(_ note: String) -> String {
+            let c = ArchiveAngelCandidate(starRating: 3, audioProblem: note)
+            guard case .eligible(_, let ev) = ArchiveAngelScorer.verdict(c) else { return "not eligible" }
+            return ev.map(\.line).joined(separator: "\n")
+        }
+        #expect(lines("one-sided audio (left only)").contains("Audio: one-sided audio (left only) — will balance"))
+        for fact in ["mono audio", "surround audio (6 channels)", "2 live audio tracks"] {
+            #expect(!lines(fact).contains("will balance"), "\(fact): \(lines(fact))")
+            #expect(lines(fact) != "not eligible", "\(fact) must stay eligible")
+        }
+    }
+
     @Test("stars dominate: ★★★ alone outranks a fully tagged, dated, played ★★")
     func starsDominate() {
         let best = lines(.init(starRating: 3)).0

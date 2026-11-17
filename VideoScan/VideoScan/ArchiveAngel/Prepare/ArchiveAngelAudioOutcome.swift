@@ -52,6 +52,9 @@ enum ArchiveAngelAudioOutcome: Equatable {
         // here — never promise what the Balance job refuses.
         for f in d.findings {
             if case .channelImbalance(let c) = f, let analysis = d.balanceAnalysis {
+                // Mono is how the recording was made (Rick 2026-11-16): it
+                // plays on both sides already, so it is not something to fix.
+                if c == .mono { return .balanced(monoIsFineNote) }
                 if let reason = BalanceAudioFix.refusalReason(for: analysis) {
                     return .refused(reason)
                 }
@@ -78,6 +81,19 @@ enum ArchiveAngelAudioOutcome: Equatable {
         return .refused("Balance Audio can't help here — \(words).")
     }
 
+    /// What the Angel says about a one-channel track, in the verify note
+    /// and as the reason its balance step does not run.
+    static let monoIsFineNote = "Mono audio — one channel; it plays on both sides, nothing to balance."
+
+    /// Why the Angel's balance step does NOT run on this analysis, or nil
+    /// when it does. The Angel's own rule on top of Balance Audio's: the
+    /// tool can widen a mono track to two channels when Rick asks it to
+    /// (Repair…), but Prepare never does it on its own. Pure.
+    static func balanceSkipReason(for analysis: AudioBalanceAnalysis) -> String? {
+        if analysis.classification == .mono { return monoIsFineNote }
+        return BalanceAudioFix.refusalReason(for: analysis)
+    }
+
     /// The Angel's "Already verified" skip: the diagnosis to reuse instead
     /// of verifying again, or nil = verify now. Reused only when a verdict
     /// is stored AND the cached diagnosis is itself a verdict: a newer
@@ -93,7 +109,7 @@ enum ArchiveAngelAudioOutcome: Equatable {
         switch c {
         case .leftOnly:  return "One-sided audio — left channel only"
         case .rightOnly: return "One-sided audio — right channel only"
-        case .mono:      return "Mono audio — one channel"
+        case .mono:      return monoIsFineNote
         default:         return c.familyDescription
         }
     }
