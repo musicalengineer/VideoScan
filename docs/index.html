@@ -1011,6 +1011,9 @@ function latestRun(N, h) {
   }
   return null;
 }
+// A Mac's newest run older than the stale window is a missed run. A cell without `finished`
+// is dated by its night alone, so it gets that whole day before the window starts.
+const runMissed = run => hoursSince(run.when) > STALE_HOURS + (/^\d{4}-\d{2}-\d{2}$/.test(run.when) ? 24 : 0);
 // One row's counts: app then every other lane, the same words for green and a few failed.
 // `sep` "\n": each lane on its own line on the card (Rick 2026-11-08: no leading dots).
 function runWords(cell, sep = " · ") {
@@ -1415,21 +1418,26 @@ const SUMMARY = {
       const lastRow = d.tdRows.filter(r => r.source === "nightly-local").pop();
       return { ...NO_LINE, sentence: `Nightly summary not published yet; last nightly row ${lastRow ? fmtWhen(lastRow.ts) : NO_DATA}.${covWords}` };
     }
-    const T = N.list, lastNight = T[T.length - 1], st = stability(N);
-    const cells = N.hosts.map(h => [h, cellOf(lastNight, h)]);
+    // Each Mac's NEWEST run, as on the Test Results card (Rick 2026-11-17): the M4 runs at 2 PM,
+    // so yesterday's run stands until today's arrives. Yellow is an issue, never a schedule.
+    const T = N.list, st = stability(N);
+    const runs = N.hosts.map(h => [h, latestRun(N, h)]);
+    const cells = runs.map(([h, r]) => [h, r ? r.cell : null]);
+    const missed = runs.filter(([, r]) => r && r.cell.state !== "did_not_run" && runMissed(r));
     const reds = cells.filter(([, c]) => c && c.state === "red");
     const watches = cells.filter(([, c]) => c && c.state === "watch");
     const greens = cells.filter(([, c]) => c && c.state === "green");
     const skipped = cells.filter(([, c]) => c && c.state === "did_not_run");
     const none = cells.filter(([, c]) => !c);
-    const state = reds.length ? "red" : watches.length ? "watch" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
+    const state = reds.length ? "red" : watches.length ? "watch" : (greens.length ? (skipped.length || none.length || missed.length ? "watch" : "green") : "amber");
     const suite = Math.max(0, ...cells.map(([, c]) => c ? c.total : 0));
     const parts = [];
     if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? " fails" : "s fail"} on the ${esc(hostName(h))}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
     if (watches.length) parts.push(watches.map(([h, c]) => `a few fail on the ${esc(hostName(h))} (<b>${n(c.failed)}</b> of ${n(c.total)})`).join(" and "));
     if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(hostName(h))} is green (${n(c.passed)} passed)`).join(", "));
     if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(hostName(h))} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
-    if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(hostName(h))).join(" or ")}`);
+    if (missed.length) parts.push(missed.map(([h, r]) => `the ${esc(hostName(h))} has <b>not run since ${day(r.when)}</b>`).join(", "));
+    if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(hostName(h))).join(" or ")} in ${N.list.length} nights`);
     const lead = st.redStreak ? `Red <b>${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running</b>: ` : st.greenStreak ? `Green <b>${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running</b>: ` : "";
     const primary = (greens[0] || watches[0] || reds[0] || [null, null]);
     const ph = primary[0], pc = primary[1];
@@ -1654,10 +1662,11 @@ const BODIES = {
     const N = nights(d);
     const cards = [];
     if (N && N.list.length) {
-      const lastNight = N.list[N.list.length - 1];
-      const weekNight = N.list[N.list.length - 8] || null;
       for (const h of N.hosts) {
-        const c = cellOf(lastNight, h), w = weekNight ? cellOf(weekNight, h) : null;
+        // Each Mac's newest run (as the summary line and the card), against the night a week before it.
+        const run = latestRun(N, h), c = run ? run.cell : null;
+        const weekNight = run ? N.list[N.list.indexOf(run.night) - 7] || null : null;
+        const w = weekNight ? cellOf(weekNight, h) : null;
         cards.push(card(`${h} · passed`, c && c.state !== "did_not_run" ? n(c.passed) : (c ? "did not run" : "no run"), w && w.state !== "did_not_run" ? w.passed : null, c && c.state !== "did_not_run" ? c.passed : null, false));
         cards.push(card(`${h} · failed`, c && c.state !== "did_not_run" ? n(c.failed) : DASH, w && w.state !== "did_not_run" ? w.failed : null, c && c.state !== "did_not_run" ? c.failed : null, true, c && c.state === "did_not_run" ? cellReason(c) : undefined));
       }
