@@ -16,10 +16,17 @@ extension PromoteToArchiveSheet {
             GroupBox("Archival readiness (preserve as-is — assess, record, never alter)") {
                 VStack(alignment: .leading, spacing: 6) {
                     // Counters — audio first, then format, then date, then un-probeable.
+                    // The five audio counters are a partition: every selected
+                    // file is in exactly one (ArchiveReadiness.SoundBucket).
                     HStack(spacing: 12) {
                         counter(plan.audioProblemCount, "audio problem", color: .red, icon: "waveform.badge.exclamationmark")
                         counter(plan.audioUnbalancedCount, "one-sided audio", color: .orange, icon: "speaker.wave.1")
                         counter(plan.audioNotVerifiedCount, "audio checked at promote", color: .secondary, icon: "waveform")
+                        counter(plan.audioNotedCount, "audio note", color: .secondary, icon: "text.bubble")
+                        counter(plan.audioFineCount, "audio fine", color: .green, icon: "checkmark.circle")
+                    }
+                    .font(.system(size: 11))
+                    HStack(spacing: 12) {
                         counter(plan.atRiskFormatCount, "at-risk format", color: .orange, icon: "film")
                         counter(plan.dateWarningCount, "undated / low-confidence", color: .secondary, icon: "calendar.badge.exclamationmark")
                         counter(plan.unprobeableCount, "un-probeable", color: .red, icon: "xmark.octagon")
@@ -76,11 +83,16 @@ extension PromoteToArchiveSheet {
     }
 
     /// Red only for what stops a promotion (un-probeable, or sound the
-    /// gate refuses); green when there is nothing to say.
+    /// gate refuses); green when there is nothing to say AND the sound is
+    /// in the "fine" bucket — a layout note, an accepted silence or an
+    /// unchecked track is never green, whatever the warnings list holds.
     static func lineColor(_ r: ArchiveReadiness) -> Color {
         if r.blocking { return .red }
-        if case .refusable = r.sound { return .red }
-        return r.warnings.isEmpty ? .green : .secondary
+        switch r.sound.bucket {
+        case .refused: return .red
+        case .fine: return r.warnings.isEmpty ? .green : .secondary
+        case .noted, .unbalanced, .notChecked: return .secondary
+        }
     }
 
     private func counter(_ n: Int, _ label: String, color: Color, icon: String) -> some View {

@@ -104,8 +104,11 @@ struct PromoteSoundGateTests {
     func silentSurround() {
         let d = S.soundDiagnosis(channels: [-70, -72, -.infinity, -90, -75, -80])
         #expect(d.balanceAnalysis?.classification == .multichannel)
-        #expect(d.persistedStatus == "ok" && d.persistedNote.hasPrefix("surround audio"),
-                "fixture: Verify Audio stores this as ok / surround: \(d.persistedNote)")
+        // Codex #300 F1: Verify Audio used to store this as ok / "surround
+        // audio (6 channels)", which the Promote sheet showed green while
+        // this gate refused it. The stored note now says what was measured.
+        #expect(d.findings == [.silentAudio] && d.persistedStatus == "ok" && d.persistedNote == "silent audio",
+                "Verify Audio stores what was measured: \(d.persistedNote)")
         if case .silent(_, let loudest) = G.finding(from: d) { #expect(loudest == -70) } else {
             Issue.record("six channels under the line are silent: \(G.finding(from: d))")
         }
