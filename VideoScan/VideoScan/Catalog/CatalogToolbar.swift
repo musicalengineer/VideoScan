@@ -114,7 +114,6 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Plain values for the Showing box — a handful of Bools, no records.
     private var showingState: CatalogShowingSummary.State {
         CatalogShowingSummary.State(
-            kindFacet: model.kindFacetSetting.facet,
             viewFilters: showFilters.active,
             showPairsOnly: showPairsOnly,
             showDisconnectedMedia: showDisconnectedMedia,
@@ -162,21 +161,8 @@ struct CatalogToolbar<Dashboard: View>: View {
     // identical work to the table filter running 250 ms-debounced in
     // parallel. CatalogContent.computeFiltered() now derives the badge
     // count from its own single pass — over the same purge → set-aside
-    // → kind-facet base (#124) the old pfSearchBadgeBase scan used —
+    // → superseded base the old pfSearchBadgeBase scan used —
     // and publishes it up through ContentView (`searchHitCount` above).
-
-    /// Facet chip binding — explicit save() on every change (@Published
-    /// kills didSet; same pattern as the catalog-scope binding in
-    /// ScanOptionsMenu).
-    private var kindFacetBinding: Binding<CatalogKindFacet> {
-        Binding(
-            get: { model.kindFacetSetting.facet },
-            set: { newVal in
-                model.kindFacetSetting.facet = newVal
-                model.saveKindFacetSetting()
-            }
-        )
-    }
 
     /// "+ Filter" menu next to the search field. Each pick appends a
     /// field-prefix token (or a complete `stream:...` token) to the
@@ -196,9 +182,8 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Button("Notes")       { insertSearchPrefix("notes:") }
             }
             Section("Structural") {
-                // GH #124: the facet-family grammar. type:video is the
-                // video-BEARING bucket (V+A or video-only), matching the
-                // toolbar facet chip's Videos spelling.
+                // GH #124: the media-kind grammar. type:video is the
+                // video-BEARING bucket (V+A or video-only).
                 Menu("Media kind") {
                     Button("Video (any)")    { insertSearchToken("type:video") }
                     Button("Video only")     { insertSearchToken("type:video-only") }
@@ -355,23 +340,11 @@ struct CatalogToolbar<Dashboard: View>: View {
             // and ⌘⌫ (VideoScanModel+TrashSelection.swift).
 
             Menu {
-                // Media kind, merged in from the old standalone "All
-                // Kinds" chip (Rick 2026-08-11: the two menus overlapped).
-                // It is a view narrowing like everything else here, so it
-                // belongs in the same menu — and the label below still
-                // names the active facet, so the default-off state stays
-                // visible without its own button.
-                Section("Show files — media kind") {
-                    Picker("Media kind", selection: kindFacetBinding) {
-                        ForEach(CatalogKindFacet.allCases) { facet in
-                            Label(facet.label, systemImage: facet.icon)
-                                .tag(facet)
-                                .help(facet.help)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                }
+                // The Show menu's final shape for now (DECISIONS 2026-11-17):
+                // five filter ticks — no tick lists everything — and two
+                // switches that are not filters (disconnected media, the
+                // folder view). The media-kind section is gone: Audio Only
+                // is one of the five.
                 // Baseline reachability opt-out (2026-07-20). Reachable-only
                 // is the DEFAULT; this toggle lifts that baseline. Kept in its
                 // own section ABOVE the additive filters — and deliberately
@@ -390,7 +363,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 }
                 Section("Show files — filters") {
                     // Every row asks the ONE store (which applies the
-                    // Not Yet Archived / Has Master Copy exclusion, persists
+                    // Audio Only / Videos Missing Sound exclusion, persists
                     // and logs); the words are the filter's `title`, the
                     // same ones the Showing box uses.
                     ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
@@ -400,6 +373,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                         )) {
                             Label(filter.title, systemImage: filter.icon)
                         }
+                        .help(filter.help)
                     }
                 }
                 // Footage folders (Rick 2026-10-16, docs/design/
@@ -442,15 +416,13 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Image(systemName: "line.3.horizontal.decrease.circle\(viewIsModified ? ".fill" : "")")
                     Text("Show")
                 }
-                .foregroundColor(model.kindFacetSetting.facet == .videoBearing
-                                 ? .primary : .teal)
             }
             .menuStyle(.button)
             .vsGlassButtonStyle()
             .fixedSize()
-            .help("Choose which files are shown — media kind, filters, and folders")
+            .help("Choose which files are shown — filters and folders. No filter ticked lists everything.")
 
-            // "Showing: Videos · Not Yet Archived · Connected drives" — a
+            // "Not Yet Archived · Connected drives" — a
             // highlighted box beside the Show menu saying in plain words
             // what the table is filtered to (Rick 2026-08-22: "humans
             // looking at lots of data need bright clear reminders").

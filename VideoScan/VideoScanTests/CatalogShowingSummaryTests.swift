@@ -18,7 +18,7 @@ struct CatalogShowingSummaryTests {
         CatalogShowingSummary.pills(for: s).map(\.text)
     }
 
-    /// Every subset of the Show filters (2^6 = 64).
+    /// Every subset of the Show filters (2^5 = 32).
     private var everyFilterSet: [Set<CatalogViewFilter>] {
         let all = CatalogViewFilter.allCases
         return (0..<(1 << all.count)).map { mask in
@@ -26,19 +26,21 @@ struct CatalogShowingSummaryTests {
         }
     }
 
-    @Test func defaultWithoutMasterArchiveSaysVideosOnConnectedDrives() {
+    @Test func defaultWithoutMasterArchiveSaysEverythingOnConnectedDrives() {
         let s = CatalogShowingSummary.State()
-        #expect(texts(s) == ["Videos", "Connected drives"])
-        #expect(CatalogShowingSummary.sentence(for: s) == "Showing Videos, Connected drives")
+        #expect(texts(s) == ["Everything", "Connected drives"])
+        #expect(CatalogShowingSummary.sentence(for: s) == "Showing Everything, Connected drives")
     }
 
-    @Test func masterArchiveAddsTheArchivePillInTheSecondSlot() {
+    @Test func masterArchiveAddsTheArchivePillAfterEverything() {
         var s = CatalogShowingSummary.State(hasMasterArchive: true)
-        #expect(texts(s) == ["Videos", "Including archived", "Connected drives"])
+        #expect(texts(s) == ["Everything", "Including archived", "Connected drives"])
         s.viewFilters = [.notYetArchived]
-        #expect(texts(s) == ["Videos", "Not Yet Archived", "Connected drives"])
-        s.viewFilters = [.hasMasterCopy]
-        #expect(texts(s) == ["Videos", "Has Master Copy", "Connected drives"])
+        #expect(texts(s) == ["Not Yet Archived", "Connected drives"])
+        // TRUTH (Has Master Copy left the menu 2026-11-17): with Not Yet Archived off, archived files
+        // ARE in the list whatever else is on, and the box says so.
+        s.viewFilters = [.audioOnly]
+        #expect(texts(s) == ["Including archived", "Audio Only", "Connected drives"])
     }
 
     @Test func theToDoPillIsTheOnlyGreenOneAndNoBoxPillIsAButton() {
@@ -62,9 +64,6 @@ struct CatalogShowingSummaryTests {
             let s = CatalogShowingSummary.State(viewFilters: [f])
             #expect(CatalogShowingSummary.boxPills(for: s).map(\.text).contains(f.title))
         }
-        for k in CatalogKindFacet.allCases {
-            #expect(!CatalogShowingSummary.words(for: k).isEmpty)
-        }
     }
 
     @Test("TRUTH: the box names exactly the filters that are on — every subset, Master Archive or not",
@@ -79,7 +78,10 @@ struct CatalogShowingSummaryTests {
             // "Including archived" is said only when it is true: a Master
             // Archive exists and neither archive filter is on.
             let saysIncluding = CatalogShowingSummary.boxPills(for: s).contains { $0.text == CatalogShowingSummary.includingArchived }
-            #expect(saysIncluding == (hasMasterArchive && !filters.contains(.notYetArchived) && !filters.contains(.hasMasterCopy)))
+            #expect(saysIncluding == (hasMasterArchive && !filters.contains(.notYetArchived)))
+            // "Everything" exactly when no filter is on.
+            let saysEverything = CatalogShowingSummary.boxPills(for: s).contains { $0.text == CatalogShowingSummary.everything }
+            #expect(saysEverything == filters.isEmpty, "on: \(filters)")
             // The tooltip carries every name, whatever line is drawn.
             let help = CatalogShowingSummary.help(for: s)
             for f in filters { #expect(help.contains(f.title)) }
@@ -100,27 +102,30 @@ struct CatalogShowingSummaryTests {
                 let namesAll = names.allSatisfy(line.contains)
                 let countsRest = names.count > 1
                     && (line.contains("+\(names.count - 1) more") && line.contains(names[0]) || line == "\(names.count) filters on")
-                let countsOne = names.count == 1 && line == "1 filter on"
-                #expect(namesAll || countsRest || countsOne, "\(line) hides a filter of \(names)")
+                #expect(namesAll || countsRest, "\(line) hides a filter of \(names)")
+                #expect(!line.contains(CatalogShowingSummary.everything) || names.isEmpty, "\(line) says Everything with a filter on")
             }
             // Longest first, so the first that fits says the most.
             #expect(lines == lines.sorted { $0.count > $1.count })
         }
         let none = CatalogShowingSummary.boxLines(for: .init())
-        #expect(none == ["Videos · Connected drives", "Videos"])
-        let three = CatalogShowingSummary.boxLines(for: .init(viewFilters: [.notYetArchived, .needsDate, .unpairedOnly]))
-        #expect(three == ["Videos · Not Yet Archived · Unpaired Only · Needs a Date · Connected drives",
-                          "Videos · Not Yet Archived +2 more", "3 filters on"])
+        #expect(none == ["Everything · Connected drives", "Everything"])
+        let one = CatalogShowingSummary.boxLines(for: .init(viewFilters: [.audioOnly]))
+        #expect(one == ["Audio Only · Connected drives", "Audio Only"])
+        let three = CatalogShowingSummary.boxLines(for: .init(viewFilters: [.notYetArchived, .needsDate, .videosMissingSound]))
+        #expect(three == ["Not Yet Archived · Videos Missing Sound · Needs a Date · Connected drives",
+                          "Not Yet Archived +2 more", "3 filters on"])
+        // Pairs only with no filter: not "everything", and nothing shorter to fall back to.
+        #expect(CatalogShowingSummary.boxLines(for: .init(showPairsOnly: true)) == ["Pairs only · Connected drives"])
     }
 
     @Test func kitchenSinkReadsInFixedOrder() {
         let s = CatalogShowingSummary.State(
-            kindFacet: .everything,
-            viewFilters: [.notYetArchived, .needsDate, .unpairedOnly],
+            viewFilters: [.notYetArchived, .needsDate, .videosMissingSound, .onePerFootage],
             showPairsOnly: true, showDisconnectedMedia: true,
             hasMasterArchive: true)
         #expect(texts(s) == [
-            "All kinds", "Not Yet Archived", "Unpaired Only", "Needs a Date", "Pairs only", "All drives",
+            "Not Yet Archived", "Videos Missing Sound", "Needs a Date", "Hide Other Versions", "Pairs only", "All drives",
         ])
     }
 

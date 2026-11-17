@@ -2,16 +2,20 @@
 // The ONE owner of the Catalog ▸ Show filter set (CatalogShowFilterStore.swift,
 // 2026-11-17).
 //
-//   LOGIC      turn on / off / clear; Not Yet Archived and Has Master Copy
-//              exclude each other; the persisted value round-trips under
-//              stable keys; the old label-keyed value migrates once, dropping
-//              the removed filters and anything unknown; the seed runs once.
+//   LOGIC      the five ticks; turn on / off / clear; Audio Only and Videos
+//              Missing Sound exclude each other; the persisted value
+//              round-trips under stable keys; the old label-keyed value
+//              migrates once, dropping the removed filters and anything
+//              unknown; a stable-key value holding a removed filter drops it
+//              and says so; the media-kind section's setting migrates once
+//              from each of its three values; the seed runs once.
 //   LOGGING    every writer's change is exactly one line naming the change,
 //              the writer and the resulting set; launch logs what it restored;
 //              a call that changes nothing writes nothing.
-//   ISOLATION  a poisoned stored value (a number, data, garbage text) restores
-//              as no filters, never crashes, and is rewritten clean.
-//   SCALE      N/A — six enums; no records are read.
+//   ISOLATION  a poisoned stored value (a number, data, garbage text) — the
+//              filter set's or the old media-kind setting's — restores as no
+//              filters, never crashes, and is rewritten clean.
+//   SCALE      N/A — five enums; no records are read.
 //   MEDIA      N/A — no media is opened.
 // The sensor (nothing else writes the keys) is ShowFiltersAuditSensorTests;
 // the truth test (the box names exactly the set) is in CatalogShowingSummaryTests.
@@ -43,23 +47,28 @@ struct CatalogShowFilterStoreTests {
 
     // MARK: LOGIC
 
-    @Test("LOGIC: the menu after the 2026-11-17 trim — six filters, stable keys, the menu's words")
-    func theTrimmedFilterList() {
+    @Test("LOGIC: the menu's final shape (2026-11-17) — five ticks, in this order, stable keys, the menu's words")
+    func theFiveTicks() {
         #expect(CatalogViewFilter.allCases.map(\.title) == [
-            "Unpaired Only", "Repaired — Awaiting Confirmation", "Not Yet Archived", "Has Master Copy",
-            "Hide Other Versions", "Needs a Date",
+            "Audio Only", "Videos Missing Sound", "Not Yet Archived", "Needs a Date", "Hide Other Versions",
         ])
         #expect(CatalogViewFilter.allCases.map(\.rawValue) == [
-            "unpairedOnly", "awaitingConfirmation", "notYetArchived", "hasMasterCopy", "onePerFootage", "needsDate",
+            "audioOnly", "videosMissingSound", "notYetArchived", "needsDate", "onePerFootage",
         ])
         for f in CatalogViewFilter.allCases {
-            #expect(!f.icon.isEmpty)
+            #expect(!f.icon.isEmpty && !f.help.isEmpty)
             #expect(f.rawValue != f.title, "\(f): the stored key must not be the display label")
         }
-        // The pure per-record filters carry a predicate; the model-backed pair and the group pass do not.
-        let modelBacked: Set<CatalogViewFilter> = [.notYetArchived, .hasMasterCopy, .onePerFootage]
+        #expect(Set(CatalogViewFilter.allCases.map(\.icon)).count == 5, "each tick has its own glyph")
+        // The pure per-record filters carry a predicate; the model-backed one and the group pass do not.
+        let modelBacked: Set<CatalogViewFilter> = [.notYetArchived, .onePerFootage]
         for f in CatalogViewFilter.allCases {
             #expect((f.recordPredicate == nil) == modelBacked.contains(f), "\(f)")
+        }
+        // No removed filter's key is a live one, and none of the removed words is a live title.
+        for (key, words) in CatalogShowFilterStore.removedStableKeys {
+            #expect(CatalogViewFilter(rawValue: key) == nil, "\(key)")
+            #expect(!CatalogViewFilter.allCases.map(\.title).contains(words), "\(words)")
         }
     }
 
@@ -70,14 +79,14 @@ struct CatalogShowFilterStoreTests {
             let s = store(defaults, lines)
             #expect(s.active.isEmpty)
             s.set(.needsDate, on: true, by: .showMenu)
-            s.set(.unpairedOnly, on: true, by: .showMenu)
+            s.set(.videosMissingSound, on: true, by: .showMenu)
             s.set(.notYetArchived, on: true, by: .showMenu)
-            #expect(s.active == [.needsDate, .unpairedOnly, .notYetArchived])
-            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "unpairedOnly,notYetArchived,needsDate",
+            #expect(s.active == [.needsDate, .videosMissingSound, .notYetArchived])
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "videosMissingSound,notYetArchived,needsDate",
                     "stable keys, in menu order")
             // Relaunch: a second store over the same defaults.
-            #expect(store(defaults, Lines()).active == [.needsDate, .unpairedOnly, .notYetArchived])
-            s.set(.unpairedOnly, on: false, by: .showMenu)
+            #expect(store(defaults, Lines()).active == [.needsDate, .videosMissingSound, .notYetArchived])
+            s.set(.videosMissingSound, on: false, by: .showMenu)
             #expect(store(defaults, Lines()).active == [.needsDate, .notYetArchived])
             s.clearAll(by: .emptyTable)
             #expect(s.active.isEmpty)
@@ -98,30 +107,37 @@ struct CatalogShowFilterStoreTests {
         }
     }
 
-    @Test("LOGIC: Not Yet Archived and Has Master Copy cannot both be on — turning one on turns the other off")
-    func theArchivePairIsMutuallyExclusive() {
+    @Test("LOGIC: Audio Only and Videos Missing Sound cannot both be on — turning one on turns the other off")
+    func theSoundPairIsMutuallyExclusive() {
+        #expect(CatalogViewFilter.audioOnly.excludes == .videosMissingSound)
+        #expect(CatalogViewFilter.videosMissingSound.excludes == .audioOnly)
+        for f in [CatalogViewFilter.notYetArchived, .needsDate, .onePerFootage] { #expect(f.excludes == nil, "\(f)") }
         withDefaults { defaults in
             let lines = Lines()
             let s = store(defaults, lines)
-            s.set(.notYetArchived, on: true, by: .showMenu)
+            s.set(.audioOnly, on: true, by: .showMenu)
             s.set(.needsDate, on: true, by: .showMenu)
             lines.all.removeAll()
-            s.set(.hasMasterCopy, on: true, by: .showMenu)
-            #expect(s.active == [.hasMasterCopy, .needsDate])
-            #expect(lines.all == ["Catalog Show filters: on: Has Master Copy; off: Not Yet Archived (by Show menu) "
-                                    + "→ now Has Master Copy, Needs a Date"],
+            s.set(.videosMissingSound, on: true, by: .showMenu)
+            #expect(s.active == [.videosMissingSound, .needsDate])
+            #expect(lines.all == ["Catalog Show filters: on: Videos Missing Sound; off: Audio Only (by Show menu) "
+                                    + "→ now Videos Missing Sound, Needs a Date"],
                     "one change, one line, both halves named")
-            s.set(.notYetArchived, on: true, by: .showMenu)
-            #expect(s.active == [.notYetArchived, .needsDate])
+            s.set(.audioOnly, on: true, by: .showMenu)
+            #expect(s.active == [.audioOnly, .needsDate])
+            // Turning the one that is on OFF leaves the other off: no filter is switched on behind the user's back.
+            s.set(.audioOnly, on: false, by: .showMenu)
+            #expect(s.active == [.needsDate])
             // No sequence of writes reaches the pair.
             for f in CatalogViewFilter.allCases { s.set(f, on: true, by: .showMenu) }
-            #expect(!(s.active.contains(.notYetArchived) && s.active.contains(.hasMasterCopy)))
-            // A stored value that holds both (an old build's, hand-edited) is made legal at launch, and says so.
-            defaults.set("notYetArchived,hasMasterCopy", forKey: CatalogShowFilterStore.key)
+            #expect(!(s.active.contains(.audioOnly) && s.active.contains(.videosMissingSound)))
+            #expect(s.active.count == 4)
+            // A stored value that holds both (hand-edited) is made legal at launch, and says so.
+            defaults.set("audioOnly,videosMissingSound", forKey: CatalogShowFilterStore.key)
             let relaunch = Lines()
-            #expect(store(defaults, relaunch).active == [.notYetArchived])
-            #expect(relaunch.all.first?.contains("dropped Has Master Copy") == true)
-            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "notYetArchived")
+            #expect(store(defaults, relaunch).active == [.audioOnly])
+            #expect(relaunch.all.first?.contains("dropped Videos Missing Sound") == true)
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "audioOnly")
         }
     }
 
@@ -130,31 +146,146 @@ struct CatalogShowFilterStoreTests {
         withDefaults { defaults in
             let old = ["Video+Audio Only", "Unpaired Only", "Rated Only", "Has Family", "In Workspace",
                        "Untagged (junk candidate)", "Not Yet Archived", "Archive Candidates", "No Place Yet",
-                       "One Per Footage", "Confirmed Date", "A Filter From Another Build"].joined(separator: "|")
+                       "One Per Footage", "Confirmed Date", "Has Master Copy", "Repaired — Awaiting Confirmation",
+                       "A Filter From Another Build"].joined(separator: "|")
             defaults.set(old, forKey: CatalogShowFilterStore.legacyKey)
             let lines = Lines()
             let s = store(defaults, lines)
-            #expect(s.active == [.unpairedOnly, .notYetArchived, .onePerFootage])
+            #expect(s.active == [.notYetArchived, .onePerFootage])
             #expect(!s.active.contains(.needsDate), "Confirmed Date is the OPPOSITE of Needs a Date — never carried over")
-            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "unpairedOnly,notYetArchived,onePerFootage")
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "notYetArchived,onePerFootage")
             #expect(defaults.object(forKey: CatalogShowFilterStore.legacyKey) == nil, "the old key is gone after the migration")
             let line = lines.all.first ?? ""
             #expect(lines.all.count == 1)
-            #expect(line.hasPrefix("Catalog Show filters: restored at launch → Unpaired Only, Not Yet Archived, Hide Other Versions"))
+            #expect(line.hasPrefix("Catalog Show filters: restored at launch → Not Yet Archived, Hide Other Versions"))
             #expect(line.contains("migrated from the old setting"))
             for gone in CatalogShowFilterStore.removedLegacyLabels { #expect(line.contains(gone), "\(gone) not named") }
             #expect(line.contains("not known to this build: A Filter From Another Build"))
             // Once: the next launch reads the stable key and has nothing to say about a migration.
             let again = Lines()
-            #expect(store(defaults, again).active == [.unpairedOnly, .notYetArchived, .onePerFootage])
-            #expect(again.all == ["Catalog Show filters: restored at launch → Unpaired Only, Not Yet Archived, Hide Other Versions"])
+            #expect(store(defaults, again).active == [.notYetArchived, .onePerFootage])
+            #expect(again.all == ["Catalog Show filters: restored at launch → Not Yet Archived, Hide Other Versions"])
+        }
+    }
+
+    @Test("LOGIC: a stored set holding a filter removed on 2026-11-17 drops it, names it, and is rewritten — each one, and all three",
+          arguments: [["unpairedOnly"], ["hasMasterCopy"], ["awaitingConfirmation"],
+                      ["unpairedOnly", "awaitingConfirmation", "hasMasterCopy"]])
+    func removedStableTokensAreDroppedAndNamed(removed: [String]) {
+        withDefaults { defaults in
+            defaults.set((["needsDate"] + removed + ["notYetArchived"]).joined(separator: ","), forKey: CatalogShowFilterStore.key)
+            let lines = Lines()
+            #expect(store(defaults, lines).active == [.needsDate, .notYetArchived], "the filters that remain are kept")
+            #expect(lines.all.count == 1)
+            let line = lines.all.first ?? ""
+            #expect(line.hasPrefix("Catalog Show filters: restored at launch → Not Yet Archived, Needs a Date (dropped, no longer in the menu: "))
+            for key in removed {
+                #expect(line.contains(CatalogShowFilterStore.removedStableKeys[key] ?? "?"), "\(key) is not named in: \(line)")
+            }
+            #expect(!line.contains("not known to this build"), "a removed filter is named as removed, not as unknown")
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "notYetArchived,needsDate", "rewritten without them")
+            // Once: the next launch has nothing to drop.
+            let again = Lines()
+            #expect(store(defaults, again).active == [.needsDate, .notYetArchived])
+            #expect(again.all == ["Catalog Show filters: restored at launch → Not Yet Archived, Needs a Date"])
+        }
+        // Only removed filters stored: nothing is on, and the store still works.
+        withDefaults { defaults in
+            defaults.set(removed.joined(separator: ","), forKey: CatalogShowFilterStore.key)
+            let s = store(defaults, Lines())
+            #expect(s.active.isEmpty)
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "")
+            s.set(.audioOnly, on: true, by: .showMenu)
+            #expect(store(defaults, Lines()).active == [.audioOnly])
+        }
+    }
+
+    // MARK: The media-kind section's setting (removed 2026-11-17)
+
+    @Test("LOGIC: the media-kind setting migrates once — Audio Only becomes the tick, Videos and All Kinds become no tick; logged",
+          arguments: [("audioOnly", true, "Audio Only and is now the Audio Only filter"),
+                      ("videoBearing", false, "Videos and is now no filter"),
+                      ("everything", false, "All Kinds and is now no filter")])
+    func migrationOfTheKindFacet(stored: String, audioOnly: Bool, words: String) {
+        let facetKey = CatalogShowFilterStore.legacyKindFacetKey
+        #expect(facetKey == "catalogKindFacet", "the key the removed section wrote")
+        withDefaults { defaults in
+            defaults.set(stored, forKey: facetKey)
+            defaults.set("needsDate", forKey: CatalogShowFilterStore.key)
+            let lines = Lines()
+            let s = store(defaults, lines)
+            let expected: Set<CatalogViewFilter> = audioOnly ? [.audioOnly, .needsDate] : [.needsDate]
+            #expect(s.active == expected)
+            #expect(defaults.object(forKey: facetKey) == nil, "the old key is deleted")
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == CatalogShowFilterStore.encode(expected))
+            #expect(lines.all.count == 2, "the launch line, then the migration's one line: \(lines.all)")
+            let line = lines.all.last ?? ""
+            #expect(line.hasPrefix("Catalog Show filters: the Show menu's media-kind section was removed; its setting was " + words))
+            #expect(line.hasSuffix("→ now " + CatalogShowFilterStore.names(expected)))
+            // Once.
+            let again = Lines()
+            #expect(store(defaults, again).active == expected)
+            #expect(again.all.count == 1)
+        }
+        // With no filter set stored at all (the common case).
+        withDefaults { defaults in
+            defaults.set(stored, forKey: facetKey)
+            let s = store(defaults, Lines())
+            #expect(s.active == (audioOnly ? [.audioOnly] : []))
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == (audioOnly ? "audioOnly" : ""))
+            #expect(defaults.object(forKey: facetKey) == nil)
+        }
+    }
+
+    @Test("LOGIC: a migrated Audio Only turns off a stored Videos Missing Sound; no stored media-kind setting says nothing")
+    func kindFacetMigrationKeepsTheSetLegal() {
+        withDefaults { defaults in
+            defaults.set("audioOnly", forKey: CatalogShowFilterStore.legacyKindFacetKey)
+            defaults.set("videosMissingSound,notYetArchived", forKey: CatalogShowFilterStore.key)
+            let lines = Lines()
+            #expect(store(defaults, lines).active == [.audioOnly, .notYetArchived])
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "audioOnly,notYetArchived")
+            #expect(lines.all.last?.hasSuffix("→ now Audio Only, Not Yet Archived") == true)
+        }
+        withDefaults { defaults in
+            let before: Set<CatalogViewFilter> = [.needsDate]
+            let out = CatalogShowFilterStore.migrateKindFacet(in: defaults, into: before)
+            #expect(out.filters == before && out.line == nil, "a fresh install has nothing to migrate")
+            let lines = Lines()
+            _ = store(defaults, lines)
+            #expect(lines.all == ["Catalog Show filters: restored at launch → none"])
+            #expect(defaults.object(forKey: CatalogShowFilterStore.key) == nil, "nothing changed — nothing written")
+        }
+    }
+
+    @Test("ISOLATION: a poisoned media-kind setting is dropped, said once, and never turns a filter on")
+    func poisonedKindFacet() {
+        let long = String(repeating: "k", count: 5_000)
+        let poisons: [Any] = [7, 3.5, true, Data([0xFF, 0x00]), ["audioOnly"], ["a": 1], Date(),
+                              "", "AUDIOONLY", " audioOnly ", "audioOnly,everything", "definitely-not-a-facet", long]
+        for poison in poisons {
+            withDefaults { defaults in
+                defaults.set(poison, forKey: CatalogShowFilterStore.legacyKindFacetKey)
+                defaults.set("notYetArchived", forKey: CatalogShowFilterStore.key)
+                let lines = Lines()
+                let s = store(defaults, lines)
+                #expect(s.active == [.notYetArchived], "\(type(of: poison)): \(String(describing: poison).prefix(30))")
+                #expect(defaults.object(forKey: CatalogShowFilterStore.legacyKindFacetKey) == nil)
+                #expect(lines.all.count == 2 && lines.all[1].contains("was dropped"), "\(lines.all)")
+                #expect(lines.all[1].count < 400, "a long stored value is clipped in the log line")
+                // Still a working store; the next launch is quiet.
+                s.set(.audioOnly, on: true, by: .showMenu)
+                let again = Lines()
+                #expect(store(defaults, again).active == [.audioOnly, .notYetArchived])
+                #expect(again.all.count == 1)
+            }
         }
     }
 
     @Test("LOGIC: the stable key wins over a leftover old key; an unknown stable token is dropped and named")
     func stableKeyWinsAndUnknownTokensAreNamed() {
         withDefaults { defaults in
-            defaults.set("Has Master Copy", forKey: CatalogShowFilterStore.legacyKey)
+            defaults.set("Not Yet Archived", forKey: CatalogShowFilterStore.legacyKey)
             defaults.set("needsDate,fromTheFuture", forKey: CatalogShowFilterStore.key)
             let lines = Lines()
             #expect(store(defaults, lines).active == [.needsDate])
@@ -164,7 +295,7 @@ struct CatalogShowFilterStoreTests {
         }
     }
 
-    @Test("LOGIC: the first-run default is applied once, logged, and never fights Has Master Copy")
+    @Test("LOGIC: the first-run default is applied once and logged; after that the user's choice wins")
     func theSeedRunsOnce() {
         withDefaults { defaults in
             let lines = Lines()
@@ -179,11 +310,12 @@ struct CatalogShowFilterStoreTests {
             s.seedDefaultIfUntouched(hasMasterArchive: true)
             #expect(s.active.isEmpty, "the user's choice wins after the one seed")
         }
+        // The seed adds to what is on; it never clears another filter.
         withDefaults { defaults in
             let s = store(defaults, Lines())
-            s.set(.hasMasterCopy, on: true, by: .showMenu)
+            s.set(.audioOnly, on: true, by: .showMenu)
             s.seedDefaultIfUntouched(hasMasterArchive: true)
-            #expect(s.active == [.hasMasterCopy])
+            #expect(s.active == [.audioOnly, .notYetArchived])
         }
     }
 

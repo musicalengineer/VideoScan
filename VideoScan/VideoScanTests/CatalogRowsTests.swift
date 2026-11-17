@@ -2,15 +2,20 @@
 // `CatalogRows.rows(records, state)` — which records the Catalog's files table
 // lists (CatalogRows.swift, 2026-11-17) — and the Needs a Date filter.
 //
-//   LOGIC      every remaining Show filter's membership on real record shapes;
+//   LOGIC      each of the five Show filters' membership on real record shapes
+//              (Videos Missing Sound: every SoundStanding case, the paired
+//              picture half, the owner's tag);
 //              the held row (selected + listed stays, marked, until the
 //              selection moves; only the Show filters are forgiven); focus
 //              ignores every filter; the search badge and the archived-hits
 //              split.
 //   TRUTH      Needs a Date lists exactly the rows the Archive tab's "Needs a
 //              Date" lists and Promote would file under Undated/ — one rule.
-//   SCALE      100k records through the whole function, plain and with every
-//              filter on and a held row, inside the Catalog's filter budget.
+//              Videos Missing Sound lists exactly the videos whose stored
+//              sound verdict Promote's sheet shows as refused — one engine.
+//   SCALE      100k records through the whole function, plain, with Videos
+//              Missing Sound on, and with every filter on and a held row,
+//              inside the Catalog's filter budget.
 //   ISOLATION  a held id that is not in the catalog, was trashed, or is out of
 //              scope is never listed; duplicate rows and an empty catalog.
 //   SENSOR     computeFiltered is the function's only caller and holds no
@@ -45,66 +50,54 @@ struct CatalogRowsTests {
                           algorithmVersion: 1)
     }
 
-    /// No reachability probes, every kind — the filter under test is the only narrowing.
+    /// No reachability probes — the filter under test is the only narrowing.
     private func open(_ filters: Set<CatalogViewFilter> = []) -> CatalogRows.State {
         var s = CatalogRows.State()
         s.showDisconnectedMedia = true
-        s.kindFacet = .everything
         s.filters = filters
         return s
     }
 
     // MARK: LOGIC — each remaining filter
 
-    @Test("LOGIC: no filter — every active record, in catalog order")
+    @Test("LOGIC: no filter — every active record of every kind, in catalog order")
     func noFilterListsEverything() {
         let all = [rec("a.mov"), rec("b.mov"), rec("c.mov")]
         #expect(names(CatalogRows.rows(all, open())) == ["a.mov", "b.mov", "c.mov"])
+        // No media-kind narrowing any more (2026-11-17): the default State lists audio-only,
+        // un-probeable and stream-less files beside the videos.
+        let kinds = [rec("both.mov"), rec("picture.mxf", stream: .videoOnly), rec("song.mp3", stream: .audioOnly),
+                     rec("empty.bin", stream: .noStreams), rec("broken.mxf", stream: .ffprobeFailed)]
+        var plain = CatalogRows.State()
+        plain.showDisconnectedMedia = true
+        #expect(CatalogRows.rows(kinds, plain).rows.map(\.id) == kinds.map(\.id))
         #expect(CatalogRows.rows([], open(Set(CatalogViewFilter.allCases))).rows.isEmpty)
     }
 
-    @Test("LOGIC: Unpaired Only — video-only and audio-only files with no partner")
-    func unpairedOnly() {
-        let both = rec("both.mov")
-        let video = rec("video.mov", stream: .videoOnly)
-        let audio = rec("audio.wav", stream: .audioOnly)
-        let pairedVideo = rec("pv.mov", stream: .videoOnly)
-        let pairedAudio = rec("pa.wav", stream: .audioOnly)
-        pairedVideo.pairedWith = pairedAudio
-        pairedAudio.pairedWith = pairedVideo
-        let out = CatalogRows.rows([both, video, audio, pairedVideo, pairedAudio], open([.unpairedOnly]))
-        #expect(names(out) == ["video.mov", "audio.wav"])
+    @Test("LOGIC: Audio Only — files with sound and no picture, on every stream type")
+    func audioOnly() {
+        let table: [(StreamType, Bool)] = [(.videoAndAudio, false), (.videoOnly, false), (.audioOnly, true),
+                                           (.noStreams, false), (.ffprobeFailed, false)]
+        let all = table.map { rec("\($0.0.rawValue).bin", stream: $0.0) }
+        let listed = CatalogRows.rows(all, open([.audioOnly])).rows
+        for (r, (stream, expected)) in zip(all, table) {
+            #expect(listed.contains { $0 === r } == expected, "\(stream)")
+        }
+        // A paired audio half is still an audio-only file.
+        let v = rec("v.mxf", stream: .videoOnly), a = rec("a.mxf", stream: .audioOnly)
+        v.pairedWith = a
+        a.pairedWith = v
+        #expect(names(CatalogRows.rows([v, a], open([.audioOnly]))) == ["a.mxf"])
     }
 
-    @Test("LOGIC: Repaired — Awaiting Confirmation — repair copies Rick has not confirmed")
-    func awaitingConfirmation() {
-        let plain = rec("plain.mov")
-        let waiting = rec("tape_RepairedAudio.mov")
-        waiting.derivedFrom = plain.id
-        waiting.derivationKind = "rebuildAudio"
-        let confirmed = rec("done_RepairedAudio.mov")
-        confirmed.derivedFrom = plain.id
-        confirmed.derivationKind = "rebuildAudio"
-        confirmed.repairConfirmedDate = Date(timeIntervalSince1970: 1_700_000_000)
-        let trimmed = rec("trim.mov")
-        trimmed.derivedFrom = plain.id
-        trimmed.derivationKind = "trim"
-        #expect(names(CatalogRows.rows([plain, waiting, confirmed, trimmed], open([.awaitingConfirmation])))
-                    == ["tape_RepairedAudio.mov"])
-    }
-
-    @Test("LOGIC: Not Yet Archived and Has Master Copy ask the archive index, one record at a time")
-    func theArchivePair() {
+    @Test("LOGIC: Not Yet Archived asks the archive index, one record at a time")
+    func notYetArchived() {
         let all = [rec("todo.mov"), rec("archived.mov"), rec("sampled.mov")]
         var s = open([.notYetArchived])
         s.engines.notYetArchived = { $0.filename == "todo.mov" }
-        s.engines.hasMasterCopy = { $0.filename == "archived.mov" }
         #expect(names(CatalogRows.rows(all, s)) == ["todo.mov"])
-        s.filters = [.hasMasterCopy]
-        #expect(names(CatalogRows.rows(all, s)) == ["archived.mov"],
-                "a file hidden only by a sampled match is neither to-do nor proven archived")
-        s.filters = [.notYetArchived, .hasMasterCopy]
-        #expect(CatalogRows.rows(all, s).rows.isEmpty, "the pair the store refuses: always empty")
+        s.filters = []
+        #expect(names(CatalogRows.rows(all, s)).count == 3, "off: archived files are listed (the box says Including archived)")
     }
 
     private func digest(_ r: VideoRecord, _ hex: Character) {
@@ -166,9 +159,9 @@ struct CatalogRowsTests {
         let trashed = rec("trashed.mov", stream: .videoOnly)
         trashed.purgedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let audio = rec("song.mp3", stream: .audioOnly)
-        var s = open([.unpairedOnly, .needsDate])
+        var s = open([.needsDate])
         #expect(names(CatalogRows.rows([keep, dated, trashed, audio], s)) == ["keep.mov", "song.mp3"])
-        s.kindFacet = .videoBearing
+        s.filters = [.videosMissingSound, .needsDate]
         #expect(names(CatalogRows.rows([keep, dated, trashed, audio], s)) == ["keep.mov"])
         s.showRemoved = true
         #expect(names(CatalogRows.rows([keep, dated, trashed, audio], s)) == ["keep.mov", "trashed.mov"])
@@ -294,11 +287,11 @@ struct CatalogRowsTests {
         let v = rec("v.mov", stream: .videoOnly), a = rec("a.wav", stream: .audioOnly)
         v.pairedWith = a
         a.pairedWith = v
-        var s = open([.unpairedOnly])
+        var s = open([.videosMissingSound])
         s.showPairsOnly = true
         s.held = [v.id]
         let out = CatalogRows.rows([a, v], s)
-        #expect(Set(names(out)) == ["v.mov"], "paired rows never match Unpaired Only; the selected one is held")
+        #expect(Set(names(out)) == ["v.mov"], "a paired picture half never matches Videos Missing Sound; the selected one is held")
         #expect(out.noLongerMatching == [v.id])
     }
 
@@ -351,6 +344,138 @@ struct CatalogRowsTests {
         }
     }
 
+    // MARK: Videos Missing Sound
+
+    /// A video whose stored sound check reads `status` / `note` (checked at a fixed time).
+    private func checked(_ name: String, stream: StreamType = .videoAndAudio, status: String = "ok", note: String = "",
+                         channels: String = "2") -> VideoRecord {
+        let r = rec(name, stream: stream)
+        r.isPlayable = "Yes"
+        r.audioChannels = stream == .videoAndAudio ? channels : ""
+        r.audioVerifyStatus = status
+        r.audioVerifyNote = note
+        r.audioVerifyDate = Date(timeIntervalSince1970: 1_800_000_000)
+        return r
+    }
+    private func fragment(_ finding: AudioVerifyFinding) -> String { VerifyAudioRules.noteFragment(for: finding) }
+
+    @Test("LOGIC: Videos Missing Sound — which SoundStanding cases count, every case named, with and without a paired audio file")
+    func whichStandingsCount() {
+        typealias S = ArchiveReadiness.SoundStanding
+        // (standing, listed when unpaired, listed when it is the picture half of a pair)
+        let table: [(S, Bool, Bool)] = [
+            (.noTrack, true, false),              // no audio stream: missing — unless its sound is the paired file
+            (.refusable("silent audio"), true, true),   // measured silent / check found no stream / damaged
+            (.accepted("tag"), false, false),     // silent or no track, the owner's tag covers it
+            (.unbalanced("left only"), false, false),   // Prepare balances it
+            (.note("mono audio"), false, false),
+            (.unmeasured("5.1 surround"), false, false),
+            (.notChecked, false, false),
+            (.fine, false, false),
+        ]
+        for (standing, unpaired, paired) in table {
+            #expect(VideoMissingSound.counts(standing, hasPairedSound: false) == unpaired, "\(standing)")
+            #expect(VideoMissingSound.counts(standing, hasPairedSound: true) == paired, "\(standing), paired")
+            // The rule in one line: what Promote's sheet counts as refused — minus the paired picture half.
+            #expect(unpaired == (standing.bucket == .refused), "\(standing): the filter and the Promote counter disagree")
+        }
+        // Every bucket of the Promote sheet is represented above.
+        #expect(Set(table.map(\.0.bucket)) == Set(ArchiveReadiness.SoundBucket.allCases))
+    }
+
+    @Test("LOGIC: Videos Missing Sound on real record shapes — no track, silent, damaged; not one-sided, mono, surround or unchecked")
+    func videosMissingSoundOnRecordShapes() {
+        let silent = fragment(.silentAudio), noStream = fragment(.noAudioStream)
+        let pictureOnly = rec("picture-only.mxf", stream: .videoOnly)
+        let pairedPicture = rec("paired-picture.mxf", stream: .videoOnly)
+        let pairedSound = rec("paired-sound.mxf", stream: .audioOnly)
+        pairedPicture.pairedWith = pairedSound
+        pairedSound.pairedWith = pairedPicture
+        let all: [(VideoRecord, Bool)] = [
+            (pictureOnly, true),                                                    // (a) no audio stream
+            (pairedPicture, false),                                                 // (a) …unless the audio half is paired
+            (pairedSound, false),                                                   // an audio file is not a video
+            (checked("silent.mov", note: silent), true),                            // (b) measured silent
+            (checked("no-stream-found.mov", note: noStream), true),                 // the check found no stream in a file the scan said had one
+            (checked("damaged.mov", status: "damaged", note: "audio will not decode"), true),   // (c) stored as damaged
+            (checked("damaged-no-note.mov", status: "damaged"), true),
+            (checked("damaged-picture-only.mov", stream: .videoOnly, status: "damaged", note: "referenced media missing"), true),
+            (checked("left-only.mov", note: fragment(.channelImbalance(.leftOnly))), false),
+            (checked("right-only.mov", note: fragment(.channelImbalance(.rightOnly))), false),
+            (checked("lopsided.mov", note: fragment(.channelImbalance(.trueStereo))), false),
+            (checked("mono.mov", note: fragment(.channelImbalance(.mono)), channels: "1"), false),
+            (checked("mono-on-stereo-record.mov", note: fragment(.channelImbalance(.mono)), channels: "2"), false),
+            (checked("layout-note.mov", note: "a note this build does not know"), false),
+            (checked("fine.mov"), false),
+            (rec("never-checked.mov"), false),
+            (rec("song.mp3", stream: .audioOnly), false),
+            (rec("unprobeable.mxf", stream: .ffprobeFailed), false),                // not known to be a video
+            (rec("no-streams.bin", stream: .noStreams), false),
+        ]
+        let listed = CatalogRows.rows(all.map(\.0), open([.videosMissingSound])).rows
+        for (r, expected) in all {
+            #expect(listed.contains { $0 === r } == expected, "\(r.filename): \(ArchiveReadiness.storedSoundStanding(of: r))")
+            #expect(VideoMissingSound.matches(r) == expected, "\(r.filename)")
+        }
+        // A damaged pair half stays listed: the pairing excuses a missing track, never damage.
+        let damagedHalf = checked("damaged-half.mxf", stream: .videoOnly, status: "damaged")
+        damagedHalf.pairedWith = pairedSound
+        #expect(VideoMissingSound.matches(damagedHalf))
+        // With Audio Only instead (the two never combine): the audio files, none of the videos.
+        #expect(Set(names(CatalogRows.rows(all.map(\.0), open([.audioOnly])))) == ["paired-sound.mxf", "song.mp3"])
+    }
+
+    @Test("LOGIC: the owner's “Silent — checked” tag takes a silent or track-less video off the list — never a damaged one, and only while it covers these bytes")
+    func theOwnersTagIsRespected() {
+        let silent = checked("silent-home-movie.mov", note: fragment(.silentAudio))
+        let film = rec("8mm-film.mov", stream: .videoOnly)
+        let damaged = checked("damaged.mov", status: "damaged")
+        for r in [silent, film, damaged] {
+            r.sizeBytes = 4_096
+            #expect(VideoMissingSound.matches(r), "\(r.filename) before the tag")
+            r.tags = [WorkflowTags.silentChecked]
+        }
+        #expect(!VideoMissingSound.matches(silent), "the owner has looked: no sound is right for this one")
+        #expect(!VideoMissingSound.matches(film))
+        #expect(VideoMissingSound.matches(damaged), "the tag accepts silence and a missing track, never damage")
+        if case .accepted = ArchiveReadiness.storedSoundStanding(of: silent) {} else {
+            Issue.record("a tagged silent file must read .accepted, got \(ArchiveReadiness.storedSoundStanding(of: silent))")
+        }
+        // A tag on a record with nothing to tie it to (no size, no fingerprint) accepts nothing.
+        silent.sizeBytes = 0
+        #expect(VideoMissingSound.matches(silent), "a tag that cannot be tied to these bytes does not hide the file")
+        // Untagging puts it back.
+        film.tags = []
+        #expect(VideoMissingSound.matches(film))
+    }
+
+    @MainActor
+    @Test("TRUTH: Videos Missing Sound reads the ONE sound verdict — for every class × tracks × completeness × tag it lists exactly what the Promote sheet counts as refused, and nothing the gate would promote",
+          arguments: SoundStandingCell.all)
+    func videosMissingSoundFollowsTheOneEngine(_ cell: SoundStandingCell) {
+        let d = cell.diagnosis
+        // The record as the production writer (VerifyAudioJob.write) stores this file's check.
+        let record = SoundStandingFixture.record(for: d, tagged: cell.tagged)
+        let readiness = ArchiveReadiness.assess(record: record)
+        #expect(ArchiveReadiness.storedSoundStanding(of: record) == readiness.sound,
+                "the filter's standing and the Promote sheet's are two readings: \(readiness.sound)")
+        let listed = VideoMissingSound.matches(record)
+        #expect(listed == (readiness.sound.bucket == .refused), "\(readiness.sound)")
+        if listed {
+            #expect(SoundStandingFixture.gate(d, record: record).isRefusal,
+                    "listed as missing sound, but Promote's gate would archive it: \(readiness.sound)")
+        }
+        // Rick's rule, on what was MEASURED: one-sided, mono, healthy stereo and surround are never "missing".
+        if case .levels(let c) = cell.source, [.leftOnly, .rightOnly, .mono, .trueStereo, .dualMono, .multichannel].contains(c) {
+            #expect(!listed, "\(c.rawValue) is not missing sound")
+        }
+        // Silent or track-less, measured in full, no tag: listed. The same file with the owner's tag: not.
+        let soundless = cell.source == .levels(.silent) || cell.source == .noStream
+        if soundless, cell.complete { #expect(listed == !cell.tagged, "\(readiness.sound)") }
+        // Damage: listed, tag or no tag.
+        if cell.source == .referenceMovie { #expect(listed) }
+    }
+
     @Test("TRUTH: dating a row takes it out of Needs a Date; clearing the date puts it back")
     func needsDateFollowsTheEdit() {
         let r = rec("IMG_0002.mov")
@@ -383,8 +508,9 @@ struct CatalogRowsScaleTests {
 
     /// Budget: the Catalog's filter pass at 100k rows — 1.0 s for the plain
     /// pass (the same ceiling CatalogAllVolumesDefaultTests gives the view's
-    /// pass), 2.0 s with every filter on (Needs a Date resolves a date per row).
-    @Test("SCALE: 100k records — plain, and with every filter on and a held row")
+    /// pass) and for Videos Missing Sound alone (stored fields only), 2.0 s
+    /// with every filter on (Needs a Date resolves a date per row).
+    @Test("SCALE: 100k records — plain, with Videos Missing Sound on, and with every filter on and a held row")
     func hundredThousandRows() {
         let all = catalog(100_000)
         var s = CatalogRows.State()
@@ -395,7 +521,27 @@ struct CatalogRowsScaleTests {
         #expect(plain.rows.count == 100_000)
         #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "plain pass took \(elapsed)s for 100k records")
 
-        s.filters = [.unpairedOnly, .needsDate, .notYetArchived, .onePerFootage]
+        // Videos Missing Sound alone: every fifth record is video-only (no track), and every
+        // eleventh of the rest was measured silent.
+        let silent = VerifyAudioRules.noteFragment(for: .silentAudio)
+        var expectedMissing = 0
+        for (i, r) in all.enumerated() {
+            r.isPlayable = "Yes"
+            if i % 5 == 0 { expectedMissing += 1; continue }
+            r.audioChannels = "2"
+            r.audioVerifyStatus = "ok"
+            r.audioVerifyDate = Date(timeIntervalSince1970: 1_800_000_000)
+            if i % 11 == 0 { r.audioVerifyNote = silent; expectedMissing += 1 }
+            if i % 13 == 0 { r.tags = ["Keeper", "Family"] }   // tags that are not the owner's mark
+        }
+        s.filters = [.videosMissingSound]
+        t0 = Date()
+        let missing = CatalogRows.rows(all, s)
+        elapsed = Date().timeIntervalSince(t0)
+        #expect(missing.rows.count == expectedMissing && expectedMissing > 25_000)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "Videos Missing Sound took \(elapsed)s for 100k records")
+
+        s.filters = [.videosMissingSound, .needsDate, .notYetArchived, .onePerFootage]
         s.engines.notYetArchived = { $0.sizeBytes == 0 }
         let heldRow = all[70_000]   // dated (70_000 % 7 == 0) and video-only: fails Needs a Date
         s.held = [heldRow.id]

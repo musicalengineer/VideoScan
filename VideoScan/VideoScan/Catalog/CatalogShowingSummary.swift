@@ -1,5 +1,5 @@
 // CatalogShowingSummary.swift
-// "Showing: Videos · Not Yet Archived · Connected drives" — the one-line
+// "Showing: Not Yet Archived · Connected drives" — the one-line
 // answer to "why don't I see X?" (Rick 2026-08-22: "humans looking at
 // lots of data need bright clear reminders, remember we're dealing with
 // senior citizens, me included").
@@ -10,12 +10,16 @@
 //
 // ONE VOCABULARY (2026-11-17). A Show filter is called the same thing in
 // the Show menu and in this box: `CatalogViewFilter.title`. Two sets of
-// words for one switch ("Has Master Copy" in the menu, "Already archived"
-// here) made the box something to translate rather than read.
+// words for one switch made the box something to translate rather than read.
+//
+// EVERYTHING (2026-11-17, "final shape for now"). No filter ticked means
+// every file is listed, and the box says "Everything" — unless Show Pairs
+// Only or Folders Only narrows the list, in which case it says that instead
+// (the box never calls a narrowed list "Everything"). There is no media-kind
+// word any more: Audio Only is one of the filters.
 //
 // THE BOX TELLS THE TRUTH (2026-11-17 audit). Every filter that is on is
-// named — with or without a Master Archive, and when both archive filters
-// are somehow in the set. When the full line does not fit, the box draws a
+// named — with or without a Master Archive. When the full line does not fit, the box draws a
 // shorter line that COUNTS the filters ("+2 more", "3 filters on") instead
 // of cutting them off the end; the tooltip always carries the full list.
 // While a focus set overrides the filters the box says the focus, not the
@@ -52,7 +56,6 @@ enum CatalogShowingSummary {
 
     /// Everything the row needs to know, as plain values (no bindings).
     struct State: Equatable {
-        var kindFacet: CatalogKindFacet = .videoBearing
         var viewFilters: Set<CatalogViewFilter> = []
         var showPairsOnly = false
         var showDisconnectedMedia = false
@@ -64,9 +67,9 @@ enum CatalogShowingSummary {
         var foldersOnly = false
         /// Show ▸ Folders by Machine Estimate — its own pill beside the folder one.
         var estimateFolders = false
-        /// A Master Archive is designated. With one, and neither archive
-        /// filter on, the box says "Including archived"; an archive filter
-        /// that IS on is named either way.
+        /// A Master Archive is designated. With one, and Not Yet Archived
+        /// off, the box says "Including archived" (archived files ARE in
+        /// the list then); Not Yet Archived, when on, is named either way.
         var hasMasterArchive = false
         /// Focus mode ("Show in Catalog", "A/V Pair focus") overrides every
         /// filter; the row says so instead of listing filters that are
@@ -175,13 +178,15 @@ enum CatalogShowingSummary {
     /// menu and the box never disagree.
     static func words(for filter: CatalogViewFilter) -> String { filter.title }
 
-    /// Plain-words label for the media-kind facet.
-    static func words(for facet: CatalogKindFacet) -> String {
-        switch facet {
-        case .videoBearing: return "Videos"
-        case .audioOnly:    return "Audio only"
-        case .everything:   return "All kinds"
-        }
+    /// What the box says when no Show filter is on and nothing else narrows
+    /// the list (DECISIONS 2026-11-17: "no filter ticked means everything is
+    /// shown, and the Showing box says so").
+    static let everything = "Everything"
+
+    /// Is the list every file in scope? No Show filter, and neither of the
+    /// two view switches that drop rows (Show Pairs Only, Folders Only).
+    static func listsEverything(_ s: State) -> Bool {
+        s.viewFilters.isEmpty && !s.showPairsOnly && !(s.footageFolders && s.foldersOnly)
     }
 
     /// The pills, in reading order: selected volume(s) · the chosen person
@@ -200,21 +205,21 @@ enum CatalogShowingSummary {
         return tokens.compactMap { $0 } + boxPills(for: s)
     }
 
-    /// What the box says when a Master Archive exists and neither archive
-    /// filter is on — a state, not a filter.
+    /// What the box says when a Master Archive exists and Not Yet Archived
+    /// is off — a state, not a filter. True by construction: with that
+    /// filter off no step of the row pass drops an archived file.
     static let includingArchived = "Including archived"
     /// The one title of the clear action (the Show menu and the empty table).
     static let clearAllFiltersTitle = "Clear All Filters"
 
     /// One pill per Show filter that is on — ALL of them, whatever else is
-    /// true — the archive pair first (the eye knows that slot), the rest in
+    /// true — Not Yet Archived first (the eye knows that slot), the rest in
     /// menu order.
     static func filterPills(for filters: Set<CatalogViewFilter>) -> [Pill] {
         let ordered = CatalogViewFilter.ordered(filters)
-        let archive = ordered.filter { $0 == .notYetArchived || $0 == .hasMasterCopy }
-        let rest = ordered.filter { $0 != .notYetArchived && $0 != .hasMasterCopy }
-        return archive.map { Pill($0.title, $0 == .notYetArchived ? .archiveToDo : .archiveAll) }
-            + rest.map { Pill($0.title) }
+        let archive = ordered.filter { $0 == .notYetArchived }
+        let rest = ordered.filter { $0 != .notYetArchived }
+        return archive.map { Pill($0.title, .archiveToDo) } + rest.map { Pill($0.title) }
     }
 
     /// The pills the highlighted box draws as text, in reading order: what
@@ -225,9 +230,9 @@ enum CatalogShowingSummary {
             return [Pill(focus, .neutral)]
         }
         var out: [Pill] = []
-        out.append(Pill(words(for: s.kindFacet)))
+        if listsEverything(s) { out.append(Pill(everything)) }
         let filters = filterPills(for: s.viewFilters)
-        if s.hasMasterArchive, !s.viewFilters.contains(.notYetArchived), !s.viewFilters.contains(.hasMasterCopy) {
+        if s.hasMasterArchive, !s.viewFilters.contains(.notYetArchived) {
             out.append(Pill(includingArchived, .archiveAll))
         }
         out.append(contentsOf: filters)
@@ -241,27 +246,32 @@ enum CatalogShowingSummary {
     /// The lines the box may draw, longest first; it draws the first that
     /// fits (ViewThatFits) and never truncates one. Every line either NAMES
     /// each filter that is on or says how many it is not naming:
-    ///   1. everything:  "Videos · Not Yet Archived · Needs a Date · Connected drives"
-    ///   2. the first filter and a count:  "Videos · Not Yet Archived +1 more"
-    ///   3. the count alone:  "2 filters on"   (no filter on: the media kind)
-    /// The tooltip (`help`) always carries the full list.
+    ///   1. the whole line:  "Not Yet Archived · Needs a Date · Connected drives"
+    ///   2. one filter on: its name alone ("Needs a Date");
+    ///      several: the first and a count ("Not Yet Archived +1 more")
+    ///   3. several: the count alone ("2 filters on")
+    /// No filter on: the whole line, then "Everything" when that is what is
+    /// listed. The tooltip (`help`) always carries the full list.
     static func boxLines(for s: State) -> [String] {
         let full = boxPills(for: s).map(\.text).joined(separator: " · ")
         guard s.focusLabel == nil else { return [full] }
         let names = filterPills(for: s.viewFilters).map(\.text)
-        let kind = words(for: s.kindFacet)
         var lines = [full]
         if let first = names.first {
-            lines.append(kind + " · " + first + (names.count > 1 ? " +\(names.count - 1) more" : ""))
-            lines.append(names.count == 1 ? "1 filter on" : "\(names.count) filters on")
-        } else {
-            lines.append(kind)
+            if names.count == 1 {
+                lines.append(first)
+            } else {
+                lines.append(first + " +\(names.count - 1) more")
+                lines.append("\(names.count) filters on")
+            }
+        } else if listsEverything(s) {
+            lines.append(everything)
         }
         var seen = Set<String>()
         return lines.filter { seen.insert($0).inserted }
     }
 
-    /// VoiceOver / log line: "Showing Videos, Not Yet Archived, Connected drives".
+    /// VoiceOver / log line: "Showing Not Yet Archived, Connected drives".
     static func sentence(for s: State) -> String {
         "Showing " + pills(for: s).map(\.text).joined(separator: ", ")
     }
@@ -328,8 +338,8 @@ enum CatalogShowingSummary {
 
 // MARK: - The box
 
-/// One highlighted box beside the Show menu: "Showing: Videos · Not Yet
-/// Archived · Connected drives". Pure layout over a handful of Bools —
+/// One highlighted box beside the Show menu: "Not Yet Archived · Connected
+/// drives", or "Everything · Connected drives" when no filter is on. Pure layout over a handful of Bools —
 /// no records are touched here. A READOUT, not a control: it has no click.
 /// The glyph says the one thing that matters most at a glance: green
 /// checklist = the to-do view (Not Yet Archived on), blue box = archived

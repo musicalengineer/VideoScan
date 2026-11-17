@@ -84,13 +84,6 @@ struct CatalogContent: View {
     /// folders and their members — no loose files. The parent keeps it
     /// implying `showFootageFolders` (CatalogFoldersOnlyRule).
     var showFoldersOnly: Bool = false
-    /// Media-kind facet (GH #124): which stream shapes the table shows.
-    /// Default `.videoBearing` — audio-only rows hidden until the user
-    /// flips the toolbar facet chip. Applied in computeFiltered AFTER the
-    /// purge/set-aside filters and BEFORE search, so the search working
-    /// set shrinks with the view (the issue's ~4x win). Never affects
-    /// correlate/combine — those source candidates from `model.records`.
-    var kindFacet: CatalogKindFacet = .videoBearing
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -551,7 +544,6 @@ struct CatalogContent: View {
     private func rowsState(holding held: Set<UUID>) -> CatalogRows.State {
         var state = CatalogRows.State()
         state.focusIDs = filterByIDs
-        state.kindFacet = kindFacet
         state.searchText = searchText
         state.person = personFilter
         state.volumePrefixes = Array(filterTargetPaths)
@@ -571,7 +563,6 @@ struct CatalogContent: View {
         // Master Archive worklists: the model's memoized reverse index makes
         // each answer O(1).
         state.engines.notYetArchived = { model.pfNotYetArchived($0) }
-        state.engines.hasMasterCopy = { model.pfHasMasterCopy($0) }
         state.engines.possiblyArchivedSampled = { model.isPossiblyArchivedSampled($0) }
         return state
     }
