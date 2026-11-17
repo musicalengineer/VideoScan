@@ -9419,6 +9419,61 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofDecisionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofDecisionTests"
+      ],
+      "tests": [
+        "couldNotCheckTable",
+        "engineSourceIsReadOnly",
+        "everyReasonHasASentence",
+        "hashArgsVector",
+        "hashCodecTable",
+        "hundredThousandDecisions",
+        "layoutParse",
+        "layoutVerdictNeedsNoHashes",
+        "liveChannelTable",
+        "logLineNamesFilesVerdictAndHashes",
+        "notProvenBalancedSoundShape",
+        "notProvenLossyOriginal",
+        "notProvenOriginalShape",
+        "notProvenPictureDiffers",
+        "notProvenSoundDiffers",
+        "notProvenStreamSet",
+        "onePoisonedFactNeverProves",
+        "provenForRightOnlyAndMono",
+        "provenWhenEverythingHolds",
+        "streamHashesParse",
+        "timecodeTrackRule"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofMediaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofMediaTests"
+      ],
+      "tests": [
+        "attenuatedSoundIsRefused",
+        "cancelledCheckIsCouldNotCheck",
+        "differingChannelsAreRefused",
+        "evidenceIsTrueAndTheProofIsReadOnly",
+        "extraOrMissingStreamIsRefused",
+        "fileChangedDuringTheCheckIsCouldNotCheck",
+        "losslessWrappersAreProven",
+        "lossyOriginalIsNotProven",
+        "reencodedPictureIsRefused",
+        "rightOnlyIsProvenAgainstTheRightChannel",
+        "swappedFilesAreRefused",
+        "truncatedCopyIsRefused",
+        "twoSoundTracksAreNotProven",
+        "unmeasurableIsCouldNotCheck"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BoundaryTests.swift",
@@ -40007,7 +40062,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 600,
+      "expected_floor": 635,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40213,7 +40268,9 @@
         "VideoScanTests/CatalogSweepClosingTests",
         "VideoScanTests/CatalogSweepWaitLineTests",
         "VideoScanTests/CatalogSweepFinalTests",
-        "VideoScanTests/FileJourneyLadderRegressionTests"
+        "VideoScanTests/FileJourneyLadderRegressionTests",
+        "VideoScanTests/BalancedCopyProofDecisionTests",
+        "VideoScanTests/BalancedCopyProofMediaTests"
       ]
     },
     {
