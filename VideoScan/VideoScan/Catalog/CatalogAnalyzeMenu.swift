@@ -59,7 +59,11 @@ struct CatalogAnalyzeMenu: View {
     let canCombine: Bool
     let isCombining: Bool
     @Binding var showPairsOnly: Bool
-    @Binding var viewFilters: Set<CatalogViewFilter>
+    /// Whether Show ▸ One Per Footage is on, and the request to change it.
+    /// Values, not a binding to a filter set: the toolbar forwards the
+    /// request to the ONE store as the "Analyze menu" writer.
+    let onePerFootage: Bool
+    let onSetOnePerFootage: (Bool) -> Void
 
     let onUpdateNow: (AnalyzeCycler) -> Void
     let onAnalyzeSelectedDuplicates: () -> Void
@@ -127,11 +131,9 @@ struct CatalogAnalyzeMenu: View {
             Divider()
             Toggle("Show Pairs Only", isOn: $showPairsOnly)
                 .disabled(!hasCorrelatedPairs)
-            Toggle("One Per Footage", isOn: Binding(
-                get: { viewFilters.contains(.onePerFootage) },
-                set: { on in
-                    if on { viewFilters.insert(.onePerFootage) } else { viewFilters.remove(.onePerFootage) }
-                }))
+            Toggle(CatalogViewFilter.onePerFootage.title, isOn: Binding(
+                get: { onePerFootage },
+                set: { onSetOnePerFootage($0) }))
 
             Divider()
             // BATCH combine — the step AFTER correlating; the row's

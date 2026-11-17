@@ -265,7 +265,7 @@ extension CatalogContent {
                 Label(CatalogRowMenuText.removeFromCatalog(count: activeRecs.count),
                       systemImage: "trash.slash")
             }
-            .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
+            .help("Hide these records from the default view. The files on disk are not deleted.")
         }
 
         // Move to Trash — the row menu's ONE delete verb (Trash only,

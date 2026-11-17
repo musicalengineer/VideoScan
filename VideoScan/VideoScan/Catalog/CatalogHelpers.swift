@@ -70,21 +70,10 @@ struct CatalogContent: View {
     /// NOT one of the additive `viewFilters` — it's a baseline preference, so
     /// "Clear All Filters" leaves it alone.
     let showDisconnectedMedia: Bool
-    /// When true, purged rows are included in the table (rendered italic +
-    /// orange, with a restricted context menu). When false (default), purged
-    /// rows are hidden — they remain in catalog.json for recoverability.
-    let showRemoved: Bool
-    /// When true, set-aside rows (video-only catalog scope: photos / music /
-    /// audio with no matching video) are included in the table so Rick can
-    /// browse and put them back. When false (default), they are hidden —
-    /// records and files are untouched. Independent of `showRemoved`.
-    var showSetAside: Bool = false
-    /// When true, superseded rows (originals retired by a confirmed
-    /// repair, GH #132) are included in the table so Rick can inspect or
-    /// restore them. When false (default), they are hidden — records and
-    /// files untouched. Session-scoped in the parent (deliberately NOT
-    /// persisted, unlike showRemoved/showSetAside).
-    var showSuperseded: Bool = false
+    // (No showRemoved / showSetAside / showSuperseded since 2026-11-17: the
+    // Show ▸ hidden-records reveals are gone, so removed, set-aside and
+    // superseded rows are always hidden here. A focus set — "Show in
+    // Catalog" on specific records — still lists exactly what was asked for.)
     /// Show ▸ Events & Copies as Folders (2026-10-16, docs/design/
     /// footage_folders_2026_10_16.md). Off (the default) = the linear
     /// table exactly as before; on = the folder view
@@ -146,6 +135,9 @@ struct CatalogContent: View {
     /// A folder was just made: the parent clears the focus and turns
     /// Show ▸ As folders on (the table then reveals the folder).
     var onMadeFolder: (() -> Void)?
+    /// The empty table's "Clear All Filters": the parent asks the ONE filter
+    /// store (this view holds the set as a value and never changes it).
+    var onClearViewFilters: (() -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -534,168 +526,54 @@ struct CatalogContent: View {
         return model.record(forID: copyID)
     }
 
-    /// Compute the table's row set — and, as a by-product of the SAME
-    /// scan, publish the toolbar's search-hit badge count through the
-    /// `searchHitCount` binding (GH #123 PR B). Callers only ever run
-    /// this from event handlers (onAppear/onChange), never from `body`,
-    /// so the binding write is a legal state mutation.
-    func computeFiltered() -> [VideoRecord] {
-        // Explicit-IDs ask always wins, including over Show-Removed. The
-        // filterByIDs path is driven by user navigation ("Show in Catalog",
-        // "Show Pair in Catalog") — they asked for those specific records,
-        // so surface them whether or not the row happens to be purged or
-        // the Show-Removed toggle is on.
-        if !filterByIDs.isEmpty {
-            // Focus mode is mutually exclusive with a live search
-            // (ContentView clears one when the other activates); zero the
-            // badge so a stale count can't outlive its query.
-            searchHitCount = 0
-            archivedSearchHitIDs = []
-            return records.filter { filterByIDs.contains($0.id) }
-        }
-        // Default: hide soft-deleted (purged) records. Composes with all the
-        // filters below — purge filter applied FIRST so each downstream filter
-        // sees a smaller input. Toggling Show Removed is a pure inclusion (it
-        // adds purged rows back; it doesn't change online/View semantics).
-        var out = pfApplyPurgeFilter(records, showRemoved: showRemoved)
-        // Catalog-scope set-aside filter (2026-07-15) — composes with the
-        // purge filter above; applied BEFORE search so set-aside rows can
-        // never match a default search (Rick: cruft is "only bothersome if
-        // it shows up in a list or in a search").
-        out = pfApplySetAsideFilter(out, showSetAside: showSetAside)
-        // Superseded filter (GH #132) — third sibling of the two above.
-        // Originals retired by a confirmed repair stay out of the default
-        // view (their repaired copy represents the footage now) until the
-        // "Show superseded" toggle reveals them.
-        out = pfApplySupersededFilter(out, showSuperseded: showSuperseded)
-        // Media-kind facet (GH #124) — the default Videos facet drops the
-        // ~80k audio-only rows here, BEFORE search/pairs/View filters, so
-        // every downstream pass (and the table itself) works the small
-        // set. `.everything` is an identity short-circuit. Note the
-        // Show-Pairs-Only flatten below re-appends each video's audio
-        // partner by reference, so correlated pairs stay whole even under
-        // the default facet.
-        out = pfApplyKindFacet(out, facet: kindFacet)
-        if !searchText.isEmpty {
-            // Search routes through the model's CatalogSearchIndex so the
-            // per-keystroke cost is haystack.contains() per record — no
-            // re-lowercasing or re-concatenation of every audio transcript
-            // and OCR field. Correctness is identical to the canonical
-            // pfRecordFilenameOrPersonMatch (pinned by index unit tests).
-            // Rick 2026-06-09: this is the fast path that made search
-            // feel instant on 15k-record catalogs.
-            //
-            // GH #123 PR B: ONE scan per settled query. The search runs
-            // over the badge base (purge → set-aside → kind facet, the
-            // #124-era pfSearchBadgeBase, BEFORE the volume filter) so
-            // its hit count IS the toolbar badge; the volume filter then
-            // narrows the survivors. Filters are independent per-record
-            // predicates, so search-then-volume yields exactly the same
-            // rows as volume-then-search.
-            let searchInput = out
-            out = addingTitledFolderMembers(to: model.searchIndex.filter(records: searchInput, query: searchText),
-                                            from: searchInput)
-            // Badge honors the reachable-only baseline (2026-07-20, Rick): in the
-            // default connected-only view the hit count matches the media you can
-            // actually see, instead of #123's cross-catalog count that included
-            // matches on disconnected drives. The "Show disconnected media" opt-out
-            // restores the full #123 count. Reversible — revert to `out.count`.
-            searchHitCount = showDisconnectedMedia
-                ? out.count
-                : out.filter { VolumeReachability.isReachable(path: $0.fullPath) }.count
-        } else {
-            searchHitCount = 0
-        }
-        // Person ▾ picker (2026-10-24): AFTER the search, so the badge keeps
-        // counting the whole catalog's hits (the volume filter's contract
-        // above), and BEFORE the volume filter, which then walks only this
-        // person's rows. One O(rows) pass of the People tab's own matcher
-        // (PersonVideos.associates); Everyone is the identity.
-        out = CatalogPersonFilter.apply(out, person: personFilter)
-        if !filterTargetPaths.isEmpty {
-            let prefixes = Array(filterTargetPaths)
-            // Match records by CURRENT physical location only. A relocated file
-            // shows under its destination volume, never its source — see
-            // pfRecordOnSelectedVolume. (Previously this also matched
-            // originalFullPath, so selecting RicksBackups surfaced files that
-            // had moved to LaCie — confusing, and inconsistent with the Volume
-            // column.)
-            out = out.filter { pfRecordOnSelectedVolume($0, prefixes: prefixes) }
-        }
-        if showPairsOnly {
-            // Only show records that have a correlated partner
-            let pairedIDs = Set(out.compactMap { $0.pairedWith != nil ? $0.id : nil })
-            let partnerIDs = Set(out.compactMap { $0.pairedWith?.id })
-            let allPairIDs = pairedIDs.union(partnerIDs)
-            out = out.filter { allPairIDs.contains($0.id) }
+    /// The table's row set. Membership is decided by ONE pure function,
+    /// `CatalogRows.rows(records, state)` (CatalogRows.swift); this adapter
+    /// only hands it the view's values and the model's engines, then
+    /// publishes its by-products: the toolbar's search-hit badge (GH #123
+    /// PR B — the same scan, never a second one), the archived-hits banner,
+    /// and the rows held although they no longer match a Show filter.
+    /// `holding`: the selected rows to keep listed (after an edit — see
+    /// `refreshRows(afterEdit:)`); empty for every other caller.
+    /// Callers only ever run this from event handlers (onAppear/onChange),
+    /// never from `body`, so the state writes are legal.
+    func computeFiltered(holding held: Set<UUID> = []) -> [VideoRecord] {
+        let result = CatalogRows.rows(records, rowsState(holding: held))
+        searchHitCount = result.searchHitCount
+        archivedSearchHitIDs = result.archivedSearchHitIDs
+        archivedSearchSampledHitCount = result.archivedSearchSampledHitCount
+        tableState.noLongerMatchingIDs = result.noLongerMatching
+        return result.rows
+    }
 
-            // Collect video records (one per pair), sort by current table sort
-            var videos = out.filter { $0.streamType == .videoOnly && $0.pairedWith != nil }
-            videos.sort(using: sortOrder)
-
-            // Flatten: video then its audio partner, in sort order
-            var result: [VideoRecord] = []
-            for v in videos {
-                result.append(v)
-                if let a = v.pairedWith { result.append(a) }
-            }
-            out = result
+    /// The view's filter inputs as the value `CatalogRows.rows` reads. The
+    /// engines capture the model lazily — a pass that needs no search and no
+    /// archive answer never touches it. O(selected volumes); no records.
+    private func rowsState(holding held: Set<UUID>) -> CatalogRows.State {
+        var state = CatalogRows.State()
+        state.focusIDs = filterByIDs
+        state.kindFacet = kindFacet
+        state.searchText = searchText
+        state.person = personFilter
+        state.volumePrefixes = Array(filterTargetPaths)
+        state.showPairsOnly = showPairsOnly
+        state.sortOrder = sortOrder
+        state.showDisconnectedMedia = showDisconnectedMedia
+        state.filters = viewFilters
+        state.held = held
+        // Search routes through the model's CatalogSearchIndex (the fast
+        // path, 2026-06-09), plus the members of folders whose title holds
+        // the typed words while the folder view is on.
+        state.engines.search = { rows, query in
+            addingTitledFolderMembers(to: model.searchIndex.filter(records: rows, query: query), from: rows)
         }
-        // Reachable-only baseline (2026-07-20): by default the catalog shows
-        // ONLY media on currently-mounted volumes. The "Show disconnected
-        // media" toggle lifts this baseline. Uses the SAME
-        // VolumeReachability.isReachable the Volumes view uses so the two
-        // stay consistent. Applied here (after the additive filters would
-        // start) but gated on its OWN flag, not `viewFilters` — Clear All
-        // Filters must not disturb it.
-        if !showDisconnectedMedia {
-            out = out.filter { VolumeReachability.isReachable(path: $0.fullPath) }
-        }
-        // View menu filters (additive — each active filter narrows further).
-        // Every pure per-record filter is applied here, in declaration order,
-        // from the enum's own predicate table (CatalogViewFilter
-        // .recordPredicate) — one loop instead of one branch per filter
-        // (2026-10-31, the complexity ratchet on this function). The filters
-        // that need the model or a whole-group pass follow by hand.
-        for filter in CatalogViewFilter.allCases where viewFilters.contains(filter) {
-            if let keep = filter.recordPredicate { out = out.filter(keep) }
-        }
-        // Master Archive worklists (2026-08-15). Event-driven pass; the
-        // model's memoized reverse index makes each predicate O(1).
-        if viewFilters.contains(.notYetArchived) {
-            if searchText.isEmpty {
-                out = out.filter { model.pfNotYetArchived($0) }
-                archivedSearchHitIDs = []
-                archivedSearchSampledHitCount = 0
-            } else {
-                // Same predicate, but remember what it hid: a search for
-                // an archived file must never dead-end at "No matches"
-                // (Rick 2026-08-22: "when we search we'll miss important
-                // videos"). The banner offers the jump to the Archive tab.
-                let split = CatalogShowingSummary.splitArchivedHits(out) { !model.pfNotYetArchived($0) }
-                out = split.shown
-                archivedSearchHitIDs = split.archived.map(\.id)
-                archivedSearchSampledHitCount = split.archived.filter(model.isPossiblyArchivedSampled).count
-            }
-        } else {
-            archivedSearchHitIDs = []
-            archivedSearchSampledHitCount = 0
-        }
-        if viewFilters.contains(.hasMasterCopy) {
-            out = out.filter { model.pfHasMasterCopy($0) }
-        }
-        // Archive Angel phase 2: Set lookup in the evidence sidecar — O(1).
-        if viewFilters.contains(.archiveCandidates) {
-            let ids = model.archiveAngel.candidateIDs
-            out = out.filter { ids.contains($0.id) }
-        }
-        // "One per footage" (Find Similar Footage, 2026-09-23): LAST, so it
-        // picks the best-ranked member among the rows every other filter
-        // left visible. One O(rows) dictionary pass.
-        if viewFilters.contains(.onePerFootage) {
-            out = FootageOnePerGroup.filter(out)
-        }
-        return out
+        // The SAME VolumeReachability the Volumes view uses.
+        state.engines.isReachable = { VolumeReachability.isReachable(path: $0) }
+        // Master Archive worklists: the model's memoized reverse index makes
+        // each answer O(1).
+        state.engines.notYetArchived = { model.pfNotYetArchived($0) }
+        state.engines.hasMasterCopy = { model.pfHasMasterCopy($0) }
+        state.engines.possiblyArchivedSampled = { model.isPossiblyArchivedSampled($0) }
+        return state
     }
 
     /// A folder's own title is searchable (Rick 2026-10-19): with the folder
@@ -738,13 +616,38 @@ struct CatalogContent: View {
         switch CatalogEmptyNote.pick(rowsEmpty: tableData.isEmpty, searching: !searchText.isEmpty,
                                      foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil
                                          && tableState.foldersOnlyFindsNothing,
-                                     personChosen: personFilter != nil) {
+                                     personChosen: personFilter != nil,
+                                     // A focus set ignores the filters: they are not why it is empty.
+                                     filtersActive: !viewFilters.isEmpty && filterByIDs.isEmpty) {
         case .noMatches: noMatchesOverlay
         case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels, personName: personFilter?.name,
                                               foldersExist: !model.footageFolders.index.folders.isEmpty)
         case .noPerson: personEmptyNote
+        case .filtered: filteredEmptyNote
         case .none: EmptyView()
         }
+    }
+
+    /// The empty table while Show filters are on (2026-11-17: this used to be
+    /// a blank pane): which filters, and the one click that lists files again.
+    private var filteredEmptyNote: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+            Text(CatalogShowingSummary.filteredEmptyNote(filters: viewFilters))
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 16)
+            if let onClearViewFilters {
+                Button(CatalogShowingSummary.clearAllFiltersTitle, action: onClearViewFilters)
+                    .accessibilityIdentifier("catalog.filtered.clearAll")
+            }
+        }
+        .padding(40)
+        .accessibilityIdentifier("catalog.filtered.empty")
     }
 
     /// The empty table while the Person picker names someone: says who.
@@ -1227,7 +1130,7 @@ struct CatalogContent: View {
                         .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
                 }
                 .buttonStyle(.plain)
-                .help("Dismiss — purged records stay hidden until you flip Show Removed and right-click → Restore")
+                .help("Dismiss — the removed records stay hidden.")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -1276,7 +1179,7 @@ struct CatalogContent: View {
                         .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
                 }
                 .buttonStyle(.plain)
-                .help("Dismiss — set-aside files stay hidden until you flip “Show set-aside files” and right-click → Put Back in Catalog")
+                .help("Dismiss — the set-aside files stay hidden.")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

@@ -93,7 +93,7 @@ struct CatalogVolumePillLogicTests {
     @Test func clearingViaThePillEmptiesTheSelection() {
         let sel: Set<UUID> = [UUID(), UUID()]
         #expect(Summary.volumeSelection(after: .clearVolumes, sel).isEmpty)
-        for other: Summary.Pill.Action in [.none, .toggleArchived, .toggleDrives] {
+        for other: Summary.Pill.Action in [.none, .clearPerson] {
             #expect(Summary.volumeSelection(after: other, sel) == sel, "\(other) leaves the selection alone")
         }
     }

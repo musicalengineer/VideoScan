@@ -309,17 +309,6 @@ struct UserPlaceCatalogTests {
         return r
     }
 
-    // MARK: "No place yet" filter
-
-    @Test("No place yet predicate follows the derived status")
-    func noPlaceYetPredicate() {
-        #expect(pfRecordHasNoPlace(record(place: nil)))
-        #expect(!pfRecordHasNoPlace(record(place: "Cape Cod")))
-        #expect(CatalogViewFilter.allCases.contains(.noPlaceYet))
-        #expect(CatalogShowingSummary.words(for: .noPlaceYet) == "No place yet")
-        #expect(CatalogViewFilter(rawValue: "No Place Yet") == .noPlaceYet, "persisted filter round trip")
-    }
-
     // MARK: Plain search matches the place (substring, like tags/notes)
 
     @Test("catalog-bar and universal search find rows by place substring")

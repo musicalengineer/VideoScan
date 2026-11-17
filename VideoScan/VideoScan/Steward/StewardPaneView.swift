@@ -56,6 +56,9 @@ struct StewardPaneView: View {
     @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     @Environment(\.openWindow) private var openWindow
     @AppStorage("selectedTab") private var selectedTab: Int = 0
+    /// The Catalog's Show-filter store, as a plain reference (this pane only
+    /// writes: "Show one per footage"). nil outside the main window.
+    @Environment(\.catalogShowFilterReference) private var showFilterStore
     @AppStorage("steward.pane.expanded") private var expanded = true
     /// The filter above the list and the Events order — pure view state.
     @AppStorage("steward.pane.filter") private var filterRaw = StewardCaseBuilder.Filter.all.rawValue
@@ -376,8 +379,16 @@ struct StewardPaneView: View {
                 footageSheet = FootageSheetRequest(recordID: id)
             },
             showOnePerFootage: {
-                note(.acted, c, action: "Show one per footage in the Catalog")
-                StewardCatalogDoor.turnOnOnePerFootage(in: .standard)
+                // The ONE store turns the filter on (and logs "by Steward").
+                // Outside the main window there is no store: refused out
+                // loud, never a write to the setting from here.
+                guard StewardCatalogDoor.turnOnOnePerFootage(in: showFilterStore) else {
+                    let line = "Triage suggestions: Hide other versions not done — the Catalog's Show filters are not available in this window"
+                    model.log(line)
+                    appLog.write(line)
+                    return
+                }
+                note(.acted, c, action: "Hide other versions in the Catalog")
                 // The Catalog restores the last focus when it appears; an
                 // old one would hide the very rows this is meant to show.
                 model.focusedMediaIDs = []
@@ -557,25 +568,17 @@ enum StewardPaneWords {
     }
 }
 
-/// The steward's way into the Catalog's "One Per Footage" view. The Catalog
-/// tab is not alive while Triage is on screen, so there is no binding to
-/// flip; the Show filters are persisted under one key and read back when
-/// the Catalog appears — this adds the filter there, through the Catalog's
-/// own encoder.
+/// The steward's way into the Catalog's "Hide Other Versions" view: it asks the
+/// Catalog's ONE filter store (CatalogShowFilterStore), which lives above the
+/// tabs, so the filter is on when the Catalog tab appears. The store applies
+/// its rules, persists and writes the log line ("by Steward"); nothing here
+/// reads or writes the setting.
 enum StewardCatalogDoor {
-    /// CatalogView's `@AppStorage("catalog.viewFilters")` (sensor:
-    /// StewardSourceSensorTests pins that the Catalog still uses this key).
-    static let viewFiltersKey = "catalog.viewFilters"
-
-    static func turnOnOnePerFootage(in defaults: UserDefaults) {
-        let raw = defaults.string(forKey: viewFiltersKey) ?? ""
-        var filters = CatalogShowingSummary.decode(raw)
-        filters.insert(.onePerFootage)
-        // QA F11: a filter this build does not know (another build's) is
-        // not ours to drop — it is kept, after the ones this build knows.
-        let unknown = raw.split(separator: Character(CatalogShowingSummary.separator)).map(String.init)
-            .filter { CatalogViewFilter(rawValue: $0) == nil }
-        let tokens = [CatalogShowingSummary.encode(filters)] + unknown
-        defaults.set(tokens.filter { !$0.isEmpty }.joined(separator: CatalogShowingSummary.separator), forKey: viewFiltersKey)
+    /// false = no store in this window (nothing was changed).
+    @MainActor
+    static func turnOnOnePerFootage(in store: CatalogShowFilterStore?) -> Bool {
+        guard let store else { return false }
+        store.set(.onePerFootage, on: true, by: .steward)
+        return true
     }
 }

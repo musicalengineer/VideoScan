@@ -333,25 +333,34 @@ nonisolated func pfPlaceFieldMatches(value: String, rec: VideoRecord) -> Bool {
     return UserPlaceEntry.matches(value, against: place)
 }
 
-/// "No place yet" review-queue predicate (CatalogViewFilter.noPlaceYet):
-/// true when Rick has not entered a place. Derived from `userPlaceStatus`
-/// so it can never disagree with the inspector's status line.
-nonisolated func pfRecordHasNoPlace(_ rec: VideoRecord) -> Bool {
-    rec.userPlaceStatus == .unplaced
-}
-
-/// "Confirmed date" predicate (CatalogViewFilter.confirmedDate, Rick
-/// 2026-10-31): true when the record carries Rick's OWN date — `userDate`,
+/// "Confirmed date" predicate (Rick 2026-10-31; the Show filter of that name
+/// was inverted into Needs a Date on 2026-11-17 — `pfRecordNeedsDate` below —
+/// and this stays for the File Journey and the machine-era readers): true
+/// when the record carries Rick's OWN date — `userDate`,
 /// loaded from the `user_dates` table, at either confidence ("known" or his
 /// best guess: both are his) — and that date is a well-formed reduced-ISO
 /// date. Derived from `userDateStatus` so it can never disagree with the
 /// inspector's status line; a machine date (inferred, container, file stamp)
 /// never counts. A malformed stored value (the loader already refuses one;
 /// an in-memory or imported one could still arrive) is not a confirmed date.
-/// Pure, nonisolated, O(1) — runs inside the Catalog's filter pass.
+/// Pure, nonisolated, O(1).
 nonisolated func pfRecordHasConfirmedDate(_ rec: VideoRecord) -> Bool {
     guard rec.userDateStatus != .unconfirmed, let date = rec.userDate else { return false }
     return UserDateEntry.canonicalize(date) != nil
+}
+
+/// "Needs a Date" (CatalogViewFilter.needsDate, Rick 2026-11-17): the record
+/// has no usable FILING date — Promote would put it under Undated/. ONE rule:
+/// this is `ArchiveCategorySnapshot.needsDate`, the Archive tab's "Needs a
+/// Date" list, which asks the same `RecordDateResolver` the promote flow uses
+/// for placement (Rick's date, then the container's, the dossier's, the
+/// filename's). So a row with a good camera date is NOT listed, and a row
+/// Rick dated — at either confidence — leaves the list.
+/// Pure, nonisolated, per-record (no catalog pass; a few field reads and one
+/// filename pattern match) — runs inside the Catalog's event-driven filter
+/// pass, 100k rows inside CatalogRowsScaleTests' budget.
+nonisolated func pfRecordNeedsDate(_ rec: VideoRecord) -> Bool {
+    ArchiveCategorySnapshot.needsDate(rec)
 }
 
 /// `notes:` field match — the union across the userNotes split
@@ -611,27 +620,6 @@ nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String
     return tokens.allSatisfy { pfCatalogTokenMatches($0, rec) }
 }
 
-// MARK: - Family tagging predicates (Step 5)
-//
-// Pure helpers powering the catalog's "Has Family" / "Untagged" filters and
-// the People column. The catalog table calls these directly so the same
-// rules drive screen and tests with no behavioural drift.
-
-/// True if `rec` has at least one detected OR suspected person tag.
-/// Drives the "Has Family" catalog filter — fastest way to surface
-/// keeper-candidate footage.
-nonisolated func pfRecordHasAnyPerson(_ rec: VideoRecord) -> Bool {
-    !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty
-}
-
-/// True if `rec` has no person tags at all in either array. Drives the
-/// "Untagged (junk candidate)" filter — these are the rows where a
-/// family scan found nothing recognisable, so they're the highest-yield
-/// triage targets for deletion / archival.
-nonisolated func pfRecordIsUntagged(_ rec: VideoRecord) -> Bool {
-    rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty
-}
-
 // MARK: - Triage disposition (issue #66, pattern 3)
 //
 // junkScore today is just a column. Promote it to a triage assist:
@@ -820,7 +808,8 @@ nonisolated func pfSupersededRecords(_ records: [VideoRecord]) -> [VideoRecord] 
 }
 
 /// Repair copies waiting for Rick's one-click confirmation (GH #132) —
-/// the "Repaired — Awaiting Confirmation" worklist. Pure wrapper over
+/// the Show ▸ "Repaired — Awaiting Confirmation" worklist (kept through the
+/// 2026-11-17 trim: it is the only list of that queue). Pure wrapper over
 /// the derived flag so the view filter, badge math, and tests share one
 /// definition.
 nonisolated func pfAwaitingConfirmation(_ rec: VideoRecord) -> Bool {

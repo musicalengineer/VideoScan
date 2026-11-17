@@ -225,7 +225,7 @@ final class ArchiveAngelEvidenceStore: ObservableObject {
     nonisolated var fileURL: URL { directory.appendingPathComponent(Self.filename) }
 
     @Published private(set) var file: ArchiveAngelEvidenceFile?
-    /// Grade A + B ids — the "Archive candidates" filter set. Rebuilt on
+    /// Grade A + B ids — the "Archive candidates" set (the badges, the panel's focus). Rebuilt on
     /// every replace so the catalog filter is a Set lookup.
     @Published private(set) var candidateIDs: Set<UUID> = []
     /// Bumped on EVERY replace/clear, membership change or not (codex

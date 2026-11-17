@@ -80,8 +80,22 @@ extension CatalogContent {
         // touches a @State the Tag cell reads — rows re-render, the
         // filter is NOT recomputed (that is the stage below). Its own
         // wrapper var, same reason as the grade stage (GH #132).
-        tableWithAngelGrades
+        tableWithEditTriggers
             .onReceive(angelRevisionPublisher) { angelBadgeRevision = $0 }
+    }
+
+    /// A record edit reaches the table (2026-11-17, audit F1): an inspector
+    /// save or a job's in-place writes post `.videoScanCatalogMutated`; the
+    /// pane's edit clock debounces the posts and ticks, and the rows are
+    /// re-filtered THEN — holding the selected row (see `refreshRows`). And
+    /// when the selection moves off a held row, it leaves. Its own stage,
+    /// same reason as the others (GH #132).
+    private var tableWithEditTriggers: some View {
+        tableWithAngelGrades
+            .onAppear { tableState.editClock.start() }
+            .onDisappear { tableState.editClock.stop() }
+            .onReceive(tableState.editClock.$revision) { catalogEdited(revision: $0) }
+            .onChange(of: selectedIDs) { releaseHeldRowsIfSelectionMoved() }
     }
 
     private var angelRevisionPublisher: AnyPublisher<Int, Never> {
@@ -90,13 +104,13 @@ extension CatalogContent {
 
     private var tableWithAngelGrades: some View {
         // A finished Archive Angel sweep republishes its grade set: the
-        // "Promote me" badges and the Archive-candidates filter follow it
-        // (2026-09-11). The store is a nested ObservableObject, which the
+        // "Promote me" badges follow it (2026-09-11; the Archive Candidates
+        // filter that also followed it was removed 2026-11-17). The store is a nested ObservableObject, which the
         // environment model does not forward — hence a publisher, not
         // onChange. Its own stage: the onChange chain below is already at
         // the type-checker's budget (GH #132).
         tableWithCatalogTriggers
-            .onReceive(angelGradesPublisher) { _ in refreshRows() }
+            .onReceive(angelGradesPublisher) { _ in refreshRows(afterEdit: true) }
     }
 
     /// Grade-set changes only — identical sweeps do not churn the table.
@@ -110,21 +124,24 @@ extension CatalogContent {
     // "unable to type-check in reasonable time", the 2026-09-01 CI-red
     // shape. Each stage below resolves its onChange overloads against a
     // fixed `some View`, so the solver never sees the whole chain at once.
-    // Order is irrelevant to behaviour: every trigger does the same thing.
+    // Order is irrelevant to behaviour. The DATA triggers (a batch landed,
+    // records changed in place, the count changed) refresh `afterEdit` — the
+    // selected row is held; the triggers Rick pulls himself (a filter, the
+    // search, a scope, a reveal toggle) are plain refreshes.
     // (C++ analogy: breaking one giant template expression into named
     // intermediate typedefs so overload resolution stays local.)
     private var tableWithCatalogTriggers: some View {
         tableWithFolderTriggers
-            .onChange(of: model.lastTidyBatch) { refreshRows() }
+            .onChange(of: model.lastTidyBatch) { refreshRows(afterEdit: true) }
             // Re-compute when purge state flips on any record (purge, undo, restore).
             // We key off lastPurgedBatch so mutations from the model are observed.
-            .onChange(of: model.lastPurgedBatch) { refreshRows() }
+            .onChange(of: model.lastPurgedBatch) { refreshRows(afterEdit: true) }
             // In-place purge/lifecycle mutations that arm no banner (Delete
             // Confirmed Junk, workbench discard, dossier auto-purge) — #160.
-            .onChange(of: model.volumeAggregatesRevision) { refreshRows() }
+            .onChange(of: model.volumeAggregatesRevision) { refreshRows(afterEdit: true) }
             // Confirm Repair supersedes originals (and undo restores them) —
             // same observation pattern as the purge batch (GH #132).
-            .onChange(of: model.lastConfirmBatch) { refreshRows() }
+            .onChange(of: model.lastConfirmBatch) { refreshRows(afterEdit: true) }
     }
 
     /// Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16):
@@ -179,23 +196,14 @@ extension CatalogContent {
             .onReceive(tableState.folderPaintClock.$revision) { tableState.folderPaintRevision = $0 }
     }
 
-    /// Reveal toggles: disconnected media, kind facet, removed / set-aside /
-    /// superseded rows.
+    /// Reveal toggles: disconnected media and the kind facet. (Removed /
+    /// set-aside / superseded reveals left the Show menu 2026-11-17.)
     private var tableWithFilterTriggers: some View {
         tableWithSearchTriggers
             // Reachable-only baseline opt-out (2026-07-20).
             .onChange(of: showDisconnectedMedia) { refreshRows() }
             // Media-kind facet chip flip (GH #124).
             .onChange(of: kindFacet) { refreshRows() }
-            .onChange(of: showRemoved) {
-                refreshRows()
-                // GH #143: fresh "Trash emptied" words for the rows about to
-                // show; the stats run off the main actor.
-                if showRemoved { Task { await model.refreshTrashEmptied() } }
-            }
-            .onChange(of: showSetAside) { refreshRows() }
-            // Superseded reveal toggle (GH #132).
-            .onChange(of: showSuperseded) { refreshRows() }
     }
 
     /// First appearance, record count, and the search / scope inputs.
@@ -205,7 +213,7 @@ extension CatalogContent {
                 tableData = computeFiltered()   // appear: no filter changed — selection untouched
                 refreshFolderDisplay()          // the folder view starts from these rows (no-op when off)
             }
-            .onChange(of: records.count) { refreshRows() }
+            .onChange(of: records.count) { refreshRows(afterEdit: true) }
             .onChange(of: searchText) { refreshRows() }
             .onChange(of: filterTargetPaths) { refreshRows() }
             .onChange(of: personFilter) { refreshRows() }
@@ -392,8 +400,7 @@ extension CatalogContent {
             //
             // People column: confirmed names in blue, suspected (borderline)
             // names italic + secondary with a leading "?". Em-dash when both
-            // arrays are empty — the "junk candidate" signal the user filters
-            // on with .untaggedOnly. Sortable via peopleSortKey: confirmed
+            // arrays are empty. Sortable via peopleSortKey: confirmed
             // alphabetical first, suspected after (~ prefix), untagged last.
             Group {
                 // Hand-entered place (Rick 2026-09-12) — beside the Date
@@ -443,7 +450,8 @@ extension CatalogContent {
                                    isSelected: selectedIDs.contains(rec.id),
                                    isOffline: offline,
                                    pairTint: showPairsOnly && rec.pairedWith != nil,
-                                   tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged))
+                                   tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged),
+                                   noLongerMatches: tableState.noLongerMatchingIDs.contains(rec.id))
     }
 
     func volumeCell(_ rec: VideoRecord) -> some View {

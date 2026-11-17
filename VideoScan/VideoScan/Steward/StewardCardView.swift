@@ -357,9 +357,9 @@ struct StewardCardView: View {
                    action: actions.openFootageGroup)
             showInCatalogButton
             compareFootageButton(id: "steward.action.compareFootage")
-            button("Show one per footage in the Catalog", "rectangle.stack", ColorActionButton.Palette.play,
+            button("Hide other versions in the Catalog", "rectangle.stack", ColorActionButton.Palette.play,
                    id: "steward.action.onePerFootage", enabled: true,
-                   help: "Turns on “One Per Footage” in the Catalog's Show menu and goes there: each set of the same footage is shown once",
+                   help: "Turns on “Hide Other Versions” in the Catalog's Show menu and goes there: each set of the same footage is shown once",
                    action: actions.showOnePerFootage)
             button("Name this footage…", "pencil", ColorActionButton.Palette.archive,
                    id: "steward.action.nameFootage", enabled: false,
