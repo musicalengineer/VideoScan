@@ -6076,6 +6076,7 @@
       ],
       "tests": [
         "aFailedLevelsPassIsNotDamage",
+        "aPartlyMeasuredTrackIsNeverCalledMono",
         "aSoundTrackThatWasNotMeasuredIsNotBalanced",
         "balanceStepRunsForOneSidedOnly",
         "damageFindingsStayDamaged",
@@ -6083,6 +6084,8 @@
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
+        "monoBesideAnyOtherFindingIsNotCalledFine",
+        "monoBesideDamageIsDamage",
         "monoIsNotSomethingToFix",
         "noAudioStreamIsItsOwnCase",
         "rightOnlyIsFixable",
@@ -6718,8 +6721,10 @@
         "everyClassHasWordsAndNoLetterGrade",
         "genuineDamageStillNeedsRepair",
         "hallieKeepsItsRegularButtons",
+        "layoutNotesStayReadyButSaySo",
         "locationWords",
         "missingFileOnAMountedVolumeIsNotDriveNotConnected",
+        "monoStaysReadyAndPromotesDirectly",
         "movAndMp4WithQuickTimeCodecsPlayInQuickTime",
         "needsDateClassSaysNeedsADate",
         "noAudioTrackIsNotANeed",
@@ -6735,7 +6740,6 @@
         "readyWithNothingMissingIsReadyToArchive",
         "rowCarriesWordsReadinessAndRouteTogether",
         "rowShowsNoGradeNoScoreAndAllFiveButtons",
-        "soundFactsStayReady",
         "tenRowsAPage",
         "tenThousandRowsBuildInsideTheBudget",
         "threeOrMoreNeedsSayAndMore",
@@ -7753,12 +7757,13 @@
         "dvPromotesWithToken",
         "familyDateStandsInForAnUndatedTwin",
         "headerCompatibility",
+        "layoutNotesAreNeutral",
+        "monoIsNotAProblem",
         "oneSidedIsFlaggedNotRefused",
         "refusableSoundIsTheProblem",
         "safeCodecs",
         "scale",
         "sheetAgreesWithTheNoSoundFloor",
-        "soundFactsAreNotProblems",
         "tokenAndSummary",
         "unknownCodec",
         "unprobeableNeedsOverride",
@@ -18550,7 +18555,7 @@
         "composeBody",
         "composeEmptyNamesStopReason",
         "composeThoughtItselfOut",
-        "composeTruncatedProseKept",
+        "composeTruncatedProseRefused",
         "defaults",
         "errors",
         "garbageIsLocal",
@@ -24779,20 +24784,21 @@
         "ObservationsMockupTests"
       ],
       "tests": [
-        "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
-        "aFailureIsWordsAndIsLoggedOnce",
-        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
-        "aSupersededSearchNeverPublishes",
-        "aScopeChangeThenASearchShowsTheNewScopesHits",
         "aFailedLoadShowsTheFailureAndARetryClearsIt",
-        "theSearchButtonObservesTheFramesStore",
-        "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
+        "aFailureIsWordsAndIsLoggedOnce",
+        "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
+        "aScopeChangeThenASearchShowsTheNewScopesHits",
+        "aSupersededSearchNeverPublishes",
         "everythingIsReadOnly",
+        "hitsDark",
+        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
+        "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
+        "theModuleReadsTheCatalogThroughOneDoor",
+        "theSearchButtonObservesTheFramesStore",
         "theSearchMatchesObservationColumnsOnlyNeverACatalogField",
         "theThreeEntryPointsUseTheOneDoorAndTheDossierIsTheOneLoader",
-        "tiersLight",
         "tiersDark",
-        "hitsDark"
+        "tiersLight"
       ]
     },
     {
@@ -34181,6 +34187,7 @@
         "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
+        "test_a_mac_that_missed_its_run_is_yellow_and_named_never_silently_green",
         "test_a_mac_the_summary_has_never_seen_is_behind_too",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
         "test_a_run_newer_than_the_summary_makes_the_card_say_it_is_behind",
@@ -34225,6 +34232,8 @@
         "test_static_checks_read_the_m4_lane_with_its_age_and_codeql_grey",
         "test_summary_first_page_renders_every_line_and_twist",
         "test_summary_sparkline_does_not_join_across_missing_sample",
+        "test_the_tests_line_is_yellow_for_a_few_failures_in_a_macs_newest_run",
+        "test_the_tests_line_reads_each_macs_newest_run_not_the_newest_night",
         "test_theme_defaults_dark_and_respects_saved_choice",
         "test_version_and_app_source_share_a_tile_and_test_results_is_wide",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
@@ -36274,6 +36283,246 @@
         "itBuildsAndIsOrdered",
         "reviewedAndOffsiteOnlyOnThePersonsWord",
         "theyBuildQuickly"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundStandingFollowsGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundStandingFollowsGateTests"
+      ],
+      "tests": [
+        "aLayoutNoteIsNotGreen",
+        "aStoredNoteNobodyRecognisesIsNeverGreen",
+        "aTagNotTiedToTheBytesAcceptsNothing",
+        "acceptedSilenceIsNotAProblem",
+        "damageOutranksTheTagEvenWithNoTrack",
+        "noStreamAndDamage",
+        "scale",
+        "silentSurroundIsSilent",
+        "soundBucketsPartitionTheSelection",
+        "staleMonoIsNotChecked",
+        "theAcceptedLineDoesNotPromise",
+        "theSheetFollowsTheGate"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelStaleSoundVerdictPrepareTests"
+      ],
+      "tests": [
+        "monoOnTheSecondStreamGoesThroughPrepareAndIsNotStuck",
+        "reuseNeedsAStandingVerdict",
+        "staleMonoIsVerifiedFreshAndBalanced"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ObservationsStoreBehaviourTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LatestWinsTests",
+        "ObservationsStoreBehaviourTests",
+        "ObservationsProductionDoorTests"
+      ],
+      "tests": [
+        "aFailedSearchIsWordsIsLoggedAndARetryClearsIt",
+        "aFailureIsShownAndAResetForgetsEverything",
+        "aHitThatCannotBeShownSaysWhyAndAGoodOneClearsTheWords",
+        "aNewScopeDropsTheOldScopesReportAtOnceAndALateOldReadNeverReplacesTheNewOne",
+        "aReadThatGaveUpOnItsOwnIsNotAFailure",
+        "aReadThatGivesUpIsNotShownAsAFailure",
+        "aRefreshKeepsTheReportOnScreenWhileItRereads",
+        "aSearchAtTheCapIsPublishedWholeAndSaidAsCapped",
+        "aSessionWithNoCatalogOpenRefusesInWords",
+        "closingTheWindowStopsBothReadsAndNothingPublishesAfter",
+        "onlyTheCurrentTicketPublishesAndTheAnswerStaysForTheSameKey",
+        "settingTheScopeAlreadyShownReadsNothing",
+        "tenThousandRequestsInABurstPublishExactlyOneAnswer",
+        "theReportIsThisSessionsCatalogAndTheReadWritesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchStoreBehaviourTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameSearchStoreBehaviourTests"
+      ],
+      "tests": [
+        "aHitCarriesItsRowsFactsAndOneThatIsNotARecordHereSaysWhy",
+        "aJobIsStartedOverTheWindowsScopeWatchedUntilItEndsAndItsSavesAreShown",
+        "aModelThatCannotWarmUpIsNotTheWindowsProblemAndClosingCancelsAWarmUp",
+        "aSearchBeforeTheIndexIsReadAsksNothingAndIsAnsweredWhenTheIndexArrives",
+        "aSimilarityBelowZeroIsShownAsItIs",
+        "anIndexDamagedOnDiskAfterItWasShownIsNotBuiltAtTheNextOpenAndNeverStaleHits",
+        "indexFramesWithNoOperationsCenterSaysSo",
+        "oneHundredThousandFramesHalfInScopeAreSearchedInsideTheBudget",
+        "thePageIsFortyEightHitsTwoPerVideoBestFirstAndRepeatable",
+        "theScopesFilesAreReadOncePerScope",
+        "theTimingLineCountsOnlyTheFramesInScope",
+        "wordsTooShortAskNothingAndTheWordsAreTrimmed"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexEngineTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameIndexEngineTests",
+        "FrameIndexJobBehaviourTests"
+      ],
+      "tests": [
+        "aBigFrameIsShrunkToTheEdgeKeepingItsShapeAndASmallOneIsLeftAlone",
+        "aCatalogThatCannotBeReadRefusesAndWritesNothing",
+        "aDamagedIndexOnDiskIsSaidAndReplacedByAGoodOne",
+        "aDecodeCutByStopBlamesNobody",
+        "aDecodeThatFailsIsTheFilesFaultOnlyWhenTheFileIsThere",
+        "aFileNotAtItsPathIsCountedNotRecordedNotDecodedAndIndexedWhenItIsBack",
+        "aFileThatVanishesMidDecodeIsLeftForTheNextRunInWords",
+        "aFrameThatDidNotDecodeDropsOutWithItsTimeAndTheRestStayPaired",
+        "aModelFailureIsNeverTheFilesBarThePixelDoor",
+        "aModelThatAnswersWithTheWrongShapeFailsTheRunAndBlamesNoFile",
+        "aPauseWhoseSaveFailsEndsTheRunFailedAndSaysWhatIsNotOnDisk",
+        "aRefusedJobNeverStartsReadsNothingAndTheOutcomeLineSaysRefused",
+        "anIndexMadeByAnotherModelIsNotResumedFrom",
+        "noMoreFilesAreDecodedAtOnceThanTheJobsConcurrency",
+        "removedCopiesAndSoundOnlyFilesAreNotPlanned",
+        "resumeWithoutAPauseAndASecondStartChangeNothing",
+        "theCenterRunsOneIndexJobAtATimeAndHandsBackTheRunningOne",
+        "theDriveIsAskedBeforeThePath",
+        "theSmokeDoorThrowsTheSameVerdictInWords",
+        "theTimeCheckpointSavesEvenWhenTheFileCountIsFarOff",
+        "theTimesAreInsideTheClipInOrderAndAZeroDurationStillLooksSomewhere"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SigLIPInputTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigLIPInputTests"
+      ],
+      "tests": [
+        "aFrameBecomesASquareOfRGBInMinusOneToOneTopRowFirst",
+        "aFrameOfAnyShapeIsSquashedToTheSquareNotCropped",
+        "aHubSnapshotIsUsedOnlyWhenItIsComplete",
+        "everyModelErrorSaysWhatHappened",
+        "noFramesAskNothingOfTheModel",
+        "tokenIdsArePaddedOrCutToExactlySixtyFour"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexReopenTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameIndexReopenTests"
+      ],
+      "tests": [
+        "aWindowOpenedMidRunShowsTheJobAndIsHandedItsSavesWithoutPressingAnything",
+        "aWindowOpenedMidRunThatPressesIndexFramesIsHandedTheLaterSaves",
+        "theProductionDoorJoinsThroughTheCenterItWasGiven",
+        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener",
+        "windowsOpenedAndClosedDuringAPausedRunLeaveNoListenerBehind"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchProductionDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameSearchProductionDoorTests"
+      ],
+      "tests": [
+        "aHitIsThisSessionsCatalogRowForTheIndexedContentAndTheReadCommitsNothing",
+        "aSessionWithNoCatalogOpenSaysSoAndItsJobRefusesAndWritesNothing",
+        "indexFramesThroughTheDoorRunsInTheGivenCenterOverTheSessionsFilesAndTheWindowsFolder",
+        "theAppBuildsOneLoaderPerModelAndItIsSigLIP"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ObservationsReadDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ObservationsReadDoorTests"
+      ],
+      "tests": [
+        "aSessionWithNoCatalogOpenRefusesInTheDoorsWordsAndTheBodyNeverRuns",
+        "theDoorIsTheSessionsOwnRepositoryACancelledReadNeverReachesItAndNothingIsCommitted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameSearchRegressionTests"
+      ],
+      "tests": [
+        "aDecoderOrModelRefusalIsRecordedInItsOwnWords",
+        "aJobThatWasRefusedIsNotWatchedAndItsReasonIsSaid",
+        "aRefusalReachesTheJobsFailedLineInItsOwnWords",
+        "aRefusalReachesTheWindowInItsOwnWords",
+        "aVideoCataloguedAndIndexedAfterTheFirstSearchIsFound",
+        "everyFamilyOfErrorIsSaidInTheWordsItCarries",
+        "rowsReadBeforeANewerIndexWasShownAreNotKept"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchLifecycleTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameSearchLifecycleTests"
+      ],
+      "tests": [
+        "aClosedWindowNeverPublishesAgainEvenWhileSomethingStillHoldsIt",
+        "aClosedWindowRevealsNothingAndSaysNothing",
+        "aRunCutWhileItReadsTheCatalogIsStoppedNotRefused",
+        "aSearchInFlightAgainstAnOlderIndexNeverPublishesUnderANewerOne",
+        "aWindowClosedWhileAnArrivingIndexAnswersItsWordsStartsNoWarmUp",
+        "aWindowNeitherJoinsNorIsHandedAJobWritingAnotherIndex",
+        "everyEndingDropsTheRunsListeners",
+        "hitsAlreadyShownAreRecomputedWhenANewerIndexIsShown"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexMediaMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameIndexMediaMatrixTests"
+      ],
+      "tests": [
+        "aFileThatIsNotAVideoIsTheFilesFaultAndADeletedOneIsNot",
+        "aThumbnailIsTheFrameAtThatTimeAtMostThreeHundredTwentyAcrossAndIsKept",
+        "everyAskedTimeDecodesToThePictureThatIsThere",
+        "theFiveContainersThroughTheJobAreFoundByColourAtTheRightTimes"
+      ]
+    },
+    {
+      "blocked_reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigLIPTinyModelTests"
+      ],
+      "tests": [
+        "aCheckpointAlreadyInMLXConvLayoutGivesTheSameVectorsAsTheTorchOne",
+        "aDamagedCheckpointIsALoadFailureInWordsNeverACrashOrAHalfLoadedModel",
+        "aPublishedLayoutCheckpointLoadsAndBothTowersAnswerUnitVectors",
+        "aRunCutMidwayStopsAtTheNextBatchBoundaryAndTheEngineCallsItStopped",
+        "seventyPicturesAcrossThreeBatchesComeBackInOrder",
+        "theTinyModelThroughTheJobTheIndexOnDiskAndTheWindowsSearch",
+        "warmingLoadsTheModelAndUnloadingDropsItUntilTheNextQuestion",
+        "weightsThatCannotBeFoundKeepTheirOwnWordsAndAFailedLoadIsTriedAgain"
       ]
     }
   ],
@@ -39025,9 +39274,13 @@
         {
           "name": "VideoScan/VideoScanTests/MachineEstimateFoldersTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
+          "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3763,
+      "expected_floor": 3846,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39748,7 +40001,19 @@
         "VideoScanTests/FileJourneyCodexFindingsTests",
         "VideoScanTests/FileJourneyNonsenseDataTests",
         "VideoScanTests/HallieBrainLogTests",
-        "VideoScanTests/HallieUnstatedYearDecodingTests"
+        "VideoScanTests/HallieUnstatedYearDecodingTests",
+        "VideoScanTests/SoundStandingFollowsGateTests",
+        "VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests",
+        "VideoScanTests/FrameIndexEngineTests",
+        "VideoScanTests/FrameIndexJobBehaviourTests",
+        "VideoScanTests/FrameIndexReopenTests",
+        "VideoScanTests/FrameSearchProductionDoorTests",
+        "VideoScanTests/FrameSearchStoreBehaviourTests",
+        "VideoScanTests/LatestWinsTests",
+        "VideoScanTests/ObservationsProductionDoorTests",
+        "VideoScanTests/ObservationsReadDoorTests",
+        "VideoScanTests/ObservationsStoreBehaviourTests",
+        "VideoScanTests/SigLIPInputTests"
       ]
     },
     {
@@ -40146,7 +40411,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 679,
+      "expected_floor": 698,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40353,6 +40618,9 @@
         "VideoScanTests/CatalogSweepWaitLineTests",
         "VideoScanTests/CatalogSweepFinalTests",
         "VideoScanTests/FileJourneyLadderRegressionTests",
+        "VideoScanTests/FrameIndexMediaMatrixTests",
+        "VideoScanTests/FrameSearchLifecycleTests",
+        "VideoScanTests/FrameSearchRegressionTests",
         "VideoScanTests/BalancedCopyProofDecisionTests",
         "VideoScanTests/BalancedCopyProofMediaTests",
         "VideoScanTests/BalancedCopyProofHardeningTests",

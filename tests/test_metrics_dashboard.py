@@ -1108,6 +1108,67 @@ def test_a_run_older_than_the_stale_window_keeps_its_row_and_says_stale(tmp_path
     assert et_when(old) in m4.group(1) and "STALE" in m4.group(1) and m4.group(2) == "13,000 passed · 0 failed"
 
 
+def green_studios(now, m4_age_hours=23):
+    """Both studios green: the Ultra 10 hours ago, the M4 `m4_age_hours` ago and absent from the newest night."""
+    fx, _, _ = two_studio_fixture(now)
+    nights = fx["summary_latest.json"]["nightly"]["nights"]
+    for night in nights:
+        night["hosts"].pop("M4", None)
+        for cell in night["hosts"].values():
+            cell.update(state="green", failed=0, reason=None, failed_tests=[])
+    m4_done = now - timedelta(hours=m4_age_hours)
+    by_date = {night["date"]: night for night in nights}
+    by_date[m4_done.strftime("%Y-%m-%d")]["hosts"]["M4"] = {
+        "state": "green", "passed": 13324, "failed": 0, "total": 13394, "reason": None,
+        "finished": iso(m4_done), "failed_tests": []}
+    nights[-1]["hosts"].pop("M4", None)   # the newest night never holds the M4 (it runs at 2 PM)
+    return fx, m4_done
+
+
+def dot_of_tests_line(out):
+    m = re.search(r'class="dot (\w+)"', out["sections"]["sum-tests"])
+    assert m, out["sections"]["sum-tests"]
+    return m.group(1)
+
+
+@needs_node
+def test_the_tests_line_reads_each_macs_newest_run_not_the_newest_night(tmp_path):
+    """RED 2026-11-17 (Rick): every morning the Tests line was yellow with "no nightly on the M4"
+    because the M4 runs at 2 PM and the newest night held only the Ultra's 2 AM run. Yesterday's
+    2 PM run stands until a new one arrives: both green is green, and the cards show its counts."""
+    now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)
+    fx, _ = green_studios(now)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-tests"]
+    assert dot_of_tests_line(out) == "green", line
+    assert "no nightly on" not in line and "the M4 is green (13,324 passed)" in line, line
+    body = out["sections"]["body-tests"]
+    assert "13,324" in body and ">no run<" not in body, body
+
+
+@needs_node
+def test_the_tests_line_is_yellow_for_a_few_failures_in_a_macs_newest_run(tmp_path):
+    """Yellow means an issue: yesterday's M4 run with 3 failed still colours the line this morning."""
+    now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    line = out["sections"]["sum-tests"]
+    assert dot_of_tests_line(out) == "watch", line
+    assert "a few fail on the M4 (<b>3</b> of 13,394)" in line and "no nightly on" not in line, line
+
+
+@needs_node
+def test_a_mac_that_missed_its_run_is_yellow_and_named_never_silently_green(tmp_path):
+    """A newest run older than the 36-hour window is a missed run, which is an issue: yellow, with the date."""
+    now = datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0)
+    fx, m4_done = green_studios(now, m4_age_hours=72)
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    line = out["sections"]["sum-tests"]
+    assert dot_of_tests_line(out) == "watch", line
+    assert "the M4 has <b>not run since" in line and "no nightly on" not in line, line
+
+
 @needs_node
 def test_version_and_app_source_share_a_tile_and_test_results_is_wide(tmp_path):
     """RED 2026-11-08 (Rick, screenshot): the top row wrapped; Version and App source

@@ -9,6 +9,11 @@
 // write, no schema change) — and each window owns one ObservationsStore
 // that runs it off the main actor and publishes the result.
 //
+// The read itself has ONE door for the whole module, `SessionCatalogRead`
+// below: the report, the words search and the Frames mode's file rows (and
+// through those rows the Index Frames job) all go through it, so "is the
+// catalog open", the refusal's words and the cancellation check exist once.
+//
 // Shape: a feature store behind a seam (rule 12, #337) — the WINDOW owns one;
 // nothing extends VideoScanModel and the model holds nothing new. The loader
 // is a value of closures a test replaces (the mockups drive it with fixtures).
@@ -34,6 +39,36 @@
 import Combine
 import Foundation
 import VideoScanCore
+
+/// THE read door for a session: catalog.sqlite as THIS session holds it, read-only, for everything in
+/// Observations/. It says whether the catalog is open, refuses in one set of words when it is not, checks for
+/// cancellation before the read, and runs `body` inside the repository's read snapshot. Nothing else in the
+/// module names the session's repository (a sensor pins it).
+///
+/// (For Rick: a function object holding a weak pointer to the session — `read { … }` calls it; `callAsFunction`
+/// is C++'s `operator()`.)
+struct SessionCatalogRead: Sendable {
+    static let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
+
+    /// The repository this session reads; nil while its catalog is not open.
+    private let repository: @Sendable () async -> (any CatalogRepository)?
+
+    @MainActor
+    init(model: VideoScanModel) {
+        repository = { [weak model] in await MainActor.run { model?.catalogCutover.committer?.repository } }
+    }
+
+    /// A door over any repository source (tests: a closed session, a fixture catalog).
+    init(repository: @escaping @Sendable () async -> (any CatalogRepository)?) {
+        self.repository = repository
+    }
+
+    func callAsFunction<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
+        guard let repository = await repository() else { throw Self.notOpen }
+        try Task.checkCancellation()
+        return try await repository.read(body)
+    }
+}
 
 /// THE door: how the app reads the observations.
 struct ObservationsLoader {
@@ -70,21 +105,15 @@ struct ObservationsLoader {
 
     @MainActor
     private static func make(model: VideoScanModel) -> ObservationsLoader {
-        let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
+        let read = SessionCatalogRead(model: model)
         return ObservationsLoader(
-            loadReport: { [weak model] scope in
-                let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-                guard let repository else { throw notOpen }
-                try Task.checkCancellation()
+            loadReport: { scope in
                 let now = Date()
-                return try await repository.read { try ObservationsReport.build(reader: $0, scope: scope, now: now) }
+                return try await read { try ObservationsReport.build(reader: $0, scope: scope, now: now) }
             },
-            search: { [weak model] scope, query in
-                let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-                guard let repository else { throw notOpen }
-                try Task.checkCancellation()
+            search: { scope, query in
                 let now = Date()
-                return try await repository.read { try ObservationsSearch.search(reader: $0, scope: scope, query: query, now: now) }
+                return try await read { try ObservationsSearch.search(reader: $0, scope: scope, query: query, now: now) }
             },
             reveal: { [weak model] id in
                 guard let model, model.canNavigateToRecord(id: id) else { return false }
@@ -96,6 +125,47 @@ struct ObservationsLoader {
                 model?.log("Observations: " + line)
                 appLog.write("[observations] " + line)
             })
+    }
+}
+
+/// An error in the words it carries — the ONE rule this module shows and logs a failure by.
+///
+/// A `LocalizedError` says its own (`errorDescription`). A plain Swift error (a `Refusal`, a repository or
+/// SQLite error) has nothing for Foundation, whose `localizedDescription` is then the boilerplate "The
+/// operation couldn’t be completed. (VideoScanCore.Refusal error 1.)" — its `description` is what it means
+/// ("catalog.sqlite is not open in this session — there is nothing to read"). A Foundation error (Cocoa,
+/// POSIX, AVFoundation) keeps Foundation's sentence.
+///
+///
+/// The reason is kept (Codex #302): a `failureReason` the sentence does not already say is added after a dash,
+/// and a Foundation error's underlying error is added in ITS own words in brackets — one level down, never a
+/// `userInfo` dump, so no path or key appears that the sentences themselves do not carry.
+///
+/// (For Rick: `what()` for three families of exception that each keep their message somewhere else. A Swift
+/// error with no NSError bridging of its own is given its type's name as its NSError domain; that is the test.)
+enum FailureWords {
+    static func of(_ error: any Error) -> String {
+        if let localized = error as? any LocalizedError, let said = localized.errorDescription {
+            return joined(said, reason: localized.failureReason, underlying: nil)
+        }
+        let ns = error as NSError
+        guard ns.domain != String(reflecting: type(of: error)) else { return "\(error)" }
+        return joined(error.localizedDescription, reason: ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String,
+                      underlying: (ns.userInfo[NSUnderlyingErrorKey] as? any Error).map(sentence))
+    }
+
+    /// One error's own sentence and nothing below it.
+    private static func sentence(_ error: any Error) -> String {
+        if let said = (error as? any LocalizedError)?.errorDescription { return said }
+        let plainSwift = (error as NSError).domain == String(reflecting: type(of: error))
+        return plainSwift ? "\(error)" : error.localizedDescription
+    }
+
+    private static func joined(_ sentence: String, reason: String?, underlying: String?) -> String {
+        var words = sentence
+        if let reason, !reason.isEmpty, !words.contains(reason) { words += " — " + reason }
+        if let underlying, !underlying.isEmpty, !words.contains(underlying) { words += " (" + underlying + ")" }
+        return words
     }
 }
 
@@ -194,10 +264,10 @@ final class ObservationsStore: ObservableObject {
     // What the view reads — each one a reading of the request's phase, never a flag of its own.
     var report: ObservationsReport? { reportRun.value }
     var loading: Bool { reportRun.isLoading }
-    var failure: String? { reportRun.failure.map { "\($0)" } }
+    var failure: String? { reportRun.failure.map(FailureWords.of) }
     var search: ObservationsSearch? { searchRun.value }
     var searching: Bool { searchRun.isLoading }
-    var searchFailure: String? { searchRun.failure.map { "\($0)" } }
+    var searchFailure: String? { searchRun.failure.map(FailureWords.of) }
 
     /// Read the report for the scope (a newer request cancels an older one).
     func load() async {
@@ -213,7 +283,8 @@ final class ObservationsStore: ObservableObject {
             let took = ContinuousClock.now - started
             loader.note("read \(scope.words): \(built.files.formatted()) files, \(built.analyzed.formatted()) analyzed, in \(took.formatted(.units(allowed: [.milliseconds])))")
         case .failure(let error):
-            if said.insert("\(error)").inserted { loader.note("could not be read for \(scope.words) — \(error)") }
+            let why = FailureWords.of(error)
+            if said.insert(why).inserted { loader.note("could not be read for \(scope.words) — \(why)") }
         }
     }
 
@@ -242,7 +313,7 @@ final class ObservationsStore: ObservableObject {
         case .success(let found):
             loader.note("searched \"\(query)\" in \(request.scope.words): \(found.hits.count.formatted()) hit\(found.hits.count == 1 ? "" : "s")\(found.truncated ? " (capped)" : "")")
         case .failure(let error):
-            loader.note("the search for \"\(query)\" in \(request.scope.words) could not be read — \(error)")
+            loader.note("the search for \"\(query)\" in \(request.scope.words) could not be read — \(FailureWords.of(error))")
         }
     }
 

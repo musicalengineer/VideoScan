@@ -32,7 +32,8 @@
 //   • FrameIndexWriter (an actor) — owns the builder; loads the index on
 //     disk, plans (skips what is done — restart = resume) and saves, all on
 //     its own executor, never the main actor; a save returns the snapshot it
-//     wrote, which `onSaved` hands to the window (no re-read from disk).
+//     wrote, which `onSaved` hands to the window (no re-read from disk) — and
+//     to every window that joined the run later (`alsoTell`).
 //   • FrameIndexJob (main actor) — counters, Pause/Stop, progress, WHEN to
 //     save (FrameIndexSavePoint) and the first terminal cause
 //     (FrameIndexRunOutcome).
@@ -175,7 +176,7 @@ enum FrameIndexEngine {
         } catch is CancellationError {
             return .deferred(.stopped)
         } catch {
-            return decodeFailed(error.localizedDescription)
+            return decodeFailed(FailureWords.of(error))
         }
         guard !decoded.isEmpty else { return decodeFailed("no frame of \(times.count) could be decoded") }
 
@@ -191,7 +192,7 @@ enum FrameIndexEngine {
         } catch SigLIPError.badImage {
             return .unreadable(SigLIPError.badImage.localizedDescription)
         } catch {
-            return Task.isCancelled ? .deferred(.stopped) : .deferred(.modelUnavailable(error.localizedDescription))
+            return Task.isCancelled ? .deferred(.stopped) : .deferred(.modelUnavailable(FailureWords.of(error)))
         }
     }
 
@@ -333,9 +334,48 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
     var note: @MainActor (String) -> Void = { appLog.write("[frame index] " + $0) }
     /// Called after every save with the index exactly as written (the window shows it; no re-read).
     var onSaved: (@MainActor (FrameIndex) -> Void)?
+    /// The windows watching this run: each is given every save from the moment it registered, after `onSaved`,
+    /// in the order they registered. Bounded by the windows OPEN now — a window takes its entry out when it
+    /// closes (`stopTelling`) — and emptied by every ending, in one place (`state`'s didSet).
+    private var laterListeners: [(token: UUID, tell: @MainActor (FrameIndex) -> Void)] = []
+    var listenerCount: Int { laterListeners.count }
+
+    /// Give `listener` every save from now on; the token takes it out again. A run that is over has no more
+    /// saves: nothing is kept and there is no token.
+    @discardableResult
+    func alsoTell(_ listener: @escaping @MainActor (FrameIndex) -> Void) -> UUID? {
+        guard state.isActive else { return nil }
+        let token = UUID()
+        laterListeners.append((token, listener))
+        return token
+    }
+
+    func stopTelling(_ token: UUID) {
+        laterListeners.removeAll { $0.token == token }
+    }
+
+    /// This run for a window: the job, and how the window stops being told when it closes.
+    func watched(by onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexWatch {
+        let token = onSaved.flatMap { alsoTell($0) }
+        return FrameIndexWatch(job: self, stopTelling: { [weak self] in
+            if let token { self?.stopTelling(token) }
+        })
+    }
+
+    /// True when this run writes the index a window reads: the same folder AND the same model.
+    func writes(root: URL, model: String) -> Bool {
+        self.root.standardizedFileURL == root.standardizedFileURL && embedder.modelID == model
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
-        didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
+        didSet {
+            guard !state.isActive else { return }
+            if finishedAt == nil { finishedAt = Date() }
+            // EVERY ending comes through here (finished, stopped, failed, a refused catalog read, refuseToStart):
+            // a run that is over tells nobody and holds nobody's closure.
+            laterListeners = []
+            onSaved = nil
+        }
     }
     @Published private(set) var finishedAt: Date?
     @Published private(set) var subtitleText = "Reading the catalog…"
@@ -456,9 +496,18 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
         do {
             rows = try await loadFiles(scope)
         } catch {
+            // A Stop or Quit while the catalog was being read is a stop, not a refusal (the read door throws
+            // CancellationError before it reads; a job whose Stop was asked never ends FAILED).
+            if error is CancellationError || Task.isCancelled || state.cancelWasRequested {
+                note("stopped while reading the catalog. Nothing was read or written.")
+                outcome = .stopped
+                state = .cancelled
+                return
+            }
             wasRefused = true
-            note("refused — the catalog could not be read (\(error.localizedDescription)). Nothing was read or written.")
-            let message = "Refused — the catalog could not be read: \(error.localizedDescription)"
+            let why = FailureWords.of(error)
+            note("refused — the catalog could not be read (\(why)). Nothing was read or written.")
+            let message = "Refused — the catalog could not be read: \(why)"
             outcome = .refused(message)
             state = .failed(message: message)
             return
@@ -593,8 +642,9 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
             unsaved = 0
             lastSave = Date()
             onSaved?(written)
+            for listener in laterListeners { listener.tell(written) }
         } catch {
-            let why = error.localizedDescription
+            let why = FailureWords.of(error)
             note("could not save the frame index (\(point.rawValue)): \(why)")
             saveProblem = why
             if failure == nil { failure = .saveFailed(at: point, why: why) }
@@ -634,22 +684,59 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
 
 // MARK: - Center dispatch
 
+/// A window's hold on a run: the job, and how to stop being told of its saves (the window calls it when it closes).
+struct FrameIndexWatch {
+    let job: FrameIndexJob
+    let stopTelling: @MainActor () -> Void
+}
+
 extension MediaFileOperationsCenter {
 
-    /// Start "Index frames (SigLIP 2)" over `scope`. One job at a time: a second request while one runs returns the running one.
-    /// `onSaved` is given the index exactly as each save wrote it (a job already running keeps the `onSaved` it started with).
-    @discardableResult
-    func startFrameIndex(scope: ObservationsScope, loadFiles: @escaping FrameIndexJob.LoadFiles, embedder: any FrameEmbedding,
-                         note: @escaping @MainActor (String) -> Void, onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexJob {
-        if let running = jobs.lazy.compactMap({ $0 as? FrameIndexJob }).first(where: { $0.state.isActive }) { return running }
+    /// The Index Frames job running now, if one is. O(jobs) (≤ ~60).
+    var runningFrameIndex: FrameIndexJob? {
+        jobs.lazy.compactMap { $0 as? FrameIndexJob }.first { $0.state.isActive }
+    }
+
+    /// Join the running job without starting one — only when it writes the index the caller reads (the same
+    /// folder, the same model): `onSaved` is given every save from now on. Nil: none is running, or it is
+    /// another index's.
+    func joinFrameIndex(root: URL, model: String, onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexWatch? {
+        guard let running = runningFrameIndex, running.writes(root: root, model: model) else { return nil }
+        return running.watched(by: onSaved)
+    }
+
+    /// Start "Index frames (SigLIP 2)" over `scope`, writing the index under `root`. One job at a time:
+    /// - one already running for THIS index (folder and model) is the one handed back, and `onSaved` is told from now on;
+    /// - one running for ANOTHER index is never handed back: the request is refused in words, nothing is started.
+    /// `onSaved` is given the index exactly as each save wrote it.
+    func watchFrameIndex(scope: ObservationsScope, loadFiles: @escaping FrameIndexJob.LoadFiles, embedder: any FrameEmbedding,
+                         root: URL = FrameIndexStore.productionRoot,
+                         note: @escaping @MainActor (String) -> Void, onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexWatch {
         let job = FrameIndexJob(scope: scope, loadFiles: loadFiles, embedder: embedder)
+        job.root = root
         job.note = note
-        job.onSaved = onSaved
+        if let running = runningFrameIndex {
+            if running.writes(root: root, model: embedder.modelID) { return running.watched(by: onSaved) }
+            let reason = "Index Frames is already running for a different index (\(running.embedder.modelID)) — one Index Frames job runs at a time. "
+                + "Wait for it to finish or stop it, then start again."
+            note("refused — " + reason)
+            job.refuseToStart(reason: reason)
+            return job.watched(by: nil)
+        }
+        let watch = job.watched(by: onSaved)
         guard add(job) else {
             job.refuseToStart(reason: "Index Frames runs on the Mac that holds the catalog — this one is a viewer.")
-            return job
+            return watch
         }
         job.start()
-        return job
+        return watch
+    }
+
+    /// `watchFrameIndex` for a caller that only wants the job.
+    @discardableResult
+    func startFrameIndex(scope: ObservationsScope, loadFiles: @escaping FrameIndexJob.LoadFiles, embedder: any FrameEmbedding,
+                         root: URL = FrameIndexStore.productionRoot,
+                         note: @escaping @MainActor (String) -> Void, onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexJob {
+        watchFrameIndex(scope: scope, loadFiles: loadFiles, embedder: embedder, root: root, note: note, onSaved: onSaved).job
     }
 }
