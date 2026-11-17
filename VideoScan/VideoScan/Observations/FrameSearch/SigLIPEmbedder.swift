@@ -29,6 +29,16 @@
 // (~32 × 197 × 3072 × 2 B ≈ 39 MB per layer, transient). MLX's buffer cache
 // is capped at 256 MB while this model runs.
 //
+// Seam (2026-11-16): the towers take their sizes from a `SigLIPShape` and the
+// embedder its weights folder and tokenizer from a `SigLIPSource`. The app has
+// exactly one of each (`.base`, `.hub` — the published model, as before). A
+// test builds a SigLIP a few kilobytes large in the same checkpoint layout
+// and runs the REAL load path and both towers on it (SigLIPTinyModelTests),
+// so the key filter, the conv transposition, `verify: [.all]`, batching and
+// cancellation are exercised in every lane, not only where the 1.5 GB
+// weights are. (For Rick: an injected interface in place of a hard-wired
+// dependency; the sizes are constructor parameters, not compile-time constants.)
+//
 // (For Rick: an MLX `Module` is a C++ class whose members are tensors; the
 // `@ModuleInfo(key:)` wrappers name each member exactly as the safetensors
 // file does, so `update(parameters:)` is a by-name memcpy. `actor` ≈ a class
@@ -57,6 +67,13 @@ protocol FrameEmbedding: Sendable {
     func embed(images: [CGImage]) async throws -> [[Float]]
     /// The query's L2-normalised vector.
     func embed(text: String) async throws -> [Float]
+    /// Load the model ahead of the first question (the window asks for this in the background).
+    func prewarm() async throws
+}
+
+extension FrameEmbedding {
+    /// A model with nothing to load.
+    func prewarm() async throws {}
 }
 
 enum SigLIPError: LocalizedError {
@@ -98,6 +115,33 @@ enum SigLIPConfig {
             }
         }
     }
+}
+
+/// The sizes of one SigLIP. `.base` is google/siglip2-base-patch16-224 as published.
+struct SigLIPShape: Sendable, Equatable {
+    var dims = SigLIPConfig.dims
+    var imageSize = SigLIPConfig.imageSize
+    var patchSize = SigLIPConfig.patchSize
+    var layers = SigLIPConfig.layers
+    var heads = SigLIPConfig.heads
+    var intermediate = SigLIPConfig.intermediate
+    var vocab = SigLIPConfig.vocab
+    var maxTokens = SigLIPConfig.maxTokens
+
+    static let base = SigLIPShape()
+}
+
+/// Where a SigLIP comes from: its id, its sizes, the folder its `model.safetensors` is in and how words become
+/// token ids. The app uses `.hub` and nothing else.
+struct SigLIPSource: Sendable {
+    var modelID = SigLIPConfig.modelID
+    var shape = SigLIPShape.base
+    /// The folder holding `model.safetensors`; nil = the hub cache's snapshot, else a one-time download.
+    var weights: (@Sendable () async throws -> URL)?
+    /// Words → token ids (before padding); nil = the Gemma tokenizer beside the weights.
+    var tokenize: (@Sendable (String) -> [Int])?
+
+    static let hub = SigLIPSource()
 }
 
 // MARK: - Pixels (shared with the tests)
@@ -180,11 +224,11 @@ private final class SigLayer: Module {
     @ModuleInfo var mlp: SigMLP
     @ModuleInfo(key: "layer_norm2") var norm2: LayerNorm
 
-    override init() {
-        let d = SigLIPConfig.dims
-        _attention.wrappedValue = SigAttention(dims: d, heads: SigLIPConfig.heads)
+    init(_ s: SigLIPShape) {
+        let d = s.dims
+        _attention.wrappedValue = SigAttention(dims: d, heads: s.heads)
         _norm1.wrappedValue = LayerNorm(dimensions: d, eps: SigLIPConfig.layerNormEps)
-        mlp = SigMLP(dims: d, hidden: SigLIPConfig.intermediate)
+        mlp = SigMLP(dims: d, hidden: s.intermediate)
         _norm2.wrappedValue = LayerNorm(dimensions: d, eps: SigLIPConfig.layerNormEps)
     }
 
@@ -196,7 +240,7 @@ private final class SigLayer: Module {
 
 private final class SigEncoder: Module {
     var layers: [SigLayer]
-    override init() { layers = (0..<SigLIPConfig.layers).map { _ in SigLayer() } }
+    init(_ s: SigLIPShape) { layers = (0..<s.layers).map { _ in SigLayer(s) } }
     func callAsFunction(_ x: MLXArray) -> MLXArray { layers.reduce(x) { $1($0) } }
 }
 
@@ -205,9 +249,9 @@ private final class SigVisionEmbeddings: Module {
     @ModuleInfo(key: "position_embedding") var position: Embedding
     let positions: Int
 
-    override init() {
-        let d = SigLIPConfig.dims, p = SigLIPConfig.patchSize
-        positions = (SigLIPConfig.imageSize / p) * (SigLIPConfig.imageSize / p)
+    init(_ s: SigLIPShape) {
+        let d = s.dims, p = s.patchSize
+        positions = (s.imageSize / p) * (s.imageSize / p)
         _patch.wrappedValue = Conv2d(inputChannels: 3, outputChannels: d, kernelSize: .init(p), stride: .init(p))
         _position.wrappedValue = Embedding(embeddingCount: positions, dimensions: d)
     }
@@ -224,18 +268,20 @@ private final class SigPoolingHead: Module {
     @ModuleInfo var attention: SigHeadAttention
     @ModuleInfo var layernorm: LayerNorm
     @ModuleInfo var mlp: SigMLP
+    let dims: Int
 
-    override init() {
-        let d = SigLIPConfig.dims
+    init(_ s: SigLIPShape) {
+        let d = s.dims
+        dims = d
         _probe.wrappedValue = MLXArray.zeros([1, 1, d])
-        attention = SigHeadAttention()
+        attention = SigHeadAttention(s)
         layernorm = LayerNorm(dimensions: d, eps: SigLIPConfig.layerNormEps)
-        mlp = SigMLP(dims: d, hidden: SigLIPConfig.intermediate)
+        mlp = SigMLP(dims: d, hidden: s.intermediate)
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let b = x.dim(0)
-        let q = MLX.broadcast(probe, to: [b, 1, SigLIPConfig.dims])
+        let q = MLX.broadcast(probe, to: [b, 1, dims])
         let h = attention(query: q, keyValue: x)
         return (h + mlp(layernorm(h)))[0..., 0, 0...]
     }
@@ -245,16 +291,20 @@ private final class SigHeadAttention: Module {
     @ParameterInfo(key: "in_proj_weight") var inWeight: MLXArray
     @ParameterInfo(key: "in_proj_bias") var inBias: MLXArray
     @ModuleInfo(key: "out_proj") var out: Linear
+    let dims: Int
+    let heads: Int
 
-    override init() {
-        let d = SigLIPConfig.dims
+    init(_ s: SigLIPShape) {
+        let d = s.dims
+        dims = d
+        heads = s.heads
         _inWeight.wrappedValue = MLXArray.zeros([3 * d, d])
         _inBias.wrappedValue = MLXArray.zeros([3 * d])
         _out.wrappedValue = Linear(d, d)
     }
 
     func callAsFunction(query: MLXArray, keyValue x: MLXArray) -> MLXArray {
-        let d = SigLIPConfig.dims, heads = SigLIPConfig.heads
+        let d = dims
         let wq = inWeight[0..<d], wk = inWeight[d..<(2 * d)], wv = inWeight[(2 * d)...]
         let bq = inBias[0..<d], bk = inBias[d..<(2 * d)], bv = inBias[(2 * d)...]
         let (b, l, s) = (query.dim(0), query.dim(1), x.dim(1))
@@ -272,11 +322,11 @@ private final class SigVisionTransformer: Module {
     @ModuleInfo(key: "post_layernorm") var postNorm: LayerNorm
     @ModuleInfo var head: SigPoolingHead
 
-    override init() {
-        embeddings = SigVisionEmbeddings()
-        encoder = SigEncoder()
-        _postNorm.wrappedValue = LayerNorm(dimensions: SigLIPConfig.dims, eps: SigLIPConfig.layerNormEps)
-        head = SigPoolingHead()
+    init(_ s: SigLIPShape) {
+        embeddings = SigVisionEmbeddings(s)
+        encoder = SigEncoder(s)
+        _postNorm.wrappedValue = LayerNorm(dimensions: s.dims, eps: SigLIPConfig.layerNormEps)
+        head = SigPoolingHead(s)
     }
 
     func callAsFunction(_ pixels: MLXArray) -> MLXArray { head(postNorm(encoder(embeddings(pixels)))) }
@@ -286,9 +336,9 @@ private final class SigTextEmbeddings: Module {
     @ModuleInfo(key: "token_embedding") var token: Embedding
     @ModuleInfo(key: "position_embedding") var position: Embedding
 
-    override init() {
-        _token.wrappedValue = Embedding(embeddingCount: SigLIPConfig.vocab, dimensions: SigLIPConfig.dims)
-        _position.wrappedValue = Embedding(embeddingCount: SigLIPConfig.maxTokens, dimensions: SigLIPConfig.dims)
+    init(_ s: SigLIPShape) {
+        _token.wrappedValue = Embedding(embeddingCount: s.vocab, dimensions: s.dims)
+        _position.wrappedValue = Embedding(embeddingCount: s.maxTokens, dimensions: s.dims)
     }
 
     func callAsFunction(_ ids: MLXArray) -> MLXArray {
@@ -302,14 +352,14 @@ private final class SigTextTransformer: Module {
     @ModuleInfo(key: "final_layer_norm") var finalNorm: LayerNorm
     @ModuleInfo var head: Linear
 
-    override init() {
-        embeddings = SigTextEmbeddings()
-        encoder = SigEncoder()
-        _finalNorm.wrappedValue = LayerNorm(dimensions: SigLIPConfig.dims, eps: SigLIPConfig.layerNormEps)
-        head = Linear(SigLIPConfig.dims, SigLIPConfig.dims)
+    init(_ s: SigLIPShape) {
+        embeddings = SigTextEmbeddings(s)
+        encoder = SigEncoder(s)
+        _finalNorm.wrappedValue = LayerNorm(dimensions: s.dims, eps: SigLIPConfig.layerNormEps)
+        head = Linear(s.dims, s.dims)
     }
 
-    /// (B, 64) ids → (B, D): no attention mask, pooled at the LAST position (the reference's rule).
+    /// (B, maxTokens) ids → (B, D): no attention mask, pooled at the LAST position (the reference's rule).
     func callAsFunction(_ ids: MLXArray) -> MLXArray {
         let h = finalNorm(encoder(embeddings(ids)))
         return head(h[0..., -1, 0...])
@@ -320,9 +370,9 @@ private final class SigLIP: Module {
     @ModuleInfo(key: "vision_model") var vision: SigVisionTransformer
     @ModuleInfo(key: "text_model") var text: SigTextTransformer
 
-    override init() {
-        _vision.wrappedValue = SigVisionTransformer()
-        _text.wrappedValue = SigTextTransformer()
+    init(_ s: SigLIPShape) {
+        _vision.wrappedValue = SigVisionTransformer(s)
+        _text.wrappedValue = SigTextTransformer(s)
     }
 }
 
@@ -332,18 +382,26 @@ actor SigLIPEmbedder: FrameEmbedding {
 
     static let shared = SigLIPEmbedder()
 
-    nonisolated let modelID = SigLIPConfig.modelID
-    nonisolated let dims = SigLIPConfig.dims
+    nonisolated let modelID: String
+    nonisolated let dims: Int
     /// Images per forward pass (memory: see the file header).
     let batchSize = 32
 
+    private let source: SigLIPSource
     private var model: SigLIP?
+    /// The Gemma tokenizer; stays nil when the source brings its own `tokenize`.
     private var tokenizer: Tokenizer?
     /// Seconds the last load took (the report's cold number).
     private(set) var loadSeconds: Double?
 
     /// Where the weights came from (logged once).
     private(set) var weightsFolder: URL?
+
+    init(source: SigLIPSource = .hub) {
+        self.source = source
+        modelID = source.modelID
+        dims = source.shape.dims
+    }
 
     func prewarm() async throws { _ = try await ensureLoaded() }
 
@@ -356,15 +414,15 @@ actor SigLIPEmbedder: FrameEmbedding {
         MLX.GPU.clearCache()
     }
 
-    private func ensureLoaded() async throws -> (SigLIP, Tokenizer) {
-        if let model, let tokenizer { return (model, tokenizer) }
+    private func ensureLoaded() async throws -> SigLIP {
+        if let model { return model }
         let started = CFAbsoluteTimeGetCurrent()
         noteMLXInferenceUsed()   // AppDelegate's quit path synchronises the GPU stream (MLXShutdown.swift)
         MLX.GPU.set(cacheLimit: 256 * 1024 * 1024)
-        let folder = try await Self.weights()
+        let folder = try await (source.weights ?? Self.hubWeights)()
         do {
-            let tok = try await AutoTokenizer.from(modelFolder: folder)
-            let m = SigLIP()
+            let tok: Tokenizer? = try await source.tokenize == nil ? AutoTokenizer.from(modelFolder: folder) : nil
+            let m = SigLIP(source.shape)
             try runMLX {
                 var weights = try loadArrays(url: folder.appendingPathComponent("model.safetensors"))
                 weights = weights.filter { !$0.key.contains("position_ids") && $0.key != "logit_scale" && $0.key != "logit_bias" }
@@ -381,14 +439,14 @@ actor SigLIPEmbedder: FrameEmbedding {
             weightsFolder = folder
             loadSeconds = CFAbsoluteTimeGetCurrent() - started
             siglipLog.info("SigLIP 2 loaded from \(folder.path, privacy: .public) in \(self.loadSeconds ?? 0, format: .fixed(precision: 2)) s")
-            return (m, tok)
+            return m
         } catch {
             throw SigLIPError.loadFailed(error.localizedDescription)
         }
     }
 
     /// The hub cache's snapshot, else a one-time download of the same public files through swift-transformers.
-    private static func weights() async throws -> URL {
+    private static let hubWeights: @Sendable () async throws -> URL = {
         if let cached = SigLIPConfig.hubCacheSnapshot() { return cached }
         do {
             return try await HubApi().snapshot(from: SigLIPConfig.modelID,
@@ -400,7 +458,8 @@ actor SigLIPEmbedder: FrameEmbedding {
 
     func embed(images: [CGImage]) async throws -> [[Float]] {
         guard !images.isEmpty else { return [] }
-        let (m, _) = try await ensureLoaded()
+        let m = try await ensureLoaded()
+        let size = source.shape.imageSize
         var out: [[Float]] = []
         out.reserveCapacity(images.count)
         var start = 0
@@ -408,12 +467,11 @@ actor SigLIPEmbedder: FrameEmbedding {
             try Task.checkCancellation()
             let batch = images[start..<min(start + batchSize, images.count)]
             var flat: [Float] = []
-            flat.reserveCapacity(batch.count * 224 * 224 * 3)
+            flat.reserveCapacity(batch.count * size * size * 3)
             for image in batch {
-                guard let px = SigLIPPixels.normalizedHWC(image) else { throw SigLIPError.badImage }
+                guard let px = SigLIPPixels.normalizedHWC(image, size: size) else { throw SigLIPError.badImage }
                 flat.append(contentsOf: px)
             }
-            let size = SigLIPConfig.imageSize
             let rows: [Float] = try runMLX {
                 let pixels = MLXArray(flat, [batch.count, size, size, 3]).asType(.float16)
                 let e = m.vision(pixels).asType(.float32)
@@ -429,8 +487,8 @@ actor SigLIPEmbedder: FrameEmbedding {
 
     /// The text exactly as typed (no prompt template; SigLIP 2 is trained on plain captions).
     func embed(text: String) async throws -> [Float] {
-        let (m, tok) = try await ensureLoaded()
-        let ids = SigLIPPixels.padded(tok.encode(text: text))
+        let m = try await ensureLoaded()
+        let ids = tokens(text)
         return try runMLX {
             let e = m.text(MLXArray(ids.map(Int32.init), [1, ids.count])).asType(.float32)
             let n = e / sqrt((e * e).sum(axis: -1, keepDims: true))
@@ -441,8 +499,13 @@ actor SigLIPEmbedder: FrameEmbedding {
 
     /// The ids the text tower sees (tests: parity with the reference tokenizer).
     func tokenIDs(_ text: String) async throws -> [Int] {
-        let (_, tok) = try await ensureLoaded()
-        return SigLIPPixels.padded(tok.encode(text: text))
+        _ = try await ensureLoaded()
+        return tokens(text)
+    }
+
+    /// Words → ids, padded or cut to the model's length. Call after `ensureLoaded`.
+    private func tokens(_ text: String) -> [Int] {
+        SigLIPPixels.padded(source.tokenize?(text) ?? tokenizer?.encode(text: text) ?? [], to: source.shape.maxTokens)
     }
 }
 
@@ -450,8 +513,12 @@ actor SigLIPEmbedder: FrameEmbedding {
 
 actor SigLIPEmbedder: FrameEmbedding {
     static let shared = SigLIPEmbedder()
-    nonisolated let modelID = SigLIPConfig.modelID
-    nonisolated let dims = SigLIPConfig.dims
+    nonisolated let modelID: String
+    nonisolated let dims: Int
+    init(source: SigLIPSource = .hub) {
+        modelID = source.modelID
+        dims = source.shape.dims
+    }
     func prewarm() async throws { throw SigLIPError.unavailable }
     func embed(images: [CGImage]) async throws -> [[Float]] { throw SigLIPError.unavailable }
     func embed(text: String) async throws -> [Float] { throw SigLIPError.unavailable }

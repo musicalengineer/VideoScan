@@ -22,7 +22,9 @@
 // (ObservationsStore.swift), the same rule the Words search follows. The
 // index follows it too: the newest read of the disk or the newest save the
 // job handed over is the one shown and searched; an older one finishing late
-// is dropped. Similarity is SigLIP's raw cosine (−1…1; matching captions
+// is dropped. A window that opens while Index Frames is already running joins
+// that job (`joinIndex`) and is handed its saves like the window that
+// started it. Similarity is SigLIP's raw cosine (−1…1; matching captions
 // land around 0.10–0.20); it is a ranking, not a probability, and the words
 // say so.
 //
@@ -69,7 +71,11 @@ struct FrameSearchLoader {
     let thumbnail: @Sendable (_ path: String, _ seconds: Double) async -> CGImage?
     /// Start (or find) the index job over the scope; nil when no MFO center is reachable.
     /// `onSaved` is given the index exactly as each save wrote it.
-    let startIndex: @MainActor (_ scope: ObservationsScope, _ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob?
+    let startIndex: @MainActor (_ scope: ObservationsScope, _ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexWatch?
+    /// The Index Frames job that is ALREADY running for THIS index (the folder this loader reads, its model), if
+    /// one is — joined: `onSaved` is given every save from now on. For a window that opens mid-run.
+    /// (Default: nothing to join — tests and mockups that start no job.)
+    var joinIndex: @MainActor (_ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexWatch? = { _ in nil }
     let reveal: @MainActor (UUID) -> Bool
     let note: @MainActor (String) -> Void
 
@@ -91,16 +97,16 @@ struct FrameSearchLoader {
         return loader
     }
 
+    /// The loader over `model`'s session. The app calls this through `production(model:)` with the defaults —
+    /// SigLIP 2, the index folder in Application Support, the app's MFO center. A test names all three (a stub
+    /// model, a temp folder, its own center), so everything the window does through this door is tested as built.
+    /// The job is started over the SAME `root` the window reads, by construction.
     @MainActor
-    private static func make(model: VideoScanModel) -> FrameSearchLoader {
-        let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
-        let embedder = SigLIPEmbedder.shared
-        let root = FrameIndexStore.productionRoot
-        let files: Files = { [weak model] scope in
-            let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-            guard let repository else { throw notOpen }
-            return try await repository.read { try $0.frameIndexFiles(scope) }
-        }
+    static func make(model: VideoScanModel, embedder: any FrameEmbedding = SigLIPEmbedder.shared,
+                     root: URL = FrameIndexStore.productionRoot,
+                     center: @escaping @MainActor () -> MediaFileOperationsCenter? = { FrameIndexHost.center }) -> FrameSearchLoader {
+        let read = SessionCatalogRead(model: model)   // the module's one read door (ObservationsStore.swift)
+        let files: Files = { scope in try await read { try $0.frameIndexFiles(scope) } }
         let note: @MainActor (String) -> Void = { [weak model] line in
             model?.log("Frames: " + line)
             appLog.write("[frames] " + line)
@@ -113,11 +119,12 @@ struct FrameSearchLoader {
             prewarm: { try await embedder.prewarm() },
             thumbnail: { path, seconds in await FrameThumbnails.shared.image(path: path, seconds: seconds) },
             startIndex: { scope, onSaved in
-                guard let center = FrameIndexHost.center else { return nil }
+                guard let center = center() else { return nil }
                 return center.startedByUser {
-                    $0.startFrameIndex(scope: scope, loadFiles: files, embedder: embedder, note: note, onSaved: onSaved)
+                    $0.watchFrameIndex(scope: scope, loadFiles: files, embedder: embedder, root: root, note: note, onSaved: onSaved)
                 }
             },
+            joinIndex: { onSaved in center()?.joinFrameIndex(root: root, model: embedder.modelID, onSaved: onSaved) },
             reveal: { [weak model] id in
                 guard let model, model.canNavigateToRecord(id: id) else { return false }
                 model.showInCatalog(recordID: id)
@@ -201,10 +208,15 @@ final class FrameSearchStore: ObservableObject {
     @Published private(set) var jobLine: String?
 
     let loader: FrameSearchLoader
-    /// The current scope's files, kept between searches (dropped with the scope).
+    /// The current scope's files, kept between searches — dropped with the scope, and whenever a newer index is
+    /// shown: a video catalogued and indexed since these rows were read is in that index and must be findable.
     private var scopeFiles: [String: CatalogRow.FrameIndexFile]?
     private var warming: Task<Void, Never>?
     private var jobWatch: AnyCancellable?
+    /// Takes this window's entry out of the job's listeners (set while a job is watched).
+    private var stopTelling: (@MainActor () -> Void)?
+    /// The window went away. A closed store publishes nothing, ever again — whatever still holds it.
+    private var closed = false
 
     init(scope: ObservationsScope, loader: FrameSearchLoader) {
         self.scope = scope
@@ -215,7 +227,7 @@ final class FrameSearchStore: ObservableObject {
     var hits: [FrameHit] { searchRun.value?.hits ?? [] }
     var query: String? { searchRun.key?.query }
     var searching: Bool { searchRun.isLoading }
-    var failure: String? { searchRun.failure?.localizedDescription }
+    var failure: String? { searchRun.failure.map(FailureWords.of) }
     var timing: String? { searchRun.value?.timing }
 
     /// The standing line: a reading of the newest index, never a field of its own. (O(1): the counts are already made.)
@@ -237,10 +249,14 @@ final class FrameSearchStore: ObservableObject {
     var modelID: String { loader.modelID }
 
     /// Read the index from disk — the window's first look, the one place there is no snapshot to be handed —
-    /// and warm the model in the background so the first query is fast.
+    /// and warm the model in the background so the first query is fast. A job already running is joined FIRST,
+    /// so no save can fall between the read and the join: a save that lands during the read is the newer look.
     func loadIndex() async {
+        guard !closed else { return }
+        joinRunningJob()
         let load = loader.loadIndex
-        guard await show({ IndexRead(await load()) }) else { return }
+        // `show` may have answered the words in the field before it came back; the window can close meanwhile.
+        guard await show({ IndexRead(await load()) }), !closed else { return }
         let warm = loader.prewarm
         warming?.cancel()
         warming = Task.detached(priority: .utility) { try? await warm() }
@@ -248,13 +264,23 @@ final class FrameSearchStore: ObservableObject {
 
     /// The ONE way the index on screen changes: `look` runs off the main actor and is shown only if no newer
     /// look (a read, a save) began meanwhile. False: superseded, or the window closed — nothing was shown.
+    ///
+    /// Nothing computed against the index it replaces outlives it (latest wins): the scope's rows are dropped, a
+    /// search still in flight is cancelled and can no longer publish, the hits on screen go at once, and the
+    /// words in the field are asked again of the index now shown (one text-tower pass and one scoring — cheap).
     @discardableResult
     private func show(_ look: @escaping @Sendable () async -> IndexRead) async -> Bool {
+        guard !closed else { return false }
         let ticket = indexRun.begin(loader.modelID, look)
         let result = await ticket.result
         guard indexRun.finish(ticket, result) else { return false }
+        scopeFiles = nil
         if case .success(let read) = result, case .unreadable(let why) = read.status {
             loader.note("the frame index cannot be used: \(why)")
+        }
+        if let asked = query {
+            searchRun.reset()
+            await search(asked)
         }
         return true
     }
@@ -262,7 +288,7 @@ final class FrameSearchStore: ObservableObject {
     /// A new scope: the old scope's hits and files go at once (a search still in flight for it is cancelled
     /// and can no longer publish); the words in the field are asked again of the new one.
     func set(scope: ObservationsScope) async {
-        guard scope != self.scope else { return }
+        guard !closed, scope != self.scope else { return }
         let asked = query
         self.scope = scope
         scopeFiles = nil
@@ -273,6 +299,7 @@ final class FrameSearchStore: ObservableObject {
     /// Embed the words, score every frame in scope, publish the best page. Words too short to ask (the field
     /// was cleared) end any search in flight and clear the hits.
     func search(_ raw: String) async {
+        guard !closed else { return }
         revealProblem = nil
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 2 else {
@@ -309,10 +336,10 @@ final class FrameSearchStore: ObservableObject {
         switch result {
         case .success(let found):
             guard let rows = found.rows else { return }
-            scopeFiles = rows
+            scopeFiles = rows   // still the current request, so read under the index on screen: a newer index resets the search
             loader.note("searched \"\(text)\" in \(request.scope.words): \(found.hits.count) frame hit\(found.hits.count == 1 ? "" : "s"), best \(found.hits.first.map { String(format: "%.3f", $0.score) } ?? "—"); \(found.timing ?? "")")
         case .failure(let error):
-            loader.note("the search for \"\(text)\" in \(request.scope.words) could not run — \(error.localizedDescription)")
+            loader.note("the search for \"\(text)\" in \(request.scope.words) could not run — \(FailureWords.of(error))")
         }
     }
 
@@ -320,24 +347,60 @@ final class FrameSearchStore: ObservableObject {
         String(format: "%.2f s", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
     }
 
+    /// What a job is given to tell this window of a save. Weak: a window that is gone keeps nothing alive; a
+    /// window that is closed but still held by something is told nothing (`closed`), and its entry is out of
+    /// the job's list anyway (`stopTelling`).
+    private var whenSaved: @MainActor (FrameIndex) -> Void {
+        { [weak self] saved in
+            guard let self, !self.closed else { return }
+            Task { [weak self] in await self?.show(saved: saved) }
+        }
+    }
+
+    /// The window opened while Index Frames runs for THIS index: show that job and be handed its saves from now on.
+    private func joinRunningJob() {
+        guard job == nil, let running = loader.joinIndex(whenSaved) else { return }
+        watch(running)
+    }
+
     /// Start (or show) the index job over the window's scope. Each save hands back the index it wrote.
     func buildIndex() {
-        guard let job = loader.startIndex(scope, { [weak self] saved in Task { await self?.show(saved: saved) } }) else {
+        guard !closed else { return }
+        guard let started = loader.startIndex(scope, whenSaved) else {
             jobLine = "The Media File Operations center is not available in this window."
             return
         }
-        watch(job)
+        guard started.job.state.isActive else {
+            // Already over — refused before it started (a viewer Mac, another index's job running). It will
+            // never change again, so there is nothing to watch: say why and leave the button as it was.
+            job = nil
+            jobLine = Self.refusalWords(started.job)
+            return
+        }
+        watch(started)
     }
 
-    private func watch(_ job: FrameIndexJob) {
-        self.job = job
-        jobLine = job.subtitle
-        jobWatch = job.objectWillChange
+    /// Why a job that refused did so (the words its own FAILED state carries); nil for any other ending.
+    private static func refusalWords(_ job: FrameIndexJob) -> String? {
+        guard job.wasRefused, case .failed(let message) = job.state else { return nil }
+        return message
+    }
+
+    private func watch(_ watch: FrameIndexWatch) {
+        stopTelling?()
+        stopTelling = watch.stopTelling
+        job = watch.job
+        jobLine = watch.job.subtitle
+        jobWatch = watch.job.objectWillChange
             .throttle(for: .milliseconds(500), scheduler: DispatchQueue.main, latest: true)
-            .sink { [weak self, weak job] _ in
+            .sink { [weak self, weak job = watch.job] _ in
                 guard let self, let job else { return }
-                self.jobLine = job.state.isActive ? job.subtitle : nil
-                if !job.state.isActive { self.job = nil }
+                guard !job.state.isActive else { self.jobLine = job.subtitle; return }
+                // Over. A refusal that came AFTER the watch began (the catalog could not be read) keeps its
+                // reason beside the button until the next action, in the same words as one that came at once.
+                self.jobLine = Self.refusalWords(job)
+                self.job = nil
+                self.stopTelling = nil
             }
     }
 
@@ -349,6 +412,7 @@ final class FrameSearchStore: ObservableObject {
 
     @discardableResult
     func reveal(_ hit: FrameHit) -> Bool {
+        guard !closed else { return false }
         guard let id = hit.recordID, loader.reveal(id) else {
             revealProblem = "\(hit.filename) is not in this session's catalog — nothing to show"
             return false
@@ -357,8 +421,13 @@ final class FrameSearchStore: ObservableObject {
         return true
     }
 
-    /// The window went away: stop the search in flight and the model warm-up; an index read still running shows nothing.
+    /// The window went away, for good: stop the search in flight and the model warm-up, take this window out of
+    /// the job's listeners, and publish nothing from here on — an index read still running, a save still on its
+    /// way and anything asked of the store afterwards show nothing.
     func cancel() {
+        closed = true
+        stopTelling?()
+        stopTelling = nil
         indexRun.reset()
         searchRun.reset()
         warming?.cancel()
