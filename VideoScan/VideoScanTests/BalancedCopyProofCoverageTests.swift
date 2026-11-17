@@ -6,7 +6,8 @@
 // real 5.1 original, and a same-size replacement of the copy mid-run.
 // Real ffmpeg media throughout (tones and test patterns only). Each test
 // first shows the job's OWN copy of that shape is judged as pinned here,
-// then that the damaged one is refused.
+// then that the damaged one is refused — or, since the 2026-11-17 ruling,
+// that a track the copy lacks is NAMED as held by the original.
 
 import Foundation
 import Testing
@@ -21,10 +22,6 @@ struct BalancedCopyProofCoverageTests {
     typealias Lab = BalancedCopyProofLab
     private let fm = FileManager.default
 
-    private func streamsDiffer(_ outcome: Proof.Outcome) -> Bool {
-        if case .notProven(.streamsDiffer) = outcome { return true }
-        return false
-    }
     private func notProven(_ outcome: Proof.Outcome) -> Bool {
         if case .notProven = outcome { return true }
         return false
@@ -40,7 +37,8 @@ struct BalancedCopyProofCoverageTests {
         let longerBalanced = try await Media.balance(longer)
 
         let outcome = await Proof.measure(original: original, balanced: longerBalanced)
-        #expect(Lab.timing(outcome) == "video stream 0 has 50 packets, the balanced copy 75", "\(outcome)")
+        #expect(outcome == .notProven(.pictureDiffers(originalIndex: 0, "50 frames play in the original, 75 in the balanced copy")),
+                "\(outcome)")
         // And each with its own copy is a good pair.
         #expect(await Proof.measure(original: longer, balanced: longerBalanced).isProven)
     }
@@ -65,8 +63,9 @@ struct BalancedCopyProofCoverageTests {
         #expect(notProven(outcome), "expected not proven, got \(outcome)")
     }
 
-    @Test("A dropped SUBTITLE stream is not proven; the job's own copy, subtitles carried, is", .timeLimit(.minutes(2)))
-    func droppedSubtitleIsRefused() async throws {
+    @Test("A dropped SUBTITLE stream is NAMED as held by the original, never proven the same; the job's own copy, subtitles carried, is the same",
+          .timeLimit(.minutes(2)))
+    func droppedSubtitleIsNamed() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch("subtitle")
         defer { try? fm.removeItem(at: dir) }
@@ -85,17 +84,19 @@ struct BalancedCopyProofCoverageTests {
             Issue.record("the job carries the subtitles; its copy must be proven")
             return
         }
-        #expect(evidence.carried.map(\.kind) == ["video", "subtitle"])
-        #expect(evidence.carried.map(\.packets) == [50, 2])
+        #expect(evidence.streams.map(\.kind) == ["video", "subtitle"])
+        #expect(evidence.streams.map(\.packets) == [50, 2])
+        #expect(evidence.streams[1].frames == nil && evidence.streams[1].packetIdentical, "captions are held packet for packet")
 
         let dropped = try Media.derive("no_subtitle_balanced", from: balanced, ["-map", "0:v", "-map", "0:a", "-c", "copy"])
         let outcome = await Proof.measure(original: original, balanced: dropped)
-        #expect(streamsDiffer(outcome), "\(outcome)")
+        #expect(!outcome.isProven && outcome.playsTheSame, "\(outcome)")
+        #expect(Lab.differs(outcome) == ["[track] the original holds a text track (subrip)"], "\(outcome)")
     }
 
-    @Test("A dropped ATTACHMENT is not proven; an attachment carried is COULD NOT CHECK (it has no packets to hash)",
+    @Test("PIN: a Matroska ATTACHMENT, dropped or carried, is COULD NOT CHECK — it has no packets to hash, and ffmpeg cannot say what it is",
           .timeLimit(.minutes(2)))
-    func droppedAttachmentIsRefused() async throws {
+    func attachmentIsCouldNotCheck() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch("attachment")
         defer { try? fm.removeItem(at: dir) }
@@ -109,8 +110,11 @@ struct BalancedCopyProofCoverageTests {
 
         let dropped = try Media.derive("no_attachment_balanced", from: balanced, ["-map", "0:v", "-map", "0:a", "-c", "copy"])
         let outcome = await Proof.measure(original: original, balanced: dropped)
-        #expect(streamsDiffer(outcome), "\(outcome)")
-        // PIN: carried faithfully it still cannot be vouched for — fail closed.
+        // Dropped: the original's own decode pass is not clean (ffmpeg warns, on a line of its
+        // own, that it cannot find the attachment's codec parameters) — fail closed.
+        #expect(Lab.reason(outcome)?.hasPrefix("the original could not be decoded to the end (ffmpeg exited 0 but said: ") == true,
+                "\(outcome)")
+        // Carried faithfully it cannot be vouched for either.
         let carried = await Proof.measure(original: original, balanced: balanced)
         #expect(Lab.reason(carried) == "attachment stream 2 gave no packets to compare", "\(carried)")
     }
@@ -134,17 +138,27 @@ struct BalancedCopyProofCoverageTests {
             Issue.record("two picture streams in order must be proven")
             return
         }
-        #expect(evidence.carried.map(\.kind) == ["video", "video"])
-        #expect(evidence.carried[0].packetSHA256 != evidence.carried[1].packetSHA256)
+        #expect(evidence.streams.map(\.kind) == ["video", "video"])
+        #expect(evidence.streams[0].framesSHA256 != evidence.streams[1].framesSHA256)
+        #expect(evidence.streams.allSatisfy { $0.frames == 50 && $0.packetIdentical })
 
         let swapped = try Media.derive("swapped_balanced", from: balanced,
                                        ["-map", "0:1", "-map", "0:0", "-map", "0:2", "-c", "copy", "-write_tmcd", "0"])
         let outcome = await Proof.measure(original: original, balanced: swapped)
-        guard case .notProven(.carriedStreamDiffers(let kind, let index, _, _)) = outcome else {
-            Issue.record("expected the first picture stream to be refused, got \(outcome)")
+        // The swap puts the track QuickTime does not play by default first: refused from the headers.
+        #expect(outcome == .notProven(.pictureConfigurationDiffers(
+            "picture stream 0: the balanced copy's track is not marked to play by default")), "\(outcome)")
+        // With both tracks switched on, the swap is refused by the decoded frames themselves.
+        let both = try Media.derive("swapped_on_balanced", from: balanced,
+                                    ["-map", "0:1", "-map", "0:0", "-map", "0:2", "-c", "copy", "-write_tmcd", "0",
+                                     "-disposition:v", "default"])
+        let original2 = try Media.derive("test_both_on", from: original,
+                                         ["-map", "0", "-c", "copy", "-write_tmcd", "0", "-disposition:v", "default"])
+        guard case .notProven(.pictureDiffers(let index, _)) = await Proof.measure(original: original2, balanced: both) else {
+            Issue.record("expected the first picture stream's frames to be refused")
             return
         }
-        #expect(kind == "video" && index == 0)
+        #expect(index == 0)
     }
 
     @Test("PIN: a sound-only PCM pair (WAV) is PROVEN — everything the original has is its one channel",
@@ -162,7 +176,7 @@ struct BalancedCopyProofCoverageTests {
             Issue.record("a sound-only pair holds everything the original has")
             return
         }
-        #expect(evidence.carried.isEmpty && !evidence.gainedTimecodeTrack)
+        #expect(evidence.streams.isEmpty)
         #expect(evidence.soundSamples == 96_000)
         #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
         // Not proven by having nothing to compare: a different tone is refused.

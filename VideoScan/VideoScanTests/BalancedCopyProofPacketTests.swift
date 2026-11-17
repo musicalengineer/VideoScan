@@ -8,6 +8,9 @@
 // Each is rebuilt here with real ffmpeg media (test patterns and tones),
 // was seen RED on dd4042d33, and first shows by another road that the
 // damaged copy agrees with the original in everything that was compared.
+// On the engine rebuilt 2026-11-17 the first is refused by the decoded
+// frames' times, the second by the display configuration, the third by
+// the packet pass (captions are not decoded; their packets are the proof).
 
 import Foundation
 import Testing
@@ -63,10 +66,12 @@ struct BalancedCopyProofPacketTests {
         #expect(await packetTable(of: retimed, stream: "v:0") != times)
 
         let outcome = await Proof.measure(original: original, balanced: retimed)
-        #expect(!outcome.isProven, "pictures moved against the sound and the copy was still proven: \(outcome)")
-        #expect(Lab.timing(outcome)
-                == "video stream 0: its packets are not presented at the original's times, each for the original's duration",
-                "\(outcome)")
+        #expect(!outcome.playsTheSame, "pictures moved against the sound and the copy was still the same: \(outcome)")
+        guard case .notProven(.pictureDiffers(0, let what)) = outcome else {
+            Issue.record("expected the frames' times to be the reason, got \(outcome)")
+            return
+        }
+        #expect(what.hasPrefix("its frames are not the original's, each at the original's time"), "\(what)")
     }
 
     // MARK: 2 — display rotation
@@ -97,12 +102,12 @@ struct BalancedCopyProofPacketTests {
         #expect(matrix == "-180", "the copy carries a 180° display matrix: \(matrix)")
 
         let outcome = await Proof.measure(original: original, balanced: rotated)
-        #expect(!outcome.isProven, "a picture shown upside down was proven: \(outcome)")
+        #expect(!outcome.playsTheSame, "a picture shown upside down was the same: \(outcome)")
         guard case .notProven(.pictureConfigurationDiffers(let what)) = outcome else {
             Issue.record("expected the display configuration to be the reason, got \(outcome)")
             return
         }
-        #expect(what.hasPrefix("video stream 0: side data none → [{") && what.contains("displaymatrix"), "\(what)")
+        #expect(what.hasPrefix("picture stream 0: side data none → [{") && what.contains("displaymatrix"), "\(what)")
     }
 
     // MARK: 3 — packet boundaries
@@ -147,8 +152,8 @@ struct BalancedCopyProofPacketTests {
         #expect(await packetTable(of: recut, stream: "s:0") != sizes)
 
         let outcome = await Proof.measure(original: original, balanced: recut)
-        #expect(!outcome.isProven, "different captions at both cues were proven: \(outcome)")
-        guard case .notProven(.carriedStreamDiffers(let kind, let index, _, _)) = outcome else {
+        #expect(!outcome.playsTheSame, "different captions at both cues were the same: \(outcome)")
+        guard case .notProven(.carriedStreamDiffers(let kind, let index, _)) = outcome else {
             Issue.record("expected the caption packets to be the reason, got \(outcome)")
             return
         }

@@ -2,14 +2,16 @@
 // Codex review #298 (2026-11-16) BLOCKED BalancedCopyProof with eight
 // findings, five of them ways to a false PROVEN. Each test here is one of
 // those reproductions, built with real ffmpeg media (tones and test
-// patterns only), seen RED on the engine as reviewed and green after it.
+// patterns only), seen RED on the engine as reviewed and green after it —
+// and green again on the engine rebuilt 2026-11-17 to compare WHAT PLAYS,
+// where most of them are now refused by the decoded frames themselves.
 //
-// A false PROVEN can cost a family recording; "not proven" and "could not
-// check" only cost keeping the original. So every test below asserts a
-// refusal, and — where the reproduction depends on it — first asserts, by
-// another road, that the damaged copy really does agree with the original
-// in everything the OLD proof compared (so the test cannot pass for the
-// wrong reason).
+// A false "the same" can cost a family recording; "not the same" and
+// "could not check" only cost keeping the original. So every test below
+// asserts a refusal, and — where the reproduction depends on it — first
+// asserts, by another road, that the damaged copy really does agree with
+// the original in everything the FIRST proof compared (so the test cannot
+// pass for the wrong reason).
 
 import Foundation
 import os
@@ -107,10 +109,49 @@ enum BalancedCopyProofLab {
         return nil
     }
 
-    /// What moved, when the outcome is "not proven: timing".
-    static func timing(_ outcome: BalancedCopyProof.Outcome) -> String? {
-        if case .notProven(.timingDiffers(let what)) = outcome { return what }
+    /// Why, when the outcome is "not the same".
+    static func refusal(_ outcome: BalancedCopyProof.Outcome) -> BalancedCopyProof.NotProven? {
+        if case .notProven(let why) = outcome { return why }
         return nil
+    }
+
+    /// Every named difference as the log writes it.
+    static func differs(_ outcome: BalancedCopyProof.Outcome) -> [String] {
+        outcome.differences.map(BalancedCopyProof.sentence)
+    }
+
+    /// "pts,duration,size,SHA256:…[,flags]" of every packet of one stream —
+    /// what the packet pass compares (`flags` adds the discard flag).
+    static func packetRows(of path: String, stream: String, flags: Bool = false) async -> String {
+        await output(ToolLocator.ffprobePath,
+                     ["-v", "error", "-select_streams", stream, "-show_packets", "-show_data_hash", "sha256",
+                      "-show_entries", "packet=pts,duration,size,data_hash" + (flags ? ",flags" : ""), "-of", "csv=p=0", path])
+    }
+
+    /// Frames a player is given of one stream (decoded, edit list applied).
+    static func playedFrames(of path: String, stream: String = "v:0") async -> String {
+        await output(ToolLocator.ffprobePath,
+                     ["-v", "error", "-select_streams", stream, "-count_frames", "-show_entries", "stream=nb_read_frames",
+                      "-of", "default=nw=1:nk=1", path])
+    }
+
+    /// A copy of `path` named `name` with one 32-bit field rewritten in
+    /// place: the field `offset` bytes after the first occurrence of
+    /// `marker` (an atom or chunk name), read and written big- or
+    /// little-endian. Returns the new file's path and the old value.
+    static func patched(_ path: String, as name: String, after marker: String, offset: Int, littleEndian: Bool = false,
+                        _ change: (UInt32) -> UInt32) throws -> (path: String, was: UInt32) {
+        var bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let found = try #require(bytes.range(of: Data(marker.utf8)), "no \(marker) in \((path as NSString).lastPathComponent)")
+        let field = (found.upperBound + offset)..<(found.upperBound + offset + 4)
+        let raw = Array(bytes[field])
+        let old = (littleEndian ? raw.reversed() : raw).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        let new = change(old)
+        let out = [UInt8(new >> 24), UInt8(new >> 16 & 0xff), UInt8(new >> 8 & 0xff), UInt8(new & 0xff)]
+        bytes.replaceSubrange(field, with: littleEndian ? out.reversed() : out)
+        let url = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent(name)
+        try bytes.write(to: url)
+        return (url.path, old)
     }
 }
 
@@ -148,7 +189,7 @@ struct BalancedCopyProofHardeningTests {
         let balanced = try await Media.balance(original)
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
-        #expect(!outcome.isProven, "sound the copy does not carry was certified as preserved: \(outcome)")
+        #expect(!outcome.playsTheSame, "sound the copy does not carry was certified as preserved: \(outcome)")
         guard case .notProven(.discardedChannelNotSilent(let channel, let peak)) = outcome else {
             Issue.record("expected the discarded channel to be the reason, got \(outcome)")
             return
@@ -224,8 +265,9 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.channelHash(of: shifted, channel: 1) == live)
 
         let outcome = await Proof.measure(original: original, balanced: shifted)
-        #expect(!outcome.isProven, "A/V sync changed and the copy was still proven: \(outcome)")
-        #expect(Lab.timing(outcome) == "the sound starts at 0.000000 s, in the balanced copy at 0.500000 s", "\(outcome)")
+        #expect(!outcome.playsTheSame, "A/V sync changed and the copy was still the same: \(outcome)")
+        #expect(outcome == .notProven(.soundPlacementDiffers(
+            "run 1: 96000 samples from sample time 0, in the balanced copy 96000 from 24000")), "\(outcome)")
     }
 
     @Test("F2: an original whose sound really starts half a second late is still PROVEN against the job's own copy",
@@ -243,6 +285,7 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
         #expect(outcome.isProven, "the timing rule must pass what Balance Audio really writes: \(outcome)")
+        #expect(outcome.evidence?.soundStartSeconds == 0.5, "the evidence says where the sound starts")
     }
 
     @Test("F2: a QuickTime copy whose edit list plays only the first half of the picture — same bytes otherwise — is NOT PROVEN",
@@ -252,21 +295,14 @@ struct BalancedCopyProofHardeningTests {
         let (dir, original, balanced) = try await plainPair("f2elst")
         defer { try? fm.removeItem(at: dir) }
         // Halve the segment duration of the first track's (the picture's) edit list, in place.
-        var bytes = try Data(contentsOf: URL(fileURLWithPath: balanced))
-        let atom = try #require(bytes.range(of: Data("elst".utf8)), "the mov muxer writes an edit list")
-        let field = (atom.upperBound + 8)..<(atom.upperBound + 12)
-        #expect(bytes[atom.upperBound] == 0, "version 0: 32-bit fields")
-        let duration = bytes[field].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        let (trimmed, duration) = try Lab.patched(balanced, as: "trimmed_balanced.mov", after: "elst", offset: 8) { $0 / 2 }
         #expect(duration > 0)
-        let half = duration / 2
-        bytes.replaceSubrange(field, with: [UInt8(half >> 24), UInt8(half >> 16 & 0xff), UInt8(half >> 8 & 0xff), UInt8(half & 0xff)])
-        let trimmed = dir.appendingPathComponent("trimmed_balanced.mov").path
-        try bytes.write(to: URL(fileURLWithPath: trimmed))
 
         #expect(await Lab.entry("duration", of: balanced, stream: "v:0") == "2.000000")
         #expect(await Lab.entry("duration", of: trimmed, stream: "v:0") == "1.000000")
         let outcome = await Proof.measure(original: original, balanced: trimmed)
-        #expect(Lab.timing(outcome) != nil, "expected a timing refusal, got \(outcome)")
+        #expect(outcome == .notProven(.pictureDiffers(originalIndex: 0, "50 frames play in the original, 25 in the balanced copy")),
+                "\(outcome)")
     }
 
     @Test("F2: a copy whose picture was retimed to half speed — same packets — is NOT PROVEN", .timeLimit(.minutes(2)))
@@ -284,13 +320,17 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.packetHash(of: retimed, stream: "v:0") == picture)
 
         let outcome = await Proof.measure(original: original, balanced: retimed)
-        #expect(!outcome.isProven, "the picture plays at half speed and the copy was still proven: \(outcome)")
-        #expect(Lab.timing(outcome)?.hasPrefix("video stream 0: its packets are not presented") == true, "\(outcome)")
+        #expect(!outcome.playsTheSame, "the picture plays at half speed and the copy was still the same: \(outcome)")
+        guard case .notProven(.pictureDiffers(0, let what)) = outcome else {
+            Issue.record("expected the picture's times to be the reason, got \(outcome)")
+            return
+        }
+        #expect(what.hasPrefix("its frames are not the original's, each at the original's time"), "\(what)")
     }
 
     // MARK: F3 — partial reads
 
-    @Test("F3: Codex's scenario — a one-second copy, and an ffmpeg that would read only one second — is refused by the packet pass before that ffmpeg is ever run",
+    @Test("F3: Codex's scenario — a one-second copy, and an ffmpeg that reads only one second of the original and says so on stderr — is COULD NOT CHECK",
           .timeLimit(.minutes(2)))
     func zeroExitPartialReadNeverProvesAShortCopy() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -303,11 +343,14 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: half,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
-        #expect(!outcome.isProven, "a copy holding half the recording was proven: \(outcome)")
-        // ffprobe's packet pass already refuses it; the sound pass (the wrapper) never ran.
-        // What a partial SOUND pass does is the next two tests, which reach it.
-        #expect(Lab.timing(outcome) == "video stream 0 has 50 packets, the balanced copy 25", "\(outcome)")
-        #expect(!fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")))
+        #expect(!outcome.playsTheSame, "a copy holding half the recording was the same: \(outcome)")
+        // The halves agree frame for frame — the only thing between this pair and
+        // "the same" is that the read is not believed.
+        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")), "the decode pass was reached")
+        #expect(Lab.reason(outcome)?.contains("Error during demuxing: Input/output error") == true, "\(outcome)")
+        // With the real ffmpeg the same pair is refused for what it is: half the picture.
+        #expect(await Proof.measure(original: original, balanced: half)
+                == .notProven(.pictureDiffers(originalIndex: 0, "50 frames play in the original, 25 in the balanced copy")))
     }
 
     @Test("F3: a zero-exit read with ANYTHING on stderr is COULD NOT CHECK, even for a faithful pair",
@@ -321,7 +364,7 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
-        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")), "the sound pass was reached")
+        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")), "the decode pass was reached")
         let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
         #expect(why.contains("Error during demuxing: Input/output error"), "the reason quotes the line: \(why)")
     }
@@ -336,10 +379,10 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
-        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "silent")), "the sound pass was reached")
+        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "silent")), "the decode pass was reached")
         let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
-        #expect(why.hasPrefix("the original was not read to the end (stream 0: 2") && why.hasSuffix(" of 50 packets)"),
-                "about half of the picture's 50 packets: \(why)")
+        #expect(why.hasPrefix("the original was not read to the end (stream ") && why.hasSuffix(" packets)"),
+                "fewer packets than the packet pass listed: \(why)")
     }
 
     // MARK: F4 — identity
@@ -423,18 +466,19 @@ struct BalancedCopyProofHardeningTests {
                                           tools: Proof.Tools(ffmpeg: hasher, ffprobe: probe))
         #expect(outcome == .couldNotCheck("a file changed while it was being checked"))
 
-        // Codex #301-5: what the tools were actually given. Four ffprobe runs
-        // and two ffmpeg runs, each with ONE file argument: the canonical
-        // path under first/, never the given path through the link.
+        // Codex #301-5: what the tools were actually given. Six ffprobe runs
+        // (per file: its header, what its tracks store, its packets) and two
+        // ffmpeg runs, each with ONE file argument: the canonical path under
+        // first/, never the given path through the link.
         let seen = try String(contentsOfFile: dir.path + "/tools-seen/arguments", encoding: .utf8)
             .split(separator: "\n").map(String.init)
         let canonicalOriginal = SourceTree.canonicalPath(URL(fileURLWithPath: original))
         let canonicalBalanced = SourceTree.canonicalPath(URL(fileURLWithPath: balanced))
         #expect(canonicalOriginal.contains("/first/") && !canonicalOriginal.contains("/via/"))
         let files = seen.filter { $0.hasSuffix(".mov") }
-        #expect(files == [canonicalOriginal, canonicalBalanced, canonicalOriginal, canonicalBalanced,
-                          canonicalOriginal, canonicalBalanced],
-                "two header reads, two packet passes, two sound passes: \(files)")
+        #expect(files == [canonicalOriginal, canonicalOriginal, canonicalBalanced, canonicalBalanced,
+                          canonicalOriginal, canonicalBalanced, canonicalOriginal, canonicalBalanced],
+                "four header reads, two packet passes, two decode passes: \(files)")
         #expect(!seen.contains { $0.contains("/via/") || $0.contains("/second/") }, "a tool was handed a path through the link")
     }
 
@@ -454,7 +498,7 @@ struct BalancedCopyProofHardeningTests {
                     "-x264-params", "repeat-headers=0", "-flags", "+global_header"])
         let balanced = try await Media.balance(original)
         #expect(await Proof.measure(original: original, balanced: balanced).isProven,
-                "the job's own H.264 + PCM copy is a good pair")
+                "the job's own H.264 + PCM copy is the same")
         let cropped = try Media.derive("cropped_balanced", from: balanced,
                                        ["-map", "0", "-c", "copy", "-bsf:v", "h264_metadata=crop_right=16"])
 
@@ -466,12 +510,8 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.entry("width", of: cropped, stream: "v:0") == "304")
 
         let outcome = await Proof.measure(original: original, balanced: cropped)
-        #expect(!outcome.isProven, "a picture that decodes 16 pixels narrower was proven: \(outcome)")
-        guard case .notProven(.pictureConfigurationDiffers(let what)) = outcome else {
-            Issue.record("expected the decoder configuration to be the reason, got \(outcome)")
-            return
-        }
-        #expect(what.hasPrefix("video stream 0: codec extradata SHA256:"), "\(what)")
+        #expect(!outcome.playsTheSame, "a picture that decodes 16 pixels narrower was the same: \(outcome)")
+        #expect(outcome == .notProven(.pictureConfigurationDiffers("picture stream 0: width 320 → 304")), "\(outcome)")
     }
 
     // MARK: F6 — channel layout
@@ -493,7 +533,7 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.channelHash(of: wrong, channel: 1) == live)
 
         let outcome = await Proof.measure(original: original, balanced: wrong)
-        #expect(!outcome.isProven, "centre + LFE was certified as both sides: \(outcome)")
+        #expect(!outcome.playsTheSame, "centre + LFE was certified as both sides: \(outcome)")
         #expect(outcome == .notProven(.channelLayoutNotStereo(file: "the balanced copy", layout: "2 channels (FC+LFE)")))
     }
 
@@ -509,7 +549,7 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.entry("channel_layout", of: wrong, stream: "a:0").contains("FC+LFE"))
 
         let outcome = await Proof.measure(original: original, balanced: wrong)
-        #expect(!outcome.isProven, "centre + LFE was certified as both sides: \(outcome)")
+        #expect(!outcome.playsTheSame, "centre + LFE was certified as both sides: \(outcome)")
         #expect(outcome == .notProven(.channelLayoutNotStereo(file: "the balanced copy", layout: "2 channels (FC+LFE)")))
     }
 

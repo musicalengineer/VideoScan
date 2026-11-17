@@ -9431,9 +9431,9 @@
         "BalancedCopyProofCoverageTests"
       ],
       "tests": [
+        "attachmentIsCouldNotCheck",
         "bigEndianOriginalLittleEndianCopy",
-        "droppedAttachmentIsRefused",
-        "droppedSubtitleIsRefused",
+        "droppedSubtitleIsNamed",
         "longerCopyIsRefused",
         "monoAndSurroundOriginals",
         "reorderedPacketsAreRefused",
@@ -9450,28 +9450,36 @@
         "BalancedCopyProofDecisionTests"
       ],
       "tests": [
+        "chapterMarks",
+        "containerEncodingAndConfigurationDifferences",
         "couldNotCheckTable",
+        "decodeArgsVector",
+        "differencesAreOrdered",
         "engineSourceIsReadOnly",
         "everyReasonHasASentence",
-        "hashArgsVector",
         "hashCodecTable",
+        "headerVerdictNeedsNoReads",
         "hundredThousandDecisions",
         "layoutParse",
-        "layoutVerdictNeedsNoHashes",
         "liveChannelTable",
-        "logLineIsAlwaysOneLine",
-        "logLineNamesFilesVerdictAndHashes",
+        "logLinesAreAlwaysOneLine",
+        "logLinesNameFilesVerdictEvidenceAndDifferences",
+        "metadataDifferences",
+        "namedDifferencesAreNeverProven",
         "notProvenBalancedSoundShape",
+        "notProvenCarriedTrackDiffers",
         "notProvenLossyOriginal",
         "notProvenOriginalShape",
         "notProvenPictureDiffers",
+        "notProvenPictureStreamSet",
         "notProvenSoundDiffers",
-        "notProvenStreamSet",
-        "onePoisonedFactNeverProves",
+        "playbackDifferences",
+        "poisonedFactsNeverProve",
         "provenForRightOnlyAndMono",
         "provenWhenEverythingHolds",
-        "streamHashesParse",
-        "timecodeTrackRule"
+        "spareSoundTrackRule",
+        "trackDifferences",
+        "trackFlags"
       ]
     },
     {
@@ -9512,15 +9520,15 @@
         "cancelledCheckIsCouldNotCheck",
         "differingChannelsAreRefused",
         "evidenceIsTrueAndTheProofIsReadOnly",
-        "extraOrMissingStreamIsRefused",
+        "extraOrMissingStream",
         "fileChangedDuringTheCheckIsCouldNotCheck",
-        "losslessWrappersAreProven",
+        "losslessWrappersPlayTheSame",
         "lossyOriginalIsNotProven",
         "reencodedPictureIsRefused",
         "rightOnlyIsProvenAgainstTheRightChannel",
         "swappedFilesAreRefused",
         "truncatedCopyIsRefused",
-        "twoSoundTracksAreNotProven",
+        "twoSoundTracksOutsideDVAreNotProven",
         "unmeasurableIsCouldNotCheck"
       ]
     },
@@ -9539,27 +9547,53 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPresentationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPresentationTests"
+      ],
+      "tests": [
+        "aCopyThatStartsLateAsAWholeIsRefused",
+        "aFrameThatNeedsConvertingIsCouldNotCheck",
+        "aPassThatCannotBeBelievedIsCouldNotCheck",
+        "aTrackSwitchedOffIsRefused",
+        "changedPaletteIsRefused",
+        "containerAndMetadataAreNamed",
+        "decoderConfigurationIsNamed",
+        "editListHidingPictureWithIdenticalPacketsIsRefused",
+        "headerDurationThatLiesIsCouldNotCheck",
+        "interiorSoundRetimeIsRefused",
+        "losslessReencodeIsNamed",
+        "storedButNotPlayedMediaIsNamed",
+        "twoTrackDVWithASilentSpareTrack",
+        "twoTrackDVWithSoundOnTheSpareTrackIsRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BalancedCopyProofRuleTests.swift",
       "stage": "regression",
       "suites": [
         "BalancedCopyProofRuleTests"
       ],
       "tests": [
-        "carriedStreamTable",
         "channelLayoutTable",
-        "configurationTable",
         "discardedChannelTable",
+        "displayTable",
+        "frameLedgerChannelFold",
+        "frameLedgerFaults",
+        "frameLedgerPictureFold",
+        "frameLedgerTimeline",
+        "ledgersAtScale",
         "levelText",
+        "logAtScale",
         "logRecordParse",
-        "packetLedgerAtScale",
         "packetLedgerFaults",
         "packetLedgerFold",
         "readReportFromACleanLog",
         "readReportRefusals",
         "readVerdictTable",
-        "rulesAtScale",
-        "singleLineAndQuoted",
-        "soundTimingTable"
+        "singleLineAndQuoted"
       ]
     },
     {
@@ -40411,7 +40445,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 698,
+      "expected_floor": 722,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40626,7 +40660,8 @@
         "VideoScanTests/BalancedCopyProofHardeningTests",
         "VideoScanTests/BalancedCopyProofRuleTests",
         "VideoScanTests/BalancedCopyProofCoverageTests",
-        "VideoScanTests/BalancedCopyProofPacketTests"
+        "VideoScanTests/BalancedCopyProofPacketTests",
+        "VideoScanTests/BalancedCopyProofPresentationTests"
       ]
     },
     {

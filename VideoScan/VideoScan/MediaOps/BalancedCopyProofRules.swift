@@ -1,15 +1,16 @@
 // BalancedCopyProofRules.swift
 // The PURE half of BalancedCopyProof: `decide` over measured `Facts`, the
-// rules it is made of, and the one-line log record. No file, no subprocess.
-// What PROVEN means, rule by rule, is the header of BalancedCopyProof.swift;
-// the facts are gathered in BalancedCopyProofMeasure.swift.
+// rules it is made of, the named differences, and the START / OUTCOME log
+// lines. No file, no subprocess. What each answer means is the header of
+// BalancedCopyProof.swift; the facts are gathered in
+// BalancedCopyProofMeasure.swift.
 
 import Foundation
 import VideoScanCore
 
 extension BalancedCopyProof {
 
-    // MARK: - Pure rules: small helpers
+    // MARK: - Small helpers
 
     /// SHA-256 of zero bytes: what a stream that delivered nothing hashes to.
     static let emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -23,9 +24,12 @@ extension BalancedCopyProof {
         return String(format: "%.1f dBFS", dBFS).replacingOccurrences(of: "-", with: "−")
     }
 
-    /// "1.968633 s"; "no stated time" for nil.
-    static func time(_ seconds: Double?) -> String {
-        seconds.map { String(format: "%.6f s", $0) } ?? "no stated time"
+    /// A length in plain words: "1.969 s" under a minute, then "8:34", "1:02:03".
+    static func length(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 60 else { return String(format: "%.3f s", seconds) }
+        let whole = Int(seconds.rounded())
+        let (h, m, s) = (whole / 3600, whole % 3600 / 60, whole % 60)
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
     static func side(_ channel: Int) -> String { channel == 0 ? "left" : "right" }
@@ -45,8 +49,7 @@ extension BalancedCopyProof {
     /// a bit ("s16"/"s16p" → pcm_s16le). nil = a format this proof does not
     /// know how to hash exactly.
     static func hashCodec(forSampleFormat format: String) -> String? {
-        let packed = format.hasSuffix("p") ? String(format.dropLast()) : format
-        switch packed {
+        switch packedSampleFormat(format) {
         case "u8": return "pcm_u8"
         case "s16": return "pcm_s16le"
         case "s32": return "pcm_s32le"
@@ -57,68 +60,91 @@ extension BalancedCopyProof {
         }
     }
 
-    /// A digest that can be compared: present, and not the hash of nothing
-    /// (a stream that delivered no bytes proves nothing about itself).
+    /// "s16p" → "s16": the interleaved form of a sample format.
+    static func packedSampleFormat(_ format: String) -> String {
+        format.hasSuffix("p") ? String(format.dropLast()) : format
+    }
+
+    /// A digest that can be compared: present, and not the hash of nothing.
     static func comparable(_ digest: String?) -> String? {
         guard let digest, digest.count == 64, digest != emptySHA256 else { return nil }
         return digest
     }
 
-    /// Two statements of one time disagree: stated on one side only, or
-    /// further apart than `tolerance`. Unstated on BOTH sides agrees (the
-    /// container has no such field — WAV has no start time).
-    static func moved(_ original: Double?, _ copy: Double?, tolerance: Double) -> Bool {
-        switch (original, copy) {
-        case (nil, nil): return false
-        case (let a?, let b?): return abs(a - b) > tolerance
-        default: return true
-        }
+    /// The original's sound stream the balance job reads.
+    static func keptSound(_ facts: Facts) -> SoundStream? {
+        guard let index = facts.keptSoundIndex else { return facts.original.sound.first }
+        return facts.original.sound.first { $0.index == index }
     }
 
-    // MARK: - Pure rules: streams
+    // MARK: - Streams
 
-    /// Which copy stream answers for which original stream.
+    /// Which copy stream answers for which original stream. Positions are
+    /// into `original.carried` / `balanced.carried`.
     struct Pairing: Sendable, Equatable {
-        /// Positions in `original.carried` / `balanced.carried`.
         struct Pair: Sendable, Equatable {
             var original: Int
             var balanced: Int
         }
-        var pairs: [Pair]
-        var gainedTimecodeTrack: Bool
+        /// Picture streams, in order.
+        var pictures: [Pair]
+        /// Timecode / text / data tracks both files have.
+        var others: [Pair]
+        /// Such tracks only one file has.
+        var onlyInOriginal: [Int]
+        var onlyInBalanced: [Int]
     }
 
-    /// Pair the non-audio streams, in order. The copy may hold exactly one
-    /// more than the original — a `tmcd` timecode track — and only when the
-    /// original has none. Kind and codec must agree pairwise (the codec TAG
-    /// may not: raw DV's is empty, QuickTime's is "dvc ").
+    /// Pair the non-audio streams. Pictures pair in order and their number
+    /// must agree — a picture more or less is not the same content. Every
+    /// other track pairs with the first unused track of the same kind,
+    /// codec and tag; what is left over on either side is a named difference.
     static func pairing(original: [CarriedStream], balanced: [CarriedStream]) -> Result<Pairing, NotProven> {
-        var copyPositions = Array(balanced.indices)
-        var gained = false
-        if balanced.count == original.count + 1,
-           !original.contains(where: \.isTimecodeTrack),
-           let extra = balanced.lastIndex(where: \.isTimecodeTrack) {
-            copyPositions.remove(at: extra)
-            gained = true
-        }
-        guard copyPositions.count == original.count else {
+        let ours = original.indices.filter { original[$0].isPicture }
+        let theirs = balanced.indices.filter { balanced[$0].isPicture }
+        guard ours.count == theirs.count else {
             return .failure(.streamsDiffer(
-                "the original has \(original.count) picture/data streams, the balanced copy \(balanced.count)"))
+                "the original has \(ours.count) picture streams, the balanced copy \(theirs.count)"))
         }
-        for (o, b) in zip(original.indices, copyPositions)
-        where original[o].kind != balanced[b].kind || original[o].codec != balanced[b].codec {
-            return .failure(.streamsDiffer(
-                "stream \(original[o].index) is \(describe(original[o])), the balanced copy has \(describe(balanced[b]))"))
+        var out = Pairing(pictures: zip(ours, theirs).map { Pairing.Pair(original: $0, balanced: $1) },
+                          others: [], onlyInOriginal: [], onlyInBalanced: [])
+        var unused = balanced.indices.filter { !balanced[$0].isPicture }
+        for o in original.indices where !original[o].isPicture {
+            let like = unused.firstIndex {
+                balanced[$0].kind == original[o].kind && balanced[$0].codec == original[o].codec
+                    && balanced[$0].tag == original[o].tag
+            }
+            if let like {
+                out.others.append(Pairing.Pair(original: o, balanced: unused.remove(at: like)))
+            } else {
+                out.onlyInOriginal.append(o)
+            }
         }
-        return .success(Pairing(pairs: zip(original.indices, copyPositions).map { Pairing.Pair(original: $0, balanced: $1) },
-                                gainedTimecodeTrack: gained))
+        out.onlyInBalanced = unused
+        return .success(out)
     }
 
-    private static func describe(_ s: CarriedStream) -> String {
-        s.codec.isEmpty ? "\(s.kind) (\(s.tag))" : "\(s.kind) (\(s.codec))"
+    /// "a timecode track", "a text track (subrip)", "a data track (gpmd)".
+    static func describe(_ s: CarriedStream) -> String {
+        if s.isTimecodeTrack { return "a timecode track" }
+        let name = s.codec.isEmpty ? s.tag : s.codec
+        let suffix = name.isEmpty ? "" : " (\(name))"
+        switch s.kind {
+        case "subtitle": return "a text track\(suffix)"
+        case "data": return "a data track\(suffix)"
+        case "attachment": return "an attachment\(suffix)"
+        default: return "a \(s.kind.isEmpty ? "nameless" : s.kind) track\(suffix)"
+        }
     }
 
-    // MARK: - Pure rules: sound format and layout
+    /// A decoded track that plays by default in the original and not in
+    /// the copy: QuickTime's "track enabled" switch is this flag, and a
+    /// player skips a track that is switched off.
+    static func switchedOff(_ original: Set<String>, _ copy: Set<String>) -> Bool {
+        original.contains("default") && !copy.contains("default")
+    }
+
+    // MARK: - Sound format and layout
 
     /// A layout this proof takes for plain left + right ("mono" for one
     /// channel): stated so, or unstated in a container measured to leave
@@ -129,8 +155,9 @@ extension BalancedCopyProof {
         return unset && !file.containerWords.isDisjoint(with: containersLeavingLayoutUnset)
     }
 
-    /// The original's side of the sound rules: one-sided, one track, PCM,
-    /// one or two channels laid out plainly.
+    /// The original's side of the sound rules: one-sided, with the track the
+    /// job reads: PCM, one or two channels laid out plainly. Further sound
+    /// tracks are the DV rule's (`spareHeaderVerdict`, `spareCheck`).
     static func originalSoundVerdict(_ facts: Facts) -> Outcome? {
         guard facts.originalMeasuredInFull else {
             return .couldNotCheck("the original's sound was only partly measured")
@@ -138,9 +165,7 @@ extension BalancedCopyProof {
         guard liveChannel(for: facts.originalClass) != nil else {
             return .notProven(.originalNotOneSided(facts.originalClass))
         }
-        guard facts.original.sound.count == 1, let sound = facts.original.sound.first else {
-            return .notProven(.originalSoundTracks(facts.original.sound.count))
-        }
+        guard let sound = keptSound(facts) else { return .notProven(.originalSoundTracks(0)) }
         guard sound.codec.lowercased().hasPrefix("pcm_") else {
             return .notProven(.soundReencoded(codec: sound.codec))
         }
@@ -160,7 +185,7 @@ extension BalancedCopyProof {
     /// The copy's side: one track, two channels, the original's format,
     /// laid out as stereo. Call after `originalSoundVerdict` returned nil.
     static func balancedSoundVerdict(_ facts: Facts) -> Outcome? {
-        guard let original = facts.original.sound.first else { return .notProven(.originalSoundTracks(0)) }
+        guard let original = keptSound(facts) else { return .notProven(.originalSoundTracks(0)) }
         guard facts.balanced.sound.count == 1, let copy = facts.balanced.sound.first else {
             return .notProven(.balancedSoundTracks(facts.balanced.sound.count))
         }
@@ -179,163 +204,207 @@ extension BalancedCopyProof {
         guard layoutIsPlain(copy, in: facts.balanced) else {
             return .notProven(.channelLayoutNotStereo(file: "the balanced copy", layout: copy.channelLayout))
         }
-        return nil
-    }
-
-    // MARK: - Pure rules: decoder configuration and timing
-
-    /// Every paired stream — and the sound — must be configured for its
-    /// decoder and its display as the original is (header, PROVEN 2).
-    static func configurationVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
-        if let original = facts.original.sound.first, let copy = facts.balanced.sound.first,
-           original.sideData != copy.sideData {
+        guard original.sideData == copy.sideData else {
             return .notProven(.pictureConfigurationDiffers(
                 "audio stream \(original.index): side data \(original.sideData.isEmpty ? "none" : original.sideData.prefix(96))"
                 + " → \(copy.sideData.isEmpty ? "none" : copy.sideData.prefix(96))"))
         }
-        for pair in pairing.pairs {
+        guard !switchedOff(original.flags, copy.flags) else {
+            return .notProven(.pictureConfigurationDiffers(
+                "audio stream \(original.index): the balanced copy's track is not marked to play by default"))
+        }
+        return nil
+    }
+
+    /// The DV rule, as far as the headers decide it: a file with more than
+    /// one sound track must have a picture, and every picture must be DV on
+    /// both sides (DECISIONS 2026-11-17).
+    static func spareHeaderVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
+        guard facts.original.sound.count > 1 else { return nil }
+        let codecs = pairing.pictures.flatMap {
+            [facts.original.carried[$0.original].codec, facts.balanced.carried[$0.balanced].codec]
+        }
+        guard !codecs.isEmpty, codecs.allSatisfy({ $0 == "dvvideo" }) else {
+            let found = codecs.isEmpty ? "it has no picture" : "its picture is \(Set(codecs).sorted().joined(separator: "/"))"
+            return .notProven(.spareSoundTrack(
+                "\(facts.original.sound.count) sound tracks; a spare one may be left behind only in a DV recording, and \(found)"))
+        }
+        return nil
+    }
+
+    /// Every paired picture must be DISPLAYED as the original is.
+    static func displayVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
+        for pair in pairing.pictures {
             let original = facts.original.carried[pair.original]
             let copy = facts.balanced.carried[pair.balanced]
-            if original.kind == "video", !original.configuration.describesAPicture {
-                return .couldNotCheck("video stream \(original.index)'s size and pixel format could not be read")
+            guard original.configuration.describesAPicture else {
+                return .couldNotCheck("picture stream \(original.index)'s size and pixel format could not be read")
             }
-            if let what = original.configuration.firstDifference(from: copy.configuration) {
-                return .notProven(.pictureConfigurationDiffers("\(original.kind) stream \(original.index): \(what)"))
+            if let what = original.configuration.displayDifference(from: copy.configuration) {
+                return .notProven(.pictureConfigurationDiffers("picture stream \(original.index): \(what)"))
+            }
+            if switchedOff(original.flags, copy.flags) {
+                return .notProven(.pictureConfigurationDiffers(
+                    "picture stream \(original.index): the balanced copy's track is not marked to play by default"))
             }
         }
         return nil
     }
 
-    /// The sound's stated start, duration and the file's whole duration,
-    /// each within the slack (header, PROVEN 3). The sound's distance from
-    /// the picture needs no rule of its own: the picture's packet times are
-    /// held exactly, so the sound's start is that distance. (The sound's
-    /// PACKET count is not compared: PCM packets are the muxer's chunking.)
-    static func soundTimingVerdict(_ facts: Facts) -> Outcome? {
-        guard let original = facts.original.sound.first, let copy = facts.balanced.sound.first else { return nil }
-        let slack = max(original.timingSlackSeconds, copy.timingSlackSeconds)
-        if moved(original.timing.startSeconds, copy.timing.startSeconds, tolerance: slack) {
-            return .notProven(.timingDiffers("the sound starts at \(time(original.timing.startSeconds)), "
-                + "in the balanced copy at \(time(copy.timing.startSeconds))"))
-        }
-        if moved(original.timing.durationSeconds, copy.timing.durationSeconds, tolerance: slack) {
-            return .notProven(.timingDiffers("the sound lasts \(time(original.timing.durationSeconds)), "
-                + "in the balanced copy \(time(copy.timing.durationSeconds))"))
-        }
-        if moved(facts.original.durationSeconds, facts.balanced.durationSeconds, tolerance: slack) {
-            return .notProven(.timingDiffers(
-                "the file lasts \(time(facts.original.durationSeconds)), "
-                + "the balanced copy \(time(facts.balanced.durationSeconds))"))
-        }
-        return nil
-    }
-
-    /// Everything that can be decided BEFORE the sound is decoded: format,
-    /// streams, configuration, every carried packet, the sound's stated
-    /// times. nil = go on to the sound pass. `measure` asks this first so a
-    /// lossy, mis-shaped, re-timed or re-configured pair never costs it.
-    static func layoutVerdict(_ facts: Facts) -> Outcome? {
-        if let verdict = headerVerdict(facts) { return verdict }
-        guard case .success(let pairing) = pairing(original: facts.original.carried,
-                                                   balanced: facts.balanced.carried) else { return nil }
-        if case .refused(let outcome) = carriedEvidence(facts, pairing: pairing) { return outcome }
-        return soundTimingVerdict(facts)
-    }
-
-    /// What the two HEADERS alone decide — sound format and layout, the
-    /// stream set, decoder and display configuration — before a single
-    /// packet is read. `measure` asks this first, so a lossy or mis-shaped
-    /// pair costs no whole-file read at all.
+    /// What the two HEADERS alone decide, before a single packet is read:
+    /// sound format and layout, the picture streams, how they are displayed.
+    /// `measure` asks this first, so a lossy or mis-shaped pair costs no
+    /// whole-file read.
     static func headerVerdict(_ facts: Facts) -> Outcome? {
         if let verdict = originalSoundVerdict(facts) ?? balancedSoundVerdict(facts) { return verdict }
         switch pairing(original: facts.original.carried, balanced: facts.balanced.carried) {
         case .failure(let why): return .notProven(why)
-        case .success(let pairing): return configurationVerdict(facts, pairing: pairing)
+        case .success(let pairing):
+            return spareHeaderVerdict(facts, pairing: pairing) ?? displayVerdict(facts, pairing: pairing)
         }
     }
 
-    // MARK: - Pure rules: the reads, the hashes, the discarded channel
+    // MARK: - The packet pass (second evidence)
 
-    /// One sound pass must have read, of EVERY stream, the packets the
-    /// packet pass listed (header, PROVEN 7).
-    static func readVerdict(_ file: FileLayout, read: ReadReport?, called name: String) -> Outcome? {
-        guard let read else { return .couldNotCheck("\(name)'s hash pass gave no account of what it read") }
-        let counted = file.carried.map { ($0.index, $0.packets) } + file.sound.map { ($0.index, $0.timing.packets) }
-        for (index, expected) in counted {
-            guard let expected, let got = read.streams[index]?.packets else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): packets not counted)")
+    /// A stream's packets, when the packet pass read them: count and both digests.
+    private static func packets(of s: CarriedStream) -> (count: Int, bytes: String, times: String)? {
+        guard let count = s.packets, count > 0, let bytes = comparable(s.packetSHA256),
+              let times = comparable(s.timingSHA256) else { return nil }
+        return (count, bytes, times)
+    }
+
+    /// What the packet pass decides: every carried stream was counted, and a
+    /// timecode / text / data track both files have is the same packet for
+    /// packet (it is not decoded, so its packets are all the proof there is).
+    /// A PICTURE whose packets differ is not refused here: its decoded
+    /// frames decide, and the difference is named.
+    static func packetVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
+        for pair in pairing.pictures + pairing.others {
+            let original = facts.original.carried[pair.original]
+            let copy = facts.balanced.carried[pair.balanced]
+            let name = "\(original.kind) stream \(original.index)"
+            guard let a = packets(of: original), let b = packets(of: copy) else {
+                return .couldNotCheck("\(name) gave no packets to compare")
             }
-            guard got == expected else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): \(got) of \(expected) packets)")
+            guard !original.isPicture else { continue }
+            guard a.count == b.count else {
+                return .notProven(.carriedStreamDiffers(kind: original.kind, originalIndex: original.index,
+                                                        "\(a.count) packets, the balanced copy \(b.count)"))
             }
-        }
-        guard let sound = file.sound.first, let decoded = read.streams[sound.index] else { return nil }
-        guard (decoded.decodeErrors ?? 0) == 0, let samples = decoded.samples, samples > 0 else {
-            return .couldNotCheck("\(name)'s sound did not decode cleanly")
-        }
-        if let stated = sound.timing.durationSeconds,
-           abs(Double(samples) / Double(sound.sampleRateHz) - stated) > sound.timingSlackSeconds {
-            return .couldNotCheck("\(name) was not read to the end (\(samples) sound samples decoded, "
-                + "\(time(stated)) stated)")
+            guard a.bytes == b.bytes else {
+                return .notProven(.carriedStreamDiffers(kind: original.kind, originalIndex: original.index,
+                                                        "sha256 \(short(a.bytes)) ≠ \(short(b.bytes))"))
+            }
+            guard a.times == b.times else {
+                return .notProven(.carriedStreamDiffers(kind: original.kind, originalIndex: original.index,
+                                                        "its packets are not at the original's times"))
+            }
         }
         return nil
     }
 
-    /// `carriedEvidence`'s answer: the streams held, or the outcome that ends
-    /// the decision.
-    enum CarriedCheck: Sendable, Equatable {
-        case held([Evidence.Stream])
+    // MARK: - The decode pass: was the read whole
+
+    /// One decode pass must have read, of every stream it decoded, the
+    /// packets the packet pass listed, with no decode error; ffmpeg must
+    /// have muxed exactly the frames folded here; and each decoded stream's
+    /// length must be the length its header states, where it states one
+    /// (header, WHAT PLAYS 5). A short read is never agreement.
+    static func readVerdict(_ file: FileLayout, read: ReadReport?, kept: SoundStream?, called name: String) -> Outcome? {
+        guard let read else { return .couldNotCheck("\(name)'s decode pass gave no account of what it read") }
+        let decoded = file.pictures.map { ($0.index, $0.packets) } + file.sound.map { ($0.index, $0.packets) }
+        for (index, expected) in decoded {
+            guard let expected, let got = read.streams[index] else {
+                return .couldNotCheck("\(name) was not read to the end (stream \(index): packets not counted)")
+            }
+            guard got.packets == expected else {
+                return .couldNotCheck("\(name) was not read to the end (stream \(index): \(got.packets) of \(expected) packets)")
+            }
+            guard got.decodeErrors == 0 else {
+                return .couldNotCheck("\(name) did not decode cleanly (stream \(index))")
+            }
+        }
+        guard !read.folded.isEmpty, read.muxed == read.folded else {
+            return .couldNotCheck("\(name)'s decoded frames did not all arrive (ffmpeg wrote \(read.muxed.values.reduce(0, +)), "
+                + "\(read.folded.values.reduce(0, +)) were read)")
+        }
+        for picture in file.pictures {
+            guard let played = read.pictures[picture.index], played.frames > 0 else {
+                return .couldNotCheck("\(name)'s picture stream \(picture.index) gave no frames")
+            }
+            if let stated = picture.statedSeconds,
+               abs(played.endSeconds - played.firstSeconds - stated) > picture.timingSlackSeconds {
+                return .couldNotCheck("\(name) was not read to the end (picture stream \(picture.index): "
+                    + "\(length(played.endSeconds - played.firstSeconds)) decoded, \(length(stated)) stated)")
+            }
+        }
+        guard let kept, let samples = read.soundSamples, samples > 0 else {
+            return .couldNotCheck("\(name)'s sound gave no samples")
+        }
+        if let stated = kept.statedSeconds,
+           abs(Double(samples) / Double(kept.sampleRateHz) - stated) > kept.statedLengthSlackSeconds {
+            return .couldNotCheck("\(name) was not read to the end (\(samples) sound samples decoded, "
+                + "\(length(stated)) stated)")
+        }
+        return nil
+    }
+
+    // MARK: - The decode pass: what plays
+
+    /// (≈ a C++ `std::variant<T, Outcome>`: the thing held, or the outcome
+    /// that ends the decision.)
+    enum Check<Held: Sendable & Equatable>: Sendable, Equatable {
+        case held(Held)
         case refused(Outcome)
     }
 
-    /// Hold each paired stream against the original's, packet by packet
-    /// (header, PROVEN 1): the same count, the same sequence of (size,
-    /// payload SHA-256), the same sequence of (presentation time, duration).
-    static func carriedEvidence(_ facts: Facts, pairing: Pairing) -> CarriedCheck {
+    /// Every picture stream plays the original's frames at the original's
+    /// times (header, WHAT PLAYS 1). Also notes whether its stored packets
+    /// are identical — the second evidence.
+    static func pictureCheck(_ facts: Facts, pairing: Pairing) -> Check<[Evidence.Stream]> {
         var out: [Evidence.Stream] = []
-        for pair in pairing.pairs {
+        for pair in pairing.pictures {
             let original = facts.original.carried[pair.original]
             let copy = facts.balanced.carried[pair.balanced]
-            let name = "\(original.kind) stream \(original.index)"
-            guard let packets = original.packets, let copyPackets = copy.packets else {
-                return .refused(.couldNotCheck("\(name)'s packets could not be counted"))
+            guard let a = facts.originalRead?.pictures[original.index], let b = facts.balancedRead?.pictures[copy.index],
+                  a.frames > 0, let ours = comparable(a.sha256), let theirs = comparable(b.sha256),
+                  let stored = packets(of: original), let copied = packets(of: copy) else {
+                return .refused(.couldNotCheck("picture stream \(original.index) gave no frames to compare"))
             }
-            guard packets == copyPackets else {
-                return .refused(.notProven(.timingDiffers("\(name) has \(packets) packets, the balanced copy \(copyPackets)")))
+            guard a.frames == b.frames else {
+                return .refused(.notProven(.pictureDiffers(
+                    originalIndex: original.index, "\(a.frames) frames play in the original, \(b.frames) in the balanced copy")))
             }
-            guard packets > 0, let a = comparable(original.packetSHA256), let b = comparable(copy.packetSHA256),
-                  let times = comparable(original.timingSHA256), let copyTimes = comparable(copy.timingSHA256) else {
-                return .refused(.couldNotCheck("\(name) gave no packets to compare"))
+            guard ours == theirs else {
+                return .refused(.notProven(.pictureDiffers(
+                    originalIndex: original.index,
+                    "its frames are not the original's, each at the original's time: sha256 \(short(ours)) ≠ \(short(theirs))")))
             }
-            guard a == b else {
-                return .refused(.notProven(.carriedStreamDiffers(
-                    kind: original.kind, originalIndex: original.index, original: a, balanced: b)))
+            out.append(Evidence.Stream(
+                kind: original.kind, codec: original.codec, originalIndex: original.index, balancedIndex: copy.index,
+                frames: a.frames, framesSHA256: ours,
+                packetIdentical: stored.count == copied.count && stored.bytes == copied.bytes && stored.times == copied.times,
+                packetSHA256: stored.bytes, packets: stored.count))
+        }
+        for pair in pairing.others {
+            let original = facts.original.carried[pair.original]
+            guard let stored = packets(of: original) else {
+                return .refused(.couldNotCheck("\(original.kind) stream \(original.index) gave no packets to compare"))
             }
-            guard times == copyTimes else {
-                return .refused(.notProven(.timingDiffers(
-                    "\(name): its packets are not presented at the original's times, each for the original's duration")))
-            }
-            out.append(Evidence.Stream(kind: original.kind, codec: original.codec, originalIndex: original.index,
-                                       balancedIndex: copy.index, packetSHA256: a, timingSHA256: times,
-                                       packets: packets))
+            out.append(Evidence.Stream(
+                kind: original.kind, codec: original.codec, originalIndex: original.index,
+                balancedIndex: facts.balanced.carried[pair.balanced].index, frames: nil, framesSHA256: nil,
+                packetIdentical: true, packetSHA256: stored.bytes, packets: stored.count))
         }
         return .held(out)
     }
 
-    /// `discardedCheck`'s answer.
-    enum DiscardedCheck: Sendable, Equatable {
-        /// nil = a one-channel original: nothing is left behind.
-        case held(Evidence.Discarded?)
-        case refused(Outcome)
-    }
-
-    /// The channel the copy leaves behind must have held nothing (header,
-    /// PROVEN 6): its measured peak at or under the ceiling.
-    static func discardedCheck(_ facts: Facts, liveChannel: Int) -> DiscardedCheck {
-        guard let sound = facts.original.sound.first else { return .refused(.notProven(.originalSoundTracks(0))) }
-        if sound.channels == 1 { return .held(nil) }
+    /// The channel the copy leaves behind must have held nothing: its
+    /// measured peak at or under the ceiling. nil = a one-channel original.
+    static func discardedCheck(_ facts: Facts, kept: SoundStream, liveChannel: Int) -> Check<Evidence.Discarded?> {
+        if kept.channels == 1 { return .held(nil) }
         let other = 1 - liveChannel
-        guard sound.channels == 2, let peaks = facts.originalRead?.channelPeaksDBFS, peaks.count == 2,
+        guard kept.channels == 2, let peaks = facts.originalRead?.peaksDBFS[kept.index], peaks.count == 2,
               !peaks[other].isNaN else {
             return .refused(.couldNotCheck("the original's other channel was not measured"))
         }
@@ -345,47 +414,293 @@ extension BalancedCopyProof {
         return .held(Evidence.Discarded(channel: other, peakDBFS: peaks[other]))
     }
 
-    /// THE decision. Pure: the same facts always give the same answer.
-    /// Order: what is known before the sound is decoded (format, streams,
-    /// configuration, every carried packet, the sound's stated times), then
-    /// whether both sound passes read everything, then the channel left
-    /// behind, then the copy's two channels against each other and against
-    /// the original.
+    /// The copy's left, its right and the original's live channel are the
+    /// same samples, placed at the same times (header, WHAT PLAYS 2). Held:
+    /// the one digest, and the original's timeline.
+    static func soundCheck(_ facts: Facts) -> Check<String> {
+        guard let ours = facts.originalRead, let theirs = facts.balancedRead,
+              ours.channelSHA256.count == 1, theirs.channelSHA256.count == 2,
+              let source = comparable(ours.channelSHA256[0]), let left = comparable(theirs.channelSHA256[0]),
+              let right = comparable(theirs.channelSHA256[1]),
+              let segments = ours.soundSegments, let copied = theirs.soundSegments, !segments.isEmpty,
+              let samples = ours.soundSamples, ours.channelSamples == [samples],
+              let copySamples = theirs.soundSamples, theirs.channelSamples == [copySamples, copySamples] else {
+            return .refused(.couldNotCheck("the sound gave no samples to compare"))
+        }
+        guard left == right else { return .refused(.notProven(.channelsDiffer(left: left, right: right))) }
+        guard left == source else { return .refused(.notProven(.soundDiffers(original: source, balanced: left))) }
+        guard segments.count == copied.count else {
+            return .refused(.notProven(.soundPlacementDiffers(
+                "the original's sound plays in \(segments.count) unbroken runs, the balanced copy's in \(copied.count)")))
+        }
+        for (i, (a, b)) in zip(segments, copied).enumerated()
+        where a.samples != b.samples || abs(a.start - b.start) > Int64(soundTimingToleranceSamples) {
+            return .refused(.notProven(.soundPlacementDiffers(
+                "run \(i + 1): \(a.samples) samples from sample time \(a.start), "
+                + "in the balanced copy \(b.samples) from \(b.start)")))
+        }
+        return .held(source)
+    }
+
+    /// The DV rule, measured (DECISIONS 2026-11-17): every sound track the
+    /// copy leaves behind was measured at or under the ceiling, and every
+    /// picture is DV and packet-identical. Held: one named difference per
+    /// dropped track.
+    static func spareCheck(_ facts: Facts, kept: SoundStream, streams: [Evidence.Stream]) -> Check<[Difference]> {
+        var out: [Difference] = []
+        for spare in facts.original.sound where spare.index != kept.index {
+            guard let peaks = facts.originalRead?.peaksDBFS[spare.index], spare.channels > 0,
+                  peaks.count == spare.channels, !peaks.contains(where: \.isNaN), let peak = peaks.max() else {
+                return .refused(.couldNotCheck("the original's sound track \(spare.index) was not measured"))
+            }
+            guard peak <= discardedChannelPeakCeilingDBFS else {
+                return .refused(.notProven(.spareSoundTrack(
+                    "stream \(spare.index) is not silent: peak \(level(peak))")))
+            }
+            let pictures = streams.filter { $0.kind == "video" }
+            guard !pictures.isEmpty, pictures.allSatisfy({ $0.codec == "dvvideo" && $0.packetIdentical }) else {
+                return .refused(.notProven(.spareSoundTrack(
+                    "stream \(spare.index) is silent, but the picture is not DV carried bit for bit")))
+            }
+            out.append(Difference(
+                kind: .track, heldOnlyBy: .original,
+                what: "a second sound track (stream \(spare.index), \(spare.channels) channels), measured silent: "
+                    + (peak == -.infinity ? "digital silence" : "peak \(level(peak))")))
+        }
+        return .held(out)
+    }
+
+    // MARK: - Named differences
+
+    /// How long a file's stream STORES beyond what it plays. 0 = nothing
+    /// hidden, or the container has no edit lists.
+    private static func hidden(stored: Double?, played: Double) -> Double {
+        guard let stored, stored - played > timingSlackCeilingSeconds else { return 0 }
+        return stored - played
+    }
+
+    /// One stream that an edit list plays less of in one file than in the other.
+    private static func playbackDifference(_ thing: String, originalStored: Double?, originalPlayed: Double,
+                                           copyStored: Double?, copyPlayed: Double) -> Difference? {
+        let ours = hidden(stored: originalStored, played: originalPlayed)
+        let theirs = hidden(stored: copyStored, played: copyPlayed)
+        guard abs(ours - theirs) > timingSlackCeilingSeconds else { return nil }
+        func says(_ stored: Double?, _ played: Double) -> String {
+            "stores \(length(stored ?? played)) of \(thing) and plays \(length(played))"
+        }
+        return Difference(
+            kind: .playback, heldOnlyBy: ours > theirs ? .original : .balancedCopy,
+            what: "stored \(thing) an edit list does not play: the original \(says(originalStored, originalPlayed)), "
+                + "the balanced copy \(says(copyStored, copyPlayed))")
+    }
+
+    /// Every "key=value" a file states, on the container or on any stream.
+    private static func everyTag(_ file: FileLayout) -> Set<String> {
+        let all = [file.tags] + file.carried.map(\.tags) + file.sound.map(\.tags)
+        return Set(all.flatMap { $0.map { "\($0.key)=\($0.value)" } })
+    }
+
+    /// Where the two files' tags are compared, and everything each states anywhere.
+    private struct TagTally {
+        var originalHas: Set<String>
+        var copyHas: Set<String>
+        var found: [Difference.Holder?: [String]] = [:]
+
+        /// Tags one file has and the other has not, or states differently.
+        /// `scope` names where they are ("", "stream 1 "). A tag the other
+        /// file states with the SAME value somewhere else (raw DV's timecode
+        /// is the container's, QuickTime's the track's) is not missing.
+        mutating func compare(_ original: [String: String], _ copy: [String: String], scope: String) {
+            for key in Set(original.keys).union(copy.keys).sorted() {
+                switch (original[key], copy[key]) {
+                case (let a?, let b?): if a != b { found[nil, default: []].append(scope + key) }
+                case (let a?, nil): if !copyHas.contains("\(key)=\(a)") { found[.original, default: []].append(scope + key) }
+                case (nil, let b?): if !originalHas.contains("\(key)=\(b)") { found[.balancedCopy, default: []].append(scope + key) }
+                case (nil, nil): break
+                }
+            }
+        }
+    }
+
+    /// "picture stream 0 (the balanced copy only: default)" — nil when both
+    /// tracks have the same flags set.
+    private static func flagPhrase(_ thing: String, _ original: Set<String>, _ copy: Set<String>) -> String? {
+        guard original != copy else { return nil }
+        let ours = original.subtracting(copy).sorted(), theirs = copy.subtracting(original).sorted()
+        let said = [ours.isEmpty ? nil : "the original only: \(ours.joined(separator: ", "))",
+                    theirs.isEmpty ? nil : "the balanced copy only: \(theirs.joined(separator: ", "))"]
+        return "\(thing) (\(said.compactMap { $0 }.joined(separator: "; ")))"
+    }
+
+    private static func named(_ tags: [String]) -> String {
+        let shown = tags.prefix(namedTagLimit).joined(separator: ", ")
+        return tags.count > namedTagLimit ? "\(shown) +\(tags.count - namedTagLimit) more" : shown
+    }
+
+    /// Tracks only one file has, and the container.
+    private static func trackDifferences(_ facts: Facts, pairing: Pairing) -> [Difference] {
+        var out = pairing.onlyInOriginal.map {
+            Difference(kind: .track, heldOnlyBy: .original, what: describe(facts.original.carried[$0]))
+        }
+        out += pairing.onlyInBalanced.map {
+            Difference(kind: .track, heldOnlyBy: .balancedCopy, what: describe(facts.balanced.carried[$0]))
+        }
+        if facts.original.container != facts.balanced.container {
+            func word(_ file: FileLayout) -> String { file.container.split(separator: ",").first.map(String.init) ?? "unknown" }
+            out.append(Difference(kind: .container, heldOnlyBy: nil,
+                                  what: "the original is a \(word(facts.original)) file, the balanced copy a \(word(facts.balanced)) file"))
+        }
+        return out
+    }
+
+    /// How one paired picture is STORED differently: codec or packets, then
+    /// decoder configuration, then media an edit list hides.
+    private static func storageDifferences(_ facts: Facts, original: CarriedStream, copy: CarriedStream,
+                                           held: Evidence.Stream) -> [Difference] {
+        var out: [Difference] = []
+        let every = "every decoded frame is the same"
+        if original.codec != copy.codec {
+            out.append(Difference(kind: .encoding, heldOnlyBy: nil,
+                                  what: "picture stream \(original.index) is stored as \(original.codec) in the original "
+                                    + "and as \(copy.codec) in the balanced copy; \(every)"))
+        } else if !held.packetIdentical {
+            out.append(Difference(kind: .encoding, heldOnlyBy: nil,
+                                  what: "picture stream \(original.index) (\(original.codec)) is not stored in the same "
+                                    + "packets (\(original.packets ?? 0) in the original, \(copy.packets ?? 0) in the "
+                                    + "balanced copy); \(every)"))
+        }
+        if original.configuration.extradataSHA256 != copy.configuration.extradataSHA256 {
+            out.append(Difference(kind: .decoderConfiguration, heldOnlyBy: nil,
+                                  what: "picture stream \(original.index)'s decoder configuration (extradata) is "
+                                    + "written differently; \(every)"))
+        }
+        if let a = facts.originalRead?.pictures[original.index], let b = facts.balancedRead?.pictures[copy.index],
+           let hidden = playbackDifference("picture", originalStored: original.storedSeconds,
+                                           originalPlayed: a.endSeconds - a.firstSeconds,
+                                           copyStored: copy.storedSeconds, copyPlayed: b.endSeconds - b.firstSeconds) {
+            out.append(hidden)
+        }
+        return out
+    }
+
+    /// Sound an edit list hides, and track flags set in one file only.
+    private static func soundPlaybackDifferences(_ facts: Facts, pairing: Pairing, kept: SoundStream,
+                                                 copySound: SoundStream) -> [Difference] {
+        var out: [Difference] = []
+        if let hidden = playbackDifference(
+            "sound", originalStored: kept.storedSeconds,
+            originalPlayed: Double(facts.originalRead?.soundSamples ?? 0) / Double(max(kept.sampleRateHz, 1)),
+            copyStored: copySound.storedSeconds,
+            copyPlayed: Double(facts.balancedRead?.soundSamples ?? 0) / Double(max(copySound.sampleRateHz, 1))) {
+            out.append(hidden)
+        }
+        var flags = pairing.pictures.compactMap { pair -> String? in
+            let original = facts.original.carried[pair.original]
+            return flagPhrase("picture stream \(original.index)", original.flags, facts.balanced.carried[pair.balanced].flags)
+        }
+        if let phrase = flagPhrase("the sound", kept.flags, copySound.flags) { flags.append(phrase) }
+        if !flags.isEmpty {
+            out.append(Difference(kind: .playback, heldOnlyBy: nil, what: "track flags differ: \(flags.joined(separator: "; "))"))
+        }
+        return out
+    }
+
+    /// Chapter marks and tags one file has and the other has not.
+    private static func metadataDifferences(_ facts: Facts, pairing: Pairing, kept: SoundStream,
+                                            copySound: SoundStream) -> [Difference] {
+        var out: [Difference] = []
+        if facts.original.chapters != facts.balanced.chapters {
+            let (ours, theirs) = (facts.original.chapters.count, facts.balanced.chapters.count)
+            out.append(Difference(kind: .metadata, heldOnlyBy: ours > theirs ? .original : (theirs > ours ? .balancedCopy : nil),
+                                  what: "chapter marks (\(ours) in the original, \(theirs) in the balanced copy)"))
+        }
+        var tags = TagTally(originalHas: everyTag(facts.original), copyHas: everyTag(facts.balanced))
+        tags.compare(facts.original.tags, facts.balanced.tags, scope: "")
+        tags.compare(kept.tags, copySound.tags, scope: "sound ")
+        for pair in pairing.pictures + pairing.others {
+            let original = facts.original.carried[pair.original]
+            tags.compare(original.tags, facts.balanced.carried[pair.balanced].tags, scope: "stream \(original.index) ")
+        }
+        if let only = tags.found[.original] {
+            out.append(Difference(kind: .metadata, heldOnlyBy: .original, what: "tags the balanced copy does not have: \(named(only))"))
+        }
+        if let only = tags.found[.balancedCopy] {
+            out.append(Difference(kind: .metadata, heldOnlyBy: .balancedCopy, what: "tags the original does not have: \(named(only))"))
+        }
+        if let changed = tags.found[nil] {
+            out.append(Difference(kind: .metadata, heldOnlyBy: nil, what: "tags with different values: \(named(changed))"))
+        }
+        return out
+    }
+
+    /// Everything that differs between two files that PLAY the same, each
+    /// in plain words, with the file that holds what the other does not.
+    /// Order: tracks, container, encoding, decoder configuration, playback
+    /// instructions, metadata.
+    static func differences(_ facts: Facts, pairing: Pairing, kept: SoundStream, copySound: SoundStream,
+                            streams: [Evidence.Stream], spare: [Difference]) -> [Difference] {
+        let stored = zip(pairing.pictures, streams).flatMap {
+            storageDifferences(facts, original: facts.original.carried[$0.original],
+                               copy: facts.balanced.carried[$0.balanced], held: $1)
+        }
+        let order: [Difference.Kind] = [.encoding, .decoderConfiguration, .playback]
+        return spare + trackDifferences(facts, pairing: pairing)
+            + order.flatMap { kind in stored.filter { $0.kind == kind } }
+            + soundPlaybackDifferences(facts, pairing: pairing, kept: kept, copySound: copySound)
+            + metadataDifferences(facts, pairing: pairing, kept: kept, copySound: copySound)
+    }
+
+    // MARK: - The decision
+
+    /// THE decision. Pure and total: the same facts always give the same
+    /// answer, and every combination of facts gives one. Order: the headers;
+    /// the packet pass; whether both decode passes were whole; the picture;
+    /// the channel left behind; the sound; a spare sound track; then, for a
+    /// pair that plays the same, everything else that differs.
     static func decide(_ facts: Facts) -> Outcome {
-        if let verdict = layoutVerdict(facts) { return verdict }
-        guard let live = liveChannel(for: facts.originalClass), let sound = facts.original.sound.first,
+        if let verdict = headerVerdict(facts) { return verdict }
+        guard let live = liveChannel(for: facts.originalClass), let kept = keptSound(facts),
+              let copySound = facts.balanced.sound.first,
               case .success(let pairing) = pairing(original: facts.original.carried,
                                                    balanced: facts.balanced.carried) else {
             return .couldNotCheck("the two files' streams could not be lined up")
         }
-        if let verdict = readVerdict(facts.original, read: facts.originalRead, called: "the original")
-            ?? readVerdict(facts.balanced, read: facts.balancedRead, called: "the balanced copy") {
+        if let verdict = packetVerdict(facts, pairing: pairing)
+            ?? readVerdict(facts.original, read: facts.originalRead, kept: kept, called: "the original")
+            ?? readVerdict(facts.balanced, read: facts.balancedRead, kept: copySound, called: "the balanced copy") {
             return verdict
         }
-        let carried: [Evidence.Stream]
-        switch carriedEvidence(facts, pairing: pairing) {
+        let streams: [Evidence.Stream]
+        switch pictureCheck(facts, pairing: pairing) {
         case .refused(let outcome): return outcome
-        case .held(let streams): carried = streams
+        case .held(let held): streams = held
         }
         let discarded: Evidence.Discarded?
-        switch discardedCheck(facts, liveChannel: live) {
+        switch discardedCheck(facts, kept: kept, liveChannel: live) {
         case .refused(let outcome): return outcome
         case .held(let measured): discarded = measured
         }
-        guard let source = comparable(facts.originalLiveSHA256), let left = comparable(facts.balancedLeftSHA256),
-              let right = comparable(facts.balancedRightSHA256) else {
-            return .couldNotCheck("the sound gave no samples to compare")
+        let sound: String
+        switch soundCheck(facts) {
+        case .refused(let outcome): return outcome
+        case .held(let digest): sound = digest
         }
-        guard left == right else { return .notProven(.channelsDiffer(left: left, right: right)) }
-        guard left == source else { return .notProven(.soundDiffers(original: source, balanced: left)) }
-        return .proven(Evidence(
-            carried: carried, gainedTimecodeTrack: pairing.gainedTimecodeTrack,
-            originalClass: facts.originalClass, liveChannel: live, soundCodec: sound.codec,
-            sampleFormat: sound.sampleFormat, sampleRateHz: sound.sampleRateHz, soundSHA256: source,
-            soundSamples: facts.originalRead?.streams[sound.index]?.samples ?? 0, discarded: discarded))
+        let spare: [Difference]
+        switch spareCheck(facts, kept: kept, streams: streams) {
+        case .refused(let outcome): return outcome
+        case .held(let dropped): spare = dropped
+        }
+        let evidence = Evidence(
+            streams: streams, originalClass: facts.originalClass, liveChannel: live, soundCodec: kept.codec,
+            sampleFormat: kept.sampleFormat, sampleRateHz: kept.sampleRateHz, soundSHA256: sound,
+            soundSamples: facts.originalRead?.soundSamples ?? 0,
+            soundStartSeconds: Double(facts.originalRead?.soundSegments?.first?.start ?? 0) / Double(kept.sampleRateHz),
+            discarded: discarded)
+        let differs = differences(facts, pairing: pairing, kept: kept, copySound: copySound, streams: streams, spare: spare)
+        return differs.isEmpty ? .proven(evidence) : .sameContent(evidence, differs: differs)
     }
 
-    // MARK: - The log line (pure; the future caller writes it)
+    // MARK: - The log lines (pure; the caller writes them through the one sink)
 
     /// Characters that would break a one-line record or hide in it: line
     /// and paragraph separators, control and format characters.
@@ -417,35 +732,56 @@ extension BalancedCopyProof {
         "\"" + path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    private static func provenDetail(_ e: Evidence) -> String {
-        let streams = e.carried.map {
-            "\($0.kind) \($0.originalIndex)→\($0.balancedIndex) sha256 \($0.packetSHA256) (\($0.packets) packets, "
-                + "each one's time, duration, size and bytes equal; times sha256 \(short($0.timingSHA256)); "
-                + "configuration and side data equal)"
+    private static func files(_ original: String, _ balanced: String) -> String {
+        "original \(quoted(original)) · balanced copy \(quoted(balanced))"
+    }
+
+    private static func evidenceDetail(_ e: Evidence) -> String {
+        let streams = e.streams.map { s -> String in
+            let packets = s.packetIdentical
+                ? "stored packets identical, sha256 \(s.packetSHA256) (\(s.packets))" : "stored packets differ"
+            guard let frames = s.frames, let digest = s.framesSHA256 else {
+                return "\(s.kind) \(s.originalIndex)→\(s.balancedIndex): \(packets)"
+            }
+            return "picture \(s.originalIndex)→\(s.balancedIndex): \(frames) decoded frames, each one's time, duration "
+                + "and pixels equal, sha256 \(digest); \(packets)"
         }
-        let sound = "sound \(e.soundCodec) \(e.sampleRateHz) Hz: original \(side(e.liveChannel)) = copy left = copy right "
-            + "sha256 \(e.soundSHA256) (\(e.soundSamples) samples)"
+        let sound = "sound \(e.soundCodec) \(e.sampleRateHz) Hz: original \(side(e.liveChannel)) = copy left = copy right, "
+            + "\(e.soundSamples) samples at the same times, sha256 \(e.soundSHA256)"
         let discarded = e.discarded.map {
             "original \(side($0.channel)): \($0.isDigitalSilence ? "digital silence" : "peak \(level($0.peakDBFS))")"
                 + ", not in the copy"
         } ?? "original has one channel, nothing left behind"
-        let timecode = e.gainedTimecodeTrack ? ["copy has a muxer-made timecode track"] : []
-        return (streams + [sound, discarded] + timecode).joined(separator: "; ")
+        return (streams + [sound, discarded]).joined(separator: "; ")
     }
 
-    /// ONE line naming both files, the verdict, and what was compared.
-    /// Whatever a file name, a codec name or a tool's message holds, the
-    /// result has no line break and no control character in it.
+    /// "[track] the original holds a timecode track".
+    static func sentence(_ d: Difference) -> String {
+        "[\(d.kind.rawValue)] " + (d.heldOnlyBy.map { "\($0.rawValue) holds \(d.what)" } ?? d.what)
+    }
+
+    /// The line written BEFORE the files are read.
+    static func startLine(original: String, balanced: String) -> String {
+        singleLine("balanced copy proof: START — \(files(original, balanced))")
+    }
+
+    /// ONE line naming both files, the verdict, the evidence and every
+    /// difference. Whatever a file name, a codec name, a tag or a tool's
+    /// message holds, the result has no line break and no control character.
     static func logLine(original: String, balanced: String, outcome: Outcome) -> String {
-        let files = "original \(quoted(original)) · balanced copy \(quoted(balanced))"
+        let head = "balanced copy proof: OUTCOME"
+        let pair = files(original, balanced)
         let line: String
         switch outcome {
         case .proven(let e):
-            line = "balanced copy proof: PROVEN — \(files) — \(provenDetail(e))"
+            line = "\(head) PROVEN THE SAME — \(pair) — \(evidenceDetail(e)); nothing else differs"
+        case .sameContent(let e, let differs):
+            line = "\(head) SAME CONTENT, DIFFERS IN \(differs.count) — \(pair) — \(evidenceDetail(e)) — differs: "
+                + differs.map(sentence).joined(separator: " | ")
         case .notProven(let why):
-            line = "balanced copy proof: NOT PROVEN — \(files) — \(why.message)"
+            line = "\(head) NOT THE SAME — \(pair) — \(why.message)"
         case .couldNotCheck(let reason):
-            line = "balanced copy proof: COULD NOT CHECK — \(files) — \(reason)"
+            line = "\(head) COULD NOT CHECK — \(pair) — \(reason)"
         }
         return singleLine(line)
     }

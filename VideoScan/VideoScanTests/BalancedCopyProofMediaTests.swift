@@ -5,16 +5,14 @@
 // / panFilter / audioEncodeArgs / rawDVInputArgs / balancedOutputURL) — so
 // a change to what the job renders shows up here as a proof that says no.
 //
-// Dimensions: MEDIA MATRIX (mov/prores, mkv/ffv1, mxf, avi/dv, raw dv,
-// mp4/h264+aac; 16-bit, 24-bit, float) · TRUTH (the evidence hashes equal
-// hashes computed here by another road) · ISOLATION (missing, unreadable
+// Dimensions: MEDIA MATRIX (mov/prores, mkv/ffv1, mxf, avi/dv, raw dv → mov,
+// mp4/h264+aac; 16-bit, 24-bit, float) · TRUTH (the evidence digests equal
+// digests computed here by another road) · ISOLATION (missing, unreadable
 // and swapped files; a tool that fails) · SENSOR (both files and their
 // folder are byte-for-byte untouched by the proof). The negatives are the
 // point: each damaged copy must be refused, with the right reason.
-// The Codex #298 reproductions (discarded channel, timing, partial reads,
-// symlinks, decoder configuration, layout, cancellation) are in
-// BalancedCopyProofHardeningTests; the attacks it found untested are in
-// BalancedCopyProofCoverageTests.
+// The Codex reproductions are in the Hardening (#298), Packet (#301) and
+// Presentation (#304, and the 2026-11-17 ruling) suites.
 
 import CryptoKit
 import Foundation
@@ -72,6 +70,18 @@ enum BalancedCopyProofMedia {
             default: return "s16"
             }
         }
+        /// What differs between the job's own copy and its original, by kind
+        /// — measured 2026-11-17. Raw DV becomes QuickTime: a timecode
+        /// track gained, another container, tracks marked "default" (raw DV
+        /// has no such flag), the muxer's own tags. An MXF file's UMIDs are
+        /// its identity and are new in every file.
+        var expectedDifferences: [BalancedCopyProof.Difference.Kind] {
+            switch self {
+            case .rawDV: return [.track, .container, .playback, .metadata]
+            case .mxfPCM16: return [.metadata]
+            default: return []
+            }
+        }
     }
 
     static func scratch(_ label: String) throws -> URL {
@@ -127,9 +137,10 @@ enum BalancedCopyProofMedia {
         return out
     }
 
+    static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
     static func sha256(ofFile path: String) throws -> String {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        sha256(try Data(contentsOf: URL(fileURLWithPath: path)))
     }
 
     /// Name → SHA-256 of every file in `dir`.
@@ -139,6 +150,24 @@ enum BalancedCopyProofMedia {
             out[name] = try sha256(ofFile: dir.appendingPathComponent(name).path)
         }
         return out
+    }
+
+    /// The proof's sound digest made by ANOTHER road: one channel written to
+    /// a raw PCM file with the `pan` filter, cut HERE into one-second pieces,
+    /// each hashed here, folded as "<bytes> <sha256>" lines.
+    static func channelDigest(of path: String, channel: Int, in dir: URL, bytesPerSecond: Int = 96_000) throws -> (digest: String, bytes: Int) {
+        let raw = dir.appendingPathComponent("channel_\(UUID().uuidString.prefix(6)).raw").path
+        try BalanceAudioTestMedia.runFFmpeg(
+            ["-i", path, "-map", "0:a:0", "-af", "pan=mono|c0=c\(channel)", "-f", "s16le", "-c:a", "pcm_s16le"], output: raw)
+        let pcm = try Data(contentsOf: URL(fileURLWithPath: raw))
+        var fold = SHA256()
+        var at = 0
+        while at < pcm.count {
+            let piece = pcm.subdata(in: at..<min(at + bytesPerSecond, pcm.count))
+            fold.update(data: Data("\(piece.count) \(sha256(piece))\n".utf8))
+            at += piece.count
+        }
+        return (fold.finalize().map { String(format: "%02x", $0) }.joined(), pcm.count)
     }
 }
 
@@ -160,11 +189,11 @@ struct BalancedCopyProofMediaTests {
 
     // MARK: Media matrix
 
-    @Test("MATRIX: a lossless one-sided original balanced by the job's own render is PROVEN in every wrapper",
+    @Test("MATRIX: a lossless one-sided original balanced by the job's own render PLAYS THE SAME in every wrapper — proven the same, or the same content with each difference named",
           .timeLimit(.minutes(3)),
           arguments: [Media.Wrapper.movProResPCM16, .movProResPCM24, .movProResFloat, .mkvFFV1PCM16,
                       .mkvFFV1PCM24, .mxfPCM16, .aviDVPCM16, .rawDV])
-    func losslessWrappersAreProven(_ wrapper: Media.Wrapper) async throws {
+    func losslessWrappersPlayTheSame(_ wrapper: Media.Wrapper) async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch(wrapper.rawValue)
         defer { try? fm.removeItem(at: dir) }
@@ -172,36 +201,49 @@ struct BalancedCopyProofMediaTests {
         let balanced = try await Media.balance(original)
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
-        guard case .proven(let evidence) = outcome else {
-            Issue.record("\(wrapper.rawValue): expected proven, got \(outcome)")
+        guard let evidence = outcome.evidence else {
+            Issue.record("\(wrapper.rawValue): expected the same content, got \(outcome)")
             return
         }
-        #expect(evidence.liveChannel == 0)
-        #expect(evidence.originalClass == .leftOnly)
-        #expect(evidence.sampleFormat == wrapper.sampleFormat)
-        #expect(evidence.sampleRateHz == 48_000)
+        #expect(outcome.differences.map(\.kind) == wrapper.expectedDifferences, "\(outcome.differences)")
+        #expect(outcome.isProven == wrapper.expectedDifferences.isEmpty)
+        #expect(evidence.liveChannel == 0 && evidence.originalClass == .leftOnly)
+        #expect(evidence.sampleFormat == wrapper.sampleFormat && evidence.sampleRateHz == 48_000)
         #expect(evidence.soundCodec.hasPrefix("pcm_"))
         #expect(evidence.soundSHA256.count == 64 && evidence.soundSHA256 != Proof.emptySHA256)
-        #expect(evidence.carried.first?.kind == "video")
-        #expect(evidence.carried.allSatisfy { $0.packetSHA256.count == 64 && $0.packetSHA256 != Proof.emptySHA256 })
+        #expect(evidence.soundStartSeconds == 0)
+        // The picture: every frame decoded and held, and — the second evidence — its packets identical too.
+        let picture = try #require(evidence.streams.first)
+        #expect(evidence.streams.count == 1 && picture.kind == "video" && picture.packetIdentical)
+        #expect((picture.frames ?? 0) >= 50 && picture.frames == picture.packets)
+        #expect(picture.framesSHA256?.count == 64 && picture.framesSHA256 != Proof.emptySHA256)
+        #expect(picture.packetSHA256.count == 64 && picture.packetSHA256 != picture.framesSHA256)
         #expect(evidence.originalStamp == FileIdentityStamp.capture(path: original))
         #expect(evidence.balancedStamp == FileIdentityStamp.capture(path: balanced))
         #expect(evidence.originalResolvedPath == SourceTree.canonicalPath(URL(fileURLWithPath: original)))
-        // What the hardened proof also holds, on what the job really writes:
-        // the channel left behind is digital silence, every stream's packets
-        // were counted, and the sound was decoded to the end.
+        // The channel left behind is digital silence, and the sound was decoded to the end.
         #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
-        #expect(evidence.carried.allSatisfy { $0.packets >= 50 })
         #expect(evidence.soundSamples >= 94_000 && evidence.soundSamples <= 96_096)
         let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
         #expect(line.contains("original right: digital silence, not in the copy") && !line.contains("\n"))
-        // Raw DV is the one wrapper whose copy changes container (.mov) and
-        // gains the muxer's timecode track.
-        #expect(evidence.gainedTimecodeTrack == (wrapper == .rawDV))
+        #expect(line.contains("stored packets identical"))
+        // Raw DV is the one wrapper whose copy changes container (.mov) and gains the muxer's timecode track.
         #expect(URL(fileURLWithPath: balanced).pathExtension == (wrapper == .rawDV ? "mov" : wrapper.ext))
+        if wrapper == .rawDV {
+            #expect(outcome.differences.prefix(2) == [
+                Proof.Difference(kind: .track, heldOnlyBy: .balancedCopy, what: "a timecode track"),
+                Proof.Difference(kind: .container, heldOnlyBy: nil, what: "the original is a dv file, the balanced copy a mov file")
+            ])
+            // Nothing the ORIGINAL holds is missing from the copy: its one tag, the timecode, is on the copy's tracks.
+            #expect(outcome.differences.allSatisfy { $0.heldOnlyBy != .original }, "\(outcome.differences)")
+            #expect(outcome.differences.contains(Proof.Difference(
+                kind: .playback, heldOnlyBy: nil,
+                what: "track flags differ: picture stream 0 (the balanced copy only: default); the sound (the balanced copy only: default)")))
+            #expect(line.contains("OUTCOME SAME CONTENT, DIFFERS IN 4"))
+        }
     }
 
-    @Test("MATRIX: a right-only original is proven against its RIGHT channel", .timeLimit(.minutes(2)))
+    @Test("MATRIX: a right-only original plays the same against its RIGHT channel", .timeLimit(.minutes(2)))
     func rightOnlyIsProvenAgainstTheRightChannel() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch("right")
@@ -211,17 +253,14 @@ struct BalancedCopyProofMediaTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
         guard case .proven(let evidence) = outcome else { Issue.record("\(outcome)"); return }
-        #expect(evidence.liveChannel == 1)
-        #expect(evidence.originalClass == .rightOnly)
-        // Truth: the hash is the RIGHT channel's, computed here by another road.
-        let raw = dir.appendingPathComponent("right.raw").path
-        try BalanceAudioTestMedia.runFFmpeg(
-            ["-i", original, "-map", "0:a:0", "-af", "pan=mono|c0=c1", "-f", "s16le", "-c:a", "pcm_s16le"], output: raw)
-        let independent = try Media.sha256(ofFile: raw)
-        #expect(evidence.soundSHA256 == independent)
+        #expect(evidence.liveChannel == 1 && evidence.originalClass == .rightOnly)
+        // Truth: the digest is the RIGHT channel's, computed here by another road — and not the left's.
+        let right = try Media.channelDigest(of: original, channel: 1, in: dir).digest
+        let left = try Media.channelDigest(of: original, channel: 0, in: dir).digest
+        #expect(evidence.soundSHA256 == right && evidence.soundSHA256 != left)
     }
 
-    @Test("MATRIX: mp4/h264 + AAC is NOT PROVEN by design — the sound was re-encoded", .timeLimit(.minutes(2)))
+    @Test("MATRIX: mp4/h264 + AAC is NOT THE SAME by design — the sound was re-encoded", .timeLimit(.minutes(2)))
     func lossyOriginalIsNotProven() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch("aac")
@@ -235,9 +274,9 @@ struct BalancedCopyProofMediaTests {
             .hasSuffix("the sound was re-encoded (aac) — the original is kept"))
     }
 
-    @Test("MATRIX: an original with two sound tracks (the 12-bit DV shape) is NOT PROVEN — the copy drops a track",
+    @Test("MATRIX: two sound tracks in a recording that is NOT DV — the copy drops one — is NOT THE SAME",
           .timeLimit(.minutes(2)))
-    func twoSoundTracksAreNotProven() async throws {
+    func twoSoundTracksOutsideDVAreNotProven() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try Media.scratch("twopair")
         defer { try? fm.removeItem(at: dir) }
@@ -245,12 +284,13 @@ struct BalancedCopyProofMediaTests {
             into: dir, label: "proof", pair1: Media.leftOnly, pair2: "0|0", container: .movPcm)
         let balanced = try await Media.balance(original)
 
-        #expect(await Proof.measure(original: original, balanced: balanced) == .notProven(.originalSoundTracks(2)))
+        #expect(await Proof.measure(original: original, balanced: balanced) == .notProven(.spareSoundTrack(
+            "2 sound tracks; a spare one may be left behind only in a DV recording, and its picture is h264")))
     }
 
     // MARK: Truth + read-only
 
-    @Test("TRUTH + SENSOR: the evidence hashes equal hashes made here by another road, and the proof touches nothing",
+    @Test("TRUTH + SENSOR: the evidence digests equal digests made here by another road, and the proof touches nothing",
           .timeLimit(.minutes(2)))
     func evidenceIsTrueAndTheProofIsReadOnly() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -262,56 +302,61 @@ struct BalancedCopyProofMediaTests {
         let after = try Media.folderDigest(dir)
         #expect(after == before, "the proof must not create, change or remove any file")
         guard case .proven(let evidence) = outcome else { Issue.record("\(outcome)"); return }
+        let heldPicture = try #require(evidence.streams.first, "the evidence names no stream")
+        #expect(evidence.streams.map(\.kind) == ["video", "data"], "the original's timecode track is held too")
 
-        // Picture: ffmpeg's framehash muxer (another tool than the proof's
-        // ffprobe packet pass) lists every packet as "stream, dts, pts,
-        // duration, size, sha256"; folded HERE the way the header says.
+        // DECODED PICTURE, by another road: every frame written to one raw
+        // file by the rawvideo muxer (the proof uses framehash), cut HERE
+        // into frames, each hashed here, folded with the times a 25 fps
+        // recording has. 320×240 yuv444p10le is 460,800 bytes a frame.
+        let raw = dir.appendingPathComponent("frames.raw").path
+        try BalanceAudioTestMedia.runFFmpeg(["-i", balanced, "-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "yuv444p10le"], output: raw)
+        let pixels = try Data(contentsOf: URL(fileURLWithPath: raw))
+        #expect(pixels.count == 50 * 460_800)
+        var played = SHA256()
+        played.update(data: Data("#dimensions 320x240\n#sar 1/1\n".utf8))
+        for n in 0..<50 {
+            let frame = pixels.subdata(in: (n * 460_800)..<((n + 1) * 460_800))
+            let at = n == 0 ? "0/1" : "\(n / gcd(n, 25))/\(25 / gcd(n, 25))"
+            played.update(data: Data("\(at) 1/25 460800 \(Media.sha256(frame))\n".utf8))
+        }
+        #expect(heldPicture.frames == 50)
+        #expect(heldPicture.framesSHA256 == played.finalize().map { String(format: "%02x", $0) }.joined())
+
+        // STORED PACKETS, by another road: ffmpeg's framehash muxer over the
+        // stream COPY lists every packet as "stream, dts, pts, duration,
+        // size, sha256" (the proof's packet pass is ffprobe); folded here.
         let listing = await ProcessRunner.runProcess(
             executable: ToolLocator.ffmpegPath,
             arguments: ["-v", "error", "-i", original, "-map", "0:v:0", "-c", "copy", "-f", "framehash", "-hash", "sha256", "-"],
             deadlineSeconds: 60)
-        var bytes = SHA256(), times = SHA256(), packets = 0
-        var ticksPerSecond: Int64 = 0
-        for line in (listing.stdout ?? "").split(separator: "\n") {
-            if line.hasPrefix("#tb 0: 1/") { ticksPerSecond = Int64(line.dropFirst("#tb 0: 1/".count)) ?? 0 }
+        var bytes = SHA256(), packets = 0
+        for line in (listing.stdout ?? "").split(separator: "\n") where !line.hasPrefix("#") {
             let fields = line.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard !line.hasPrefix("#"), fields.count == 6, let pts = Int64(fields[2]), let duration = Int64(fields[3]) else { continue }
-            func fraction(_ ticks: Int64) -> String {
-                var a = abs(ticks), b = ticksPerSecond
-                while b != 0 { (a, b) = (b, a % b) }
-                return "\(ticks / max(a, 1))/\(ticksPerSecond / max(a, 1))"
-            }
+            guard fields.count == 6 else { continue }
             bytes.update(data: Data("\(fields[4]) \(fields[5])\n".utf8))
-            times.update(data: Data("\(fraction(pts)) \(fraction(duration))\n".utf8))
             packets += 1
         }
-        func hex(_ hasher: SHA256) -> String { hasher.finalize().map { String(format: "%02x", $0) }.joined() }
-        let heldPicture = try #require(evidence.carried.first, "the evidence names no carried stream")
-        #expect(ticksPerSecond == 12_800 && packets == 50)
-        #expect(heldPicture.packets == packets)
-        #expect(heldPicture.packetSHA256 == hex(bytes))
-        #expect(heldPicture.timingSHA256 == hex(times))
-        #expect(evidence.carried.map(\.kind) == ["video", "data"], "the original's timecode track is held too")
+        #expect(packets == 50 && heldPicture.packets == packets && heldPicture.packetIdentical)
+        #expect(heldPicture.packetSHA256 == bytes.finalize().map { String(format: "%02x", $0) }.joined())
 
-        // Sound: the original's left channel written out as raw PCM with the
-        // pan filter, hashed in this process.
-        let raw = dir.appendingPathComponent("left.raw").path
-        try BalanceAudioTestMedia.runFFmpeg(
-            ["-i", original, "-map", "0:a:0", "-af", "pan=mono|c0=c0", "-f", "s16le", "-c:a", "pcm_s16le"], output: raw)
-        let independent = try Media.sha256(ofFile: raw)
-        #expect(evidence.soundSHA256 == independent)
-        let samples = (try fm.attributesOfItem(atPath: raw)[.size] as? NSNumber)?.intValue ?? 0
-        #expect(samples == 2 * 48_000 * 2, "2 s of 48 kHz 16-bit mono")
+        // SOUND, by another road: the original's left channel written out as raw PCM with the pan filter.
+        let sound = try Media.channelDigest(of: original, channel: 0, in: dir)
+        #expect(evidence.soundSHA256 == sound.digest)
+        #expect(sound.bytes == 2 * 48_000 * 2, "2 s of 48 kHz 16-bit mono")
+        #expect(evidence.soundSamples == 96_000)
 
-        // The log line carries exactly those hashes.
+        // The log line carries exactly those digests.
         let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
         #expect(line.contains(evidence.soundSHA256) && line.contains(heldPicture.packetSHA256))
-        #expect(line.contains(original) && line.contains(balanced))
+        #expect(line.contains(heldPicture.framesSHA256 ?? "?") && line.contains(original) && line.contains(balanced))
     }
+
+    private func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
 
     // MARK: Negatives — the proof must say no
 
-    @Test("NEGATIVE: a copy whose picture was re-encoded is not proven", .timeLimit(.minutes(2)))
+    @Test("NEGATIVE: a copy whose picture was re-encoded lossily is not the same", .timeLimit(.minutes(2)))
     func reencodedPictureIsRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let (dir, original, balanced) = try await provenPair("revideo")
@@ -320,14 +365,14 @@ struct BalancedCopyProofMediaTests {
                                    ["-map", "0", "-c", "copy", "-c:v", "prores_ks", "-profile:v", "0", "-q:v", "20"])
 
         let outcome = await Proof.measure(original: original, balanced: bad)
-        guard case .notProven(.carriedStreamDiffers(let kind, _, _, _)) = outcome else {
+        guard case .notProven(.pictureDiffers(0, let what)) = outcome else {
             Issue.record("expected the picture to be refused, got \(outcome)")
             return
         }
-        #expect(kind == "video")
+        #expect(what.hasPrefix("its frames are not the original's"))
     }
 
-    @Test("NEGATIVE: a copy whose sound was turned down 1 dB is not proven", .timeLimit(.minutes(2)))
+    @Test("NEGATIVE: a copy whose sound was turned down 1 dB is not the same", .timeLimit(.minutes(2)))
     func attenuatedSoundIsRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let (dir, original, balanced) = try await provenPair("quiet")
@@ -342,7 +387,7 @@ struct BalancedCopyProofMediaTests {
         }
     }
 
-    @Test("NEGATIVE: a copy whose two channels differ — by a whole channel, or by a hair — is not proven",
+    @Test("NEGATIVE: a copy whose two channels differ — by a whole channel, or by a hair — is not the same",
           .timeLimit(.minutes(2)))
     func differingChannelsAreRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -363,26 +408,28 @@ struct BalancedCopyProofMediaTests {
         }
     }
 
-    @Test("NEGATIVE: a truncated copy — whole file cut short, or only its sound — is not proven",
+    @Test("NEGATIVE: a truncated copy — whole file cut short, or only its sound — is not the same",
           .timeLimit(.minutes(2)))
     func truncatedCopyIsRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let (dir, original, balanced) = try await provenPair("short")
         defer { try? fm.removeItem(at: dir) }
         let half = try Media.derive("half_balanced", from: balanced, ["-t", "1", "-map", "0", "-c", "copy"])
-        // Since Codex #298 F2/F3 ffprobe's own packet count refuses it, before any hash pass.
         let outcome = await Proof.measure(original: original, balanced: half)
-        #expect(outcome == .notProven(.timingDiffers("video stream 0 has 50 packets, the balanced copy 25")))
+        #expect(outcome == .notProven(.pictureDiffers(originalIndex: 0, "50 frames play in the original, 25 in the balanced copy")))
         // Picture whole, last 10 ms of sound missing.
         let shortSound = try Media.derive("short_sound_balanced", from: balanced,
                                           ["-map", "0", "-c", "copy", "-af", "atrim=end=1.99", "-c:a", "pcm_s16le"])
         let soundOutcome = await Proof.measure(original: original, balanced: shortSound)
-        #expect(soundOutcome == .notProven(.timingDiffers(
-            "the sound lasts 2.000000 s, in the balanced copy 1.990000 s")))
+        guard case .notProven(.soundDiffers) = soundOutcome else {
+            Issue.record("expected the short sound to be refused, got \(soundOutcome)")
+            return
+        }
     }
 
-    @Test("NEGATIVE: a copy with an extra stream or a missing stream is not proven", .timeLimit(.minutes(2)))
-    func extraOrMissingStreamIsRefused() async throws {
+    @Test("NEGATIVE: a second sound track or a second picture in the copy, or no picture, is not the same; a dropped timecode track is NAMED as held by the original",
+          .timeLimit(.minutes(2)))
+    func extraOrMissingStream() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let (dir, original, balanced) = try await provenPair("streams")
         defer { try? fm.removeItem(at: dir) }
@@ -393,30 +440,28 @@ struct BalancedCopyProofMediaTests {
 
         let extraPicture = try Media.derive("extra_picture_balanced", from: balanced,
                                             ["-map", "0", "-map", "1:v", "-c", "copy"], secondInput: balanced)
-        let extraOutcome = await Proof.measure(original: original, balanced: extraPicture)
-        guard case .notProven(.streamsDiffer) = extraOutcome else {
-            Issue.record("extra picture: \(extraOutcome)")
-            return
-        }
+        #expect(await Proof.measure(original: original, balanced: extraPicture)
+                == .notProven(.streamsDiffer("the original has 1 picture streams, the balanced copy 2")))
 
         let noPicture = try Media.derive("no_picture_balanced", from: balanced, ["-map", "0:a", "-c", "copy"])
-        let noPictureOutcome = await Proof.measure(original: original, balanced: noPicture)
-        guard case .notProven(.streamsDiffer) = noPictureOutcome else {
-            Issue.record("no picture: \(noPictureOutcome)")
-            return
-        }
+        #expect(await Proof.measure(original: original, balanced: noPicture)
+                == .notProven(.streamsDiffer("the original has 1 picture streams, the balanced copy 0")))
 
-        // The original's timecode track left behind.
+        // The original's timecode track left behind: the picture and the sound
+        // play the same, and the original HOLDS something the copy does not.
         let noTimecode = try Media.derive("no_timecode_balanced", from: balanced,
                                           ["-map", "0:v", "-map", "0:a", "-c", "copy", "-write_tmcd", "0"])
-        let noTimecodeOutcome = await Proof.measure(original: original, balanced: noTimecode)
-        guard case .notProven(.streamsDiffer) = noTimecodeOutcome else {
-            Issue.record("no timecode: \(noTimecodeOutcome)")
+        let outcome = await Proof.measure(original: original, balanced: noTimecode)
+        guard case .sameContent(_, let differs) = outcome else {
+            Issue.record("no timecode: expected the same content with the track named, got \(outcome)")
             return
         }
+        #expect(differs.first == Proof.Difference(kind: .track, heldOnlyBy: .original, what: "a timecode track"), "\(differs)")
+        #expect(differs.allSatisfy { $0.heldOnlyBy != .balancedCopy }, "\(differs)")
+        #expect(!outcome.isProven)
     }
 
-    @Test("NEGATIVE: the two files the wrong way round are not proven — a balanced file is not a one-sided original",
+    @Test("NEGATIVE: the two files the wrong way round are not the same — a balanced file is not a one-sided original",
           .timeLimit(.minutes(2)))
     func swappedFilesAreRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -428,7 +473,7 @@ struct BalancedCopyProofMediaTests {
 
     // MARK: Isolation — could not check
 
-    @Test("ISOLATION: a missing, unreadable or doubled file, or a tool that fails, is COULD NOT CHECK — never proven",
+    @Test("ISOLATION: a missing, unreadable or doubled file, or a tool that fails, is COULD NOT CHECK — never the same",
           .timeLimit(.minutes(2)))
     func unmeasurableIsCouldNotCheck() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -453,22 +498,24 @@ struct BalancedCopyProofMediaTests {
         // Bytes that are not media.
         let junk = dir.appendingPathComponent("junk_balanced.mov").path
         try Data(repeating: 0x5a, count: 64 * 1024).write(to: URL(fileURLWithPath: junk))
-        #expect(reason(await Proof.measure(original: original, balanced: junk))?.contains("could not be read as media") == true)
+        #expect(reason(await Proof.measure(original: original, balanced: junk)) == "the balanced copy could not be read as media")
         #expect(reason(await Proof.measure(original: junk, balanced: balanced)) != nil)
 
         // The tools: absent, then present but failing.
         let noTools = Proof.Tools(ffmpeg: "/nonexistent/ffmpeg", ffprobe: ToolLocator.ffprobePath)
         #expect(reason(await Proof.measure(original: original, balanced: balanced, tools: noTools))?.contains("not found") == true)
         let failing = Proof.Tools(ffmpeg: "/usr/bin/false", ffprobe: ToolLocator.ffprobePath)
-        #expect(reason(await Proof.measure(original: original, balanced: balanced, tools: failing))?.contains("could not be read to the end") == true)
+        #expect(reason(await Proof.measure(original: original, balanced: balanced, tools: failing))?
+            .hasPrefix("the original could not be decoded to the end (ffmpeg status 1") == true)
         let failingProbe = Proof.Tools(ffmpeg: ToolLocator.ffmpegPath, ffprobe: "/usr/bin/false")
-        #expect(reason(await Proof.measure(original: original, balanced: balanced, tools: failingProbe))?.contains("could not be read as media") == true)
+        #expect(reason(await Proof.measure(original: original, balanced: balanced, tools: failingProbe))
+                == "the original could not be read as media")
 
         // And the pair itself is good: the same call with the real tools proves it.
         #expect(await Proof.measure(original: original, balanced: balanced).isProven)
     }
 
-    @Test("ISOLATION: a copy that is modified while it is being read is COULD NOT CHECK, though its hashes match",
+    @Test("ISOLATION: a copy that is modified while it is being read is COULD NOT CHECK, though its digests match",
           .timeLimit(.minutes(2)))
     func fileChangedDuringTheCheckIsCouldNotCheck() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
