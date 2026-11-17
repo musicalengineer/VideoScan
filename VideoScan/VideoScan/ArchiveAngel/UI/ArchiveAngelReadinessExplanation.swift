@@ -333,7 +333,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         case .unmeasured(let note):
             return "Checked — \(note). \(asSentence(ArchiveReadiness.notMeasuredWords)) Listen before you archive it."
         case .accepted(let words):
-            return words
+            return "\(words). \(ArchiveReadiness.acceptedConditionWords)."
         case .notChecked:
             // A stored note, yet "not checked": it was measured on something
             // else (a "mono" note on a file that is not one channel).

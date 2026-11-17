@@ -91,6 +91,14 @@ enum SoundStandingFixture {
         return AudioVerifyDiagnosis(findings: findings, shape: vshape, balanceAnalysis: nil)
     }
 
+    /// A reference movie with no audio stream of its own: its media is on
+    /// another disk. Damage, and no track — the gate puts damage first.
+    nonisolated static func referenceMovieDiagnosis() -> AudioVerifyDiagnosis {
+        var d = noStreamDiagnosis()
+        d.findings = VerifyAudioRules.findings(shape: d.shape, referencedPaths: ["/missing/audio.aif"], levels: nil)
+        return d
+    }
+
     /// The catalog record of the file `d` was measured on: the scan's
     /// header fields, plus exactly what VerifyAudioJob stores for `d` (a
     /// not-checked diagnosis stores nothing).
@@ -109,11 +117,8 @@ enum SoundStandingFixture {
         } else {
             r.streamTypeRaw = StreamType.videoOnly.rawValue
         }
-        if !d.persistedStatus.isEmpty {
-            r.audioVerifyStatus = d.persistedStatus
-            r.audioVerifyNote = d.persistedNote
-            r.audioVerifyDate = Date(timeIntervalSince1970: 1_800_000_000)
-        }
+        // The production writer (Codex #302): nothing typed by hand.
+        VerifyAudioJob.write(d, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000))
         if tagged { r.tags = [WorkflowTags.silentChecked] }
         return r
     }
@@ -142,14 +147,41 @@ enum SoundStandingFixture {
 
 /// One cell of the walk.
 struct SoundStandingCell: Sendable, CustomTestStringConvertible {
-    let channelClass: AudioChannelClass
-    let tracks: Int
-    let complete: Bool
+    /// What the file is: measured levels of a class, or one of the two
+    /// states with no levels at all.
+    enum Source: Sendable, Equatable {
+        case levels(AudioChannelClass)
+        case noStream
+        case referenceMovie
+    }
+    let source: Source
+    var tracks: Int = 1
+    var complete: Bool = true
     let tagged: Bool
 
+    init(channelClass: AudioChannelClass, tracks: Int, complete: Bool, tagged: Bool) {
+        self.source = .levels(channelClass); self.tracks = tracks; self.complete = complete; self.tagged = tagged
+    }
+    init(_ source: Source, tagged: Bool) {
+        self.source = source; self.tagged = tagged
+    }
+
+    var diagnosis: AudioVerifyDiagnosis {
+        switch source {
+        case .levels(let c): return SoundStandingFixture.diagnosis(c, tracks: tracks, complete: complete)
+        case .noStream: return SoundStandingFixture.noStreamDiagnosis()
+        case .referenceMovie: return SoundStandingFixture.referenceMovieDiagnosis()
+        }
+    }
+
     var testDescription: String {
-        "\(channelClass.rawValue) · \(tracks) track\(tracks == 1 ? "" : "s") · \(complete ? "measured in full" : "partly measured")"
-            + " · \(tagged ? "tagged Silent — checked" : "no tag")"
+        let tag = " · \(tagged ? "tagged Silent — checked" : "no tag")"
+        switch source {
+        case .levels(let c):
+            return "\(c.rawValue) · \(tracks) track\(tracks == 1 ? "" : "s") · \(complete ? "measured in full" : "partly measured")" + tag
+        case .noStream: return "no audio stream" + tag
+        case .referenceMovie: return "reference movie, no audio stream (damaged)" + tag
+        }
     }
 
     static let all: [SoundStandingCell] = {
@@ -162,6 +194,12 @@ struct SoundStandingCell: Sendable, CustomTestStringConvertible {
                     }
                 }
             }
+        }
+        // The states with no levels: no track, and damage with no track
+        // (Codex #302 F1 — the tag accepts the first, never the second).
+        for tagged in [false, true] {
+            out.append(SoundStandingCell(.noStream, tagged: tagged))
+            out.append(SoundStandingCell(.referenceMovie, tagged: tagged))
         }
         return out
     }()
@@ -177,8 +215,10 @@ struct SoundStandingFollowsGateTests {
     @Test("TRUTH: for every class × tracks × completeness × tag, the sheet's sound line agrees with the gate's decision",
           arguments: SoundStandingCell.all)
     func theSheetFollowsTheGate(_ cell: SoundStandingCell) {
-        let d = F.diagnosis(cell.channelClass, tracks: cell.tracks, complete: cell.complete)
-        #expect(d.balanceAnalysis?.classification == cell.channelClass, "the fixture's levels classify as the cell says")
+        let d = cell.diagnosis
+        if case .levels(let c) = cell.source {
+            #expect(d.balanceAnalysis?.classification == c, "the fixture's levels classify as the cell says")
+        }
         let record = F.record(for: d, tagged: cell.tagged)
         let decision = F.gate(d, record: record)
         let readiness = ArchiveReadiness.assess(record: record)
@@ -353,6 +393,54 @@ struct SoundStandingFollowsGateTests {
         record.sizeBytes = 0   // never fingerprinted, and no size to bind the tag to
         #expect(F.gate(d, record: record).isRefusal)
         #expect(F.isRed(ArchiveReadiness.assess(record: record)))
+    }
+
+    // Codex #302 F1: `assess` chose "no audio track" before it looked at the
+    // stored "damaged", and the tag accepts no-track.
+    @Test("F4: a stored 'damaged' outranks everything — a tagged reference movie with no audio stream is red, never 'accepted'")
+    func damageOutranksTheTagEvenWithNoTrack() {
+        let d = F.referenceMovieDiagnosis()
+        let r = F.record(for: d, tagged: true)
+        #expect(r.audioVerifyStatus == "damaged" && r.streamTypeRaw == StreamType.videoOnly.rawValue)
+        #expect(F.gate(d, record: r).isRefusal)
+        let readiness = ArchiveReadiness.assess(record: r)
+        let line = readiness.sheetLine(dateLabel: "1992")
+        #expect(F.isRed(readiness), "\(line) | \(readiness.warnings)")
+        #expect(line.contains("Audio ✗") && line.contains("reference movie"), "\(line)")
+        #expect(readiness.sound.bucket == .refused)
+        #expect(readiness.token.contains("audio=problem"), "\(readiness.token)")
+        // An un-probeable record that stores damage is red on its sound too.
+        r.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        #expect(ArchiveReadiness.assess(record: r).sound.bucket == .refused)
+        // The row never reads Ready.
+        r.streamTypeRaw = StreamType.videoOnly.rawValue
+        #expect(F.row(r).statusWords == "Needs audio repair")
+    }
+
+    // Codex #302 F4: the forecast compares the record with itself; the job
+    // compares it with the bytes it proved. The sheet may forecast, not promise.
+    @Test("F4: the accepted line is conditional — the forecast says 'as catalogued', the job's proven mark may still refuse")
+    func theAcceptedLineDoesNotPromise() {
+        let d = F.diagnosis(.silent)
+        let r = F.record(for: d, tagged: true)
+        #expect(r.sizeBytes == 4_096 && r.contentFixity == nil)
+        #expect(ArchiveReadiness.forecastSoundMark(record: r) == .accepted)
+        // The file on disk is one byte longer than the catalog says.
+        let proven = PromoteSoundGate.mark(tags: r.tags, storedFixity: nil, provenDigest: String(repeating: "a", count: 64),
+                                           recordSizeBytes: r.sizeBytes, provenSizeBytes: 4_097)
+        #expect(proven == .notTiedToTheseBytes)
+        #expect(PromoteSoundGate.decide(finding: PromoteSoundGate.finding(from: d), mark: proven, soundPartnerName: nil,
+                                        recordedYear: nil, digestPrefix: "").isRefusal)
+        let readiness = ArchiveReadiness.assess(record: r)
+        let facts = ArchiveAngelReadinessExplanation.make(ArchiveAngelRowFacts.make(record: r, evidence: nil, kind: .ready)).facts
+        let said = [readiness.sheetLine(dateLabel: "1992")] + readiness.warnings + facts.filter { $0.label == "Sound" }.map(\.value)
+        for sentence in said {
+            #expect(!sentence.contains("Promote archives it"), "an unconditional promise: \(sentence)")
+            #expect(!sentence.contains("accepted by"), "\(sentence)")
+        }
+        #expect(readiness.warnings.first?.contains("as catalogued") == true, "\(readiness.warnings)")
+        #expect(readiness.warnings.first?.contains("Promote checks the file is still that one") == true, "\(readiness.warnings)")
+        #expect(!F.isRed(readiness) && !F.isGreen(readiness))
     }
 
     // MARK: F5 — counters

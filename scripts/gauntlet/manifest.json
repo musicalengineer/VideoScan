@@ -36154,12 +36154,27 @@
         "aStoredNoteNobodyRecognisesIsNeverGreen",
         "aTagNotTiedToTheBytesAcceptsNothing",
         "acceptedSilenceIsNotAProblem",
+        "damageOutranksTheTagEvenWithNoTrack",
         "noStreamAndDamage",
         "scale",
         "silentSurroundIsSilent",
         "soundBucketsPartitionTheSelection",
         "staleMonoIsNotChecked",
+        "theAcceptedLineDoesNotPromise",
         "theSheetFollowsTheGate"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelStaleSoundVerdictPrepareTests"
+      ],
+      "tests": [
+        "monoOnTheSecondStreamGoesThroughPrepareAndIsNotStuck",
+        "reuseNeedsAStandingVerdict",
+        "staleMonoIsVerifiedFreshAndBalanced"
       ]
     }
   ],
@@ -38913,7 +38928,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3776,
+      "expected_floor": 3781,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39635,7 +39650,8 @@
         "VideoScanTests/FileJourneyNonsenseDataTests",
         "VideoScanTests/HallieBrainLogTests",
         "VideoScanTests/HallieUnstatedYearDecodingTests",
-        "VideoScanTests/SoundStandingFollowsGateTests"
+        "VideoScanTests/SoundStandingFollowsGateTests",
+        "VideoScanTests/ArchiveAngelStaleSoundVerdictPrepareTests"
       ]
     },
     {

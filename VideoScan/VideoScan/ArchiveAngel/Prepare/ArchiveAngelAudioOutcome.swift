@@ -107,9 +107,17 @@ enum ArchiveAngelAudioOutcome: Equatable {
     /// of verifying again, or nil = verify now. Reused only when a verdict
     /// is stored AND the cached diagnosis is itself a verdict: a newer
     /// not-checked diagnosis behind an earlier stored "ok" is neither
-    /// "already verified" nor something to hand on (review F4). Pure.
-    static func reusableDiagnosis(storedStatus: String, cached: AudioVerifyDiagnosis?) -> AudioVerifyDiagnosis? {
-        guard !storedStatus.isEmpty, let cached else { return nil }
+    /// "already verified" nor something to hand on (review F4).
+    ///
+    /// `standing`: ArchiveReadiness's reading of the stored verdict for this
+    /// record — the same one the Angel's row routes by. `.notChecked` means
+    /// the stored verdict does not describe the record (a "mono" note on a
+    /// file that is not one channel, Codex #302): the row said "Needs audio
+    /// checked", so the cached diagnosis of that other sound is not reused
+    /// and the file is verified now. Pure.
+    static func reusableDiagnosis(storedStatus: String, cached: AudioVerifyDiagnosis?,
+                                  standing: ArchiveReadiness.SoundStanding) -> AudioVerifyDiagnosis? {
+        guard !storedStatus.isEmpty, standing != .notChecked, let cached else { return nil }
         if case .notChecked = cached.verdict { return nil }
         return cached
     }

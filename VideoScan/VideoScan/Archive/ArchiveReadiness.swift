@@ -52,8 +52,9 @@ struct ArchiveReadiness: Equatable, Sendable {
         /// Checked; damaged, silent or no stream — Promote refuses it. Red.
         case refusable(String)
         /// Silent, or no audio track, and the owner's “Silent — checked” tag
-        /// speaks for this file: Promote accepts it. The payload is the
-        /// sentence shown. Neutral — said, not counted as a problem.
+        /// speaks for this file AS CATALOGUED: Promote accepts it if the
+        /// file is still that one. The payload is the sentence shown.
+        /// Neutral — said, not counted as a problem, never a promise.
         case accepted(String)
         /// No stored check describes this file's sound: never checked, a
         /// stored "mono" on a record that is not one channel, or a file
@@ -220,11 +221,14 @@ struct ArchiveReadiness: Equatable, Sendable {
 
         // ---- Audio
         let hasAudio = stream == .videoAndAudio || stream == .audioOnly
+        // A stored "damaged" comes first, track or no track (Codex #302): a
+        // reference movie has no audio stream of its own AND is damaged, and
+        // Promote's gate puts damage ahead of "no track".
         let audio: Audio
-        if !hasAudio {
-            audio = .noAudioTrack
-        } else if i.audioVerifyStatus == "damaged" {
+        if i.audioVerifyStatus == "damaged" {
             audio = .verifiedProblem(i.audioVerifyNote.isEmpty ? "damaged audio" : i.audioVerifyNote)
+        } else if !hasAudio {
+            audio = .noAudioTrack
         } else if i.audioVerifyStatus == "ok" || i.audioVerifyDate != nil {
             audio = i.audioVerifyNote.isEmpty ? .verifiedOK : .verifiedProblem(i.audioVerifyNote)
         } else {
@@ -232,8 +236,9 @@ struct ArchiveReadiness: Equatable, Sendable {
         }
 
         // An un-probeable file has no sound fact at all: Promote's gate
-        // answers "could not check" for it, so it is not "no track".
-        let sound: SoundStanding = blocking
+        // answers "could not check" for it, so it is not "no track" — unless
+        // damage is stored, which nothing outranks.
+        let sound: SoundStanding = blocking && i.audioVerifyStatus != "damaged"
             ? .notChecked
             : soundStanding(audio: audio, audioVerifyStatus: i.audioVerifyStatus,
                             channelCount: channelCount(i.audioChannels), mark: i.soundMark)
@@ -307,8 +312,13 @@ struct ArchiveReadiness: Equatable, Sendable {
         PromoteSoundGate.decide(finding: finding, mark: mark, soundPartnerName: nil, recordedYear: nil,
                                 digestPrefix: "").isRefusal
     }
-    static let acceptedSilentWords = "Silent — accepted by your “\(PromoteSoundGate.ownerTag)” tag"
-    static let acceptedNoTrackWords = "No audio track — accepted by your “\(PromoteSoundGate.ownerTag)” tag"
+    // A FORECAST, so conditional words (Codex #302): the tag is read against
+    // the file as catalogued; the Promote job reads it again against the
+    // bytes it proves, and refuses if the file is no longer that one.
+    static let acceptedSilentWords = "Silent — your “\(PromoteSoundGate.ownerTag)” tag covers this file as catalogued"
+    static let acceptedNoTrackWords = "No audio track — your “\(PromoteSoundGate.ownerTag)” tag covers this file as catalogued"
+    /// What every "accepted" sentence ends with: the condition.
+    static let acceptedConditionWords = "Promote checks the file is still that one before archiving it without sound"
 
     /// THE reading of a stored sound verdict for the Promote sheet. The
     /// worst fragment wins: refusable, then a stored "mono" that does not
@@ -325,26 +335,39 @@ struct ArchiveReadiness: Equatable, Sendable {
     static func soundStanding(audio: Audio, audioVerifyStatus: String,
                               channelCount: Int? = nil,
                               mark: PromoteSoundGate.Mark = .absent) -> SoundStanding {
+        // Damage first, whatever `audio` says: the owner's tag accepts
+        // silence and a missing track, never damage (Codex #302).
+        if audioVerifyStatus == "damaged" {
+            if case .verifiedProblem(let note) = audio { return .refusable(note) }
+            return .refusable("damaged audio")
+        }
         switch audio {
         case .verifiedOK: return .fine
         case .notVerified: return .notChecked
         case .noAudioTrack:
             return gateRefuses(.noTrack, mark: mark) ? .noTrack : .accepted(acceptedNoTrackWords)
         case .verifiedProblem(let note):
-            if audioVerifyStatus == "damaged" { return .refusable(note) }
-            let fragments = note.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
-            if fragments.contains(noStreamNoteFragment) {
-                return gateRefuses(.noTrack, mark: mark) ? .refusable(note) : .accepted(acceptedNoTrackWords)
-            }
-            if fragments.contains(silentNoteFragment) {
-                let silent = PromoteSoundGate.Finding.silent(levels: "", loudestDBFS: -.infinity)
-                return gateRefuses(silent, mark: mark) ? .refusable(note) : .accepted(acceptedSilentWords)
-            }
-            if fragments.contains(monoNoteFragment), channelCount != 1 { return .notChecked }
-            if fragments.contains(where: unbalancedNoteFragments.contains) { return .unbalanced(note) }
-            if fragments == [monoNoteFragment] { return .note(note) }
-            return .unmeasured(note)
+            return standing(ofStoredNote: note, channelCount: channelCount, mark: mark)
         }
+    }
+
+    /// The reading of a NOTE stored beside an "ok" verdict (never a damaged
+    /// one — `soundStanding` has answered that). Fragment by fragment, worst
+    /// first. Pure.
+    private static func standing(ofStoredNote note: String, channelCount: Int?,
+                                 mark: PromoteSoundGate.Mark) -> SoundStanding {
+        let fragments = note.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        if fragments.contains(noStreamNoteFragment) {
+            return gateRefuses(.noTrack, mark: mark) ? .refusable(note) : .accepted(acceptedNoTrackWords)
+        }
+        if fragments.contains(silentNoteFragment) {
+            let silent = PromoteSoundGate.Finding.silent(levels: "", loudestDBFS: -.infinity)
+            return gateRefuses(silent, mark: mark) ? .refusable(note) : .accepted(acceptedSilentWords)
+        }
+        if fragments.contains(monoNoteFragment), channelCount != 1 { return .notChecked }
+        if fragments.contains(where: unbalancedNoteFragments.contains) { return .unbalanced(note) }
+        if fragments == [monoNoteFragment] { return .note(note) }
+        return .unmeasured(note)
     }
 
     /// Date state from a resolution:
@@ -374,7 +397,7 @@ struct ArchiveReadiness: Equatable, Sendable {
         case .unmeasured(let note):
             return "Sound checked: \(note) — \(notMeasuredWords); listen before you archive it"
         case .accepted(let words):
-            return "\(words) — Promote archives it without sound"
+            return "\(words); \(acceptedConditionWords)"
         case .notChecked where hasAudio:
             return "Sound not checked yet — Promote checks it before copying (missing, silent or damaged sound is refused)"
         case .noTrack:
