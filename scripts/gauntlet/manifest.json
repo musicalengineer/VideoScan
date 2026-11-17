@@ -34022,6 +34022,43 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_m4_run_suite_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_run_suite_lane.py"
+      ],
+      "tests": [
+        "test_a_build_failure_is_red_after_the_nightlys_one_clean_retry",
+        "test_a_core_failure_turns_a_green_app_red",
+        "test_a_core_lane_with_no_number_is_red",
+        "test_a_failed_test_is_red_and_named_with_where_the_repo_declares_it",
+        "test_a_held_lock_refuses_before_touching_anything",
+        "test_a_held_lock_refuses_with_exit_3_and_starts_nothing",
+        "test_a_runner_that_leaves_no_row_is_red",
+        "test_cli_exits_0_green_1_red_4_norun_and_caps_the_names",
+        "test_dry_run_prints_the_plan_and_touches_nothing",
+        "test_failures_build_timeout_and_no_row_are_red",
+        "test_green_needs_both_lanes_counted_and_exit_zero",
+        "test_green_run_counts_both_lanes_and_publishes_nothing",
+        "test_machine_setup_is_norun",
+        "test_names_reduce_to_what_the_sources_declare",
+        "test_status_shows_the_last_suite_run_also_after_another_lane",
+        "test_the_lane_never_passes_a_publish_or_metrics_flag",
+        "test_the_machine_preflight_is_norun_not_a_test_result",
+        "test_the_nightly_runner_refuses_half_an_on_demand_command",
+        "test_the_nightly_window_refuses_with_exit_5_and_starts_nothing",
+        "test_the_runner_is_the_nightlys_with_its_own_caches_and_the_nightlys_flags",
+        "test_usage_errors_exit_2",
+        "test_wait_exits_0_on_green_and_shows_the_verdict",
+        "test_wait_exits_1_on_red",
+        "test_wait_exits_2_when_the_run_could_not_run",
+        "test_zero_app_tests_is_red",
+        "test_zero_tests_or_no_number_is_red_whatever_the_status_says"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_metrics_dashboard.py",
@@ -40248,6 +40285,10 @@
         {
           "name": "tests/test_m4_run_deep_lane.py",
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
+        },
+        {
+          "name": "tests/test_m4_run_suite_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
           "name": "tests/test_nightly_gauntlet.py",

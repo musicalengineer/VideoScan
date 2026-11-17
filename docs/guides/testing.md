@@ -427,6 +427,7 @@ name it in the report. The laptops (M5 Pro, M1) take overflow and are off the ni
 | Full app suite (Debug) | the M4 | `xcodebuild test -project <abs>/VideoScan/VideoScan.xcodeproj -scheme VideoScan -derivedDataPath <abs dd> -only-testing:VideoScanTests` |
 | Release gauntlet (§3) | the M4, on request | `scripts/m4_run.sh deep` from the Ultra (it pushes the commit to the M4 and runs `scripts/run_gauntlet.sh --away` in the M4's GUI session); `scripts/m4_run.sh status` reads it back |
 | UI test plans (Smoke, Gauntlet) | the M4, on request | `scripts/m4_run.sh ui [--only <UITestClass>]`; `all` = deep then ui |
+| Full suite (app + Core, Release, the nightly's runner) for any commit | the M4, on request | `scripts/m4_run.sh suite --ref <rev> --wait` (exit 0 GREEN · 1 RED · 2 could not run); nothing is published; `status` shows counts and failed tests (operations.md §1) |
 | Nightly (app, Core, Hallie replay, analysis lane) | both Studios at 02:00 on the rota | launchd, installed by `scripts/install_nightly.sh`; the rota is `scripts/nightly_rota.json`; timing budgets are strict only there (`VIDEOSCAN_TIMING_STRICT=1`, DECISIONS 2026-10-31) |
 | Nightly UI smoke on the M4 | ruled 2026-10-28, not yet nightly | five stale flows first (#408; BACKLOG "Nightly UI smoke on the M4") |
 | Nightly adversarial review | built | `tools/adversarial_nightly.py` reads the invariants in `docs/practices/invariants.md` (`tools/invariants.py` parses them; `tests/test_invariants_coverage.py` pins 8 areas); its reviews are in `docs/reviews/codex.md` |
