@@ -10,64 +10,196 @@
 // that can. It has NO caller yet; nothing is trashed, promoted or stored
 // because of it.
 //
+// The rule behind every rule: a false PROVEN can cost a family recording;
+// "not proven" and "could not check" only cost keeping the original. Every
+// doubt resolves to one of those two.
+//
 // PROVEN means ALL of:
-//   1. Every non-audio stream of the original (video, timecode/data,
-//      subtitles — what the job's `-map 0` carries) is in the copy, same
-//      kind and codec, in the same order, and the SHA-256 over that
+//   1. STREAMS. Every non-audio stream of the original (video, timecode/
+//      data, subtitles — what the job's `-map 0` carries) is in the copy,
+//      same kind and codec, in the same order, and the SHA-256 over that
 //      stream's packet payloads is equal (ffmpeg `-c copy -f streamhash`:
 //      no decode, timestamps not hashed). The copy may hold ONE stream the
 //      original has not: the `tmcd` timecode track the mov muxer makes from
-//      DV timecode (BalanceAudioFix.outputStreamMismatch tolerates the same
-//      one), and only when the original has no timecode track of its own.
-//   2. The original has exactly one audio stream, measured in full by
-//      AudioBalanceProbe as leftOnly / rightOnly / mono. The copy has
-//      exactly one, 2 channels, same codec, sample format and sample rate.
-//      Decoded with no resampling and no format change, the copy's LEFT
-//      samples, its RIGHT samples and the original's LIVE channel hash to
-//      the same SHA-256 (equal hashes of the raw PCM bytes ⇒ equal sample
-//      counts). The channels are picked with `channelmap` (a remap, no
-//      arithmetic) — not with the `pan` filter the job renders with.
-//   3. The original's audio codec is `pcm_*`. A lossy original is "not
-//      proven" by design, before anything is hashed.
+//      DV timecode, and only when the original has no timecode track.
+//   2. DECODER CONFIGURATION. For each paired stream ffprobe states the same
+//      extradata SHA-256 (or none on both sides), width, height, pixel
+//      format, sample and display aspect ratio, field order, colour range,
+//      space, transfer and primaries. (Equal packets under a different SPS
+//      are a different picture.) Extradata gained or lost is a difference
+//      too: measured 2026-11-16, no job output of the matrix gains or loses
+//      any — raw DV → QuickTime included — so there is no case to excuse.
+//   3. TIMING. For each paired stream: the same packet count (ffprobe
+//      `-count_packets`), start time and duration to the microsecond
+//      ffprobe prints, the same `r_frame_rate`, and the same
+//      `avg_frame_rate` (when the container changed — raw DV → QuickTime —
+//      the copy's average rate must be the original's real rate, because
+//      the raw-DV demuxer's own average is a known-bogus 60000/1). For the
+//      sound: start, duration, its offset from the first picture stream and
+//      the file's duration, each within `soundTimingSlackSeconds` (one
+//      sample period, or one tick of the stream's time base, never more
+//      than 1 ms). A length stated on one side only is a difference.
+//   4. SOUND FORMAT. The original has exactly one audio stream, `pcm_*`,
+//      1 or 2 channels, measured in full by AudioBalanceProbe as leftOnly /
+//      rightOnly / mono. The copy has exactly one: 2 channels, same codec,
+//      sample format and rate. Both state a plain layout — "stereo" (FL+FR;
+//      "mono" for a 1-channel original) — or state none in a container
+//      measured to leave it unset (`containersLeavingLayoutUnset`).
+//   5. SOUND SAMPLES. Decoded with no resampling and no format change, the
+//      copy's LEFT samples, its RIGHT samples and the original's LIVE
+//      channel hash to the same SHA-256 (equal hashes of the raw PCM bytes
+//      ⇒ equal sample counts). The channels are picked with `channelmap`
+//      (a remap, no arithmetic) — not with the `pan` filter the job
+//      renders with.
+//   6. THE DISCARDED CHANNEL HELD NOTHING. The original's other channel was
+//      measured in the SAME pass that hashed the live one, and its PEAK is
+//      at or under `discardedChannelPeakCeilingDBFS`. Peak, not whole-track
+//      RMS: a short quiet passage in a long silent channel has a tiny RMS
+//      and an honest peak. The evidence and the log line carry the
+//      measured peak (or "digital silence").
+//   7. BOTH READS WERE WHOLE. Each hash pass exited 0, logged nothing at
+//      error level or above, ended with ffmpeg's own clean-exit line, read
+//      exactly the packet count ffprobe counted for every stream (the sound
+//      included), decoded the sound with zero decode errors, and — where
+//      the container states the sound stream's duration (AVI does not) —
+//      decoded as many samples as that duration holds, within the same
+//      slack. A stream with no packets at all (a Matroska attachment)
+//      cannot be held this way: "could not check".
+//   8. BOTH FILES STAYED PUT. Neither given path ends in a symbolic link;
+//      each is resolved once (`realpath`) and every tool reads the resolved
+//      path; at the end both given paths resolve to the same place and both
+//      files' identity stamps (device, inode, size, mtime, ctime) are
+//      unchanged; and the check was not cancelled, even during those
+//      closing stamps.
 // Anything unmeasured is "could not check". Unknown is never proven.
 //
 // What it does NOT prove (said plainly so no caller assumes it):
-//   - timestamps / frame rate (the job's own verification holds duration
-//     to 1 s; packet payloads say nothing about timing);
-//   - container metadata (creation date, tags) — `-map_metadata 0` is the
-//     job's promise, not checked here;
-//   - the original's DEAD channel: by the director's definition the copy
-//     need not carry it. "Dead" is the analyzer's −60 dBFS floor, not
-//     digital silence.
+//   - PER-PACKET timestamps. Start, duration, frame rate and packet count
+//     are compared; two packets that swapped presentation times inside an
+//     otherwise equal stream are not seen (their payloads still are).
+//   - container metadata (creation date, tags, timecode VALUE beyond the
+//     timecode track's packets) — `-map_metadata 0` is the job's promise,
+//     not checked here;
+//   - that the discarded channel is digital silence: it may hold anything
+//     whose peak is under the ceiling (hiss, hum, or sound that quiet);
+//   - a PARENT DIRECTORY swapped for another and swapped back mid-run:
+//     that leaves both resolved paths and both files' stamps as they were.
+//     (A file renamed away and back changes its ctime and is caught.)
+//   - text written to stderr mid-run by something other than ffmpeg's own
+//     logger is not told apart from a metadata continuation line when it
+//     happens to look like one;
 //   - An original with more than one audio stream (12-bit DV, two pairs) is
 //     "not proven": the copy drops the silent pair, and this engine does
 //     not decide that a dropped stream held nothing.
 //
-// Shape (the repo's engine split): pure `decide` over measured `Facts`
-// (table-tested, no I/O) + one `@concurrent` `measure` that gathers them
-// with the app's one process runner (ProcessRunner.runProcess, tools from
-// ToolLocator — the same road as AudioBalanceProbe / VerifyAudioProbe).
+// Shape (the repo's engine split), three files: the facts and outcomes
+// (here); pure `decide` over measured `Facts`, table-tested, no I/O
+// (BalancedCopyProofRules.swift); one `@concurrent` `measure` that gathers
+// them (BalancedCopyProofMeasure.swift) with the app's one process runner
+// (ProcessRunner.runProcess, tools from ToolLocator — the same road as
+// AudioBalanceProbe / VerifyAudioProbe).
 // (An `enum` with no cases is Swift's namespace ≈ a C++ struct of statics.)
 //
-// Cost: one levels pass over the original (AudioBalanceProbe.analyze), two
-// ffprobe calls, then ONE ffmpeg pass per file that hashes every stream at
-// once. Each pass reads the whole container.
+// Cost: FIVE whole-file reads — one levels pass over the original
+// (AudioBalanceProbe.analyze), one ffprobe packet count per file (demux
+// only), one ffmpeg hash pass per file (demux + sound decode).
 //
-// Memory: ffmpeg streams and hashes in its own process. This process keeps
-// two ffprobe JSON documents (capped 1 MiB each), the stream-hash lines
-// (capped 64 KiB) and stderr (ProcessRunner's 256 KiB cap) — worst case
-// under 3 MiB, whatever the size of the media.
+// Memory: see BalancedCopyProofMeasure.swift — under 3 MiB whatever the
+// size of the media; nothing here holds more than the two stream lists.
 
 import Foundation
-import os
 import VideoScanCore
-
-private let proofLog = Logger(subsystem: "Rick-Breen.VideoScan",
-                              category: "balancedCopyProof")
 
 enum BalancedCopyProof {
 
+    // MARK: - Named numbers
+
+    /// The loudest PEAK the original's discarded channel may hold and still
+    /// count as "held nothing". Rick rules on this number.
+    /// Measured 2026-11-16 (16-bit, 48 kHz): digital silence −∞; a steady
+    /// 0.0005-amplitude sine (−69 dBFS RMS, Codex #301 F1) peaks at −66.2;
+    /// ±0.001 uniform noise (−64.8 RMS) peaks at −59.9; ±0.0001 noise at
+    /// −80.8; a 0.004 tone burst of 50 ms in 2 s (−67 RMS) peaks at −48.
+    static let discardedChannelPeakCeilingDBFS: Double = -60.0
+
+    /// How far a PICTURE (or data) stream's start or duration may differ:
+    /// one microsecond, the resolution ffprobe prints. Measured 0 on every
+    /// job output of the matrix, raw DV → mov included (118118/60000 s and
+    /// 59059/30000 s are the same instant).
+    static let pictureTimingToleranceSeconds: Double = 0.000_001
+
+    /// How far the SOUND's start, duration and picture offset may differ,
+    /// in sample periods. Measured: 0 for mov/mkv/mxf/avi; raw DV → mov
+    /// states 1.968633 s against 1.968625 s (0.4 of a 48 kHz sample — the
+    /// raw-DV demuxer's 1/14112000 time base against whole samples).
+    static let soundTimingToleranceSamples: Double = 1
+
+    /// The most any time base may widen that slack: 1 ms, Matroska's tick
+    /// (its DURATION tags round the last sample to the millisecond).
+    static let soundTimingSlackCeilingSeconds: Double = 0.001
+
+    /// ffprobe `format_name` words of the containers that state NO channel
+    /// layout for plain 2-channel PCM, measured on Balance Audio's own
+    /// output 2026-11-16 (mov and raw DV say "stereo"). An unset layout is
+    /// accepted only in these. Each was also given FC+LFE: avi and wav then
+    /// state it (refused); Matroska and MXF cannot store one at all.
+    static let containersLeavingLayoutUnset: Set<String> = ["matroska", "mxf", "avi", "wav"]
+
     // MARK: - Measured facts
+
+    /// When a stream plays, as ffprobe states it.
+    struct StreamTiming: Sendable, Equatable {
+        /// `start_time`, seconds. nil = the container states none (WAV).
+        var startSeconds: Double?
+        /// `duration` (or Matroska's DURATION tag), seconds. nil = unstated.
+        var durationSeconds: Double?
+        /// One tick of the stream's `time_base`, seconds.
+        var tickSeconds: Double?
+        /// `r_frame_rate` / `avg_frame_rate` as printed ("30000/1001").
+        var realFrameRate: String = ""
+        var averageFrameRate: String = ""
+        /// `nb_read_packets` of a full `-count_packets` demux. nil = not counted.
+        var packets: Int?
+    }
+
+    /// What a decoder is told about a stream besides its packets.
+    struct PictureConfiguration: Sendable, Equatable {
+        /// ffprobe `extradata_hash` ("SHA256:…"); "" = the stream has none.
+        var extradataSHA256: String = ""
+        var width: Int?
+        var height: Int?
+        var pixelFormat: String = ""
+        var sampleAspect: String = ""
+        var displayAspect: String = ""
+        var fieldOrder: String = ""
+        var colorRange: String = ""
+        var colorSpace: String = ""
+        var colorTransfer: String = ""
+        var colorPrimaries: String = ""
+
+        /// A picture stream whose size and pixel format ffprobe could read.
+        var describesAPicture: Bool { (width ?? 0) > 0 && (height ?? 0) > 0 && !pixelFormat.isEmpty }
+
+        /// The first thing `copy` states differently ("width 320 → 304").
+        func firstDifference(from copy: PictureConfiguration) -> String? {
+            func text(_ n: Int?) -> String { n.map(String.init) ?? "" }
+            let fields: [(name: String, original: String, copy: String)] = [
+                ("codec extradata", extradataSHA256, copy.extradataSHA256),
+                ("width", text(width), text(copy.width)), ("height", text(height), text(copy.height)),
+                ("pixel format", pixelFormat, copy.pixelFormat),
+                ("sample aspect ratio", sampleAspect, copy.sampleAspect),
+                ("display aspect ratio", displayAspect, copy.displayAspect),
+                ("field order", fieldOrder, copy.fieldOrder), ("colour range", colorRange, copy.colorRange),
+                ("colour space", colorSpace, copy.colorSpace), ("colour transfer", colorTransfer, copy.colorTransfer),
+                ("colour primaries", colorPrimaries, copy.colorPrimaries)
+            ]
+            guard let field = fields.first(where: { $0.original != $0.copy }) else { return nil }
+            func shown(_ value: String) -> String {
+                value.isEmpty ? "none" : (value.hasPrefix("SHA256:") ? String(value.prefix(19)) : value)
+            }
+            return "\(field.name) \(shown(field.original)) → \(shown(field.copy))"
+        }
+    }
 
     /// One non-audio stream of a file and the SHA-256 of its packets.
     struct CarriedStream: Sendable, Equatable {
@@ -82,6 +214,8 @@ enum BalancedCopyProof {
         /// SHA-256 (lowercase hex) over the stream's packet payloads; nil
         /// until the hash pass ran.
         var packetSHA256: String?
+        var timing = StreamTiming()
+        var configuration = PictureConfiguration()
 
         /// The timecode track the mov muxer writes.
         var isTimecodeTrack: Bool { kind == "data" && tag == "tmcd" }
@@ -96,12 +230,49 @@ enum BalancedCopyProof {
         var sampleFormat: String
         var sampleRateHz: Int
         var channels: Int
+        /// ffprobe `channel_layout` ("stereo", "2 channels (FC+LFE)"); "" =
+        /// the container states none.
+        var channelLayout: String = ""
+        var timing = StreamTiming()
+
+        /// How far this stream's stated times may be from another statement
+        /// of the same times: one sample period, or one tick of its time
+        /// base when that is coarser, capped at 1 ms.
+        var timingSlackSeconds: Double {
+            let sample = sampleRateHz > 0 ? BalancedCopyProof.soundTimingToleranceSamples / Double(sampleRateHz) : 0
+            return min(BalancedCopyProof.soundTimingSlackCeilingSeconds, max(sample, timing.tickSeconds ?? 0))
+        }
     }
 
     /// The streams of one file.
     struct FileLayout: Sendable, Equatable {
         var carried: [CarriedStream] = []
         var sound: [SoundStream] = []
+        /// ffprobe `format_name` ("mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm").
+        var container: String = ""
+        /// ffprobe's duration of the whole file, seconds.
+        var durationSeconds: Double?
+
+        var containerWords: Set<String> { Set(container.split(separator: ",").map { $0.lowercased() }) }
+    }
+
+    /// What a hash pass says it read of one input stream.
+    struct StreamRead: Sendable, Equatable {
+        var packets: Int
+        /// Sound only: samples decoded, and decode errors met.
+        var samples: Int64?
+        var decodeErrors: Int?
+    }
+
+    /// One hash pass's own account of its read (from its log).
+    struct ReadReport: Sendable, Equatable {
+        /// By container-wide stream index.
+        var streams: [Int: StreamRead] = [:]
+        /// The original's pass only: every channel's peak level in dBFS, in
+        /// channel order; −∞ = every sample of that channel is zero.
+        var channelPeaksDBFS: [Double] = []
+        /// Parser state: how many "Channel: N" lines were seen.
+        var channelsAnnounced = 0
     }
 
     /// Everything `decide` looks at. Built by `measure`; built by hand in
@@ -120,6 +291,9 @@ enum BalancedCopyProof {
         /// SHA-256 of the copy's left / right channel as raw PCM.
         var balancedLeftSHA256: String?
         var balancedRightSHA256: String?
+        /// What each hash pass says it read; nil = no pass, or no account.
+        var originalRead: ReadReport?
+        var balancedRead: ReadReport?
     }
 
     // MARK: - Outcome
@@ -133,6 +307,16 @@ enum BalancedCopyProof {
             var balancedIndex: Int
             /// The one SHA-256 both files' packets hashed to.
             var packetSHA256: String
+            /// The one packet count ffprobe and both hash passes agree on.
+            var packets: Int
+        }
+        /// The original's channel that is NOT in the copy, as measured.
+        struct Discarded: Sendable, Equatable {
+            /// 0 = left, 1 = right.
+            var channel: Int
+            /// Peak level, dBFS; −∞ when every sample is zero.
+            var peakDBFS: Double
+            var isDigitalSilence: Bool { peakDBFS == -.infinity }
         }
         var carried: [Stream]
         /// The copy also holds a muxer-made timecode track.
@@ -146,10 +330,17 @@ enum BalancedCopyProof {
         /// The one SHA-256 that the original's live channel, the copy's
         /// left and the copy's right all hashed to.
         var soundSHA256: String
-        /// Both files as they were when measured (nil in hand-built facts).
-        /// A caller that acts on the proof later must find them unchanged.
+        /// Samples per channel the original's pass decoded.
+        var soundSamples: Int64
+        /// nil = the original has one channel; nothing was discarded.
+        var discarded: Discarded?
+        /// Both files as they were when measured (nil in hand-built facts):
+        /// where each given path resolved to, and that file's stamp. A
+        /// caller that acts on the proof later must find them unchanged.
         var originalStamp: FileIdentityStamp?
         var balancedStamp: FileIdentityStamp?
+        var originalResolvedPath: String?
+        var balancedResolvedPath: String?
     }
 
     /// Why a copy that WAS measured is not proven.
@@ -167,10 +358,18 @@ enum BalancedCopyProof {
         /// Codec, sample format, sample rate or channel count is not what a
         /// lossless balanced copy has.
         case soundFormatChanged(String)
+        /// A file's channels are not laid out as plain left + right.
+        case channelLayoutNotStereo(file: String, layout: String)
         /// A stream is missing from the copy, or the copy has one too many.
         case streamsDiffer(String)
+        /// A paired stream would not decode as the original's.
+        case pictureConfigurationDiffers(String)
+        /// Something plays at another time, speed or length.
+        case timingDiffers(String)
         /// A carried stream's packets are not the original's.
         case carriedStreamDiffers(kind: String, originalIndex: Int, original: String, balanced: String)
+        /// The channel the copy leaves behind is not silent.
+        case discardedChannelNotSilent(channel: Int, peakDBFS: Double)
         /// The copy's two channels are not the same samples.
         case channelsDiffer(left: String, right: String)
         /// The copy's sound is not the original's live channel.
@@ -191,11 +390,20 @@ enum BalancedCopyProof {
                 return "the balanced copy has \(n) sound tracks, expected exactly 1"
             case .soundFormatChanged(let what):
                 return "the balanced copy's sound format is not the original's (\(what))"
+            case .channelLayoutNotStereo(let file, let layout):
+                return "\(file)'s channels are not laid out as plain left and right "
+                    + "(\(layout.isEmpty ? "no layout stated" : layout))"
             case .streamsDiffer(let what):
                 return "the balanced copy does not hold the original's streams (\(what))"
+            case .pictureConfigurationDiffers(let what):
+                return "the balanced copy would not decode as the original does (\(what))"
+            case .timingDiffers(let what):
+                return "the balanced copy does not play at the original's times (\(what))"
             case .carriedStreamDiffers(let kind, let index, let original, let balanced):
                 return "\(kind) stream \(index) is not the original's, packet for packet "
                     + "(sha256 \(BalancedCopyProof.short(original)) ≠ \(BalancedCopyProof.short(balanced)))"
+            case .discardedChannelNotSilent(_, let peak):
+                return "the original's other channel is not silent (peak \(BalancedCopyProof.level(peak)))"
             case .channelsDiffer(let left, let right):
                 return "the balanced copy's left and right channels are not the same sound "
                     + "(sha256 \(BalancedCopyProof.short(left)) ≠ \(BalancedCopyProof.short(right)))"
@@ -215,458 +423,5 @@ enum BalancedCopyProof {
         case couldNotCheck(String)
 
         var isProven: Bool { if case .proven = self { return true }; return false }
-    }
-
-    // MARK: - Pure rules
-
-    /// SHA-256 of zero bytes: what a stream that delivered nothing hashes to.
-    static let emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-    /// First 12 hex digits, for reasons (the full digest is in Evidence).
-    static func short(_ digest: String) -> String { String(digest.prefix(12)) }
-
-    /// The original channel a balanced copy must equal: 0 = left, 1 = right.
-    /// nil = the class is not one the balance job fixes. Mirrors
-    /// BalanceAudioFix.panFilter (leftOnly/mono read c0, rightOnly reads c1).
-    static func liveChannel(for c: AudioChannelClass) -> Int? {
-        switch c {
-        case .leftOnly, .mono: return 0
-        case .rightOnly: return 1
-        case .dualMono, .trueStereo, .silent, .multichannel: return nil
-        }
-    }
-
-    /// The raw PCM codec that holds a DECODED sample format without changing
-    /// a bit ("s16"/"s16p" → pcm_s16le). nil = a format this proof does not
-    /// know how to hash exactly.
-    static func hashCodec(forSampleFormat format: String) -> String? {
-        let packed = format.hasSuffix("p") ? String(format.dropLast()) : format
-        switch packed {
-        case "u8": return "pcm_u8"
-        case "s16": return "pcm_s16le"
-        case "s32": return "pcm_s32le"
-        case "s64": return "pcm_s64le"
-        case "flt": return "pcm_f32le"
-        case "dbl": return "pcm_f64le"
-        default: return nil
-        }
-    }
-
-    /// Which copy stream answers for which original stream.
-    struct Pairing: Sendable, Equatable {
-        /// Positions in `original.carried` / `balanced.carried`.
-        struct Pair: Sendable, Equatable {
-            var original: Int
-            var balanced: Int
-        }
-        var pairs: [Pair]
-        var gainedTimecodeTrack: Bool
-    }
-
-    /// Pair the non-audio streams, in order. The copy may hold exactly one
-    /// more than the original — a `tmcd` timecode track — and only when the
-    /// original has none. Kind and codec must agree pairwise (the codec TAG
-    /// may not: raw DV's is empty, QuickTime's is "dvc ").
-    static func pairing(original: [CarriedStream], balanced: [CarriedStream]) -> Result<Pairing, NotProven> {
-        var copyPositions = Array(balanced.indices)
-        var gained = false
-        if balanced.count == original.count + 1,
-           !original.contains(where: \.isTimecodeTrack),
-           let extra = balanced.lastIndex(where: \.isTimecodeTrack) {
-            copyPositions.remove(at: extra)
-            gained = true
-        }
-        guard copyPositions.count == original.count else {
-            return .failure(.streamsDiffer(
-                "the original has \(original.count) picture/data streams, the balanced copy \(balanced.count)"))
-        }
-        for (o, b) in zip(original.indices, copyPositions)
-        where original[o].kind != balanced[b].kind || original[o].codec != balanced[b].codec {
-            return .failure(.streamsDiffer(
-                "stream \(original[o].index) is \(describe(original[o])), the balanced copy has \(describe(balanced[b]))"))
-        }
-        return .success(Pairing(pairs: zip(original.indices, copyPositions).map { Pairing.Pair(original: $0, balanced: $1) },
-                                gainedTimecodeTrack: gained))
-    }
-
-    private static func describe(_ s: CarriedStream) -> String {
-        s.codec.isEmpty ? "\(s.kind) (\(s.tag))" : "\(s.kind) (\(s.codec))"
-    }
-
-    /// The original's side of the sound rules: one-sided, one track, PCM.
-    static func originalSoundVerdict(_ facts: Facts) -> Outcome? {
-        guard facts.originalMeasuredInFull else {
-            return .couldNotCheck("the original's sound was only partly measured")
-        }
-        guard liveChannel(for: facts.originalClass) != nil else {
-            return .notProven(.originalNotOneSided(facts.originalClass))
-        }
-        guard facts.original.sound.count == 1, let sound = facts.original.sound.first else {
-            return .notProven(.originalSoundTracks(facts.original.sound.count))
-        }
-        guard sound.codec.lowercased().hasPrefix("pcm_") else {
-            return .notProven(.soundReencoded(codec: sound.codec))
-        }
-        guard hashCodec(forSampleFormat: sound.sampleFormat) != nil, sound.sampleRateHz > 0 else {
-            return .couldNotCheck("the original's sound format could not be read "
-                + "(sample format \"\(sound.sampleFormat)\", \(sound.sampleRateHz) Hz)")
-        }
-        return nil
-    }
-
-    /// The copy's side: one track, two channels, the original's format.
-    /// Call after `originalSoundVerdict` returned nil.
-    static func balancedSoundVerdict(_ facts: Facts) -> Outcome? {
-        guard let original = facts.original.sound.first else { return .notProven(.originalSoundTracks(0)) }
-        guard facts.balanced.sound.count == 1, let copy = facts.balanced.sound.first else {
-            return .notProven(.balancedSoundTracks(facts.balanced.sound.count))
-        }
-        guard copy.codec == original.codec else {
-            return .notProven(.soundFormatChanged("codec \(original.codec) → \(copy.codec)"))
-        }
-        guard copy.sampleFormat == original.sampleFormat else {
-            return .notProven(.soundFormatChanged("sample format \(original.sampleFormat) → \(copy.sampleFormat)"))
-        }
-        guard copy.sampleRateHz == original.sampleRateHz else {
-            return .notProven(.soundFormatChanged("sample rate \(original.sampleRateHz) → \(copy.sampleRateHz) Hz"))
-        }
-        guard copy.channels == 2 else {
-            return .notProven(.soundFormatChanged("\(copy.channels) channels, expected 2"))
-        }
-        return nil
-    }
-
-    /// Everything that can be decided BEFORE a hash is computed. nil = the
-    /// layouts allow a proof; go on and hash. `measure` asks this first so a
-    /// lossy or mis-shaped pair never costs two whole-file reads.
-    static func layoutVerdict(_ facts: Facts) -> Outcome? {
-        if let verdict = originalSoundVerdict(facts) ?? balancedSoundVerdict(facts) { return verdict }
-        if case .failure(let why) = pairing(original: facts.original.carried, balanced: facts.balanced.carried) {
-            return .notProven(why)
-        }
-        return nil
-    }
-
-    /// A digest that can be compared: present, and not the hash of nothing
-    /// (a stream that delivered no bytes proves nothing about itself).
-    static func comparable(_ digest: String?) -> String? {
-        guard let digest, digest.count == 64, digest != emptySHA256 else { return nil }
-        return digest
-    }
-
-    /// `carriedEvidence`'s answer: the streams held, or the outcome that ends
-    /// the decision.
-    enum CarriedCheck: Sendable, Equatable {
-        case held([Evidence.Stream])
-        case refused(Outcome)
-    }
-
-    /// Hold each paired stream's packets against the original's.
-    static func carriedEvidence(_ facts: Facts, pairing: Pairing) -> CarriedCheck {
-        var out: [Evidence.Stream] = []
-        for pair in pairing.pairs {
-            let original = facts.original.carried[pair.original]
-            let copy = facts.balanced.carried[pair.balanced]
-            guard let a = comparable(original.packetSHA256), let b = comparable(copy.packetSHA256) else {
-                return .refused(.couldNotCheck("\(original.kind) stream \(original.index) gave no packets to compare"))
-            }
-            guard a == b else {
-                return .refused(.notProven(.carriedStreamDiffers(
-                    kind: original.kind, originalIndex: original.index, original: a, balanced: b)))
-            }
-            out.append(Evidence.Stream(kind: original.kind, codec: original.codec, originalIndex: original.index,
-                                       balancedIndex: copy.index, packetSHA256: a))
-        }
-        return .held(out)
-    }
-
-    /// THE decision. Pure: the same facts always give the same answer.
-    /// Order: what the layouts already rule out, then the picture, then the
-    /// copy's two channels against each other, then against the original.
-    static func decide(_ facts: Facts) -> Outcome {
-        if let verdict = layoutVerdict(facts) { return verdict }
-        guard let live = liveChannel(for: facts.originalClass), let sound = facts.original.sound.first,
-              case .success(let pairing) = pairing(original: facts.original.carried,
-                                                   balanced: facts.balanced.carried) else {
-            return .couldNotCheck("the two files' streams could not be lined up")
-        }
-        let carried: [Evidence.Stream]
-        switch carriedEvidence(facts, pairing: pairing) {
-        case .refused(let outcome): return outcome
-        case .held(let streams): carried = streams
-        }
-        guard let source = comparable(facts.originalLiveSHA256), let left = comparable(facts.balancedLeftSHA256),
-              let right = comparable(facts.balancedRightSHA256) else {
-            return .couldNotCheck("the sound gave no samples to compare")
-        }
-        guard left == right else { return .notProven(.channelsDiffer(left: left, right: right)) }
-        guard left == source else { return .notProven(.soundDiffers(original: source, balanced: left)) }
-        return .proven(Evidence(
-            carried: carried, gainedTimecodeTrack: pairing.gainedTimecodeTrack,
-            originalClass: facts.originalClass, liveChannel: live, soundCodec: sound.codec,
-            sampleFormat: sound.sampleFormat, sampleRateHz: sound.sampleRateHz, soundSHA256: source))
-    }
-
-    // MARK: - The log line (pure; the future caller writes it)
-
-    /// One line naming both files, the verdict, and the hashes compared.
-    static func logLine(original: String, balanced: String, outcome: Outcome) -> String {
-        let files = "original \"\(original)\" · balanced copy \"\(balanced)\""
-        switch outcome {
-        case .proven(let e):
-            let side = e.liveChannel == 0 ? "left" : "right"
-            let streams = e.carried
-                .map { "\($0.kind) \($0.originalIndex)→\($0.balancedIndex) sha256 \($0.packetSHA256)" }
-            let sound = "sound \(e.soundCodec) \(e.sampleRateHz) Hz: original \(side) = copy left = copy right "
-                + "sha256 \(e.soundSHA256)"
-            let timecode = e.gainedTimecodeTrack ? ["copy has a muxer-made timecode track"] : []
-            return "balanced copy proof: PROVEN — \(files) — "
-                + (streams + [sound] + timecode).joined(separator: "; ")
-        case .notProven(let why):
-            return "balanced copy proof: NOT PROVEN — \(files) — \(why.message)"
-        case .couldNotCheck(let reason):
-            return "balanced copy proof: COULD NOT CHECK — \(files) — \(reason)"
-        }
-    }
-
-    // MARK: - ffprobe layout (pure parse)
-
-    /// ffprobe request for the stream list of one file.
-    static func layoutArgs(input: String) -> [String] {
-        ["-v", "error",
-         "-show_entries", "stream=index,codec_type,codec_name,codec_tag_string,channels,sample_rate,sample_fmt",
-         "-of", "json", input]
-    }
-
-    private struct ProbedStream: Decodable {
-        let index: Int?
-        let codec_type: String?
-        let codec_name: String?
-        let codec_tag_string: String?
-        let channels: Int?
-        let sample_rate: String?
-        let sample_fmt: String?
-    }
-    private struct ProbeReport: Decodable { let streams: [ProbedStream]? }
-
-    /// Decode ffprobe's JSON into a layout; nil when it is not that JSON or
-    /// lists no stream at all (not a media file).
-    static func layout(fromProbeJSON data: Data) -> FileLayout? {
-        guard let report = try? JSONDecoder().decode(ProbeReport.self, from: data),
-              let streams = report.streams, !streams.isEmpty else { return nil }
-        var layout = FileLayout()
-        for (position, s) in streams.enumerated() {
-            let index = s.index ?? position
-            if s.codec_type == "audio" {
-                layout.sound.append(SoundStream(
-                    index: index, codec: s.codec_name ?? "", sampleFormat: s.sample_fmt ?? "",
-                    sampleRateHz: s.sample_rate.flatMap { Int($0) } ?? 0, channels: s.channels ?? 0))
-            } else {
-                layout.carried.append(CarriedStream(
-                    index: index, kind: s.codec_type ?? "", codec: s.codec_name ?? "",
-                    tag: s.codec_tag_string ?? "", packetSHA256: nil))
-            }
-        }
-        return layout
-    }
-
-    // MARK: - ffmpeg hash pass (pure builders + parse)
-
-    /// Filter graph that picks ONE channel of the original's audio stream.
-    /// `channelmap` moves samples; it never does arithmetic on them.
-    static func originalSoundFilter(streamIndex: Int, liveChannel: Int) -> String {
-        "[0:\(streamIndex)]channelmap=map=\(liveChannel):channel_layout=mono[live]"
-    }
-
-    /// Filter graph that splits the copy's audio into its two channels.
-    static func balancedSoundFilter(streamIndex: Int) -> String {
-        "[0:\(streamIndex)]asplit[a][b];"
-            + "[a]channelmap=map=0:channel_layout=mono[left];"
-            + "[b]channelmap=map=1:channel_layout=mono[right]"
-    }
-
-    /// One pass that hashes every carried stream's packets (`-c copy`) and
-    /// each named filter output as raw PCM (`-c:a <hashCodec>`, no `-ar`, so
-    /// nothing is resampled). The streamhash muxer prints one line per
-    /// OUTPUT stream, in map order: carried streams first, then the sound.
-    /// `inputArgs` are demuxer options (the raw-DV `-r`), before `-i`.
-    static func hashArgs(input: String, inputArgs: [String], carriedIndices: [Int], soundFilter: String,
-                         soundOutputs: [String], hashCodec: String) -> [String] {
-        var args = ["-v", "error", "-nostdin"] + inputArgs + ["-i", input, "-filter_complex", soundFilter]
-        for index in carriedIndices { args += ["-map", "0:\(index)"] }
-        for output in soundOutputs { args += ["-map", "[\(output)]"] }
-        return args + ["-c", "copy", "-c:a", hashCodec, "-f", "streamhash", "-hash", "sha256", "-"]
-    }
-
-    /// The digests the streamhash muxer printed ("0,v,SHA256=<hex>"), by
-    /// output stream number. nil unless there are exactly `expected` lines,
-    /// numbered 0..<expected, each a 64-digit hex SHA-256.
-    static func streamHashes(fromStdout stdout: String, expected: Int) -> [String]? {
-        var byStream: [Int: String] = [:]
-        for line in stdout.split(whereSeparator: \.isNewline) {
-            let fields = line.split(separator: ",", maxSplits: 2).map(String.init)
-            guard fields.count == 3, let number = Int(fields[0]), fields[2].hasPrefix("SHA256="),
-                  byStream[number] == nil else { return nil }
-            let digest = String(fields[2].dropFirst("SHA256=".count)).lowercased()
-            guard digest.count == 64, digest.allSatisfy(\.isHexDigit) else { return nil }
-            byStream[number] = digest
-        }
-        guard expected > 0, byStream.count == expected else { return nil }
-        let ordered = (0..<expected).compactMap { byStream[$0] }
-        return ordered.count == expected ? ordered : nil
-    }
-
-    // MARK: - Measurement (I/O, read only)
-
-    /// The two tools. `located` is production; a test points one at
-    /// /usr/bin/false to see the failure path.
-    struct Tools: Sendable {
-        var ffmpeg: String
-        var ffprobe: String
-        static var located: Tools { Tools(ffmpeg: ToolLocator.ffmpegPath, ffprobe: ToolLocator.ffprobePath) }
-    }
-
-    /// A measurement step's failure, already in the caller's words.
-    private struct Unchecked: Error { let reason: String }
-
-    /// Measure both files and decide. Never throws: every failure is an
-    /// `Outcome` (`couldNotCheck` when nothing could be measured).
-    ///
-    /// `@concurrent`: runs on the global executor — this repo's Approachable
-    /// Concurrency would otherwise run a `nonisolated async` on the CALLER's
-    /// actor. (For Rick: ≈ posting the work to a thread pool instead of
-    /// running it on the caller's thread.)
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    static func measure(original: String, balanced: String, tools: Tools = .located,
-                        control: ProcessControl? = nil) async -> Outcome {
-        do {
-            return try await measured(original: original, balanced: balanced, tools: tools, control: control)
-        } catch let unchecked as Unchecked {
-            proofLog.notice("proof could not check \((original as NSString).lastPathComponent, privacy: .public) ↔ \((balanced as NSString).lastPathComponent, privacy: .public): \(unchecked.reason, privacy: .public)")
-            return .couldNotCheck(unchecked.reason)
-        } catch {
-            return .couldNotCheck("the check was stopped")
-        }
-    }
-
-    private static func measured(original: String, balanced: String, tools: Tools,
-                                 control: ProcessControl?) async throws -> Outcome {
-        let stamps = try fileStamps(original: original, balanced: balanced)
-        guard FileManager.default.isExecutableFile(atPath: tools.ffmpeg),
-              FileManager.default.isExecutableFile(atPath: tools.ffprobe) else {
-            throw Unchecked(reason: "ffmpeg/ffprobe not found (set VS_FFMPEG_PATH / VS_FFPROBE_PATH or install via Homebrew)")
-        }
-        let analysis: AudioBalanceAnalysis
-        do {
-            analysis = try await AudioBalanceProbe.analyze(path: original, control: control)
-        } catch AudioBalanceProbeError.noAudioStream {
-            return .notProven(.originalSoundTracks(0))
-        } catch let error as AudioBalanceProbeError {
-            throw Unchecked(reason: "the original's sound could not be measured — \(error.localizedDescription)")
-        }
-        var facts = Facts(
-            original: try await layout(of: original, called: "the original", tools: tools, control: control),
-            balanced: try await layout(of: balanced, called: "the balanced copy", tools: tools, control: control),
-            originalClass: analysis.classification,
-            originalMeasuredInFull: analysis.measuredSilent != nil)
-        if let verdict = layoutVerdict(facts) { return verdict }
-        guard let live = liveChannel(for: facts.originalClass), let sourceSound = facts.original.sound.first,
-              let copySound = facts.balanced.sound.first,
-              let codec = hashCodec(forSampleFormat: sourceSound.sampleFormat) else {
-            throw Unchecked(reason: "the two files' streams could not be lined up")
-        }
-
-        let originalHashes = try await hashes(
-            of: original, called: "the original", carried: facts.original.carried.map(\.index),
-            inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape),
-            soundFilter: originalSoundFilter(streamIndex: sourceSound.index, liveChannel: live),
-            soundOutputs: ["live"], hashCodec: codec, tools: tools, control: control)
-        let balancedHashes = try await hashes(
-            of: balanced, called: "the balanced copy", carried: facts.balanced.carried.map(\.index),
-            inputArgs: [], soundFilter: balancedSoundFilter(streamIndex: copySound.index),
-            soundOutputs: ["left", "right"], hashCodec: codec, tools: tools, control: control)
-        for i in facts.original.carried.indices { facts.original.carried[i].packetSHA256 = originalHashes[i] }
-        for i in facts.balanced.carried.indices { facts.balanced.carried[i].packetSHA256 = balancedHashes[i] }
-        facts.originalLiveSHA256 = originalHashes[facts.original.carried.count]
-        facts.balancedLeftSHA256 = balancedHashes[facts.balanced.carried.count]
-        facts.balancedRightSHA256 = balancedHashes[facts.balanced.carried.count + 1]
-
-        // Both files must be the files that were opened at the start: a
-        // file rewritten or swapped mid-measurement was not measured.
-        let after = try fileStamps(original: original, balanced: balanced)
-        guard stamps[0].describesSameFile(now: after[0], volume: .sameOperation),
-              stamps[1].describesSameFile(now: after[1], volume: .sameOperation) else {
-            throw Unchecked(reason: "a file changed while it was being checked")
-        }
-        let outcome = decide(facts)
-        guard case .proven(var evidence) = outcome else { return outcome }
-        evidence.originalStamp = stamps[0]
-        evidence.balancedStamp = stamps[1]
-        return .proven(evidence)
-    }
-
-    /// Both files' identity stamps, [original, balanced]: each a readable
-    /// regular file, and not one file under two names.
-    private static func fileStamps(original: String, balanced: String) throws -> [FileIdentityStamp] {
-        guard isRegularFile(original), let a = FileIdentityStamp.capture(path: original) else {
-            throw Unchecked(reason: "the original is not on disk, or cannot be read")
-        }
-        guard isRegularFile(balanced), let b = FileIdentityStamp.capture(path: balanced) else {
-            throw Unchecked(reason: "the balanced copy is not on disk, or cannot be read")
-        }
-        // Two stats of one operation (the repo's one stamp comparison): a
-        // hard link or a symlink to the original is the original.
-        guard !a.describesSameFile(now: b, volume: .sameOperation) else {
-            throw Unchecked(reason: "the original and the balanced copy are the same file")
-        }
-        return [a, b]
-    }
-
-    private static func isRegularFile(_ path: String) -> Bool {
-        var info = stat()
-        return stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
-    }
-
-    private static func layout(of path: String, called name: String, tools: Tools,
-                               control: ProcessControl?) async throws -> FileLayout {
-        let result = await ProcessRunner.runProcess(
-            executable: tools.ffprobe, arguments: layoutArgs(input: path),
-            stdoutLimitBytes: 1 << 20, deadlineSeconds: 60, control: control)
-        try Task.checkCancellation()
-        guard result.exitCode == 0, let data = result.stdout?.data(using: .utf8),
-              let layout = layout(fromProbeJSON: data) else {
-            throw Unchecked(reason: "\(name) could not be read as media (ffprobe status \(result.exitCode))")
-        }
-        return layout
-    }
-
-    /// One hash pass over one file: the carried streams' digests in order,
-    /// then one per sound output. The deadline is the levels pass's (it
-    /// scales with the file's size — both read the whole container).
-    private static func hashes(of path: String, called name: String, carried: [Int], inputArgs: [String],
-                               soundFilter: String, soundOutputs: [String], hashCodec: String,
-                               tools: Tools, control: ProcessControl?) async throws -> [String] {
-        let bytes = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value ?? 0
-        let deadline = AudioBalanceProbe.levelsDeadlineSeconds(forFileSizeBytes: bytes)
-        let result = await ProcessRunner.runProcess(
-            executable: tools.ffmpeg,
-            arguments: hashArgs(input: path, inputArgs: inputArgs, carriedIndices: carried,
-                                soundFilter: soundFilter, soundOutputs: soundOutputs, hashCodec: hashCodec),
-            stdoutLimitBytes: 1 << 16, deadlineSeconds: deadline, control: control)
-        try Task.checkCancellation()
-        guard result.exitCode == 0 else {
-            if result.timedOut {
-                throw Unchecked(reason: "reading \(name) ran out of time after \(Int(deadline)) seconds")
-            }
-            let tail = result.stderr.split(separator: "\n").suffix(2).joined(separator: " · ")
-            throw Unchecked(reason: "\(name) could not be read to the end (ffmpeg status \(result.exitCode)\(tail.isEmpty ? "" : " — \(tail)"))")
-        }
-        guard let digests = streamHashes(fromStdout: result.stdout ?? "",
-                                         expected: carried.count + soundOutputs.count) else {
-            throw Unchecked(reason: "\(name) did not give a hash for every stream")
-        }
-        return digests
     }
 }

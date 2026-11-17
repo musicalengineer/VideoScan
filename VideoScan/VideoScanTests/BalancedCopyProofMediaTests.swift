@@ -11,6 +11,10 @@
 // and swapped files; a tool that fails) · SENSOR (both files and their
 // folder are byte-for-byte untouched by the proof). The negatives are the
 // point: each damaged copy must be refused, with the right reason.
+// The Codex #301 reproductions (discarded channel, timing, partial reads,
+// symlinks, decoder configuration, layout, cancellation) are in
+// BalancedCopyProofHardeningTests; the attacks it found untested are in
+// BalancedCopyProofCoverageTests.
 
 import CryptoKit
 import Foundation
@@ -182,6 +186,15 @@ struct BalancedCopyProofMediaTests {
         #expect(evidence.carried.allSatisfy { $0.packetSHA256.count == 64 && $0.packetSHA256 != Proof.emptySHA256 })
         #expect(evidence.originalStamp == FileIdentityStamp.capture(path: original))
         #expect(evidence.balancedStamp == FileIdentityStamp.capture(path: balanced))
+        #expect(evidence.originalResolvedPath == SourceTree.canonicalPath(URL(fileURLWithPath: original)))
+        // What the hardened proof also holds, on what the job really writes:
+        // the channel left behind is digital silence, every stream's packets
+        // were counted, and the sound was decoded to the end.
+        #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
+        #expect(evidence.carried.allSatisfy { $0.packets >= 50 })
+        #expect(evidence.soundSamples >= 94_000 && evidence.soundSamples <= 96_096)
+        let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
+        #expect(line.contains("original right: digital silence, not in the copy") && !line.contains("\n"))
         // Raw DV is the one wrapper whose copy changes container (.mov) and
         // gains the muxer's timecode track.
         #expect(evidence.gainedTimecodeTrack == (wrapper == .rawDV))
@@ -337,19 +350,15 @@ struct BalancedCopyProofMediaTests {
         let (dir, original, balanced) = try await provenPair("short")
         defer { try? fm.removeItem(at: dir) }
         let half = try Media.derive("half_balanced", from: balanced, ["-t", "1", "-map", "0", "-c", "copy"])
+        // Since Codex #301 F2/F3 ffprobe's own packet count refuses it, before any hash pass.
         let outcome = await Proof.measure(original: original, balanced: half)
-        guard case .notProven(.carriedStreamDiffers) = outcome else {
-            Issue.record("cut short: expected the picture to be refused, got \(outcome)")
-            return
-        }
+        #expect(outcome == .notProven(.timingDiffers("video stream 0 has 50 packets, the balanced copy 25")))
         // Picture whole, last 10 ms of sound missing.
         let shortSound = try Media.derive("short_sound_balanced", from: balanced,
                                           ["-map", "0", "-c", "copy", "-af", "atrim=end=1.99", "-c:a", "pcm_s16le"])
         let soundOutcome = await Proof.measure(original: original, balanced: shortSound)
-        guard case .notProven(.soundDiffers) = soundOutcome else {
-            Issue.record("short sound: expected the sound to be refused, got \(soundOutcome)")
-            return
-        }
+        #expect(soundOutcome == .notProven(.timingDiffers(
+            "the sound lasts 2.000000 s, in the balanced copy 1.990000 s")))
     }
 
     @Test("NEGATIVE: a copy with an extra stream or a missing stream is not proven", .timeLimit(.minutes(2)))

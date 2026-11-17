@@ -1,0 +1,510 @@
+// BalancedCopyProofHardeningTests.swift
+// Codex review #301 (2026-11-16) BLOCKED BalancedCopyProof with eight
+// findings, five of them ways to a false PROVEN. Each test here is one of
+// those reproductions, built with real ffmpeg media (tones and test
+// patterns only), seen RED on the engine as reviewed and green after it.
+//
+// A false PROVEN can cost a family recording; "not proven" and "could not
+// check" only cost keeping the original. So every test below asserts a
+// refusal, and — where the reproduction depends on it — first asserts, by
+// another road, that the damaged copy really does agree with the original
+// in everything the OLD proof compared (so the test cannot pass for the
+// wrong reason).
+
+import Foundation
+import os
+import Testing
+@testable import VideoScan
+import VideoScanCore
+
+/// Fixture helpers for the hardening and coverage suites.
+enum BalancedCopyProofLab {
+
+    typealias Media = BalancedCopyProofMedia
+
+    /// A 2-second file with any picture and sound arguments. `video` nil =
+    /// sound only.
+    static func make(_ name: String, in dir: URL, video: [String]? = ["-c:v", "prores_ks", "-profile:v", "0"],
+                     audio: [String] = ["-c:a", "pcm_s16le"], channels: String = Media.leftOnly,
+                     extra: [String] = [], seconds: Int = 2) throws -> String {
+        let out = dir.appendingPathComponent(name).path
+        var args: [String] = []
+        if video != nil { args += ["-f", "lavfi", "-i", "testsrc=duration=\(seconds):size=320x240:rate=25"] }
+        args += ["-f", "lavfi", "-i", "aevalsrc=\(channels):s=48000:d=\(seconds)"]
+        try BalanceAudioTestMedia.runFFmpeg(args + (video ?? []) + audio + extra, output: out)
+        return out
+    }
+
+    /// stdout of one tool run, trimmed.
+    static func output(_ tool: String, _ args: [String]) async -> String {
+        let result = await ProcessRunner.runProcess(executable: tool, arguments: args, deadlineSeconds: 120)
+        return (result.stdout ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// One ffprobe stream entry ("width", "start_time", "channel_layout" …).
+    static func entry(_ name: String, of path: String, stream: String) async -> String {
+        await output(ToolLocator.ffprobePath,
+                     ["-v", "error", "-select_streams", stream, "-show_entries", "stream=\(name)",
+                      "-of", "default=nw=1:nk=1", path])
+    }
+
+    /// SHA-256 over one stream's packets, by the `hash` muxer.
+    static func packetHash(of path: String, stream: String) async -> String {
+        await output(ToolLocator.ffmpegPath,
+                     ["-v", "error", "-i", path, "-map", "0:\(stream)", "-c", "copy", "-f", "hash", "-hash", "sha256", "-"])
+    }
+
+    /// SHA-256 over one channel's decoded 16-bit samples.
+    static func channelHash(of path: String, channel: Int) async -> String {
+        await output(ToolLocator.ffmpegPath,
+                     ["-v", "error", "-i", path, "-map", "0:a:0", "-af", "pan=mono|c0=c\(channel)",
+                      "-c:a", "pcm_s16le", "-f", "hash", "-hash", "sha256", "-"])
+    }
+
+    /// An executable shell script in `dir/tools-<name>/<tool>`.
+    static func script(_ name: String, tool: String, in dir: URL, _ body: String) throws -> String {
+        let folder = dir.appendingPathComponent("tools-\(name)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(tool)
+        try ("#!/bin/sh\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url.path
+    }
+
+    /// An ffmpeg that reads only the FIRST SECOND of every input and still
+    /// exits 0 — a zero-exit partial read. `complaint` is what it prints on
+    /// stderr afterwards ("" = it stays silent).
+    static func firstSecondOnlyFFmpeg(in dir: URL, name: String, complaint: String) throws -> String {
+        try script(name, tool: "ffmpeg", in: dir, """
+        n=$#
+        i=0
+        while [ $i -lt $n ]; do
+          a="$1"; shift
+          if [ "$a" = "-i" ]; then set -- "$@" -t 1 -i; else set -- "$@" "$a"; fi
+          i=$((i+1))
+        done
+        "\(ToolLocator.ffmpegPath)" "$@"
+        \(complaint.isEmpty ? ":" : "echo \"\(complaint)\" >&2")
+        exit 0
+        """)
+    }
+
+    static func reason(_ outcome: BalancedCopyProof.Outcome) -> String? {
+        if case .couldNotCheck(let why) = outcome { return why }
+        return nil
+    }
+
+    /// What moved, when the outcome is "not proven: timing".
+    static func timing(_ outcome: BalancedCopyProof.Outcome) -> String? {
+        if case .notProven(.timingDiffers(let what)) = outcome { return what }
+        return nil
+    }
+}
+
+@Suite("Balanced copy proof — Codex #301 reproductions", .serialized)
+struct BalancedCopyProofHardeningTests {
+
+    typealias Proof = BalancedCopyProof
+    typealias Media = BalancedCopyProofMedia
+    typealias Lab = BalancedCopyProofLab
+    private let fm = FileManager.default
+
+    /// mov/prores + 16-bit PCM, left only, NO timecode track, and its
+    /// balanced copy.
+    private func plainPair(_ label: String) async throws -> (dir: URL, original: String, balanced: String) {
+        let dir = try Media.scratch(label)
+        let original = try Media.original(in: dir, .movProResPCM16)
+        let balanced = try await Media.balance(original)
+        return (dir, original, balanced)
+    }
+
+    // MARK: F1 — the discarded channel
+
+    @Test("F1: a short quiet passage on the 'dead' channel (whole-track RMS under the floor) is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func quietPassageOnTheDiscardedChannelIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f1burst")
+        defer { try? fm.removeItem(at: dir) }
+        // Right: 50 ms of an 880 Hz tone peaking at −48 dBFS, silence around
+        // it. Over 2 s that is −67 dBFS RMS, so the analyzer calls it dead.
+        let original = try Media.original(
+            in: dir, .movProResPCM24, channels: "\(Media.tone)|0.004*sin(880*2*PI*t)*gt(t\\,1)*lt(t\\,1.05)")
+        let analysis = try await AudioBalanceProbe.analyze(path: original)
+        #expect(analysis.classification == .leftOnly, "the fixture must be one the balance job accepts")
+        let balanced = try await Media.balance(original)
+
+        let outcome = await Proof.measure(original: original, balanced: balanced)
+        #expect(!outcome.isProven, "sound the copy does not carry was certified as preserved: \(outcome)")
+        guard case .notProven(.discardedChannelNotSilent(let channel, let peak)) = outcome else {
+            Issue.record("expected the discarded channel to be the reason, got \(outcome)")
+            return
+        }
+        #expect(channel == 1)
+        #expect(abs(peak - -47.96) < 0.2, "0.004 full scale is −47.96 dBFS; measured \(peak)")
+        #expect(Proof.logLine(original: original, balanced: balanced, outcome: outcome)
+            .hasSuffix("the original's other channel is not silent (peak −48.0 dBFS) — the original is kept"))
+    }
+
+    @Test("F1: hiss on the 'dead' channel peaking just over the ceiling (−59.9 dBFS; −64.8 RMS) is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func hissJustOverTheCeilingIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f1hiss")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try Media.original(in: dir, .movProResPCM16, channels: "\(Media.tone)|0.001*(2*random(0)-1)")
+        #expect(try await AudioBalanceProbe.analyze(path: original).classification == .leftOnly)
+        let balanced = try await Media.balance(original)
+
+        let outcome = await Proof.measure(original: original, balanced: balanced)
+        guard case .notProven(.discardedChannelNotSilent(1, let peak)) = outcome else {
+            Issue.record("expected the discarded channel to be the reason, got \(outcome)")
+            return
+        }
+        #expect(peak > Proof.discardedChannelPeakCeilingDBFS && peak < -59.0, "measured \(peak)")
+    }
+
+    @Test("F1 PIN (Rick rules on the ceiling): Codex's steady 0.0005 sine peaks at −66 dBFS, UNDER −60 — proven, and the evidence says what was left behind",
+          .timeLimit(.minutes(2)))
+    func codexQuietSineIsUnderTheCeilingAndTheEvidenceSaysSo() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f1sine")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try Media.original(in: dir, .movProResPCM24, channels: "\(Media.tone)|0.0005*sin(880*2*PI*t)")
+        let balanced = try await Media.balance(original)
+
+        let outcome = await Proof.measure(original: original, balanced: balanced)
+        // With the ceiling at −60 dBFS PEAK this pair is still proven: the
+        // sine peaks at −66.0. What changed is that the proof now MEASURES
+        // the channel and says so. If Rick lowers the ceiling under −66,
+        // this test flips to discardedChannelNotSilent — change it then.
+        guard case .proven(let evidence) = outcome else {
+            Issue.record("the ceiling moved, or the measurement did: \(outcome)")
+            return
+        }
+        let discarded = try #require(evidence.discarded)
+        #expect(discarded.channel == 1 && !discarded.isDigitalSilence)
+        #expect(abs(discarded.peakDBFS - -66.02) < 0.1, "0.0005 full scale is −66.02 dBFS; measured \(discarded.peakDBFS)")
+        #expect(Proof.logLine(original: original, balanced: balanced, outcome: outcome)
+            .contains("original right: peak −66.0 dBFS, not in the copy"))
+    }
+
+    // MARK: F2 — timing
+
+    @Test("F2: a copy whose sound starts half a second late — same packets, same samples — is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func shiftedSoundIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f2shift")
+        defer { try? fm.removeItem(at: dir) }
+        let shifted = try Media.derive(
+            "shifted_balanced", from: balanced,
+            ["-itsoffset", "0.5", "-i", balanced, "-map", "0:v", "-map", "1:a", "-c", "copy", "-write_tmcd", "0"])
+
+        // By another road: only the sound's start moved.
+        #expect(await Lab.entry("start_time", of: original, stream: "a:0") == "0.000000")
+        #expect(await Lab.entry("start_time", of: shifted, stream: "a:0") == "0.500000")
+        let picture = await Lab.packetHash(of: original, stream: "v:0")
+        let live = await Lab.channelHash(of: original, channel: 0)
+        #expect(picture.hasPrefix("SHA256=") && live.hasPrefix("SHA256="))
+        #expect(await Lab.packetHash(of: shifted, stream: "v:0") == picture)
+        #expect(await Lab.channelHash(of: shifted, channel: 1) == live)
+
+        let outcome = await Proof.measure(original: original, balanced: shifted)
+        #expect(!outcome.isProven, "A/V sync changed and the copy was still proven: \(outcome)")
+        #expect(Lab.timing(outcome) == "the sound starts at 0.000000 s, in the balanced copy at 0.500000 s", "\(outcome)")
+    }
+
+    @Test("F2: an original whose sound really starts half a second late is still PROVEN against the job's own copy",
+          .timeLimit(.minutes(2)))
+    func lateSoundOriginalStillProves() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, plain, _) = try await plainPair("f2late")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try Media.derive(
+            "test_late", from: plain,
+            ["-itsoffset", "0.5", "-i", plain, "-map", "0:v", "-map", "1:a", "-c", "copy", "-write_tmcd", "0"])
+        #expect(await Lab.entry("start_time", of: original, stream: "a:0") == "0.500000")
+        let balanced = try await Media.balance(original)
+        #expect(await Lab.entry("start_time", of: balanced, stream: "a:0") == "0.500000")
+
+        let outcome = await Proof.measure(original: original, balanced: balanced)
+        #expect(outcome.isProven, "the timing rule must pass what Balance Audio really writes: \(outcome)")
+    }
+
+    @Test("F2: a QuickTime copy whose edit list plays only the first half of the picture — same bytes otherwise — is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func editListTrimmedCopyIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f2elst")
+        defer { try? fm.removeItem(at: dir) }
+        // Halve the segment duration of the first track's (the picture's) edit list, in place.
+        var bytes = try Data(contentsOf: URL(fileURLWithPath: balanced))
+        let atom = try #require(bytes.range(of: Data("elst".utf8)), "the mov muxer writes an edit list")
+        let field = (atom.upperBound + 8)..<(atom.upperBound + 12)
+        #expect(bytes[atom.upperBound] == 0, "version 0: 32-bit fields")
+        let duration = bytes[field].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        #expect(duration > 0)
+        let half = duration / 2
+        bytes.replaceSubrange(field, with: [UInt8(half >> 24), UInt8(half >> 16 & 0xff), UInt8(half >> 8 & 0xff), UInt8(half & 0xff)])
+        let trimmed = dir.appendingPathComponent("trimmed_balanced.mov").path
+        try bytes.write(to: URL(fileURLWithPath: trimmed))
+
+        #expect(await Lab.entry("duration", of: balanced, stream: "v:0") == "2.000000")
+        #expect(await Lab.entry("duration", of: trimmed, stream: "v:0") == "1.000000")
+        let outcome = await Proof.measure(original: original, balanced: trimmed)
+        #expect(Lab.timing(outcome) != nil, "expected a timing refusal, got \(outcome)")
+    }
+
+    @Test("F2: a copy whose picture was retimed to half speed — same packets — is NOT PROVEN", .timeLimit(.minutes(2)))
+    func retimedPictureIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f2retime")
+        defer { try? fm.removeItem(at: dir) }
+        let retimed = try Media.derive("retimed_balanced", from: balanced,
+                                       ["-map", "0", "-c", "copy", "-bsf:v", "setts=ts=N*1024"])
+
+        #expect(await Lab.entry("r_frame_rate", of: original, stream: "v:0") == "25/1")
+        #expect(await Lab.entry("r_frame_rate", of: retimed, stream: "v:0") == "25/2")
+        let picture = await Lab.packetHash(of: original, stream: "v:0")
+        #expect(picture.hasPrefix("SHA256="))
+        #expect(await Lab.packetHash(of: retimed, stream: "v:0") == picture)
+
+        let outcome = await Proof.measure(original: original, balanced: retimed)
+        #expect(!outcome.isProven, "the picture plays at half speed and the copy was still proven: \(outcome)")
+        #expect(Lab.timing(outcome)?.hasPrefix("video stream 0 ") == true, "\(outcome)")
+    }
+
+    // MARK: F3 — partial reads
+
+    @Test("F3: an ffmpeg that reads one second, complains on stderr and exits 0 never proves a one-second copy",
+          .timeLimit(.minutes(2)))
+    func zeroExitPartialReadNeverProvesAShortCopy() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f3short")
+        defer { try? fm.removeItem(at: dir) }
+        let half = try Media.derive("half_balanced", from: balanced,
+                                    ["-t", "1", "-map", "0", "-c", "copy", "-write_tmcd", "0"])
+        let partial = try Lab.firstSecondOnlyFFmpeg(
+            in: dir, name: "noisy", complaint: "[in#0/mov @ 0x0] Error during demuxing: Input/output error")
+
+        let outcome = await Proof.measure(original: original, balanced: half,
+                                          tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
+        #expect(!outcome.isProven, "a copy holding half the recording was proven: \(outcome)")
+        // ffprobe's own count already refuses it, before any hash pass runs.
+        #expect(Lab.timing(outcome) == "video stream 0 has 50 packets, the balanced copy 25", "\(outcome)")
+    }
+
+    @Test("F3: a zero-exit read with ANYTHING on stderr is COULD NOT CHECK, even for a faithful pair",
+          .timeLimit(.minutes(2)))
+    func stderrOutputWithExitZeroIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f3noisy")
+        defer { try? fm.removeItem(at: dir) }
+        let partial = try Lab.firstSecondOnlyFFmpeg(
+            in: dir, name: "noisy", complaint: "[in#0/mov @ 0x0] Error during demuxing: Input/output error")
+
+        let outcome = await Proof.measure(original: original, balanced: balanced,
+                                          tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
+        let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
+        #expect(why.contains("Error during demuxing: Input/output error"), "the reason quotes the line: \(why)")
+    }
+
+    @Test("F3: a SILENT zero-exit short read of both files is COULD NOT CHECK — the read is held to ffprobe's count",
+          .timeLimit(.minutes(2)))
+    func silentShortReadIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f3silent")
+        defer { try? fm.removeItem(at: dir) }
+        let partial = try Lab.firstSecondOnlyFFmpeg(in: dir, name: "silent", complaint: "")
+
+        let outcome = await Proof.measure(original: original, balanced: balanced,
+                                          tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
+        let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
+        #expect(why.contains("not read to the end"), "\(why)")
+    }
+
+    // MARK: F4 — identity
+
+    @Test("F4: an original reached through a symbolic link that is retargeted mid-run and put back is COULD NOT CHECK",
+          .timeLimit(.minutes(2)))
+    func symlinkRetargetIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f4link")
+        defer { try? fm.removeItem(at: dir) }
+        // A and B: two different left-only recordings of one shape.
+        let a = try Lab.make("test_a.mov", in: dir)
+        let b = try Lab.make("test_b.mov", in: dir, channels: "0.4*sin(660*2*PI*t)|0")
+        let bBalanced = try await Media.balance(b)
+        let link = dir.appendingPathComponent("test_link.mov").path
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: a)
+
+        // ffprobe: point the link at B, then do the real work.
+        let probe = try Lab.script("retarget", tool: "ffprobe", in: dir, """
+        /bin/ln -sfn "\(b)" "\(link)"
+        exec "\(ToolLocator.ffprobePath)" "$@"
+        """)
+        // ffmpeg: do the real work; after the copy's pass (the last one) put the link back on A.
+        let hasher = try Lab.script("retarget", tool: "ffmpeg", in: dir, """
+        "\(ToolLocator.ffmpegPath)" "$@"
+        status=$?
+        case "$*" in *test_b_balanced*) /bin/ln -sfn "\(a)" "\(link)" ;; esac
+        exit $status
+        """)
+        let stampBefore = FileIdentityStamp.capture(path: a)
+
+        let outcome = await Proof.measure(original: link, balanced: bBalanced,
+                                          tools: Proof.Tools(ffmpeg: hasher, ffprobe: probe))
+        #expect(Lab.reason(outcome) != nil, "B's hashes were bound to A's stamp: \(outcome)")
+        #expect(Lab.reason(outcome)?.hasPrefix("the original is a symbolic link") == true, "\(outcome)")
+        #expect(FileIdentityStamp.capture(path: a) == stampBefore, "A itself was never touched")
+        // The same B pair, named directly, is a good pair.
+        #expect(await Proof.measure(original: b, balanced: bBalanced).isProven)
+        // A link in the copy's place is refused the same way.
+        let copyLink = dir.appendingPathComponent("test_copy_link.mov").path
+        try fm.createSymbolicLink(atPath: copyLink, withDestinationPath: bBalanced)
+        let linked = await Proof.measure(original: b, balanced: copyLink)
+        #expect(Lab.reason(linked)?.hasPrefix("the balanced copy is a symbolic link") == true, "\(linked)")
+    }
+
+    @Test("F4: every tool reads the RESOLVED path; a parent folder re-pointed mid-run is COULD NOT CHECK",
+          .timeLimit(.minutes(2)))
+    func parentFolderRetargetIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f4parent")
+        defer { try? fm.removeItem(at: dir) }
+        let first = dir.appendingPathComponent("first", isDirectory: true)
+        let second = dir.appendingPathComponent("second", isDirectory: true)
+        try fm.createDirectory(at: first, withIntermediateDirectories: true)
+        let original = try Media.original(in: first, .movProResPCM16)
+        let balanced = try await Media.balance(original)
+        try fm.copyItem(at: first, to: second)
+        let via = dir.appendingPathComponent("via").path
+        try fm.createSymbolicLink(atPath: via, withDestinationPath: first.path)
+        let givenOriginal = via + "/" + (original as NSString).lastPathComponent
+        let givenBalanced = via + "/" + (balanced as NSString).lastPathComponent
+
+        // Left alone: proven, and the evidence names where the paths really led.
+        guard case .proven(let evidence) = await Proof.measure(original: givenOriginal, balanced: givenBalanced) else {
+            Issue.record("a pair reached through a linked folder is still a pair")
+            return
+        }
+        #expect(evidence.originalResolvedPath == SourceTree.canonicalPath(URL(fileURLWithPath: original)))
+        #expect(evidence.balancedResolvedPath == SourceTree.canonicalPath(URL(fileURLWithPath: balanced)))
+        #expect(evidence.originalStamp == FileIdentityStamp.capture(path: original))
+
+        // ffmpeg re-points the folder link at the twin folder before each pass.
+        let hasher = try Lab.script("repoint", tool: "ffmpeg", in: dir, """
+        /bin/ln -sfn "\(second.path)" "\(via)"
+        case "$*" in *"/second/"*) echo "read through the re-pointed link" > "\(dir.path)/leak" ;; esac
+        exec "\(ToolLocator.ffmpegPath)" "$@"
+        """)
+        let outcome = await Proof.measure(original: givenOriginal, balanced: givenBalanced,
+                                          tools: Proof.Tools(ffmpeg: hasher, ffprobe: ToolLocator.ffprobePath))
+        #expect(outcome == .couldNotCheck("a file changed while it was being checked"))
+        #expect(!fm.fileExists(atPath: dir.path + "/leak"), "ffmpeg was handed a path that follows the link")
+    }
+
+    // MARK: F5 — decoder configuration
+
+    @Test("F5: a copy with the same H.264 packets but a cropped SPS in its extradata is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func croppedDecoderConfigurationIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f5crop")
+        defer { try? fm.removeItem(at: dir) }
+        // H.264 with its SPS in the extradata only, and PCM sound (so the
+        // lossy-sound rule does not refuse first).
+        let original = try Lab.make(
+            "test_h264.mov", in: dir,
+            video: ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-x264-params", "repeat-headers=0", "-flags", "+global_header"])
+        let balanced = try await Media.balance(original)
+        #expect(await Proof.measure(original: original, balanced: balanced).isProven,
+                "the job's own H.264 + PCM copy is a good pair")
+        let cropped = try Media.derive("cropped_balanced", from: balanced,
+                                       ["-map", "0", "-c", "copy", "-bsf:v", "h264_metadata=crop_right=16"])
+
+        // By another road: packet for packet the same, and a narrower picture.
+        let packets = await Lab.packetHash(of: original, stream: "v:0")
+        #expect(packets.hasPrefix("SHA256="))
+        #expect(await Lab.packetHash(of: cropped, stream: "v:0") == packets)
+        #expect(await Lab.entry("width", of: original, stream: "v:0") == "320")
+        #expect(await Lab.entry("width", of: cropped, stream: "v:0") == "304")
+
+        let outcome = await Proof.measure(original: original, balanced: cropped)
+        #expect(!outcome.isProven, "a picture that decodes 16 pixels narrower was proven: \(outcome)")
+        guard case .notProven(.pictureConfigurationDiffers(let what)) = outcome else {
+            Issue.record("expected the decoder configuration to be the reason, got \(outcome)")
+            return
+        }
+        #expect(what.hasPrefix("video stream 0: codec extradata SHA256:"), "\(what)")
+    }
+
+    // MARK: F6 — channel layout
+
+    @Test("F6: two equal channels stored as front-centre + LFE are NOT PROVEN — stereo means left + right",
+          .timeLimit(.minutes(2)))
+    func wrongChannelLayoutIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f6layout")
+        defer { try? fm.removeItem(at: dir) }
+        let wrong = try Media.derive(
+            "wrong_layout_balanced", from: balanced,
+            ["-map", "0", "-c", "copy", "-af", "channelmap=map=0|1:channel_layout=FC+LFE", "-c:a", "pcm_s16le"])
+
+        #expect(await Lab.entry("channel_layout", of: balanced, stream: "a:0") == "stereo")
+        #expect(await Lab.entry("channel_layout", of: wrong, stream: "a:0").contains("FC+LFE"))
+        let live = await Lab.channelHash(of: original, channel: 0)
+        #expect(live.hasPrefix("SHA256="))
+        #expect(await Lab.channelHash(of: wrong, channel: 1) == live)
+
+        let outcome = await Proof.measure(original: original, balanced: wrong)
+        #expect(!outcome.isProven, "centre + LFE was certified as both sides: \(outcome)")
+        #expect(outcome == .notProven(.channelLayoutNotStereo(file: "the balanced copy", layout: "2 channels (FC+LFE)")))
+    }
+
+    @Test("F6: Codex's own reproduction — a WAV original and a WAV copy laid out FC+LFE — is NOT PROVEN",
+          .timeLimit(.minutes(2)))
+    func wrongChannelLayoutInWAVIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("f6wav")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try Lab.make("test_original.wav", in: dir, video: nil)
+        let wrong = try Media.derive("wrong_layout", from: original,
+                                     ["-af", "channelmap=map=0|0:channel_layout=FC+LFE", "-c:a", "pcm_s16le"])
+        #expect(await Lab.entry("channel_layout", of: wrong, stream: "a:0").contains("FC+LFE"))
+
+        let outcome = await Proof.measure(original: original, balanced: wrong)
+        #expect(!outcome.isProven, "centre + LFE was certified as both sides: \(outcome)")
+        #expect(outcome == .notProven(.channelLayoutNotStereo(file: "the balanced copy", layout: "2 channels (FC+LFE)")))
+    }
+
+    // MARK: F7 — cancellation
+
+    @Test("F7: a check cancelled while the closing stamps are taken is COULD NOT CHECK, though every hash matched",
+          .timeLimit(.minutes(2)))
+    func cancellationDuringTheClosingStampsIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let (dir, original, balanced) = try await plainPair("f7cancel")
+        defer { try? fm.removeItem(at: dir) }
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+
+        // The seam alone changes nothing.
+        let watched = Proof.Tools(ffmpeg: ToolLocator.ffmpegPath, ffprobe: ToolLocator.ffprobePath,
+                                  afterFinalStamps: { calls.withLock { $0 += 1 } })
+        #expect(await Proof.measure(original: original, balanced: balanced, tools: watched).isProven)
+        #expect(calls.withLock { $0 } == 1, "the seam runs once, after the closing stamps")
+
+        // Cancel exactly there: both hash passes are done, the stamps match.
+        let cancelling = Proof.Tools(ffmpeg: ToolLocator.ffmpegPath, ffprobe: ToolLocator.ffprobePath,
+                                     afterFinalStamps: {
+                                         calls.withLock { $0 += 1 }
+                                         withUnsafeCurrentTask { $0?.cancel() }
+                                     })
+        let task = Task { await Proof.measure(original: original, balanced: balanced, tools: cancelling) }
+        let outcome = await task.value
+        #expect(calls.withLock { $0 } == 2, "the check ran to its closing stamps before it was cancelled")
+        #expect(outcome == .couldNotCheck("the check was stopped"))
+    }
+}
