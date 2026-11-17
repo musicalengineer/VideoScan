@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-16T13:15:13Z",
- "sha": "78224131",
+ "ts": "2026-11-17T13:59:36Z",
+ "sha": "30ff73ce",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 365,
- "baseline_before": 353,
- "baseline_after": 353,
+ "offenders": 364,
+ "baseline_before": 352,
+ "baseline_after": 352,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
