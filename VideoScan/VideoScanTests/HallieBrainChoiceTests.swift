@@ -513,15 +513,19 @@ struct HallieCloudRequestShapeTests {
         } catch { Issue.record("unexpected \(error)") }
     }
 
-    @Test("compose: prose cut off at the limit is still prose")
-    func composeTruncatedProseKept() async throws {
+    // Codex #299 (2026-11-16): a sentence cut mid-word was returned as the
+    // composed answer, with no mark and no log line. Cut off is cut off,
+    // with or without text; the caller's template answers instead.
+    @Test("compose: prose cut off at the limit is not an answer")
+    func composeTruncatedProseRefused() async {
         let (session, token) = hallieCloudStubSession()
         HallieCloudStubLedger.shared.queue(
             token, status: 200,
             body: #"{"content":[{"type":"text","text":"Donna is in 3 videos, and"}],"stop_reason":"max_tokens"}"#)
-        let text = try await hallieStubbedCloudBrain(session).composePlainText(
-            system: "You are Hallie.", user: "[c1] Donna is in 3 videos.", dataClass: .familyText)
-        #expect(text == "Donna is in 3 videos, and")
+        await #expect(throws: HallieBrainError.cloudTruncated) {
+            _ = try await hallieStubbedCloudBrain(session).composePlainText(
+                system: "You are Hallie.", user: "[c1] Donna is in 3 videos.", dataClass: .familyText)
+        }
     }
 
     @Test("HTTP errors classify without echoing the key; overload retries once")
