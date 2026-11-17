@@ -119,6 +119,50 @@ struct ArchiveAngelAudioOutcomeTests {
         #expect(BalanceAudioFix.refusalReason(for: analysis(.mono)) == nil)
     }
 
+    // Codex #300 F3 (A): a two-channel stream whose levels pass read only one
+    // channel classifies `.mono` with an incomplete measurement. The mono
+    // words must not be said of it: the completeness guard speaks first.
+    @Test func aPartlyMeasuredTrackIsNeverCalledMono() {
+        var partial = analysis(.mono)
+        partial.shape.audioChannels = 2
+        partial.levelsComplete = false
+        #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: partial)
+                == BalanceAudioFix.incompleteMeasurementReason)
+        // A complete one-channel measurement still reads as mono.
+        #expect(ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis(.mono))
+                == ArchiveAngelAudioOutcome.monoIsFineNote)
+    }
+
+    // Codex #300 F3 (B): mono beside measured damage is damage. "Mono is
+    // fine" is the answer only when mono is the ONLY finding.
+    @Test func monoBesideDamageIsDamage() {
+        let damaged = AudioVerifyDiagnosis(
+            findings: [.durationMismatch(audioSeconds: 20, videoSeconds: 100), .channelImbalance(.mono)],
+            shape: verifyShape(), balanceAnalysis: analysis(.mono))
+        #expect(ArchiveAngelAudioOutcome.from(damaged) == .damaged(damaged.persistedNote))
+        #expect(ArchiveAngelAudioOutcome.from(damaged).headline.contains("audio shorter than video"))
+        // Order of the findings does not matter.
+        let reversed = AudioVerifyDiagnosis(
+            findings: [.channelImbalance(.mono), .unsupportedCodec(codec: "qdm2", decodable: true)],
+            shape: verifyShape(), balanceAnalysis: analysis(.mono))
+        #expect(ArchiveAngelAudioOutcome.from(reversed) == .damaged(reversed.persistedNote))
+    }
+
+    @Test func monoBesideAnyOtherFindingIsNotCalledFine() {
+        let noStream = AudioVerifyDiagnosis(findings: [.channelImbalance(.mono), .noAudioStream],
+                                            shape: verifyShape(), balanceAnalysis: analysis(.mono))
+        #expect(ArchiveAngelAudioOutcome.from(noStream) == .noAudio)
+        let silent = AudioVerifyDiagnosis(findings: [.channelImbalance(.mono), .silentAudio],
+                                          shape: verifyShape(), balanceAnalysis: analysis(.mono))
+        guard case .refused = ArchiveAngelAudioOutcome.from(silent) else {
+            Issue.record("got \(ArchiveAngelAudioOutcome.from(silent))"); return
+        }
+        // Mono alone is still fine.
+        let alone = AudioVerifyDiagnosis(findings: [.channelImbalance(.mono)], shape: verifyShape(),
+                                         balanceAnalysis: analysis(.mono))
+        #expect(ArchiveAngelAudioOutcome.from(alone) == .balanced(ArchiveAngelAudioOutcome.monoIsFineNote))
+    }
+
     @Test func healthyStereoAndDualMonoAreBalanced() {
         guard case .balanced(let s) = ArchiveAngelAudioOutcome.from(healthy(.trueStereo)) else { Issue.record("stereo"); return }
         #expect(s.contains("True stereo"))

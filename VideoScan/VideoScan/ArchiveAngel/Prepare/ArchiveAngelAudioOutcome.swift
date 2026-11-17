@@ -54,7 +54,13 @@ enum ArchiveAngelAudioOutcome: Equatable {
             if case .channelImbalance(let c) = f, let analysis = d.balanceAnalysis {
                 // Mono is how the recording was made (Rick 2026-11-16): it
                 // plays on both sides already, so it is not something to fix.
-                if c == .mono { return .balanced(monoIsFineNote) }
+                // "Fine" only when mono is ALL the check found (Codex #300
+                // F3): beside damage, silence or a missing stream the other
+                // finding is the answer, so fall through to the branches below.
+                if c == .mono {
+                    if d.findings.count == 1 { return .balanced(monoIsFineNote) }
+                    continue
+                }
                 if let reason = BalanceAudioFix.refusalReason(for: analysis) {
                     return .refused(reason)
                 }
@@ -88,10 +94,13 @@ enum ArchiveAngelAudioOutcome: Equatable {
     /// Why the Angel's balance step does NOT run on this analysis, or nil
     /// when it does. The Angel's own rule on top of Balance Audio's: the
     /// tool can widen a mono track to two channels when Rick asks it to
-    /// (Repair…), but Prepare never does it on its own. Pure.
+    /// (Repair…), but Prepare never does it on its own. Balance Audio's gate
+    /// is asked FIRST (Codex #300 F3): a two-channel track whose levels pass
+    /// read one channel also classifies `.mono`, and that is "only partly
+    /// measured", not mono. Pure.
     static func balanceSkipReason(for analysis: AudioBalanceAnalysis) -> String? {
-        if analysis.classification == .mono { return monoIsFineNote }
-        return BalanceAudioFix.refusalReason(for: analysis)
+        if let refusal = BalanceAudioFix.refusalReason(for: analysis) { return refusal }
+        return analysis.classification == .mono ? monoIsFineNote : nil
     }
 
     /// The Angel's "Already verified" skip: the diagnosis to reuse instead

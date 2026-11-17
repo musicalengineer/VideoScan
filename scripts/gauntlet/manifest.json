@@ -6076,6 +6076,7 @@
       ],
       "tests": [
         "aFailedLevelsPassIsNotDamage",
+        "aPartlyMeasuredTrackIsNeverCalledMono",
         "aSoundTrackThatWasNotMeasuredIsNotBalanced",
         "balanceStepRunsForOneSidedOnly",
         "damageFindingsStayDamaged",
@@ -6083,6 +6084,8 @@
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
+        "monoBesideAnyOtherFindingIsNotCalledFine",
+        "monoBesideDamageIsDamage",
         "monoIsNotSomethingToFix",
         "noAudioStreamIsItsOwnCase",
         "rightOnlyIsFixable",
@@ -38888,7 +38891,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3763,
+      "expected_floor": 3766,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
