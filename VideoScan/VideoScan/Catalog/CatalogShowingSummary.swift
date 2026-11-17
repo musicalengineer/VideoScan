@@ -1,24 +1,25 @@
 // CatalogShowingSummary.swift
-// "Showing: Videos · Not yet archived · Connected drives" — the one-line
+// "Showing: Videos · Not Yet Archived · Connected drives" — the one-line
 // answer to "why don't I see X?" (Rick 2026-08-22: "humans looking at
 // lots of data need bright clear reminders, remember we're dealing with
 // senior citizens, me included").
 //
 // WHY PILLS, NOT A SENTENCE. Every filter combination would otherwise
-// need its own grammar ("Showing Unpaired Not in Archive Repaired not
-// waiting for Papal dispensation" — Rick's own parody). A pill is a
-// fact, not a clause: each one is two or three plain words, and any
-// combination of them reads fine side by side. The vocabulary below is
-// the ONLY place the words live — the raw `CatalogViewFilter` names
-// ("Untagged (junk candidate)") never reach the row.
+// need its own grammar. A pill is a fact, not a clause: each one is two or
+// three plain words, and any combination of them reads fine side by side.
 //
-// WHY POSITIVES. "Not yet archived" is the one sanctioned negative,
-// because it is the name of the job (the catalog is the to-do list; the
-// Archive tab is the done list). Everything else says what IS shown.
+// ONE VOCABULARY (2026-11-17). A Show filter is called the same thing in
+// the Show menu and in this box: `CatalogViewFilter.title`. Two sets of
+// words for one switch ("Has Master Copy" in the menu, "Already archived"
+// here) made the box something to translate rather than read.
 //
-// The archive pill is the big switch Rick asked for: click it and the
-// view flips between "Not yet archived" (default once a Master Archive
-// exists) and "Including archived". Same for the drives pill.
+// THE BOX TELLS THE TRUTH (2026-11-17 audit). Every filter that is on is
+// named — with or without a Master Archive, and when both archive filters
+// are somehow in the set. When the full line does not fit, the box draws a
+// shorter line that COUNTS the filters ("+2 more", "3 filters on") instead
+// of cutting them off the end; the tooltip always carries the full list.
+// While a focus set overrides the filters the box says the focus, not the
+// filters. The box is a readout: clicking it changes nothing.
 //
 // Pure `enum` + value type — headless-testable, no SwiftUI, no model.
 
@@ -32,8 +33,10 @@ enum CatalogShowingSummary {
     /// One pill. `emphasis` picks the colour: the archive pill is the
     /// one that matters most, so it is the only one that goes green.
     struct Pill: Equatable, Identifiable {
-        enum Emphasis: Equatable { case neutral, archiveToDo, archiveAll, reveal, volume, person }
-        enum Action: Equatable { case none, toggleArchived, toggleDrives, clearVolumes, clearPerson }
+        enum Emphasis: Equatable { case neutral, archiveToDo, archiveAll, volume, person }
+        /// What a click on the pill does. Only the volume and person tokens
+        /// are buttons; the box's own pills are a readout (`.none`).
+        enum Action: Equatable { case none, clearVolumes, clearPerson }
 
         let text: String
         let emphasis: Emphasis
@@ -53,9 +56,6 @@ enum CatalogShowingSummary {
         var viewFilters: Set<CatalogViewFilter> = []
         var showPairsOnly = false
         var showDisconnectedMedia = false
-        var showRemoved = false
-        var showSetAside = false
-        var showSuperseded = false
         /// Show ▸ Events & Copies as Folders (2026-10-16) — a view shape,
         /// not a filter; it gets its own pill so the folder rows explain
         /// themselves from the Showing box too.
@@ -64,8 +64,9 @@ enum CatalogShowingSummary {
         var foldersOnly = false
         /// Show ▸ Folders by Machine Estimate — its own pill beside the folder one.
         var estimateFolders = false
-        /// A Master Archive is designated — without one "archived" is
-        /// meaningless and the archive pill is omitted entirely.
+        /// A Master Archive is designated. With one, and neither archive
+        /// filter on, the box says "Including archived"; an archive filter
+        /// that IS on is named either way.
         var hasMasterArchive = false
         /// Focus mode ("Show in Catalog", "A/V Pair focus") overrides every
         /// filter; the row says so instead of listing filters that are
@@ -170,25 +171,9 @@ enum CatalogShowingSummary {
     }
 
 
-    /// Plain-words label for one additive filter. Every case is handled
-    /// so a new filter cannot ship without its words (compiler-enforced).
-    static func words(for filter: CatalogViewFilter) -> String {
-        switch filter {
-        case .videoAndAudioOnly:    return "With sound"
-        case .unpairedOnly:         return "Missing their other half"
-        case .ratedOnly:            return "Starred"
-        case .hasFamily:            return "With family"
-        case .workspaceOnly:        return "In the workspace"
-        case .untaggedOnly:         return "Untagged"
-        case .awaitingConfirmation: return "Repaired, waiting for your OK"
-        case .notYetArchived:       return "Not yet archived"
-        case .hasMasterCopy:        return "Already archived"
-        case .archiveCandidates:    return "Archive Angel candidates"
-        case .noPlaceYet:           return "No place yet"
-        case .onePerFootage:        return "One per footage"
-        case .confirmedDate:        return "Confirmed date"
-        }
-    }
+    /// The words for one Show filter — the menu's own (`title`), so the
+    /// menu and the box never disagree.
+    static func words(for filter: CatalogViewFilter) -> String { filter.title }
 
     /// Plain-words label for the media-kind facet.
     static func words(for facet: CatalogKindFacet) -> String {
@@ -215,67 +200,89 @@ enum CatalogShowingSummary {
         return tokens.compactMap { $0 } + boxPills(for: s)
     }
 
+    /// What the box says when a Master Archive exists and neither archive
+    /// filter is on — a state, not a filter.
+    static let includingArchived = "Including archived"
+    /// The one title of the clear action (the Show menu and the empty table).
+    static let clearAllFiltersTitle = "Clear All Filters"
+
+    /// One pill per Show filter that is on — ALL of them, whatever else is
+    /// true — the archive pair first (the eye knows that slot), the rest in
+    /// menu order.
+    static func filterPills(for filters: Set<CatalogViewFilter>) -> [Pill] {
+        let ordered = CatalogViewFilter.ordered(filters)
+        let archive = ordered.filter { $0 == .notYetArchived || $0 == .hasMasterCopy }
+        let rest = ordered.filter { $0 != .notYetArchived && $0 != .hasMasterCopy }
+        return archive.map { Pill($0.title, $0 == .notYetArchived ? .archiveToDo : .archiveAll) }
+            + rest.map { Pill($0.title) }
+    }
+
     /// The pills the highlighted box draws as text, in reading order: what
-    /// · archive state · extra filters · where · revealed hidden records.
-    /// Order is fixed so the eye learns where each fact lives. The volume
-    /// pill is not here: it is its own accent button in front of the box.
+    /// · the filters that are on · pairs · folders · where. Order is fixed so the eye learns where each fact lives. The
+    /// volume pill is not here: it is its own accent button in front of the box.
     static func boxPills(for s: State) -> [Pill] {
         if let focus = s.focusLabel {
             return [Pill(focus, .neutral)]
         }
         var out: [Pill] = []
         out.append(Pill(words(for: s.kindFacet)))
-
-        if s.hasMasterArchive {
-            if s.viewFilters.contains(.notYetArchived) {
-                out.append(Pill("Not yet archived", .archiveToDo, action: .toggleArchived))
-            } else if s.viewFilters.contains(.hasMasterCopy) {
-                out.append(Pill("Already archived", .archiveAll))
-            } else {
-                out.append(Pill("Including archived", .archiveAll, action: .toggleArchived))
-            }
+        let filters = filterPills(for: s.viewFilters)
+        if s.hasMasterArchive, !s.viewFilters.contains(.notYetArchived), !s.viewFilters.contains(.hasMasterCopy) {
+            out.append(Pill(includingArchived, .archiveAll))
         }
-
-        // Remaining additive filters in declaration order — the archive
-        // pair is already spoken for above.
-        for f in CatalogViewFilter.allCases
-        where s.viewFilters.contains(f) && f != .notYetArchived && f != .hasMasterCopy {
-            out.append(Pill(words(for: f)))
-        }
+        out.append(contentsOf: filters)
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
         if s.footageFolders { out.append(contentsOf: folderPills(s)) }
 
-        out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives",
-                        action: .toggleDrives))
-
-        if s.showRemoved    { out.append(Pill("Plus removed files", .reveal)) }
-        if s.showSetAside   { out.append(Pill("Plus set-aside files", .reveal)) }
-        if s.showSuperseded { out.append(Pill("Plus replaced originals", .reveal)) }
+        out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives"))
         return out
     }
 
-    /// VoiceOver / log line: "Showing Videos, Not yet archived, Connected drives".
+    /// The lines the box may draw, longest first; it draws the first that
+    /// fits (ViewThatFits) and never truncates one. Every line either NAMES
+    /// each filter that is on or says how many it is not naming:
+    ///   1. everything:  "Videos · Not Yet Archived · Needs a Date · Connected drives"
+    ///   2. the first filter and a count:  "Videos · Not Yet Archived +1 more"
+    ///   3. the count alone:  "2 filters on"   (no filter on: the media kind)
+    /// The tooltip (`help`) always carries the full list.
+    static func boxLines(for s: State) -> [String] {
+        let full = boxPills(for: s).map(\.text).joined(separator: " · ")
+        guard s.focusLabel == nil else { return [full] }
+        let names = filterPills(for: s.viewFilters).map(\.text)
+        let kind = words(for: s.kindFacet)
+        var lines = [full]
+        if let first = names.first {
+            lines.append(kind + " · " + first + (names.count > 1 ? " +\(names.count - 1) more" : ""))
+            lines.append(names.count == 1 ? "1 filter on" : "\(names.count) filters on")
+        } else {
+            lines.append(kind)
+        }
+        var seen = Set<String>()
+        return lines.filter { seen.insert($0).inserted }
+    }
+
+    /// VoiceOver / log line: "Showing Videos, Not Yet Archived, Connected drives".
     static func sentence(for s: State) -> String {
         "Showing " + pills(for: s).map(\.text).joined(separator: ", ")
     }
 
-    // MARK: Persistence of the filter set
-
-    /// `Set<CatalogViewFilter>` ⇄ one UserDefaults string. Raw values are
-    /// the menu labels, which contain commas-free text today but spaces
-    /// and parentheses — so the separator is a character no label will
-    /// ever use. Unknown tokens (a filter renamed or removed in a later
-    /// build) are dropped, never crash.
-    static let separator = "|"
-
-    static func encode(_ filters: Set<CatalogViewFilter>) -> String {
-        CatalogViewFilter.allCases.filter { filters.contains($0) }
-            .map(\.rawValue).joined(separator: separator)
+    /// The box's tooltip: the whole truth, however short the drawn line is.
+    static func help(for s: State) -> String {
+        if let focus = s.focusLabel {
+            return "\(focus): only these files are listed. The Show filters are not applied until you leave this view."
+        }
+        let on = filterPills(for: s.viewFilters).map(\.text)
+        let filters = on.isEmpty ? "No Show filter is on." : "Show filters on: " + on.joined(separator: ", ") + "."
+        return "Showing " + boxPills(for: s).map(\.text).joined(separator: ", ") + ".\n" + filters
+            + "\nUse the Show menu to change what is listed."
     }
 
-    static func decode(_ raw: String) -> Set<CatalogViewFilter> {
-        Set(raw.split(separator: Character(separator))
-                .compactMap { CatalogViewFilter(rawValue: String($0)) })
+    /// The empty table's words when the Show filters alone left nothing.
+    static func filteredEmptyNote(filters: Set<CatalogViewFilter>) -> String {
+        let on = filterPills(for: filters).map(\.text)
+        return on.count == 1
+            ? "No files match the Show filter that is on: \(on[0])."
+            : "No files match the Show filters that are on: " + on.joined(separator: ", ") + "."
     }
 
     // MARK: Archived search hits
@@ -321,11 +328,12 @@ enum CatalogShowingSummary {
 
 // MARK: - The box
 
-/// One highlighted box beside the Show menu: "Showing: Videos · Not yet
-/// archived · Connected drives". Pure layout over a handful of Bools —
-/// no records are touched here. Colour says the one thing that matters
-/// most at a glance: green = to-do view (archived hidden), blue =
-/// archived included, neutral = no Master Archive yet.
+/// One highlighted box beside the Show menu: "Showing: Videos · Not Yet
+/// Archived · Connected drives". Pure layout over a handful of Bools —
+/// no records are touched here. A READOUT, not a control: it has no click.
+/// The glyph says the one thing that matters most at a glance: green
+/// checklist = the to-do view (Not Yet Archived on), blue box = archived
+/// files are listed, none = no Master Archive yet or a focus set.
 struct CatalogShowingBox: View {
     let state: CatalogShowingSummary.State
 
@@ -336,37 +344,42 @@ struct CatalogShowingBox: View {
 
     /// The view's meaning as a glyph + its colour (2026-10-24, Rick: solid
     /// fills with white text were hard on the eyes) — the chip itself is
-    /// neutral, so only the volume pill is tinted. nil = no Master Archive.
+    /// neutral, so only the volume pill is tinted. nil = no Master Archive,
+    /// or a focus set (the filters are not in force).
     private var mark: (symbol: String, color: Color)? {
-        guard state.hasMasterArchive else { return nil }
+        guard state.hasMasterArchive, state.focusLabel == nil else { return nil }
         return state.viewFilters.contains(.notYetArchived)
             ? ("checklist", toDoGreen) : ("archivebox.fill", allBlue)
     }
 
     var body: some View {
-        let pills = CatalogShowingSummary.boxPills(for: state)
+        // At most three short strings, built from a handful of values.
+        let lines = CatalogShowingSummary.boxLines(for: state)
         HStack(spacing: 6) {
             if let mark {
                 Image(systemName: mark.symbol)
                     .imageScale(.small)
                     .foregroundStyle(mark.color)
             }
-            Text(pills.map(\.text).joined(separator: " · "))
-                .font(Self.font)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // The first line that fits is drawn whole; a line that does not
+            // fit is never cut short — the next, shorter one counts the
+            // filters it leaves out. (≈ picking the longest of N preformatted
+            // strings that fits the column, instead of ellipsizing one.)
+            ViewThatFits(in: .horizontal) {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                        .font(Self.font)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 7).fill(Color.secondary.opacity(0.14)))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.secondary.opacity(0.28), lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 7))
-        .help(state.hasMasterArchive
-              ? (state.viewFilters.contains(.notYetArchived)
-                 ? "Files already in the Master Archive are hidden — this is your to-do list. Click to include them."
-                 : "Archived files are shown too. Click to hide them and see only what still needs archiving.")
-              : "What the table is filtered to. Use the Show menu to change it.")
+        .help(CatalogShowingSummary.help(for: state))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(CatalogShowingSummary.sentence(for: state))
         .accessibilityIdentifier("catalog.showingBox")

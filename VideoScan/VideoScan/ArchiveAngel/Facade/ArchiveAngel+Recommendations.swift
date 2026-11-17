@@ -24,7 +24,7 @@ struct ArchiveAngelRecommendationSummary: Equatable {
     /// a record in a prepared batch is counted there, not in its class.
     var counts: [ArchiveAngelRecommendationClass: Int] = [:]
     /// Ready + Needs a date + Worth a look, not already in a batch — the
-    /// catalog's Archive Candidates filter.
+    /// catalog's "Promote me" badges and the panel's focus.
     var candidateIDs: Set<UUID> = []
     var preparedIDs: Set<UUID> = []
     var promotedIDs: Set<UUID> = []

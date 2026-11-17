@@ -205,7 +205,8 @@ struct AwaitingConfirmationWorklistTests {
         // The View-menu item is generated from allCases — pin the case,
         // its family-language label, and its icon.
         #expect(CatalogViewFilter.allCases.contains(.awaitingConfirmation))
-        #expect(CatalogViewFilter.awaitingConfirmation.rawValue == "Repaired — Awaiting Confirmation")
+        #expect(CatalogViewFilter.awaitingConfirmation.title == "Repaired — Awaiting Confirmation")
+        #expect(CatalogViewFilter.awaitingConfirmation.rawValue == "awaitingConfirmation", "the stored key is not the label")
         #expect(CatalogViewFilter.awaitingConfirmation.icon == "checkmark.seal")
     }
 

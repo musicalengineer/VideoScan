@@ -511,7 +511,7 @@ final class ArchiveAngel: ObservableObject {
     // MARK: Recommend (O(1) reads — safe in a row or an inspector)
 
     /// Ready + Needs a date + Worth a look, not already in a prepared
-    /// batch — the catalog's "Archive Candidates" filter set (S3b: the
+    /// batch — the "Archive candidates" set behind the catalog badges (S3b: the
     /// classes, the same numbers the Archive tab shows).
     var candidateIDs: Set<UUID> { recommendations.candidateIDs }
 

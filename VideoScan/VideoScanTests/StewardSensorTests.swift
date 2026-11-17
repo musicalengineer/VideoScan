@@ -398,16 +398,20 @@ struct StewardSensorTests {
         return String(src[start.upperBound..<end.lowerBound])
     }
 
-    @Test func theJunkLineIsStillTriagesAndTheCatalogStillUsesTheFilterKey() throws {
+    @Test func theJunkLineIsStillTriagesAndTheCatalogDoorAsksTheFilterStore() throws {
         #expect(StewardCaseBuilder.junkThreshold == 5)
         #expect(try source("MediaAnalyzer.swift").contains("junkScore >= 5 && familyScore < 2"),
                 "MediaAnalyzer's Suspected Junk line moved — move StewardCaseBuilder.junkThreshold with it")
         #expect(try source("TriageView.swift").contains("rec.junkScore >= 5 ? .orange"),
                 "the Triage table's orange line moved — move StewardCaseBuilder.junkThreshold with it")
-        #expect(StewardCatalogDoor.viewFiltersKey == "catalog.viewFilters")
-        #expect(try source("ContentView.swift").contains("@AppStorage(\"catalog.viewFilters\") private var persistedViewFilters"),
-                "the Catalog's Show-filter key moved — the steward's One Per Footage door writes the old one")
-        #expect(try source("ContentView.swift").contains("catalogViewFilters = CatalogShowingSummary.decode(persistedViewFilters)"))
+        // The One Per Footage door asks the Catalog's ONE filter store
+        // (2026-11-17) — it no longer knows a defaults key at all.
+        let pane = code(try source("StewardPaneView.swift"))
+        #expect(pane.contains("store.set(.onePerFootage, on: true, by: .steward)"))
+        #expect(!pane.contains("defaults.set(") && !pane.contains("UserDefaults"),
+                "the steward pane writes a setting itself")
+        #expect(try source("ContentView.swift").contains(".environment(\\.catalogShowFilterReference, catalogShowFilters)"),
+                "the store is not handed down to the Triage tab")
         #expect(StewardCaseBuilder.minFootageStrength == FootageConfidence.likely.strength, "Likely or stronger")
     }
 

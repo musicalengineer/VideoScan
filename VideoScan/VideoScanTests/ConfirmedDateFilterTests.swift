@@ -1,28 +1,29 @@
 // ConfirmedDateFilterTests.swift
-// "Confirmed date" Show filter (Rick 2026-10-31: "a view filter in the media
-// catalog 'Show Confirmed Date' … so I can quickly scroll through and double
-// check the dates are consistent"). One chip in the EXISTING filter row
-// (CatalogViewFilter.confirmedDate), one predicate (pfRecordHasConfirmedDate),
-// applied where every other additive filter is applied (computeFiltered).
+// Rick's own date on a record, and the Show filter that reads dates.
 //
-// Five dimensions + TRUTH:
-//   LOGIC      the predicate keeps exactly the rows with Rick's own date
-//              (either confidence), none without; the chip's words, icon and
-//              persisted raw value round-trip like its neighbours.
+// History: "Confirmed Date" was a Show filter (Rick 2026-10-31). On 2026-11-17
+// the Show menu was cut to the bare minimum and the filter was INVERTED into
+// "Needs a Date" (CatalogViewFilter.needsDate → pfRecordNeedsDate): the rows
+// with no usable filing date. `pfRecordHasConfirmedDate` stays — the File
+// Journey and the machine-era readers ask it — so its tests stay here, beside
+// the truth test both predicates share.
+//
+// Dimensions:
+//   LOGIC      pfRecordHasConfirmedDate keeps exactly the rows with Rick's own
+//              date (either confidence). Needs a Date's membership, the held
+//              row and the 100k budget are in CatalogRowsTests.swift.
 //   TRUTH      production shape: records dated through the model, committed to
 //              catalog.sqlite by the one committer, reloaded by the one loader —
-//              the chip's count equals a direct SQL count of `user_dates` rows
-//              on live files (the loader's own join), on the same snapshot.
-//   SCALE      ConfirmedDateFilterScaleTests.swift (gauntlet performance
-//              stage): 100k records through the predicate inside the
-//              Catalog's filter budget — TimingBudget's judge, never a raw assert.
+//              the confirmed-date count equals a direct SQL count of
+//              `user_dates` rows on live files, and no row the store holds a
+//              date for is listed under Needs a Date.
+//   SCALE      ConfirmedDateFilterScaleTests.swift (the confirmed-date
+//              predicate); CatalogRowsScaleTests (Needs a Date in the pass).
 //   ISOLATION  a malformed user date ("banana", "", "19", "1992-13") never
-//              counts and never crashes; a removed row with a confirmed date
-//              is not in the table.
-//   SENSOR     (ConfirmedDateFilterSensorTests) the chip exists in the filter
-//              row's source — the enum case the Show menu iterates, the words,
-//              the filter pass — and the predicate reads the user date, never
-//              a machine date.
+//              counts and never crashes; a removed row is not in the table.
+//   SENSOR     (ConfirmedDateFilterSensorTests) Needs a Date is a filter case
+//              the Show menu iterates, applied in the ONE rows function
+//              through the predicate table, and it is the Archive tab's rule.
 //   MEDIA      N/A — no media is opened.
 
 import Foundation
@@ -33,7 +34,7 @@ import VideoScanCore
 
 // MARK: - LOGIC + ISOLATION
 
-@Suite("Confirmed date filter — the predicate and the chip")
+@Suite("Confirmed date — the predicate")
 struct ConfirmedDateFilterTests {
 
     private func rec(_ name: String, date: String? = nil, confidence: String? = nil) -> VideoRecord {
@@ -73,42 +74,6 @@ struct ConfirmedDateFilterTests {
         #expect(rows.filter(pfRecordHasConfirmedDate).map(\.filename) == ["a.mov", "c.mov", "e.mov"])
     }
 
-    @Test("LOGIC: the chip is a CatalogViewFilter case with plain words, an icon and a persisted raw value")
-    func chipIsAFilterCase() {
-        #expect(CatalogViewFilter.allCases.contains(.confirmedDate))
-        #expect(CatalogShowingSummary.words(for: .confirmedDate) == "Confirmed date")
-        #expect(!CatalogViewFilter.confirmedDate.icon.isEmpty)
-        #expect(CatalogViewFilter(rawValue: "Confirmed Date") == .confirmedDate, "persisted filter round trip")
-        let encoded = CatalogShowingSummary.encode([.confirmedDate, .ratedOnly])
-        #expect(CatalogShowingSummary.decode(encoded) == [.confirmedDate, .ratedOnly])
-    }
-
-    @Test("LOGIC: the predicate table — every pure filter has one, the model-backed and group filters do not")
-    func predicateTableCoversEveryFilter() {
-        let modelBacked: Set<CatalogViewFilter> = [.notYetArchived, .hasMasterCopy, .archiveCandidates, .onePerFootage]
-        for f in CatalogViewFilter.allCases {
-            #expect((f.recordPredicate == nil) == modelBacked.contains(f), "\(f)")
-        }
-        let keep = CatalogViewFilter.confirmedDate.recordPredicate
-        #expect(keep?(rec("dated.mov", date: "1992")) == true)
-        #expect(keep?(rec("undated.mov")) == false)
-        // The table and the loop give the same rows the hand-written branches gave.
-        let rows = [rec("a.mov", date: "1991"), rec("b.mov"), rec("c.mov", date: "1992")]
-        rows[2].starRating = 4
-        var out = rows
-        for f in CatalogViewFilter.allCases where Set<CatalogViewFilter>([.confirmedDate, .ratedOnly]).contains(f) {
-            if let keep = f.recordPredicate { out = out.filter(keep) }
-        }
-        #expect(out.map(\.filename) == ["c.mov"])
-    }
-
-    @Test("LOGIC: the Showing box names the chip beside its neighbours, in declaration order")
-    func showingBoxNamesTheChip() {
-        let s = CatalogShowingSummary.State(viewFilters: [.confirmedDate, .ratedOnly])
-        #expect(CatalogShowingSummary.pills(for: s).map(\.text) == ["Videos", "Starred", "Confirmed date", "Connected drives"])
-        #expect(CatalogShowingSummary.sentence(for: s) == "Showing Videos, Starred, Confirmed date, Connected drives")
-    }
-
     @Test("ISOLATION: a malformed user date never counts and never crashes")
     func malformedUserDateNeverCounts() {
         for bad in ["banana", "", "   ", "19", "1992-13", "1992-02-30", "6/1992/x", "1992/06", "92"] {
@@ -133,7 +98,7 @@ struct ConfirmedDateFilterTests {
 
 // MARK: - TRUTH (production shape, sandboxed catalog.sqlite)
 
-@Suite("Confirmed date filter — truth against catalog.sqlite", .serialized)
+@Suite("Confirmed date and Needs a Date — truth against catalog.sqlite", .serialized)
 @MainActor
 struct ConfirmedDateFilterTruthTests {
 
@@ -196,40 +161,82 @@ struct ConfirmedDateFilterTruthTests {
         #expect(chip.count == stored, "chip \(chip.count) vs user_dates on live files \(stored)")
         #expect(Set(chip.map(\.id.uuidString)) == [PoisonedCatalogFixture.id(.healthy), PoisonedCatalogFixture.id(.stalePrint)])
     }
+
+    @Test("TRUTH: Needs a Date on the reloaded catalog — a file Rick dated leaves the list, and no listed row has a stored date")
+    func needsDateFollowsTheStoredDates() async throws {
+        let scene = try CutoverScene.make("needs_a_date"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        #expect(scene.model.catalogCutover.isSQLiteAuthority)
+
+        // The Catalog's own pass: every kind, no reachability probes, the one filter on.
+        func needsDate(_ records: [VideoRecord]) -> [VideoRecord] {
+            var state = CatalogRows.State()
+            state.kindFacet = .everything
+            state.showDisconnectedMedia = true
+            state.filters = [.needsDate]
+            return CatalogRows.rows(records, state).rows
+        }
+        let before = Set(needsDate(try await scene.sqliteLoad().records).map(\.id.uuidString))
+
+        try scene.record(.healthy).userDate = "1992-06-14"
+        try scene.record(.healthy).userDateConfidence = "known"
+        try scene.record(.stalePrint).userDate = "1991"
+        try scene.record(.stalePrint).userDateConfidence = "estimated"
+        #expect(scene.model.saveCatalogNow())
+
+        let snapshot = try await scene.sqliteLoad()
+        let listed = needsDate(snapshot.records)
+        let after = Set(listed.map(\.id.uuidString))
+        #expect(!after.contains(PoisonedCatalogFixture.id(.healthy)), "Rick dated it: it has a filing date")
+        #expect(!after.contains(PoisonedCatalogFixture.id(.stalePrint)), "his best guess is a filing date too")
+        #expect(after.isSubset(of: before), "dating files can only shorten the list")
+        // No listed row carries a date the store holds for it; every listed
+        // row is one the Archive tab's own rule would list.
+        for r in listed {
+            #expect(!pfRecordHasConfirmedDate(r), "\(r.filename) is listed as needing a date but has Rick's")
+            #expect(ArchiveCategorySnapshot.needsDate(r))
+            #expect(!r.isPurged)
+        }
+        let live = pfApplyPurgeFilter(snapshot.records, showRemoved: false)
+        let dated = live.filter(pfRecordHasConfirmedDate)
+        #expect(dated.count == (try storedConfirmedDateCount(scene.databaseURL)))
+        #expect(Set(dated.map(\.id)).isDisjoint(with: listed.map(\.id)))
+    }
 }
 
-// MARK: - SENSOR (source-reading: the chip exists in the filter row)
+// MARK: - SENSOR (source-reading: Needs a Date is in the filter row)
 
-@Suite("Confirmed date filter — chip-in-the-row sensor")
+@Suite("Needs a Date filter — chip-in-the-row sensor")
 struct ConfirmedDateFilterSensorTests {
 
-    @Test("SENSOR: the chip is a CatalogViewFilter case the Show menu iterates, with words, and the filter pass applies it")
+    @Test("SENSOR: Needs a Date is a CatalogViewFilter case the Show menu iterates, applied in the one rows function, by the Archive tab's rule")
     func chipExistsInTheFilterRow() throws {
-        // The enum the Show menu draws (one Toggle per case).
-        let content = try SourceTree.appCode(named: "ContentView.swift")
-        #expect(content.contains("case confirmedDate = \"Confirmed Date\""))
+        // The enum the Show menu draws (one Toggle per case), keyed by a stable raw value.
+        let store = try SourceTree.appCode(named: "CatalogShowFilterStore.swift")
+        #expect(store.contains("case needsDate"))
+        #expect(store.contains("case .needsDate:            return \"Needs a Date\""))
+        #expect(!store.contains("confirmedDate"), "the inverted filter is gone, not kept beside its opposite")
         let toolbar = try SourceTree.appCode(named: "CatalogToolbar.swift")
         #expect(toolbar.contains("Section(\"Show files — filters\")"))
         #expect(toolbar.contains("ForEach(CatalogViewFilter.allCases, id: \\.self) { filter in"),
                 "the Show menu draws every CatalogViewFilter case — the chip rides allCases")
-        // The words in the Showing box (compiler-enforced switch, pinned here by name).
+        #expect(toolbar.contains("Label(filter.title, systemImage: filter.icon)"), "the menu says the filter's title")
+        // The Showing box says the same words: it has no vocabulary of its own.
         let summary = try SourceTree.appCode(named: "CatalogShowingSummary.swift")
-        #expect(summary.contains("case .confirmedDate:"))
-        #expect(summary.contains("\"Confirmed date\""))
-        // Applied in the ONE filter pass, through the enum's predicate table, never in a body.
-        #expect(content.contains("case .confirmedDate:        return pfRecordHasConfirmedDate"))
-        let helpers = try SourceTree.appCode(named: "CatalogHelpers.swift")
-        #expect(helpers.contains("for filter in CatalogViewFilter.allCases where viewFilters.contains(filter) {"))
-        #expect(helpers.contains("if let keep = filter.recordPredicate { out = out.filter(keep) }"))
-        #expect(!helpers.contains("viewFilters.contains(.confirmedDate)"), "no hand-written branch beside the table")
-        // The predicate reads Rick's date — never a machine date.
+        #expect(summary.contains("static func words(for filter: CatalogViewFilter) -> String { filter.title }"))
+        // Applied in the ONE rows function, through the enum's predicate table, never in a body.
+        #expect(store.contains("case .needsDate:            return pfRecordNeedsDate"))
+        let rows = try SourceTree.appCode(named: "CatalogRows.swift")
+        #expect(rows.contains("for filter in CatalogViewFilter.ordered(state.filters) {"))
+        #expect(rows.contains("if let keep = filter.recordPredicate { out = out.filter(keep) }"))
+        #expect(!rows.contains("contains(.needsDate)"), "no hand-written branch beside the table")
+        // ONE rule: the predicate is the Archive tab's Needs a Date, which asks Promote's resolver.
         let queries = try SourceTree.appCode(named: "CatalogQueries.swift")
-        let start = try #require(queries.range(of: "func pfRecordHasConfirmedDate("))
-        let body = String(queries[start.lowerBound...].prefix(400))
-        #expect(body.contains("userDateStatus"))
-        #expect(body.contains("UserDateEntry.canonicalize"))
-        for machine in ["inferredRecordDate", "embeddedCreationDate", "dateCreatedRaw", "dateModifiedRaw", "resolvedDate"] {
-            #expect(!body.contains(machine), "the predicate must not read \(machine)")
-        }
+        let start = try #require(queries.range(of: "func pfRecordNeedsDate("))
+        let body = String(queries[start.lowerBound...].prefix(160))
+        #expect(body.contains("ArchiveCategorySnapshot.needsDate(rec)"))
+        let categories = try SourceTree.appCode(named: "ArchiveView+Categories.swift")
+        let rule = try #require(categories.range(of: "static func needsDate(_ f: DateFacts) -> Bool {"))
+        #expect(String(categories[rule.lowerBound...].prefix(260)).contains("RecordDateResolver.resolve("))
     }
 }

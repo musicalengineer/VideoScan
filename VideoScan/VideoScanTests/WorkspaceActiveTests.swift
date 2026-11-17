@@ -7,11 +7,11 @@ import Foundation
 // Pass A of the Triage workflow (Manager dispatch 2026-06-14):
 //   - VideoRecord.workspaceActive: a per-record Bool, default false.
 //   - Round-trips through Codable (additive, legacy catalogs must decode).
-//   - CatalogViewFilter.workspaceOnly narrows the catalog table to rows
-//     where workspaceActive == true.
+//   (The Show ▸ In Workspace filter that read the flag was removed
+//    2026-11-17; the test that mirrored its predicate went with it.)
 //
 // Pass A does NOT add UI mechanism to set the flag; Pass B (Import) does.
-// These tests cover the data shape and the filter predicate only.
+// These tests cover the data shape only.
 
 struct WorkspaceActiveTests {
 
@@ -66,34 +66,7 @@ struct WorkspaceActiveTests {
                 "Legacy catalog without workspaceActive key must decode to false")
     }
 
-    // MARK: - 2. Filter predicate
-
-    // regression: Pass A spec — when .workspaceOnly is in the active filter
-    // set, only records with workspaceActive == true pass.
-    @Test func workspaceFilter_predicate() {
-        let a = makeRecord(name: "a.mov", workspaceActive: false)
-        let b = makeRecord(name: "b.mov", workspaceActive: true)
-        let c = makeRecord(name: "c.mov", workspaceActive: false)
-        let all: [VideoRecord] = [a, b, c]
-
-        // Mirror the predicate inside CatalogContent.computeFiltered()'s
-        // .workspaceOnly branch. Keeping the test parallel to the source
-        // means a future change to the predicate has to be reflected here,
-        // which is exactly the sensor we want.
-        let filters: Set<CatalogViewFilter> = [.workspaceOnly]
-        let filtered: [VideoRecord]
-        if filters.contains(.workspaceOnly) {
-            filtered = all.filter { $0.workspaceActive }
-        } else {
-            filtered = all
-        }
-
-        #expect(filtered.count == 1, "Exactly one record should pass the workspace filter")
-        #expect(filtered.first?.filename == "b.mov",
-                "The workspace-active record must be the one that passes")
-    }
-
-    // MARK: - 3. Default + clone propagation
+    // MARK: - 2. Default + clone propagation
 
     // regression: Pass A spec — newly constructed VideoRecord must have
     // workspaceActive == false (matches Bool default), and snapshotClone()

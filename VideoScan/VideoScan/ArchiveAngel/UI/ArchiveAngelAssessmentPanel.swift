@@ -110,7 +110,7 @@ struct ArchiveAngelAssessmentPanel: View {
                     .controlSize(.large)
                     .fixedSize()
                     .disabled(angel.candidateIDs.isEmpty)
-                    .help("Focus the Catalog on every Ready, Needs a date and Worth a look record. Show ▸ Archive Candidates keeps the same view as a filter.")
+                    .help("Focus the Catalog on every Ready, Needs a date and Worth a look record.")
                 Menu {
                     Button("Assess Now") { angel.assessNow() }
                         .disabled(sweep.status.isRunning || !angel.sweepEnabled)
