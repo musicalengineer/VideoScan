@@ -292,6 +292,53 @@ struct BalancedCopyProofPresentationTests {
         #expect(grows.sha256 != scaled.sha256, "a picture scaled back to its first size hashed as the original")
     }
 
+    @Test("#308-1: a COPY whose picture changes shape half way to one of the same byte count (64×48 → 32×96) — every frame hash equal — is not the same: a pass whose picture changes shape is COULD NOT CHECK",
+          .timeLimit(.minutes(2)))
+    func aPictureThatChangesShapeMidStreamIsCouldNotCheck() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("p81shape")
+        defer { try? fm.removeItem(at: dir) }
+        // One YUV 4:2:0 buffer that is a 64×48 picture and, read another way, a 32×96 one.
+        var buffer = Data((0..<(64 * 48)).map { UInt8(16 + 3 * ($0 % 64)) })
+        buffer.append(Data(repeating: 128, count: 64 * 48 / 2))
+        let raw = dir.appendingPathComponent("buffer.yuv")
+        try Data(Array(repeating: buffer, count: 25).joined()).write(to: raw)
+        func stream(_ name: String, size: String) throws -> Data {
+            let out = dir.appendingPathComponent(name).path
+            try BalanceAudioTestMedia.runFFmpeg(
+                ["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", size, "-r", "25", "-i", raw.path, "-c:v", "libx264",
+                 "-preset", "ultrafast", "-qp", "0", "-vf", "setsar=1", "-pix_fmt", "yuv420p", "-f", "h264"], output: out)
+            return try Data(contentsOf: URL(fileURLWithPath: out))
+        }
+        let (wide, tall) = (try stream("wide.h264", size: "64x48"), try stream("tall.h264", size: "32x96"))
+        func film(_ name: String, picture: Data, channels: String) throws -> String {
+            let joined = dir.appendingPathComponent(name + ".h264")
+            try picture.write(to: joined)
+            let out = dir.appendingPathComponent(name + ".mkv").path
+            try BalanceAudioTestMedia.runFFmpeg(
+                ["-r", "25", "-i", joined.path, "-f", "lavfi", "-i", "aevalsrc=\(channels):s=48000:d=2", "-map", "0:v", "-map", "1:a",
+                 "-c:v", "copy", "-af", "asetnsamples=n=48000:p=0", "-c:a", "pcm_s16le"], output: out)
+            return out
+        }
+        let original = try film("test_wide", picture: wide + wide, channels: Media.leftOnly)
+        let copy = try film("shape_balanced", picture: wide + tall, channels: "\(Media.tone)|\(Media.tone)")
+        // By another road: the copy shows two shapes, and its frames are the same bytes.
+        let heights = Set(await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_frames",
+                                                                      "-show_entries", "frame=height", "-of", "csv=p=0", copy])
+            .split(separator: "\n").compactMap { $0.split(separator: ",").first.map(String.init) })
+        #expect(heights == ["48", "96"])
+        func frames(_ path: String) async -> String {
+            await Lab.output(ToolLocator.ffmpegPath, ["-v", "error", "-i", path, "-map", "0:v:0", "-f", "framehash", "-hash", "sha256", "-"])
+                .split(separator: "\n").filter { !$0.hasPrefix("#") }.joined(separator: "\n")
+        }
+        let (ours, theirs) = (await frames(original), await frames(copy))
+        #expect(ours.split(separator: "\n").count == 50 && theirs.split(separator: "\n").count == 50)
+
+        let outcome = await Proof.measure(original: original, balanced: copy)
+        #expect(!outcome.playsTheSame, "a picture shown in another shape was the same: \(outcome)")
+        #expect(Lab.reason(outcome)?.contains("Reconfiguring filter graph because video parameters changed") == true, "\(outcome)")
+    }
+
     // MARK: #307-3 — a subtitle's styles
 
     @Test("#307-3: a copy whose captions are the same packets in another STYLE (white turned red in the track's configuration) is NOT THE SAME",
@@ -664,7 +711,7 @@ struct BalancedCopyProofPresentationTests {
         let unmarked = try Media.derive("unmarked_balanced", from: withMarks, ["-map", "0", "-c", "copy", "-map_chapters", "-1"])
         #expect((await Proof.measure(original: chaptered, balanced: unmarked)).differences.contains(Proof.Difference(
             kind: .metadata, heldOnlyBy: .original,
-            what: "2 chapter marks the other file does not have: 0.000000–1.000000 One, 1.000000–2.000000 Two")))
+            what: "2 chapter marks the other file does not have: 0.000000–1.000000 title=One, 1.000000–2.000000 title=Two")))
 
         // PIN: the same streams remuxed to QuickTime lose the picture's colour-range
         // statement (full range → unstated). That changes how the same pixels are

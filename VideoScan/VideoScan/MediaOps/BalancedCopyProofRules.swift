@@ -502,23 +502,25 @@ extension BalancedCopyProof {
         }
     }
 
-    /// Every "key=value" a file states, on the container or on any stream.
-    private static func everyTag(_ file: FileLayout) -> Set<String> {
-        let all = [file.tags] + file.carried.map(\.tags) + file.sound.map(\.tags)
-        return Set(all.flatMap { $0.map { "\($0.key)=\($0.value)" } })
+    /// Every "key=value" in these tag sets.
+    private static func pairs(_ tags: [[String: String]]) -> Set<String> {
+        Set(tags.flatMap { $0.map { "\($0.key)=\($0.value)" } })
     }
 
-    /// Where the two files' tags are compared, and everything each states anywhere.
+    /// Where the two files' tags are compared.
     private struct TagTally {
-        var originalHas: Set<String>
-        var copyHas: Set<String>
         var found: [Difference.Holder: [String]] = [:]
 
         /// Tags one file has and the other has not, or states differently.
-        /// `scope` names where they are ("", "stream 1 "). A tag the other
-        /// file states with the SAME value somewhere else (raw DV's timecode
-        /// is the container's, QuickTime's the track's) is not missing.
-        mutating func compare(_ original: [String: String], _ copy: [String: String], scope: String) {
+        /// `scope` names where they are ("", "stream 1 "). A tag is not
+        /// missing when the other file states it with the SAME value across
+        /// the container/track line — `originalHas` / `copyHas`: for the
+        /// container's tags, what the other file's tracks state; for a
+        /// track's, what the other file's container states (raw DV's
+        /// timecode is the container's, QuickTime's the track's). One track
+        /// never answers for another (Codex #308-4).
+        mutating func compare(_ original: [String: String], _ copy: [String: String], scope: String,
+                              originalHas: Set<String>, copyHas: Set<String>) {
             for key in Set(original.keys).union(copy.keys).sorted() {
                 switch (original[key], copy[key]) {
                 case (let a?, let b?):
@@ -603,9 +605,18 @@ extension BalancedCopyProof {
             originalPlayed: Double(facts.originalRead?.soundSamples ?? 0) / Double(max(kept.sampleRateHz, 1)),
             copyStored: copySound.storedSeconds,
             copyPlayed: Double(facts.balancedRead?.soundSamples ?? 0) / Double(max(copySound.sampleRateHz, 1)))
-        var flags = pairing.pictures.compactMap { pair -> String? in
+        // A paired text/data track is not decoded: what it plays is what its header states (Codex #308-2).
+        for pair in pairing.others {
+            let (original, copy) = (facts.original.carried[pair.original], facts.balanced.carried[pair.balanced])
+            out += hiddenDifferences("\(original.kind) stream \(original.index)", originalStored: original.storedSeconds,
+                                     originalPlayed: original.statedSeconds ?? original.storedSeconds ?? 0,
+                                     copyStored: copy.storedSeconds,
+                                     copyPlayed: copy.statedSeconds ?? copy.storedSeconds ?? 0)
+        }
+        var flags = (pairing.pictures + pairing.others).compactMap { pair -> String? in
             let original = facts.original.carried[pair.original]
-            return flagPhrase("picture stream \(original.index)", original.flags, facts.balanced.carried[pair.balanced].flags)
+            return flagPhrase("\(original.isPicture ? "picture" : original.kind) stream \(original.index)", original.flags,
+                              facts.balanced.carried[pair.balanced].flags)
         }
         if let phrase = flagPhrase("the sound", kept.flags, copySound.flags) { flags.append(phrase) }
         if !flags.isEmpty {
@@ -628,12 +639,16 @@ extension BalancedCopyProof {
                                       what: "\(alone.count) chapter marks the other file does not have: \(named(alone))"))
             }
         }
-        var tags = TagTally(originalHas: everyTag(facts.original), copyHas: everyTag(facts.balanced))
-        tags.compare(facts.original.tags, facts.balanced.tags, scope: "")
-        tags.compare(kept.tags, copySound.tags, scope: "sound ")
+        var tags = TagTally()
+        func tracks(_ file: FileLayout) -> Set<String> { pairs(file.carried.map(\.tags) + file.sound.map(\.tags)) }
+        tags.compare(facts.original.tags, facts.balanced.tags, scope: "",
+                     originalHas: tracks(facts.original), copyHas: tracks(facts.balanced))
+        let (ours, theirs) = (pairs([facts.original.tags]), pairs([facts.balanced.tags]))
+        tags.compare(kept.tags, copySound.tags, scope: "sound ", originalHas: ours, copyHas: theirs)
         for pair in pairing.pictures + pairing.others {
             let original = facts.original.carried[pair.original]
-            tags.compare(original.tags, facts.balanced.carried[pair.balanced].tags, scope: "stream \(original.index) ")
+            tags.compare(original.tags, facts.balanced.carried[pair.balanced].tags, scope: "stream \(original.index) ",
+                         originalHas: ours, copyHas: theirs)
         }
         if let only = tags.found[.original] {
             out.append(Difference(kind: .metadata, heldOnlyBy: .original, what: "tags the balanced copy does not have: \(named(only))"))

@@ -570,6 +570,12 @@ struct BalancedCopyProofRuleTests {
         // What a pinned format prints when a frame would need converting.
         let convert = "[fc#0 @ 0x7b4ec08000] [error] Error reinitializing filters!"
         #expect(fault(with(convert, at: 8)) == convert)
+        // #308-1: a picture or sound that changes shape mid-stream restarts the filter graph. framehash
+        // states a stream's size once, so what follows cannot be held: the pass is refused.
+        for change in ["[fc#0 @ 0x7624c04000] [info] Reconfiguring filter graph because video parameters changed to yuv420p(unknown, unknown), 32x96, unspecified alpha",
+                       "[fc#0 @ 0x1] [info] Reconfiguring filter graph because audio parameters changed to 44100 Hz, stereo, s16"] {
+            #expect(fault(with(change, at: 8)) == change)
+        }
         // A line that carries no level: a wrapper's complaint, a library's own stderr.
         for stray in ["Error during demuxing: Input/output error", "[in#0/mov @ 0x0] Error during demuxing",
                       "dyld: warning", "[not a level] text"] {

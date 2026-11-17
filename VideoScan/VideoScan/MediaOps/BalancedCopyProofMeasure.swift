@@ -176,7 +176,10 @@ extension BalancedCopyProof {
               let sideData = sideData(fromProbeJSON: data), sideData.count == streams.count else { return nil }
         var layout = FileLayout(
             container: report.format?.format_name ?? "", tags: report.format?.tags ?? [:],
-            chapters: (report.chapters ?? []).map { "\($0.start_time ?? "?")–\($0.end_time ?? "?") \($0.tags?["title"] ?? "")" })
+            chapters: (report.chapters ?? []).map { chapter in
+                let tags = (chapter.tags ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+                return "\(chapter.start_time ?? "?")–\(chapter.end_time ?? "?") \(tags.joined(separator: " "))"
+            })
         for (position, s) in streams.enumerated() {
             let index = s.index ?? position
             if s.codec_type == "audio" {
@@ -581,6 +584,8 @@ extension BalancedCopyProof {
     static let quietLogLevels: Set<Substring> = ["warning", "info", "verbose", "debug", "trace"]
     /// Levels `-v error` prints. One line at any of them refuses the pass.
     static let loudLogLevels: Set<Substring> = ["error", "fatal", "panic"]
+    /// What ffmpeg logs, at info, when a stream's frames change size or format.
+    static let reconfiguredPayload = "Reconfiguring filter graph"
     /// What ffmpeg logs last, at verbose, when it finished in order.
     static let cleanExitPayload = "Exiting with exit code 0"
 
@@ -652,6 +657,11 @@ extension BalancedCopyProof {
                 return .failure(ReadFault(line: String(line)))
             }
             guard quietLogLevels.contains(record.level) else { return .failure(ReadFault(line: String(line))) }
+            // A picture or sound that changes shape mid-stream restarts the
+            // filter graph. framehash states a stream's size once, and two
+            // shapes can have one byte count, so nothing after the change
+            // can be held: the pass is refused (Codex #308-1).
+            guard !record.payload.hasPrefix(reconfiguredPayload) else { return .failure(ReadFault(line: String(line))) }
             last = record
             let peaks = "astats@\(runTag)s"
             if !runTag.isEmpty, let component = record.components.first, component.hasPrefix(peaks) {

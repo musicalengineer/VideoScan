@@ -9473,6 +9473,7 @@
         "notProvenPictureDiffers",
         "notProvenPictureStreamSet",
         "notProvenSoundDiffers",
+        "pairedUndecodedTracksAreHeldLikeTheRest",
         "playbackDifferences",
         "poisonedFactsNeverProve",
         "provenForRightOnlyAndMono",
@@ -9557,6 +9558,7 @@
         "aFrameThatNeedsConvertingIsCouldNotCheck",
         "aPassThatCannotBeBelievedIsCouldNotCheck",
         "aPictureScaledBackToItsFirstSizeIsRefused",
+        "aPictureThatChangesShapeMidStreamIsCouldNotCheck",
         "aTrackSwitchedOffIsRefused",
         "changedPaletteIsRefused",
         "changedSubtitleConfigurationIsRefused",
@@ -40448,7 +40450,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 725,
+      "expected_floor": 727,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

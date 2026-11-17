@@ -275,7 +275,7 @@ enum BalancedCopyProof {
         var container: String = ""
         /// The container's own tags.
         var tags: [String: String] = [:]
-        /// Its chapter marks, each "<start>–<end> <title>".
+        /// Its chapter marks, each "<start>–<end> <every tag, sorted>".
         var chapters: [String] = []
 
         var containerWords: Set<String> { Set(container.split(separator: ",").map { $0.lowercased() }) }

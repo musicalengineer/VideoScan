@@ -323,6 +323,45 @@ struct BalancedCopyProofDecisionTests {
         #expect(mixed.differences.map(\.what) == ["track flags differ: the sound (the original only: dub; the balanced copy only: original)"])
     }
 
+    @Test("#308-2/3/4: a text or data track both files have is held like the rest — media it hides, its track flags, and a tag lost from one track are all named")
+    func pairedUndecodedTracksAreHeldLikeTheRest() {
+        func withCaptions(_ change: @escaping (inout Proof.Facts) -> Void) -> Proof.Outcome {
+            Proof.decide(Self.facts {
+                $0.original.carried = [Self.video(0), Self.captions(2)]
+                $0.balanced.carried = [Self.video(0), Self.captions(2)]
+                change(&$0)
+            })
+        }
+        #expect(withCaptions { _ in }.isProven)
+        // #308-2: each caption track plays one second and stores 2.6 — what the rest says is not compared.
+        let hidden = withCaptions {
+            for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
+                $0[keyPath: side].carried[1].statedSeconds = 1
+                $0[keyPath: side].carried[1].storedSeconds = 2.6
+            }
+        }
+        #expect(hidden.differences.map(\.heldOnlyBy) == [.original, .balancedCopy] && !hidden.isProven, "\(hidden)")
+        #expect(hidden.differences.first?.what == "stored subtitle stream 2 an edit list does not play: 2.600 s stored, 1.000 s "
+                + "played — the hidden part is not compared with the other file")
+        // #308-3: which caption track is switched on.
+        let flags = withCaptions { $0.balanced.carried[1].flags = ["default"] }
+        #expect(flags.differences == [Proof.Difference(
+            kind: .playback, heldOnlyBy: nil, what: "track flags differ: subtitle stream 2 (the balanced copy only: default)")])
+        // #308-4: the picture's title is gone from the copy; that the SOUND track still says it is not the picture's title.
+        let title = Proof.decide(Self.facts {
+            $0.original.carried[0].tags["title"] = "Grandpa"
+            $0.original.sound[0].tags["title"] = "Grandpa"
+            $0.balanced.sound[0].tags["title"] = "Grandpa"
+        })
+        #expect(title.differences == [Proof.Difference(
+            kind: .metadata, heldOnlyBy: .original, what: "tags the balanced copy does not have: stream 0 title")], "\(title)")
+        // The one relocation that is not a loss stays: a container's tag found on a track, or a track's on the container.
+        #expect(Proof.decide(Self.facts {
+            $0.original.carried[0].tags["timecode"] = "01:00:00:00"
+            $0.balanced.tags["timecode"] = "01:00:00:00"
+        }).isProven)
+    }
+
     @Test("CHAPTERS: chapter marks one file has and the other has not, or that differ, are named")
     func chapterMarks() {
         let marks = ["0.000000–1.000000 One", "1.000000–2.000000 Two"]
@@ -915,7 +954,13 @@ struct BalancedCopyProofDecisionTests {
         let layout = try #require(Proof.layout(fromProbeJSON: json))
         #expect(layout.container == Self.movie && layout.containerWords.contains("mov") && layout.hasEditLists)
         #expect(layout.tags == ["encoder": "Lavf"])
-        #expect(layout.chapters == ["0.000000–1.000000 One", "1.000000–2.000000 "])
+        #expect(layout.chapters == ["0.000000–1.000000 title=One", "1.000000–2.000000 "])
+        // #308-5: every tag of a chapter is part of the mark, not only its title.
+        func marks(_ tags: String) -> [String]? {
+            Proof.layout(fromProbeJSON: Data(#"{"streams":[{"index":0,"codec_type":"audio"}],"chapters":[{"start_time":"0.000000","end_time":"1.000000","tags":{\#(tags)}}]}"#.utf8))?.chapters
+        }
+        #expect(marks(#""title":"Birthday","COMMENT":"Grandpa speaking""#) == ["0.000000–1.000000 COMMENT=Grandpa speaking title=Birthday"])
+        #expect(marks(#""title":"Birthday","COMMENT":"Grandpa speaking""#) != marks(#""title":"Birthday""#))
         #expect(layout.carried[0].flags == ["default"] && layout.carried[1].flags.isEmpty && layout.sound[0].flags.isEmpty)
         #expect(layout.carried.map(\.index) == [0, 2] && layout.pictures.map(\.index) == [0])
         let video = layout.carried[0]
