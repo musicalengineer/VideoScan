@@ -9,6 +9,11 @@
 // write, no schema change) — and each window owns one ObservationsStore
 // that runs it off the main actor and publishes the result.
 //
+// The read itself has ONE door for the whole module, `SessionCatalogRead`
+// below: the report, the words search and the Frames mode's file rows (and
+// through those rows the Index Frames job) all go through it, so "is the
+// catalog open", the refusal's words and the cancellation check exist once.
+//
 // Shape: a feature store behind a seam (rule 12, #337) — the WINDOW owns one;
 // nothing extends VideoScanModel and the model holds nothing new. The loader
 // is a value of closures a test replaces (the mockups drive it with fixtures).
@@ -34,6 +39,36 @@
 import Combine
 import Foundation
 import VideoScanCore
+
+/// THE read door for a session: catalog.sqlite as THIS session holds it, read-only, for everything in
+/// Observations/. It says whether the catalog is open, refuses in one set of words when it is not, checks for
+/// cancellation before the read, and runs `body` inside the repository's read snapshot. Nothing else in the
+/// module names the session's repository (a sensor pins it).
+///
+/// (For Rick: a function object holding a weak pointer to the session — `read { … }` calls it; `callAsFunction`
+/// is C++'s `operator()`.)
+struct SessionCatalogRead: Sendable {
+    static let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
+
+    /// The repository this session reads; nil while its catalog is not open.
+    private let repository: @Sendable () async -> (any CatalogRepository)?
+
+    @MainActor
+    init(model: VideoScanModel) {
+        repository = { [weak model] in await MainActor.run { model?.catalogCutover.committer?.repository } }
+    }
+
+    /// A door over any repository source (tests: a closed session, a fixture catalog).
+    init(repository: @escaping @Sendable () async -> (any CatalogRepository)?) {
+        self.repository = repository
+    }
+
+    func callAsFunction<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
+        guard let repository = await repository() else { throw Self.notOpen }
+        try Task.checkCancellation()
+        return try await repository.read(body)
+    }
+}
 
 /// THE door: how the app reads the observations.
 struct ObservationsLoader {
@@ -70,21 +105,15 @@ struct ObservationsLoader {
 
     @MainActor
     private static func make(model: VideoScanModel) -> ObservationsLoader {
-        let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
+        let read = SessionCatalogRead(model: model)
         return ObservationsLoader(
-            loadReport: { [weak model] scope in
-                let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-                guard let repository else { throw notOpen }
-                try Task.checkCancellation()
+            loadReport: { scope in
                 let now = Date()
-                return try await repository.read { try ObservationsReport.build(reader: $0, scope: scope, now: now) }
+                return try await read { try ObservationsReport.build(reader: $0, scope: scope, now: now) }
             },
-            search: { [weak model] scope, query in
-                let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-                guard let repository else { throw notOpen }
-                try Task.checkCancellation()
+            search: { scope, query in
                 let now = Date()
-                return try await repository.read { try ObservationsSearch.search(reader: $0, scope: scope, query: query, now: now) }
+                return try await read { try ObservationsSearch.search(reader: $0, scope: scope, query: query, now: now) }
             },
             reveal: { [weak model] id in
                 guard let model, model.canNavigateToRecord(id: id) else { return false }

@@ -32,7 +32,8 @@
 //   • FrameIndexWriter (an actor) — owns the builder; loads the index on
 //     disk, plans (skips what is done — restart = resume) and saves, all on
 //     its own executor, never the main actor; a save returns the snapshot it
-//     wrote, which `onSaved` hands to the window (no re-read from disk).
+//     wrote, which `onSaved` hands to the window (no re-read from disk) — and
+//     to every window that joined the run later (`alsoTell`).
 //   • FrameIndexJob (main actor) — counters, Pause/Stop, progress, WHEN to
 //     save (FrameIndexSavePoint) and the first terminal cause
 //     (FrameIndexRunOutcome).
@@ -333,6 +334,15 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
     var note: @MainActor (String) -> Void = { appLog.write("[frame index] " + $0) }
     /// Called after every save with the index exactly as written (the window shows it; no re-read).
     var onSaved: (@MainActor (FrameIndex) -> Void)?
+    /// Windows that opened while the run was under way: each is given every LATER save, after `onSaved`.
+    /// Bounded: one closure per window opened during the run (each holds its window weakly); emptied when the run ends.
+    private var laterListeners: [@MainActor (FrameIndex) -> Void] = []
+
+    /// Give `listener` every save from now on. A run that is over has no more saves: nothing is kept.
+    func alsoTell(_ listener: @escaping @MainActor (FrameIndex) -> Void) {
+        guard state.isActive else { return }
+        laterListeners.append(listener)
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
@@ -594,6 +604,7 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
             unsaved = 0
             lastSave = Date()
             onSaved?(written)
+            for tell in laterListeners { tell(written) }
         } catch {
             let why = FailureWords.of(error)
             note("could not save the frame index (\(point.rawValue)): \(why)")
@@ -630,6 +641,7 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
                 state = .finished(summary: summary)
             }
         }
+        laterListeners = []
     }
 }
 
@@ -637,13 +649,29 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
 
 extension MediaFileOperationsCenter {
 
+    /// The Index Frames job running now, if one is. O(jobs) (≤ ~60).
+    var runningFrameIndex: FrameIndexJob? {
+        jobs.lazy.compactMap { $0 as? FrameIndexJob }.first { $0.state.isActive }
+    }
+
+    /// Join the running job without starting one: `onSaved` is given every save from now on. Nil: none is running.
+    func joinFrameIndex(onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob? {
+        guard let running = runningFrameIndex else { return nil }
+        running.alsoTell(onSaved)
+        return running
+    }
+
     /// Start "Index frames (SigLIP 2)" over `scope`, writing the index under `root`. One job at a time: a second request while one runs returns the running one.
-    /// `onSaved` is given the index exactly as each save wrote it (a job already running keeps the `onSaved` it started with).
+    /// `onSaved` is given the index exactly as each save wrote it. A job already running keeps the `onSaved` it started
+    /// with and ALSO tells this one from now on — the window asking may not be the window that started it.
     @discardableResult
     func startFrameIndex(scope: ObservationsScope, loadFiles: @escaping FrameIndexJob.LoadFiles, embedder: any FrameEmbedding,
                          root: URL = FrameIndexStore.productionRoot,
                          note: @escaping @MainActor (String) -> Void, onSaved: (@MainActor (FrameIndex) -> Void)?) -> FrameIndexJob {
-        if let running = jobs.lazy.compactMap({ $0 as? FrameIndexJob }).first(where: { $0.state.isActive }) { return running }
+        if let running = runningFrameIndex {
+            if let onSaved { running.alsoTell(onSaved) }
+            return running
+        }
         let job = FrameIndexJob(scope: scope, loadFiles: loadFiles, embedder: embedder)
         job.root = root
         job.note = note

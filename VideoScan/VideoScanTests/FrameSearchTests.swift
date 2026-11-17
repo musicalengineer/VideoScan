@@ -711,7 +711,8 @@ struct FrameSearchSensorTests {
         }
         let view = try SourceTree.appCode(named: "FrameSearchView.swift")
         #expect(!view.contains("@EnvironmentObject") && !view.contains("model.") && !view.contains(".yellow"))
-        #expect(try SourceTree.appCode(named: "FrameSearchStore.swift").contains("repository.read {"), "the catalog through the read door only")
+        let store = try SourceTree.appCode(named: "FrameSearchStore.swift")
+        #expect(store.contains("try await read { try $0.frameIndexFiles(scope) }") && !store.contains("repository"), "the catalog through the module's one read door only")
     }
 }
 

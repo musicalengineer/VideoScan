@@ -22,7 +22,8 @@
 // (ObservationsStore.swift), the same rule the Words search follows. The
 // index follows it too: the newest read of the disk or the newest save the
 // job handed over is the one shown and searched; an older one finishing late
-// is dropped. Similarity is SigLIP's raw cosine (−1…1; matching captions
+// is dropped. A window that opens while Index Frames is already running joins
+// that job (`joinIndex`) and is handed its saves like the window that started it. Similarity is SigLIP's raw cosine (−1…1; matching captions
 // land around 0.10–0.20); it is a ranking, not a probability, and the words
 // say so.
 //
@@ -70,6 +71,9 @@ struct FrameSearchLoader {
     /// Start (or find) the index job over the scope; nil when no MFO center is reachable.
     /// `onSaved` is given the index exactly as each save wrote it.
     let startIndex: @MainActor (_ scope: ObservationsScope, _ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob?
+    /// The Index Frames job that is ALREADY running, if one is — joined: `onSaved` is given every save from now
+    /// on. For a window that opens mid-run. (Default: nothing to join — tests and mockups that start no job.)
+    var joinIndex: @MainActor (_ onSaved: @escaping @MainActor (FrameIndex) -> Void) -> FrameIndexJob? = { _ in nil }
     let reveal: @MainActor (UUID) -> Bool
     let note: @MainActor (String) -> Void
 
@@ -99,12 +103,8 @@ struct FrameSearchLoader {
     static func make(model: VideoScanModel, embedder: any FrameEmbedding = SigLIPEmbedder.shared,
                      root: URL = FrameIndexStore.productionRoot,
                      center: @escaping @MainActor () -> MediaFileOperationsCenter? = { FrameIndexHost.center }) -> FrameSearchLoader {
-        let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
-        let files: Files = { [weak model] scope in
-            let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
-            guard let repository else { throw notOpen }
-            return try await repository.read { try $0.frameIndexFiles(scope) }
-        }
+        let read = SessionCatalogRead(model: model)   // the module's one read door (ObservationsStore.swift)
+        let files: Files = { scope in try await read { try $0.frameIndexFiles(scope) } }
         let note: @MainActor (String) -> Void = { [weak model] line in
             model?.log("Frames: " + line)
             appLog.write("[frames] " + line)
@@ -122,6 +122,7 @@ struct FrameSearchLoader {
                     $0.startFrameIndex(scope: scope, loadFiles: files, embedder: embedder, root: root, note: note, onSaved: onSaved)
                 }
             },
+            joinIndex: { onSaved in center()?.joinFrameIndex(onSaved: onSaved) },
             reveal: { [weak model] id in
                 guard let model, model.canNavigateToRecord(id: id) else { return false }
                 model.showInCatalog(recordID: id)
@@ -244,8 +245,10 @@ final class FrameSearchStore: ObservableObject {
     var modelID: String { loader.modelID }
 
     /// Read the index from disk — the window's first look, the one place there is no snapshot to be handed —
-    /// and warm the model in the background so the first query is fast.
+    /// and warm the model in the background so the first query is fast. A job already running is joined FIRST,
+    /// so no save can fall between the read and the join: a save that lands during the read is the newer look.
     func loadIndex() async {
+        joinRunningJob()
         let load = loader.loadIndex
         guard await show({ IndexRead(await load()) }) else { return }
         let warm = loader.prewarm
@@ -329,9 +332,20 @@ final class FrameSearchStore: ObservableObject {
         String(format: "%.2f s", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
     }
 
+    /// What a job is given to tell this window of a save. Weak: a closed window is told nothing and keeps nothing alive.
+    private var whenSaved: @MainActor (FrameIndex) -> Void {
+        { [weak self] saved in Task { await self?.show(saved: saved) } }
+    }
+
+    /// The window opened while Index Frames runs: show that job and be handed its saves from now on.
+    private func joinRunningJob() {
+        guard job == nil, let running = loader.joinIndex(whenSaved) else { return }
+        watch(running)
+    }
+
     /// Start (or show) the index job over the window's scope. Each save hands back the index it wrote.
     func buildIndex() {
-        guard let job = loader.startIndex(scope, { [weak self] saved in Task { await self?.show(saved: saved) } }) else {
+        guard let job = loader.startIndex(scope, whenSaved) else {
             jobLine = "The Media File Operations center is not available in this window."
             return
         }

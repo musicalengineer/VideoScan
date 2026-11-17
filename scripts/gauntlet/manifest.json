@@ -24640,20 +24640,21 @@
         "ObservationsMockupTests"
       ],
       "tests": [
-        "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
-        "aFailureIsWordsAndIsLoggedOnce",
-        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
-        "aSupersededSearchNeverPublishes",
-        "aScopeChangeThenASearchShowsTheNewScopesHits",
         "aFailedLoadShowsTheFailureAndARetryClearsIt",
-        "theSearchButtonObservesTheFramesStore",
-        "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
+        "aFailureIsWordsAndIsLoggedOnce",
+        "aLoadPublishesTheReportForItsScopeAndAShortQueryClears",
+        "aScopeChangeThenASearchShowsTheNewScopesHits",
+        "aSupersededSearchNeverPublishes",
         "everythingIsReadOnly",
+        "hitsDark",
+        "hitsReadForTheOldScopeAreNeverPublishedUnderTheNewOne",
+        "noModelExtensionAndNoRecordsWorkAndTheViewReadsOneStore",
+        "theModuleReadsTheCatalogThroughOneDoor",
+        "theSearchButtonObservesTheFramesStore",
         "theSearchMatchesObservationColumnsOnlyNeverACatalogField",
         "theThreeEntryPointsUseTheOneDoorAndTheDossierIsTheOneLoader",
-        "tiersLight",
         "tiersDark",
-        "hitsDark"
+        "tiersLight"
       ]
     },
     {
@@ -36296,6 +36297,32 @@
         "warmingLoadsTheModelAndUnloadingDropsItUntilTheNextQuestion",
         "weightsThatCannotBeFoundKeepTheirOwnWordsAndAFailedLoadIsTriedAgain"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameIndexReopenTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FrameIndexReopenTests"
+      ],
+      "tests": [
+        "aWindowOpenedMidRunShowsTheJobAndIsHandedItsSavesWithoutPressingAnything",
+        "aWindowOpenedMidRunThatPressesIndexFramesIsHandedTheLaterSaves",
+        "theProductionDoorJoinsThroughTheCenterItWasGiven",
+        "theWindowThatStartedTheJobIsStillToldAndARunThatIsOverTakesNoListener"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ObservationsReadDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ObservationsReadDoorTests"
+      ],
+      "tests": [
+        "aSessionWithNoCatalogOpenRefusesInTheDoorsWordsAndTheBodyNeverRuns",
+        "theDoorIsTheSessionsOwnRepositoryACancelledReadNeverReachesItAndNothingIsCommitted"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -39052,7 +39079,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3820,
+      "expected_floor": 3827,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39781,7 +39808,9 @@
         "VideoScanTests/ObservationsProductionDoorTests",
         "VideoScanTests/ObservationsStoreBehaviourTests",
         "VideoScanTests/SigLIPInputTests",
-        "VideoScanTests/FrameSearchProductionDoorTests"
+        "VideoScanTests/FrameSearchProductionDoorTests",
+        "VideoScanTests/FrameIndexReopenTests",
+        "VideoScanTests/ObservationsReadDoorTests"
       ]
     },
     {

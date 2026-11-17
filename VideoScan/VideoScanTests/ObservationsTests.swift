@@ -308,7 +308,22 @@ struct ObservationsSensorTests {
         #expect(store.contains("dossiers: FileDossierLoader.production(model: model)") && !store.contains("FileDossierLoader("), "the one dossier door")
         #expect(store.contains("model.showInCatalog(recordID: id)") && store.contains("model.canNavigateToRecord(id: id)"), "the one reveal door")
         #expect(store.contains("Task.detached(priority: .userInitiated)"), "reads run off the main actor")
-        #expect(store.contains("repository.read {"), "inside the repository's read snapshot")
+        #expect(store.contains("return try await repository.read(body)"), "inside the repository's read snapshot")
+    }
+
+    /// One read door for a session (STATUS "Next" item 1, 2026-11-16): the report, the words search and the Frames
+    /// mode's file rows all read through `SessionCatalogRead`; nothing else in the module names the session's repository.
+    @Test func theModuleReadsTheCatalogThroughOneDoor() throws {
+        let files = ["ObservationsStore.swift", "ObservationsWindow.swift", "FrameSearchStore.swift", "FrameSearchView.swift", "FrameIndexJob.swift", "SigLIPEmbedder.swift"]
+        func count(_ needle: String) throws -> Int {
+            try files.reduce(0) { $0 + (try code($1)).components(separatedBy: needle).count - 1 }
+        }
+        #expect(try count("catalogCutover") == 1, "the session's repository is named once, inside the door")
+        #expect(try count("repository.read") == 1, "and read once, inside the door")
+        #expect(try count("is not open in this session") == 1, "one refusal, one set of words")
+        #expect(try code("ObservationsStore.swift").components(separatedBy: "SessionCatalogRead(model: model)").count == 2, "the Words loader's door")
+        #expect(try code("FrameSearchStore.swift").components(separatedBy: "SessionCatalogRead(model: model)").count == 2, "the Frames loader's door")
+        #expect(try code("ObservationsStore.swift").contains("try Task.checkCancellation()"), "a cancelled read never reaches the catalog")
     }
 }
 
