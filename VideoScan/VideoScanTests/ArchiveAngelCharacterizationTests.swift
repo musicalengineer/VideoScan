@@ -665,7 +665,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 15, "v15 2026-10-06: the noSound floor — no sound track, silent or damaged audio is never recommended")
+        #expect(ArchiveAngelScorer.rulesVersion == 16, "v16 2026-11-16: \"will balance\" only for one-sided sound — a v15 sidecar rescored")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

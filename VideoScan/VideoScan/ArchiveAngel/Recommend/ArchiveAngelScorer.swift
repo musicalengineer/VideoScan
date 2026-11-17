@@ -532,8 +532,11 @@ enum ArchiveAngelScorer {
     /// EventLabeler): onePerEvent's event is a labelled OCCASION as well
     /// as a day — a holiday, a family birthday, a name word with the year
     /// (`coverage.eventLabels`, `coverage.birthdayWindowDays`); 15 = the
-    /// `noSound` floor (2026-10-06) — every v14 sidecar must rescore.
-    static let rulesVersion = 15
+    /// `noSound` floor (2026-10-06) — every v14 sidecar must rescore; 16 =
+    /// sound facts are not problems (2026-11-16): "will balance" is said
+    /// only of one-sided sound, never of mono, surround or two-track
+    /// files — a v15 sidecar still carries the old line, so it rescores.
+    static let rulesVersion = 16
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.
