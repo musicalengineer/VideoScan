@@ -351,29 +351,36 @@ struct FrameIndexJobBehaviourTests {
     @Test func noMoreFilesAreDecodedAtOnceThanTheJobsConcurrency() async throws {
         let root = try ObsFixture.tempDir()
         defer { try? FileManager.default.removeItem(at: root) }
-        /// In flight now and the most ever (≈ a mutex-guarded high-water mark).
+        /// In the decoder now and the most ever (≈ a mutex-guarded high-water mark).
         final class Pool: @unchecked Sendable {
             private let lock = NSLock()
             private var now = 0
-            private(set) var most = 0
+            private var most = 0
             func enter() { lock.withLock { now += 1; most = max(most, now) } }
             func leave() { lock.withLock { now -= 1 } }
+            var inFlight: Int { lock.withLock { now } }
             var highWater: Int { lock.withLock { most } }
         }
         let pool = Pool()
+        let open = Flag()
         let rows = (1...12).map { ObsFixture.row($0, path: "/V/\($0).mov") }
         let job = ObsFixture.job(rows, root: root)
         job.concurrency = 3
         job.extract = { _, times in
             pool.enter()
-            try await Task.sleep(for: .milliseconds(20))
+            while !open.isSet { try await Task.sleep(for: .milliseconds(2)) }   // a gate: every decode stays in hand until the test opens it
             pool.leave()
             return times.map { ($0, card(16)) }
         }
         job.start()
+        // With every decode held, the pool fills as far as it ever will. No clock decides the verdict (Codex #302 finding 9).
+        try await FrameIndexJobTests.until("the pool is full") { pool.inFlight == 3 }
+        for _ in 0..<1_000 { await Task.yield() }          // the job's turn to hand out a fourth file, if it would
+        #expect(pool.inFlight == 3, "twelve files wait and the gate is shut: exactly `concurrency` are in the decoder, not one more")
+        open.set()
         await job.task?.value
         #expect(job.indexed == 12 && job.outcome == .finished)
-        #expect(pool.highWater == 3, "the memory bound in the file header is `concurrency` files in flight: saw \(pool.highWater)")
+        #expect(pool.highWater == 3, "the memory bound in the file header is `concurrency` files in flight, start to end: saw \(pool.highWater)")
     }
 
     @Test func theTimeCheckpointSavesEvenWhenTheFileCountIsFarOff() async throws {

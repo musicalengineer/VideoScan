@@ -36289,9 +36289,9 @@
       ],
       "tests": [
         "aCheckpointAlreadyInMLXConvLayoutGivesTheSameVectorsAsTheTorchOne",
-        "aCutRunStopsAtTheNextBatchAndTheEngineCallsItStopped",
         "aDamagedCheckpointIsALoadFailureInWordsNeverACrashOrAHalfLoadedModel",
         "aPublishedLayoutCheckpointLoadsAndBothTowersAnswerUnitVectors",
+        "aRunCutMidwayStopsAtTheNextBatchBoundaryAndTheEngineCallsItStopped",
         "seventyPicturesAcrossThreeBatchesComeBackInOrder",
         "theTinyModelThroughTheJobTheIndexOnDiskAndTheWindowsSearch",
         "warmingLoadsTheModelAndUnloadingDropsItUntilTheNextQuestion",

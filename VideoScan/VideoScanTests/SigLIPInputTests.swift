@@ -44,19 +44,35 @@ struct SigLIPInputTests {
     }
 
     @Test func aFrameOfAnyShapeIsSquashedToTheSquareNotCropped() throws {
-        // 400 × 100: the left half red, the right half blue. Cropping to a square would lose one colour.
+        // 400 × 100, four bands: green at the far left (50 px), red, blue, white at the far right (50 px).
+        // A centre crop to a square keeps only the middle 100 px (red | blue) and loses BOTH outer bands — so the
+        // outer bands landing in the outer columns is what tells squash from crop (Codex #302 finding 8: the old
+        // red | blue card read the same either way).
         let ctx = try #require(CGContext(data: nil, width: 400, height: 100, bitsPerComponent: 8, bytesPerRow: 0,
                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
-        ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
-        ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 200, y: 0, width: 200, height: 100))
+        let bands: [(x: Int, width: Int, r: CGFloat, g: CGFloat, b: CGFloat)] = [(0, 50, 0, 1, 0), (50, 150, 1, 0, 0), (200, 150, 0, 0, 1), (350, 50, 1, 1, 1)]
+        for band in bands {
+            ctx.setFillColor(CGColor(srgbRed: band.r, green: band.g, blue: band.b, alpha: 1))
+            ctx.fill(CGRect(x: band.x, y: 0, width: band.width, height: 100))
+        }
         let frame = try #require(ctx.makeImage())
         let px = try #require(SigLIPPixels.normalizedHWC(frame, size: 16))
         #expect(px.count == 16 * 16 * 3)
-        let left = (8 * 16 + 2) * 3, right = (8 * 16 + 13) * 3
-        #expect(px[left] > 0.9 && px[left + 2] < -0.9, "the left of the square is the left of the frame (red)")
-        #expect(px[right] < -0.9 && px[right + 2] > 0.9, "the right of the square is the right of the frame (blue)")
+        func colour(column: Int) -> String {
+            let i = (8 * 16 + column) * 3
+            let on = (px[i] > 0.8, px[i + 1] > 0.8, px[i + 2] > 0.8)
+            switch on {
+            case (false, true, false): return "green"
+            case (true, false, false): return "red"
+            case (false, false, true): return "blue"
+            case (true, true, true): return "white"
+            default: return "mixed"
+            }
+        }
+        // 400 → 16 columns: 25 px each. Green fills columns 0–1, red 2–7, blue 8–13, white 14–15.
+        #expect(colour(column: 0) == "green" && colour(column: 15) == "white", "the frame's outer edges are the square's outer columns: \(colour(column: 0)), \(colour(column: 15))")
+        #expect(colour(column: 4) == "red" && colour(column: 11) == "blue", "and the middle keeps its order")
+        #expect(!(0..<16).map(colour).contains("mixed") || (0..<16).map(colour).filter { $0 == "mixed" }.count <= 3, "four clean bands (a band edge may blend): \((0..<16).map(colour))")
     }
 
     @Test func tokenIdsArePaddedOrCutToExactlySixtyFour() {

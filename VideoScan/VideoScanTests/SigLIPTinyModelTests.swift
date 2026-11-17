@@ -121,6 +121,74 @@ enum TinySigLIP {
     }
 }
 
+/// Pictures that say when their pixels are read — the embedder reads a picture when it builds that picture's
+/// batch — and that can hold the reader at one of them. (A CGImage over a callback data provider: CoreGraphics
+/// asks for the bytes when the picture is first drawn.)
+final class WatchedPictures: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [Int] = []
+    private var isHolding = false
+    private var released = false
+    private let holdAt: Int
+    private(set) var images: [CGImage] = []
+
+    /// One picture's bytes and its place in the set.
+    private final class Source {
+        let index: Int
+        let bytes: [UInt8]
+        unowned let owner: WatchedPictures
+        init(index: Int, owner: WatchedPictures) {
+            self.index = index
+            self.owner = owner
+            bytes = (0..<(16 * 16 * 4)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ index &* 31) }
+        }
+    }
+
+    init(count: Int, holdAt: Int) {
+        self.holdAt = holdAt
+        images = (0..<count).compactMap { index in
+            let source = Source(index: index, owner: self)
+            var callbacks = CGDataProviderDirectCallbacks(
+                version: 0, getBytePointer: nil, releaseBytePointer: nil,
+                getBytesAtPosition: { info, buffer, position, count in
+                    guard let info else { return 0 }
+                    let source = Unmanaged<Source>.fromOpaque(info).takeUnretainedValue()
+                    source.owner.wasRead(source.index)
+                    let start = Int(position), n = max(0, min(count, source.bytes.count - start))
+                    source.bytes.withUnsafeBytes { raw in
+                        if let base = raw.baseAddress, n > 0 { buffer.copyMemory(from: base.advanced(by: start), byteCount: n) }
+                    }
+                    return n
+                },
+                releaseInfo: { info in
+                    if let info { Unmanaged<Source>.fromOpaque(info).release() }
+                })
+            guard let provider = CGDataProvider(directInfo: Unmanaged.passRetained(source).toOpaque(), size: off_t(source.bytes.count), callbacks: &callbacks) else { return nil }
+            return CGImage(width: 16, height: 16, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(),
+                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue), provider: provider, decode: nil,
+                           shouldInterpolate: false, intent: .defaultIntent)
+        }
+    }
+
+    /// The pictures read so far, in order (a picture read twice is listed once).
+    var read: [Int] { lock.withLock { seen } }
+    /// True while the reader waits at `holdAt`.
+    var holding: Bool { lock.withLock { isHolding } }
+    func release() { lock.withLock { released = true } }
+
+    private func wasRead(_ index: Int) {
+        let first = lock.withLock { () -> Bool in
+            guard !seen.contains(index) else { return false }
+            seen.append(index)
+            return true
+        }
+        guard first, index == holdAt else { return }
+        lock.withLock { isHolding = true }
+        while !lock.withLock({ released }) { usleep(1_000) }     // a gate inside a C callback: no await here
+        lock.withLock { isHolding = false }
+    }
+}
+
 @Suite("SigLIP — the real loader and towers on a tiny model", .serialized)
 struct SigLIPTinyModelTests {
 
@@ -268,25 +336,38 @@ struct SigLIPTinyModelTests {
 
     // MARK: Cancel
 
-    @Test func aCutRunStopsAtTheNextBatchAndTheEngineCallsItStopped() async throws {
+    /// Seventy pictures are three batches (32, 32, 6). The reader is held at picture 32 — the second batch is
+    /// being built, its own cancellation check already passed — the run is cut there, and the reader released.
+    /// The second batch's forward pass may finish; the THIRD batch must never be built (no picture from 64 on is
+    /// read), so no later forward pass happens. A check made only on entry would run all three (Codex #302
+    /// finding 10; seen RED with the check moved out of the loop).
+    @Test func aRunCutMidwayStopsAtTheNextBatchBoundaryAndTheEngineCallsItStopped() async throws {
         let folder = try TinySigLIP.folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let embedder = TinySigLIP.embedder(folder)
-        let pictures = (0..<5).map(TinySigLIP.picture)
-        let cut = Task { () -> Int in
-            while !Task.isCancelled { await Task.yield() }
-            return try await embedder.embed(images: pictures).count
-        }
-        cut.cancel()
-        await #expect(throws: CancellationError.self) { try await cut.value }
+        try await embedder.prewarm()
 
-        let engine = Task { () -> FrameIndexFileOutcome in
-            while !Task.isCancelled { await Task.yield() }
-            return await FrameIndexEngine.outcome(path: "/V/a.mov", durationSeconds: 10, framesPerFile: 2,
-                                                  extract: { _, times in times.map { ($0, TinySigLIP.picture(1)) } }, embedder: embedder, whereabouts: { _ in nil })
+        // Straight through the embedder.
+        let direct = WatchedPictures(count: 70, holdAt: 32)
+        let cut = Task { try await embedder.embed(images: direct.images).count }
+        try await FrameIndexJobTests.until("the second batch is being built") { direct.holding }
+        cut.cancel()
+        direct.release()
+        await #expect(throws: CancellationError.self) { try await cut.value }
+        #expect(Set(direct.read) == Set(0..<64), "the first two batches were built and nothing after them: \(direct.read.filter { $0 >= 64 })")
+
+        // Through the engine: the cancellation arrives while the model is working, not before the engine was entered.
+        let viaEngine = WatchedPictures(count: 70, holdAt: 32)
+        let pictures = viaEngine.images
+        let engine = Task {
+            await FrameIndexEngine.outcome(path: "/V/a.mov", durationSeconds: 700, framesPerFile: 70,
+                                           extract: { _, times in zip(times, pictures).map { ($0, Optional($1)) } }, embedder: embedder, whereabouts: { _ in nil })
         }
+        try await FrameIndexJobTests.until("the engine's second batch is being built") { viaEngine.holding }
         engine.cancel()
-        guard case .deferred(.stopped) = await engine.value else { Issue.record("a cut inference blames nobody"); return }
+        viaEngine.release()
+        guard case .deferred(.stopped) = await engine.value else { Issue.record("a run cut during inference blames nobody"); return }
+        #expect(!viaEngine.read.contains { $0 >= 64 }, "and the third batch was never built")
     }
 
     // MARK: End to end
