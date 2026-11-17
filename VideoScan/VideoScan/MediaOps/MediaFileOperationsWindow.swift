@@ -18,6 +18,10 @@ import SwiftUI
 //     original views (`CombineJobsSection`), behavior untouched.
 // Visual unity first; type unity (combine conforming to the job
 // protocol) is deferred.
+//
+// Above the list (2026-11-17): the repair copies still waiting for the
+// owner's "Sounds Good" (RepairsAwaitingConfirmation.swift) — a banner in the
+// style of the Delete Duplicates resume offer, drawn only when some wait.
 
 /// Opens (or reveals) the Media File Operations window BEHIND the window
 /// the user is working in (2026-09-02). Every job start used to call
@@ -150,6 +154,10 @@ struct MediaFileOperationsWindow: View {
 
     /// Compare rows the user expanded for the verdict + metadata diff.
     @State private var expandedJobIDs: Set<UUID> = []
+    /// The repair copies waiting for "Sounds Good" (2026-11-17: the list
+    /// moved here from the Catalog's Show menu). The store prepares the list
+    /// on catalog edits; this window only draws it.
+    @StateObject private var awaitingRepairs = RepairsAwaitingConfirmationStore()
 
     private var combineSectionVisible: Bool {
         !dashboard.combineJobs.isEmpty || model.isCombining
@@ -166,6 +174,10 @@ struct MediaFileOperationsWindow: View {
                                              onDiscard: { model.discardPendingDeleteDuplicatesPlan() })
                 Divider()
             }
+            if !awaitingRepairs.items.isEmpty {
+                RepairsAwaitingConfirmationSection(store: awaitingRepairs)
+                Divider()
+            }
             if center.jobs.isEmpty && !combineSectionVisible {
                 emptyState
             } else {
@@ -175,6 +187,12 @@ struct MediaFileOperationsWindow: View {
             footerBar
         }
         .frame(minWidth: 640, idealWidth: 760, minHeight: 340, idealHeight: 560)
+        // Follow the catalog while the window is open (one pass per burst of
+        // edits, in the store — never in this body).
+        .onAppear { awaitingRepairs.start(reading: { [model] in model.records }) }
+        .onDisappear { awaitingRepairs.stop() }
+        // A catalog load or a scan changes the count without an edit post.
+        .onChange(of: model.records.count) { awaitingRepairs.refresh(from: model.records) }
         // Repair… from a finished Verify row or its detail opens the Repair
         // sheet here, on this window (Rick 2026-10-10).
         .modifier(MediaRepairLaunchHost())

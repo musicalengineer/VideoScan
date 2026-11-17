@@ -6,8 +6,9 @@
 // (CatalogShowFilterStoreTests.swift, CatalogRowsTests.swift).
 //
 //   F3  a table emptied by filters alone drew a blank pane
-//   F5  the Showing box omitted or misstated filters (no Master Archive, both
-//       archive filters, focus mode, one truncating Text)
+//   F5  the Showing box omitted or misstated filters (no Master Archive, focus
+//       mode, one truncating Text; the "both archive filters" case left with
+//       Has Master Copy on 2026-11-17)
 //   F6  filters changed without the Show menu (a tap on the box; the Steward
 //       and ContentView writing the defaults key themselves)
 //   F1  a single-record edit did not refresh the table
@@ -37,17 +38,26 @@ struct ShowFiltersShowingBoxAuditTests {
         }
     }
 
-    // F5 / F7 — the pair empties the table; the box said only "Not yet archived".
-    // The store now refuses the pair (CatalogShowFilterStoreTests); a State that
-    // holds both anyway still names both.
-    @Test("TRUTH: both archive filters in the set — the box names both")
-    func contradictoryArchivePairIsNotHidden() {
-        let s = CatalogShowingSummary.State(viewFilters: [.notYetArchived, .hasMasterCopy],
-                                            hasMasterArchive: true)
-        let t = texts(s)
-        #expect(t.contains(CatalogShowingSummary.words(for: .notYetArchived))
-                    && t.contains(CatalogShowingSummary.words(for: .hasMasterCopy)),
-                "the box hides one half of a pair that empties the table: \(t)")
+    // DECISIONS 2026-11-17 ("final shape for now"): no filter ticked means
+    // everything is shown, and the Showing box says so.
+    @Test("TRUTH: no filter on — the box says Everything; any filter on — it never does", arguments: [true, false])
+    func noFilterMeansEverything(hasMasterArchive: Bool) {
+        let none = CatalogShowingSummary.State(hasMasterArchive: hasMasterArchive)
+        #expect(texts(none).first == CatalogShowingSummary.everything)
+        #expect(CatalogShowingSummary.everything == "Everything")
+        for f in CatalogViewFilter.allCases {
+            let s = CatalogShowingSummary.State(viewFilters: [f], hasMasterArchive: hasMasterArchive)
+            #expect(!texts(s).contains(CatalogShowingSummary.everything), "\(f) is on but the box says Everything")
+        }
+        // The two view switches that drop rows are not "everything" either.
+        var pairs = none
+        pairs.showPairsOnly = true
+        #expect(!texts(pairs).contains(CatalogShowingSummary.everything))
+        var folders = none
+        folders.footageFolders = true
+        #expect(texts(folders).contains(CatalogShowingSummary.everything), "As folders lists every file, in folders")
+        folders.foldersOnly = true
+        #expect(!texts(folders).contains(CatalogShowingSummary.everything), "Folders Only leaves the loose files out")
     }
 }
 
@@ -95,6 +105,62 @@ struct ShowFiltersAuditSensorTests {
         let summary = try SourceTree.appCode(named: "CatalogShowingSummary.swift")
         for gone in ["Plus removed files", "Plus set-aside files", "Plus replaced originals"] {
             #expect(!summary.contains(gone))
+        }
+    }
+
+    // MARK: The five-tick menu (DECISIONS 2026-11-17, "final shape for now")
+
+    // The media-kind section (Videos / Audio Only / All Kinds) was a second
+    // control over what is listed, with its own stored key and no log line.
+    @Test("SENSOR: there is no second media-kind control — no facet type, no facet state, no picker section")
+    func noSecondKindControl() throws {
+        for file in try appFiles() {
+            #expect(!file.code.contains("CatalogKindFacet") && !file.code.contains("kindFacet"),
+                    "\(file.name) still carries the media-kind facet")
+        }
+        let toolbar = try SourceTree.appCode(named: "CatalogToolbar.swift")
+        #expect(!toolbar.contains("Show files — media kind"), "the Show menu still has a media-kind section")
+        #expect(toolbar.contains("ForEach(CatalogViewFilter.allCases"), "the Show menu's ticks come from the one filter list")
+    }
+
+    @Test("SENSOR: only the store names the old media-kind key (it migrates it once, logged)")
+    func onlyTheStoreNamesTheKindFacetKey() throws {
+        let namers = try appFiles().filter { $0.code.contains("\"catalogKindFacet\"") }.map(\.name)
+        #expect(namers == ["CatalogShowFilterStore.swift"], "the media-kind key is named in: \(namers)")
+    }
+
+    // Unpaired Only, Has Master Copy and the awaiting-confirmation filter left
+    // the menu: their words may survive only where the store names what a
+    // migration dropped.
+    @Test("SENSOR: no surface still offers a removed Show filter")
+    func theRemovedFiltersAreOfferedNowhere() throws {
+        for file in try appFiles() where file.name != "CatalogShowFilterStore.swift" {
+            for gone in ["\"Unpaired Only\"", "\"Has Master Copy\"", "\"Repaired — Awaiting Confirmation\"",
+                         ".unpairedOnly", ".hasMasterCopy", "CatalogViewFilter.awaitingConfirmation",
+                         "engines.hasMasterCopy"] {
+                #expect(!file.code.contains(gone), "\(file.name) still names \(gone)")
+            }
+        }
+    }
+
+    // The awaiting-confirmation list moved to the Media File Operations
+    // window; its confirm is the ONE engine, and its body reads a prepared list.
+    @Test("SENSOR: the repairs waiting for Sounds Good are listed in Media File Operations, through the one confirm engine")
+    func theAwaitingListLivesInMediaFileOperations() throws {
+        let window = try SourceTree.appCode(named: "MediaFileOperationsWindow.swift")
+        #expect(window.contains("RepairsAwaitingConfirmationSection("), "the MFO window does not show the list")
+        let list = SourceTree.strippingComments(try SourceTree.appCode(named: "RepairsAwaitingConfirmation.swift"))
+        #expect(list.contains("pfAwaitingConfirmation"), "the list must use the one awaiting rule")
+        #expect(list.contains("model.confirmRepairs(repairIDs:"), "the list must confirm through the one engine")
+        #expect(list.contains("pendingCatalogSelection"), "the list must reveal a row through Show in Catalog")
+        for second in ["repairConfirmedDate =", "supersededByID ="] {
+            #expect(!list.contains(second), "the list writes \(second) itself — a second confirm path")
+        }
+        // Nothing O(records) in the section's body: the view part never walks the catalog.
+        let view = try #require(list.range(of: "struct RepairsAwaitingConfirmationSection"))
+        let body = String(list[view.lowerBound...])
+        for walk in ["model.records.filter", "records.filter", "for rec in", ".records.first("] {
+            #expect(!body.contains(walk), "the section walks the catalog in a view: \(walk)")
         }
     }
 

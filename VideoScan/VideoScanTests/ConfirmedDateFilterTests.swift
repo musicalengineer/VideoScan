@@ -171,7 +171,6 @@ struct ConfirmedDateFilterTruthTests {
         // The Catalog's own pass: every kind, no reachability probes, the one filter on.
         func needsDate(_ records: [VideoRecord]) -> [VideoRecord] {
             var state = CatalogRows.State()
-            state.kindFacet = .everything
             state.showDisconnectedMedia = true
             state.filters = [.needsDate]
             return CatalogRows.rows(records, state).rows
@@ -214,7 +213,7 @@ struct ConfirmedDateFilterSensorTests {
         // The enum the Show menu draws (one Toggle per case), keyed by a stable raw value.
         let store = try SourceTree.appCode(named: "CatalogShowFilterStore.swift")
         #expect(store.contains("case needsDate"))
-        #expect(store.contains("case .needsDate:            return \"Needs a Date\""))
+        #expect(store.contains("case .needsDate:          return \"Needs a Date\""))
         #expect(!store.contains("confirmedDate"), "the inverted filter is gone, not kept beside its opposite")
         let toolbar = try SourceTree.appCode(named: "CatalogToolbar.swift")
         #expect(toolbar.contains("Section(\"Show files — filters\")"))
@@ -225,7 +224,7 @@ struct ConfirmedDateFilterSensorTests {
         let summary = try SourceTree.appCode(named: "CatalogShowingSummary.swift")
         #expect(summary.contains("static func words(for filter: CatalogViewFilter) -> String { filter.title }"))
         // Applied in the ONE rows function, through the enum's predicate table, never in a body.
-        #expect(store.contains("case .needsDate:            return pfRecordNeedsDate"))
+        #expect(store.contains("case .needsDate:          return pfRecordNeedsDate"))
         let rows = try SourceTree.appCode(named: "CatalogRows.swift")
         #expect(rows.contains("for filter in CatalogViewFilter.ordered(state.filters) {"))
         #expect(rows.contains("if let keep = filter.recordPredicate { out = out.filter(keep) }"))

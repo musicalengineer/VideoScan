@@ -116,7 +116,7 @@ enum CatalogPersonFilter {
 /// the people and the choice come in, the pick goes out — it observes
 /// nothing and reads no records. Everyone first, then the People tab's
 /// order; the chosen line carries the checkmark (an inline Picker in a
-/// Menu, the same idiom as the Show menu's media kind).
+/// Menu).
 struct CatalogPersonMenu: View {
     let people: [CatalogPerson]
     let selected: CatalogPerson?

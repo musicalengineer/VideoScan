@@ -870,26 +870,6 @@ final class VideoScanModel: ObservableObject {
         duplicateKeeperSettings.save(to: .standard)
     }
 
-    /// Catalog media-kind facet (GH #124 layer 1): the persisted "which
-    /// stream shapes does the catalog table show" preference. DEFAULT
-    /// `.videoBearing` — the table opens on video-bearing records so 80k
-    /// music rows never bury the videos again. Audio-only stays one click
-    /// away via the toolbar facet chip and is NEVER hidden from
-    /// correlate/combine (those source candidates from `records`
-    /// directly). Same explicit-save + test-host-pristine discipline as
-    /// `catalogScopeSettings` above.
-    @Published var kindFacetSetting: CatalogKindFacetSetting =
-        TestEnvironment.isTestHost
-            ? CatalogKindFacetSetting()
-            : CatalogKindFacetSetting.restored(from: .standard)
-
-    /// Explicit save for the media-kind facet — @Published kills didSet,
-    /// so every UI mutation of `kindFacetSetting` must call this.
-    func saveKindFacetSetting() {
-        guard !TestEnvironment.isTestHost else { return }
-        kindFacetSetting.save(to: .standard)
-    }
-
     /// The Archive Angel — its ONE property on the model (consolidation S2,
     /// 2026-09-22). The façade owns the evidence sidecar, the background
     /// scoring sweep, the attention memory, the settings and the prepared

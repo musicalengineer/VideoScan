@@ -332,33 +332,29 @@ struct SetAsideVisibilityTests {
         model.records = [video, music, purged]
         model.searchIndex.rebuild(records: model.records)
 
-        // Default toggles: only the visible video counts. Facet pinned to
-        // .everything here — this test isolates the purge/set-aside legs;
-        // the facet leg of the badge base is pinned by MediaKindFacetTests.
+        // Default toggles: only the visible video counts.
         let defaultBase = pfSearchBadgeBase(model.records,
                                             showRemoved: false, showSetAside: false,
-                                            showSuperseded: false, kindFacet: .everything)
+                                            showSuperseded: false)
         #expect(model.searchIndex.count(records: defaultBase, query: "donna") == 1,
                 "badge must not count set-aside or purged hits the table hides")
         // Parity sensor: badge base == the table's pre-search base
-        // (purge → set-aside → kind facet, same order as computeFiltered).
-        let tableBase = pfApplyKindFacet(
-            pfApplySetAsideFilter(
-                pfApplyPurgeFilter(model.records, showRemoved: false),
-                showSetAside: false),
-            facet: .everything)
+        // (purge → set-aside, same order as CatalogRows.rows).
+        let tableBase = pfApplySetAsideFilter(
+            pfApplyPurgeFilter(model.records, showRemoved: false),
+            showSetAside: false)
         #expect(defaultBase.map(\.id) == tableBase.map(\.id),
                 "badge base and table base must be the same pipeline")
 
         // "Show set-aside files" on: the set-aside hit is counted too.
         let browseBase = pfSearchBadgeBase(model.records,
                                            showRemoved: false, showSetAside: true,
-                                           showSuperseded: false, kindFacet: .everything)
+                                           showSuperseded: false)
         #expect(model.searchIndex.count(records: browseBase, query: "donna") == 2)
         // "Show removed" on as well: all three count.
         let allBase = pfSearchBadgeBase(model.records,
                                         showRemoved: true, showSetAside: true,
-                                        showSuperseded: false, kindFacet: .everything)
+                                        showSuperseded: false)
         #expect(model.searchIndex.count(records: allBase, query: "donna") == 3)
     }
 

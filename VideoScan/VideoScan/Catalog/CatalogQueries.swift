@@ -413,16 +413,21 @@ nonisolated func pfStreamTypeAliasMatches(value: String, recordType: StreamType)
     }
 }
 
-/// Structural filter for `type:` / `kind:` tokens — the FACET-family
-/// grammar (GH #124, shared spelling with the #117 v2 facet work).
+/// Structural filter for `type:` / `kind:` tokens — the media-kind
+/// grammar (GH #124, shared spelling with the #117 v2 facet work; the
+/// Show menu's media-kind section it once mirrored left on 2026-11-17,
+/// the grammar stays):
+///     type:video       → videoAndAudio | videoOnly
+///     type:video-only  → videoOnly
+///     type:audio       → audioOnly
+///     type:both / :av  → videoAndAudio
+///     type:failed      → ffprobeFailed        type:none → noStreams
 /// Differs from the legacy `stream:` grammar in ONE deliberate way:
-/// `type:video` means "video-bearing" (videoAndAudio OR videoOnly) to
-/// match the facet chip's Videos bucket, whereas `stream:video` has
-/// always meant strictly videoOnly and keeps meaning that (back-compat).
-/// `type:video-only` is the strict spelling here. NOTE: a search token
-/// is an ASSERTION of confirmed streams, so `type:video` does NOT match
-/// ffprobeFailed/noStreams even though the videoBearing VIEW facet keeps
-/// those rows visible — the view is a safety net, the query is a claim.
+/// `type:video` means "video-bearing" (videoAndAudio OR videoOnly),
+/// whereas `stream:video` has always meant strictly videoOnly and keeps
+/// meaning that (back-compat). `type:video-only` is the strict spelling
+/// here. NOTE: a search token is an ASSERTION of confirmed streams, so
+/// `type:video` does NOT match ffprobeFailed/noStreams — the query is a claim.
 /// Unknown values return false (typo → empty results, not everything),
 /// same contract as `pfStreamTypeAliasMatches`.
 nonisolated func pfMediaKindAliasMatches(value: String, recordType: StreamType) -> Bool {
@@ -808,10 +813,10 @@ nonisolated func pfSupersededRecords(_ records: [VideoRecord]) -> [VideoRecord] 
 }
 
 /// Repair copies waiting for Rick's one-click confirmation (GH #132) —
-/// the Show ▸ "Repaired — Awaiting Confirmation" worklist (kept through the
-/// 2026-11-17 trim: it is the only list of that queue). Pure wrapper over
-/// the derived flag so the view filter, badge math, and tests share one
-/// definition.
+/// the list the Media File Operations window shows
+/// (RepairsAwaitingConfirmation.swift; it was a Show filter until
+/// 2026-11-17). Pure wrapper over the derived flag so the list and the tests
+/// share one definition.
 nonisolated func pfAwaitingConfirmation(_ rec: VideoRecord) -> Bool {
     rec.isAwaitingConfirmation
 }
@@ -856,28 +861,23 @@ nonisolated func pfApplySupersededFilter(
 }
 
 /// The record base the toolbar's search-hit badge counts over. MUST be
-/// the same purge → set-aside → kind-facet pre-filter, in the same
-/// order, that `computeFiltered()` applies before running the search —
+/// the same purge → set-aside → superseded pre-filter, in the same
+/// order, that `CatalogRows.rows` applies before running the search —
 /// otherwise the badge counts rows the table hides (QA fix, 2026-07-15:
 /// the badge was counting set-aside records that a default search could
-/// never show; GH #124 extends the same contract to the facet — with
-/// the default Videos facet a ".m4a" search must not claim 80k hits the
-/// table shows zero of. The chip is the visible tell for why, and
-/// flipping it to All Kinds restores the wide count.)
+/// never show). The media-kind leg (GH #124) left with the media-kind
+/// section on 2026-11-17: every kind is searched.
 nonisolated func pfSearchBadgeBase(
     _ records: [VideoRecord],
     showRemoved: Bool,
     showSetAside: Bool,
-    showSuperseded: Bool,
-    kindFacet: CatalogKindFacet
+    showSuperseded: Bool
 ) -> [VideoRecord] {
-    pfApplyKindFacet(
-        pfApplySupersededFilter(
-            pfApplySetAsideFilter(
-                pfApplyPurgeFilter(records, showRemoved: showRemoved),
-                showSetAside: showSetAside),
-            showSuperseded: showSuperseded),
-        facet: kindFacet)
+    pfApplySupersededFilter(
+        pfApplySetAsideFilter(
+            pfApplyPurgeFilter(records, showRemoved: showRemoved),
+            showSetAside: showSetAside),
+        showSuperseded: showSuperseded)
 }
 
 /// Volume-membership predicate for the catalog's Volume filter. A record

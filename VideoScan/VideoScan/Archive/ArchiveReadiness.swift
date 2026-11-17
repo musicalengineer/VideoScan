@@ -213,35 +213,18 @@ struct ArchiveReadiness: Equatable, Sendable {
     // MARK: Assess (pure)
 
     static func assess(_ i: Inputs) -> ArchiveReadiness {
-        // ---- Playable / blocking
-        let stream = StreamType(rawValue: i.streamTypeRaw) ?? .ffprobeFailed
-        let hasMedia = stream == .videoAndAudio || stream == .videoOnly || stream == .audioOnly
-        let playable = hasMedia && i.isPlayable != "No streams"
+        // ---- Playable / blocking, then audio — one function (`soundFacts`)
+        // so a caller that needs only the sound reads the same verdict.
+        let facts = soundFacts(streamTypeRaw: i.streamTypeRaw, isPlayable: i.isPlayable,
+                               audioVerifyStatus: i.audioVerifyStatus, audioVerifyDate: i.audioVerifyDate,
+                               audioVerifyNote: i.audioVerifyNote, audioChannels: i.audioChannels, mark: i.soundMark)
+        let stream = facts.stream
+        let hasMedia = facts.hasMedia
+        let playable = facts.playable
         let blocking = !playable
-
-        // ---- Audio
-        let hasAudio = stream == .videoAndAudio || stream == .audioOnly
-        // A stored "damaged" comes first, track or no track (Codex #302): a
-        // reference movie has no audio stream of its own AND is damaged, and
-        // Promote's gate puts damage ahead of "no track".
-        let audio: Audio
-        if i.audioVerifyStatus == "damaged" {
-            audio = .verifiedProblem(i.audioVerifyNote.isEmpty ? "damaged audio" : i.audioVerifyNote)
-        } else if !hasAudio {
-            audio = .noAudioTrack
-        } else if i.audioVerifyStatus == "ok" || i.audioVerifyDate != nil {
-            audio = i.audioVerifyNote.isEmpty ? .verifiedOK : .verifiedProblem(i.audioVerifyNote)
-        } else {
-            audio = .notVerified
-        }
-
-        // An un-probeable file has no sound fact at all: Promote's gate
-        // answers "could not check" for it, so it is not "no track" — unless
-        // damage is stored, which nothing outranks.
-        let sound: SoundStanding = blocking && i.audioVerifyStatus != "damaged"
-            ? .notChecked
-            : soundStanding(audio: audio, audioVerifyStatus: i.audioVerifyStatus,
-                            channelCount: channelCount(i.audioChannels), mark: i.soundMark)
+        let hasAudio = facts.hasAudio
+        let audio = facts.audio
+        let sound = facts.sound
 
         // ---- Format
         let format = formatRisk(videoCodec: i.videoCodec, audioCodec: i.audioCodec, stream: stream)
@@ -265,6 +248,59 @@ struct ArchiveReadiness: Equatable, Sendable {
                                        resolution: resolution)
         return ArchiveReadiness(playable: playable, audio: audio, sound: sound, format: format, date: date,
                                 warnings: warnings, blocking: blocking)
+    }
+
+    /// What `assess` concludes about the sound, and the stream facts it rests on.
+    struct SoundFacts: Equatable, Sendable {
+        let stream: StreamType
+        /// A stream type that names media (video, audio or both).
+        let hasMedia: Bool
+        let playable: Bool
+        let hasAudio: Bool
+        let audio: Audio
+        let sound: SoundStanding
+    }
+
+    /// The sound half of `assess`, on its own (2026-11-17: the Catalog's
+    /// Videos Missing Sound filter needs this verdict per row and must not
+    /// pay for the format table and the date resolver, nor read the verify
+    /// fields a second way). `assess` calls this, so there is ONE reading of
+    /// the stored sound check. O(1): a few compares and one split of the
+    /// short stored note. Pure.
+    static func soundFacts(streamTypeRaw: String, isPlayable: String,
+                           audioVerifyStatus: String, audioVerifyDate: Date?, audioVerifyNote: String,
+                           audioChannels: String, mark: PromoteSoundGate.Mark) -> SoundFacts {
+        // ---- Playable / blocking
+        let stream = StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
+        let hasMedia = stream == .videoAndAudio || stream == .videoOnly || stream == .audioOnly
+        let playable = hasMedia && isPlayable != "No streams"
+        let blocking = !playable
+
+        // ---- Audio
+        let hasAudio = stream == .videoAndAudio || stream == .audioOnly
+        // A stored "damaged" comes first, track or no track (Codex #302): a
+        // reference movie has no audio stream of its own AND is damaged, and
+        // Promote's gate puts damage ahead of "no track".
+        let audio: Audio
+        if audioVerifyStatus == "damaged" {
+            audio = .verifiedProblem(audioVerifyNote.isEmpty ? "damaged audio" : audioVerifyNote)
+        } else if !hasAudio {
+            audio = .noAudioTrack
+        } else if audioVerifyStatus == "ok" || audioVerifyDate != nil {
+            audio = audioVerifyNote.isEmpty ? .verifiedOK : .verifiedProblem(audioVerifyNote)
+        } else {
+            audio = .notVerified
+        }
+
+        // An un-probeable file has no sound fact at all: Promote's gate
+        // answers "could not check" for it, so it is not "no track" — unless
+        // damage is stored, which nothing outranks.
+        let sound: SoundStanding = blocking && audioVerifyStatus != "damaged"
+            ? .notChecked
+            : soundStanding(audio: audio, audioVerifyStatus: audioVerifyStatus,
+                            channelCount: channelCount(audioChannels), mark: mark)
+        return SoundFacts(stream: stream, hasMedia: hasMedia, playable: playable, hasAudio: hasAudio,
+                          audio: audio, sound: sound)
     }
 
     /// The ONE "no usable sound" rule (Rick 2026-10-06 — the Archive
@@ -555,11 +591,23 @@ extension ArchiveReadiness {
     /// catalogued size when it was never fingerprinted). The Promote job asks
     /// the same function again with the digest it has just read, so a file
     /// that changed since is refused there whatever the sheet forecast.
-    @MainActor
+    /// Not main-actor bound (2026-11-17): it reads four stored fields, and the
+    /// Catalog's row pass asks it from wherever that pass runs.
     static func forecastSoundMark(record r: VideoRecord) -> PromoteSoundGate.Mark {
         PromoteSoundGate.mark(tags: r.tags, storedFixity: r.contentFixity,
                               provenDigest: r.contentFixity?.digest ?? "",
                               recordSizeBytes: r.sizeBytes, provenSizeBytes: r.sizeBytes)
+    }
+
+    /// The sound standing of a catalogued record from its stored facts — the
+    /// SAME value `assess(record:).sound` holds (a test pins the two), without
+    /// the format and date work. O(1) per record; nothing is decoded or read
+    /// from disk. For per-row callers (Show ▸ Videos Missing Sound).
+    static func storedSoundStanding(of r: VideoRecord) -> SoundStanding {
+        soundFacts(streamTypeRaw: r.streamTypeRaw, isPlayable: r.isPlayable,
+                   audioVerifyStatus: r.audioVerifyStatus, audioVerifyDate: r.audioVerifyDate,
+                   audioVerifyNote: r.audioVerifyNote, audioChannels: r.audioChannels,
+                   mark: forecastSoundMark(record: r)).sound
     }
 
     /// The Sendable snapshot `assess(record:)` reads — for a caller that
