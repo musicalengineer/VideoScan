@@ -52,9 +52,16 @@ struct FrameSearchRegressionTests {
         let onSaved = try #require(seams.onSaved)
         onSaved(ObsFixture.index([2, 3]))
         try await FrameIndexJobTests.until("the saved index is shown") { store.indexState == .ready(frames: 2, contents: 2) }
+        // The newer index asks the words in the field again by itself (the second catalog read). Wait for THAT
+        // answer before testing that the rows are kept — otherwise the explicit search below races it and reads
+        // the catalog a third time on correct code (Codex #304 F2).
+        try await FrameIndexJobTests.until("the newer index has answered the words in the field") {
+            !store.searching && store.hits.first?.filename == "three.mov"
+        }
+        #expect(reads.value == 2, "the scope's files are read again once the index changed")
         await store.search("axis 3")
         #expect(store.hits.first?.filename == "three.mov", "a frame the standing line counts must be findable: \(store.hits.map(\.filename))")
-        #expect(reads.value == 2, "the scope's files are read again once the index changed — and only then")
+        #expect(reads.value == 2, "and only then: the rows the automatic answer read are the rows this search uses")
         await store.search("axis 2")
         #expect(reads.value == 2, "the same index, the same scope: no further read")
     }
