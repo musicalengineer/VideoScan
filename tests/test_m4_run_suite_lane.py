@@ -42,7 +42,22 @@ import m4_run_summary as ms  # noqa: E402
 FAKE_XCODEBUILD = r'''#!/bin/sh
 echo "xcodebuild $*" >> "$SUITE_FAKE/calls"
 case " $* " in
-  *" -checkFirstLaunchStatus "*) [ -e "$SUITE_FAKE/die" ] && kill -9 $PPID; exit 0 ;;
+  *" -checkFirstLaunchStatus "*)
+    [ -e "$SUITE_FAKE/die" ] && kill -9 $PPID
+    if [ -e "$SUITE_FAKE/logout" ]; then
+      # What launchd does at a logout of the GUI session: SIGTERM the agent's own shell (m4_run.sh
+      # __host: this stand-in <- the runner <- caffeinate <- run_bounded's python <- that shell).
+      # The runner is in its own session and lives on.
+      pid=$PPID
+      for hop in 1 2 3 4 5 6; do
+        case "$(ps -o command= -p "$pid")" in *"m4_run.sh __host"*) break ;; esac
+        pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+      done
+      echo "logout: TERM $pid $(ps -o command= -p "$pid")" >> "$SUITE_FAKE/calls"
+      kill -TERM "$pid"
+      sleep 1
+    fi
+    exit 0 ;;
   *" build-for-testing "*) echo "fake build"; exit "$(cat "$SUITE_FAKE/build_rc")" ;;
   *" test-without-building "*) cat "$SUITE_FAKE/app.log"; exit "$(cat "$SUITE_FAKE/test_rc")" ;;
 esac
@@ -551,6 +566,20 @@ class CallerTests(Testbed):
         p = self.caller('--wait')
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn('OUTCOME NORUN', p.stdout)
+
+    def test_a_run_whose_shell_is_stopped_ends_the_wait_with_exit_2_not_a_six_hour_poll(self):
+        # RED 2026-11-17, the first real run: the M4's console session logged out 55 minutes in; launchd
+        # SIGTERMed the agent's shell, so no OUTCOME was ever written and --wait polled on for its budget.
+        self.set_host_clock('1730')
+        (self.fake / 'logout').touch()
+        p = self.caller('--wait')
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn('ended without an OUTCOME', p.stderr)
+        self.assertIn('ENDED WITHOUT AN OUTCOME', p.stdout)
+        log = (self.runs()[0] / 'run.log').read_text()
+        self.assertIn('START', log)
+        self.assertNotIn('OUTCOME', log)
+        self.assertEqual(probe(self.root / 'lock'), 'FREE')
 
     def test_the_nightly_window_refuses_with_exit_5_and_starts_nothing(self):
         self.set_host_clock('0200')

@@ -50,6 +50,11 @@ suite run even after a later ui/deep run (`<root>/latest-suite`). `--wait` exits
 (refused on the host, NORUN, or the wait gave up); a run that never started exits 3 busy / 4 testbed / 5 window as
 for the other lanes. Timing budgets are strict, as in the scheduled run.
 
+**A logout of the host's GUI session stops a run** (any lane): launchd SIGTERMs the agent's shell, the app-hosted
+test host dies mid-test, and no OUTCOME is written (2026-11-17, the first real suite run, 55 minutes in). `status` then
+says `ENDED WITHOUT AN OUTCOME` and `--wait` exits (suite: 2) instead of polling out its budget. Do not log the M4's
+console session out, or restart it, while `status` says RUNNING.
+
 **One-time UI setup on a host** (a person at the screen once): Accessibility + Automation for the XCUITest runner; the
 display never sleeps while a run holds the lock (`caffeinate -dimsu`, in the gauntlet); automation mode without a
 password (testing.md §4).

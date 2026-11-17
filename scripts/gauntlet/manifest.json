@@ -34036,6 +34036,7 @@
         "test_a_failed_test_is_red_and_named_with_where_the_repo_declares_it",
         "test_a_held_lock_refuses_before_touching_anything",
         "test_a_held_lock_refuses_with_exit_3_and_starts_nothing",
+        "test_a_run_whose_shell_is_stopped_ends_the_wait_with_exit_2_not_a_six_hour_poll",
         "test_a_runner_that_leaves_no_row_is_red",
         "test_cli_exits_0_green_1_red_4_norun_and_caps_the_names",
         "test_dry_run_prints_the_plan_and_touches_nothing",

@@ -72,10 +72,12 @@
 # ~25 GB together), xcresult bundles per run (~50–300 MB each, kept; prune
 # <root>/out by hand), and the watchdog budgets below in wall time.
 #
-# Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error · 2 usage ·
+# Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error (also a run
+#       whose shell was stopped before its OUTCOME: a logout of the host's GUI session, a restart) · 2 usage ·
 #       3 busy · 4 testbed worktree not usable · 5 nightly window.
 #       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
-#       stopped it, or the wait gave up); a run that never started still exits 3 / 4 / 5 as above.
+#       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
+#       started still exits 3 / 4 / 5 as above.
 #
 # Tests: tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
 # summary line), tests/test_m4_run_deep_lane.py, tests/test_m4_run_suite_lane.py.
@@ -104,7 +106,7 @@ usage() {
     exit 2
 }
 
-die() { echo "m4_run: $*" >&2; exit "${2:-1}"; }
+die() { echo "m4_run: $1" >&2; exit "${2:-1}"; }     # die <message> [exit code]
 
 # ── Host configuration ────────────────────────────────────────────────────
 # Same account on every fleet Mac, so $HOME names the host's home too.
@@ -181,7 +183,12 @@ if [ -e "\$last/run.log" ]; then
   echo "last run: \$(readlink "\$last")"
   grep -E '^(START|OUTCOME)' "\$last/run.log" | sed 's/^/  /'
   [ -f "\$last/summary.txt" ] && sed 's/^/  /' "\$last/summary.txt"
-  grep -q '^OUTCOME' "\$last/run.log" || echo "  now: \$(tail -1 "\$last/run.log")"
+  if ! grep -q '^OUTCOME' "\$last/run.log"; then
+    case "\$probe" in
+      BUSY*) echo "  now: \$(tail -1 "\$last/run.log")" ;;
+      *) echo "  ENDED WITHOUT AN OUTCOME: nothing of this run holds the lock — its shell was stopped (a logout of the GUI session, a restart, a crash); its logs are what is left" ;;
+    esac
+  fi
   # A live suite run: its runner's last step, and how many tests have finished in each lane.
   if [ -f "\$last/suite.log" ] && ! grep -q '^OUTCOME' "\$last/run.log"; then
     echo "  step: \$(grep -E '^\[[0-9:]+\] ' "\$last/suite.log" | grep -v 'Core lane machine' | tail -1)"
@@ -317,7 +324,7 @@ SH
 }
 
 wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
-    local out="$1" waited=0 line norun=1
+    local out="$1" waited=0 line norun=1 free=0
     [ "$LANE" = suite ] && norun=2       # suite: could-not-run is told apart from RED
     while [ "$waited" -lt "$WAIT_BUDGET" ]; do
         sleep "$WAIT_POLL"; waited=$((waited + WAIT_POLL))
@@ -330,6 +337,17 @@ wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
                 "OUTCOME RED"*) exit 1 ;;
                 *) exit "$norun" ;;          # REFUSED, NORUN
             esac
+        fi
+        # No OUTCOME and nothing holds the lock, twice running (the agent takes it within a
+        # second of starting): the run's shell is gone — a logout of the host's GUI session
+        # stops the agent (2026-11-17, the first real suite run), so does a restart. Without
+        # this the caller waited out the whole budget for a line that would never come.
+        case "$(on_host "$(lock_probe_snippet)" 2>/dev/null)" in FREE*) free=$((free + 1)) ;; *) free=0 ;; esac
+        if [ "$free" -ge 2 ]; then
+            line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
+            [ -n "$line" ] && continue          # it finished between the two looks
+            on_host "$(status_snippet)"
+            die "the run on $H_NAME ended without an OUTCOME (its shell was stopped: logout, restart or crash) — logs in $out" "$norun"
         fi
     done
     die "gave up waiting after ${WAIT_BUDGET}s; the run may still be going — scripts/m4_run.sh status --host $HOST" "$norun"
