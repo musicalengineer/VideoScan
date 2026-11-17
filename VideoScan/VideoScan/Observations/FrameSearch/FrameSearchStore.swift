@@ -23,7 +23,8 @@
 // index follows it too: the newest read of the disk or the newest save the
 // job handed over is the one shown and searched; an older one finishing late
 // is dropped. A window that opens while Index Frames is already running joins
-// that job (`joinIndex`) and is handed its saves like the window that started it. Similarity is SigLIP's raw cosine (−1…1; matching captions
+// that job (`joinIndex`) and is handed its saves like the window that
+// started it. Similarity is SigLIP's raw cosine (−1…1; matching captions
 // land around 0.10–0.20); it is a ranking, not a probability, and the words
 // say so.
 //

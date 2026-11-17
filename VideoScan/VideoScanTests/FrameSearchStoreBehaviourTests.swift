@@ -115,10 +115,10 @@ struct FrameSearchStoreBehaviourTests {
         let rows = [ObsFixture.row(2, path: "/V/a/two.mov", removed: true), ObsFixture.row(3, path: "/V/a/three.mov", fileID: "not-a-uuid"),
                     ObsFixture.row(4, path: "/V/a/four.mov")]
         var asked: [UUID] = []
-        var allow = true
+        let refuse = FrameIndexJobTests.Flag()      // the Catalog says no while this is set
         let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(
             index: { .ready(ObsFixture.index([2, 3, 4])) }, files: { _ in rows },
-            reveal: { id in asked.append(id); return allow }))
+            reveal: { id in asked.append(id); return !refuse.isSet }))
         await store.loadIndex()
 
         await store.search("axis 2")
@@ -136,10 +136,10 @@ struct FrameSearchStoreBehaviourTests {
 
         await store.search("axis 4")
         #expect(store.revealProblem == nil, "a new search starts with no stale words")
-        allow = false
+        refuse.set()
         #expect(store.reveal(store.hits[0]) == false)
         #expect(store.revealProblem == "four.mov is not in this session's catalog — nothing to show")
-        allow = true
+        refuse.set(false)
         #expect(store.reveal(store.hits[0]) && store.revealProblem == nil)
     }
 
