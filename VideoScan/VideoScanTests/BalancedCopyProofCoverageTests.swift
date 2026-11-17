@@ -40,7 +40,7 @@ struct BalancedCopyProofCoverageTests {
         #expect(outcome == .notProven(.pictureDiffers(originalIndex: 0, "50 frames play in the original, 75 in the balanced copy")),
                 "\(outcome)")
         // And each with its own copy is a good pair.
-        #expect(await Proof.measure(original: longer, balanced: longerBalanced).isProven)
+        #expect(await Proof.measure(original: longer, balanced: longerBalanced).playsTheSame)
     }
 
     @Test("REORDERED packets — the second half played first, nothing added or lost — are not proven",
@@ -63,7 +63,7 @@ struct BalancedCopyProofCoverageTests {
         #expect(notProven(outcome), "expected not proven, got \(outcome)")
     }
 
-    @Test("A dropped SUBTITLE stream is NAMED as held by the original, never proven the same; the job's own copy, subtitles carried, is the same",
+    @Test("A SUBTITLE stream is NAMED for each file that holds one and never compared: carried by the job, or dropped, the original's is the original's",
           .timeLimit(.minutes(2)))
     func droppedSubtitleIsNamed() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -80,21 +80,23 @@ struct BalancedCopyProofCoverageTests {
             output: original)
         let balanced = try await Media.balance(original)
 
-        guard case .proven(let evidence) = await Proof.measure(original: original, balanced: balanced) else {
+        guard let evidence = (await Proof.measure(original: original, balanced: balanced)).evidence else {
             Issue.record("the job carries the subtitles; its copy must be proven")
             return
         }
-        #expect(evidence.streams.map(\.kind) == ["video", "subtitle"])
-        #expect(evidence.streams.map(\.packets) == [50, 2])
-        #expect(evidence.streams[1].frames == nil && evidence.streams[1].packetIdentical, "captions are held packet for packet")
+        #expect(evidence.streams.map(\.packets) == [50], "the evidence is the picture")
+        let carried = await Proof.measure(original: original, balanced: balanced)
+        #expect(carried.differences.filter { $0.kind == .track }.map(\.heldBy) == [.original, .balancedCopy],
+                "each file's text track is its own; they are not compared")
 
         let dropped = try Media.derive("no_subtitle_balanced", from: balanced, ["-map", "0:v", "-map", "0:a", "-c", "copy"])
         let outcome = await Proof.measure(original: original, balanced: dropped)
         #expect(!outcome.isProven && outcome.playsTheSame, "\(outcome)")
-        #expect(Lab.differs(outcome) == ["[track] the original holds a text track (subrip)"], "\(outcome)")
+        #expect(Lab.differs(outcome).first == "[track] the original holds a text track (subrip) — not compared with the other file", "\(outcome)")
+        #expect(outcome.differences.filter { $0.kind == .track }.count == 1)
     }
 
-    @Test("PIN: a Matroska ATTACHMENT, dropped or carried, is COULD NOT CHECK — it has no packets to hash, and ffmpeg cannot say what it is",
+    @Test("PIN: a Matroska ATTACHMENT, dropped or carried, is COULD NOT CHECK — ffmpeg cannot say what it is, and says so on a line of its own",
           .timeLimit(.minutes(2)))
     func attachmentIsCouldNotCheck() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -116,7 +118,8 @@ struct BalancedCopyProofCoverageTests {
                 "\(outcome)")
         // Carried faithfully it cannot be vouched for either.
         let carried = await Proof.measure(original: original, balanced: balanced)
-        #expect(Lab.reason(carried) == "attachment stream 2 gave no packets to compare", "\(carried)")
+        #expect(Lab.reason(carried)?.hasPrefix("the original could not be decoded to the end (ffmpeg exited 0 but said: ") == true,
+                "\(carried)")
     }
 
     @Test("TWO picture streams the wrong way round are not proven; in the original's order they are",
@@ -134,11 +137,11 @@ struct BalancedCopyProofCoverageTests {
              "-pix_fmt", "yuv422p10le", "-c:a", "pcm_s16le"],
             output: original)
         let balanced = try await Media.balance(original)
-        guard case .proven(let evidence) = await Proof.measure(original: original, balanced: balanced) else {
+        guard let evidence = (await Proof.measure(original: original, balanced: balanced)).evidence else {
             Issue.record("two picture streams in order must be proven")
             return
         }
-        #expect(evidence.streams.map(\.kind) == ["video", "video"])
+        #expect(evidence.streams.count == 2)
         #expect(evidence.streams[0].framesSHA256 != evidence.streams[1].framesSHA256)
         #expect(evidence.streams.allSatisfy { $0.frames == 50 && $0.packetIdentical })
 
@@ -172,7 +175,7 @@ struct BalancedCopyProofCoverageTests {
         #expect(await Lab.entry("channel_layout", of: balanced, stream: "a:0") == "unknown",
                 "WAV states no layout for plain stereo — the measured case the layout rule allows")
 
-        guard case .proven(let evidence) = await Proof.measure(original: original, balanced: balanced) else {
+        guard let evidence = (await Proof.measure(original: original, balanced: balanced)).evidence else {
             Issue.record("a sound-only pair holds everything the original has")
             return
         }
@@ -197,7 +200,7 @@ struct BalancedCopyProofCoverageTests {
         let original = try Lab.make("test_big_endian.mov", in: dir, audio: ["-c:a", "pcm_s16be"])
         let balanced = try await Media.balance(original)
         #expect(await Lab.entry("codec_name", of: balanced, stream: "a:0") == "pcm_s16be")
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
 
         let little = try Media.derive("little_balanced", from: balanced, ["-map", "0", "-c", "copy", "-c:a", "pcm_s16le"])
         let samples = await Lab.channelHash(of: original, channel: 0)
@@ -217,13 +220,13 @@ struct BalancedCopyProofCoverageTests {
         let mono = try Lab.make("test_mono.mov", in: dir, channels: Media.tone)
         #expect(await Lab.entry("channels", of: mono, stream: "a:0") == "1")
         let monoBalanced = try await Media.balance(mono)
-        guard case .proven(let evidence) = await Proof.measure(original: mono, balanced: monoBalanced) else {
+        guard let evidence = (await Proof.measure(original: mono, balanced: monoBalanced)).evidence else {
             Issue.record("a mono original spread to two channels must be proven")
             return
         }
         #expect(evidence.originalClass == .mono && evidence.liveChannel == 0)
         #expect(evidence.discarded == nil, "one channel: nothing is left behind")
-        #expect(Proof.logLine(original: mono, balanced: monoBalanced, outcome: .proven(evidence))
+        #expect(Proof.logLine(original: mono, balanced: monoBalanced, outcome: .sameContent(evidence, differs: []))
             .contains("original has one channel, nothing left behind"))
 
         let surround = try Lab.make("test_surround.mov", in: dir,
@@ -259,6 +262,6 @@ struct BalancedCopyProofCoverageTests {
         let after = try #require(FileIdentityStamp.capture(path: balanced))
         #expect(after.size == before.size && after.inode != before.inode, "same size, another file")
         // Left alone, the replacement is a good copy.
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
     }
 }

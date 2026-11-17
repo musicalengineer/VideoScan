@@ -15,9 +15,9 @@
 //
 // The answer has three shapes (DECISIONS 2026-11-17):
 //   PROVEN THE SAME            what plays is identical and nothing else differs;
-//   SAME CONTENT, DIFFERS IN…  what plays is identical, and each other
-//                              difference is NAMED, with which file holds
-//                              something the other does not;
+//   SAME CONTENT, DIFFERS IN…  what plays is identical; everything else
+//                              either file holds is NAMED per file and NOT
+//                              compared;
 //   NOT THE SAME / COULD NOT CHECK.
 //
 // WHAT PLAYS (required for the first two shapes) — both files are decoded
@@ -53,19 +53,30 @@
 //   6. BOTH FILES STAYED PUT (resolved paths, identity stamps, no
 //      cancellation — unchanged from the first design).
 //
-// SECOND EVIDENCE, bit-exact — the packet pass (ffprobe `-show_packets
-// -show_data_hash`): per non-audio stream, the count, and running SHA-256
-// of every packet's (size, payload hash, side data) and (time, duration).
-// A picture whose packets are NOT identical but whose frames are is a named
-// difference; a timecode/text/data track present in both must be identical.
+// SECOND EVIDENCE, bit-exact, for the PICTURE — the packet pass (ffprobe
+// `-show_packets -show_data_hash`): per picture stream, the count and
+// running SHA-256 of every packet's (size, payload hash, side data) and
+// (time, duration). A picture whose packets are NOT identical but whose
+// frames are is a named difference (encoding).
 //
-// NAMED DIFFERENCES (`Difference`): a track only one file has (timecode,
-// text, data; a second sound track ONLY under the DV rule below) ·
-// container · how a picture is stored (codec, or bytes) · decoder
-// configuration (extradata) · playback instructions — one file STORES media
-// an edit list does not play (stored length from the file's own index with
-// the edit list ignored, against the decoded length); track flags set in
-// one file only · metadata tags and chapter marks.
+// THE PROOF CLAIMS EQUALITY OF TWO THINGS ONLY (re-scoped 2026-11-17 after
+// Codex #307/#308 both landed in per-kind comparisons of everything else):
+// (a) every picture stream as played, (b) the kept sound on the timeline —
+// with the discarded channel's measured peak and the DV rule below.
+// Everything else a file carries — any other track (timecode, text, data,
+// attachment), media an edit list does not play, track flags, chapter
+// marks, tags — is NOT compared, in either direction. Each is NAMED for the
+// file that holds it (`Difference.heldBy`, "… — not compared with the other
+// file"), whether or not the other file holds something like it.
+//
+// So `.proven` means: plays the same, AND neither file holds ANYTHING
+// outside (a) and (b) — no other track, no hidden media, no track flag, no
+// chapter mark, no tag — AND same container, picture packets identical,
+// same decoder configuration. Nothing ancillary may be present under
+// `.proven`. The real balance job's normal pair is therefore `.sameContent`
+// (every real file has tags; raw DV → QuickTime also gains a timecode track,
+// track flags and another container). A Trash offer for a file names every
+// difference whose `heldBy` is that file.
 //
 // THE DV RULE (DECISIONS 2026-11-17): an original with more than one sound
 // track is accepted only when every other track is MEASURED at or under the
@@ -275,8 +286,8 @@ enum BalancedCopyProof {
         var container: String = ""
         /// The container's own tags.
         var tags: [String: String] = [:]
-        /// Its chapter marks, each "<start>–<end> <every tag, sorted>".
-        var chapters: [String] = []
+        /// How many chapter marks it has.
+        var chapters = 0
 
         var containerWords: Set<String> { Set(container.split(separator: ",").map { $0.lowercased() }) }
         /// The QuickTime family: the one whose edit lists can hide stored media.
@@ -353,7 +364,9 @@ enum BalancedCopyProof {
 
     // MARK: - Outcome
 
-    /// One way the two files differ although they PLAY the same.
+    /// One thing that keeps a pair that PLAYS the same from being "the same":
+    /// something about how a picture is stored (compared), or something one
+    /// file holds outside the picture and the kept sound (never compared).
     struct Difference: Sendable, Equatable {
         enum Kind: String, Sendable {
             case track, container, encoding, decoderConfiguration = "decoder configuration"
@@ -363,27 +376,29 @@ enum BalancedCopyProof {
             case original = "the original", balancedCopy = "the balanced copy"
         }
         var kind: Kind
-        /// The file that HOLDS something the other does not — what a Trash
-        /// offer must name before that file goes. nil = both hold it,
-        /// expressed differently.
-        var heldOnlyBy: Holder?
+        /// The file that HOLDS the thing — what a Trash offer must name
+        /// before that file goes. It says nothing about the other file: the
+        /// thing was not compared. nil = not a holding at all: the two
+        /// files store the same pictures differently (container, encoding,
+        /// decoder configuration).
+        var heldBy: Holder?
         /// Plain words.
         var what: String
     }
 
     /// What a "same" verdict stands on.
     struct Evidence: Sendable, Equatable {
+        /// One picture stream.
         struct Stream: Sendable, Equatable {
-            var kind: String
             var codec: String
             var originalIndex: Int
             var balancedIndex: Int
-            /// Pictures: frames played, and the one SHA-256 both files'
-            /// decoded frames (time, duration, pixels) folded to.
-            var frames: Int?
-            var framesSHA256: String?
+            /// Frames played, and the one SHA-256 both files' decoded frames
+            /// (time, duration, pixels) folded to.
+            var frames: Int
+            var framesSHA256: String
             /// The stored packets are identical too, byte for byte and time
-            /// for time (always true for a non-picture stream held here).
+            /// for time.
             var packetIdentical: Bool
             /// The original's packet digest and count.
             var packetSHA256: String
@@ -443,8 +458,6 @@ enum BalancedCopyProof {
         case pictureConfigurationDiffers(String)
         /// A picture does not play the original's frames at the original's times.
         case pictureDiffers(originalIndex: Int, String)
-        /// A timecode/text/data track both files have is not the same.
-        case carriedStreamDiffers(kind: String, originalIndex: Int, String)
         /// The sound is not placed on the timeline as the original's is.
         case soundPlacementDiffers(String)
         /// The channel the copy leaves behind is not silent.
@@ -490,7 +503,7 @@ enum BalancedCopyProof {
             case .soundDiffers(let original, let balanced):
                 return "the balanced copy's sound is not the original's live channel, sample for sample "
                     + "(sha256 \(BalancedCopyProof.short(original)) ≠ \(BalancedCopyProof.short(balanced)))"
-            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers, .carriedStreamDiffers:
+            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers:
                 return nil
             }
         }
@@ -503,8 +516,6 @@ enum BalancedCopyProof {
                 return "the balanced copy would not be displayed as the original is (\(what))"
             case .pictureDiffers(let index, let what):
                 return "picture stream \(index) does not play the same in the balanced copy (\(what))"
-            case .carriedStreamDiffers(let kind, let index, let what):
-                return "\(kind) stream \(index) is not the original's, packet for packet (\(what))"
             default:
                 return "the balanced copy is not the same"
             }
@@ -512,11 +523,13 @@ enum BalancedCopyProof {
     }
 
     enum Outcome: Sendable, Equatable {
-        /// What plays is identical, and nothing else differs.
+        /// What plays is identical, the pictures are stored identically, and
+        /// neither file holds anything else at all.
         case proven(Evidence)
-        /// What plays is identical; the two files differ in the things
-        /// named (never empty). A caller offering either file for the Trash
-        /// names every difference that file `heldOnlyBy`.
+        /// What plays is identical; the things named (never empty) are
+        /// stored differently, or held by one file and NOT compared. A
+        /// caller offering a file for the Trash names every difference
+        /// whose `heldBy` is that file.
         case sameContent(Evidence, differs: [Difference])
         /// Measured, and the copy does not play what the original plays.
         case notProven(NotProven)

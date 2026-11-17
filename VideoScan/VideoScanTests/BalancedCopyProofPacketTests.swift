@@ -45,7 +45,7 @@ struct BalancedCopyProofPacketTests {
         let original = try Media.derive("test_vfr", from: plain,
                                         ["-map", "0", "-c", "copy", "-bsf:v", "setts=ts=N*512+512*gt(N\\,20)"])
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven,
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame,
                 "the job's own copy of a variable-rate original is a good pair")
         // The copy: the 80 ms picture comes after frame 30 instead.
         let retimed = try Media.derive("retimed_balanced", from: balanced,
@@ -84,7 +84,7 @@ struct BalancedCopyProofPacketTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Lab.make("test_upright.mov", in: dir)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
         let rotated = dir.appendingPathComponent("rotated_balanced.mov").path
         try BalanceAudioTestMedia.runFFmpeg(["-display_rotation:v:0", "180", "-i", balanced, "-map", "0", "-c", "copy"],
                                             output: rotated)
@@ -112,7 +112,7 @@ struct BalancedCopyProofPacketTests {
 
     // MARK: 3 — packet boundaries
 
-    @Test("#301-3: captions cut differently — \"hello\"/\"world\" against \"hellow\"/\"orld\", the same bytes end to end — are NOT PROVEN",
+    @Test("#301-3: captions cut differently — \"hello\"/\"world\" against \"hellow\"/\"orld\" — are never PROVEN: each file's text track is named as its own, not compared",
           .timeLimit(.minutes(2)))
     func repartitionedSubtitlePacketsAreRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -131,7 +131,7 @@ struct BalancedCopyProofPacketTests {
              "-map", "0:v", "-map", "1:a", "-map", "2:s", "-c:v", "ffv1", "-c:a", "pcm_s16le", "-c:s", "srt"],
             output: original)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
         let recut = try Media.derive("recut_balanced", from: balanced,
                                      ["-i", try captions("recut.srt", "hellow", "orld"),
                                       "-map", "0:v", "-map", "0:a", "-map", "1:s", "-c", "copy", "-c:s", "srt"])
@@ -151,12 +151,16 @@ struct BalancedCopyProofPacketTests {
         let sizes = await packetTable(of: original, stream: "s:0")
         #expect(await packetTable(of: recut, stream: "s:0") != sizes)
 
+        // RE-SCOPED 2026-11-17: the proof no longer claims anything about a text track. Two rounds of
+        // review (#307, #308) kept finding one more thing about such tracks that was not compared, so
+        // none of it is: the pair plays the same picture and sound, each file's text track is NAMED as
+        // its own and NOT compared, and the pair is never "proven". A Trash offer for the original
+        // must therefore say that it holds a text track.
         let outcome = await Proof.measure(original: original, balanced: recut)
-        #expect(!outcome.playsTheSame, "different captions at both cues were the same: \(outcome)")
-        guard case .notProven(.carriedStreamDiffers(let kind, let index, _)) = outcome else {
-            Issue.record("expected the caption packets to be the reason, got \(outcome)")
-            return
-        }
-        #expect(kind == "subtitle" && index == 2)
+        #expect(outcome.playsTheSame && !outcome.isProven, "\(outcome)")
+        #expect(outcome.differences.filter { $0.kind == .track } == [
+            Proof.Difference(kind: .track, heldBy: .original, what: "a text track (subrip) — not compared with the other file"),
+            Proof.Difference(kind: .track, heldBy: .balancedCopy, what: "a text track (subrip) — not compared with the other file")
+        ], "\(outcome.differences)")
     }
 }

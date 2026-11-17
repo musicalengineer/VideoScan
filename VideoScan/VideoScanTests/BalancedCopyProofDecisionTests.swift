@@ -100,8 +100,8 @@ struct BalancedCopyProofDecisionTests {
     /// A left-only PCM original and a faithful balanced copy, QuickTime both.
     static func goodFacts() -> Proof.Facts {
         withWholeReads(Proof.Facts(
-            original: Proof.FileLayout(carried: [video()], sound: [sound()], container: movie, tags: ["encoder": "Lavf"]),
-            balanced: Proof.FileLayout(carried: [video()], sound: [sound()], container: movie, tags: ["encoder": "Lavf"]),
+            original: Proof.FileLayout(carried: [video()], sound: [sound()], container: movie),
+            balanced: Proof.FileLayout(carried: [video()], sound: [sound()], container: movie),
             originalClass: .leftOnly, originalMeasuredInFull: true))
     }
 
@@ -154,7 +154,7 @@ struct BalancedCopyProofDecisionTests {
         #expect(evidence.sampleFormat == "s16" && evidence.sampleRateHz == 48_000)
         #expect(evidence.soundSamples == 96_000 && evidence.soundStartSeconds == 0)
         #expect(evidence.streams == [Proof.Evidence.Stream(
-            kind: "video", codec: "prores", originalIndex: 0, balancedIndex: 0, frames: 50,
+            codec: "prores", originalIndex: 0, balancedIndex: 0, frames: 50,
             framesSHA256: Self.framesHash, packetIdentical: true, packetSHA256: Self.pictureHash, packets: 50)])
         #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
         // Pure: the same facts, the same answer.
@@ -192,45 +192,34 @@ struct BalancedCopyProofDecisionTests {
 
     // MARK: Shape 2 — the same content, differing in named things
 
-    @Test("SAME CONTENT: a track only one file has is NAMED, with the file that holds it")
-    func trackDifferences() {
+    @Test("NOT COMPARED: any track that is not a picture or the kept sound is NAMED for each file that holds one — never compared, never proven")
+    func otherTracksAreNamedPerFile() {
         // Raw DV → QuickTime: the copy gains the muxer's timecode track.
         let gained = Proof.decide(Self.facts { $0.balanced.carried = [Self.video(0), Self.timecode(2)] })
         #expect(gained.playsTheSame && !gained.isProven)
-        #expect(gained.differences == [Proof.Difference(kind: .track, heldOnlyBy: .balancedCopy, what: "a timecode track")])
-        #expect(Self.differs(gained) == ["[track] the balanced copy holds a timecode track"])
+        #expect(gained.differences == [Proof.Difference(kind: .track, heldBy: .balancedCopy, what: "a timecode track — not compared with the other file")])
+        #expect(Self.differs(gained) == ["[track] the balanced copy holds a timecode track — not compared with the other file"])
         // The original's timecode track is not in the copy: the ORIGINAL holds something.
         let lost = Proof.decide(Self.facts { $0.original.carried = [Self.video(0), Self.timecode(2)] })
-        #expect(lost.differences == [Proof.Difference(kind: .track, heldOnlyBy: .original, what: "a timecode track")])
-        // A text track and a data track, each named for what it is.
+        #expect(lost.differences.map(\.heldBy) == [.original])
+        // BOTH hold one — with the same packets or other packets, the proof does not look: each is named.
+        for copyHash in [Self.timecodeHash, Self.otherHash, nil] {
+            let both = Proof.decide(Self.facts {
+                $0.original.carried = [Self.video(0), Self.timecode(2)]
+                $0.balanced.carried = [Self.video(0), Self.timecode(2, hash: copyHash)]
+            })
+            #expect(both.differences.map(\.heldBy) == [.original, .balancedCopy] && !both.isProven, "\(both)")
+            #expect(both.evidence?.streams.count == 1, "the evidence holds pictures only")
+        }
+        // A text track, a data track and an attachment, each named for what it is.
         let text = Proof.decide(Self.facts {
             $0.original.carried = [Self.video(0), Self.captions(2),
-                                   Proof.CarriedStream(index: 3, kind: "data", codec: "bin_data", tag: "gpmd",
-                                                       packetSHA256: Self.otherHash, timingSHA256: Self.timesHash, packets: 9)]
+                                   Proof.CarriedStream(index: 3, kind: "data", codec: "bin_data", tag: "gpmd"),
+                                   Proof.CarriedStream(index: 4, kind: "attachment", codec: "ttf", tag: "")]
         })
-        #expect(Self.differs(text) == ["[track] the original holds a text track (subrip)",
-                                       "[track] the original holds a data track (bin_data)"])
-        // Carried in both, and equal: no difference at all.
-        let both = Proof.decide(Self.facts {
-            $0.original.carried = [Self.video(0), Self.timecode(2)]
-            $0.balanced.carried = [Self.video(0), Self.timecode(2)]
-        })
-        guard case .proven(let evidence) = both else { Issue.record("carried tmcd: \(both)"); return }
-        #expect(evidence.streams.map(\.kind) == ["video", "data"])
-        #expect(evidence.streams[1].frames == nil && evidence.streams[1].packetIdentical && evidence.streams[1].packets == 1)
-        // The original has one, the copy two: the second is the copy's alone.
-        let two = Proof.decide(Self.facts {
-            $0.original.carried = [Self.video(0), Self.timecode(2)]
-            $0.balanced.carried = [Self.video(0), Self.timecode(2), Self.timecode(3)]
-        })
-        #expect(Self.differs(two) == ["[track] the balanced copy holds a timecode track"])
-        // Tracks of another codec do not answer for each other: one missing, one extra.
-        let swapped = Proof.decide(Self.facts {
-            $0.original.carried = [Self.video(0), Self.timecode(2)]
-            $0.balanced.carried = [Self.video(0), Self.captions(2)]
-        })
-        #expect(Self.differs(swapped) == ["[track] the original holds a timecode track",
-                                          "[track] the balanced copy holds a text track (subrip)"])
+        #expect(Self.differs(text) == ["[track] the original holds a text track (subrip) — not compared with the other file",
+                                       "[track] the original holds a data track (bin_data) — not compared with the other file",
+                                       "[track] the original holds an attachment (ttf) — not compared with the other file"])
     }
 
     @Test("SAME CONTENT: container, how the picture is stored, and decoder configuration are named — neither file holds more")
@@ -240,7 +229,7 @@ struct BalancedCopyProofDecisionTests {
             $0.original.sound[0].channelLayout = "stereo"
         })
         #expect(container.differences == [Proof.Difference(
-            kind: .container, heldOnlyBy: nil, what: "the original is a dv file, the balanced copy a mov file")])
+            kind: .container, heldBy: nil, what: "the original is a dv file, the balanced copy a mov file")])
         // Another codec, every decoded frame the same.
         let codec = Proof.decide(Self.facts { $0.balanced.carried = [Self.video(codec: "ffv1", hash: Self.otherHash)] })
         #expect(Self.differs(codec) == ["[encoding] picture stream 0 is stored as prores in the original and as ffv1 in the "
@@ -250,18 +239,18 @@ struct BalancedCopyProofDecisionTests {
         for change in [{ $0.packetSHA256 = Self.otherHash }, { $0.packets = 75 }, { $0.timingSHA256 = Self.otherTimesHash }]
             as [(inout Proof.CarriedStream) -> Void] {
             let stored = Proof.decide(Self.facts { change(&$0.balanced.carried[0]) })
-            #expect(stored.differences.map(\.kind) == [.encoding] && stored.differences[0].heldOnlyBy == nil, "\(stored)")
+            #expect(stored.differences.map(\.kind) == [.encoding] && stored.differences[0].heldBy == nil, "\(stored)")
             #expect(stored.differences[0].what.hasPrefix("picture stream 0 (prores) is not stored in the same packets"))
             #expect(stored.evidence?.streams[0].packetIdentical == false)
         }
         // Extradata written differently, frames identical.
         let extradata = Proof.decide(Self.facts { $0.balanced.carried[0].configuration.extradataSHA256 = "SHA256:ab" })
         #expect(extradata.differences.map(\.kind) == [.decoderConfiguration])
-        #expect(extradata.differences[0].heldOnlyBy == nil)
+        #expect(extradata.differences[0].heldBy == nil)
     }
 
-    @Test("SAME CONTENT: media an edit list hides is named as STORED BUT NOT PLAYED, with the file that stores it")
-    func playbackDifferences() {
+    @Test("NOT COMPARED: media an edit list hides is named as STORED BUT NOT PLAYED for each file that stores any — equal lengths prove nothing")
+    func hiddenMediaIsNamedPerFile() {
         // Rick's NH-Part-4 shape: the original stores 10:52 and plays 8:34; the copy holds only what plays.
         func hides(_ f: inout Proof.Facts, original: Double?, copy: Double?, played: Double = 514) {
             for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
@@ -273,29 +262,30 @@ struct BalancedCopyProofDecisionTests {
         }
         let hidden = Proof.decide(Self.facts { hides(&$0, original: 652, copy: 514) })
         #expect(hidden.differences == [Proof.Difference(
-            kind: .playback, heldOnlyBy: .original,
-            what: "stored picture an edit list does not play: 10:52 stored, 8:34 played — the hidden part is not compared with the other file")])
-        // The other way round: the COPY stores media it does not play.
-        let copyHides = Proof.decide(Self.facts { hides(&$0, original: 514, copy: 652) })
-        #expect(copyHides.differences.map(\.heldOnlyBy) == [.balancedCopy])
-        // Both hide the same LENGTH (Codex #307-2): the hidden parts are not decoded and not hashed, so they
-        // are not known to be the same media. Each file is named as holding its own; never proven.
+            kind: .playback, heldBy: .original,
+            what: "stored picture (stream 0) an edit list does not play: 10:52 stored, 8:34 played — not compared with the other file")])
+        #expect(Proof.decide(Self.facts { hides(&$0, original: 514, copy: 652) }).differences.map(\.heldBy) == [.balancedCopy])
+        // Both hide the same LENGTH (Codex #307-2): not known to be the same media. Each holds its own.
         let bothHide = Proof.decide(Self.facts { hides(&$0, original: 652, copy: 652) })
-        #expect(bothHide.differences.map(\.heldOnlyBy) == [.original, .balancedCopy] && !bothHide.isProven)
-        #expect(bothHide.differences.allSatisfy { $0.kind == .playback })
+        #expect(bothHide.differences.map(\.heldBy) == [.original, .balancedCopy] && !bothHide.isProven)
         // A container with no edit lists states no stored length: nothing is hidden there.
         #expect(Proof.decide(Self.facts { hides(&$0, original: nil, copy: nil) }).isProven)
-        let fromMatroska = Proof.decide(Self.facts { hides(&$0, original: nil, copy: 652) })
-        #expect(fromMatroska.differences.map(\.heldOnlyBy) == [.balancedCopy])
         // Within a millisecond is not hidden media.
         #expect(Proof.decide(Self.facts { hides(&$0, original: 514.0009, copy: 514) }).isProven)
-        // Hidden SOUND is named the same way.
+        // Hidden SOUND, and media hidden in a track that is not decoded (Codex #308-2: against its stated length).
         let sound = Proof.decide(Self.facts { $0.original.sound[0].storedSeconds = 3.5 })
-        #expect(Self.differs(sound) == ["[playback instructions] the original holds stored sound an edit list does not play: "
-                                        + "3.500 s stored, 2.000 s played — the hidden part is not compared with the other file"])
+        #expect(Self.differs(sound) == ["[playback instructions] the original holds stored sound (stream 1) an edit list does not play: "
+                                        + "3.500 s stored, 2.000 s played — not compared with the other file"])
+        let captions = Proof.decide(Self.facts {
+            var track = Self.captions(2)
+            (track.statedSeconds, track.storedSeconds) = (1, 2.6)
+            $0.original.carried.append(track)
+        })
+        #expect(captions.differences.map(\.kind) == [.track, .playback] && captions.differences.allSatisfy { $0.heldBy == .original })
+        #expect(captions.differences[1].what.hasPrefix("stored subtitle (stream 2) an edit list does not play: 2.600 s stored, 1.000 s played"))
     }
 
-    @Test("TRACK FLAGS: a decoded track that plays by default in the original and is switched off in the copy is NOT THE SAME; any other flag difference is named")
+    @Test("TRACK FLAGS: a picture or the kept sound that plays by default in the original and is switched off in the copy is NOT THE SAME; flags are otherwise named per file, not compared")
     func trackFlags() {
         func on(_ f: inout Proof.Facts) {
             for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
@@ -303,129 +293,70 @@ struct BalancedCopyProofDecisionTests {
                 f[keyPath: side].sound[0].flags = ["default"]
             }
         }
-        #expect(Proof.decide(Self.facts { on(&$0) }).isProven)
-        // QuickTime's "track enabled" switch, off in the copy: a player skips the track.
+        // QuickTime's "track enabled" switch, off in the copy: a player skips the track. This is about WHAT PLAYS.
         #expect(Proof.decide(Self.facts { on(&$0); $0.balanced.sound[0].flags = [] }) == .notProven(.pictureConfigurationDiffers(
             "audio stream 1: the balanced copy's track is not marked to play by default")))
         #expect(Proof.decide(Self.facts { on(&$0); $0.balanced.carried[0].flags = ["forced"] }) == .notProven(.pictureConfigurationDiffers(
             "picture stream 0: the balanced copy's track is not marked to play by default")))
-        // Decided from the headers, before a packet is read.
-        #expect(Proof.headerVerdict(Self.facts { on(&$0); $0.balanced.sound[0].flags = [] }) != nil)
-        // Raw DV states no flags; its QuickTime copy's tracks are switched on: named, neither file holds more.
-        let gained = Proof.decide(Self.facts { $0.balanced.carried[0].flags = ["default"]; $0.balanced.sound[0].flags = ["default"] })
+        #expect(Proof.headerVerdict(Self.facts { on(&$0); $0.balanced.sound[0].flags = [] }) != nil, "decided from the headers")
+        // Flags themselves are named for each file that has any — the same flags on both sides included.
+        let both = Proof.decide(Self.facts { on(&$0) })
+        #expect(both.differences == [
+            Proof.Difference(kind: .playback, heldBy: .original, what: "track flags (stream 0: default; stream 1: default) — not compared with the other file"),
+            Proof.Difference(kind: .playback, heldBy: .balancedCopy, what: "track flags (stream 0: default; stream 1: default) — not compared with the other file")
+        ])
+        // Raw DV states none; its QuickTime copy's tracks are switched on.
+        let gained = Proof.decide(Self.facts { $0.balanced.carried[0].flags = ["default"]; $0.balanced.sound[0].flags = ["dub", "comment"] })
         #expect(gained.differences == [Proof.Difference(
-            kind: .playback, heldOnlyBy: nil,
-            what: "track flags differ: picture stream 0 (the balanced copy only: default); the sound (the balanced copy only: default)")])
-        let mixed = Proof.decide(Self.facts {
-            $0.original.sound[0].flags = ["dub", "comment"]
-            $0.balanced.sound[0].flags = ["comment", "original"]
-        })
-        #expect(mixed.differences.map(\.what) == ["track flags differ: the sound (the original only: dub; the balanced copy only: original)"])
+            kind: .playback, heldBy: .balancedCopy, what: "track flags (stream 0: default; stream 1: comment dub) — not compared with the other file")])
     }
 
-    @Test("#308-2/3/4: a text or data track both files have is held like the rest — media it hides, its track flags, and a tag lost from one track are all named")
-    func pairedUndecodedTracksAreHeldLikeTheRest() {
-        func withCaptions(_ change: @escaping (inout Proof.Facts) -> Void) -> Proof.Outcome {
-            Proof.decide(Self.facts {
-                $0.original.carried = [Self.video(0), Self.captions(2)]
-                $0.balanced.carried = [Self.video(0), Self.captions(2)]
-                change(&$0)
-            })
-        }
-        #expect(withCaptions { _ in }.isProven)
-        // #308-2: each caption track plays one second and stores 2.6 — what the rest says is not compared.
-        let hidden = withCaptions {
-            for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
-                $0[keyPath: side].carried[1].statedSeconds = 1
-                $0[keyPath: side].carried[1].storedSeconds = 2.6
-            }
-        }
-        #expect(hidden.differences.map(\.heldOnlyBy) == [.original, .balancedCopy] && !hidden.isProven, "\(hidden)")
-        #expect(hidden.differences.first?.what == "stored subtitle stream 2 an edit list does not play: 2.600 s stored, 1.000 s "
-                + "played — the hidden part is not compared with the other file")
-        // #308-3: which caption track is switched on.
-        let flags = withCaptions { $0.balanced.carried[1].flags = ["default"] }
-        #expect(flags.differences == [Proof.Difference(
-            kind: .playback, heldOnlyBy: nil, what: "track flags differ: subtitle stream 2 (the balanced copy only: default)")])
-        // #308-4: the picture's title is gone from the copy; that the SOUND track still says it is not the picture's title.
-        let title = Proof.decide(Self.facts {
-            $0.original.carried[0].tags["title"] = "Grandpa"
-            $0.original.sound[0].tags["title"] = "Grandpa"
-            $0.balanced.sound[0].tags["title"] = "Grandpa"
-        })
-        #expect(title.differences == [Proof.Difference(
-            kind: .metadata, heldOnlyBy: .original, what: "tags the balanced copy does not have: stream 0 title")], "\(title)")
-        // The one relocation that is not a loss stays: a container's tag found on a track, or a track's on the container.
-        #expect(Proof.decide(Self.facts {
-            $0.original.carried[0].tags["timecode"] = "01:00:00:00"
-            $0.balanced.tags["timecode"] = "01:00:00:00"
-        }).isProven)
-    }
-
-    @Test("CHAPTERS: chapter marks one file has and the other has not, or that differ, are named")
+    @Test("NOT COMPARED: chapter marks are named, with their number, for each file that has any")
     func chapterMarks() {
-        let marks = ["0.000000–1.000000 One", "1.000000–2.000000 Two"]
-        #expect(Proof.decide(Self.facts { $0.original.chapters = marks; $0.balanced.chapters = marks }).isProven)
-        #expect(Proof.decide(Self.facts { $0.original.chapters = marks }).differences == [Proof.Difference(
-            kind: .metadata, heldOnlyBy: .original,
-            what: "2 chapter marks the other file does not have: 0.000000–1.000000 One, 1.000000–2.000000 Two")])
-        #expect(Proof.decide(Self.facts { $0.balanced.chapters = marks }).differences.map(\.heldOnlyBy) == [.balancedCopy])
-        let renamed = Proof.decide(Self.facts {
-            $0.original.chapters = marks
-            $0.balanced.chapters = [marks[0], "1.000000–2.000000 Deux"]
-        })
-        // The same NUMBER of marks, one replaced (Codex #307-4): each file holds a mark the other has not.
-        #expect(renamed.differences == [
-            Proof.Difference(kind: .metadata, heldOnlyBy: .original,
-                             what: "1 chapter marks the other file does not have: 1.000000–2.000000 Two"),
-            Proof.Difference(kind: .metadata, heldOnlyBy: .balancedCopy,
-                             what: "1 chapter marks the other file does not have: 1.000000–2.000000 Deux")])
+        #expect(Proof.decide(Self.facts { $0.original.chapters = 2 }).differences == [Proof.Difference(
+            kind: .metadata, heldBy: .original, what: "2 chapter marks — not compared with the other file")])
+        #expect(Proof.decide(Self.facts { $0.balanced.chapters = 1 }).differences.map(\.heldBy) == [.balancedCopy])
+        // The same number on both sides is not "the same marks" (Codex #307-4, #308-5): each file holds its own.
+        let both = Proof.decide(Self.facts { $0.original.chapters = 2; $0.balanced.chapters = 2 })
+        #expect(both.differences.map(\.heldBy) == [.original, .balancedCopy] && !both.isProven)
     }
 
-    @Test("SAME CONTENT: tags one file has and the other has not, or states differently, are named — at most six, then a count")
-    func metadataDifferences() {
+    @Test("NOT COMPARED: tags are named — how many, and their names, at most six then a count — for each file that has any; values are never compared")
+    func tagsAreNamedPerFile() {
         let outcome = Proof.decide(Self.facts {
             $0.original.tags = ["encoder": "Lavf", "creation_time": "1994-12-25", "make": "Sony"]
-            $0.balanced.tags = ["encoder": "Lavf63", "major_brand": "qt  "]
+            $0.balanced.tags = ["encoder": "Lavf", "major_brand": "qt  "]
             $0.original.carried[0].tags = ["timecode": "01:00:00:00"]
             $0.balanced.sound[0].tags = ["handler_name": "SoundHandler"]
         })
-        // A tag with ANOTHER VALUE is held by both (Codex #307-4): each file has a value the other has not —
-        // the original's capture date is the original's alone, whatever the copy says under the same name.
         #expect(outcome.differences == [
-            Proof.Difference(kind: .metadata, heldOnlyBy: .original,
-                             what: "tags the balanced copy does not have: creation_time, encoder (\"Lavf\"), make, stream 0 timecode"),
-            Proof.Difference(kind: .metadata, heldOnlyBy: .balancedCopy,
-                             what: "tags the original does not have: encoder (\"Lavf63\"), major_brand, sound handler_name")
+            Proof.Difference(kind: .metadata, heldBy: .original,
+                             what: "4 tags (creation_time, encoder, make, stream 0 timecode) — not compared with the other file"),
+            Proof.Difference(kind: .metadata, heldBy: .balancedCopy,
+                             what: "3 tags (encoder, major_brand, stream 1 handler_name) — not compared with the other file")
         ])
-        #expect(outcome.differences.allSatisfy { $0.heldOnlyBy != nil }, "every metadata difference has an owner")
-        // A tag the other file states with the SAME value somewhere else is not missing: raw DV's
-        // timecode is the container's, QuickTime's is the picture track's.
-        #expect(Proof.decide(Self.facts {
-            $0.original.tags["timecode"] = "01:00:00:00"
-            $0.balanced.carried[0].tags["timecode"] = "01:00:00:00"
-        }).isProven)
-        #expect(Self.differs(Proof.decide(Self.facts {
-            $0.original.tags["timecode"] = "01:00:00:00"
-            $0.balanced.carried[0].tags["timecode"] = "02:00:00:00"
-        })) == ["[metadata] the original holds tags the balanced copy does not have: timecode",
-                "[metadata] the balanced copy holds tags the original does not have: stream 0 timecode"])
+        // The SAME tags with the SAME values on both sides are still each file's own: nothing was compared
+        // (Codex #307-4, #308-4: no value, no scope, no relocation is reasoned about).
+        let same = Proof.decide(Self.facts { $0.original.tags = ["encoder": "Lavf"]; $0.balanced.tags = ["encoder": "Lavf"] })
+        #expect(same.differences.map(\.heldBy) == [.original, .balancedCopy] && !same.isProven)
         let many = Proof.decide(Self.facts {
             for n in 1...9 { $0.original.tags["key\(n)"] = "v" }
         })
-        #expect(many.differences.map(\.what) == ["tags the balanced copy does not have: key1, key2, key3, key4, key5, key6 +3 more"])
+        #expect(many.differences.map(\.what) == ["9 tags (key1, key2, key3, key4, key5, key6 +3 more) — not compared with the other file"])
         #expect(Proof.namedTagLimit == 6)
     }
 
-    @Test("SAME CONTENT: differences come in one order — tracks, container, encoding, decoder configuration, playback, metadata")
+    @Test("SAME CONTENT: differences come in one order — tracks, container, encoding, decoder configuration, playback, metadata; the original first")
     func differencesAreOrdered() {
         let outcome = Proof.decide(Self.dvFacts {
+            $0.original.tags = ["timecode": "00:00:00:00"]
             $0.balanced.tags = ["major_brand": "qt  "]
             $0.balanced.carried[0].configuration.extradataSHA256 = "SHA256:ab"
             $0.balanced.carried[0].storedSeconds = 9
         })
-        #expect(outcome.differences.map(\.kind) == [.track, .track, .container, .decoderConfiguration, .playback, .metadata],
+        #expect(outcome.differences.map(\.kind) == [.track, .track, .container, .decoderConfiguration, .playback, .metadata, .metadata],
                 "\(outcome)")
+        #expect(outcome.differences.map(\.heldBy) == [.original, .balancedCopy, nil, nil, .balancedCopy, .original, .balancedCopy])
         guard case .sameContent(let evidence, _) = outcome else { Issue.record("\(outcome)"); return }
         #expect(evidence.streams.count == 1 && evidence.streams[0].codec == "dvvideo")
     }
@@ -442,7 +373,7 @@ struct BalancedCopyProofDecisionTests {
         let good = Proof.decide(Self.dvFacts())
         #expect(Self.differs(good) == [
             "[track] the original holds a second sound track (stream 2, 2 channels), measured silent: digital silence",
-            "[track] the balanced copy holds a timecode track",
+            "[track] the balanced copy holds a timecode track — not compared with the other file",
             "[container] the original is a dv file, the balanced copy a mov file"
         ], "\(good)")
         // Quiet under the ceiling: accepted, and the measured peak is stated.
@@ -561,35 +492,6 @@ struct BalancedCopyProofDecisionTests {
             $0.balancedRead?.channelSHA256[1] = Self.otherHash
         })
         guard case .notProven(.pictureDiffers) = both else { Issue.record("\(both)"); return }
-    }
-
-    @Test("NOT THE SAME: a timecode or text track both files have must be the same packet for packet")
-    func notProvenCarriedTrackDiffers() {
-        func decide(_ change: @escaping (inout Proof.CarriedStream) -> Void) -> Proof.Outcome {
-            Proof.decide(Self.facts {
-                $0.original.carried = [Self.video(0), Self.timecode(2)]
-                $0.balanced.carried = [Self.video(0), Self.timecode(2)]
-                change(&$0.balanced.carried[1])
-            })
-        }
-        #expect(decide { $0.packetSHA256 = Self.otherHash } == .notProven(.carriedStreamDiffers(
-            kind: "data", originalIndex: 2, "sha256 \(Proof.short(Self.timecodeHash)) ≠ \(Proof.short(Self.otherHash))")))
-        #expect(decide { $0.packets = 2 }
-                == .notProven(.carriedStreamDiffers(kind: "data", originalIndex: 2, "1 packets, the balanced copy 2")))
-        #expect(decide { $0.timingSHA256 = Self.otherTimesHash }
-                == .notProven(.carriedStreamDiffers(kind: "data", originalIndex: 2, "its packets are not at the original's times")))
-        // Codex #307-3: such a track is not decoded, so its configuration must be the original's too
-        // (a subtitle's styles live in its extradata; the packets are the same).
-        for change in [{ $0.configuration.extradataSHA256 = "SHA256:ab" }, { $0.configuration.sideData = "[{}]" },
-                       { $0.configuration.width = 720 }] as [(inout Proof.CarriedStream) -> Void] {
-            #expect(decide(change) == .notProven(.carriedStreamDiffers(
-                kind: "data", originalIndex: 2, "its codec configuration is not the original's")))
-        }
-        // Unread, uncounted, or holding nothing (a Matroska attachment): could not check.
-        for poison in [{ $0.packetSHA256 = nil }, { $0.packets = nil }, { $0.packets = 0 }, { $0.timingSHA256 = "abc" },
-                       { $0.packetSHA256 = Proof.emptySHA256 }] as [(inout Proof.CarriedStream) -> Void] {
-            #expect(decide(poison) == .couldNotCheck("data stream 2 gave no packets to compare"))
-        }
     }
 
     @Test("NOT THE SAME: the copy's channels differ from each other, from the original's live channel, or are placed at other times")
@@ -775,7 +677,7 @@ struct BalancedCopyProofDecisionTests {
             ("stream tag", { $0.original.carried[0].tags["timecode"] = "01:00:00:00" }),
             ("sound tag", { $0.balanced.sound[0].tags["handler_name"] = "x" }),
             ("track flag", { $0.balanced.carried[0].flags = ["forced"] }),
-            ("chapter marks", { $0.original.chapters = ["0.000000–1.000000 One"] })
+            ("chapter marks", { $0.original.chapters = 1 })
         ]
         for (name, change) in named {
             let outcome = Proof.decide(Self.facts(change))
@@ -838,7 +740,7 @@ struct BalancedCopyProofDecisionTests {
         #expect(proven.contains("sound pcm_s16le 48000 Hz: original left = copy left = copy right, 96000 samples at the same times, "
                                 + "sha256 \(Self.soundHash)"))
         #expect(proven.contains("original right: digital silence, not in the copy"))
-        #expect(proven.hasSuffix("; nothing else differs") && !proven.contains("\n"))
+        #expect(proven.hasSuffix("; neither file holds anything else") && !proven.contains("\n"))
 
         let quiet = Proof.logLine(original: original, balanced: copy, outcome: Proof.decide(Self.poisoned {
             $0.originalRead?.peaksDBFS[1] = [-3.1, -71.3]
@@ -857,9 +759,9 @@ struct BalancedCopyProofDecisionTests {
         let dv = Proof.logLine(original: original, balanced: copy, outcome: Proof.decide(Self.dvFacts()))
         #expect(dv.hasPrefix("balanced copy proof: OUTCOME SAME CONTENT, DIFFERS IN 3 — \(pair) — "))
         #expect(dv.hasSuffix(" — differs: [track] the original holds a second sound track (stream 2, 2 channels), measured silent: "
-                             + "digital silence | [track] the balanced copy holds a timecode track | "
+                             + "digital silence | [track] the balanced copy holds a timecode track — not compared with the other file | "
                              + "[container] the original is a dv file, the balanced copy a mov file"))
-        #expect(!dv.contains("nothing else differs") && !dv.contains("PROVEN"))
+        #expect(!dv.contains("neither file holds anything else") && !dv.contains("PROVEN"))
         let stored = Proof.logLine(original: original, balanced: copy, outcome: Proof.decide(Self.facts {
             $0.balanced.carried[0].packetSHA256 = Self.otherHash
         }))
@@ -904,7 +806,6 @@ struct BalancedCopyProofDecisionTests {
             .channelLayoutNotStereo(file: "the balanced copy", layout: "2 channels (FC+LFE)"),
             .pictureConfigurationDiffers("picture stream 0: width 320 → 304"),
             .pictureDiffers(originalIndex: 0, "50 frames play in the original, 25 in the balanced copy"),
-            .carriedStreamDiffers(kind: "subtitle", originalIndex: 2, "2 packets, the balanced copy 3"),
             .soundPlacementDiffers("run 1"), .discardedChannelNotSilent(channel: 1, peakDBFS: -48.2),
             .spareSoundTrack("stream 2 is not silent: peak −12.0 dBFS"),
             .channelsDiffer(left: Self.soundHash, right: Self.otherHash),
@@ -954,13 +855,7 @@ struct BalancedCopyProofDecisionTests {
         let layout = try #require(Proof.layout(fromProbeJSON: json))
         #expect(layout.container == Self.movie && layout.containerWords.contains("mov") && layout.hasEditLists)
         #expect(layout.tags == ["encoder": "Lavf"])
-        #expect(layout.chapters == ["0.000000–1.000000 title=One", "1.000000–2.000000 "])
-        // #308-5: every tag of a chapter is part of the mark, not only its title.
-        func marks(_ tags: String) -> [String]? {
-            Proof.layout(fromProbeJSON: Data(#"{"streams":[{"index":0,"codec_type":"audio"}],"chapters":[{"start_time":"0.000000","end_time":"1.000000","tags":{\#(tags)}}]}"#.utf8))?.chapters
-        }
-        #expect(marks(#""title":"Birthday","COMMENT":"Grandpa speaking""#) == ["0.000000–1.000000 COMMENT=Grandpa speaking title=Birthday"])
-        #expect(marks(#""title":"Birthday","COMMENT":"Grandpa speaking""#) != marks(#""title":"Birthday""#))
+        #expect(layout.chapters == 2, "chapter marks are counted, never read")
         #expect(layout.carried[0].flags == ["default"] && layout.carried[1].flags.isEmpty && layout.sound[0].flags.isEmpty)
         #expect(layout.carried.map(\.index) == [0, 2] && layout.pictures.map(\.index) == [0])
         let video = layout.carried[0]
@@ -985,6 +880,10 @@ struct BalancedCopyProofDecisionTests {
         #expect(abs(sound.timingSlackSeconds - 1.0 / 48_000) < 1e-12)
         #expect(abs(video.timingSlackSeconds - 1.0 / 12_800) < 1e-12)
         #expect(timecode.timingSlackSeconds == Proof.timingSlackCeilingSeconds, "a 40 ms tick is capped at 1 ms")
+        // Raw DV states the picture's estimated length for its sound: that is no statement about the sound.
+        let rawDV = Data(#"{"streams":[{"index":0,"codec_type":"video","duration":"1637.702700"},{"index":1,"codec_type":"audio","duration":"1637.702700"}],"format":{"format_name":"dv"}}"#.utf8)
+        let tape = try #require(Proof.layout(fromProbeJSON: rawDV))
+        #expect(tape.sound[0].statedSeconds == nil && tape.carried[0].statedSeconds == 1637.7027)
         #expect(Proof.layout(fromProbeJSON: Data("{}".utf8)) == nil)
         #expect(Proof.layout(fromProbeJSON: Data("{\"streams\":[]}".utf8)) == nil)
         #expect(Proof.layout(fromProbeJSON: Data("not json".utf8)) == nil)

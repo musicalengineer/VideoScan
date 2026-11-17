@@ -232,7 +232,7 @@ struct BalancedCopyProofHardeningTests {
         // sine peaks at −66.0. What changed is that the proof now MEASURES
         // the channel and says so. If Rick lowers the ceiling under −66,
         // this test flips to discardedChannelNotSilent — change it then.
-        guard case .proven(let evidence) = outcome else {
+        guard let evidence = outcome.evidence else {
             Issue.record("the ceiling moved, or the measurement did: \(outcome)")
             return
         }
@@ -284,7 +284,7 @@ struct BalancedCopyProofHardeningTests {
         #expect(await Lab.entry("start_time", of: balanced, stream: "a:0") == "0.500000")
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
-        #expect(outcome.isProven, "the timing rule must pass what Balance Audio really writes: \(outcome)")
+        #expect(outcome.playsTheSame, "the timing rule must pass what Balance Audio really writes: \(outcome)")
         #expect(outcome.evidence?.soundStartSeconds == 0.5, "the evidence says where the sound starts")
     }
 
@@ -420,7 +420,7 @@ struct BalancedCopyProofHardeningTests {
         #expect(Lab.reason(outcome)?.hasPrefix("the original is a symbolic link") == true, "\(outcome)")
         #expect(FileIdentityStamp.capture(path: a) == stampBefore, "A itself was never touched")
         // The same B pair, named directly, is a good pair.
-        #expect(await Proof.measure(original: b, balanced: bBalanced).isProven)
+        #expect(await Proof.measure(original: b, balanced: bBalanced).playsTheSame)
         // A link in the copy's place is refused the same way.
         let copyLink = dir.appendingPathComponent("test_copy_link.mov").path
         try fm.createSymbolicLink(atPath: copyLink, withDestinationPath: bBalanced)
@@ -446,7 +446,7 @@ struct BalancedCopyProofHardeningTests {
         let givenBalanced = via + "/" + (balanced as NSString).lastPathComponent
 
         // Left alone: proven, and the evidence names where the paths really led.
-        guard case .proven(let evidence) = await Proof.measure(original: givenOriginal, balanced: givenBalanced) else {
+        guard let evidence = (await Proof.measure(original: givenOriginal, balanced: givenBalanced)).evidence else {
             Issue.record("a pair reached through a linked folder is still a pair")
             return
         }
@@ -497,7 +497,7 @@ struct BalancedCopyProofHardeningTests {
             video: ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                     "-x264-params", "repeat-headers=0", "-flags", "+global_header"])
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven,
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame,
                 "the job's own H.264 + PCM copy is the same")
         let cropped = try Media.derive("cropped_balanced", from: balanced,
                                        ["-map", "0", "-c", "copy", "-bsf:v", "h264_metadata=crop_right=16"])
@@ -566,7 +566,7 @@ struct BalancedCopyProofHardeningTests {
         // The seam alone changes nothing.
         let watched = Proof.Tools(ffmpeg: ToolLocator.ffmpegPath, ffprobe: ToolLocator.ffprobePath,
                                   afterFinalStamps: { calls.withLock { $0 += 1 } })
-        #expect(await Proof.measure(original: original, balanced: balanced, tools: watched).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced, tools: watched).playsTheSame)
         #expect(calls.withLock { $0 } == 1, "the seam runs once, after the closing stamps")
 
         // Cancel exactly there: both hash passes are done, the stamps match.

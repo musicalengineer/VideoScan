@@ -125,11 +125,8 @@ extension BalancedCopyProof {
         let format_name: String?
         let tags: [String: String]?
     }
-    private struct ProbedChapter: Decodable {
-        let start_time: String?
-        let end_time: String?
-        let tags: [String: String]?
-    }
+    /// A chapter mark: counted, never read.
+    private struct ProbedChapter: Decodable {}
     private struct ProbeReport: Decodable {
         let streams: [ProbedStream]?
         let format: ProbedFormat?
@@ -176,10 +173,7 @@ extension BalancedCopyProof {
               let sideData = sideData(fromProbeJSON: data), sideData.count == streams.count else { return nil }
         var layout = FileLayout(
             container: report.format?.format_name ?? "", tags: report.format?.tags ?? [:],
-            chapters: (report.chapters ?? []).map { chapter in
-                let tags = (chapter.tags ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
-                return "\(chapter.start_time ?? "?")–\(chapter.end_time ?? "?") \(tags.joined(separator: " "))"
-            })
+            chapters: report.chapters?.count ?? 0)
         for (position, s) in streams.enumerated() {
             let index = s.index ?? position
             if s.codec_type == "audio" {
@@ -187,7 +181,11 @@ extension BalancedCopyProof {
                     index: index, codec: s.codec_name ?? "", sampleFormat: s.sample_fmt ?? "",
                     sampleRateHz: s.sample_rate.flatMap { Int($0) } ?? 0, channels: s.channels ?? 0,
                     channelLayout: s.channel_layout ?? "", sideData: sideData[position],
-                    statedSeconds: s.statedSeconds, tickSeconds: tick(s.time_base), tags: s.tags ?? [:], flags: s.flags))
+                    // Raw DV states no length for its sound: ffprobe gives the PICTURE's (estimated from
+                    // the bit rate), and a camcorder's unlocked sound does not hold 1601.6 samples a frame
+                    // (dry run 2026-11-17: 27:18 of tape decoded 1,784 samples more than that length).
+                    statedSeconds: layout.containerWords == ["dv"] ? nil : s.statedSeconds,
+                    tickSeconds: tick(s.time_base), tags: s.tags ?? [:], flags: s.flags))
             } else {
                 layout.carried.append(CarriedStream(
                     index: index, kind: s.codec_type ?? "", codec: s.codec_name ?? "",
@@ -795,10 +793,6 @@ extension BalancedCopyProof {
                                            layout: facts.original, tools: tools, control: control)
         facts.balanced = try await packets(of: files.balanced, bytes: files.stamps[1].size, called: "the balanced copy",
                                            layout: facts.balanced, tools: tools, control: control)
-        if case .success(let pairing) = pairing(original: facts.original.carried, balanced: facts.balanced.carried),
-           let verdict = packetVerdict(facts, pairing: pairing) {
-            return verdict
-        }
         try await decode(&facts, files: files, analysis: analysis, tools: tools, control: control)
 
         // Both given paths must still resolve to the files that were opened

@@ -42,7 +42,7 @@ struct BalancedCopyProofPresentationTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Lab.make("test_long_gop.mov", in: dir, video: Self.longGOP)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "the job's own copy is the same")
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame, "the job's own copy is the same")
         let (hiding, _) = try Lab.patched(balanced, as: "hiding_balanced.mov", after: "elst", offset: 8) { $0 / 2 }
 
         // By another road: the packet pass's rows are IDENTICAL — time, duration, size, bytes of all 50 packets …
@@ -95,7 +95,7 @@ struct BalancedCopyProofPresentationTests {
         #expect(await Lab.entry("pix_fmt", of: original, stream: "v:0") == "pal8")
         let balanced = try await Media.balance(original)
         let faithful = await Proof.measure(original: original, balanced: balanced)
-        #expect(faithful.isProven, "the job carries the palette change; its copy is the same: \(faithful)")
+        #expect(faithful.playsTheSame, "the job carries the palette change; its copy is the same: \(faithful)")
         let blue = try paletted("blue_balanced.avi", second: "blue", channels: "\(Media.tone)|\(Media.tone)", in: dir)
 
         // By another road: everything the packet pass lists is identical, palette-change packet included …
@@ -130,7 +130,7 @@ struct BalancedCopyProofPresentationTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Media.original(in: dir, .mkvFFV1PCM16)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "the faithful pair is the same")
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame, "the faithful pair is the same")
         let retimed = try Media.derive("retimed_balanced", from: balanced,
                                        ["-map", "0", "-c", "copy", "-bsf:a", "setts=ts=TS+10*max(0\\,min(N-10\\,70-N))"])
 
@@ -177,11 +177,11 @@ struct BalancedCopyProofPresentationTests {
             return
         }
         #expect(evidence.streams.first?.frames == 25 && evidence.soundSamples == 96_000)
-        #expect(differs == [Proof.Difference(
-            kind: .playback, heldOnlyBy: .original,
-            what: "stored picture an edit list does not play: 2.000 s stored, 1.000 s played — the hidden part is not compared with the other file")], "\(differs)")
+        #expect(differs.filter { $0.what.hasPrefix("stored ") } == [Proof.Difference(
+            kind: .playback, heldBy: .original,
+            what: "stored picture (stream 0) an edit list does not play: 2.000 s stored, 1.000 s played — not compared with the other file")], "\(differs)")
         let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
-        #expect(line.contains("SAME CONTENT, DIFFERS IN 1") && line.contains("[playback instructions] the original holds stored picture"))
+        #expect(line.contains("SAME CONTENT, DIFFERS IN ") && line.contains("[playback instructions] the original holds stored picture"))
 
         // Long-GOP H.264: the hidden packets ARE carried by the job's copy, under the same edit list.
         // Both files store two seconds and play the same one — and since the hidden second is neither
@@ -190,7 +190,8 @@ struct BalancedCopyProofPresentationTests {
         let (hides, _) = try Lab.patched(long, as: "test_hides_long.mov", after: "elst", offset: 8) { $0 / 2 }
         let carried = try await Media.balance(hides)
         let same = await Proof.measure(original: hides, balanced: carried)
-        #expect(same.differences.map(\.heldOnlyBy) == [.original, .balancedCopy] && !same.isProven, "\(same)")
+        #expect(same.differences.filter { $0.what.hasPrefix("stored ") }.map(\.heldBy) == [.original, .balancedCopy] && !same.isProven,
+                "\(same)")
         #expect(same.evidence?.streams.first?.frames == 25 && same.evidence?.streams.first?.packets == 50,
                 "25 frames play; all 50 stored packets are in the copy, identical")
         // And against the copy that plays ALL of it, the hiding original is not the same.
@@ -229,8 +230,8 @@ struct BalancedCopyProofPresentationTests {
 
         let outcome = await Proof.measure(original: original, balanced: copy)
         #expect(!outcome.isProven, "a green tail only the original stores went unnamed: \(outcome)")
-        #expect(outcome.differences.contains { $0.kind == .playback && $0.heldOnlyBy == .original
-            && $0.what.hasPrefix("stored picture an edit list does not play: 2.000 s stored, 1.000 s played") }, "\(outcome)")
+        #expect(outcome.differences.contains { $0.kind == .playback && $0.heldBy == .original
+            && $0.what.hasPrefix("stored picture (stream 0) an edit list does not play: 2.000 s stored, 1.000 s played") }, "\(outcome)")
     }
 
     // MARK: #307-1 — a picture that changes size
@@ -341,7 +342,7 @@ struct BalancedCopyProofPresentationTests {
 
     // MARK: #307-3 — a subtitle's styles
 
-    @Test("#307-3: a copy whose captions are the same packets in another STYLE (white turned red in the track's configuration) is NOT THE SAME",
+    @Test("#307-3: a copy whose captions are the same packets in another STYLE is never PROVEN: each file's text track is named as its own, not compared",
           .timeLimit(.minutes(2)))
     func changedSubtitleConfigurationIsRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -357,7 +358,7 @@ struct BalancedCopyProofPresentationTests {
              "-map", "0:v", "-map", "1:a", "-map", "2:s", "-c:v", "ffv1", "-c:a", "pcm_s16le", "-c:s", "ass"],
             output: original)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "the job carries captions and their styles")
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame, "the job carries captions and their styles")
         // The same captions with the default style's colour changed: only the track's header differs.
         let script = dir.appendingPathComponent("styles.ass")
         try BalanceAudioTestMedia.runFFmpeg(["-i", balanced, "-map", "0:s:0", "-c", "copy"], output: script.path)
@@ -372,9 +373,12 @@ struct BalancedCopyProofPresentationTests {
         #expect(await Lab.packetRows(of: restyled, stream: "s:0") == (await Lab.packetRows(of: balanced, stream: "s:0")),
                 "the caption packets are untouched")
 
+        // RE-SCOPED 2026-11-17: a text track is named for each file and NOT compared — see the header of
+        // BalancedCopyProof.swift. The restyled copy plays the same picture and sound; it is never "proven",
+        // and the original's text track is named as the original's.
         let outcome = await Proof.measure(original: original, balanced: restyled)
-        #expect(outcome == .notProven(.carriedStreamDiffers(kind: "subtitle", originalIndex: 2,
-                                                            "its codec configuration is not the original's")), "\(outcome)")
+        #expect(outcome.playsTheSame && !outcome.isProven, "\(outcome)")
+        #expect(outcome.differences.filter { $0.kind == .track }.map(\.heldBy) == [.original, .balancedCopy], "\(outcome.differences)")
     }
 
     // MARK: Two-track DV
@@ -404,12 +408,12 @@ struct BalancedCopyProofPresentationTests {
             return
         }
         #expect(differs.prefix(3) == [
-            Proof.Difference(kind: .track, heldOnlyBy: .original,
+            Proof.Difference(kind: .track, heldBy: .original,
                              what: "a second sound track (stream 2, 2 channels), measured silent: digital silence"),
-            Proof.Difference(kind: .track, heldOnlyBy: .balancedCopy, what: "a timecode track"),
-            Proof.Difference(kind: .container, heldOnlyBy: nil, what: "the original is a dv file, the balanced copy a mov file")
+            Proof.Difference(kind: .track, heldBy: .balancedCopy, what: "a timecode track — not compared with the other file"),
+            Proof.Difference(kind: .container, heldBy: nil, what: "the original is a dv file, the balanced copy a mov file")
         ], "\(differs)")
-        #expect(differs.filter { $0.heldOnlyBy == .original }.count == 1, "the spare track is ALL the original holds alone")
+        #expect(differs.filter { $0.heldBy == .original }.map(\.kind) == [.track, .metadata], "the spare track and its tags are all the original holds")
         let picture = try #require(evidence.streams.first)
         #expect(picture.codec == "dvvideo" && picture.packetIdentical && picture.frames == picture.packets)
         #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
@@ -446,7 +450,7 @@ struct BalancedCopyProofPresentationTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Media.original(in: dir, .aviDVPCM16)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
         // AVI's stream header: dwLength, 36 bytes after the first `strh` name (the picture's), little-endian.
         let (lying, frames) = try Lab.patched(balanced, as: "lying_balanced.avi", after: "strh", offset: 36, littleEndian: true) { $0 * 2 }
         #expect(frames == 60)
@@ -538,7 +542,7 @@ struct BalancedCopyProofPresentationTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Media.original(in: dir, .movProResPCM16)
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
 
         /// An ffprobe that does the real work and, for the PACKET pass only, `after` as well.
         func probe(_ name: String, after: String) throws -> Proof.Tools {
@@ -615,7 +619,7 @@ struct BalancedCopyProofPresentationTests {
         let sound = await Proof.measure(original: original, balanced: balanced,
                                         tools: Proof.Tools(ffmpeg: wide, ffprobe: ToolLocator.ffprobePath))
         #expect(Lab.reason(sound)?.hasPrefix("the original could not be decoded to the end (ffmpeg status ") == true, "\(sound)")
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "left alone, the pair is the same")
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame, "left alone, the pair is the same")
     }
 
     // MARK: Every other difference, named on real media
@@ -628,7 +632,7 @@ struct BalancedCopyProofPresentationTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Lab.make("test_ffv1.mkv", in: dir, video: ["-c:v", "ffv1", "-pix_fmt", "yuv420p"])
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
 
         // The same codec, cut into other slices: other bytes, the same pictures.
         let recut = try Media.derive("recut_balanced", from: balanced,
@@ -636,7 +640,7 @@ struct BalancedCopyProofPresentationTests {
         #expect(await Lab.packetRows(of: recut, stream: "v:0") != (await Lab.packetRows(of: balanced, stream: "v:0")))
         let sameCodec = await Proof.measure(original: original, balanced: recut)
         #expect(sameCodec.playsTheSame && !sameCodec.isProven, "\(sameCodec)")
-        #expect(sameCodec.differences.contains { $0.kind == .encoding && $0.heldOnlyBy == nil
+        #expect(sameCodec.differences.contains { $0.kind == .encoding && $0.heldBy == nil
             && $0.what.hasPrefix("picture stream 0 (ffv1) is not stored in the same packets") }, "\(sameCodec.differences)")
         #expect(sameCodec.evidence?.streams.first?.packetIdentical == false && sameCodec.evidence?.streams.first?.frames == 50)
 
@@ -644,7 +648,7 @@ struct BalancedCopyProofPresentationTests {
         let huffyuv = try Media.derive("huffyuv_balanced", from: balanced, ["-map", "0", "-c", "copy", "-c:v", "ffvhuff"])
         let otherCodec = await Proof.measure(original: original, balanced: huffyuv)
         #expect(otherCodec.differences.contains(Proof.Difference(
-            kind: .encoding, heldOnlyBy: nil,
+            kind: .encoding, heldBy: nil,
             what: "picture stream 0 is stored as ffv1 in the original and as ffvhuff in the balanced copy; every decoded frame is the same")),
                 "\(otherCodec)")
         #expect(otherCodec.differences.contains { $0.kind == .decoderConfiguration }, "another codec has another configuration")
@@ -673,8 +677,9 @@ struct BalancedCopyProofPresentationTests {
         #expect(was.hasPrefix("SHA256:") && now.hasPrefix("SHA256:") && was != now)
 
         let outcome = await Proof.measure(original: original, balanced: relabelled)
-        #expect(Lab.differs(outcome) == ["[decoder configuration] picture stream 0's decoder configuration (extradata) is written "
-                                         + "differently; every decoded frame is the same"], "\(outcome)")
+        #expect(Lab.differs(outcome).filter { $0.hasPrefix("[decoder") } == ["[decoder configuration] picture stream 0's decoder "
+            + "configuration (extradata) is written differently; every decoded frame is the same"], "\(outcome)")
+        #expect(outcome.differences.filter { $0.heldBy == nil }.count == 1, "nothing else about the picture differs")
         #expect(outcome.evidence?.streams.first?.packetIdentical == true)
     }
 
@@ -687,19 +692,19 @@ struct BalancedCopyProofPresentationTests {
         let original = try Lab.make("test_tagged.mkv", in: dir, video: ["-c:v", "ffv1"],
                                     extra: ["-metadata", "title=Christmas 1994", "-metadata", "tape=7"])
         let balanced = try await Media.balance(original)
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "the job carries the tags")
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame, "the job carries the tags")
 
         // The copy lost the original's tags and gained one of its own.
         let retagged = try Media.derive("retagged_balanced", from: balanced,
                                         ["-map", "0", "-c", "copy", "-map_metadata", "-1", "-metadata", "note=balanced"])
         let tags = await Proof.measure(original: original, balanced: retagged)
         #expect(tags.playsTheSame && !tags.isProven, "\(tags)")
-        let lost = try #require(tags.differences.first { $0.kind == .metadata && $0.heldOnlyBy == .original }, "\(tags.differences)")
+        let lost = try #require(tags.differences.first { $0.kind == .metadata && $0.heldBy == .original }, "\(tags.differences)")
         #expect(lost.what.contains("TAPE") && lost.what.contains("title"), "\(lost.what)")
-        let gained = try #require(tags.differences.first { $0.kind == .metadata && $0.heldOnlyBy == .balancedCopy }, "\(tags.differences)")
-        #expect(gained.what.contains("NOTE"), "\(gained.what)")
+        let gained = try #require(tags.differences.first { $0.kind == .metadata && $0.heldBy == .balancedCopy }, "\(tags.differences)")
+        #expect(gained.what.contains("NOTE") && !gained.what.contains("TAPE"), "\(gained.what)")
 
-        // Chapter marks: carried by the job; dropped, they are named as the original's.
+        // Chapter marks: counted and named for each file that has any.
         let marks = dir.appendingPathComponent("marks.txt")
         try ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=2000\ntitle=Two\n"
             .write(to: marks, atomically: true, encoding: .utf8)
@@ -707,11 +712,11 @@ struct BalancedCopyProofPresentationTests {
         try BalanceAudioTestMedia.runFFmpeg(["-i", original, "-i", marks.path, "-map", "0", "-map_metadata", "0", "-map_chapters", "1", "-c", "copy"],
                                             output: chaptered)
         let withMarks = try await Media.balance(chaptered)
-        #expect(await Proof.measure(original: chaptered, balanced: withMarks).isProven, "the job carries the chapter marks")
         let unmarked = try Media.derive("unmarked_balanced", from: withMarks, ["-map", "0", "-c", "copy", "-map_chapters", "-1"])
-        #expect((await Proof.measure(original: chaptered, balanced: unmarked)).differences.contains(Proof.Difference(
-            kind: .metadata, heldOnlyBy: .original,
-            what: "2 chapter marks the other file does not have: 0.000000–1.000000 title=One, 1.000000–2.000000 title=Two")))
+        func chapters(_ outcome: Proof.Outcome) -> [Proof.Difference] { outcome.differences.filter { $0.what.contains("chapter marks") } }
+        let two = Proof.Difference(kind: .metadata, heldBy: .original, what: "2 chapter marks — not compared with the other file")
+        #expect(chapters(await Proof.measure(original: chaptered, balanced: unmarked)) == [two])
+        #expect(chapters(await Proof.measure(original: chaptered, balanced: withMarks)).map(\.heldBy) == [.original, .balancedCopy])
 
         // PIN: the same streams remuxed to QuickTime lose the picture's colour-range
         // statement (full range → unstated). That changes how the same pixels are

@@ -70,18 +70,6 @@ enum BalancedCopyProofMedia {
             default: return "s16"
             }
         }
-        /// What differs between the job's own copy and its original, by kind
-        /// — measured 2026-11-17. Raw DV becomes QuickTime: a timecode
-        /// track gained, another container, tracks marked "default" (raw DV
-        /// has no such flag), the muxer's own tags. An MXF file's UMIDs are
-        /// its identity and are new in every file.
-        var expectedDifferences: [BalancedCopyProof.Difference.Kind] {
-            switch self {
-            case .rawDV: return [.track, .container, .playback, .metadata]
-            case .mxfPCM16: return [.metadata, .metadata]
-            default: return []
-            }
-        }
     }
 
     static func scratch(_ label: String) throws -> URL {
@@ -205,8 +193,16 @@ struct BalancedCopyProofMediaTests {
             Issue.record("\(wrapper.rawValue): expected the same content, got \(outcome)")
             return
         }
-        #expect(outcome.differences.map(\.kind) == wrapper.expectedDifferences, "\(outcome.differences)")
-        #expect(outcome.isProven == wrapper.expectedDifferences.isEmpty)
+        // Under the smaller rule (2026-11-17) the job's own pair is SAME CONTENT, never "proven": every
+        // file ffmpeg writes holds tags, and those are named per file and not compared.
+        #expect(!outcome.isProven && !outcome.differences.isEmpty)
+        // Nothing about the PICTURE differs except, for raw DV, the container.
+        #expect(outcome.differences.filter { $0.heldBy == nil }.map(\.kind) == (wrapper == .rawDV ? [.container] : []),
+                "\(outcome.differences)")
+        #expect(outcome.differences.filter { $0.heldBy != nil }.allSatisfy { $0.what.hasSuffix(" — not compared with the other file") })
+        // What the ORIGINAL holds outside its picture and kept sound: tags, and (QuickTime) track flags. No track.
+        let originals = outcome.differences.filter { $0.heldBy == .original }.map(\.kind)
+        #expect(originals == (wrapper.ext == "mov" ? [.playback, .metadata] : [.metadata]), "\(outcome.differences)")
         #expect(evidence.liveChannel == 0 && evidence.originalClass == .leftOnly)
         #expect(evidence.sampleFormat == wrapper.sampleFormat && evidence.sampleRateHz == 48_000)
         #expect(evidence.soundCodec.hasPrefix("pcm_"))
@@ -214,9 +210,9 @@ struct BalancedCopyProofMediaTests {
         #expect(evidence.soundStartSeconds == 0)
         // The picture: every frame decoded and held, and — the second evidence — its packets identical too.
         let picture = try #require(evidence.streams.first)
-        #expect(evidence.streams.count == 1 && picture.kind == "video" && picture.packetIdentical)
-        #expect((picture.frames ?? 0) >= 50 && picture.frames == picture.packets)
-        #expect(picture.framesSHA256?.count == 64 && picture.framesSHA256 != Proof.emptySHA256)
+        #expect(evidence.streams.count == 1 && picture.packetIdentical)
+        #expect(picture.frames >= 50 && picture.frames == picture.packets)
+        #expect(picture.framesSHA256.count == 64 && picture.framesSHA256 != Proof.emptySHA256)
         #expect(picture.packetSHA256.count == 64 && picture.packetSHA256 != picture.framesSHA256)
         #expect(evidence.originalStamp == FileIdentityStamp.capture(path: original))
         #expect(evidence.balancedStamp == FileIdentityStamp.capture(path: balanced))
@@ -230,16 +226,13 @@ struct BalancedCopyProofMediaTests {
         // Raw DV is the one wrapper whose copy changes container (.mov) and gains the muxer's timecode track.
         #expect(URL(fileURLWithPath: balanced).pathExtension == (wrapper == .rawDV ? "mov" : wrapper.ext))
         if wrapper == .rawDV {
-            #expect(outcome.differences.prefix(2) == [
-                Proof.Difference(kind: .track, heldOnlyBy: .balancedCopy, what: "a timecode track"),
-                Proof.Difference(kind: .container, heldOnlyBy: nil, what: "the original is a dv file, the balanced copy a mov file")
-            ])
-            // Nothing the ORIGINAL holds is missing from the copy: its one tag, the timecode, is on the copy's tracks.
-            #expect(outcome.differences.allSatisfy { $0.heldOnlyBy != .original }, "\(outcome.differences)")
-            #expect(outcome.differences.contains(Proof.Difference(
-                kind: .playback, heldOnlyBy: nil,
-                what: "track flags differ: picture stream 0 (the balanced copy only: default); the sound (the balanced copy only: default)")))
-            #expect(line.contains("OUTCOME SAME CONTENT, DIFFERS IN 4"))
+            // THE REAL JOB'S NORMAL PAIR: same content; the original holds its tags; the copy holds
+            // a timecode track, track flags and its own tags; and the container differs.
+            #expect(outcome.differences.map(\.kind) == [.track, .container, .playback, .metadata, .metadata], "\(outcome.differences)")
+            #expect(outcome.differences.map(\.heldBy) == [.balancedCopy, nil, .balancedCopy, .original, .balancedCopy])
+            #expect(outcome.differences[0].what == "a timecode track — not compared with the other file")
+            #expect(outcome.differences[3].what == "1 tags (timecode) — not compared with the other file")
+            #expect(line.contains("OUTCOME SAME CONTENT, DIFFERS IN 5"))
         }
     }
 
@@ -252,7 +245,7 @@ struct BalancedCopyProofMediaTests {
         let balanced = try await Media.balance(original)
 
         let outcome = await Proof.measure(original: original, balanced: balanced)
-        guard case .proven(let evidence) = outcome else { Issue.record("\(outcome)"); return }
+        guard let evidence = outcome.evidence else { Issue.record("\(outcome)"); return }
         #expect(evidence.liveChannel == 1 && evidence.originalClass == .rightOnly)
         // Truth: the digest is the RIGHT channel's, computed here by another road — and not the left's.
         let right = try Media.channelDigest(of: original, channel: 1, in: dir).digest
@@ -301,9 +294,10 @@ struct BalancedCopyProofMediaTests {
         let outcome = await Proof.measure(original: original, balanced: balanced)
         let after = try Media.folderDigest(dir)
         #expect(after == before, "the proof must not create, change or remove any file")
-        guard case .proven(let evidence) = outcome else { Issue.record("\(outcome)"); return }
+        guard let evidence = outcome.evidence else { Issue.record("\(outcome)"); return }
         let heldPicture = try #require(evidence.streams.first, "the evidence names no stream")
-        #expect(evidence.streams.map(\.kind) == ["video", "data"], "the original's timecode track is held too")
+        #expect(evidence.streams.count == 1, "the evidence is the picture; the timecode track is named, not compared")
+        #expect(outcome.differences.filter { $0.kind == .track }.map(\.heldBy) == [.original, .balancedCopy])
 
         // DECODED PICTURE, by another road: every frame written to one raw
         // file by the rawvideo muxer (the proof uses framehash), cut HERE
@@ -349,7 +343,7 @@ struct BalancedCopyProofMediaTests {
         // The log line carries exactly those digests.
         let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
         #expect(line.contains(evidence.soundSHA256) && line.contains(heldPicture.packetSHA256))
-        #expect(line.contains(heldPicture.framesSHA256 ?? "?") && line.contains(original) && line.contains(balanced))
+        #expect(line.contains(heldPicture.framesSHA256) && line.contains(original) && line.contains(balanced))
     }
 
     private func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
@@ -456,8 +450,8 @@ struct BalancedCopyProofMediaTests {
             Issue.record("no timecode: expected the same content with the track named, got \(outcome)")
             return
         }
-        #expect(differs.first == Proof.Difference(kind: .track, heldOnlyBy: .original, what: "a timecode track"), "\(differs)")
-        #expect(differs.allSatisfy { $0.heldOnlyBy != .balancedCopy }, "\(differs)")
+        #expect(differs.filter { $0.kind == .track } == [Proof.Difference(
+            kind: .track, heldBy: .original, what: "a timecode track — not compared with the other file")], "\(differs)")
         #expect(!outcome.isProven)
     }
 
@@ -512,7 +506,7 @@ struct BalancedCopyProofMediaTests {
                 == "the original could not be read as media")
 
         // And the pair itself is good: the same call with the real tools proves it.
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
     }
 
     @Test("ISOLATION: a copy that is modified while it is being read is COULD NOT CHECK, though its digests match",
@@ -538,7 +532,7 @@ struct BalancedCopyProofMediaTests {
             tools: Proof.Tools(ffmpeg: fake.path, ffprobe: ToolLocator.ffprobePath))
         #expect(outcome == .couldNotCheck("a file changed while it was being checked"))
         // The same pair, left alone, is proven.
-        #expect(await Proof.measure(original: original, balanced: balanced).isProven)
+        #expect(await Proof.measure(original: original, balanced: balanced).playsTheSame)
     }
 
     @Test("ISOLATION: a check that is cancelled says could not check", .timeLimit(.minutes(2)))
