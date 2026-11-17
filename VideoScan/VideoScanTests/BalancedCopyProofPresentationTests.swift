@@ -179,24 +179,155 @@ struct BalancedCopyProofPresentationTests {
         #expect(evidence.streams.first?.frames == 25 && evidence.soundSamples == 96_000)
         #expect(differs == [Proof.Difference(
             kind: .playback, heldOnlyBy: .original,
-            what: "stored picture an edit list does not play: the original stores 2.000 s of picture and plays 1.000 s, "
-                + "the balanced copy stores 1.000 s of picture and plays 1.000 s")], "\(differs)")
+            what: "stored picture an edit list does not play: 2.000 s stored, 1.000 s played — the hidden part is not compared with the other file")], "\(differs)")
         let line = Proof.logLine(original: original, balanced: balanced, outcome: outcome)
         #expect(line.contains("SAME CONTENT, DIFFERS IN 1") && line.contains("[playback instructions] the original holds stored picture"))
 
         // Long-GOP H.264: the hidden packets ARE carried by the job's copy, under the same edit list.
-        // Both files store the same two seconds and play the same one: nothing differs.
+        // Both files store two seconds and play the same one — and since the hidden second is neither
+        // decoded nor hashed, each is named as holding its own (Codex #307-2). Never "proven".
         let long = try Lab.make("whole_long.mov", in: dir, video: Self.longGOP)
         let (hides, _) = try Lab.patched(long, as: "test_hides_long.mov", after: "elst", offset: 8) { $0 / 2 }
         let carried = try await Media.balance(hides)
         let same = await Proof.measure(original: hides, balanced: carried)
-        #expect(same.isProven, "\(same)")
+        #expect(same.differences.map(\.heldOnlyBy) == [.original, .balancedCopy] && !same.isProven, "\(same)")
         #expect(same.evidence?.streams.first?.frames == 25 && same.evidence?.streams.first?.packets == 50,
                 "25 frames play; all 50 stored packets are in the copy, identical")
         // And against the copy that plays ALL of it, the hiding original is not the same.
         let wholeCopy = try await Media.balance(long)
         #expect(await Proof.measure(original: hides, balanced: wholeCopy)
                 == .notProven(.pictureDiffers(originalIndex: 0, "25 frames play in the original, 50 in the balanced copy")))
+    }
+
+    @Test("#307-2: two files that hide the SAME LENGTH of DIFFERENT pictures (a green tail, a blue tail) are never PROVEN — the original's hidden media is named as its own",
+          .timeLimit(.minutes(2)))
+    func equalLengthsOfDifferentHiddenMediaAreNamed() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("p72tails")
+        defer { try? fm.removeItem(at: dir) }
+        /// One second of red, then one second of `tail`, all-intra ProRes.
+        func film(_ name: String, tail: String, channels: String) throws -> String {
+            let out = dir.appendingPathComponent(name).path
+            try BalanceAudioTestMedia.runFFmpeg(
+                ["-f", "lavfi", "-i", "color=red:s=320x240:r=25:d=1", "-f", "lavfi", "-i", "color=\(tail):s=320x240:r=25:d=1",
+                 "-f", "lavfi", "-i", "aevalsrc=\(channels):s=48000:d=2",
+                 "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2:a",
+                 "-c:v", "prores_ks", "-profile:v", "0", "-c:a", "pcm_s16le"], output: out)
+            return try Lab.patched(out, as: "hides_" + name, after: "elst", offset: 8) { $0 / 2 }.path
+        }
+        let original = try film("test_green.mov", tail: "green", channels: Media.leftOnly)
+        let copy = try film("blue_balanced.mov", tail: "blue", channels: "\(Media.tone)|\(Media.tone)")
+        // By another road: what plays is the same red second; what is STORED is not the same.
+        #expect(await Lab.playedFrames(of: original) == "25")
+        #expect(await Lab.packetRows(of: copy, stream: "v:0") == (await Lab.packetRows(of: original, stream: "v:0")))
+        func stored(_ path: String) async -> String {
+            await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-ignore_editlist", "1", "-select_streams", "v:0", "-show_packets",
+                                                       "-show_data_hash", "sha256", "-show_entries", "packet=data_hash", "-of", "csv=p=0", path])
+        }
+        let (ours, theirs) = (await stored(original), await stored(copy))
+        #expect(ours.split(separator: "\n").count == 50 && ours != theirs)
+
+        let outcome = await Proof.measure(original: original, balanced: copy)
+        #expect(!outcome.isProven, "a green tail only the original stores went unnamed: \(outcome)")
+        #expect(outcome.differences.contains { $0.kind == .playback && $0.heldOnlyBy == .original
+            && $0.what.hasPrefix("stored picture an edit list does not play: 2.000 s stored, 1.000 s played") }, "\(outcome)")
+    }
+
+    // MARK: #307-1 — a picture that changes size
+
+    @Test("#307-1: an original whose picture doubles in size half way, and a copy scaled back to the first size throughout, are NOT THE SAME — nothing is scaled before it is hashed",
+          .timeLimit(.minutes(2)))
+    func aPictureScaledBackToItsFirstSizeIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("p71scale")
+        defer { try? fm.removeItem(at: dir) }
+        func part(_ name: String, size: String) throws -> String {
+            let out = dir.appendingPathComponent(name).path
+            try BalanceAudioTestMedia.runFFmpeg(
+                ["-f", "lavfi", "-i", "testsrc2=s=\(size):r=25:d=1", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0",
+                 "-pix_fmt", "yuv420p", "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+                 "-f", "h264"], output: out)
+            return out
+        }
+        let joined = dir.appendingPathComponent("joined.h264")
+        try (Data(contentsOf: URL(fileURLWithPath: try part("small.h264", size: "64x48")))
+             + Data(contentsOf: URL(fileURLWithPath: try part("large.h264", size: "128x96")))).write(to: joined)
+        let original = dir.appendingPathComponent("test_grows.mkv").path
+        try BalanceAudioTestMedia.runFFmpeg(
+            ["-r", "25", "-i", joined.path, "-f", "lavfi", "-i", "aevalsrc=\(Media.leftOnly):s=48000:d=2",
+             "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "pcm_s16le"], output: original)
+        // The copy: sound balanced, picture re-encoded losslessly — with ffmpeg's default scaling back to 64×48.
+        let copy = try Media.derive("scaled_balanced", from: original,
+                                    ["-map", "0", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-pix_fmt", "yuv420p",
+                                     "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+                                     "-af", "pan=stereo|c0=c0|c1=c0", "-c:a", "pcm_s16le"])
+        // By another road: the original really shows two sizes, the copy one.
+        func sizes(_ path: String) async -> Set<String> {
+            Set(await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_frames",
+                                                           "-show_entries", "frame=width", "-of", "csv=p=0", path])
+                .split(separator: "\n").compactMap { $0.split(separator: ",").first.map(String.init) })
+        }
+        #expect(await sizes(original) == ["64", "128"])
+        #expect(await sizes(copy) == ["64"])
+
+        let outcome = await Proof.measure(original: original, balanced: copy)
+        #expect(!outcome.playsTheSame, "half the picture lost its size and detail and the copy was the same: \(outcome)")
+        // (End to end the original's pass is could-not-check first: the size change restarts the
+        // filter graph and the peak meter reports twice. So the scaler is pinned on the decode
+        // pass itself:) the production arguments, run on both files, must fold to DIFFERENT
+        // picture digests — with ffmpeg's default scaler they fold to the same one.
+        func pictureDigest(_ path: String) async -> Proof.PictureRead? {
+            let plan = Proof.DecodePlan(pictures: [.init(index: 0, pixelFormat: "yuv420p")], soundIndex: 1,
+                                        sampleFormat: "s16", sampleRateHz: 48_000, channels: [0])
+            let ledger = Proof.FrameLedger(roles: plan.roles, sampleRateHz: 48_000)
+            let run = await ProcessRunner.runProcess(
+                executable: ToolLocator.ffmpegPath,
+                arguments: Proof.decodeArgs(input: path, inputArgs: [], plan: plan, hashCodec: "pcm_s16le"),
+                stdoutLine: { ledger.note($0) }, stdoutLimitBytes: 0, deadlineSeconds: 60)
+            return run.exitCode == 0 && ledger.fault == nil ? ledger.played.pictures[0] : nil
+        }
+        let grows = try #require(await pictureDigest(original), "the growing picture decodes")
+        let scaled = try #require(await pictureDigest(copy))
+        #expect(grows.frames == 50 && scaled.frames == 50)
+        #expect(grows.sha256 != scaled.sha256, "a picture scaled back to its first size hashed as the original")
+    }
+
+    // MARK: #307-3 — a subtitle's styles
+
+    @Test("#307-3: a copy whose captions are the same packets in another STYLE (white turned red in the track's configuration) is NOT THE SAME",
+          .timeLimit(.minutes(2)))
+    func changedSubtitleConfigurationIsRefused() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("p73ass")
+        defer { try? fm.removeItem(at: dir) }
+        let captions = dir.appendingPathComponent("captions.srt")
+        try "1\n00:00:00,200 --> 00:00:00,900\nhello\n\n2\n00:00:01,100 --> 00:00:01,800\nworld\n"
+            .write(to: captions, atomically: true, encoding: .utf8)
+        let original = dir.appendingPathComponent("test_styled.mkv").path
+        try BalanceAudioTestMedia.runFFmpeg(
+            ["-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=25",
+             "-f", "lavfi", "-i", "aevalsrc=\(Media.leftOnly):s=48000:d=2", "-i", captions.path,
+             "-map", "0:v", "-map", "1:a", "-map", "2:s", "-c:v", "ffv1", "-c:a", "pcm_s16le", "-c:s", "ass"],
+            output: original)
+        let balanced = try await Media.balance(original)
+        #expect(await Proof.measure(original: original, balanced: balanced).isProven, "the job carries captions and their styles")
+        // The same captions with the default style's colour changed: only the track's header differs.
+        let script = dir.appendingPathComponent("styles.ass")
+        try BalanceAudioTestMedia.runFFmpeg(["-i", balanced, "-map", "0:s:0", "-c", "copy"], output: script.path)
+        let white = try String(contentsOf: script, encoding: .utf8)
+        #expect(white.contains("&Hffffff") || white.contains("&H00FFFFFF"), "the default style is white")
+        let red = white.replacingOccurrences(of: "&Hffffff,&Hffffff", with: "&H0000ff,&Hffffff")
+            .replacingOccurrences(of: "&H00FFFFFF,&H00FFFFFF", with: "&H000000FF,&H00FFFFFF")
+        #expect(red != white)
+        try red.write(to: script, atomically: true, encoding: .utf8)
+        let restyled = try Media.derive("restyled_balanced", from: balanced,
+                                        ["-map", "0:v", "-map", "0:a", "-map", "1:s", "-c", "copy"], secondInput: script.path)
+        #expect(await Lab.packetRows(of: restyled, stream: "s:0") == (await Lab.packetRows(of: balanced, stream: "s:0")),
+                "the caption packets are untouched")
+
+        let outcome = await Proof.measure(original: original, balanced: restyled)
+        #expect(outcome == .notProven(.carriedStreamDiffers(kind: "subtitle", originalIndex: 2,
+                                                            "its codec configuration is not the original's")), "\(outcome)")
     }
 
     // MARK: Two-track DV
@@ -532,7 +663,8 @@ struct BalancedCopyProofPresentationTests {
         #expect(await Proof.measure(original: chaptered, balanced: withMarks).isProven, "the job carries the chapter marks")
         let unmarked = try Media.derive("unmarked_balanced", from: withMarks, ["-map", "0", "-c", "copy", "-map_chapters", "-1"])
         #expect((await Proof.measure(original: chaptered, balanced: unmarked)).differences.contains(Proof.Difference(
-            kind: .metadata, heldOnlyBy: .original, what: "chapter marks (2 in the original, 0 in the balanced copy)")))
+            kind: .metadata, heldOnlyBy: .original,
+            what: "2 chapter marks the other file does not have: 0.000000–1.000000 One, 1.000000–2.000000 Two")))
 
         // PIN: the same streams remuxed to QuickTime lose the picture's colour-range
         // statement (full range → unstated). That changes how the same pixels are

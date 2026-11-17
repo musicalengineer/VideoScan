@@ -78,7 +78,7 @@ enum BalancedCopyProofMedia {
         var expectedDifferences: [BalancedCopyProof.Difference.Kind] {
             switch self {
             case .rawDV: return [.track, .container, .playback, .metadata]
-            case .mxfPCM16: return [.metadata]
+            case .mxfPCM16: return [.metadata, .metadata]
             default: return []
             }
         }

@@ -9556,11 +9556,14 @@
         "aCopyThatStartsLateAsAWholeIsRefused",
         "aFrameThatNeedsConvertingIsCouldNotCheck",
         "aPassThatCannotBeBelievedIsCouldNotCheck",
+        "aPictureScaledBackToItsFirstSizeIsRefused",
         "aTrackSwitchedOffIsRefused",
         "changedPaletteIsRefused",
+        "changedSubtitleConfigurationIsRefused",
         "containerAndMetadataAreNamed",
         "decoderConfigurationIsNamed",
         "editListHidingPictureWithIdenticalPacketsIsRefused",
+        "equalLengthsOfDifferentHiddenMediaAreNamed",
         "headerDurationThatLiesIsCouldNotCheck",
         "interiorSoundRetimeIsRefused",
         "losslessReencodeIsNamed",
@@ -40445,7 +40448,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 722,
+      "expected_floor": 725,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

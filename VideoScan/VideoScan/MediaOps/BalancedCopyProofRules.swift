@@ -287,6 +287,12 @@ extension BalancedCopyProof {
                 return .couldNotCheck("\(name) gave no packets to compare")
             }
             guard !original.isPicture else { continue }
+            // Not decoded here, so nothing answers for its configuration but
+            // the configuration itself (a subtitle's styles are in its extradata).
+            guard original.configuration == copy.configuration else {
+                return .notProven(.carriedStreamDiffers(kind: original.kind, originalIndex: original.index,
+                                                        "its codec configuration is not the original's"))
+            }
             guard a.count == b.count else {
                 return .notProven(.carriedStreamDiffers(kind: original.kind, originalIndex: original.index,
                                                         "\(a.count) packets, the balanced copy \(b.count)"))
@@ -479,19 +485,21 @@ extension BalancedCopyProof {
         return stored - played
     }
 
-    /// One stream that an edit list plays less of in one file than in the other.
-    private static func playbackDifference(_ thing: String, originalStored: Double?, originalPlayed: Double,
-                                           copyStored: Double?, copyPlayed: Double) -> Difference? {
-        let ours = hidden(stored: originalStored, played: originalPlayed)
-        let theirs = hidden(stored: copyStored, played: copyPlayed)
-        guard abs(ours - theirs) > timingSlackCeilingSeconds else { return nil }
-        func says(_ stored: Double?, _ played: Double) -> String {
-            "stores \(length(stored ?? played)) of \(thing) and plays \(length(played))"
+    /// Media a file STORES and an edit list does not play, one difference per
+    /// file that has any. The hidden part is not decoded and (the packet
+    /// pass reads through the edit list) not hashed, so two files that hide
+    /// the same LENGTH are not known to hide the same media: each is named
+    /// as holding its own (Codex #307-2).
+    private static func hiddenDifferences(_ thing: String, originalStored: Double?, originalPlayed: Double,
+                                          copyStored: Double?, copyPlayed: Double) -> [Difference] {
+        let sides: [(Difference.Holder, Double?, Double)] = [(.original, originalStored, originalPlayed),
+                                                             (.balancedCopy, copyStored, copyPlayed)]
+        return sides.compactMap { holder, stored, played in
+            guard let stored, hidden(stored: stored, played: played) > 0 else { return nil }
+            return Difference(kind: .playback, heldOnlyBy: holder,
+                              what: "stored \(thing) an edit list does not play: \(length(stored)) stored, \(length(played)) "
+                                + "played — the hidden part is not compared with the other file")
         }
-        return Difference(
-            kind: .playback, heldOnlyBy: ours > theirs ? .original : .balancedCopy,
-            what: "stored \(thing) an edit list does not play: the original \(says(originalStored, originalPlayed)), "
-                + "the balanced copy \(says(copyStored, copyPlayed))")
     }
 
     /// Every "key=value" a file states, on the container or on any stream.
@@ -504,7 +512,7 @@ extension BalancedCopyProof {
     private struct TagTally {
         var originalHas: Set<String>
         var copyHas: Set<String>
-        var found: [Difference.Holder?: [String]] = [:]
+        var found: [Difference.Holder: [String]] = [:]
 
         /// Tags one file has and the other has not, or states differently.
         /// `scope` names where they are ("", "stream 1 "). A tag the other
@@ -513,7 +521,12 @@ extension BalancedCopyProof {
         mutating func compare(_ original: [String: String], _ copy: [String: String], scope: String) {
             for key in Set(original.keys).union(copy.keys).sorted() {
                 switch (original[key], copy[key]) {
-                case (let a?, let b?): if a != b { found[nil, default: []].append(scope + key) }
+                case (let a?, let b?):
+                    // Another value: each file holds one the other has not.
+                    if a != b {
+                        found[.original, default: []].append("\(scope)\(key) (\"\(a.prefix(40))\")")
+                        found[.balancedCopy, default: []].append("\(scope)\(key) (\"\(b.prefix(40))\")")
+                    }
                 case (let a?, nil): if !copyHas.contains("\(key)=\(a)") { found[.original, default: []].append(scope + key) }
                 case (nil, let b?): if !originalHas.contains("\(key)=\(b)") { found[.balancedCopy, default: []].append(scope + key) }
                 case (nil, nil): break
@@ -574,11 +587,10 @@ extension BalancedCopyProof {
                                   what: "picture stream \(original.index)'s decoder configuration (extradata) is "
                                     + "written differently; \(every)"))
         }
-        if let a = facts.originalRead?.pictures[original.index], let b = facts.balancedRead?.pictures[copy.index],
-           let hidden = playbackDifference("picture", originalStored: original.storedSeconds,
-                                           originalPlayed: a.endSeconds - a.firstSeconds,
-                                           copyStored: copy.storedSeconds, copyPlayed: b.endSeconds - b.firstSeconds) {
-            out.append(hidden)
+        if let a = facts.originalRead?.pictures[original.index], let b = facts.balancedRead?.pictures[copy.index] {
+            out += hiddenDifferences("picture", originalStored: original.storedSeconds,
+                                     originalPlayed: a.endSeconds - a.firstSeconds,
+                                     copyStored: copy.storedSeconds, copyPlayed: b.endSeconds - b.firstSeconds)
         }
         return out
     }
@@ -586,14 +598,11 @@ extension BalancedCopyProof {
     /// Sound an edit list hides, and track flags set in one file only.
     private static func soundPlaybackDifferences(_ facts: Facts, pairing: Pairing, kept: SoundStream,
                                                  copySound: SoundStream) -> [Difference] {
-        var out: [Difference] = []
-        if let hidden = playbackDifference(
+        var out = hiddenDifferences(
             "sound", originalStored: kept.storedSeconds,
             originalPlayed: Double(facts.originalRead?.soundSamples ?? 0) / Double(max(kept.sampleRateHz, 1)),
             copyStored: copySound.storedSeconds,
-            copyPlayed: Double(facts.balancedRead?.soundSamples ?? 0) / Double(max(copySound.sampleRateHz, 1))) {
-            out.append(hidden)
-        }
+            copyPlayed: Double(facts.balancedRead?.soundSamples ?? 0) / Double(max(copySound.sampleRateHz, 1)))
         var flags = pairing.pictures.compactMap { pair -> String? in
             let original = facts.original.carried[pair.original]
             return flagPhrase("picture stream \(original.index)", original.flags, facts.balanced.carried[pair.balanced].flags)
@@ -609,10 +618,15 @@ extension BalancedCopyProof {
     private static func metadataDifferences(_ facts: Facts, pairing: Pairing, kept: SoundStream,
                                             copySound: SoundStream) -> [Difference] {
         var out: [Difference] = []
-        if facts.original.chapters != facts.balanced.chapters {
-            let (ours, theirs) = (facts.original.chapters.count, facts.balanced.chapters.count)
-            out.append(Difference(kind: .metadata, heldOnlyBy: ours > theirs ? .original : (theirs > ours ? .balancedCopy : nil),
-                                  what: "chapter marks (\(ours) in the original, \(theirs) in the balanced copy)"))
+        // A chapter mark is one file's alone unless the other has the same mark (times and title).
+        let sides: [(Difference.Holder, [String], [String])] = [(.original, facts.original.chapters, facts.balanced.chapters),
+                                                               (.balancedCopy, facts.balanced.chapters, facts.original.chapters)]
+        for (holder, mine, others) in sides {
+            let alone = mine.filter { !others.contains($0) }
+            if !alone.isEmpty {
+                out.append(Difference(kind: .metadata, heldOnlyBy: holder,
+                                      what: "\(alone.count) chapter marks the other file does not have: \(named(alone))"))
+            }
         }
         var tags = TagTally(originalHas: everyTag(facts.original), copyHas: everyTag(facts.balanced))
         tags.compare(facts.original.tags, facts.balanced.tags, scope: "")
@@ -626,9 +640,6 @@ extension BalancedCopyProof {
         }
         if let only = tags.found[.balancedCopy] {
             out.append(Difference(kind: .metadata, heldOnlyBy: .balancedCopy, what: "tags the original does not have: \(named(only))"))
-        }
-        if let changed = tags.found[nil] {
-            out.append(Difference(kind: .metadata, heldOnlyBy: nil, what: "tags with different values: \(named(changed))"))
         }
         return out
     }

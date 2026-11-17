@@ -408,7 +408,10 @@ extension BalancedCopyProof {
         args += ["-map", "[timeline]"]
         for n in plan.channels.indices { args += ["-map", "[ch\(n)]"] }
         if !plan.pictures.isEmpty {
-            args += ["-c:v", "rawvideo", "-fps_mode", "passthrough", "-enc_time_base:v", "demux"]
+            // `-noautoscale`: a picture that changes size mid-stream is NOT
+            // scaled back to its first size before it is hashed (Codex #307-1;
+            // measured: with ffmpeg's default both halves hash as 64×48).
+            args += ["-c:v", "rawvideo", "-noautoscale", "-fps_mode", "passthrough", "-enc_time_base:v", "demux"]
         }
         return args + ["-c:a", hashCodec, "-f", "framehash", "-hash", "sha256", "-"]
     }
