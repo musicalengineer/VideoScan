@@ -126,7 +126,7 @@ struct FrameSearchStoreBehaviourTests {
         #expect(two.filename == "two.mov" && two.removed, "a removed copy reads as removed")
         #expect(two.id == FrameIndex.cacheKey(model: "test/stub-siglip", digest: ObsFixture.digest(2), seconds: 2))
         #expect(two.sourceWords == "SigLIP 2 (test/stub-siglip), similarity 1.00")
-        #expect(store.reveal(two) && asked == [UUID(uuidString: rows[0].fileID)!], "the reveal door is asked for the row's own file")
+        #expect(store.reveal(two) && asked.map(\.uuidString) == [rows[0].fileID], "the reveal door is asked for the row's own file")
 
         await store.search("axis 3")
         let three = store.hits[0]

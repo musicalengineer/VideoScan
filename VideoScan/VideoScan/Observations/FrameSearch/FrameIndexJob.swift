@@ -175,7 +175,7 @@ enum FrameIndexEngine {
         } catch is CancellationError {
             return .deferred(.stopped)
         } catch {
-            return decodeFailed(error.localizedDescription)
+            return decodeFailed(FailureWords.of(error))
         }
         guard !decoded.isEmpty else { return decodeFailed("no frame of \(times.count) could be decoded") }
 
@@ -191,7 +191,7 @@ enum FrameIndexEngine {
         } catch SigLIPError.badImage {
             return .unreadable(SigLIPError.badImage.localizedDescription)
         } catch {
-            return Task.isCancelled ? .deferred(.stopped) : .deferred(.modelUnavailable(error.localizedDescription))
+            return Task.isCancelled ? .deferred(.stopped) : .deferred(.modelUnavailable(FailureWords.of(error)))
         }
     }
 
@@ -457,8 +457,9 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
             rows = try await loadFiles(scope)
         } catch {
             wasRefused = true
-            note("refused — the catalog could not be read (\(error.localizedDescription)). Nothing was read or written.")
-            let message = "Refused — the catalog could not be read: \(error.localizedDescription)"
+            let why = FailureWords.of(error)
+            note("refused — the catalog could not be read (\(why)). Nothing was read or written.")
+            let message = "Refused — the catalog could not be read: \(why)"
             outcome = .refused(message)
             state = .failed(message: message)
             return
@@ -594,7 +595,7 @@ final class FrameIndexJob: @MainActor MediaFileOperationJob {
             lastSave = Date()
             onSaved?(written)
         } catch {
-            let why = error.localizedDescription
+            let why = FailureWords.of(error)
             note("could not save the frame index (\(point.rawValue)): \(why)")
             saveProblem = why
             if failure == nil { failure = .saveFailed(at: point, why: why) }

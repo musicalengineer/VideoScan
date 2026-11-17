@@ -99,6 +99,24 @@ struct ObservationsLoader {
     }
 }
 
+/// An error in the words it carries — the ONE rule this module shows and logs a failure by.
+///
+/// A `LocalizedError` says its own (`errorDescription`). A plain Swift error (a `Refusal`, a repository or
+/// SQLite error) has nothing for Foundation, whose `localizedDescription` is then the boilerplate "The
+/// operation couldn’t be completed. (VideoScanCore.Refusal error 1.)" — its `description` is what it means
+/// ("catalog.sqlite is not open in this session — there is nothing to read"). A Foundation error (Cocoa,
+/// POSIX, AVFoundation) keeps Foundation's sentence.
+///
+/// (For Rick: `what()` for three families of exception that each keep their message somewhere else. A Swift
+/// error with no NSError bridging of its own is given its type's name as its NSError domain; that is the test.)
+enum FailureWords {
+    static func of(_ error: any Error) -> String {
+        if let said = (error as? any LocalizedError)?.errorDescription { return said }
+        let plainSwift = (error as NSError).domain == String(reflecting: type(of: error))
+        return plainSwift ? "\(error)" : error.localizedDescription
+    }
+}
+
 /// Latest wins: the state of ONE kind of request (a load, a search) where only the newest answer may be shown.
 ///
 /// The request is named by its `key` (scope, or scope + words). `begin` cancels the request it replaces and
@@ -194,10 +212,10 @@ final class ObservationsStore: ObservableObject {
     // What the view reads — each one a reading of the request's phase, never a flag of its own.
     var report: ObservationsReport? { reportRun.value }
     var loading: Bool { reportRun.isLoading }
-    var failure: String? { reportRun.failure.map { "\($0)" } }
+    var failure: String? { reportRun.failure.map(FailureWords.of) }
     var search: ObservationsSearch? { searchRun.value }
     var searching: Bool { searchRun.isLoading }
-    var searchFailure: String? { searchRun.failure.map { "\($0)" } }
+    var searchFailure: String? { searchRun.failure.map(FailureWords.of) }
 
     /// Read the report for the scope (a newer request cancels an older one).
     func load() async {
@@ -213,7 +231,8 @@ final class ObservationsStore: ObservableObject {
             let took = ContinuousClock.now - started
             loader.note("read \(scope.words): \(built.files.formatted()) files, \(built.analyzed.formatted()) analyzed, in \(took.formatted(.units(allowed: [.milliseconds])))")
         case .failure(let error):
-            if said.insert("\(error)").inserted { loader.note("could not be read for \(scope.words) — \(error)") }
+            let why = FailureWords.of(error)
+            if said.insert(why).inserted { loader.note("could not be read for \(scope.words) — \(why)") }
         }
     }
 
@@ -242,7 +261,7 @@ final class ObservationsStore: ObservableObject {
         case .success(let found):
             loader.note("searched \"\(query)\" in \(request.scope.words): \(found.hits.count.formatted()) hit\(found.hits.count == 1 ? "" : "s")\(found.truncated ? " (capped)" : "")")
         case .failure(let error):
-            loader.note("the search for \"\(query)\" in \(request.scope.words) could not be read — \(error)")
+            loader.note("the search for \"\(query)\" in \(request.scope.words) could not be read — \(FailureWords.of(error))")
         }
     }
 

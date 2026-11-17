@@ -168,18 +168,18 @@ struct FrameIndexEngineTests {
         #expect(rule(online: true, exists: true) == nil)
     }
 
-    @Test func aBigFrameIsShrunkToTheEdgeKeepingItsShapeAndASmallOneIsLeftAlone() {
+    @Test func aBigFrameIsShrunkToTheEdgeKeepingItsShapeAndASmallOneIsLeftAlone() throws {
         let wide = FrameIndexEngine.thumbnail(FrameSearchTestCards.pixels(size: 800) { x, _ in (UInt8(x % 256), 0, 0) }, maxEdge: 336)
         #expect(wide.width == 336 && wide.height == 336)
         let small = card(64)
         let kept = FrameIndexEngine.thumbnail(small, maxEdge: 336)
         #expect(kept === small, "nothing to shrink: the same image, not a copy")
         // 400 × 100 → 320 × 80 (the grid's thumbnails).
-        let ctx = CGContext(data: nil, width: 400, height: 100, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        let ctx = try #require(CGContext(data: nil, width: 400, height: 100, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                         bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 100))
-        let strip = FrameIndexEngine.thumbnail(ctx.makeImage()!, maxEdge: 320)
+        let strip = FrameIndexEngine.thumbnail(try #require(ctx.makeImage()), maxEdge: 320)
         #expect(strip.width == 320 && strip.height == 80)
         let px = SigLIPPixels.normalizedHWC(strip, size: 4) ?? []
         #expect(px.count == 48 && px[0] > 0.95 && px[1] < -0.95 && px[2] < -0.95, "the picture survives the shrink (red stays red): \(px.prefix(3))")

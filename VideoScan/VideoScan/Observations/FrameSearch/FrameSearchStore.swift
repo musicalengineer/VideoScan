@@ -201,8 +201,11 @@ final class FrameSearchStore: ObservableObject {
     @Published private(set) var jobLine: String?
 
     let loader: FrameSearchLoader
-    /// The current scope's files, kept between searches (dropped with the scope).
+    /// The current scope's files, kept between searches — dropped with the scope, and whenever a newer index is
+    /// shown: a video catalogued and indexed since these rows were read is in that index and must be findable.
     private var scopeFiles: [String: CatalogRow.FrameIndexFile]?
+    /// How many index looks have been shown. Rows a search read under an older look are not kept.
+    private var indexLooksShown = 0
     private var warming: Task<Void, Never>?
     private var jobWatch: AnyCancellable?
 
@@ -215,7 +218,7 @@ final class FrameSearchStore: ObservableObject {
     var hits: [FrameHit] { searchRun.value?.hits ?? [] }
     var query: String? { searchRun.key?.query }
     var searching: Bool { searchRun.isLoading }
-    var failure: String? { searchRun.failure?.localizedDescription }
+    var failure: String? { searchRun.failure.map(FailureWords.of) }
     var timing: String? { searchRun.value?.timing }
 
     /// The standing line: a reading of the newest index, never a field of its own. (O(1): the counts are already made.)
@@ -253,6 +256,8 @@ final class FrameSearchStore: ObservableObject {
         let ticket = indexRun.begin(loader.modelID, look)
         let result = await ticket.result
         guard indexRun.finish(ticket, result) else { return false }
+        indexLooksShown += 1
+        scopeFiles = nil
         if case .success(let read) = result, case .unreadable(let why) = read.status {
             loader.note("the frame index cannot be used: \(why)")
         }
@@ -281,7 +286,7 @@ final class FrameSearchStore: ObservableObject {
         }
         let request = Request(scope: scope, query: text)
         let embed = loader.embedText, files = loader.files
-        let index = index, known = scopeFiles
+        let index = index, known = scopeFiles, look = indexLooksShown
         let k = Self.pageSize, cap = Self.perContent
         let ticket = searchRun.begin(request) {
             guard let index else { return Found() }   // no usable index: nothing to ask; the standing line says why
@@ -309,10 +314,10 @@ final class FrameSearchStore: ObservableObject {
         switch result {
         case .success(let found):
             guard let rows = found.rows else { return }
-            scopeFiles = rows
+            if look == indexLooksShown { scopeFiles = rows }
             loader.note("searched \"\(text)\" in \(request.scope.words): \(found.hits.count) frame hit\(found.hits.count == 1 ? "" : "s"), best \(found.hits.first.map { String(format: "%.3f", $0.score) } ?? "—"); \(found.timing ?? "")")
         case .failure(let error):
-            loader.note("the search for \"\(text)\" in \(request.scope.words) could not run — \(error.localizedDescription)")
+            loader.note("the search for \"\(text)\" in \(request.scope.words) could not run — \(FailureWords.of(error))")
         }
     }
 
@@ -324,6 +329,13 @@ final class FrameSearchStore: ObservableObject {
     func buildIndex() {
         guard let job = loader.startIndex(scope, { [weak self] saved in Task { await self?.show(saved: saved) } }) else {
             jobLine = "The Media File Operations center is not available in this window."
+            return
+        }
+        guard job.state.isActive else {
+            // Already over — refused before it started (a viewer Mac). It will never change again, so there is
+            // nothing to watch: say why and leave the button as it was.
+            self.job = nil
+            if case .failed(let message) = job.state { jobLine = message } else { jobLine = nil }
             return
         }
         watch(job)

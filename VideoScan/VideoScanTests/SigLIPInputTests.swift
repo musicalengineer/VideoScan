@@ -46,7 +46,7 @@ struct SigLIPInputTests {
     @Test func aFrameOfAnyShapeIsSquashedToTheSquareNotCropped() throws {
         // 400 × 100: the left half red, the right half blue. Cropping to a square would lose one colour.
         let ctx = try #require(CGContext(data: nil, width: 400, height: 100, bitsPerComponent: 8, bytesPerRow: 0,
-                                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+                                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
         ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))

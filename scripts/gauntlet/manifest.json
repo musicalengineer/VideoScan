@@ -36246,6 +36246,23 @@
         "everyAskedTimeDecodesToThePictureThatIsThere",
         "theFiveContainersThroughTheJobAreFoundByColourAtTheRightTimes"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FrameSearchRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FrameSearchRegressionTests"
+      ],
+      "tests": [
+        "aDecoderOrModelRefusalIsRecordedInItsOwnWords",
+        "aJobThatWasRefusedIsNotWatchedAndItsReasonIsSaid",
+        "aRefusalReachesTheJobsFailedLineInItsOwnWords",
+        "aRefusalReachesTheWindowInItsOwnWords",
+        "aVideoCataloguedAndIndexedAfterTheFirstSearchIsFound",
+        "everyFamilyOfErrorIsSaidInTheWordsItCarries",
+        "rowsReadBeforeANewerIndexWasShownAreNotKept"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -40124,7 +40141,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 604,
+      "expected_floor": 611,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40331,7 +40348,8 @@
         "VideoScanTests/CatalogSweepWaitLineTests",
         "VideoScanTests/CatalogSweepFinalTests",
         "VideoScanTests/FileJourneyLadderRegressionTests",
-        "VideoScanTests/FrameIndexMediaMatrixTests"
+        "VideoScanTests/FrameIndexMediaMatrixTests",
+        "VideoScanTests/FrameSearchRegressionTests"
       ]
     },
     {
