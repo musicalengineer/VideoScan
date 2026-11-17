@@ -91,13 +91,15 @@ struct AnthropicBrain: HallieBrainBackend {
             effort: Self.composeEffort)
         let root = try await send(request)
         // A refusal's text is not a composed answer; the composer falls back
-        // to its template. (Prose cut off at the limit is still prose.)
+        // to its template. Neither is a reply stopped at the limit: with no
+        // text the allowance went on thinking; with text the sentence is
+        // cut mid-way, and an unfinished sentence shown unmarked is not an
+        // answer (Codex #299).
         let stop = root["stop_reason"] as? String
         if stop == "refusal" { throw HallieBrainError.cloudRefused }
+        if stop == "max_tokens" { throw HallieBrainError.cloudTruncated }
         let text = Self.textBlocks(root)
         guard !text.isEmpty else {
-            // No text at the limit means the allowance went on thinking.
-            if stop == "max_tokens" { throw HallieBrainError.cloudTruncated }
             throw NLTranslatorError.badResponse(
                 "empty message content (stop_reason=\(stop ?? "none"))")
         }
