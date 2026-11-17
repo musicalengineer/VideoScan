@@ -6077,13 +6077,15 @@
       "tests": [
         "aFailedLevelsPassIsNotDamage",
         "aSoundTrackThatWasNotMeasuredIsNotBalanced",
+        "balanceStepRunsForOneSidedOnly",
         "damageFindingsStayDamaged",
         "healthyStereoAndDualMonoAreBalanced",
         "imbalanceFindingWithTwoLiveTracksIsRefusedNotFixable",
         "leftOnlyIsFixableWithTheVerdictWording",
         "levelsLineShowsNumbersAndSilence",
+        "monoIsNotSomethingToFix",
         "noAudioStreamIsItsOwnCase",
-        "rightOnlyAndMonoAreFixable",
+        "rightOnlyIsFixable",
         "surroundSilentAndMultiTrackAreRefusedInPlainWords"
       ]
     },
@@ -6724,6 +6726,8 @@
         "nonRecommendedClassesHaveNoNeeds",
         "notRecommendedIsUnavailableWithAReason",
         "okWithANoteIsNotAnAudioCheck",
+        "oneSidedNeedsBalancing",
+        "oneSidedSortsAfterRepairAndBeforeTheDate",
         "onlyNeverVerifiedNeedsAudioChecked",
         "promoteEnablement",
         "readinessSheetIsItemDriven",
@@ -6731,6 +6735,7 @@
         "readyWithNothingMissingIsReadyToArchive",
         "rowCarriesWordsReadinessAndRouteTogether",
         "rowShowsNoGradeNoScoreAndAllFiveButtons",
+        "soundFactsStayReady",
         "tenRowsAPage",
         "tenThousandRowsBuildInsideTheBudget",
         "threeOrMoreNeedsSayAndMore",
@@ -7067,7 +7072,8 @@
         "twoMinuteFloorForAll",
         "twoMinuteFloorSensor",
         "unusableOriginalKeepsExport",
-        "wholeTapeBeatsEdit"
+        "wholeTapeBeatsEdit",
+        "willBalanceOnlyForOneSided"
       ]
     },
     {
@@ -7747,8 +7753,12 @@
         "dvPromotesWithToken",
         "familyDateStandsInForAnUndatedTwin",
         "headerCompatibility",
+        "oneSidedIsFlaggedNotRefused",
+        "refusableSoundIsTheProblem",
         "safeCodecs",
         "scale",
+        "sheetAgreesWithTheNoSoundFloor",
+        "soundFactsAreNotProblems",
         "tokenAndSummary",
         "unknownCodec",
         "unprobeableNeedsOverride",
@@ -38878,7 +38888,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3760,
+      "expected_floor": 3763,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [

@@ -132,8 +132,12 @@ struct ArchivePromotePlan: Sendable {
     var allowUnprobeable: Bool = false
 
     // MARK: Readiness counters (O(selection))
-    var audioNotVerifiedCount: Int { entries.filter { $0.readiness.audio == .notVerified }.count }
-    var audioProblemCount: Int { entries.filter { if case .verifiedProblem = $0.readiness.audio { return true }; return false }.count }
+    var audioNotVerifiedCount: Int { entries.filter { $0.readiness.sound == .notChecked }.count }
+    /// Sound Promote will refuse (damaged, silent, no stream) — never a
+    /// fact about the recording such as mono (Rick 2026-11-16).
+    var audioProblemCount: Int { entries.filter { if case .refusable = $0.readiness.sound { return true }; return false }.count }
+    /// Sound on one side only / lopsided: passes, better balanced.
+    var audioUnbalancedCount: Int { entries.filter { if case .unbalanced = $0.readiness.sound { return true }; return false }.count }
     var atRiskFormatCount: Int { entries.filter { if case .atRisk = $0.readiness.format { return true }; return false }.count }
     var dateWarningCount: Int { entries.filter { $0.readiness.date != .known }.count }
     var unprobeableCount: Int { entries.filter { $0.readiness.blocking }.count }

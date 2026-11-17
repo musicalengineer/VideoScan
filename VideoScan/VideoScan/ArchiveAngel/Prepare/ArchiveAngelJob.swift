@@ -809,7 +809,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         // requires a channel-imbalance finding first. The two can
         // disagree on an analysis without that finding. Left as-is in
         // S4 (behaviour-preserving); pick one predicate later.
-        if let reason = BalanceAudioFix.refusalReason(for: analysis) {
+        if let reason = ArchiveAngelAudioOutcome.balanceSkipReason(for: analysis) {
             step(idx, .balanceAudio, .skipped, note: reason)
             return nil
         }

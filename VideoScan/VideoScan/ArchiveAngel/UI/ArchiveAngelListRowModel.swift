@@ -115,6 +115,11 @@ enum ArchiveAngelFileLocation: Equatable, Sendable {
 /// ruins a keeper", ArchiveReadiness).
 enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
     case audioRepair(note: String)
+    /// Sound on one side only (Rick 2026-11-16): not damage, and Promote
+    /// would accept it, but nobody wants to hear it that way. Prepare makes
+    /// the balanced copy, so the file is not "Ready" until it has been
+    /// through Prepare.
+    case audioBalance(note: String)
     case videoRepair(note: String)
     case date
     case audioCheck
@@ -127,6 +132,7 @@ enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
     var fragment: String {
         switch self {
         case .audioRepair: return "audio repair"
+        case .audioBalance: return "audio balanced"
         case .videoRepair: return "video repair"
         case .date: return "a date"
         case .audioCheck: return "audio checked"
@@ -139,10 +145,11 @@ enum ArchiveAngelNeed: Equatable, Sendable, Hashable {
     var rank: Int {
         switch self {
         case .audioRepair: return 0
-        case .videoRepair: return 1
-        case .date: return 2
-        case .audioCheck, .audioChecking: return 3
-        case .look: return 4
+        case .audioBalance: return 1
+        case .videoRepair: return 2
+        case .date: return 3
+        case .audioCheck, .audioChecking: return 4
+        case .look: return 5
         }
     }
 }
@@ -164,6 +171,13 @@ enum ArchiveAngelStatusWords {
             out.append(.audioRepair(note: f.audioVerifyNote))
         } else if f.audio == .notVerified {
             out.append(f.isBeingChecked ? .audioChecking : .audioCheck)
+        } else if case .unbalanced(let note) = ArchiveReadiness.soundStanding(audio: f.audio,
+                                                                              audioVerifyStatus: f.audioVerifyStatus) {
+            // One-sided sound: Ready would send the row straight to the
+            // plain Promote sheet (ArchiveAngelPromoteRoute.direct), past
+            // the Prepare step that balances it. Mono, surround and two
+            // live tracks are facts about the recording and stay Ready.
+            out.append(.audioBalance(note: note))
         }
         switch f.videoVerifyStatus {
         case "broken": out.append(.videoRepair(note: f.videoVerifyNote))

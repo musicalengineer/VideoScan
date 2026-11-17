@@ -103,6 +103,8 @@
 - "Interesting family video" score for Triage ranking (duration, people present, not a transition/test pattern) — a RANKING, never a scan gate: measured 2026-10-25, 7,506 of 11,468 live rows are under 30 s and 649 of those Rick marked Important, so duration alone is not junk evidence.
 - Run MediaAnalyzer scoring on scan (today it runs only from Triage's Analyze button) — policy change, Rick's call.
 - (ruling) Delete `ArchiveRefile` (predecessor of Update…).
+- Archive maintenance workflow (Rick 2026-11-16: "we have media in the archive that needs repair … we will need a workflow for repairing, updating, removing"): one door for an archived file that turns out wrong — replace it with a proven repair (the 11/10 and 11/16 rulings), remove it, or keep both as versions. Known case: `1998/…Christmas1997-clip2.mov` is left-only. Blocked on one thing Rick must approve: the catalog trigger `archive_copy_never_trashed` (MOPS-3) forbids trashing any archive copy. Also carries the last step of the 11/16 one-sided ruling: offering a balanced file's original and other copies for the Trash needs a "proven repair" proof in the delete engine (today it proves a survivor by equal SHA-256 only).
+- (idea, Rick 2026-11-16) An in-app player with live audio meters per channel ("I love to see audio meters"); QuickTime has none, VLC and FCP do. Would make one-sided and silent sound visible while playing.
 
 ## Catalog UI and folders
 - Open an audio-only file in an audio editor the user picks. Detail: closed GH #127.

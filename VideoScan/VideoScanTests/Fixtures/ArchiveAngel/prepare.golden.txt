@@ -18,21 +18,21 @@ entry test_pc_clean.mp4 status ready failure - nomination -
   log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
 == mono: job finished
 entry test_pc_mono.mp4 status ready failure - nomination -
-  step verifyAudio done | Mono audio — one channel | out - | rec - | existing -
-  step balanceAudio done | Audio balanced (mono) | out test_pc_mono_balanced.mp4 | rec yes | existing -
-  step accessCopy done | HEVC access copy (from balanced audio) | out test_pc_mono.vs.archive.mov | rec yes | existing -
+  step verifyAudio done | Mono audio — one channel; it plays on both sides, nothing to balance. | out - | rec - | existing -
+  step balanceAudio skipped | Mono audio — one channel; it plays on both sides, nothing to balance. | out - | rec - | existing -
+  step accessCopy done | HEVC access copy | out test_pc_mono.vs.archive.mov | rec yes | existing -
   step losslessCopy skipped | Lossless off (alpha default) | out - | rec - | existing -
   log Archive Angel: want 1, lossless off, buffer …/batch-T
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_mono.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
   log Archive Angel [1/1] test_pc_mono.mp4 — preparing (60 KB, score 105)
-  log Archive Angel [1/1] test_pc_mono.mp4 — verify audio: done — Mono audio — one channel (t s)
-  log Archive Angel [1/1] test_pc_mono.mp4 — balanced audio: done — Audio balanced (mono) (t s)
+  log Archive Angel [1/1] test_pc_mono.mp4 — verify audio: done — Mono audio — one channel; it plays on both sides, nothing to balance. (t s)
+  log Archive Angel [1/1] test_pc_mono.mp4 — balanced audio: skipped — Mono audio — one channel; it plays on both sides, nothing to balance. (t s)
   log Archive Angel [1/1] test_pc_mono.mp4 — access copy: starting archival → test_pc_mono.vs.archive.mov
-  log Archive Angel [1/1] test_pc_mono.mp4 — access copy: done — HEVC access copy (from balanced audio) (t s, size)
+  log Archive Angel [1/1] test_pc_mono.mp4 — access copy: done — HEVC access copy (t s, size)
   log Archive Angel [1/1] test_pc_mono.mp4 — lossless copy: skipped — Lossless off (alpha default) (t s)
-  log Archive Angel [1/1] test_pc_mono.mp4 — ready to review with balanced audio, access copy
+  log Archive Angel [1/1] test_pc_mono.mp4 — ready to review with access copy
   log Archive Angel: 1 ready to review · 0 rejected · 0 more would qualify
 == videoOnly: job finished
 entry test_pc_silent.mp4 status ready failure - nomination -
