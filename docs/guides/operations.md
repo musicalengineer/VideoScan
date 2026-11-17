@@ -12,7 +12,9 @@ The fleet: the **M5 Ultra** Mac Studio (`RicksUltra`, Rick's interactive machine
 *Rewritten 2026-11-01 (Codex docs review F12) to separate what is built from what the 2026-10-28 design still plans.
 The design, whole (why, the shape diagram, failure modes, phases, what was cut), is
 `docs/archive/design/m4_staging_gate_2026_10_28.md`. Rule behind it: DECISIONS 2026-10-26 and 2026-10-28 — the M4 runs
-deep and UI tests **on demand**, not on every commit; per-commit checking is the sensor lane on the Ultra.*
+deep and UI tests **on demand**, not on every commit; per-commit checking is the sensor lane on the Ultra — and, since
+2026-11-17, the CI workflow's two macOS jobs on every push to main, run on the M4 through a GitHub Actions self-hosted
+runner (a check after the merge, never a gate: "The GitHub Actions runner" below).*
 
 ### Built: `scripts/m4_run.sh` (the header comment is the reference)
 
@@ -37,6 +39,39 @@ Tests: `tests/test_m4_run.py`.
 **One-time UI setup on a host** (a person at the screen once): Accessibility + Automation for the XCUITest runner; the
 display never sleeps while a run holds the lock (`caffeinate -dimsu`, in the gauntlet); automation mode without a
 password (testing.md §4).
+
+### Built 2026-11-17: the GitHub Actions runner on the M4 (`scripts/install_gh_runner.sh`)
+
+Rick 2026-11-17 ("I had imagined it would run the testbed on branches or after merges or as needed or even in the
+workflow … so the m5ultra would not carry the burden"; "set up the self-hosted runner on the m4"). `ci.yml`'s two macOS
+jobs — `core` (VideoScanCore `swift test`) and `test` (Debug build-for-testing, then the VideoScan-CI plan, ~9,000
+tests, with the canary / ghost-pass checks and `scripts/ci_test_verdict.py`) — were `if: false` since 11/04 because no
+hosted image has Xcode 27. They now run on the M4 on **every push to main** (`runs-on: [self-hosted, macOS, ARM64, m4]`).
+GitHub dispatches; the M4 builds and tests; hosted macOS minutes are not used (DECISIONS 2026-10-26 holds: GitHub runs no
+test itself). The 14:00 full testbed, `m4_run.sh` and the nightly lanes are unchanged.
+
+| Rick says | The Ultra runs | What happens |
+|---|---|---|
+| "install the runner on the M4" | `scripts/install_gh_runner.sh install` | mints a registration token with `gh` (one hour, one use; it rides the ssh session's stdin), downloads the runner release on the M4, verifies its SHA-256 against the release notes, `config.sh --replace` as `RicksM4` with labels `m4,videoscan`, and bootstraps a LaunchAgent `com.videoscan.gh-runner` in the M4's GUI session (RunAtLoad, KeepAlive) |
+| "is the runner up?" | `scripts/install_gh_runner.sh status` | registered name and URL, the agent's state and pid, the last three job lines from `~/actions-runner/_diag` |
+| "take the runner off the M4" | `scripts/install_gh_runner.sh remove` | stops the agent, moves its plist aside, unregisters with a removal token; files under `~/actions-runner` stay |
+| "… on this Mac" | add `--host local` | the same, without ssh (labels `videoscan`, name = the host name) |
+
+How a job behaves on the M4: the runner's own checkout (`~/actions-runner/_work`, cleaned by actions/checkout every
+run) and its own DerivedData (`~/Library/Caches/videoscan-ghrunner-dd`, kept between runs for incremental builds; ~15 GB
+Debug), never the testbed worktree or `~/m4run`. Before building, `scripts/testbed_wait.sh` probes the testbed lock
+(`~/m4run/lock`, the one `m4_run.sh` and `nightly_gauntlet.sh` hold) every 30 s until it is free — up to 3 h — and sits
+out 13:50–14:05 so the 14:00 nightly takes the lock first. It never holds the lock (a job's steps are separate shells),
+so a testbed run that starts after the wait shares the M4's CPU with the job; the nightly's suite already tolerates
+that (it runs beside a lock holder), and a slow run shows as time, not as a wrong verdict. A newer push cancels an older
+queued or running job (`concurrency`, `cancel-in-progress`): main's newest commit is what gets checked; the 14:00 testbed
+reads main again. Builds are ad-hoc signed like the M4's testbed builds; `caffeinate -w` holds the M4 awake for each
+step. Timing budgets in the suite still triple under `GITHUB_ACTIONS=true` (`TimingBudget.hostedRunnerFactor`), so this
+lane is looser on timings than the nightly — the nightly keeps the tight numbers. Red shows on the commit on GitHub and in
+the workflow's step summary (counts, canary, real failures); nothing is published to the metrics page from this lane.
+The LaunchAgent is ours, not the runner's `svc.sh`: that plist creates its own session (no window server), and
+`xcodebuild test` launches the app as its test host in the logged-in desktop — the reason `m4_run.sh` uses a GUI
+LaunchAgent too. Log: `~/Library/Logs/VideoScan/gh_runner.log`. Tests: `tests/test_install_gh_runner.py`.
 
 ### Planned, not built (the 10/28 design; BACKLOG "UI tests, next increment")
 

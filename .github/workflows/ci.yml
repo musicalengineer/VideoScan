@@ -2,9 +2,14 @@ name: CI
 
 # Slim build + tests pipeline for every push to main.
 #
-# 2026-11-04: only the Linux jobs run (`preflight`; `metrics` since 11/06).
-# The two macOS jobs are `if: false` until the hosted runner has Xcode 27 /
-# Swift 6.4 (reason at each job).
+# 2026-11-04: only the Linux jobs ran (`preflight`; `metrics` since 11/06);
+# the two macOS jobs were `if: false` because no hosted image has Xcode 27 /
+# Swift 6.4. 2026-11-17 (Rick: "set up the self-hosted runner on the m4"):
+# they run on the M4 Studio through a self-hosted runner
+# (scripts/install_gh_runner.sh; runs-on [self-hosted, macOS, ARM64, m4]),
+# after waiting for the M4's testbed to be idle (scripts/testbed_wait.sh).
+# GitHub still runs no test itself (DECISIONS 2026-10-26): it dispatches, the
+# M4 runs. Hosted macOS minutes are not used.
 #
 # Static-analysis tooling (SwiftLint, Periphery, CodeQL, strict concurrency)
 # lives in nightly-analysis.yml. PRs no longer run CI because Rick works
@@ -154,30 +159,42 @@ jobs:
   # these tests already triple on GitHub (TimingBudget: GITHUB_ACTIONS).
   core:
     name: VideoScanCore package tests
-    # OFF 2026-11-04 (if: false): cannot pass until GitHub's macOS runner has
-    # the Xcode 27 / Swift 6.4 toolchain. The hosted runner's Swift is older and
-    # dies at VideoScanCore/CatalogReality.swift:324 ("cannot convert value of
-    # type 'String.SubSequence'", nightly run 41831293396); the 11/04 pushes
-    # never got a macOS runner at all (run 41856296282, "not acquired"). Last
-    # green 10/07. The same build and tests run on the fleet (sensor lane,
-    # 2 AM nightly). Turn back on (delete the `if: false`) once a runner image
-    # ships Xcode 27.
-    if: false
+    # OFF 2026-11-04 → 11-17: no hosted macOS image has Xcode 27 / Swift 6.4
+    # (the hosted Swift died at VideoScanCore/CatalogReality.swift:324, nightly
+    # run 41831293396; the 11/04 pushes got no macOS runner at all, run
+    # 41856296282). Since 2026-11-17 it runs on the M4's self-hosted runner,
+    # whose Xcode is the fleet's (scripts/update_toolchain.sh). Last hosted
+    # green 10/07.
     needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 45
+    runs-on: [self-hosted, macOS, ARM64, m4]
+    # One runner, one job at a time: a newer push cancels a queued or running
+    # older one — main's newest commit is what matters, and the 14:00 full
+    # testbed reads main again anyway.
+    concurrency:
+      group: m4-runner-core
+      cancel-in-progress: true
+    # The wait below may sit out a 2 h 10 min full testbed (budget 3 h) before
+    # the ~10 min of work; the budget has to hold both.
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode (26.x required)
-        run: scripts/ci_select_xcode.sh
-
-      # FFmpegPreviewRendererE2ETests and friends spawn real ffmpeg/ffprobe.
-      - name: Install FFmpeg
+      # The M4's Xcode is whatever the fleet runs (CLAUDE.md: Swift 6.4); no
+      # selection here — scripts/ci_select_xcode.sh is for hosted images with
+      # several Xcode_*.app bundles. Printed so a red run names the toolchain.
+      - name: Toolchain
         run: |
-          brew install ffmpeg || true
+          xcodebuild -version
+          xcrun swift --version 2>&1 | head -1
+          # FFmpegPreviewRendererE2ETests and friends spawn real ffmpeg/ffprobe
+          # (Homebrew on the M4, on the runner's PATH — install_gh_runner.sh).
           ffmpeg -version | head -1
+
+      # The testbed lock (~/m4run/lock) belongs to m4_run.sh and the 14:00
+      # nightly; wait until it is free rather than run two builds at once.
+      - name: Wait for the M4 testbed to be idle
+        run: scripts/testbed_wait.sh --budget 10800
 
       # `shell: bash` is explicit on purpose: GitHub's implicit default is
       # `bash -e {0}` (NO pipefail), so `… | tee` would return tee's 0 and
@@ -196,59 +213,72 @@ jobs:
 
   test:
     name: Build & Test
-    # OFF 2026-11-04 (if: false), same reason as `core` above: no Xcode 27 /
-    # Swift 6.4 on the hosted macOS runner yet.
-    if: false
+    # OFF 2026-11-04 → 11-17 for the same reason as `core` above (no Xcode 27 /
+    # Swift 6.4 on a hosted image). Since 2026-11-17 it runs on the M4's
+    # self-hosted runner.
     # Gated on preflight, not parallel with it: the linters were put ahead
     # of the build deliberately, "so a structural mistake doesn't burn
-    # 5-10 minutes of compile", and macOS minutes bill at 10x Linux. The
-    # ~30s preflight costs far less than one wasted macOS build.
+    # 5-10 minutes of compile". The ~30s preflight costs far less than one
+    # wasted build on the M4.
     needs: preflight
-    runs-on: macos-15
-    # 60, not 30. Xcode 26.x carries a documented compile-time regression
-    # on hosted runners (actions/runner-images#13096). The build has no
-    # choice but to use 26.x — see Select Xcode — so the budget has to
-    # absorb it. Revisit once a real run gives us the actual number.
-    timeout-minutes: 120
+    runs-on: [self-hosted, macOS, ARM64, m4]
+    concurrency:
+      group: m4-runner-test
+      cancel-in-progress: true
+    # The wait may sit out a full testbed (budget 3 h); then a Debug build of
+    # app + tests (incremental, DerivedData kept between runs) and the
+    # VideoScan-CI plan (~9,000 tests, ~20 min on the M5 Pro).
+    timeout-minutes: 300
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          persist-credentials: true
+          # Nothing in this job pushes (the metrics row moved to its own Linux
+          # job 11/06); a self-hosted checkout keeps no token in its config.
+          persist-credentials: false
 
-      # Xcode 26.x is REQUIRED, not preferred. Full history is in the
-      # header of scripts/ci_select_xcode.sh; short version: the app uses
-      # Swift 6.2 isolated conformances, Xcode 16.4's Swift 6.1 cannot
-      # parse them, and the old hard-coded 16.4 pin is why every CI run
-      # from mid-June to 2026-08-30 failed in SwiftCompile without
-      # reaching a test. The script resolves the newest installed 26.x and
-      # hard-fails if the selected compiler is older than Swift 6.2.
-      - name: Select Xcode (26.x required)
-        run: scripts/ci_select_xcode.sh
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version 2>&1 | head -1
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
 
       - name: Show environment
         run: system_profiler SPHardwareDataType | grep "Chip\|Memory"
 
-      - name: Install FFmpeg
+      # DerivedData OUTSIDE the workspace: actions/checkout cleans the
+      # workspace (git clean -ffdx) every run, and a from-scratch Debug build
+      # of ~790K lines is the expensive part. One directory per runner, like
+      # m4_run.sh's ~/Library/Caches/videoscan-m4run-dd — never that one, never
+      # Rick's, never the nightly's: two xcodebuilds in one DerivedData collide.
+      - name: DerivedData (kept between runs)
         run: |
-          brew install ffmpeg || true
-          ffmpeg -version | head -1
-          ffprobe -version | head -1
+          echo "DD=$HOME/Library/Caches/videoscan-ghrunner-dd" >> "$GITHUB_ENV"
+
+      - name: Wait for the M4 testbed to be idle
+        run: scripts/testbed_wait.sh --budget 10800
 
       # Build ONCE — app + test targets. Shared DerivedData for all later steps.
+      # Ad-hoc signed, as the M4's testbed builds are (m4_run.sh): on Apple
+      # silicon a test host has to carry a signature, and the nightly builds
+      # keep their ad-hoc override (DECISIONS 2026-10-28). caffeinate -w $$:
+      # the M4 must not sleep while this step's shell lives; a background
+      # assertion, not a wrapper, so xcodebuild's own status reaches the pipe.
       - name: Build (app + tests)
         run: |
           set -o pipefail
+          caffeinate -i -w $$ &
           xcodebuild build-for-testing \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
             -configuration Debug \
             -destination 'platform=macOS' \
-            -derivedDataPath DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath "$DD" \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee xcodebuild-build.log
           if grep -q "BUILD FAILED" xcodebuild-build.log; then
@@ -275,7 +305,8 @@ jobs:
       - name: Unit tests — pure-logic suites
         # 2026-09-25: the plan is ~9,000 tests; ricksm5 needs ~20 min, the
         # hosted runner ~2.15x that (~47 min, measured 9/25). 20 min was
-        # timing out every push.
+        # timing out every push. The M4 Max should sit near the M5 Pro's
+        # number; the budget stays until a run measures it.
         timeout-minutes: 75
         run: |
           echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
@@ -337,6 +368,7 @@ jobs:
           # pipeline keeps -e (or a future pipefail) from aborting the step
           # before the status is read.
           set +e
+          caffeinate -i -w $$ &
           TEST_RUNNER_GITHUB_ACTIONS=true \
           xcodebuild test-without-building \
             -project VideoScan/VideoScan.xcodeproj \
@@ -344,10 +376,10 @@ jobs:
             -testPlan VideoScan-CI \
             -configuration Debug \
             -destination 'platform=macOS' \
-            -derivedDataPath DerivedData \
+            -derivedDataPath "$DD" \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee test-output.log
           TEST_EXIT=${PIPESTATUS[0]}
