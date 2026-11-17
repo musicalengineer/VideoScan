@@ -9521,19 +9521,34 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPacketTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPacketTests"
+      ],
+      "tests": [
+        "changedDisplayMatrixIsRefused",
+        "internalRetimeWithEqualTotalsIsRefused",
+        "repartitionedSubtitlePacketsAreRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BalancedCopyProofRuleTests.swift",
       "stage": "regression",
       "suites": [
         "BalancedCopyProofRuleTests"
       ],
       "tests": [
+        "carriedStreamTable",
         "channelLayoutTable",
         "configurationTable",
-        "containerChangeFrameRateRule",
         "discardedChannelTable",
         "levelText",
         "logRecordParse",
-        "pictureTimingTable",
+        "packetLedgerAtScale",
+        "packetLedgerFaults",
+        "packetLedgerFold",
         "readReportFromACleanLog",
         "readReportRefusals",
         "readVerdictTable",
@@ -40131,7 +40146,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 674,
+      "expected_floor": 679,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40342,7 +40357,8 @@
         "VideoScanTests/BalancedCopyProofMediaTests",
         "VideoScanTests/BalancedCopyProofHardeningTests",
         "VideoScanTests/BalancedCopyProofRuleTests",
-        "VideoScanTests/BalancedCopyProofCoverageTests"
+        "VideoScanTests/BalancedCopyProofCoverageTests",
+        "VideoScanTests/BalancedCopyProofPacketTests"
       ]
     },
     {

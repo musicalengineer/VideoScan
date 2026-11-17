@@ -11,7 +11,7 @@
 // and swapped files; a tool that fails) · SENSOR (both files and their
 // folder are byte-for-byte untouched by the proof). The negatives are the
 // point: each damaged copy must be refused, with the right reason.
-// The Codex #301 reproductions (discarded channel, timing, partial reads,
+// The Codex #298 reproductions (discarded channel, timing, partial reads,
 // symlinks, decoder configuration, layout, cancellation) are in
 // BalancedCopyProofHardeningTests; the attacks it found untested are in
 // BalancedCopyProofCoverageTests.
@@ -263,14 +263,34 @@ struct BalancedCopyProofMediaTests {
         #expect(after == before, "the proof must not create, change or remove any file")
         guard case .proven(let evidence) = outcome else { Issue.record("\(outcome)"); return }
 
-        // Picture: the hash muxer (not streamhash) over the stream-copied video.
-        let picture = await ProcessRunner.runProcess(
+        // Picture: ffmpeg's framehash muxer (another tool than the proof's
+        // ffprobe packet pass) lists every packet as "stream, dts, pts,
+        // duration, size, sha256"; folded HERE the way the header says.
+        let listing = await ProcessRunner.runProcess(
             executable: ToolLocator.ffmpegPath,
-            arguments: ["-v", "error", "-i", original, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-hash", "sha256", "-"],
+            arguments: ["-v", "error", "-i", original, "-map", "0:v:0", "-c", "copy", "-f", "framehash", "-hash", "sha256", "-"],
             deadlineSeconds: 60)
-        let pictureHash = (picture.stdout ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var bytes = SHA256(), times = SHA256(), packets = 0
+        var ticksPerSecond: Int64 = 0
+        for line in (listing.stdout ?? "").split(separator: "\n") {
+            if line.hasPrefix("#tb 0: 1/") { ticksPerSecond = Int64(line.dropFirst("#tb 0: 1/".count)) ?? 0 }
+            let fields = line.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard !line.hasPrefix("#"), fields.count == 6, let pts = Int64(fields[2]), let duration = Int64(fields[3]) else { continue }
+            func fraction(_ ticks: Int64) -> String {
+                var a = abs(ticks), b = ticksPerSecond
+                while b != 0 { (a, b) = (b, a % b) }
+                return "\(ticks / max(a, 1))/\(ticksPerSecond / max(a, 1))"
+            }
+            bytes.update(data: Data("\(fields[4]) \(fields[5])\n".utf8))
+            times.update(data: Data("\(fraction(pts)) \(fraction(duration))\n".utf8))
+            packets += 1
+        }
+        func hex(_ hasher: SHA256) -> String { hasher.finalize().map { String(format: "%02x", $0) }.joined() }
         let heldPicture = try #require(evidence.carried.first, "the evidence names no carried stream")
-        #expect(pictureHash == "SHA256=\(heldPicture.packetSHA256)")
+        #expect(ticksPerSecond == 12_800 && packets == 50)
+        #expect(heldPicture.packets == packets)
+        #expect(heldPicture.packetSHA256 == hex(bytes))
+        #expect(heldPicture.timingSHA256 == hex(times))
         #expect(evidence.carried.map(\.kind) == ["video", "data"], "the original's timecode track is held too")
 
         // Sound: the original's left channel written out as raw PCM with the
@@ -350,7 +370,7 @@ struct BalancedCopyProofMediaTests {
         let (dir, original, balanced) = try await provenPair("short")
         defer { try? fm.removeItem(at: dir) }
         let half = try Media.derive("half_balanced", from: balanced, ["-t", "1", "-map", "0", "-c", "copy"])
-        // Since Codex #301 F2/F3 ffprobe's own packet count refuses it, before any hash pass.
+        // Since Codex #298 F2/F3 ffprobe's own packet count refuses it, before any hash pass.
         let outcome = await Proof.measure(original: original, balanced: half)
         #expect(outcome == .notProven(.timingDiffers("video stream 0 has 50 packets, the balanced copy 25")))
         // Picture whole, last 10 ms of sound missing.

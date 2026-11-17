@@ -184,9 +184,15 @@ extension BalancedCopyProof {
 
     // MARK: - Pure rules: decoder configuration and timing
 
-    /// Every paired stream must be configured for its decoder as the
-    /// original is (header, PROVEN 2).
+    /// Every paired stream — and the sound — must be configured for its
+    /// decoder and its display as the original is (header, PROVEN 2).
     static func configurationVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
+        if let original = facts.original.sound.first, let copy = facts.balanced.sound.first,
+           original.sideData != copy.sideData {
+            return .notProven(.pictureConfigurationDiffers(
+                "audio stream \(original.index): side data \(original.sideData.isEmpty ? "none" : original.sideData.prefix(96))"
+                + " → \(copy.sideData.isEmpty ? "none" : copy.sideData.prefix(96))"))
+        }
         for pair in pairing.pairs {
             let original = facts.original.carried[pair.original]
             let copy = facts.balanced.carried[pair.balanced]
@@ -200,69 +206,21 @@ extension BalancedCopyProof {
         return nil
     }
 
-    /// What `copy` states differently about when a stream plays. When the
-    /// container changed, the copy's average frame rate is held to the
-    /// original's REAL rate (the raw-DV demuxer's average is bogus).
-    static func timingDifference(original: StreamTiming, copy: StreamTiming, tolerance: Double,
-                                 containerChanged: Bool) -> String? {
-        if moved(original.startSeconds, copy.startSeconds, tolerance: tolerance) {
-            return "starts at \(time(original.startSeconds)), in the balanced copy at \(time(copy.startSeconds))"
-        }
-        if moved(original.durationSeconds, copy.durationSeconds, tolerance: tolerance) {
-            return "lasts \(time(original.durationSeconds)), in the balanced copy \(time(copy.durationSeconds))"
-        }
-        if original.realFrameRate != copy.realFrameRate {
-            return "frame rate \(original.realFrameRate) → \(copy.realFrameRate)"
-        }
-        let expectedAverage = containerChanged ? original.realFrameRate : original.averageFrameRate
-        if copy.averageFrameRate != expectedAverage {
-            return "average frame rate \(expectedAverage) → \(copy.averageFrameRate)"
-        }
-        return nil
-    }
-
-    /// Every paired stream, the sound and the file as a whole must play
-    /// when the original's do (header, PROVEN 3).
-    static func timingVerdict(_ facts: Facts, pairing: Pairing) -> Outcome? {
-        let containerChanged = facts.original.containerWords != facts.balanced.containerWords
-        for pair in pairing.pairs {
-            let original = facts.original.carried[pair.original]
-            let copy = facts.balanced.carried[pair.balanced]
-            let name = "\(original.kind) stream \(original.index)"
-            guard let packets = original.timing.packets, let copyPackets = copy.timing.packets else {
-                return .couldNotCheck("\(name)'s packets could not be counted")
-            }
-            guard packets == copyPackets else {
-                return .notProven(.timingDiffers("\(name) has \(packets) packets, the balanced copy \(copyPackets)"))
-            }
-            if let what = timingDifference(original: original.timing, copy: copy.timing,
-                                           tolerance: pictureTimingToleranceSeconds,
-                                           containerChanged: containerChanged) {
-                return .notProven(.timingDiffers("\(name) \(what)"))
-            }
-        }
-        return soundTimingVerdict(facts, containerChanged: containerChanged)
-    }
-
-    /// The sound's start, duration and distance from the picture, and the
-    /// file's whole duration. (The sound's PACKET count is not compared: PCM
-    /// packets are the muxer's chunking — a raw-DV original's 59 become 118
-    /// in the job's mov — and the sample count is held by the hash.)
-    static func soundTimingVerdict(_ facts: Facts, containerChanged: Bool) -> Outcome? {
+    /// The sound's stated start, duration and the file's whole duration,
+    /// each within the slack (header, PROVEN 3). The sound's distance from
+    /// the picture needs no rule of its own: the picture's packet times are
+    /// held exactly, so the sound's start is that distance. (The sound's
+    /// PACKET count is not compared: PCM packets are the muxer's chunking.)
+    static func soundTimingVerdict(_ facts: Facts) -> Outcome? {
         guard let original = facts.original.sound.first, let copy = facts.balanced.sound.first else { return nil }
         let slack = max(original.timingSlackSeconds, copy.timingSlackSeconds)
-        if let what = timingDifference(original: original.timing, copy: copy.timing, tolerance: slack,
-                                       containerChanged: containerChanged) {
-            return .notProven(.timingDiffers("the sound \(what)"))
+        if moved(original.timing.startSeconds, copy.timing.startSeconds, tolerance: slack) {
+            return .notProven(.timingDiffers("the sound starts at \(time(original.timing.startSeconds)), "
+                + "in the balanced copy at \(time(copy.timing.startSeconds))"))
         }
-        if let picture = facts.original.carried.first(where: { $0.kind == "video" }),
-           let copyPicture = facts.balanced.carried.first(where: { $0.kind == "video" }),
-           let start = original.timing.startSeconds, let pictureStart = picture.timing.startSeconds,
-           let copyStart = copy.timing.startSeconds, let copyPictureStart = copyPicture.timing.startSeconds,
-           abs((start - pictureStart) - (copyStart - copyPictureStart)) > slack {
-            return .notProven(.timingDiffers(
-                "the sound starts \(time(start - pictureStart)) after the picture, "
-                + "in the balanced copy \(time(copyStart - copyPictureStart))"))
+        if moved(original.timing.durationSeconds, copy.timing.durationSeconds, tolerance: slack) {
+            return .notProven(.timingDiffers("the sound lasts \(time(original.timing.durationSeconds)), "
+                + "in the balanced copy \(time(copy.timing.durationSeconds))"))
         }
         if moved(facts.original.durationSeconds, facts.balanced.durationSeconds, tolerance: slack) {
             return .notProven(.timingDiffers(
@@ -272,25 +230,37 @@ extension BalancedCopyProof {
         return nil
     }
 
-    /// Everything that can be decided BEFORE a hash is computed. nil = the
-    /// layouts allow a proof; go on and hash. `measure` asks this first so a
-    /// lossy, mis-shaped, re-timed or re-configured pair never costs the two
-    /// hash passes.
+    /// Everything that can be decided BEFORE the sound is decoded: format,
+    /// streams, configuration, every carried packet, the sound's stated
+    /// times. nil = go on to the sound pass. `measure` asks this first so a
+    /// lossy, mis-shaped, re-timed or re-configured pair never costs it.
     static func layoutVerdict(_ facts: Facts) -> Outcome? {
+        if let verdict = headerVerdict(facts) { return verdict }
+        guard case .success(let pairing) = pairing(original: facts.original.carried,
+                                                   balanced: facts.balanced.carried) else { return nil }
+        if case .refused(let outcome) = carriedEvidence(facts, pairing: pairing) { return outcome }
+        return soundTimingVerdict(facts)
+    }
+
+    /// What the two HEADERS alone decide — sound format and layout, the
+    /// stream set, decoder and display configuration — before a single
+    /// packet is read. `measure` asks this first, so a lossy or mis-shaped
+    /// pair costs no whole-file read at all.
+    static func headerVerdict(_ facts: Facts) -> Outcome? {
         if let verdict = originalSoundVerdict(facts) ?? balancedSoundVerdict(facts) { return verdict }
         switch pairing(original: facts.original.carried, balanced: facts.balanced.carried) {
         case .failure(let why): return .notProven(why)
-        case .success(let pairing):
-            return configurationVerdict(facts, pairing: pairing) ?? timingVerdict(facts, pairing: pairing)
+        case .success(let pairing): return configurationVerdict(facts, pairing: pairing)
         }
     }
 
     // MARK: - Pure rules: the reads, the hashes, the discarded channel
 
-    /// One hash pass must have read what ffprobe counted (header, PROVEN 7).
+    /// One sound pass must have read, of EVERY stream, the packets the
+    /// packet pass listed (header, PROVEN 7).
     static func readVerdict(_ file: FileLayout, read: ReadReport?, called name: String) -> Outcome? {
         guard let read else { return .couldNotCheck("\(name)'s hash pass gave no account of what it read") }
-        let counted = file.carried.map { ($0.index, $0.timing.packets) } + file.sound.map { ($0.index, $0.timing.packets) }
+        let counted = file.carried.map { ($0.index, $0.packets) } + file.sound.map { ($0.index, $0.timing.packets) }
         for (index, expected) in counted {
             guard let expected, let got = read.streams[index]?.packets else {
                 return .couldNotCheck("\(name) was not read to the end (stream \(index): packets not counted)")
@@ -318,22 +288,36 @@ extension BalancedCopyProof {
         case refused(Outcome)
     }
 
-    /// Hold each paired stream's packets against the original's.
+    /// Hold each paired stream against the original's, packet by packet
+    /// (header, PROVEN 1): the same count, the same sequence of (size,
+    /// payload SHA-256), the same sequence of (presentation time, duration).
     static func carriedEvidence(_ facts: Facts, pairing: Pairing) -> CarriedCheck {
         var out: [Evidence.Stream] = []
         for pair in pairing.pairs {
             let original = facts.original.carried[pair.original]
             let copy = facts.balanced.carried[pair.balanced]
-            guard let a = comparable(original.packetSHA256), let b = comparable(copy.packetSHA256) else {
-                return .refused(.couldNotCheck("\(original.kind) stream \(original.index) gave no packets to compare"))
+            let name = "\(original.kind) stream \(original.index)"
+            guard let packets = original.packets, let copyPackets = copy.packets else {
+                return .refused(.couldNotCheck("\(name)'s packets could not be counted"))
+            }
+            guard packets == copyPackets else {
+                return .refused(.notProven(.timingDiffers("\(name) has \(packets) packets, the balanced copy \(copyPackets)")))
+            }
+            guard packets > 0, let a = comparable(original.packetSHA256), let b = comparable(copy.packetSHA256),
+                  let times = comparable(original.timingSHA256), let copyTimes = comparable(copy.timingSHA256) else {
+                return .refused(.couldNotCheck("\(name) gave no packets to compare"))
             }
             guard a == b else {
                 return .refused(.notProven(.carriedStreamDiffers(
                     kind: original.kind, originalIndex: original.index, original: a, balanced: b)))
             }
+            guard times == copyTimes else {
+                return .refused(.notProven(.timingDiffers(
+                    "\(name): its packets are not presented at the original's times, each for the original's duration")))
+            }
             out.append(Evidence.Stream(kind: original.kind, codec: original.codec, originalIndex: original.index,
-                                       balancedIndex: copy.index, packetSHA256: a,
-                                       packets: original.timing.packets ?? 0))
+                                       balancedIndex: copy.index, packetSHA256: a, timingSHA256: times,
+                                       packets: packets))
         }
         return .held(out)
     }
@@ -362,10 +346,11 @@ extension BalancedCopyProof {
     }
 
     /// THE decision. Pure: the same facts always give the same answer.
-    /// Order: what the layouts already rule out (format, streams, decoder
-    /// configuration, timing), then whether both reads were whole, then the
-    /// picture, then the channel left behind, then the copy's two channels
-    /// against each other and against the original.
+    /// Order: what is known before the sound is decoded (format, streams,
+    /// configuration, every carried packet, the sound's stated times), then
+    /// whether both sound passes read everything, then the channel left
+    /// behind, then the copy's two channels against each other and against
+    /// the original.
     static func decide(_ facts: Facts) -> Outcome {
         if let verdict = layoutVerdict(facts) { return verdict }
         guard let live = liveChannel(for: facts.originalClass), let sound = facts.original.sound.first,
@@ -435,7 +420,8 @@ extension BalancedCopyProof {
     private static func provenDetail(_ e: Evidence) -> String {
         let streams = e.carried.map {
             "\($0.kind) \($0.originalIndex)→\($0.balancedIndex) sha256 \($0.packetSHA256) (\($0.packets) packets, "
-                + "timing and decoder configuration equal)"
+                + "each one's time, duration, size and bytes equal; times sha256 \(short($0.timingSHA256)); "
+                + "configuration and side data equal)"
         }
         let sound = "sound \(e.soundCodec) \(e.sampleRateHz) Hz: original \(side(e.liveChannel)) = copy left = copy right "
             + "sha256 \(e.soundSHA256) (\(e.soundSamples) samples)"

@@ -7,7 +7,7 @@
 // poisoned fact at a time never yields "proven") · SCALE (100k decisions
 // inside a budget) · SENSOR (the engine source writes nothing and launches
 // processes only through the app's one runner). MEDIA and TRUTH are in
-// BalancedCopyProofMediaTests. The rules added after Codex review #301
+// BalancedCopyProofMediaTests. The rules added after Codex review #298
 // (discarded channel, timing, decoder configuration, layout, whole reads,
 // the hash pass's log) are table-tested in BalancedCopyProofRuleTests.
 
@@ -28,11 +28,8 @@ struct BalancedCopyProofDecisionTests {
 
     static let movie = "mov,mp4,m4a,3gp,3g2,mj2"
 
-    static func timing(packets: Int? = 50, start: Double? = 0, duration: Double? = 2, real: String = "25/1",
-                       average: String = "25/1", tick: Double? = 1.0 / 12_800) -> Proof.StreamTiming {
-        Proof.StreamTiming(startSeconds: start, durationSeconds: duration, tickSeconds: tick, realFrameRate: real,
-                           averageFrameRate: average, packets: packets)
-    }
+    static let timesHash = String(repeating: "e5", count: 32)
+    static let otherTimesHash = String(repeating: "f6", count: 32)
     static func picture(width: Int? = 320, extradata: String = "") -> Proof.PictureConfiguration {
         Proof.PictureConfiguration(extradataSHA256: extradata, width: width, height: 240, pixelFormat: "yuv422p10le",
                                    sampleAspect: "1:1", displayAspect: "4:3", fieldOrder: "progressive",
@@ -40,11 +37,11 @@ struct BalancedCopyProofDecisionTests {
     }
     static func video(_ index: Int = 0, codec: String = "prores", hash: String? = pictureHash) -> Proof.CarriedStream {
         Proof.CarriedStream(index: index, kind: "video", codec: codec, tag: "apco", packetSHA256: hash,
-                            timing: timing(), configuration: picture())
+                            timingSHA256: timesHash, packets: 50, timeBase: "1/12800", configuration: picture())
     }
     static func timecode(_ index: Int, hash: String? = timecodeHash) -> Proof.CarriedStream {
         Proof.CarriedStream(index: index, kind: "data", codec: "", tag: "tmcd", packetSHA256: hash,
-                            timing: timing(packets: 1, real: "0/0"),
+                            timingSHA256: timesHash, packets: 1, timeBase: "1/25",
                             configuration: Proof.PictureConfiguration(extradataSHA256: "SHA256:" + otherHash))
     }
     /// `layout` nil = what a QuickTime file states: "mono" for one channel, else "stereo".
@@ -52,7 +49,8 @@ struct BalancedCopyProofDecisionTests {
                       channels: Int = 2, layout: String? = nil) -> Proof.SoundStream {
         Proof.SoundStream(index: index, codec: codec, sampleFormat: format, sampleRateHz: rate, channels: channels,
                           channelLayout: layout ?? (channels == 1 ? "mono" : "stereo"),
-                          timing: timing(packets: 94, real: "0/0", average: "0/0", tick: 1.0 / 48_000))
+                          timing: Proof.StreamTiming(startSeconds: 0, durationSeconds: 2, tickSeconds: 1.0 / 48_000,
+                                                     packets: 94))
     }
 
     /// A hash pass that read exactly what the layout says is there. For the
@@ -61,7 +59,7 @@ struct BalancedCopyProofDecisionTests {
     static func wholeRead(of file: Proof.FileLayout, liveChannel: Int? = nil) -> Proof.ReadReport {
         var report = Proof.ReadReport()
         for stream in file.carried {
-            report.streams[stream.index] = Proof.StreamRead(packets: stream.timing.packets ?? 0)
+            report.streams[stream.index] = Proof.StreamRead(packets: stream.packets ?? 0)
         }
         for stream in file.sound {
             let samples = Int64(((stream.timing.durationSeconds ?? 0) * Double(stream.sampleRateHz)).rounded())
@@ -118,7 +116,7 @@ struct BalancedCopyProofDecisionTests {
         #expect(evidence.sampleRateHz == 48_000)
         #expect(evidence.carried == [Proof.Evidence.Stream(kind: "video", codec: "prores", originalIndex: 0,
                                                            balancedIndex: 0, packetSHA256: Self.pictureHash,
-                                                           packets: 50)])
+                                                           timingSHA256: Self.timesHash, packets: 50)])
         #expect(!evidence.gainedTimecodeTrack)
         #expect(evidence.soundSamples == 96_000)
         #expect(evidence.discarded == Proof.Evidence.Discarded(channel: 1, peakDBFS: -.infinity))
@@ -374,13 +372,18 @@ struct BalancedCopyProofDecisionTests {
             ("copy picture width", { $0.balanced.carried[0].configuration.width = 304 }),
             ("copy picture extradata", { $0.balanced.carried[0].configuration.extradataSHA256 = "SHA256:ab" }),
             ("original picture size unread", { $0.original.carried[0].configuration.width = nil }),
-            ("copy picture packets", { $0.balanced.carried[0].timing.packets = 49 }),
-            ("copy picture packets uncounted", { $0.balanced.carried[0].timing.packets = nil }),
-            ("copy picture start", { $0.balanced.carried[0].timing.startSeconds = 0.04 }),
-            ("copy picture duration", { $0.balanced.carried[0].timing.durationSeconds = 4 }),
-            ("copy picture duration unstated", { $0.balanced.carried[0].timing.durationSeconds = nil }),
-            ("copy frame rate", { $0.balanced.carried[0].timing.realFrameRate = "25/2" }),
-            ("copy average frame rate", { $0.balanced.carried[0].timing.averageFrameRate = "1250/99" }),
+            ("copy picture side data", { $0.balanced.carried[0].configuration.sideData = "[{\"rotation\":-180}]" }),
+            ("copy sound side data", { $0.balanced.sound[0].sideData = "[{}]" }),
+            ("copy picture packets", { $0.balanced.carried[0].packets = 49 }),
+            ("copy picture packets uncounted", { $0.balanced.carried[0].packets = nil }),
+            ("no picture packets at all", { $0.original.carried[0].packets = 0; $0.balanced.carried[0].packets = 0 }),
+            ("copy packet times", { $0.balanced.carried[0].timingSHA256 = Self.otherTimesHash }),
+            ("copy packet times unread", { $0.balanced.carried[0].timingSHA256 = nil }),
+            ("original packet times unread", { $0.original.carried[0].timingSHA256 = nil }),
+            ("packet times of nothing", {
+                $0.original.carried[0].timingSHA256 = Proof.emptySHA256
+                $0.balanced.carried[0].timingSHA256 = Proof.emptySHA256
+            }),
             ("copy sound start", { $0.balanced.sound[0].timing.startSeconds = 0.5 }),
             ("copy sound duration", { $0.balanced.sound[0].timing.durationSeconds = 1.99 }),
             ("copy file duration", { $0.balanced.durationSeconds = 2.5 })
@@ -422,8 +425,6 @@ struct BalancedCopyProofDecisionTests {
             f.balancedRightSHA256 = nil
             f.originalRead = nil
             f.balancedRead = nil
-            for i in f.original.carried.indices { f.original.carried[i].packetSHA256 = nil }
-            for i in f.balanced.carried.indices { f.balanced.carried[i].packetSHA256 = nil }
             return f
         }
         #expect(Proof.layoutVerdict(unhashed {
@@ -432,6 +433,27 @@ struct BalancedCopyProofDecisionTests {
         #expect(Proof.layoutVerdict(unhashed { $0.balanced.sound = [] }) == .notProven(.balancedSoundTracks(0)))
         #expect(Proof.layoutVerdict(unhashed { $0.originalClass = .dualMono })
                 == .notProven(.originalNotOneSided(.dualMono)))
+        // The headers alone decide those — before any packet is read.
+        func headersOnly(_ change: (inout Proof.Facts) -> Void) -> Proof.Facts {
+            var f = unhashed(change)
+            for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
+                for i in f[keyPath: side].carried.indices {
+                    f[keyPath: side].carried[i].packets = nil
+                    f[keyPath: side].carried[i].packetSHA256 = nil
+                    f[keyPath: side].carried[i].timingSHA256 = nil
+                }
+            }
+            return f
+        }
+        #expect(Proof.headerVerdict(headersOnly { $0.original.sound = [Self.sound(codec: "aac", format: "fltp")] })
+                == .notProven(.soundReencoded(codec: "aac")))
+        #expect(Proof.headerVerdict(headersOnly { $0.balanced.carried[0].configuration.sideData = "[{}]" }) != nil)
+        #expect(Proof.headerVerdict(headersOnly { $0.balanced.carried = [] }) != nil)
+        #expect(Proof.headerVerdict(headersOnly { _ in }) == nil, "good headers: go on and read the packets")
+        guard case .couldNotCheck = Proof.layoutVerdict(headersOnly { _ in }) else {
+            Issue.record("headers without packets are not a layout that allows a proof")
+            return
+        }
         // Good layout: nothing to say yet — and decide() refuses to prove without hashes.
         let good = unhashed { _ in }
         #expect(Proof.layoutVerdict(good) == nil)
@@ -452,7 +474,8 @@ struct BalancedCopyProofDecisionTests {
         #expect(proven.contains("video 0→0 sha256 \(Self.pictureHash)"))
         #expect(proven.contains("original left = copy left = copy right sha256 \(Self.soundHash)"))
         #expect(proven.contains("pcm_s16le 48000 Hz"))
-        #expect(proven.contains("(50 packets, timing and decoder configuration equal)"))
+        #expect(proven.contains("(50 packets, each one's time, duration, size and bytes equal; times sha256 e5e5e5e5e5e5; "
+                                + "configuration and side data equal)"))
         #expect(proven.contains("(96000 samples)"))
         #expect(proven.contains("original right: digital silence, not in the copy"))
         let quiet = Proof.logLine(original: original, balanced: copy, outcome: Proof.decide(Self.poisoned {
@@ -548,7 +571,7 @@ struct BalancedCopyProofDecisionTests {
         #expect(Proof.streamHashes(fromStdout: "garbage", expected: 1) == nil)
     }
 
-    @Test("layout(fromProbeJSON:): audio apart from carried streams, with timing, packet counts and decoder configuration")
+    @Test("layout(fromProbeJSON:): audio apart from carried streams, with decoder configuration, side data and time base")
     func layoutParse() throws {
         let json = Data("""
         {"streams":[
@@ -556,14 +579,14 @@ struct BalancedCopyProofDecisionTests {
            "pix_fmt":"yuv420p","sample_aspect_ratio":"1:1","display_aspect_ratio":"4:3","field_order":"progressive",
            "color_range":"tv","color_space":"bt709","color_transfer":"bt709","color_primaries":"bt709",
            "r_frame_rate":"25/1","avg_frame_rate":"25/1","time_base":"1/12800","start_time":"0.000000",
-           "duration":"2.000000","nb_read_packets":"50","extradata_hash":"SHA256:abcd"},
+           "duration":"2.000000","extradata_hash":"SHA256:abcd","disposition":{"default":1},
+           "side_data_list":[{"side_data_type":"Display Matrix","rotation":-180,"displaymatrix":"\\n0: -65536 0 0\\n"}]},
           {"index":1,"codec_name":"pcm_s24le","codec_type":"audio","codec_tag_string":"in24",
            "sample_fmt":"s32","sample_rate":"48000","channels":2,"channel_layout":"stereo","r_frame_rate":"0/0",
-           "avg_frame_rate":"0/0","time_base":"1/48000","start_time":"0.500000","duration":"2.000000",
-           "nb_read_packets":"94"},
-          {"index":2,"codec_type":"data","codec_tag_string":"tmcd","nb_read_packets":"1",
+           "avg_frame_rate":"0/0","time_base":"1/48000","start_time":"0.500000","duration":"2.000000"},
+          {"index":2,"codec_type":"data","codec_tag_string":"tmcd","time_base":"1/25",
            "tags":{"DURATION":"00:00:01.800000000"}}],
-         "format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"2.500000"}}
+         "format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"2.500000","tags":{"encoder":"Lavf"}}}
         """.utf8)
         let layout = try #require(Proof.layout(fromProbeJSON: json))
         #expect(layout.container == Self.movie)
@@ -571,24 +594,24 @@ struct BalancedCopyProofDecisionTests {
         #expect(layout.durationSeconds == 2.5)
         #expect(layout.carried.map(\.index) == [0, 2])
         let video = layout.carried[0]
-        #expect(video.kind == "video" && video.codec == "h264" && video.tag == "avc1" && video.packetSHA256 == nil)
-        #expect(video.timing == Proof.StreamTiming(startSeconds: 0, durationSeconds: 2, tickSeconds: 1.0 / 12_800,
-                                                   realFrameRate: "25/1", averageFrameRate: "25/1", packets: 50))
+        #expect(video.kind == "video" && video.codec == "h264" && video.tag == "avc1" && video.timeBase == "1/12800")
+        // Packets are the packet pass's to fill in: unknown until then.
+        #expect(video.packetSHA256 == nil && video.timingSHA256 == nil && video.packets == nil)
         #expect(video.configuration == Proof.PictureConfiguration(
             extradataSHA256: "SHA256:abcd", width: 320, height: 240, pixelFormat: "yuv420p", sampleAspect: "1:1",
             displayAspect: "4:3", fieldOrder: "progressive", colorRange: "tv", colorSpace: "bt709",
-            colorTransfer: "bt709", colorPrimaries: "bt709"))
+            colorTransfer: "bt709", colorPrimaries: "bt709",
+            sideData: #"[{"displaymatrix":"\n0: -65536 0 0\n","rotation":-180,"side_data_type":"Display Matrix"}]"#))
         let timecode = layout.carried[1]
         #expect(timecode.isTimecodeTrack && timecode.codec.isEmpty && !video.isTimecodeTrack)
-        // No `duration`: Matroska's DURATION tag is the stream's stated length. No start: nil, not 0.
-        #expect(timecode.timing.durationSeconds == 1.8)
-        #expect(timecode.timing.startSeconds == nil && timecode.timing.tickSeconds == nil)
-        #expect(timecode.configuration == Proof.PictureConfiguration())
+        #expect(timecode.configuration == Proof.PictureConfiguration() && timecode.timeBase == "1/25")
         let sound = try #require(layout.sound.first)
         #expect(layout.sound.count == 1)
         #expect(sound.index == 1 && sound.codec == "pcm_s24le" && sound.sampleFormat == "s32")
         #expect(sound.sampleRateHz == 48_000 && sound.channels == 2 && sound.channelLayout == "stereo")
-        #expect(sound.timing.startSeconds == 0.5 && sound.timing.packets == 94)
+        #expect(sound.sideData.isEmpty)
+        #expect(sound.timing == Proof.StreamTiming(startSeconds: 0.5, durationSeconds: 2, tickSeconds: 1.0 / 48_000,
+                                                   packets: nil))
         #expect(abs(sound.timingSlackSeconds - 1.0 / 48_000) < 1e-12)
         #expect(Proof.layout(fromProbeJSON: Data("{}".utf8)) == nil)
         #expect(Proof.layout(fromProbeJSON: Data("{\"streams\":[]}".utf8)) == nil)
@@ -596,10 +619,12 @@ struct BalancedCopyProofDecisionTests {
         // Unreadable numbers are unknown, never zero.
         #expect(Proof.seconds("N/A") == nil && Proof.seconds(nil) == nil && Proof.seconds("nan") == nil)
         #expect(Proof.tick("0/1") == nil && Proof.tick("1/0") == nil && Proof.tick("x") == nil)
-        // The request counts packets and hashes extradata.
-        let args = Proof.layoutArgs(input: "/in/a.mov")
-        #expect(args.contains("-count_packets") && args.last == "/in/a.mov")
-        #expect(args.joined(separator: " ").contains("-show_data_hash sha256"))
+        // The header read asks for whole streams (side data and all); the packet pass for every packet.
+        #expect(Proof.layoutArgs(input: "/in/a.mov")
+                == ["-v", "error", "-show_data_hash", "sha256", "-show_streams", "-show_format", "-of", "json", "/in/a.mov"])
+        #expect(Proof.packetArgs(input: "/in/a.mov")
+                == ["-v", "error", "-show_packets", "-show_data_hash", "sha256", "-show_entries",
+                    "packet=stream_index,pts,duration,size,data_hash", "-of", "csv=p=0", "/in/a.mov"])
     }
 
     @Test("hashCodec: each decoded sample format maps to the raw PCM codec that holds it exactly; unknown is nil")
@@ -617,7 +642,7 @@ struct BalancedCopyProofDecisionTests {
         #expect(Proof.hashCodec(forSampleFormat: "s24") == nil)
     }
 
-    @Test("hashArgs: packets are stream-copied, sound is hashed as raw PCM with no resample, errors are fatal, input options precede -i")
+    @Test("hashArgs: the sound is hashed as raw PCM with no resample, every other stream goes to the null muxer, errors are fatal")
     func hashArgsVector() throws {
         let args = Proof.hashArgs(
             input: "/in/tape.dv", inputArgs: ["-r", "30000/1001"], carriedIndices: [0, 2],
@@ -628,12 +653,11 @@ struct BalancedCopyProofDecisionTests {
             "-r", "30000/1001", "-i", "/in/tape.dv",
             "-filter_complex",
             "[0:1]astats@vsabc=measure_perchannel=Peak_level:measure_overall=none,channelmap=map=1:channel_layout=mono[live]",
-            "-map", "0:0", "-map", "0:2", "-map", "[live]",
-            "-c", "copy", "-c:a", "pcm_s16le", "-f", "streamhash", "-hash", "sha256", "-"
+            "-map", "[live]", "-c:a", "pcm_s16le", "-f", "streamhash", "-hash", "sha256", "-",
+            "-map", "0:0", "-map", "0:2", "-c", "copy", "-f", "null", "-"
         ])
         // Nothing that resamples, re-times or writes a file.
         for forbidden in ["-ar", "-af", "-y", "-ac", "-sample_fmt"] { #expect(!args.contains(forbidden)) }
-        #expect(args.last == "-", "the only output is stdout")
         let input = try #require(args.firstIndex(of: "-i"))
         for option in ["-xerror", "-err_detect"] {
             #expect(try #require(args.firstIndex(of: option)) < input, "\(option) must apply to the read")
@@ -650,6 +674,11 @@ struct BalancedCopyProofDecisionTests {
         #expect(left < right, "left is hashed before right — the parse depends on the order")
         // The proof picks channels with channelmap, never with the filter the job rendered with.
         #expect(!copy.joined(separator: " ").contains("pan="))
+        // A sound-only file has no second output.
+        let wav = Proof.hashArgs(input: "/in/a.wav", inputArgs: [], carriedIndices: [],
+                                 soundFilter: Proof.balancedSoundFilter(streamIndex: 0),
+                                 soundOutputs: ["left", "right"], hashCodec: "pcm_s16le")
+        #expect(wav.last == "-" && !wav.contains("null") && wav.filter { $0 == "-f" }.count == 1)
     }
 
     // MARK: Scale
@@ -694,7 +723,10 @@ struct BalancedCopyProofDecisionTests {
         }
         // One process runner, one tool locator — no second road to ffmpeg.
         #expect(!code.contains("Process()"))
-        #expect(code.components(separatedBy: "ProcessRunner.runProcess(").count == 3, "one ffprobe call, one ffmpeg call")
+        #expect(code.components(separatedBy: "ProcessRunner.runProcess(").count == 4,
+                "the header read, the packet pass, the sound pass")
+        // The packet pass is consumed line by line: nothing of it is collected.
+        #expect(code.contains("stdoutLine: { ledger.note($0) }, stdoutLimitBytes: 0"))
         #expect(code.contains("ToolLocator.ffmpegPath") && code.contains("ToolLocator.ffprobePath"))
         // ffmpeg is asked for hashes on stdout only: no overwrite flag, no output path.
         #expect(!code.contains("\"-y\""))

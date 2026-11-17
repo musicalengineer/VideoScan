@@ -1,5 +1,5 @@
 // BalancedCopyProofHardeningTests.swift
-// Codex review #301 (2026-11-16) BLOCKED BalancedCopyProof with eight
+// Codex review #298 (2026-11-16) BLOCKED BalancedCopyProof with eight
 // findings, five of them ways to a false PROVEN. Each test here is one of
 // those reproductions, built with real ffmpeg media (tones and test
 // patterns only), seen RED on the engine as reviewed and green after it.
@@ -71,11 +71,24 @@ enum BalancedCopyProofLab {
         return url.path
     }
 
+    /// Where `firstSecondOnlyFFmpeg(in:name:…)` leaves a mark each time it runs.
+    static func ranMark(in dir: URL, name: String) -> String { dir.path + "/tools-\(name)/ran" }
+
+    /// A tool that writes every argument it is given, one per line, to
+    /// `tools-<name>/arguments` and then does the real work.
+    static func recording(_ tool: String, real: String, in dir: URL, name: String) throws -> String {
+        try script(name, tool: tool, in: dir, """
+        for a in "$@"; do printf '%s\\n' "$a" >> "\(dir.path)/tools-\(name)/arguments"; done
+        exec "\(real)" "$@"
+        """)
+    }
+
     /// An ffmpeg that reads only the FIRST SECOND of every input and still
     /// exits 0 — a zero-exit partial read. `complaint` is what it prints on
-    /// stderr afterwards ("" = it stays silent).
+    /// stderr afterwards ("" = it stays silent). Leaves `ranMark` behind.
     static func firstSecondOnlyFFmpeg(in dir: URL, name: String, complaint: String) throws -> String {
         try script(name, tool: "ffmpeg", in: dir, """
+        : > "\(ranMark(in: dir, name: name))"
         n=$#
         i=0
         while [ $i -lt $n ]; do
@@ -101,7 +114,7 @@ enum BalancedCopyProofLab {
     }
 }
 
-@Suite("Balanced copy proof — Codex #301 reproductions", .serialized)
+@Suite("Balanced copy proof — Codex #298 reproductions", .serialized)
 struct BalancedCopyProofHardeningTests {
 
     typealias Proof = BalancedCopyProof
@@ -272,12 +285,12 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: retimed)
         #expect(!outcome.isProven, "the picture plays at half speed and the copy was still proven: \(outcome)")
-        #expect(Lab.timing(outcome)?.hasPrefix("video stream 0 ") == true, "\(outcome)")
+        #expect(Lab.timing(outcome)?.hasPrefix("video stream 0: its packets are not presented") == true, "\(outcome)")
     }
 
     // MARK: F3 — partial reads
 
-    @Test("F3: an ffmpeg that reads one second, complains on stderr and exits 0 never proves a one-second copy",
+    @Test("F3: Codex's scenario — a one-second copy, and an ffmpeg that would read only one second — is refused by the packet pass before that ffmpeg is ever run",
           .timeLimit(.minutes(2)))
     func zeroExitPartialReadNeverProvesAShortCopy() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
@@ -291,8 +304,10 @@ struct BalancedCopyProofHardeningTests {
         let outcome = await Proof.measure(original: original, balanced: half,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
         #expect(!outcome.isProven, "a copy holding half the recording was proven: \(outcome)")
-        // ffprobe's own count already refuses it, before any hash pass runs.
+        // ffprobe's packet pass already refuses it; the sound pass (the wrapper) never ran.
+        // What a partial SOUND pass does is the next two tests, which reach it.
         #expect(Lab.timing(outcome) == "video stream 0 has 50 packets, the balanced copy 25", "\(outcome)")
+        #expect(!fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")))
     }
 
     @Test("F3: a zero-exit read with ANYTHING on stderr is COULD NOT CHECK, even for a faithful pair",
@@ -306,6 +321,7 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
+        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "noisy")), "the sound pass was reached")
         let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
         #expect(why.contains("Error during demuxing: Input/output error"), "the reason quotes the line: \(why)")
     }
@@ -320,8 +336,10 @@ struct BalancedCopyProofHardeningTests {
 
         let outcome = await Proof.measure(original: original, balanced: balanced,
                                           tools: Proof.Tools(ffmpeg: partial, ffprobe: ToolLocator.ffprobePath))
+        #expect(fm.fileExists(atPath: Lab.ranMark(in: dir, name: "silent")), "the sound pass was reached")
         let why = try #require(Lab.reason(outcome), "expected could not check, got \(outcome)")
-        #expect(why.contains("not read to the end"), "\(why)")
+        #expect(why.hasPrefix("the original was not read to the end (stream 0: 2") && why.hasSuffix(" of 50 packets)"),
+                "about half of the picture's 50 packets: \(why)")
     }
 
     // MARK: F4 — identity
@@ -393,16 +411,31 @@ struct BalancedCopyProofHardeningTests {
         #expect(evidence.balancedResolvedPath == SourceTree.canonicalPath(URL(fileURLWithPath: balanced)))
         #expect(evidence.originalStamp == FileIdentityStamp.capture(path: original))
 
-        // ffmpeg re-points the folder link at the twin folder before each pass.
-        let hasher = try Lab.script("repoint", tool: "ffmpeg", in: dir, """
+        // Every path any tool is handed is recorded. ffmpeg also re-points
+        // the folder link at the twin folder before each of its passes.
+        let probe = try Lab.recording("ffprobe", real: ToolLocator.ffprobePath, in: dir, name: "seen")
+        let hasher = try Lab.script("seen", tool: "ffmpeg", in: dir, """
+        for a in "$@"; do printf '%s\\n' "$a" >> "\(dir.path)/tools-seen/arguments"; done
         /bin/ln -sfn "\(second.path)" "\(via)"
-        case "$*" in *"/second/"*) echo "read through the re-pointed link" > "\(dir.path)/leak" ;; esac
         exec "\(ToolLocator.ffmpegPath)" "$@"
         """)
         let outcome = await Proof.measure(original: givenOriginal, balanced: givenBalanced,
-                                          tools: Proof.Tools(ffmpeg: hasher, ffprobe: ToolLocator.ffprobePath))
+                                          tools: Proof.Tools(ffmpeg: hasher, ffprobe: probe))
         #expect(outcome == .couldNotCheck("a file changed while it was being checked"))
-        #expect(!fm.fileExists(atPath: dir.path + "/leak"), "ffmpeg was handed a path that follows the link")
+
+        // Codex #301-5: what the tools were actually given. Four ffprobe runs
+        // and two ffmpeg runs, each with ONE file argument: the canonical
+        // path under first/, never the given path through the link.
+        let seen = try String(contentsOfFile: dir.path + "/tools-seen/arguments", encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        let canonicalOriginal = SourceTree.canonicalPath(URL(fileURLWithPath: original))
+        let canonicalBalanced = SourceTree.canonicalPath(URL(fileURLWithPath: balanced))
+        #expect(canonicalOriginal.contains("/first/") && !canonicalOriginal.contains("/via/"))
+        let files = seen.filter { $0.hasSuffix(".mov") }
+        #expect(files == [canonicalOriginal, canonicalBalanced, canonicalOriginal, canonicalBalanced,
+                          canonicalOriginal, canonicalBalanced],
+                "two header reads, two packet passes, two sound passes: \(files)")
+        #expect(!seen.contains { $0.contains("/via/") || $0.contains("/second/") }, "a tool was handed a path through the link")
     }
 
     // MARK: F5 — decoder configuration

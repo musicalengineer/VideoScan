@@ -1,15 +1,17 @@
 // BalancedCopyProofRuleTests.swift
-// The rules BalancedCopyProof gained after Codex review #301, as pure
-// tables: the discarded channel (F1), timing (F2), whole reads and the hash
-// pass's log (F3), decoder configuration (F5), channel layout (F6). No
-// file, no subprocess — the same rules on real media are in
-// BalancedCopyProofHardeningTests.
+// The rules BalancedCopyProof gained after Codex reviews #298 and #301, as
+// pure tables: the discarded channel (F1), the carried streams packet by
+// packet and the sound's times (F2; #301-1, -3, -4), whole reads and the
+// sound pass's log (F3), decoder and display configuration (F5; #301-2),
+// channel layout (F6), and the fold of the packet pass's lines. No file,
+// no subprocess — the same rules on real media are in
+// BalancedCopyProofHardeningTests and BalancedCopyProofPacketTests.
 
 import Foundation
 import Testing
 @testable import VideoScan
 
-@Suite("Balanced copy proof — the rules added after Codex #301")
+@Suite("Balanced copy proof — the rules added after Codex #298")
 struct BalancedCopyProofRuleTests {
 
     typealias Proof = BalancedCopyProof
@@ -76,38 +78,49 @@ struct BalancedCopyProofRuleTests {
 
     // MARK: F2 — timing
 
-    @Test("F2: a paired stream that starts, lasts, counts or runs differently is not proven, naming what moved")
-    func pictureTimingTable() {
-        func decide(_ change: @escaping (inout Proof.StreamTiming) -> Void) -> Proof.Outcome {
-            Proof.decide(Table.facts { change(&$0.balanced.carried[0].timing) })
+    @Test("#301-1/3: a carried stream is held PACKET BY PACKET — count, then bytes and boundaries, then times")
+    func carriedStreamTable() {
+        func decide(_ change: @escaping (inout Proof.CarriedStream) -> Void) -> Proof.Outcome {
+            Proof.decide(Table.facts { change(&$0.balanced.carried[0]) })
         }
         #expect(timingReason(decide { $0.packets = 49 }) == "video stream 0 has 50 packets, the balanced copy 49")
-        #expect(timingReason(decide { $0.startSeconds = 0.04 })
-                == "video stream 0 starts at 0.000000 s, in the balanced copy at 0.040000 s")
-        #expect(timingReason(decide { $0.durationSeconds = 3.96 })
-                == "video stream 0 lasts 2.000000 s, in the balanced copy 3.960000 s")
-        #expect(timingReason(decide { $0.realFrameRate = "25/2" }) == "video stream 0 frame rate 25/1 → 25/2")
-        #expect(timingReason(decide { $0.averageFrameRate = "1250/99" })
-                == "video stream 0 average frame rate 25/1 → 1250/99")
-        // Stated on one side only is a difference; unstated on both is not.
-        #expect(timingReason(decide { $0.durationSeconds = nil })?.contains("no stated time") == true)
-        #expect(timingReason(decide { $0.startSeconds = nil })?.contains("no stated time") == true)
-        #expect(Proof.decide(Table.facts {
-            $0.original.carried[0].timing.durationSeconds = nil
-            $0.balanced.carried[0].timing.durationSeconds = nil
-        }).isProven)
-        // Uncounted packets are could-not-check on either side.
-        #expect(unchecked(decide { $0.packets = nil })?.contains("could not be counted") == true)
-        #expect(unchecked(Proof.decide(Table.facts { $0.original.carried[0].timing.packets = nil })) != nil)
-        // The tolerance is ffprobe's printing resolution: one microsecond.
-        #expect(Proof.pictureTimingToleranceSeconds == 0.000_001)
-        #expect(decide { $0.durationSeconds = 2.000_000_5 }.isProven)
-        #expect(!decide { $0.durationSeconds = 2.000_002 }.isProven)
-        // A time base may differ (raw DV 1/60000 → QuickTime 1/30000): seconds are what is compared.
-        #expect(decide { $0.tickSeconds = 1.0 / 30_000 }.isProven)
+        // The same bytes cut into other packets, or other bytes: the (size, payload hash) sequence differs.
+        #expect(decide { $0.packetSHA256 = Table.otherHash }
+                == .notProven(.carriedStreamDiffers(kind: "video", originalIndex: 0, original: Table.pictureHash,
+                                                    balanced: Table.otherHash)))
+        // The same packets shown at other times: the (presentation time, duration) sequence differs.
+        #expect(timingReason(decide { $0.timingSHA256 = Table.otherTimesHash })
+                == "video stream 0: its packets are not presented at the original's times, each for the original's duration")
+        // Both wrong: the bytes are named first.
+        guard case .notProven(.carriedStreamDiffers) = decide({
+            $0.packetSHA256 = Table.otherHash
+            $0.timingSHA256 = Table.otherTimesHash
+        }) else { Issue.record("bytes are judged before times"); return }
+        // Unknown is never equal: uncounted, unread, or nothing read at all.
+        for (name, poison) in [
+            ("uncounted", { $0.packets = nil }), ("times unread", { $0.timingSHA256 = nil }),
+            ("bytes unread", { $0.packetSHA256 = nil }), ("times malformed", { $0.timingSHA256 = "abc" })
+        ] as [(String, (inout Proof.CarriedStream) -> Void)] {
+            #expect(unchecked(decide(poison)) != nil, "\(name)")
+        }
+        let nothing = Proof.decide(Table.facts {
+            for side in [\Proof.Facts.original, \Proof.Facts.balanced] {
+                $0[keyPath: side].carried[0].packets = 0
+                $0[keyPath: side].carried[0].packetSHA256 = Proof.emptySHA256
+                $0[keyPath: side].carried[0].timingSHA256 = Proof.emptySHA256
+            }
+        })
+        #expect(unchecked(nothing) == "video stream 0 gave no packets to compare")
+        // The time base itself may differ (raw DV 1/60000 → QuickTime 1/30000): the times are fractions of a second.
+        #expect(decide { $0.timeBase = "1/30000" }.isProven)
+        // Decided before the sound is decoded: the layout verdict already says no.
+        #expect(Proof.layoutVerdict(Table.facts { $0.balanced.carried[0].timingSHA256 = Table.otherTimesHash }) != nil)
+        // The evidence carries both digests and the count.
+        guard case .proven(let evidence) = Proof.decide(Table.goodFacts()) else { Issue.record("baseline"); return }
+        #expect(evidence.carried[0].timingSHA256 == Table.timesHash && evidence.carried[0].packets == 50)
     }
 
-    @Test("F2: the sound's start, length, distance from the picture and the file's length are held within one sample period")
+    @Test("F2 / #301-4: the sound's start, its length and the file's length are held within one sample period; the picture's times are exact, so the sound's start IS its distance from the picture")
     func soundTimingTable() {
         func decide(_ change: @escaping (inout Proof.Facts) -> Void) -> Proof.Outcome { Proof.decide(Table.facts(change)) }
         let sample = 1.0 / 48_000
@@ -119,19 +132,28 @@ struct BalancedCopyProofRuleTests {
         #expect(timingReason(decide { $0.balanced.durationSeconds = 2.5 })
                 == "the file lasts 2.000000 s, the balanced copy 2.500000 s")
         #expect(timingReason(decide { $0.balanced.durationSeconds = nil })?.contains("no stated time") == true)
+        #expect(timingReason(decide { $0.balanced.sound[0].timing.startSeconds = nil })?.contains("no stated time") == true)
+        // Unstated on both sides (WAV has no start time) agrees.
+        #expect(decide {
+            $0.original.sound[0].timing.startSeconds = nil
+            $0.balanced.sound[0].timing.startSeconds = nil
+        }.isProven)
         // Within one sample period: the raw DV → QuickTime case (1.968633 s against 1.968625 s).
         #expect(decide { $0.balanced.sound[0].timing.durationSeconds = 2 - 0.4 * sample }.isProven)
         #expect(!decide { $0.balanced.sound[0].timing.durationSeconds = 2 - 1.5 * sample }.isProven)
-        #expect(!decide { $0.balanced.sound[0].timing.startSeconds = 1.5 * sample }.isProven)
-        // Picture and sound both moved by the same amount inside the picture's
-        // tolerance cannot happen; moved apart is caught as the offset.
-        let apart = decide {
-            $0.original.carried[0].timing.startSeconds = 0.000_000_6
-            $0.balanced.sound[0].timing.startSeconds = 0.000_020
-            $0.balanced.carried[0].timing.startSeconds = 0
-            $0.original.sound[0].timing.startSeconds = 0.000_000_2
-        }
-        #expect(apart.isProven, "all inside the tolerances: \(apart)")
+        // #301-4, Codex's 0.000021 case: the sound may move by up to one sample
+        // (20.8 µs) — and the PICTURE may not move at all, so sound against
+        // picture can never move by more than that. A picture start 0.6 µs
+        // off is another packet time: refused by the packet sequence, not
+        // forgiven by a tolerance. (The separate offset guard is gone with
+        // the picture tolerance that made it necessary.)
+        #expect(decide { $0.balanced.sound[0].timing.startSeconds = 0.000_020 }.isProven)
+        #expect(timingReason(decide { $0.balanced.sound[0].timing.startSeconds = 0.000_021 })
+                == "the sound starts at 0.000000 s, in the balanced copy at 0.000021 s")
+        #expect(timingReason(decide {
+            $0.balanced.sound[0].timing.startSeconds = 0.000_020     // inside the sound's slack
+            $0.balanced.carried[0].timingSHA256 = Table.otherTimesHash // the picture's first packet 0.6 µs early
+        })?.hasPrefix("video stream 0: its packets are not presented at the original's times") == true)
         // A coarse time base widens the slack to its tick — never past 1 ms.
         #expect(Table.sound().timingSlackSeconds == sample)
         var matroska = Table.sound()
@@ -148,24 +170,115 @@ struct BalancedCopyProofRuleTests {
         #expect(decide { $0.balanced.sound[0].timing.packets = 188 }.isProven)
     }
 
-    @Test("F2: when the container changed, the copy's average frame rate is held to the original's REAL rate")
-    func containerChangeFrameRateRule() {
-        func rawDV(_ change: @escaping (inout Proof.Facts) -> Void) -> Proof.Outcome {
-            Proof.decide(Table.facts {
-                $0.original.container = "dv"
-                $0.original.carried[0].timing.realFrameRate = "30000/1001"
-                $0.original.carried[0].timing.averageFrameRate = "60000/1"      // the raw-DV demuxer's bogus average
-                $0.balanced.carried[0].timing.realFrameRate = "30000/1001"
-                $0.balanced.carried[0].timing.averageFrameRate = "30000/1001"
-                change(&$0)
-            })
+    // MARK: The packet pass's fold
+
+    private func sequences(_ lines: [String], carried: [(Int, String)] = [(0, "1/12800")], sound: [Int] = [1])
+        -> (fault: String?, found: [Int: Proof.PacketSequence]) {
+        var layout = Proof.FileLayout()
+        for (index, timeBase) in carried {
+            layout.carried.append(Proof.CarriedStream(index: index, kind: "video", codec: "prores", tag: "apco",
+                                                      timeBase: timeBase))
         }
-        #expect(rawDV { _ in }.isProven)
-        #expect(timingReason(rawDV { $0.balanced.carried[0].timing.averageFrameRate = "60000/1" })
-                == "video stream 0 average frame rate 30000/1001 → 60000/1")
-        #expect(timingReason(rawDV { $0.balanced.carried[0].timing.realFrameRate = "25/1" }) != nil)
-        // The same two rates in an UNCHANGED container are a difference.
-        #expect(timingReason(rawDV { $0.original.container = Table.movie }) != nil)
+        for index in sound { layout.sound.append(Table.sound(index)) }
+        let ledger = Proof.PacketLedger(layout: layout)
+        lines.forEach(ledger.note)
+        return (ledger.fault, ledger.sequences)
+    }
+    private static let a = "SHA256:" + String(repeating: "a1", count: 32)
+    private static let b = "SHA256:" + String(repeating: "b2", count: 32)
+
+    @Test("#301-1/3: the packet fold tells apart another time, another duration, another boundary, another order — and nothing else")
+    func packetLedgerFold() throws {
+        let base = ["0,0,512,100,\(Self.a)", "1,0,1024,4096,\(Self.b)", "0,512,512,200,\(Self.b)"]
+        let good = sequences(base)
+        #expect(good.fault == nil)
+        let video = try #require(good.found[0])
+        #expect(video.packets == 2 && good.found[1]?.packets == 1)
+        #expect(video.timingSHA256.count == 64 && video.packetSHA256.count == 64)
+        #expect(video.timingSHA256 != Proof.emptySHA256 && video.timingSHA256 != video.packetSHA256)
+        // The sound is counted, not folded: its lines change nothing of the picture's digests …
+        #expect(good.found[1]?.packetSHA256 == Proof.emptySHA256)
+        #expect(sequences(base + ["1,1024,768,3072,\(Self.a)"]).found[0] == video)
+        // … and a stream with no packet at all has count 0 and the digests of nothing.
+        #expect(sequences([]).found[0] == Proof.PacketSequence(packets: 0, timingSHA256: Proof.emptySHA256,
+                                                               packetSHA256: Proof.emptySHA256))
+
+        func fold(_ lines: [String], timeBase: String = "1/12800") -> Proof.PacketSequence? {
+            sequences(lines, carried: [(0, timeBase)]).found[0]
+        }
+        // Another presentation time, or duration: the times digest moves, the bytes digest does not.
+        for changed in [["0,0,512,100,\(Self.a)", "0,1024,512,200,\(Self.b)"],
+                        ["0,0,1024,100,\(Self.a)", "0,512,512,200,\(Self.b)"]] {
+            let other = try #require(fold(changed))
+            #expect(other.timingSHA256 != video.timingSHA256 && other.packetSHA256 == video.packetSHA256)
+        }
+        // Another boundary (the same 300 bytes as 150 + 150), another payload, another order: the bytes digest moves.
+        for changed in [["0,0,512,150,\(Self.a)", "0,512,512,150,\(Self.b)"],
+                        ["0,0,512,100,\(Self.b)", "0,512,512,200,\(Self.b)"],
+                        ["0,0,512,200,\(Self.b)", "0,512,512,100,\(Self.a)"]] {
+            let other = try #require(fold(changed))
+            #expect(other.packetSHA256 != video.packetSHA256 && other.timingSHA256 == video.timingSHA256)
+        }
+        // Durations swapped inside the stream, totals equal (Codex #301-1): refused.
+        let vfr = try #require(fold(["0,0,512,1,\(Self.a)", "0,512,1024,1,\(Self.a)", "0,1536,512,1,\(Self.a)"]))
+        let swapped = try #require(fold(["0,0,1024,1,\(Self.a)", "0,1024,512,1,\(Self.a)", "0,1536,512,1,\(Self.a)"]))
+        #expect(vfr.timingSHA256 != swapped.timingSHA256 && vfr.packetSHA256 == swapped.packetSHA256)
+        // The same instants in another time base are the SAME: raw DV 1/60000 against QuickTime 1/30000.
+        let rawDV = try #require(fold(["0,0,2002,100,\(Self.a)", "0,2002,2002,200,\(Self.b)"], timeBase: "1/60000"))
+        let movie = try #require(fold(["0,0,1001,100,\(Self.a)", "0,1001,1001,200,\(Self.b)"], timeBase: "1/30000"))
+        #expect(rawDV == movie)
+        let oneTickOff = try #require(fold(["0,0,1001,100,\(Self.a)", "0,1002,1001,200,\(Self.b)"], timeBase: "1/30000"))
+        #expect(oneTickOff.timingSHA256 != movie.timingSHA256, "one tick (33 µs) is a difference: no tolerance")
+        #expect(Proof.fraction(ticks: 2002, numerator: 1, denominator: 60_000) == "1001/30000")
+        #expect(Proof.fraction(ticks: 60, numerator: 1001, denominator: 30_000) == "1001/500")
+        #expect(Proof.fraction(ticks: 0, numerator: 1, denominator: 25) == "0/1")
+        #expect(Proof.fraction(ticks: -512, numerator: 1, denominator: 12_800) == "-1/25")
+        #expect(Proof.fraction(ticks: .max, numerator: 1001, denominator: 30_000) == nil)
+        #expect(Proof.fraction(ticks: 1, numerator: 1, denominator: 0) == nil)
+    }
+
+    @Test("#301-1/3: a packet line that cannot be read ends the proof — the first one is kept, nothing after it counts")
+    func packetLedgerFaults() {
+        let good = "0,0,512,100,\(Self.a)"
+        for bad in ["0,N/A,512,100,\(Self.a)", "0,0,N/A,100,\(Self.a)", "0,0,512,100",
+                    "7,0,512,100,\(Self.a)", "x,0,512,100,\(Self.a)", "0,0,512,-1,\(Self.a)", "0,0,512,100,MD5:abcd",
+                    "0,0,512,100,SHA256:zz", "0,0,512,100,\(Self.a)0", "garbage"] {
+            let result = sequences([good, bad, good])
+            #expect(result.fault == bad)
+            #expect(result.found[0]?.packets == 1, "nothing is folded after a fault: \(bad)")
+        }
+        // A carried stream whose time base ffprobe did not state cannot have its times expressed.
+        #expect(sequences([good], carried: [(0, "")]).fault == good)
+        #expect(sequences([good], carried: [(0, "0/1")]).fault == good)
+        // A packet's own side data is folded with its bytes: present on one side only, or different, is a difference.
+        let plain = sequences([good]).found[0]
+        let withSide = sequences([good + ",Palette,1024"])
+        #expect(withSide.fault == nil && withSide.found[0]?.packetSHA256 != plain?.packetSHA256)
+        #expect(withSide.found[0]?.timingSHA256 == plain?.timingSHA256)
+        #expect(sequences([good + ",Palette,1024"]).found[0] == withSide.found[0])
+        // The sound's lines need only name their stream: its times are not folded (some are N/A in AVI).
+        #expect(sequences(["1,N/A,N/A,4096,\(Self.b)"]).fault == nil)
+        #expect(sequences(["", good]).fault == nil, "an empty line is not a packet")
+    }
+
+    @Test("SCALE: an hour of DV — 108,000 packet lines plus the sound's — folds inside 5 s, holding only two digests per stream",
+          .timeLimit(.minutes(1)))
+    func packetLedgerAtScale() {
+        var layout = Proof.FileLayout()
+        layout.carried = [Proof.CarriedStream(index: 0, kind: "video", codec: "dvvideo", tag: "dvsd", timeBase: "1001/30000")]
+        layout.sound = [Table.sound(1)]
+        let ledger = Proof.PacketLedger(layout: layout)
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for i in 0..<108_000 {
+                ledger.note("0,\(i),1,120000,\(Self.a)")
+                ledger.note("1,\(i * 1024),1024,4096,\(Self.b)")
+            }
+        }
+        #expect(ledger.fault == nil)
+        #expect(ledger.sequences[0]?.packets == 108_000 && ledger.sequences[1]?.packets == 108_000)
+        #expect(elapsed < .seconds(5), "216,000 lines took \(elapsed)")
+        #expect(MemoryLayout<Proof.PacketSequence>.size < 64, "what is kept per stream is a count and two digests")
     }
 
     // MARK: F5 — decoder configuration
@@ -187,6 +300,19 @@ struct BalancedCopyProofRuleTests {
         #expect(reason { $0.colorSpace = "bt709" } == "video stream 0: colour space none → bt709")
         #expect(reason { $0.colorTransfer = "bt709" } == "video stream 0: colour transfer none → bt709")
         #expect(reason { $0.colorPrimaries = "bt709" } == "video stream 0: colour primaries none → bt709")
+        // Side data (#301-2): a display matrix gained, lost or changed.
+        let upsideDown = #"[{"rotation":-180,"side_data_type":"Display Matrix"}]"#
+        #expect(reason { $0.sideData = upsideDown } == "video stream 0: side data none → \(upsideDown)")
+        let both = Proof.decide(Table.facts {
+            $0.original.carried[0].configuration.sideData = upsideDown
+            $0.balanced.carried[0].configuration.sideData = upsideDown
+        })
+        #expect(both.isProven, "the same rotation on both sides is the same picture: \(both)")
+        let lostRotation = Proof.decide(Table.facts { $0.original.carried[0].configuration.sideData = upsideDown })
+        guard case .notProven(.pictureConfigurationDiffers) = lostRotation else { Issue.record("\(lostRotation)"); return }
+        let soundSide = Proof.decide(Table.facts { $0.balanced.sound[0].sideData = "[{\"side_data_type\":\"x\"}]" })
+        #expect(soundSide == .notProven(.pictureConfigurationDiffers(
+            "audio stream 1: side data none → [{\"side_data_type\":\"x\"}]")))
         // Extradata: gained, lost or changed — all refused (no job output of the matrix gains any).
         #expect(reason { $0.extradataSHA256 = "SHA256:0123456789abcdef" } == "video stream 0: codec extradata none → SHA256:0123456789ab")
         let lost = Proof.decide(Table.facts { $0.original.carried[0].configuration.extradataSHA256 = "SHA256:aa" })
@@ -282,7 +408,7 @@ struct BalancedCopyProofRuleTests {
         // A partial read outranks what the hashes would say.
         #expect(why {
             $0.balancedRead?.streams[0]?.packets = 25
-            $0.balanced.carried[0].packetSHA256 = Table.otherHash
+            $0.balancedLeftSHA256 = Table.otherHash
         }?.contains("not read to the end") == true)
     }
 

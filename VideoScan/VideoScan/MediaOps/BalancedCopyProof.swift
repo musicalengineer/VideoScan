@@ -15,30 +15,35 @@
 // doubt resolves to one of those two.
 //
 // PROVEN means ALL of:
-//   1. STREAMS. Every non-audio stream of the original (video, timecode/
-//      data, subtitles — what the job's `-map 0` carries) is in the copy,
-//      same kind and codec, in the same order, and the SHA-256 over that
-//      stream's packet payloads is equal (ffmpeg `-c copy -f streamhash`:
-//      no decode, timestamps not hashed). The copy may hold ONE stream the
-//      original has not: the `tmcd` timecode track the mov muxer makes from
-//      DV timecode, and only when the original has no timecode track.
-//   2. DECODER CONFIGURATION. For each paired stream ffprobe states the same
-//      extradata SHA-256 (or none on both sides), width, height, pixel
-//      format, sample and display aspect ratio, field order, colour range,
-//      space, transfer and primaries. (Equal packets under a different SPS
-//      are a different picture.) Extradata gained or lost is a difference
-//      too: measured 2026-11-16, no job output of the matrix gains or loses
-//      any — raw DV → QuickTime included — so there is no case to excuse.
-//   3. TIMING. For each paired stream: the same packet count (ffprobe
-//      `-count_packets`), start time and duration to the microsecond
-//      ffprobe prints, the same `r_frame_rate`, and the same
-//      `avg_frame_rate` (when the container changed — raw DV → QuickTime —
-//      the copy's average rate must be the original's real rate, because
-//      the raw-DV demuxer's own average is a known-bogus 60000/1). For the
-//      sound: start, duration, its offset from the first picture stream and
-//      the file's duration, each within `soundTimingSlackSeconds` (one
-//      sample period, or one tick of the stream's time base, never more
-//      than 1 ms). A length stated on one side only is a difference.
+//   1. STREAMS, PACKET BY PACKET. Every non-audio stream of the original
+//      (video, timecode/data, subtitles — what the job's `-map 0` carries)
+//      is in the copy, same kind and codec, in the same order, with the
+//      same number of packets, and for packet i of each: the same
+//      presentation time, the same duration, the same size and the same
+//      SHA-256 of its payload (ffprobe `-show_packets -show_data_hash`,
+//      folded line by line into two running digests per stream). Times
+//      are compared as exact reduced fractions (pts × time_base), so a
+//      container that re-expresses the time base still agrees: measured
+//      2026-11-17, every job output of the matrix is equal to the tick,
+//      raw DV (1/60000) → QuickTime (1/30000) included — there is no
+//      tolerance. That one comparison is the picture's whole timing: its
+//      start, length, frame rate, an edit list, a re-time in the middle.
+//      The copy may hold ONE stream the original has not: the `tmcd`
+//      timecode track the mov muxer makes from DV timecode, and only when
+//      the original has no timecode track.
+//   2. DECODER AND DISPLAY CONFIGURATION. For each paired stream ffprobe
+//      states the same extradata SHA-256 (or none on both sides), width,
+//      height, pixel format, sample and display aspect ratio, field order,
+//      colour range, space, transfer and primaries, and the same stream
+//      side data (display matrix / rotation, CPB properties, whatever
+//      `side_data_list` holds; the sound's too). Gained or lost is a
+//      difference: measured, no job output of the matrix gains or loses
+//      extradata or side data.
+//   3. SOUND TIMING. The sound's start, its duration and the file's
+//      duration, each within `timingSlackSeconds` (one sample period, or
+//      one tick of the stream's time base, never more than 1 ms). With the
+//      picture's times exact (1), the sound's start IS its distance from
+//      the picture. A time stated on one side only is a difference.
 //   4. SOUND FORMAT. The original has exactly one audio stream, `pcm_*`,
 //      1 or 2 channels, measured in full by AudioBalanceProbe as leftOnly /
 //      rightOnly / mono. The copy has exactly one: 2 channels, same codec,
@@ -50,17 +55,19 @@
 //      channel hash to the same SHA-256 (equal hashes of the raw PCM bytes
 //      ⇒ equal sample counts). The channels are picked with `channelmap`
 //      (a remap, no arithmetic) — not with the `pan` filter the job
-//      renders with.
+//      renders with. (The sound is NOT compared packet by packet: PCM
+//      packets are the muxer's chunking — raw DV's 59 become 118.)
 //   6. THE DISCARDED CHANNEL HELD NOTHING. The original's other channel was
 //      measured in the SAME pass that hashed the live one, and its PEAK is
 //      at or under `discardedChannelPeakCeilingDBFS`. Peak, not whole-track
 //      RMS: a short quiet passage in a long silent channel has a tiny RMS
 //      and an honest peak. The evidence and the log line carry the
 //      measured peak (or "digital silence").
-//   7. BOTH READS WERE WHOLE. Each hash pass exited 0, logged nothing at
-//      error level or above, ended with ffmpeg's own clean-exit line, read
-//      exactly the packet count ffprobe counted for every stream (the sound
-//      included), decoded the sound with zero decode errors, and — where
+//   7. BOTH READS WERE WHOLE. The packet pass (ffprobe) exited 0 and wrote
+//      nothing at all on stderr. The sound pass (ffmpeg) exited 0, logged
+//      nothing at error level or above, ended with ffmpeg's own clean-exit
+//      line, read exactly the packet count the packet pass listed for
+//      EVERY stream, decoded the sound with zero decode errors, and — where
 //      the container states the sound stream's duration (AVI does not) —
 //      decoded as many samples as that duration holds, within the same
 //      slack. A stream with no packets at all (a Matroska attachment)
@@ -74,20 +81,25 @@
 // Anything unmeasured is "could not check". Unknown is never proven.
 //
 // What it does NOT prove (said plainly so no caller assumes it):
-//   - PER-PACKET timestamps. Start, duration, frame rate and packet count
-//     are compared; two packets that swapped presentation times inside an
-//     otherwise equal stream are not seen (their payloads still are).
+//   - decode timestamps (dts) and packet flags: presentation time,
+//     duration, size and bytes are what is held, per packet;
 //   - container metadata (creation date, tags, timecode VALUE beyond the
 //     timecode track's packets) — `-map_metadata 0` is the job's promise,
 //     not checked here;
+//   - display information ffprobe does not list as stream side data or as
+//     one of the fields in (2) (a QuickTime clean-aperture atom, say);
 //   - that the discarded channel is digital silence: it may hold anything
 //     whose peak is under the ceiling (hiss, hum, or sound that quiet);
 //   - a PARENT DIRECTORY swapped for another and swapped back mid-run:
 //     that leaves both resolved paths and both files' stamps as they were.
 //     (A file renamed away and back changes its ctime and is caught.)
-//   - text written to stderr mid-run by something other than ffmpeg's own
-//     logger is not told apart from a metadata continuation line when it
-//     happens to look like one;
+//   - that the two packet counts are independent of ffmpeg's demuxer: the
+//     packet pass and the sound pass are separate runs of the same
+//     library, so a fault that ends BOTH at the same packet, silently, on
+//     both files alike, is not seen;
+//   - text written to stderr mid-run of the sound pass by something other
+//     than ffmpeg's own logger is not told apart from a metadata
+//     continuation line when it happens to look like one;
 //   - An original with more than one audio stream (12-bit DV, two pairs) is
 //     "not proven": the copy drops the silent pair, and this engine does
 //     not decide that a dropped stream held nothing.
@@ -101,8 +113,9 @@
 // (An `enum` with no cases is Swift's namespace ≈ a C++ struct of statics.)
 //
 // Cost: FIVE whole-file reads — one levels pass over the original
-// (AudioBalanceProbe.analyze), one ffprobe packet count per file (demux
-// only), one ffmpeg hash pass per file (demux + sound decode).
+// (AudioBalanceProbe.analyze), one ffprobe packet pass per file (demux +
+// SHA-256 of every payload), one ffmpeg sound pass per file (demux + sound
+// decode). Plus one ffprobe header read per file.
 //
 // Memory: see BalancedCopyProofMeasure.swift — under 3 MiB whatever the
 // size of the media; nothing here holds more than the two stream lists.
@@ -117,19 +130,14 @@ enum BalancedCopyProof {
     /// The loudest PEAK the original's discarded channel may hold and still
     /// count as "held nothing". Rick rules on this number.
     /// Measured 2026-11-16 (16-bit, 48 kHz): digital silence −∞; a steady
-    /// 0.0005-amplitude sine (−69 dBFS RMS, Codex #301 F1) peaks at −66.2;
+    /// 0.0005-amplitude sine (−69 dBFS RMS, Codex #298 F1) peaks at −66.2;
     /// ±0.001 uniform noise (−64.8 RMS) peaks at −59.9; ±0.0001 noise at
     /// −80.8; a 0.004 tone burst of 50 ms in 2 s (−67 RMS) peaks at −48.
     static let discardedChannelPeakCeilingDBFS: Double = -60.0
 
-    /// How far a PICTURE (or data) stream's start or duration may differ:
-    /// one microsecond, the resolution ffprobe prints. Measured 0 on every
-    /// job output of the matrix, raw DV → mov included (118118/60000 s and
-    /// 59059/30000 s are the same instant).
-    static let pictureTimingToleranceSeconds: Double = 0.000_001
-
-    /// How far the SOUND's start, duration and picture offset may differ,
-    /// in sample periods. Measured: 0 for mov/mkv/mxf/avi; raw DV → mov
+    /// How far the SOUND's start and duration (and the file's duration) may
+    /// differ, in sample periods. (The picture has no tolerance: its
+    /// packets' times are compared as exact fractions.) Measured: 0 for mov/mkv/mxf/avi; raw DV → mov
     /// states 1.968633 s against 1.968625 s (0.4 of a 48 kHz sample — the
     /// raw-DV demuxer's 1/14112000 time base against whole samples).
     static let soundTimingToleranceSamples: Double = 1
@@ -147,7 +155,7 @@ enum BalancedCopyProof {
 
     // MARK: - Measured facts
 
-    /// When a stream plays, as ffprobe states it.
+    /// When the SOUND plays, as ffprobe states it.
     struct StreamTiming: Sendable, Equatable {
         /// `start_time`, seconds. nil = the container states none (WAV).
         var startSeconds: Double?
@@ -155,10 +163,7 @@ enum BalancedCopyProof {
         var durationSeconds: Double?
         /// One tick of the stream's `time_base`, seconds.
         var tickSeconds: Double?
-        /// `r_frame_rate` / `avg_frame_rate` as printed ("30000/1001").
-        var realFrameRate: String = ""
-        var averageFrameRate: String = ""
-        /// `nb_read_packets` of a full `-count_packets` demux. nil = not counted.
+        /// Packets the packet pass listed for the stream. nil = not counted.
         var packets: Int?
     }
 
@@ -176,6 +181,9 @@ enum BalancedCopyProof {
         var colorSpace: String = ""
         var colorTransfer: String = ""
         var colorPrimaries: String = ""
+        /// The stream's `side_data_list` as canonical JSON (keys sorted):
+        /// display matrix / rotation, CPB properties, …; "" = none.
+        var sideData: String = ""
 
         /// A picture stream whose size and pixel format ffprobe could read.
         var describesAPicture: Bool { (width ?? 0) > 0 && (height ?? 0) > 0 && !pixelFormat.isEmpty }
@@ -191,17 +199,19 @@ enum BalancedCopyProof {
                 ("display aspect ratio", displayAspect, copy.displayAspect),
                 ("field order", fieldOrder, copy.fieldOrder), ("colour range", colorRange, copy.colorRange),
                 ("colour space", colorSpace, copy.colorSpace), ("colour transfer", colorTransfer, copy.colorTransfer),
-                ("colour primaries", colorPrimaries, copy.colorPrimaries)
+                ("colour primaries", colorPrimaries, copy.colorPrimaries), ("side data", sideData, copy.sideData)
             ]
             guard let field = fields.first(where: { $0.original != $0.copy }) else { return nil }
             func shown(_ value: String) -> String {
-                value.isEmpty ? "none" : (value.hasPrefix("SHA256:") ? String(value.prefix(19)) : value)
+                if value.isEmpty { return "none" }
+                if value.hasPrefix("SHA256:") { return String(value.prefix(19)) }
+                return value.count > 96 ? String(value.prefix(96)) + "…" : value
             }
             return "\(field.name) \(shown(field.original)) → \(shown(field.copy))"
         }
     }
 
-    /// One non-audio stream of a file and the SHA-256 of its packets.
+    /// One non-audio stream of a file and its packets, folded.
     struct CarriedStream: Sendable, Equatable {
         /// Container-wide stream index (what `-map 0:N` addresses).
         var index: Int
@@ -211,10 +221,17 @@ enum BalancedCopyProof {
         var codec: String
         /// ffprobe `codec_tag_string` ("tmcd", "apco", …).
         var tag: String
-        /// SHA-256 (lowercase hex) over the stream's packet payloads; nil
-        /// until the hash pass ran.
+        /// SHA-256 (lowercase hex) over the SEQUENCE of the stream's packets
+        /// as (size, SHA-256 of payload) — so it holds every packet's bytes
+        /// AND where one packet ends and the next begins. nil = not read.
         var packetSHA256: String?
-        var timing = StreamTiming()
+        /// SHA-256 over the sequence of (presentation time, duration), each
+        /// an exact reduced fraction of a second. nil = not read.
+        var timingSHA256: String?
+        /// Packets the packet pass listed. nil = not counted.
+        var packets: Int?
+        /// ffprobe `time_base` ("1/12800") — how the packets' times are read.
+        var timeBase: String = ""
         var configuration = PictureConfiguration()
 
         /// The timecode track the mov muxer writes.
@@ -233,6 +250,8 @@ enum BalancedCopyProof {
         /// ffprobe `channel_layout` ("stereo", "2 channels (FC+LFE)"); "" =
         /// the container states none.
         var channelLayout: String = ""
+        /// The stream's `side_data_list` as canonical JSON; "" = none.
+        var sideData: String = ""
         var timing = StreamTiming()
 
         /// How far this stream's stated times may be from another statement
@@ -305,9 +324,13 @@ enum BalancedCopyProof {
             var codec: String
             var originalIndex: Int
             var balancedIndex: Int
-            /// The one SHA-256 both files' packets hashed to.
+            /// The one SHA-256 both files' packet sequences (size + payload
+            /// SHA-256 of each packet) folded to.
             var packetSHA256: String
-            /// The one packet count ffprobe and both hash passes agree on.
+            /// The one SHA-256 both files' packet times (presentation time +
+            /// duration of each packet, exact fractions) folded to.
+            var timingSHA256: String
+            /// The one packet count the packet pass and both sound passes agree on.
             var packets: Int
         }
         /// The original's channel that is NOT in the copy, as measured.
@@ -362,7 +385,7 @@ enum BalancedCopyProof {
         case channelLayoutNotStereo(file: String, layout: String)
         /// A stream is missing from the copy, or the copy has one too many.
         case streamsDiffer(String)
-        /// A paired stream would not decode as the original's.
+        /// A paired stream would not decode, or not be displayed, as the original's.
         case pictureConfigurationDiffers(String)
         /// Something plays at another time, speed or length.
         case timingDiffers(String)
@@ -396,7 +419,7 @@ enum BalancedCopyProof {
             case .streamsDiffer(let what):
                 return "the balanced copy does not hold the original's streams (\(what))"
             case .pictureConfigurationDiffers(let what):
-                return "the balanced copy would not decode as the original does (\(what))"
+                return "the balanced copy would not decode or display as the original does (\(what))"
             case .timingDiffers(let what):
                 return "the balanced copy does not play at the original's times (\(what))"
             case .carriedStreamDiffers(let kind, let index, let original, let balanced):

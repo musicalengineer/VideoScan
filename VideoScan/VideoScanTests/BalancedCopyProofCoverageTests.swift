@@ -1,5 +1,5 @@
 // BalancedCopyProofCoverageTests.swift
-// The attacks Codex review #301 found covered "by inspection" but with no
+// The attacks Codex review #298 found covered "by inspection" but with no
 // fixture of their own: a longer copy, reordered packets, a dropped
 // subtitle or attachment, two picture streams the wrong way round, a
 // sound-only pair, big-endian against little-endian PCM, a real mono and a
@@ -112,7 +112,7 @@ struct BalancedCopyProofCoverageTests {
         #expect(streamsDiffer(outcome), "\(outcome)")
         // PIN: carried faithfully it still cannot be vouched for — fail closed.
         let carried = await Proof.measure(original: original, balanced: balanced)
-        #expect(Lab.reason(carried) == "attachment stream 2's packets could not be counted", "\(carried)")
+        #expect(Lab.reason(carried) == "attachment stream 2 gave no packets to compare", "\(carried)")
     }
 
     @Test("TWO picture streams the wrong way round are not proven; in the original's order they are",
