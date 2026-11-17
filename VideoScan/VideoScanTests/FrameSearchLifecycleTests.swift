@@ -153,6 +153,41 @@ struct FrameSearchLifecycleTests {
         #expect(store.indexState == .loading && store.hits.isEmpty, "closed is for good: nothing asked of it afterwards is published either")
     }
 
+    /// Codex #304 F1: the index arrives, the words already in the field are being answered from it, and the
+    /// window closes during that answer. No model warm-up may start for a window that is gone.
+    @Test func aWindowClosedWhileAnArrivingIndexAnswersItsWordsStartsNoWarmUp() async throws {
+        let warmed = ObsCounter()
+        let atTheModel = Flag(), release = Flag()
+        let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(
+            index: { .ready(ObsFixture.index([2])) }, files: { _ in [two] },
+            embedText: { text in
+                atTheModel.set()
+                while !release.isSet { try? await Task.sleep(for: .milliseconds(2)) }
+                return try await ObsStubEmbedder().embed(text: text)
+            },
+            prewarm: { warmed.bump() }))
+        await store.search("axis 2")                    // typed before the index is read: nothing is asked yet
+        let opening = Task { await store.loadIndex() }  // the index arrives and the words are asked of it
+        try await FrameIndexJobTests.until("the automatic search is at the model") { atTheModel.isSet }
+        store.cancel()
+        release.set()
+        await opening.value
+        for _ in 0..<2_000 { await Task.yield() }       // room for a warm-up to start, if one would
+        #expect(warmed.value == 0, "a closed window warms no model (0.75 GB for nobody): \(warmed.value)")
+        #expect(store.hits.isEmpty && store.indexState == .loading)
+    }
+
+    /// Codex #304 F3: Show in Catalog on a closed window says nothing and asks nothing of the Catalog.
+    @Test func aClosedWindowRevealsNothingAndSaysNothing() async {
+        var asked = 0
+        let store = FrameSearchStore(scope: .everything, loader: ObsFixture.frameLoader(reveal: { _ in asked += 1; return true }))
+        let orphan = FrameHit(model: "m", digest: "d", seconds: 1, score: 0.2, recordID: nil, filename: "Gone.dv", path: "/V/Gone.dv", removed: false)
+        let known = FrameHit(model: "m", digest: "e", seconds: 1, score: 0.2, recordID: UUID(), filename: "Here.dv", path: "/V/Here.dv", removed: false)
+        store.cancel()
+        #expect(store.reveal(orphan) == false && store.revealProblem == nil, "nothing is published on a closed window: \(store.revealProblem ?? "nil")")
+        #expect(store.reveal(known) == false && asked == 0, "and the Catalog is not asked to move for a window that is gone")
+    }
+
     // MARK: 4 — listeners end with the run
 
     /// Lives exactly as long as the listener closure that captured it.

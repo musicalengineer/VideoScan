@@ -255,7 +255,8 @@ final class FrameSearchStore: ObservableObject {
         guard !closed else { return }
         joinRunningJob()
         let load = loader.loadIndex
-        guard await show({ IndexRead(await load()) }) else { return }
+        // `show` may have answered the words in the field before it came back; the window can close meanwhile.
+        guard await show({ IndexRead(await load()) }), !closed else { return }
         let warm = loader.prewarm
         warming?.cancel()
         warming = Task.detached(priority: .utility) { try? await warm() }
@@ -411,6 +412,7 @@ final class FrameSearchStore: ObservableObject {
 
     @discardableResult
     func reveal(_ hit: FrameHit) -> Bool {
+        guard !closed else { return false }
         guard let id = hit.recordID, loader.reveal(id) else {
             revealProblem = "\(hit.filename) is not in this session's catalog — nothing to show"
             return false
