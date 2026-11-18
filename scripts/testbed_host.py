@@ -12,6 +12,7 @@ every run whose run.log says OUTCOME RED, whatever <root>/latest* points at, and
 Everything else under <root>/out that is named <stamp>-<lane> is removed, with its
 <root>/bin/<stamp> and its agent plist. A bin folder or plist with no run folder is removed
 only when it is older than a day (a caller installs them moments before its run starts).
+<root>/bin/watch (the push watcher, pinned there) is never removed.
 Symlinks are never followed and nothing outside <root> is touched. One line is printed:
 
     prune: removed 14 run folders (3.9 GB), kept 31 (newest 10 per lane, 4 RED, 2 pinned)
@@ -52,6 +53,7 @@ LANES = ("ui", "deep", "all", "suite", "corpus", "testbed")
 RUN_NAME = re.compile(r"^([0-9A-Za-z_]+)-(" + "|".join(LANES) + r")$")
 KEEP_DEFAULT = 10
 POINTERS = ("latest", "latest-suite", "latest-testbed")
+PINNED_BINS = ("watch",)                         # <root>/bin/watch: the push watcher (scripts/m4_watch_install.sh) — never pruned
 DAY = 86400
 QUIET_DEFAULT = {"testbed": 120, "all": 90, "suite": 75, "deep": 60, "corpus": 45, "ui": 30}
 SCHEDULED_DEFAULT = {"m4run": ["1400"]}          # by root folder name; the Ultra has the 01:30-06:00 window already
@@ -159,7 +161,7 @@ def prune(root: str, current: str = "", keep: int = 0) -> str:
         bins = []
     for stamp in bins:
         path = os.path.join(root, "bin", stamp)
-        if os.path.islink(path) or not os.path.isdir(path) or stamp in live_stamps:
+        if os.path.islink(path) or not os.path.isdir(path) or stamp in live_stamps or stamp in PINNED_BINS:
             continue
         try:
             old = now - os.lstat(path).st_mtime > DAY

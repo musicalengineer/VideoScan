@@ -164,6 +164,9 @@ host_config() {
         *) die "unknown host '$1' (m4|ultra; m4local on the M4 itself)" 2 ;;
     esac
     H_REPO="$HOME/dev/VideoScan"
+    # The M4 calling itself runs from a pinned copy that is not a checkout: --ref is resolved in the
+    # host's own repository, which is also where the testbed worktree comes from.
+    [ "$1" = m4local ] && REPO_ROOT="$H_REPO"
     H_SUITE_DD="$H_DD-suite"   # the suite lane's own caches: <it>/app (Release DerivedData), <it>/core (swift test scratch)
     LOCK="$H_ROOT/lock"      # the testbed lock, shared with scripts/nightly_gauntlet.sh (take_lock below)
     # The lock helper beside this script: scripts/ in the repo for the caller,
@@ -255,6 +258,8 @@ if [ -e "\$suite/run.log" ] && [ "\$(readlink "\$suite")" != "\$(readlink "\$las
   grep -E '^(START|OUTCOME)' "\$suite/run.log" | sed 's/^/  /'
   [ -f "\$suite/summary.txt" ] && sed 's/^/  /' "\$suite/summary.txt"
 fi
+[ -f '$H_ROOT/watch/verdict.txt' ] && echo "push watcher: \$(head -1 '$H_ROOT/watch/verdict.txt')"
+[ -f '$H_ROOT/watch/tick.txt' ] && echo "push watcher, last tick: \$(head -1 '$H_ROOT/watch/tick.txt')"
 testbed='$H_ROOT/latest-testbed'
 if [ -e "\$testbed/run.log" ] && [ "\$(readlink "\$testbed")" != "\$(readlink "\$last")" ]; then
   echo "last testbed run: \$(readlink "\$testbed")"

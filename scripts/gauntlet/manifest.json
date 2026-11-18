@@ -34320,6 +34320,42 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_m4_watch.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_watch.py"
+      ],
+      "tests": [
+        "test_a_commit_already_run_by_hand_is_recorded_and_not_run_again",
+        "test_a_docs_only_range_is_skipped_and_a_range_with_code_is_not",
+        "test_a_fetch_that_fails_does_nothing_and_keeps_the_state",
+        "test_a_hand_run_that_never_ran_or_of_another_lane_does_not_count",
+        "test_a_run_just_started_is_given_time_to_take_the_lock",
+        "test_a_run_that_ended_without_an_outcome_is_retried_once_then_recorded",
+        "test_a_runner_that_will_not_start_is_given_up_on",
+        "test_a_running_commit_is_never_started_again_and_its_outcome_becomes_the_one_verdict_line",
+        "test_a_start_the_host_refused_is_not_a_run_and_is_bounded",
+        "test_a_tick_starts_the_real_suite_lane_and_a_later_tick_writes_its_verdict",
+        "test_an_unknown_range_is_never_docs_only",
+        "test_busy_and_the_quiet_window_wait_without_counting_against_the_commit",
+        "test_history_and_state_are_bounded",
+        "test_install_uninstall_and_reinstall_on_a_fake_m4_and_a_refusal_anywhere_else",
+        "test_it_runs_only_on_the_m4_and_creates_nothing_elsewhere",
+        "test_no_retry_for_an_older_commit_when_main_has_moved",
+        "test_one_slot_the_newest_commit_and_a_red_verdict",
+        "test_only_one_tick_at_a_time",
+        "test_poisoned_state_is_empty_state_not_a_traceback",
+        "test_the_dry_run_plan_from_another_mac_goes_to_the_m4_and_writes_nothing",
+        "test_the_first_tick_starts_the_suite_for_the_head_of_main_through_m4local",
+        "test_the_pinned_set_is_everything_the_suite_lane_installs",
+        "test_the_plist_is_a_gui_session_agent_ticking_a_pinned_copy_every_300_seconds",
+        "test_the_watcher_never_signals_pushes_or_writes_a_branch",
+        "test_usage_errors_exit_2"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_testbed_host.py",
       "stage": "regression",
       "suites": [
@@ -40622,6 +40658,10 @@
         },
         {
           "name": "tests/test_m4_run_suite_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_m4_watch.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
