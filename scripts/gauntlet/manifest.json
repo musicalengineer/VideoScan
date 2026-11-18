@@ -34292,6 +34292,37 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_m4_run_testbed_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_run_testbed_lane.py"
+      ],
+      "tests": [
+        "test_a_corpus_lane_that_dies_without_a_summary_is_red_and_borrows_nothing",
+        "test_a_held_lock_refuses_before_touching_anything",
+        "test_a_lane_that_could_not_run_is_norun_and_never_exit_zero",
+        "test_a_poisoned_facts_file_does_not_stop_the_block_or_pass",
+        "test_a_red_suite_is_a_red_run_and_the_corpus_lanes_still_run",
+        "test_a_row_carries_counts_and_at_most_a_bounded_list",
+        "test_an_amber_corpus_lane_makes_the_run_amber_and_shows_its_diff",
+        "test_cli_exit_codes",
+        "test_dry_run_prints_the_plan_and_touches_nothing",
+        "test_m4local_is_refused_on_any_mac_that_is_not_the_m4",
+        "test_no_lane_or_an_unknown_verdict_word_is_red",
+        "test_red_over_norun_over_amber_over_green",
+        "test_status_shows_the_last_testbed_run_also_after_another_lane",
+        "test_the_lane_reuses_the_lanes_and_has_no_second_implementation",
+        "test_the_lanes_run_in_order_under_one_hold_of_the_lock_at_one_commit",
+        "test_the_machine_preflight_is_norun_and_red_outranks_it",
+        "test_three_green_lanes_are_one_green_verdict_with_one_block",
+        "test_usage_errors_exit_2",
+        "test_wait_exits_0_on_green_without_ssh_or_a_push",
+        "test_wait_exits_1_on_red_and_2_when_a_lane_could_not_run"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_metrics_dashboard.py",
@@ -40536,6 +40567,10 @@
         },
         {
           "name": "tests/test_m4_run_suite_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_m4_run_testbed_lane.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

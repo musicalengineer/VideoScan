@@ -90,7 +90,8 @@ LANES = {
 }
 HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes the harness itself assigns
 
-EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER = 0, 1, 2, 3
+EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
+VERDICT_FILE = "corpus-verdict.json"      # in <out>: the lane's verdict as counts, for m4_run_summary.py --testbed
 
 
 class Refused(Exception):
@@ -758,6 +759,8 @@ class Lane:
         text = render(report, per_file=outcomes if self.lane == "proof" else None)
         seal.write_text(self.report_dir / "report.txt", "\n".join(text) + "\n")
         (self.out / "corpus-summary.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
+        (self.out / VERDICT_FILE).write_text(json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n",
+                                             encoding="utf-8")
         self.lines = text
 
     def go(self) -> int:
@@ -776,7 +779,7 @@ class Lane:
             if not self.engine_present():
                 report = self.report({}, {}, time.time() - t0, engine_present=False)
                 self.store(report, {})
-                return EXIT_AMBER
+                return EXIT_NORUN
             try:
                 self.install_overlay()
                 if self.build() != 0:
@@ -789,6 +792,7 @@ class Lane:
                 if self.overlay_installed:                   # never a folder this run did not lay down
                     self.clear_overlay()
             report = self.report(results, hello, time.time() - t0)
+            report["against"] = against_previous(seal, self.lane, results, self.engines)
             self.store(report, results)
             return EXIT_AMBER if report["failures"] else EXIT_GREEN
         finally:
@@ -839,6 +843,19 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None) -> List[str
     return lines
 
 
+def verdict_facts(report: dict) -> dict:
+    """What a lane's run says to the testbed block: its verdict, counts and what changed —
+    numbers and outcome words only (every word in a report already went through `word()`)."""
+    if not report.get("engine_present", True):
+        verdict = "NORUN"
+    else:
+        verdict = "AMBER" if report["failures"] else "GREEN"
+    return {"lane": report["lane"], "verdict": verdict, "sha": report["sha"][:9], "files": report["files"],
+            "bytes": report["bytes"], "wall_s": report["wall_s"], "engines": report["engines"],
+            "engine_order": [e for e in LANES[report["lane"]][1] if e in report["engines"]],
+            "failures": report["failures"], "against": report.get("against")}
+
+
 def lane_runs(seal: Seal, lane: str) -> List[Path]:
     """Every stored run of a lane, oldest first (the stamp sorts by time)."""
     root = seal.reports / lane
@@ -860,6 +877,30 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
         changed += moved
     return {"compared": len(set(old) & set(new)), "changed": changed, "only_new": len(set(new) - set(old)),
             "only_old": len(set(old) - set(new)), "transitions": dict(transitions)}
+
+
+def usable_runs(seal: Seal, lane: str) -> List[Path]:
+    """The stored runs a later run can be compared against, oldest first: those that ran the
+    lane's engine. A run whose report cannot be read is not one of them."""
+    runs = []
+    for run in lane_runs(seal, lane):
+        try:
+            if json.loads((run / "report.json").read_text(encoding="utf-8")).get("engine_present", True):
+                json.loads((run / "outcomes.json").read_text(encoding="utf-8"))
+                runs.append(run)
+        except (OSError, ValueError):
+            continue
+    return runs
+
+
+def against_previous(seal: Seal, lane: str, results: Dict[str, dict], engines: List[str]) -> Optional[dict]:
+    """This run's diff against the newest stored run of the lane (None: there is none)."""
+    earlier = usable_runs(seal, lane)
+    if not earlier:
+        return None
+    previous = earlier[-1]
+    delta = diff(json.loads((previous / "outcomes.json").read_text(encoding="utf-8")), results, engines)
+    return {"what": "the previous run", "run": previous.name, "sha": previous.parent.name[:9], **delta}
 
 
 def status(seal: Seal) -> List[str]:

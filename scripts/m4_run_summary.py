@@ -17,7 +17,24 @@ Usage:
     m4_run_summary.py PLAN LOG RC SECONDS [--timeout] [--tsv PATH]
     m4_run_summary.py --gauntlet RESULT_JSON RC SECONDS [--timeout]
     m4_run_summary.py --suite ROW_JSON RC SECONDS [--timeout] [--repo WORKTREE] [--log PATH]
-Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only), 4 NORUN (--suite only).
+    m4_run_summary.py --testbed LANES_TSV SHA SECONDS
+Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet, --testbed), 4 NORUN (--suite, --testbed).
+
+--testbed reads the rows scripts/m4_run.sh host_testbed wrote, one per lane it ran
+(name, the lane's own verdict, seconds, the lane's facts file: the suite's row or a
+corpus lane's corpus-verdict.json), and prints the ONE block of a testbed run:
+
+    testbed: AMBER at 5112b8697 — 3 lanes, wall 5400s
+      suite         GREEN   3360s  app 13941 passed, 0 failed, 14 skipped; core 2587 passed, 0 failed, 0 skipped
+      corpus check  AMBER    621s  234 files — probe: probed 208, unopenable 26 · check: OK 94, …
+                                   against 20261117_194337_87818 at e24b3a200: 2 of 234 files changed (new 0, absent 0)
+                                     check: OK -> Problem x2
+      corpus proof  GREEN   1221s  8 files — balance: balanced 8 · proof: same_content 8
+                                   against 20261117_195424_2690 at c905a6b00: 0 of 8 files changed (new 0, absent 0)
+
+The run is RED if any lane is RED (or its verdict is not a word this file knows, or
+no lane ran), else NORUN if any lane could not run, else AMBER, else GREEN. Counts
+and outcome words only: a corpus lane's facts file carries nothing else.
 
 --suite reads the row scripts/nightly_local_tests.sh --on-demand wrote for the
 full app + Core suite (the nightly's own counts, failed names and verdict) and
@@ -340,9 +357,111 @@ def suite_main(argv):
     return {GREEN: 0, RED: 1, NORUN: 4}[verdict]
 
 
+TESTBED_RANK = {GREEN: 0, AMBER: 1, NORUN: 2, RED: 3}
+TESTBED_INDENT = ' ' * 31
+
+
+def _load(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            value = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _tally(counter):
+    """'OK 94, Warning 112' — biggest first, then by name."""
+    if not isinstance(counter, dict):
+        return 'no count'
+    pairs = [(str(k), v) for k, v in counter.items() if isinstance(v, int)]
+    return ', '.join(f"{k} {v}" for k, v in sorted(pairs, key=lambda kv: (-kv[1], kv[0]))) or 'none'
+
+
+def corpus_lane_lines(facts):
+    """(counts, [continuation lines]) for a corpus lane's corpus-verdict.json (dict or None)."""
+    if not isinstance(facts, dict):
+        return 'no facts file (see the lane\'s own lines)', []
+    if facts.get('verdict') == NORUN:
+        return 'not run: this ref has no engine for the lane', []
+    files = _count(facts, 'files')
+    engines = facts.get('engines') if isinstance(facts.get('engines'), dict) else {}
+    order = [e for e in (facts.get('engine_order') or []) if e in engines] or sorted(engines)
+    counts = f"{files if files is not None else 'no count of'} files — " + ' · '.join(f"{e}: {_tally(engines[e])}" for e in order)
+    more = []
+    against = facts.get('against')
+    if isinstance(against, dict) and against.get('run'):
+        more.append(f"against {against.get('what') or 'the previous run'} {against['run']} at {str(against.get('sha') or '?')[:9]}: "
+                    f"{against.get('changed', '?')} of {against.get('compared', '?')} files changed "
+                    f"(new {against.get('only_new', 0)}, absent {against.get('only_old', 0)})")
+        transitions = against.get('transitions') if isinstance(against.get('transitions'), dict) else {}
+        for words, n in sorted(transitions.items(), key=lambda kv: (-kv[1], kv[0]))[:NAMES_PROVEN]:
+            more.append(f"  {words} x{n}")
+        for line in (against.get('listed') or [])[:NAMES_PROVEN]:
+            more.append(f"  {line}")
+    else:
+        more.append('nothing to compare against: this is the lane\'s first run (its baseline)')
+    for word in facts.get('notes') or []:
+        more.append(str(word))
+    return counts, more
+
+
+def testbed_block(rows, sha, seconds):
+    """(verdict, [lines]) for the lanes of one testbed run: [(name, verdict, seconds, facts path)]."""
+    worst = GREEN if rows else RED
+    lines = []
+    for name, verdict, secs, facts_path in rows:
+        facts = _load(facts_path)
+        if verdict not in TESTBED_RANK:
+            verdict = RED                                  # a word this file does not know is never a pass
+        if TESTBED_RANK[verdict] > TESTBED_RANK[worst]:
+            worst = verdict
+        if name == 'suite':
+            row = facts or {}
+            why = str(row.get('reason') or '')
+            counts, more = f"app {suite_counts(row)}; core {suite_counts(row, 'core_')}", []
+            if verdict != GREEN and why:
+                counts = f"{why} — {counts}"
+            if facts is None:
+                counts = 'no result row (see the lane\'s own lines)'
+        else:
+            counts, more = corpus_lane_lines(facts)
+        lines.append(f"  {name:<13} {verdict:<5} {secs:>6}s  {counts}")
+        lines += [TESTBED_INDENT + line for line in more]
+    head = f"testbed: {worst} at {str(sha)[:9]} — {len(rows)} lane{'s' if len(rows) != 1 else ''}, wall {seconds}s"
+    if not rows:
+        head += ' — no lane ran'
+    return worst, [head] + lines
+
+
+def testbed_main(argv):
+    ap = argparse.ArgumentParser(prog='m4_run_summary.py --testbed')
+    ap.add_argument('lanes')
+    ap.add_argument('sha')
+    ap.add_argument('seconds', type=int)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return 2
+    rows = []
+    try:
+        with open(a.lanes, encoding='utf-8') as f:
+            for line in f:
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) == 4:
+                    rows.append((parts[0], parts[1], parts[2] if parts[2].isdigit() else '?', parts[3]))
+    except OSError:
+        rows = []
+    verdict, lines = testbed_block(rows, a.sha, a.seconds)
+    print('\n'.join(lines))
+    return {GREEN: 0, AMBER: 3, NORUN: 4, RED: 1}[verdict]
+
+
 def main(argv):
     if argv[:1] == ['--gauntlet']:
         return gauntlet_main(argv[1:])
+    if argv[:1] == ['--testbed']:
+        return testbed_main(argv[1:])
     if argv[:1] == ['--suite']:
         return suite_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

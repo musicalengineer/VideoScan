@@ -634,7 +634,8 @@ class ProofLaneTests(unittest.TestCase):
     def test_a_ref_without_the_engine_says_so_and_builds_nothing(self):
         scene = LaneScene(self.tmp.name)
         scene.plan['engines'] = ['balance', 'proof']
-        self.assertEqual(scene.run('proof'), cr.EXIT_AMBER)
+        self.assertEqual(scene.run('proof'), cr.EXIT_NORUN, 'a lane that ran nothing is NORUN, never a pass')
+        self.assertEqual(json.loads((scene.out / cr.VERDICT_FILE).read_text())['verdict'], 'NORUN')
         summary = (scene.out / 'corpus-summary.txt').read_text()
         self.assertIn('corpus proof: NOT RUN at aaaaaaaaa — this ref has no balanced-copy proof engine', summary)
         self.assertEqual(scene.recorded_calls(), [])
@@ -866,6 +867,9 @@ class HostHookTests(unittest.TestCase):
             self.assertEqual(rc, 1, log)
             self.assertIn('OUTCOME RED', log)
             self.assertEqual(probe, 'FREE')
+        rc, log, _, probe, _, _ = self.host(4, 'h4')
+        self.assertEqual(rc, 1, log)
+        self.assertRegex(log, r'(?m)^OUTCOME NORUN .* lane=corpus sha=\w+ — corpus check: this ref has no engine for the lane$')
 
     def test_a_corpus_run_leaves_latest_suite_alone_and_status_still_shows_the_suite(self):
         # main's suite lane keeps <root>/latest-suite so `status` shows the last suite verdict

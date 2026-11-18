@@ -6,6 +6,7 @@
 #   scripts/m4_run.sh deep   [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh all    [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
+#   scripts/m4_run.sh testbed [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh status [--host m4|ultra]
 #   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
 #
@@ -15,6 +16,7 @@
 #   "deep test on the M4" / "run the gauntlet"  scripts/m4_run.sh deep
 #   "everything on the M4"                      scripts/m4_run.sh all
 #   "run the full suite on the M4 for <ref>"    scripts/m4_run.sh suite --ref <ref> --wait
+#   "run the testbed on the M4 for <ref>"       scripts/m4_run.sh testbed --ref <ref> --wait
 #   "how's the M4 run?"                         scripts/m4_run.sh status
 #
 # Lanes:
@@ -40,6 +42,14 @@
 #   corpus  the real-data corpus harness (scripts/corpus_run.sh is its front door; M4 only):
 #         scripts/corpus_run.py on the host, under the same lock, agent and --ref checkout.
 #         It refuses any host but the M4 and any state root outside ~/corpus/state.
+#   testbed  everything, one verdict (M4 only): the suite lane, then corpus `check`, then corpus
+#         `proof`, under ONE hold of the lock, at one commit. The lanes are the ones above (host_suite,
+#         host_corpus — no second implementation); each still runs when an earlier one is RED. The
+#         summary opens with one block (m4_run_summary.py --testbed): per lane GREEN / AMBER / RED /
+#         NORUN, its wall time and counts, and for a corpus lane what changed against its earlier run.
+#         The run is RED if any lane is RED, else NORUN if any lane could not run, else AMBER, else
+#         GREEN. Each corpus lane's files go to <out>/corpus-<lane>/. <root>/latest-testbed names the
+#         last testbed run for `status`; <root>/latest-suite stays the suite lane's own.
 #
 # Shape. The caller (normally the Ultra) never builds anything:
 #   1. resolves --ref (default `main`) to a commit;
@@ -68,6 +78,9 @@
 # verdict after a later ui or deep run), and prints START/OUTCOME lines into
 # run.log. `status` reads them back.
 #
+# `--host m4local` is the M4 calling itself (no ssh, no push; the commit must already be in the
+# M4's ~/dev/VideoScan): that is how the push watcher starts a run. Refused on any other Mac.
+#
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
@@ -83,10 +96,12 @@
 #       3 busy · 4 testbed worktree not usable · 5 nightly window.
 #       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
 #       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
-#       started still exits 3 / 4 / 5 as above.
+#       started still exits 3 / 4 / 5 as above. testbed --wait: the same three — 0 only when no
+#       lane is RED or NORUN.
 #
 # Tests: tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
-# summary line), tests/test_m4_run_deep_lane.py, tests/test_m4_run_suite_lane.py.
+# summary line), tests/test_m4_run_deep_lane.py, tests/test_m4_run_suite_lane.py,
+# tests/test_m4_run_testbed_lane.py.
 # Nothing in the tests touches a host.
 
 set -uo pipefail
@@ -105,11 +120,12 @@ DEEP_BUDGET=14400            # run_gauntlet.sh: ~45 min normally
 # worst with its clean retry; tests 7,200 s = 21,600 s); this one is the backstop.
 SUITE_BUDGET=22500
 CORPUS_BUDGET=21600          # corpus lane: a build, then every corpus file under its own per-file deadline
-WAIT_BUDGET=23400            # past every lane's budget, so --wait outlives the run it waits for
+WAIT_BUDGET=23400            # past every single lane's budget, so --wait outlives the run it waits for
+TESTBED_WAIT_BUDGET=$((SUITE_BUDGET + 2 * CORPUS_BUDGET + 900))   # testbed = suite + two corpus lanes, back to back
 WAIT_POLL="${VIDEOSCAN_M4RUN_WAIT_POLL:-30}"     # seconds between --wait polls (tests shorten it)
 
 usage() {
-    sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -119,15 +135,23 @@ die() { echo "m4_run: $1" >&2; exit "${2:-1}"; }     # die <message> [exit code]
 # Same account on every fleet Mac, so $HOME names the host's home too.
 host_config() {
     case "$1" in
-        m4)
+        m4|m4local)
             H_SSH="ricksm4.local"; H_ROOT="$HOME/m4run"; H_WT="$HOME/m4run/work"
             H_DD="$HOME/Library/Caches/videoscan-m4run-dd"; H_LABEL="com.videoscan.m4run"
-            H_MACHINE="m4"; H_NAME="M4" ;;
+            H_MACHINE="m4"; H_NAME="M4"
+            # m4local: the caller IS the M4 (the push watcher, scripts/m4_watch.py) — no ssh, no
+            # push. Allowed by this Mac's own name and nothing else: no flag or variable can make
+            # another Mac (the Ultra) run the M4's lanes on itself.
+            if [ "$1" = m4local ]; then
+                [ "$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" = ricksm4 ] \
+                    || die "--host m4local is for the M4 itself; this Mac is not the M4" 2
+                H_SSH=""
+            fi ;;
         ultra)
             H_SSH=""; H_ROOT="$HOME/ultrarun"; H_WT="$HOME/dev/VideoScan-wt/ultra-testbed"
             H_DD="$HOME/Library/Caches/videoscan-ultrarun-dd"; H_LABEL="com.videoscan.ultrarun"
             H_MACHINE="m5"; H_NAME="M5 Ultra" ;;
-        *) die "unknown host '$1' (m4|ultra)" 2 ;;
+        *) die "unknown host '$1' (m4|ultra; m4local on the M4 itself)" 2 ;;
     esac
     H_REPO="$HOME/dev/VideoScan"
     H_SUITE_DD="$H_DD-suite"   # the suite lane's own caches: <it>/app (Release DerivedData), <it>/core (swift test scratch)
@@ -212,6 +236,12 @@ if [ -e "\$suite/run.log" ] && [ "\$(readlink "\$suite")" != "\$(readlink "\$las
   grep -E '^(START|OUTCOME)' "\$suite/run.log" | sed 's/^/  /'
   [ -f "\$suite/summary.txt" ] && sed 's/^/  /' "\$suite/summary.txt"
 fi
+testbed='$H_ROOT/latest-testbed'
+if [ -e "\$testbed/run.log" ] && [ "\$(readlink "\$testbed")" != "\$(readlink "\$last")" ]; then
+  echo "last testbed run: \$(readlink "\$testbed")"
+  grep -E '^(START|OUTCOME)' "\$testbed/run.log" | sed 's/^/  /'
+  [ -f "\$testbed/testbed-block.txt" ] && sed 's/^/  /' "\$testbed/testbed-block.txt"
+fi
 SH
 }
 
@@ -247,7 +277,7 @@ start_run() {
     local out="$H_ROOT/out/$stamp-$LANE"
 
     echo "m4_run: $LANE on $H_NAME at $short ($REF)${ONLY:+, only $ONLY}"
-    [ "$H_MACHINE" = m5 ] && [ "$LANE" != ui ] && [ "$LANE" != suite ] && \
+    [ "$H_MACHINE" = m5 ] && [ "$LANE" != ui ] && [ "$LANE" != suite ] && [ "$LANE" != testbed ] && \
         echo "m4_run: note — run_gauntlet.sh has no 'ultra' label; the Ultra runs as --machine m5 --queue-only"
 
     if [ "$DRY" = 0 ]; then
@@ -289,13 +319,15 @@ start_run() {
     [ "$DRY" = 1 ] && echo "+ (the host checks out $sha into $H_WT under the testbed lock, refusing a dirty tree)"
     [ "$DRY" = 1 ] && [ "$LANE" = corpus ] && \
         echo "+ (the host runs corpus_run.py host $CORPUS_LANE: refused unless the hostname is the M4's and the state root is under ~/corpus/state)"
+    [ "$DRY" = 1 ] && [ "$LANE" = testbed ] && \
+        echo "+ (the host runs, under one hold of the lock: the suite lane, then corpus_run.py host check, then corpus_run.py host proof — each refused unless the hostname is the M4's; one summary block, one OUTCOME)"
 
     copy_to_host "$SELF" "$bin/m4_run.sh" || die "could not install the runner on $H_NAME"
     copy_to_host "$SCRIPT_DIR/m4_run_summary.py" "$bin/m4_run_summary.py" \
         || die "could not install the summarizer on $H_NAME"
     copy_to_host "$SCRIPT_DIR/testbed_lock.py" "$bin/testbed_lock.py" \
         || die "could not install the lock helper on $H_NAME"
-    if [ "$LANE" = suite ]; then
+    if [ "$LANE" = suite ] || [ "$LANE" = testbed ]; then
         # The nightly's own runner and its watchdog library, from the caller's
         # checkout like this script: the commit under test need not have them.
         on_host "mkdir -p '$bin/lib'" || die "could not prepare $bin/lib on $H_NAME" 4
@@ -305,7 +337,7 @@ start_run() {
         [ "$DRY" = 1 ] && echo "+ (the host runs $bin/nightly_local_tests.sh --on-demand $out --repo $H_WT --dd $H_SUITE_DD: nothing published)"
     fi
 
-    if [ "$LANE" = corpus ]; then
+    if [ "$LANE" = corpus ] || [ "$LANE" = testbed ]; then
         # The harness's host side and its driver sources, per run like the runner itself.
         local f
         for f in corpus_run.py catalog_db.py corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift; do
@@ -344,9 +376,10 @@ SH
 }
 
 wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
-    local out="$1" waited=0 line norun=1 free=0
+    local out="$1" waited=0 line norun=1 free=0 budget="$WAIT_BUDGET"
     [ "$LANE" = suite ] && norun=2       # suite: could-not-run is told apart from RED
-    while [ "$waited" -lt "$WAIT_BUDGET" ]; do
+    [ "$LANE" = testbed ] && { norun=2; budget="$TESTBED_WAIT_BUDGET"; }
+    while [ "$waited" -lt "$budget" ]; do
         sleep "$WAIT_POLL"; waited=$((waited + WAIT_POLL))
         line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
         if [ -n "$line" ]; then
@@ -370,7 +403,7 @@ wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
             die "the run on $H_NAME ended without an OUTCOME (its shell was stopped: logout, restart or crash) — logs in $out" "$norun"
         fi
     done
-    die "gave up waiting after ${WAIT_BUDGET}s; the run may still be going — scripts/m4_run.sh status --host $HOST" "$norun"
+    die "gave up waiting after ${budget}s; the run may still be going — scripts/m4_run.sh status --host $HOST" "$norun"
 }
 
 # ── Host side (inside the LaunchAgent) ────────────────────────────────────
@@ -562,21 +595,24 @@ host_suite() {
 # scripts/corpus_run.py (installed beside this script); it runs under the lane
 # watchdog with the lock's fd passed on, and writes its own counts-only
 # summary. Exit: 0 GREEN · 3 AMBER (an engine crashed, timed out or errored on
-# some file, or the ref lacks the lane's engine) · anything else RED.
+# some file) · 4 NORUN (the ref lacks the lane's engine) · anything else RED.
 # It repoints <root>/latest like every lane and never <root>/latest-suite.
+# $COUT is where the lane's own files go: <out> for the corpus lane, <out>/corpus-<lane>
+# inside a testbed run (two corpus lanes share one <out> there).
 host_corpus() {   # host_corpus <sha> <stamp>
-    local t0 rc secs extra=()
+    local t0 rc secs extra=() cout="${COUT:-$OUT}"
     [ -n "$CORPUS_DEADLINE" ] && extra+=(--deadline "$CORPUS_DEADLINE")
     [ -n "$CORPUS_LIMIT" ] && extra+=(--limit "$CORPUS_LIMIT")
+    mkdir -p "$cout"
     t0=$(date +%s)
-    run_bounded "$CORPUS_BUDGET" "$OUT/corpus.log" "$H_WT" \
-        python3 "$SCRIPT_DIR/corpus_run.py" host "$CORPUS_LANE" --sha "$1" --stamp "$2" --out "$OUT" \
+    run_bounded "$CORPUS_BUDGET" "$cout/corpus.log" "$H_WT" \
+        python3 "$SCRIPT_DIR/corpus_run.py" host "$CORPUS_LANE" --sha "$1" --stamp "$2" --out "$cout" \
         --worktree "$H_WT" --derived-data "$H_DD" --bin "$SCRIPT_DIR" ${extra[@]+"${extra[@]}"}
     rc=$?
     secs=$(( $(date +%s) - t0 ))
     echo "corpus $CORPUS_LANE exit=$rc secs=$secs"
-    if [ -f "$OUT/corpus-summary.txt" ]; then
-        cat "$OUT/corpus-summary.txt" >>"$OUT/summary.txt"
+    if [ -f "$cout/corpus-summary.txt" ]; then
+        cat "$cout/corpus-summary.txt" >>"$OUT/summary.txt"
     else
         echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
     fi
@@ -584,7 +620,47 @@ host_corpus() {   # host_corpus <sha> <stamp>
         0) ;;
         3) [ "$VERDICT" = GREEN ] && VERDICT=AMBER
            AMBER_WHY="corpus $CORPUS_LANE: see the summary" ;;
+        4) [ "$VERDICT" = RED ] || VERDICT=NORUN
+           WHY="corpus $CORPUS_LANE: this ref has no engine for the lane" ;;
         124) echo "corpus $CORPUS_LANE: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
+        *) VERDICT=RED ;;
+    esac
+}
+
+# Everything, one verdict: the suite lane, then the two corpus lanes — the SAME functions
+# the single lanes run, each judged on its own (VERDICT starts GREEN per lane) and recorded
+# as one row of <out>/lanes.tsv: name, verdict, seconds, the lane's facts file. The one
+# summary block and the run's verdict come from m4_run_summary.py --testbed (0 GREEN ·
+# 3 AMBER · 4 NORUN · else RED); the lanes' own lines follow it in summary.txt.
+host_testbed() {   # host_testbed <sha> <stamp>
+    local sha="$1" stamp="$2" t0 lane_t0 vrc block words=""
+    t0=$(date +%s)
+    : >"$OUT/lanes.tsv"
+    testbed_lane() {   # testbed_lane <name> <facts file> <function> [args…]
+        local name="$1" facts="$2"; shift 2
+        VERDICT=GREEN; AMBER_WHY=""; WHY=""
+        lane_t0=$(date +%s)
+        "$@"
+        printf '%s\t%s\t%s\t%s\n' "$name" "$VERDICT" "$(( $(date +%s) - lane_t0 ))" "$facts" >>"$OUT/lanes.tsv"
+        words="${words:+$words · }$name $VERDICT"
+    }
+    testbed_lane "suite" "$OUT/suite-row.json" host_suite
+    local corpus_lane
+    for corpus_lane in check proof; do
+        CORPUS_LANE="$corpus_lane"; COUT="$OUT/corpus-$corpus_lane"
+        testbed_lane "corpus $corpus_lane" "$COUT/corpus-verdict.json" host_corpus "$sha" "$stamp"
+    done
+    CORPUS_LANE=""; COUT=""
+    block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))")"
+    vrc=$?
+    printf '%s\n' "$block" >"$OUT/testbed-block.txt"
+    { cat "$OUT/testbed-block.txt"; echo "— the lanes' own lines —"; cat "$OUT/summary.txt"; } >"$OUT/summary.txt.new" \
+        && mv "$OUT/summary.txt.new" "$OUT/summary.txt"
+    AMBER_WHY="$words"; WHY="$words"
+    case "$vrc" in
+        0) VERDICT=GREEN; WHY="" ;;
+        3) VERDICT=AMBER ;;
+        4) VERDICT=NORUN ;;
         *) VERDICT=RED ;;
     esac
 }
@@ -602,6 +678,7 @@ host_main() {   # __host <lane> <sha> <stamp>
     trap drop_lock EXIT
     ln -sfn "$OUT" "$H_ROOT/latest"
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
+    [ "$lane" = testbed ] && ln -sfn "$OUT" "$H_ROOT/latest-testbed"
     # The testbed worktree is mutated HERE, under the lock, never by the
     # caller: a second caller's agent is refused above before it can touch
     # the tree a live run is testing (Codex 2026-11-05 re-review 3).
@@ -630,6 +707,7 @@ host_main() {   # __host <lane> <sha> <stamp>
         all)   host_deep; host_ui ;;
         suite) host_suite ;;
         corpus) host_corpus "$sha" "$stamp" ;;
+        testbed) host_testbed "$sha" "$stamp" ;;
     esac
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
@@ -640,7 +718,7 @@ host_main() {   # __host <lane> <sha> <stamp>
 # ── Arguments ─────────────────────────────────────────────────────────────
 LANE="${1:-}"; [ $# -gt 0 ] && shift
 HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""
-CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""
+CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""
 POS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -665,9 +743,15 @@ done
 [ -n "$CORPUS_LIMIT" ] && ! [[ "$CORPUS_LIMIT" =~ ^[0-9]+$ ]] && die "--limit wants a number of files" 2
 # The corpus lane: the M4 only (never the Ultra, Rick's machine), and its options belong to it alone.
 corpus_args_ok() {
-    [ "$HOST" = m4 ] || die "the corpus harness runs only on the M4 (--host $HOST refused)" 2
+    [ "$H_MACHINE" = m4 ] || die "the corpus harness runs only on the M4 (--host $HOST refused)" 2
     case "$CORPUS_LANE" in prepare|check|proof) ;; *) die "--corpus-lane wants prepare|check|proof" 2 ;; esac
     [ -z "$ONLY$PLAN_TIMEOUT" ] || die "--only/--plan-timeout do not apply to the corpus lane" 2
+}
+# The testbed lane holds the corpus lanes, so it is the M4's alone too; it takes no lane options (it runs everything).
+testbed_args_ok() {
+    [ "$H_MACHINE" = m4 ] || die "the testbed lane holds the corpus lanes, which run only on the M4 (--host $HOST refused)" 2
+    [ -z "$ONLY$PLAN_TIMEOUT$CORPUS_LANE$CORPUS_DEADLINE$CORPUS_LIMIT" ] \
+        || die "the testbed lane runs everything: --only/--plan-timeout/--corpus-lane/--deadline/--limit do not apply" 2
 }
 [ "$LANE" = corpus ] || [ "${POS[0]:-}" = corpus ] || [ -z "$CORPUS_LANE$CORPUS_DEADLINE$CORPUS_LIMIT" ] \
     || die "--corpus-lane/--deadline/--limit apply to the corpus lane" 2
@@ -682,13 +766,17 @@ case "$LANE" in
         [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
         [ -n "$ONLY" ] && [ "$LANE" != ui ] && die "--only applies to the ui lane" 2
         start_run ;;
+    testbed)
+        [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
+        testbed_args_ok
+        start_run ;;
     status)
         [ "$DRY" = 1 ] && { on_host "$(status_snippet)"; exit 0; }
         on_host "$(status_snippet)" || die "cannot reach $H_NAME (${H_SSH:-local})" ;;
     __host)
         [ ${#POS[@]} -eq 3 ] || die "__host <lane> <sha> <stamp>" 2
-        case "${POS[0]}" in ui|deep|all|suite) ;; corpus) corpus_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
+        case "${POS[0]}" in ui|deep|all|suite) ;; corpus) corpus_args_ok ;; testbed) testbed_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
         host_main "${POS[@]}" ;;
     ""|-h|--help) usage ;;
-    *) die "unknown lane '$LANE' (ui|deep|all|suite|corpus|status)" 2 ;;
+    *) die "unknown lane '$LANE' (ui|deep|all|suite|testbed|corpus|status)" 2 ;;
 esac
