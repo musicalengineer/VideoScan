@@ -18185,6 +18185,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RawDVLateSoundTrackWritersTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RawDVLateSoundTrackWritersTests"
+      ],
+      "tests": [
+        "balanceAudioJob",
+        "proofOnALatePairTape",
+        "rebuildAudioJob"
+      ]
+    },
+    {
       "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
@@ -24362,6 +24375,31 @@
         "streamLinesSayCopiedOrReencoded_andTheVerificationLevel",
         "success_catalogsCopy_linksOriginal_finished_originalUnchanged",
         "videoOnlyNeverCounts"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairRawDVTests.swift",
+      "stage": "regression",
+      "suites": [
+        "MediaRepairRawDVTests"
+      ],
+      "tests": [
+        "aCopyWithAnUnplayedTailIsNotPublished",
+        "combinedPassArguments",
+        "delayedSoundIsJudgedOnTheWritersOwnOutput",
+        "dvInsideAVI",
+        "lateSecondSoundTrackIsRefused",
+        "lateStreamLogLines",
+        "lateStreamRefusalTable",
+        "rawDVWithoutSound",
+        "rebuildOnTheMatrix",
+        "rebuildSoundOnRawDV",
+        "removeRepeatedFramesOnRawDV",
+        "sourceRulesTable",
+        "twoSoundTracksAreRefused",
+        "unreadableHeaderIsRefusedBeforeAnyWrite",
+        "whatTheProofsSay"
       ]
     },
     {
@@ -40729,7 +40767,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 787,
+      "expected_floor": 805,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40887,6 +40925,7 @@
         "VideoScanTests/FileDossierStoreTests",
         "VideoScanTests/HallieViewerCatalogTests",
         "VideoScanTests/JunkDeleteActionRegressionTests",
+        "VideoScanTests/MediaRepairRawDVTests",
         "VideoScanTests/OriginTrailWestIndiesTests",
         "VideoScanTests/P0TruthFixtureTests",
         "VideoScanTests/P0TruthRegressionTests",
@@ -40894,6 +40933,7 @@
         "VideoScanTests/P0TruthThroughSQLiteTests",
         "VideoScanTests/ProbeTimeoutRegressionTests",
         "VideoScanTests/ProcessRunnerDeadlineTests",
+        "VideoScanTests/RawDVLateSoundTrackWritersTests",
         "VideoScanTests/RelocateSummaryAllSafeHeadlineTests",
         "VideoScanTests/RelocateSummaryHeadlineTests",
         "VideoScanTests/RelocateSummaryProofTests",

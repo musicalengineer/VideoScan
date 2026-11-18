@@ -69,6 +69,40 @@ struct MediaRepairBalanceInput: Equatable, Sendable {
     }
 }
 
+/// What the ORIGINAL's container asks of a pass that rewrites it (GH #484).
+/// Only raw DV asks anything, and it asks what the dedicated Balance Audio
+/// and Rebuild Audio jobs already do — the SAME rule functions, not copies:
+///   1. the probed picture rate as an input-side `-r` (RebuildAudioFix.inputArgs):
+///      the dv demuxer states a 1/60000 time base, and the QuickTime muxer
+///      refuses that rate at trailer-write ("fps 60000 is too large");
+///   2. the sound packets' timestamps made contiguous after the encoder
+///      (BalanceAudioFix.soundTimestampArgs, GH #482): a tape whose sound
+///      runs fast is otherwise stored whole and its tail not played.
+/// Every rewriting pass of raw DV writes QuickTime (fileExtension), so both
+/// apply to all of them. Timestamps only: no sample or picture is added,
+/// dropped or changed. Every other container: `.none`, nothing added.
+/// (≈ a C++ value struct of two argument vectors.)
+struct MediaRepairSourceRules: Equatable, Sendable {
+    var inputArgs: [String] = []
+    var soundTimestampArgs: [String] = []
+
+    static let none = MediaRepairSourceRules()
+
+    /// `containerFormat` = ffprobe's format_name; `rFrameRate` = the
+    /// picture's stated r_frame_rate (nil / "0/0" = no `-r`, as the
+    /// dedicated jobs do: ffmpeg then refuses, and nothing is published).
+    init(containerFormat: String, rFrameRate: String?) {
+        inputArgs = RebuildAudioFix.inputArgs(containerFormat: containerFormat, rFrameRate: rFrameRate)
+        soundTimestampArgs = BalanceAudioFix.soundTimestampArgs(containerFormat: containerFormat)
+    }
+
+    init(summary: MediaRepairStreamSummary) {
+        self.init(containerFormat: summary.containerFormat, rFrameRate: summary.picture?.rFrameRate)
+    }
+
+    private init() {}
+}
+
 struct MediaRepairRecipe: Equatable, Sendable {
 
     /// The defined order every recipe applies its fixes in.
@@ -176,13 +210,18 @@ struct MediaRepairRecipe: Equatable, Sendable {
     /// choice goes through (a hardware variant replaces `picture`'s encode
     /// args, nothing else). `picture` is the justified plan, required for
     /// `.removeRepeatedFrames` (nil there = the picture is copied).
-    func ffmpegArgs(input: String, output: String, picture plan: MediaRepairPicturePlan?) -> [String] {
+    /// `source` = what the original's container asks of a pass that
+    /// rewrites it (raw DV's two rules, GH #484); the lossless remux and the
+    /// add-sound mux never take it (they keep or never read that container's
+    /// timing). `.none` leaves every other container's vector as it was.
+    func ffmpegArgs(input: String, output: String, picture plan: MediaRepairPicturePlan?,
+                    source: MediaRepairSourceRules = .none) -> [String] {
         if case .addFrom(let soundPath) = sound { return Self.addSoundArgs(picture: input, sound: soundPath, output: output) }
         if isLossless { return MediaRepairCommand.remuxArgs(input: input, output: output) }
-        var args = ["-hide_banner", "-nostdin", "-y", "-i", input]
+        var args = ["-hide_banner", "-nostdin", "-y"] + source.inputArgs + ["-i", input]
         args += ["-map", "0:v:0?", "-map", sound == .copy ? "0:a?" : "0:a:0?"]
         args += picture == .removeRepeatedFrames ? (plan?.encodeArgs ?? ["-c:v", "copy"]) : ["-c:v", "copy"]
-        args += soundArgs
+        args += soundArgs + source.soundTimestampArgs
         args += ["-map_metadata", "0", "-map_chapters", "0", "-progress", "pipe:2", output]
         return args
     }

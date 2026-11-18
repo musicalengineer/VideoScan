@@ -107,11 +107,11 @@ final class MediaRepairJob: @MainActor MediaFileOperationJob {
     let canPause = true
     var isPaused: Bool { isPausedValue }
 
-    /// The steps this run walks, for "N of M": the plan read (repeated
-    /// frames only), write, check, save, then the quick Verify of the copy.
+    /// The steps this run walks, for "N of M": the original read (any pass
+    /// that rewrites it — its header, and a raw DV tape's whole sound layout), write, check, save, then the quick Verify of the copy.
     var steps: [String] {
         var phases = MediaRepairPhase.allCases
-        if request.recipe.picture != .removeRepeatedFrames { phases.removeAll { $0 == .plan } }
+        if !MediaRepairEngine.rewritesSource(request.recipe) { phases.removeAll { $0 == .plan } }
         return phases.map(\.step) + [Self.verifyStep]
     }
     static let verifyStep = "verifying the repaired copy"
