@@ -9445,6 +9445,20 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofCorpusFindingsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofCorpusFindingsTests"
+      ],
+      "tests": [
+        "avidColourRangeAtom",
+        "colourRangeStatedOnOneSide",
+        "ffprobeEstimatesRawDVLength",
+        "rawDVLengthsAreEstimates"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BalancedCopyProofCoverageTests.swift",
       "stage": "regression",
       "suites": [
@@ -40661,7 +40675,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 779,
+      "expected_floor": 783,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40884,7 +40898,8 @@
         "VideoScanTests/ShowFiltersShowingBoxAuditTests",
         "VideoScanTests/ShowFiltersAuditSensorTests",
         "VideoScanTests/BalanceAudioUnlockedDVTests",
-        "VideoScanTests/BalancedCopyProofTotalityTests"
+        "VideoScanTests/BalancedCopyProofTotalityTests",
+        "VideoScanTests/BalancedCopyProofCorpusFindingsTests"
       ]
     },
     {

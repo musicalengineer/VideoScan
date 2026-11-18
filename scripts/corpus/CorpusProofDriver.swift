@@ -18,7 +18,8 @@
 //            and sample counts (listed, read, decoded, stated, stored), the
 //            sound's runs on the timeline, and every display field the two
 //            headers state differently. Needs a ref whose engine has
-//            `measurement` (2026-11-18); an older ref does not build.
+//            `measurement`, `estimatedSeconds` and `statesRangeOnOneSideOnly`
+//            (2026-11-18); an older ref does not build.
 // The balanced copy is removed from work/ as soon as its proof is recorded,
 // so at most one copy is on disk (worst case: the size of the largest
 // one-sided corpus file plus its PCM sound).
@@ -151,8 +152,20 @@ enum CorpusProofEvidence {
             out += variant(reason, facts: facts, kept: kept, copySound: copySound)
         case .notProven(.pictureConfigurationDiffers):
             out += configuration(facts, kept: kept, copySound: copySound)
+        case .sameContent:
+            // A colour range only one file states, displayed the same: which file, and the range.
+            if case .success(let pairing) = Proof.pairing(original: facts.original.carried, balanced: facts.balanced.carried) {
+                for (n, pair) in pairing.pictures.enumerated() {
+                    let original = facts.original.carried[pair.original].configuration
+                    let copy = facts.balanced.carried[pair.balanced].configuration
+                    guard original.statesRangeOnOneSideOnly(against: copy) else { continue }
+                    out += ["v\(n)_named:colour_range", "v\(n)_colour_range_o:" + CorpusWords.word(original.colorRange),
+                            "v\(n)_colour_range_c:" + CorpusWords.word(copy.colorRange)]
+                }
+            }
         default: break
         }
+        if let estimate = facts.original.estimatedSeconds { out.append("o_estimated_us:" + micros(estimate)) }
         return out
     }
 

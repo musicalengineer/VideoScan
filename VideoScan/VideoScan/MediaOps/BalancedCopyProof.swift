@@ -42,14 +42,18 @@
 //   4. NOTHING ELSE CHANGES THE DISPLAY. Per picture stream the header
 //      states the same size, pixel format, aspect ratios, field order,
 //      colour range/space/transfer/primaries and stream side data (display
-//      matrix, …); the sound has one PCM track of the same format laid out
+//      matrix, …) — one exception, named and not refused: a YUV picture's
+//      colour range stated `tv` by one file and left unstated by the other
+//      is displayed limited-range by FFmpeg either way; the sound has one PCM track of the same format laid out
 //      plainly as left + right; and no decoded track that plays by default
 //      in the original has lost that flag (a QuickTime track switched off).
 //   5. BOTH READS WERE WHOLE. ffmpeg exited 0 with nothing at error level,
 //      ended with its own clean-exit line, read of every decoded stream the
 //      packets the packet pass listed, decoded with zero errors, muxed as
 //      many frames as were folded here, and the decoded length of each
-//      stream is the length its header states (where it states one).
+//      stream is the length its header states (where it states one: raw
+//      DV states none — ffprobe's figure for it is an estimate from the
+//      bit rate, kept only to budget the decode's time).
 //   6. BOTH FILES STAYED PUT (resolved paths, identity stamps, no
 //      cancellation — unchanged from the first design).
 //
@@ -186,6 +190,28 @@ enum BalancedCopyProof {
         /// The stream's `side_data_list` as canonical JSON (keys sorted); "" = none.
         var sideData: String = ""
 
+        /// The colour range FFmpeg DISPLAYS this picture in: the one the
+        /// header states, or — when it states none — limited range ("tv")
+        /// for a YUV pixel format. nil = unstated in a format whose default
+        /// this proof does not vouch for (the full-range `yuvj…` formats,
+        /// RGB, grey, palette).
+        var displayedColorRange: String? {
+            if !colorRange.isEmpty { return colorRange }
+            return pixelFormat.hasPrefix("yuv") && !pixelFormat.hasPrefix("yuvj") ? "tv" : nil
+        }
+
+        /// The colour range is stated by ONE of the two headers, and the
+        /// other's picture is displayed in that range anyway — in practice
+        /// `tv` against unstated, for YUV. A named difference, not a display
+        /// difference. (Found on real media 2026-11-18: an Avid `ACLR` atom
+        /// on DV in QuickTime; FFmpeg's QuickTime muxer cannot write a range
+        /// for DV, so the job's copy states none.) Full range against
+        /// anything else is never this.
+        func statesRangeOnOneSideOnly(against copy: PictureConfiguration) -> Bool {
+            (colorRange.isEmpty != copy.colorRange.isEmpty)
+                && displayedColorRange != nil && displayedColorRange == copy.displayedColorRange
+        }
+
         /// A picture stream whose size and pixel format ffprobe could read.
         var describesAPicture: Bool { (width ?? 0) > 0 && (height ?? 0) > 0 && !pixelFormat.isEmpty }
 
@@ -217,10 +243,13 @@ enum BalancedCopyProof {
             return fields.filter { $0.original != $0.copy }
         }
 
-        /// The first DISPLAY field `copy` states differently ("width 320 →
-        /// 304").
+        /// The first field by which `copy` would be DISPLAYED differently
+        /// ("width 320 → 304") — every field of `displayDifferences` but a
+        /// colour range stated on one side only (`statesRangeOnOneSideOnly`).
         func displayDifference(from copy: PictureConfiguration) -> String? {
-            guard let field = displayDifferences(from: copy).first else { return nil }
+            let sameRange = statesRangeOnOneSideOnly(against: copy)
+            guard let field = displayDifferences(from: copy).first(where: { !(sameRange && $0.name == "colour range") })
+            else { return nil }
             func shown(_ value: String) -> String {
                 value.isEmpty ? "none" : (value.count > 96 ? String(value.prefix(96)) + "…" : value)
             }
@@ -322,6 +351,12 @@ enum BalancedCopyProof {
         var tags: [String: String] = [:]
         /// How many chapter marks it has.
         var chapters = 0
+        /// Raw DV only: the length ffprobe ESTIMATES from the bit rate (the
+        /// file states none). Used to budget the decode's time, never to
+        /// judge a read: measured 2026-11-18, the estimate is exact for a
+        /// 3-minute file, one tick of 1/60000 s short at 19 minutes and two
+        /// at an hour. nil = the container states its lengths.
+        var estimatedSeconds: Double?
 
         var containerWords: Set<String> { Set(container.split(separator: ",").map { $0.lowercased() }) }
         /// The QuickTime family: the one whose edit lists can hide stored media.
@@ -424,7 +459,9 @@ enum BalancedCopyProof {
         var kind: Kind
         /// The file that HOLDS the thing — what a Trash offer must name
         /// before that file goes. It says nothing about the other file: the
-        /// thing was not compared. nil = not a holding at all: the two
+        /// thing was not compared (one exception says so in its own words:
+        /// a colour range tag the other file does not state, compared and
+        /// found to display the same). nil = not a holding at all: the two
         /// files store the same pictures differently (container, encoding,
         /// decoder configuration).
         var heldBy: Holder?

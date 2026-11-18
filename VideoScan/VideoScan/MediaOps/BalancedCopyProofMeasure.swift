@@ -175,6 +175,13 @@ extension BalancedCopyProof {
         var layout = FileLayout(
             container: report.format?.format_name ?? "", tags: report.format?.tags ?? [:],
             chapters: report.chapters?.count ?? 0)
+        // Raw DV has no header and states NO length, for picture or sound: ffprobe ESTIMATES one from the
+        // bit rate. The sound's is the picture's, and a camcorder's unlocked sound does not hold 1601.6
+        // samples a frame (dry run 2026-11-17: 27:18 of tape decoded 1,784 samples more). The picture's
+        // falls short of frames × 1001/30000 as the file grows (corpus 2026-11-18: one tick of 1/60000 s
+        // at 19 minutes, two at an hour — three tapes read whole were called "not read to the end").
+        let rawDV = layout.containerWords == ["dv"]
+        if rawDV { layout.estimatedSeconds = streams.compactMap(\.statedSeconds).max() }
         for (position, s) in streams.enumerated() {
             let index = s.index ?? position
             if s.codec_type == "audio" {
@@ -182,15 +189,13 @@ extension BalancedCopyProof {
                     index: index, codec: s.codec_name ?? "", sampleFormat: s.sample_fmt ?? "",
                     sampleRateHz: s.sample_rate.flatMap { Int($0) } ?? 0, channels: s.channels ?? 0,
                     channelLayout: s.channel_layout ?? "", sideData: sideData[position],
-                    // Raw DV states no length for its sound: ffprobe gives the PICTURE's (estimated from
-                    // the bit rate), and a camcorder's unlocked sound does not hold 1601.6 samples a frame
-                    // (dry run 2026-11-17: 27:18 of tape decoded 1,784 samples more than that length).
-                    statedSeconds: layout.containerWords == ["dv"] ? nil : s.statedSeconds,
+                    statedSeconds: rawDV ? nil : s.statedSeconds,
                     tickSeconds: tick(s.time_base), tags: s.tags ?? [:], flags: s.flags))
             } else {
                 layout.carried.append(CarriedStream(
                     index: index, kind: s.codec_type ?? "", codec: s.codec_name ?? "",
-                    tag: s.codec_tag_string ?? "", timeBase: s.time_base ?? "", statedSeconds: s.statedSeconds,
+                    tag: s.codec_tag_string ?? "", timeBase: s.time_base ?? "",
+                    statedSeconds: rawDV ? nil : s.statedSeconds,
                     configuration: s.configuration(sideData: sideData[position]), tags: s.tags ?? [:], flags: s.flags))
             }
         }
@@ -419,11 +424,12 @@ extension BalancedCopyProof {
     }
 
     /// How long a decode pass may take: the levels pass's deadline (it
-    /// scales with the file's size), or twice the longest stated length
-    /// when that is more — decoding and hashing every frame of a
+    /// scales with the file's size), or twice the longest stated (raw DV:
+    /// estimated) length when that is more — decoding and hashing every frame of a
     /// long-GOP recording is slower than reading its bytes.
     static func decodeDeadlineSeconds(bytes: Int64, layout: FileLayout) -> Double {
-        let stated = (layout.carried.compactMap(\.statedSeconds) + layout.sound.compactMap(\.statedSeconds)).max() ?? 0
+        let stated = (layout.carried.compactMap(\.statedSeconds) + layout.sound.compactMap(\.statedSeconds)
+            + [layout.estimatedSeconds].compactMap { $0 }).max() ?? 0
         return max(AudioBalanceProbe.levelsDeadlineSeconds(forFileSizeBytes: bytes), 2 * stated)
     }
 

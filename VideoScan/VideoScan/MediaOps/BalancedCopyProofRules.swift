@@ -542,7 +542,8 @@ extension BalancedCopyProof {
     }
 
     /// How one paired PICTURE is stored differently though every decoded
-    /// frame is the same: codec or packets, then decoder configuration.
+    /// frame is the same: codec or packets, a colour range tag only one
+    /// file states (displayed the same), then decoder configuration.
     private static func storageDifferences(original: CarriedStream, copy: CarriedStream, held: Evidence.Stream) -> [Difference] {
         var out: [Difference] = []
         let every = "every decoded frame is the same"
@@ -555,6 +556,16 @@ extension BalancedCopyProof {
                                   what: "picture stream \(original.index) (\(original.codec)) is not stored in the same "
                                     + "packets (\(original.packets ?? 0) in the original, \(copy.packets ?? 0) in the "
                                     + "balanced copy); \(every)"))
+        }
+        if original.configuration.statesRangeOnOneSideOnly(against: copy.configuration) {
+            let (holder, stated, other): (Difference.Holder, String, String) = original.configuration.colorRange.isEmpty
+                ? (.balancedCopy, copy.configuration.colorRange, "the original")
+                : (.original, original.configuration.colorRange, "the balanced copy")
+            out.append(Difference(
+                kind: .playback, heldBy: holder,
+                what: "a colour range tag on picture stream \(original.index) (\(stated), "
+                    + "\(stated == "tv" ? "limited" : stated == "pc" ? "full" : "stated") range); \(other) states none, "
+                    + "which FFmpeg displays in the same range"))
         }
         if original.configuration.extradataSHA256 != copy.configuration.extradataSHA256 {
             out.append(Difference(kind: .decoderConfiguration, heldBy: nil,

@@ -881,10 +881,10 @@ struct BalancedCopyProofDecisionTests {
         #expect(abs(sound.timingSlackSeconds - 1.0 / 48_000) < 1e-12)
         #expect(abs(video.timingSlackSeconds - 1.0 / 12_800) < 1e-12)
         #expect(timecode.timingSlackSeconds == Proof.timingSlackCeilingSeconds, "a 40 ms tick is capped at 1 ms")
-        // Raw DV states the picture's estimated length for its sound: that is no statement about the sound.
+        // Raw DV states no length: ffprobe ESTIMATES one from the bit rate, for picture and sound alike (corpus 2026-11-18).
         let rawDV = Data(#"{"streams":[{"index":0,"codec_type":"video","duration":"1637.702700"},{"index":1,"codec_type":"audio","duration":"1637.702700"}],"format":{"format_name":"dv"}}"#.utf8)
         let tape = try #require(Proof.layout(fromProbeJSON: rawDV))
-        #expect(tape.sound[0].statedSeconds == nil && tape.carried[0].statedSeconds == 1637.7027)
+        #expect(tape.sound[0].statedSeconds == nil && tape.carried[0].statedSeconds == nil && tape.estimatedSeconds == 1637.7027)
         #expect(Proof.layout(fromProbeJSON: Data("{}".utf8)) == nil)
         #expect(Proof.layout(fromProbeJSON: Data("{\"streams\":[]}".utf8)) == nil)
         #expect(Proof.layout(fromProbeJSON: Data("not json".utf8)) == nil)
