@@ -594,8 +594,9 @@ host_suite() {
 # The real-data corpus harness (DECISIONS 2026-11-17). Everything it does is in
 # scripts/corpus_run.py (installed beside this script); it runs under the lane
 # watchdog with the lock's fd passed on, and writes its own counts-only
-# summary. Exit: 0 GREEN · 3 AMBER (an engine crashed, timed out or errored on
-# some file) · 4 NORUN (the ref lacks the lane's engine) · anything else RED.
+# summary. Exit: 0 GREEN · 3 AMBER (some file's outcome word moved against the lane's
+# baseline) · 4 NORUN (the ref lacks the lane's engine) · anything else RED (a file
+# crashed an engine or timed out, the build failed, the seal refused).
 # It repoints <root>/latest like every lane and never <root>/latest-suite.
 # $COUT is where the lane's own files go: <out> for the corpus lane, <out>/corpus-<lane>
 # inside a testbed run (two corpus lanes share one <out> there).

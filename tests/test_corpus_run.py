@@ -14,7 +14,11 @@ can be pinned without the M4 and without any real media:
   a lane        a crash or a deadline in one file does not stop the run; the
                 report is counts by stratum and by container/codec; nothing
                 that reaches a summary can carry a path or a filename;
-  status        the newest run and what changed since the previous one.
+  the verdict   a lane's verdict is its diff against the baseline: a moved outcome
+                word is AMBER and listed by SHA-256 prefix, a crash or a deadline
+                is RED, `accept` blesses a run (who, when, which) and refuses a
+                RED or partial one; a poisoned baseline is RED, never a pass;
+  status        the newest run judged against the baseline as it stands now.
 
 A fake `xcodebuild` plays the build and the in-app driver. Nothing here runs
 ssh, launchctl, a real xcodebuild or ffmpeg, and nothing opens a real catalog.
@@ -517,19 +521,19 @@ class LaneTests(unittest.TestCase):
 
     def test_a_crash_in_one_file_does_not_stop_the_run(self):
         self.scene.plan['files'] = {sha_of(1): dict(crash='check')}
-        self.assertEqual(self.scene.run(), cr.EXIT_AMBER)
+        self.assertEqual(self.scene.run(), cr.EXIT_RED)
         report = json.loads((self.scene.report_dir() / 'report.json').read_text())
         self.assertEqual(report['engines']['check'], {'OK': 2, 'crash': 1})
         self.assertEqual(report['engines']['probe'], {'OK': 3})
         self.assertEqual(report['engines']['audio'], {'OK': 2, 'not_run': 1})
         self.assertEqual(report['failures'], {'check:crash': 1})
         self.assertGreaterEqual(report['launches'], 2, 'the files after the crash need a second launch')
-        self.assertIn('corpus check: AMBER 3 files', (self.scene.out / 'corpus-summary.txt').read_text())
-        self.assertIn('check:crash 1', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertIn('corpus check: RED 3 files', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertIn('check:crash 1 — 1 crashed or timed out: RED', (self.scene.out / 'corpus-summary.txt').read_text())
 
     def test_a_file_past_its_deadline_is_recorded_and_the_rest_still_run(self):
         self.scene.plan['files'] = {sha_of(0): dict(timeout='probe'), sha_of(2): dict(timeout='audio')}
-        self.assertEqual(self.scene.run(deadline=7), cr.EXIT_AMBER)
+        self.assertEqual(self.scene.run(deadline=7), cr.EXIT_RED)
         report = json.loads((self.scene.report_dir() / 'report.json').read_text())
         self.assertEqual(report['failures'], {'probe:timeout': 1, 'audio:timeout': 1})
         self.assertEqual(report['engines']['check'], {'OK': 2, 'not_run': 1})
@@ -538,7 +542,7 @@ class LaneTests(unittest.TestCase):
 
     def test_every_file_crashing_still_ends(self):
         self.scene.plan['files'] = {sha_of(n): dict(crash='probe') for n in range(3)}
-        self.assertEqual(self.scene.run(), cr.EXIT_AMBER)
+        self.assertEqual(self.scene.run(), cr.EXIT_RED)
         report = json.loads((self.scene.report_dir() / 'report.json').read_text())
         self.assertEqual((report['engines']['probe'], report['launches']), ({'crash': 3}, 3))
 
@@ -681,7 +685,8 @@ class StatusTests(unittest.TestCase):
         self.scene.run()
         text = '\n'.join(cr.status(self.scene.seal))
         self.assertIn('newest check run: 20261117_120000_1', text)
-        self.assertIn('no previous run (this one is the baseline)', text)
+        self.assertIn('  baseline: this run (the lane has no earlier whole clean run to compare with)', text)
+        self.assertIn('corpus check: GREEN 3 files', text)
         self.assertLess(text.index('  probe:'), text.index('  check:'), "engines read in the lane's order")
         self.assertLess(text.index('  check:'), text.index('  audio:'))
 
@@ -692,11 +697,14 @@ class StatusTests(unittest.TestCase):
         lines = cr.status(self.scene.seal)
         text = '\n'.join(lines)
         self.assertIn('newest check run: 20261118_090000_2', text)
-        self.assertIn('changed since 20261117_120000_1 at aaaaaaaaa: 2 of 3 files', text)
+        self.assertIn('corpus check: AMBER 3 files', text)
+        self.assertIn('against its first run (no baseline accepted yet) 20261117_120000_1 at aaaaaaaaa: 2 of 3 files changed', text)
         self.assertIn('    check: OK -> Problem x2', lines)
         self.assertIn('    audio: OK -> damaged x1', lines)
+        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Problem', lines)
+        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged', lines)
         for n in range(3):
-            self.assertNotIn(sha_of(n)[:12], text)
+            self.assertNotIn(sha_of(n)[:13], text, 'a SHA-256 prefix only, never the whole digest')
         for name in SECRET_NAMES:
             self.assertNotIn(name, text)
 
@@ -707,6 +715,189 @@ class StatusTests(unittest.TestCase):
     def test_status_with_no_prepare_says_so(self):
         (self.scene.seal.state / 'prepare.json').write_text('{not json')            # poisoned
         self.assertIn('not prepared', cr.status(self.scene.seal)[0])
+
+
+class BaselineTests(unittest.TestCase):
+    """B. The verdict of a corpus lane is its diff against the baseline."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def facts(self):
+        return json.loads((self.scene.out / cr.VERDICT_FILE).read_text())
+
+    def test_the_first_run_is_its_own_baseline_and_green(self):
+        self.scene.plan['files'] = {sha_of(1): dict(check='error:couldNotRead', audio='error:probeFailed')}
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN, "an engine's own error word is an outcome, not a lane failure")
+        self.assertIn('corpus check: GREEN 3 files', self.summary())
+        self.assertIn('  baseline: this run', self.summary())
+        self.assertEqual((self.facts()['verdict'], self.facts()['against']), ('GREEN', None))
+
+    def test_a_moved_outcome_word_is_amber_and_the_file_is_listed_by_sha_prefix(self):
+        self.scene.run()
+        self.scene.plan['files'] = {sha_of(1): dict(check='Problem'), sha_of(2): dict(audio='damaged', check='Problem')}
+        self.assertEqual(self.scene.run(sha='b' * 40, stamp='20261118_090000_2'), cr.EXIT_AMBER)
+        lines = self.summary().splitlines()
+        self.assertTrue(lines[0].startswith('corpus check: AMBER 3 files'), lines[0])
+        self.assertIn('  against its first run (no baseline accepted yet) 20261117_120000_1 at aaaaaaaaa: 2 of 3 files changed '
+                      '(new in this run 0, not in this run 0)', lines)
+        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Problem', lines)
+        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged', lines)
+        against = self.facts()['against']
+        self.assertEqual((self.facts()['verdict'], against['changed'], against['compared']), ('AMBER', 2, 3))
+        self.assertEqual(against['transitions'], {'check: OK -> Problem': 2, 'audio: OK -> damaged': 1})
+        self.assertEqual(sorted(against['listed']), sorted([f'{sha_of(1)[:12]} check: OK -> Problem',
+                                                            f'{sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged']))
+        leaves = self.summary() + (self.scene.out / cr.VERDICT_FILE).read_text()
+        for n in range(3):
+            self.assertNotIn(sha_of(n)[:13], leaves, 'only the prefix leaves the M4')
+        for name in SECRET_NAMES:
+            self.assertNotIn(name, leaves)
+        stored = json.loads((self.scene.report_dir(sha='b' * 40, stamp='20261118_090000_2') / 'report.json').read_text())
+        self.assertEqual(sorted(c[0] for c in stored['against']['changes']), sorted([sha_of(1), sha_of(2)]),
+                         'the whole list stays in the report on the M4')
+
+    def test_a_known_error_word_unchanged_is_green_and_a_change_of_kinds_alone_is_only_noted(self):
+        self.scene.plan['files'] = {sha_of(0): dict(check='error:couldNotRead'), sha_of(1): dict(check_kinds=['a:Warning'])}
+        self.scene.run()
+        self.scene.plan['files'][sha_of(1)] = dict(check_kinds=['b:Warning'])
+        self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_GREEN)
+        self.assertIn('0 of 3 files changed', self.summary())
+        self.assertIn('finding kinds moved in 1 files whose outcome words did not (not part of the verdict)', self.summary())
+
+    def test_a_crash_or_a_deadline_is_red_whatever_the_baseline_holds(self):
+        self.scene.run()
+        for how, stamp in ((dict(crash='audio'), '20261118_090000_2'), (dict(timeout='check'), '20261118_100000_3')):
+            self.scene.plan['files'] = {sha_of(1): how}
+            self.assertEqual(self.scene.run(stamp=stamp), cr.EXIT_RED)
+            self.assertTrue(self.summary().startswith('corpus check: RED 3 files'), self.summary())
+            self.assertEqual(self.facts()['verdict'], 'RED')
+            self.assertIn('1 files crashed an engine or ran past the deadline: RED', self.facts()['notes'])
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'someone')
+        self.assertIn('a RED run is never the baseline', str(refused.exception))
+        self.assertFalse((self.scene.seal.reports / 'check' / cr.BASELINE).exists())
+        # A crashed run is never the implicit baseline either: the next clean run is judged against the first.
+        self.scene.plan['files'] = {}
+        self.assertEqual(self.scene.run(stamp='20261118_110000_4'), cr.EXIT_GREEN)
+        self.assertIn('against its first run (no baseline accepted yet) 20261117_120000_1', self.summary())
+        self.assertIn('since the previous run 20261118_100000_3 at aaaaaaaaa: 1 of 3 files changed', self.summary())
+
+    def test_accept_blesses_the_newest_run_and_records_who_when_and_which(self):
+        self.scene.run()
+        self.scene.plan['files'] = {sha_of(1): dict(check='Problem')}
+        self.assertEqual(self.scene.run(sha='b' * 40, stamp='20261118_090000_2'), cr.EXIT_AMBER)
+        lines = cr.accept(self.scene.seal, 'check', 'rickb@RicksUltra')
+        self.assertRegex(lines[0], r'^corpus check: the baseline is now run 20261118_090000_2 at bbbbbbbbb \(3 files\) — accepted '
+                                   r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d by rickb@RicksUltra; the lane had no accepted baseline before$')
+        record = json.loads((self.scene.seal.reports / 'check' / cr.BASELINE).read_text())
+        run = self.scene.report_dir(sha='b' * 40, stamp='20261118_090000_2')
+        self.assertEqual((record['run'], record['sha'], record['accepted_by'], record['files']),
+                         ('20261118_090000_2', 'b' * 40, 'rickb@RicksUltra', 3))
+        self.assertEqual(record['outcomes_sha256'], hashlib.sha256((run / 'outcomes.json').read_bytes()).hexdigest())
+        # The same run, judged now: nothing moved against the baseline it has become.
+        text = '\n'.join(cr.status(self.scene.seal))
+        self.assertIn('corpus check: GREEN 3 files', text)
+        self.assertRegex(text, r'against its accepted baseline 20261118_090000_2 at bbbbbbbbb \(accepted \S+ by rickb@RicksUltra\): 0 of 3')
+        # A later run is held to the accepted one, not to the first.
+        self.scene.plan['files'] = {}
+        self.assertEqual(self.scene.run(sha='c' * 40, stamp='20261119_090000_3'), cr.EXIT_AMBER)
+        self.assertIn(f'    {sha_of(1)[:12]} check: Problem -> OK', self.summary().splitlines())
+        self.assertEqual(self.facts()['against']['what'], 'its accepted baseline')
+        again = cr.accept(self.scene.seal, 'check', 'night worker')
+        self.assertIn('by night_worker; it replaces 20261118_090000_2', again[0])
+        history = [json.loads(line) for line in (self.scene.seal.reports / 'check' / cr.BASELINE_LOG).read_text().splitlines()]
+        self.assertEqual([h['run'] for h in history], ['20261118_090000_2', '20261119_090000_3'])
+        self.assertEqual(sorted(p.name for p in (self.scene.seal.reports / 'check').iterdir() if p.is_file()),
+                         [cr.BASELINE_LOG, cr.BASELINE], 'accept left a pending file')
+
+    def test_accept_refuses_what_is_not_a_whole_clean_run(self):
+        seal = self.scene.seal
+        for lane, needle in (('check', 'has no run to accept'), ('verbs?', 'accept wants one of'), ('../state', 'accept wants one of')):
+            with self.subTest(lane=lane), self.assertRaises(cr.Refused) as refused:
+                cr.accept(seal, lane, 'x')
+            self.assertIn(needle, str(refused.exception))
+        self.assertEqual(self.scene.run(limit=2), cr.EXIT_GREEN)
+        self.assertIn('limited to 2 files', self.summary())
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(seal, 'check', 'x')
+        self.assertIn('a partial run is never the baseline', str(refused.exception))
+        self.scene.plan['engines'] = ['balance', 'proof']
+        self.assertEqual(self.scene.run('proof'), cr.EXIT_NORUN)
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(seal, 'proof', 'x')
+        self.assertIn('did not run', str(refused.exception))
+        with self.assertRaises(cr.Refused):
+            cr.accept(cr.Seal(self.scene.home, 'ricksultra'), 'check', 'x')
+        self.assertFalse(list(seal.reports.rglob(cr.BASELINE)))
+
+    def test_a_partial_run_is_never_the_implicit_baseline(self):
+        self.scene.run(limit=1)
+        self.scene.plan['files'] = {sha_of(n): dict(check='Problem') for n in range(3)}
+        self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_GREEN)
+        self.assertIn('  baseline: this run', self.summary())
+
+    def test_a_poisoned_baseline_is_red_never_a_pass_and_never_a_traceback(self):
+        self.scene.run()
+        cr.accept(self.scene.seal, 'check', 'x')
+        record_path = self.scene.seal.reports / 'check' / cr.BASELINE
+        good = record_path.read_text()
+        outcomes = self.scene.report_dir() / 'outcomes.json'
+        kept = outcomes.read_text()
+        poisons = [('{not json', None), ('[]', None), (json.dumps(dict(run='../../state', sha='a' * 40, outcomes_sha256='0')), None),
+                   (json.dumps(dict(json.loads(good), run='20990101_000000_9')), None), (good, kept.replace('"OK"', '"Problem"', 1)),
+                   (good, '[1, 2]'),
+                   # a record that walks back to a real run by a path: the names are a commit and a stamp, never a path
+                   (json.dumps(dict(json.loads(good), run='../' + 'a' * 40 + '/20261117_120000_1')), None)]
+        for n, (record, edited) in enumerate(poisons):
+            with self.subTest(poison=n):
+                record_path.write_text(record)
+                outcomes.write_text(kept if edited is None else edited)
+                self.assertEqual(self.scene.run(stamp=f'20261118_09000{n}_2'), cr.EXIT_RED)
+                self.assertIn('corpus check: RED 3 files', self.summary())
+                self.assertIn('baseline: the accepted baseline of check cannot be read back', self.summary())
+                self.assertEqual(self.facts()['verdict'], 'RED')
+                self.assertIn('RED', '\n'.join(cr.status(self.scene.seal)))
+        record_path.write_text(good)
+        outcomes.write_text(kept)
+        self.assertEqual(self.scene.run(stamp='20261118_100000_2'), cr.EXIT_GREEN)
+
+    def test_a_long_list_of_changes_is_capped_in_what_leaves_and_whole_in_the_report(self):
+        engines = ['probe', 'check', 'audio']
+        old = {sha_of(n): dict(probe='probed', check='OK', audio='healthy') for n in range(500)}
+        new = {sha: dict(record, check='Problem') for sha, record in old.items()}
+        first = self.scene.seal.reports / 'check' / ('a' * 40) / '20261117_120000_1'
+        first.mkdir(parents=True)
+        (first / 'outcomes.json').write_text(json.dumps(old))
+        (first / 'report.json').write_text(json.dumps(dict(lane='check', failures={}, engine_present=True)))
+        against = cr.against_baseline(self.scene.seal, 'check', new, engines)
+        self.assertEqual((against['changed'], len(against['listed']), against['listed_more'], len(against['changes'])),
+                         (500, cr.LISTED, 500 - cr.LISTED, 500))
+        text = cr.against_lines(against)
+        self.assertLess(len(text), cr.LISTED + 6)
+        self.assertIn(f'    … +{500 - cr.LISTED} more files (the whole list is in the run\'s report.json on the M4)', text)
+
+    def test_the_command_line_accepts_and_scrubs_the_name(self):
+        self.scene.run()
+        code = cr.main(['accept', 'check', '--by', 'Grandma/../Birthday 1988.mov'], seal=self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN)
+        record = json.loads((self.scene.seal.reports / 'check' / cr.BASELINE).read_text())
+        self.assertEqual(record['accepted_by'], 'Grandma_.._Birthday_1988.mov')
+        self.assertEqual(cr.main(['accept', 'proof', '--by', 'x'], seal=self.scene.seal), cr.EXIT_REFUSED)
+        self.assertEqual(cr.main(['accept', 'check'], seal=cr.Seal(self.scene.home, 'ricksultra')), cr.EXIT_REFUSED)
+
+    def test_the_front_door_accepts_through_ssh_with_the_helper_on_stdin(self):
+        p = subprocess.run(['/bin/bash', str(SCRIPTS / 'corpus_run.sh'), 'accept', 'proof', '--dry-run'],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout, r'^\+ ssh ricksm4\.local python3 - accept proof --by [A-Za-z0-9_.@-]+ < \S+/scripts/corpus_run\.py\n$')
 
 
 class ScaleTests(unittest.TestCase):
@@ -727,6 +918,7 @@ class ScaleTests(unittest.TestCase):
             text = cr.render(report)
             elapsed = time.monotonic() - t0
         self.assertEqual((delta['compared'], delta['changed']), (100_000, 10_000))
+        self.assertEqual(len(delta['moved']), 10_000)
         self.assertEqual(report['files'], 100_000)
         self.assertEqual(sum(report['engines']['check'].values()), 100_000)
         self.assertLess(len(text), 40, 'the summary is a table, not a list of files')
@@ -775,7 +967,8 @@ class CallerTests(unittest.TestCase):
         self.assertIn('ssh ricksm4.local python3 - status', p.stdout)
 
     def test_usage_errors_exit_2(self):
-        for args in ([], ['bogus'], ['run'], ['run', 'delete'], ['run', 'check', '--deadline', 'soon', '--dry-run'],
+        for args in ([], ['bogus'], ['run'], ['run', 'delete'], ['accept'], ['accept', 'everything'], ['accept', 'check', 'extra'],
+                     ['run', 'check', '--deadline', 'soon', '--dry-run'],
                      ['run', 'check', '--host', 'ultra', '--dry-run'], ['run', 'check', '--only', 'X', '--dry-run']):
             with self.subTest(args=args):
                 self.assertEqual(self.run_sh('corpus_run.sh', *args).returncode, 2, args)

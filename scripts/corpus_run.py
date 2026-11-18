@@ -11,7 +11,18 @@ runs ON THE M4; `scripts/corpus_run.sh` launches it from the Ultra through
   host prepare   build the sealed state: ~/corpus/state/<the catalog file>
   host check     probe · Check Media (quick) · Verify Audio, every corpus file
   host proof     Balance Audio into work/, then the balanced-copy proof
-  status         the newest run of each lane and what changed since the last
+  status         the newest run of each lane, judged against the lane's baseline
+  accept <lane>  bless the lane's newest run as its baseline (who, when, which run)
+
+THE VERDICT OF A LANE IS THE DIFF. A run is compared, file by file (by SHA-256),
+with the lane's BASELINE: the run `accept` blessed (reports/<lane>/baseline.json),
+or — until one is accepted — the lane's first whole clean run.
+  RED    a file crashed an engine or ran past its deadline (never acceptable,
+         whatever the baseline holds), or the accepted baseline cannot be read back;
+  AMBER  some file's outcome word differs from the baseline — each is listed by
+         SHA-256 prefix with `engine: old -> new`;
+  GREEN  nothing moved. An engine's own "error:…" word is an outcome like any
+         other: known in the baseline, it is not news.
 
 THE SEAL (every entry point passes `Seal.check` first; tests/test_corpus_run.py):
   1. the hostname is the M4's (`ALLOWED_HOSTS`); the Ultra is refused by name;
@@ -91,6 +102,9 @@ LANES = {
 HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes the harness itself assigns
 
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
+BASELINE, BASELINE_LOG = "baseline.json", "baseline-history.jsonl"     # in reports/<lane>/
+CUT_WORDS = ("crash", "timeout")                # an engine that died or overran on a file: RED
+LISTED = 40                                      # changed files a summary lists; the rest are counted
 VERDICT_FILE = "corpus-verdict.json"      # in <out>: the lane's verdict as counts, for m4_run_summary.py --testbed
 
 
@@ -739,6 +753,7 @@ class Lane:
                 "bytes": sum(r.get("size", 0) for r in results.values()),
                 "media_seconds": round(sum(r.get("duration", 0) or 0 for r in results.values()), 1),
                 "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "launches": self.launches,
+                "limit": self.limit,
                 "deadline_s": self.deadline, "engines": {e: dict(c) for e, c in totals.items()},
                 "failures": dict(failures), "seal": hello,
                 "by_stratum": {k: {kk: (dict(vv) if isinstance(vv, Counter) else vv) for kk, vv in v.items()}
@@ -756,7 +771,7 @@ class Lane:
             outcomes[sha] = kept
         seal.write_json(self.report_dir / "outcomes.json", outcomes)
         seal.write_json(self.report_dir / "report.json", report)
-        text = render(report, per_file=outcomes if self.lane == "proof" else None)
+        text = render(report, per_file=outcomes if self.lane == "proof" else None, against=report.get("against"))
         seal.write_text(self.report_dir / "report.txt", "\n".join(text) + "\n")
         (self.out / "corpus-summary.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
         (self.out / VERDICT_FILE).write_text(json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n",
@@ -792,9 +807,9 @@ class Lane:
                 if self.overlay_installed:                   # never a folder this run did not lay down
                     self.clear_overlay()
             report = self.report(results, hello, time.time() - t0)
-            report["against"] = against_previous(seal, self.lane, results, self.engines)
+            report["against"] = against_baseline(seal, self.lane, results, self.engines)
             self.store(report, results)
-            return EXIT_AMBER if report["failures"] else EXIT_GREEN
+            return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, report["against"]), EXIT_RED)
         finally:
             for name in sorted(os.listdir(str(self.work))) if self.work.is_dir() else []:
                 if name.startswith("progress-"):             # the raw event lines are part of the record
@@ -809,23 +824,72 @@ def _counts(counter: Dict[str, int]) -> str:
     return ", ".join(f"{k} {v}" for k, v in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))) or "none"
 
 
-def render(report: dict, per_file: Optional[Dict[str, dict]] = None) -> List[str]:
+def cut_count(report: dict) -> int:
+    """Files on which an engine crashed or ran past the deadline (failure keys are `engine:outcome`)."""
+    return sum(n for key, n in (report.get("failures") or {}).items() if key.split(":", 1)[-1] in CUT_WORDS)
+
+
+def verdict_of(report: dict, against: Optional[dict]) -> str:
+    """The lane's verdict (the module docstring's rule): `against` is its diff with the baseline."""
+    if not report.get("engine_present", True):
+        return "NORUN"
+    if cut_count(report) or (against or {}).get("problem"):
+        return "RED"
+    return "AMBER" if (against or {}).get("changed") else "GREEN"
+
+
+def against_lines(against: Optional[dict]) -> List[str]:
+    """What changed against the baseline: counts, transitions, then the files by SHA-256 prefix."""
+    if not against:
+        return ["  baseline: this run (the lane has no earlier whole clean run to compare with)"]
+    if against.get("problem"):
+        return ["  baseline: " + against["problem"]]
+    accepted = f" (accepted {against['accepted_at']} by {against['accepted_by']})" if against.get("accepted_at") else ""
+    lines = [f"  against {against['what']} {against['run']} at {against['sha'][:9]}{accepted}: {against['changed']} of "
+             f"{against['compared']} files changed (new in this run {against['only_new']}, not in this run {against['only_old']})"]
+    for transition, n in sorted(against["transitions"].items(), key=lambda kv: (-kv[1], kv[0])):
+        lines.append(f"    {transition} x{n}")
+    lines += ["    " + line for line in against.get("listed") or []]
+    if against.get("listed_more"):
+        lines.append(f"    … +{against['listed_more']} more files (the whole list is in the run's report.json on the M4)")
+    if against.get("kinds_changed"):
+        lines.append(f"  finding kinds moved in {against['kinds_changed']} files whose outcome words did not (not part of the verdict)")
+    previous = against.get("previous")
+    if previous:
+        lines.append(f"  since the previous run {previous['run']} at {previous['sha'][:9]}: {previous['changed']} of "
+                     f"{previous['compared']} files changed")
+    return lines
+
+
+def head_lines(report: dict, against: Optional[dict]) -> List[str]:
+    """The verdict line, the engines' counts, the seal and the diff — what `status` shows of a run."""
     lane = report["lane"]
     engines = [e for e in LANES[lane][1] if e in report["engines"]]         # the lane's own order, not the JSON's
     if not report.get("engine_present", True):
         return [f"corpus {lane}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
                 "(MediaOps/BalancedCopyProof*.swift); run it with a --ref that contains it"]
     failed = sum(report["failures"].values())
-    verdict = "AMBER" if failed else "GREEN"
-    lines = [f"corpus {lane}: {verdict} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
+    lines = [f"corpus {lane}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
              f"{report['media_seconds'] / 3600:.1f} h of media) at {report['sha'][:9]} — wall {report['wall_s']:.0f}s "
-             f"(build {report['build_s']:.0f}s), {report['launches']} launch(es), per-file deadline {report['deadline_s']}s"]
+             f"(build {report['build_s']:.0f}s), {report['launches']} launch(es), per-file deadline {report['deadline_s']}s"
+             + (f", limited to {report['limit']} files" if report.get("limit") else "")]
     for e in engines:
         lines.append(f"  {e}: {_counts(report['engines'][e])}")
-    lines.append("  engine failures (crash / timeout / error): " + (_counts(report["failures"]) if failed else "none"))
+    cut = cut_count(report)
+    lines.append("  engine failures (crash / timeout / error): " + (_counts(report["failures"]) if failed else "none")
+                 + (f" — {cut} crashed or timed out: RED" if cut else ""))
     seal = report.get("seal") or {}
     lines.append(f"  seal: home sealed={seal.get('homeSealed')} test host={seal.get('testHost')} "
                  f"archive designation={seal.get('archiveDesignation')} catalog records={seal.get('records')}")
+    return lines + against_lines(against)
+
+
+def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Optional[dict] = None) -> List[str]:
+    lane = report["lane"]
+    engines = [e for e in LANES[lane][1] if e in report["engines"]]
+    lines = head_lines(report, against)
+    if not report.get("engine_present", True):
+        return lines
     lines.append("  by stratum:")
     for name, row in sorted(report["by_stratum"].items()):
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))
@@ -845,15 +909,22 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None) -> List[str
 
 def verdict_facts(report: dict) -> dict:
     """What a lane's run says to the testbed block: its verdict, counts and what changed —
-    numbers and outcome words only (every word in a report already went through `word()`)."""
-    if not report.get("engine_present", True):
-        verdict = "NORUN"
-    else:
-        verdict = "AMBER" if report["failures"] else "GREEN"
-    return {"lane": report["lane"], "verdict": verdict, "sha": report["sha"][:9], "files": report["files"],
-            "bytes": report["bytes"], "wall_s": report["wall_s"], "engines": report["engines"],
-            "engine_order": [e for e in LANES[report["lane"]][1] if e in report["engines"]],
-            "failures": report["failures"], "against": report.get("against")}
+    numbers, outcome words and SHA-256 prefixes only (every word already went through `word()`)."""
+    against = report.get("against")
+    facts = {"lane": report["lane"], "verdict": verdict_of(report, against), "sha": report["sha"][:9],
+             "files": report["files"], "bytes": report["bytes"], "wall_s": report["wall_s"], "engines": report["engines"],
+             "engine_order": [e for e in LANES[report["lane"]][1] if e in report["engines"]],
+             "failures": report["failures"], "against": None, "notes": []}
+    if cut_count(report):
+        facts["notes"].append(f"{cut_count(report)} files crashed an engine or ran past the deadline: RED")
+    if against and against.get("problem"):
+        facts["notes"].append("baseline: " + against["problem"])
+    elif against:
+        facts["against"] = {k: against.get(k) for k in ("what", "run", "sha", "compared", "changed", "only_new", "only_old",
+                                                        "transitions", "listed")}
+        if against.get("listed_more"):
+            facts["notes"].append(f"… +{against['listed_more']} more changed files")
+    return facts
 
 
 def lane_runs(seal: Seal, lane: str) -> List[Path]:
@@ -864,43 +935,147 @@ def lane_runs(seal: Seal, lane: str) -> List[Path]:
 
 
 def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict:
-    """What changed between two runs, by content: counts and outcome-word transitions only."""
+    """What changed between two runs, by content: counts, outcome-word transitions, and per
+    changed file its SHA-256 with `engine: old -> new` (`moved`; the caller shortens the SHA)."""
     transitions = Counter()
-    changed = 0
+    moved: List[Tuple[str, str]] = []
+    kinds_changed = 0
     for sha in sorted(set(old) & set(new)):
-        moved = False
+        words = []
         for e in engines:
             a, b = old[sha].get(e, "not_run"), new[sha].get(e, "not_run")
             if a != b:
                 transitions[f"{e}: {a} -> {b}"] += 1
-                moved = True
-        changed += moved
-    return {"compared": len(set(old) & set(new)), "changed": changed, "only_new": len(set(new) - set(old)),
-            "only_old": len(set(old) - set(new)), "transitions": dict(transitions)}
+                words.append(f"{e}: {a} -> {b}")
+        if words:
+            moved.append((sha, "; ".join(words)))
+        elif any(sorted(old[sha].get(e + "_kinds") or []) != sorted(new[sha].get(e + "_kinds") or []) for e in engines):
+            kinds_changed += 1
+    return {"compared": len(set(old) & set(new)), "changed": len(moved), "only_new": len(set(new) - set(old)),
+            "only_old": len(set(old) - set(new)), "transitions": dict(transitions), "moved": moved,
+            "kinds_changed": kinds_changed}
 
 
-def usable_runs(seal: Seal, lane: str) -> List[Path]:
-    """The stored runs a later run can be compared against, oldest first: those that ran the
-    lane's engine. A run whose report cannot be read is not one of them."""
+def usable_runs(seal: Seal, lane: str) -> List[Tuple[Path, dict]]:
+    """The stored runs of a lane that ran its engine, oldest first, each with its report.
+    A run whose report or outcomes cannot be read is not one of them."""
     runs = []
     for run in lane_runs(seal, lane):
         try:
-            if json.loads((run / "report.json").read_text(encoding="utf-8")).get("engine_present", True):
-                json.loads((run / "outcomes.json").read_text(encoding="utf-8"))
-                runs.append(run)
+            report = json.loads((run / "report.json").read_text(encoding="utf-8"))
+            if isinstance(report, dict) and report.get("engine_present", True) and (run / "outcomes.json").is_file():
+                runs.append((run, report))
         except (OSError, ValueError):
             continue
     return runs
 
 
-def against_previous(seal: Seal, lane: str, results: Dict[str, dict], engines: List[str]) -> Optional[dict]:
-    """This run's diff against the newest stored run of the lane (None: there is none)."""
-    earlier = usable_runs(seal, lane)
-    if not earlier:
-        return None
-    previous = earlier[-1]
-    delta = diff(json.loads((previous / "outcomes.json").read_text(encoding="utf-8")), results, engines)
-    return {"what": "the previous run", "run": previous.name, "sha": previous.parent.name[:9], **delta}
+def _outcomes(run: Path) -> Dict[str, dict]:
+    value = json.loads((run / "outcomes.json").read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("outcomes.json is not a table")
+    return value
+
+
+def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[Optional[Path], dict, Optional[str]]:
+    """(the baseline run, how it is described, a problem). The accepted one when
+    reports/<lane>/baseline.json exists — proven still to be the run that was accepted, by the
+    SHA-256 of its outcomes — else the lane's first whole clean run other than `exclude`."""
+    record_path = seal.reports / lane / BASELINE
+    if record_path.exists():
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            if not re.fullmatch(r"[0-9a-f]{40}", record["sha"]) or not re.fullmatch(r"[0-9A-Za-z_]+", record["run"]):
+                raise ValueError("not a run")
+            run = seal.reports / lane / record["sha"] / record["run"]
+            if hashlib.sha256((run / "outcomes.json").read_bytes()).hexdigest() != record["outcomes_sha256"]:
+                raise ValueError("changed")
+            _outcomes(run)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None, {}, (f"the accepted baseline of {lane} cannot be read back (missing, or changed since it was "
+                              f"accepted) — look, then `scripts/corpus_run.sh accept {lane}` blesses a run again")
+        return run, {"what": "its accepted baseline", "accepted_at": word(str(record.get("accepted_at", "")).replace(" ", "_")),
+                     "accepted_by": who_word(record.get("accepted_by"))}, None
+    for run, report in usable_runs(seal, lane):
+        if run != exclude and not cut_count(report) and not report.get("limit"):
+            return run, {"what": "its first run (no baseline accepted yet)"}, None
+    return None, {}, None
+
+
+def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: List[str],
+                     this_run: Optional[Path] = None) -> Optional[dict]:
+    """A run's diff against the lane's baseline, ready for a report: None when the run is its
+    own baseline (nothing earlier), `problem` when the accepted baseline is unreadable. Also
+    the count against the newest earlier run when that is not the baseline."""
+    run, described, problem = baseline_of(seal, lane, exclude=this_run)
+    if problem:
+        return {"problem": problem}
+    if run is None or run == this_run:
+        return None if run is None else {**described, "run": run.name, "sha": run.parent.name, "compared": len(results),
+                                         "changed": 0, "only_new": 0, "only_old": 0, "transitions": {}, "listed": [],
+                                         "listed_more": 0, "kinds_changed": 0, "changes": [], "previous": None}
+    delta = diff(_outcomes(run), results, engines)
+    moved = delta.pop("moved")
+    against = {**described, "run": run.name, "sha": run.parent.name, **delta,
+               "listed": [f"{sha_prefix(sha)} {words}" for sha, words in moved[:LISTED]],
+               "listed_more": max(0, len(moved) - LISTED),
+               "changes": [[sha, words] for sha, words in moved], "previous": None}
+    earlier = [r for r, _ in usable_runs(seal, lane) if r != this_run and (this_run is None or r.name < this_run.name)]
+    if earlier and earlier[-1] != run:
+        try:
+            since = diff(_outcomes(earlier[-1]), results, engines)
+            against["previous"] = {"run": earlier[-1].name, "sha": earlier[-1].parent.name,
+                                   "changed": since["changed"], "compared": since["compared"]}
+        except (OSError, ValueError):
+            pass
+    return against
+
+
+def who_word(text) -> str:
+    """Who accepted a baseline, as one word: `rickb@RicksUltra`."""
+    return re.sub(r"[^A-Za-z0-9_.@-]", "_", str(text or "unknown"))[:64] or "unknown"
+
+
+def accept(seal: Seal, lane: str, who: str) -> List[str]:
+    """Bless the lane's newest run as its baseline. Refused for a run that crashed or timed
+    out, ran only part of the corpus, or had no engine: none of those is a state to hold a
+    later run to. The record names the run, its commit, who and when, and the SHA-256 of the
+    run's outcomes so a later reader knows it is the same run."""
+    seal.check()
+    if lane not in LANES:
+        raise Refused("refused: accept wants one of " + ", ".join(sorted(LANES)))
+    runs = lane_runs(seal, lane)
+    if not runs:
+        raise Refused(f"refused: {lane} has no run to accept")
+    newest = runs[-1]
+    try:
+        report = json.loads((newest / "report.json").read_text(encoding="utf-8"))
+        digest = hashlib.sha256((newest / "outcomes.json").read_bytes()).hexdigest()
+        _outcomes(newest)
+    except (OSError, ValueError):
+        raise Refused(f"refused: the newest {lane} run cannot be read back")
+    if not report.get("engine_present", True):
+        raise Refused(f"refused: the newest {lane} run did not run (its ref had no engine)")
+    if cut_count(report):
+        raise Refused(f"refused: the newest {lane} run has {cut_count(report)} files that crashed or timed out — a RED run is never the baseline")
+    if report.get("limit"):
+        raise Refused(f"refused: the newest {lane} run was limited to {report['limit']} files — a partial run is never the baseline")
+    folder = seal.reports / lane
+    try:
+        was = json.loads((folder / BASELINE).read_text(encoding="utf-8")).get("run")
+    except (OSError, ValueError, AttributeError):
+        was = None
+    record = {"lane": lane, "run": newest.name, "sha": newest.parent.name, "files": report["files"],
+              "accepted_at": time.strftime("%Y-%m-%d %H:%M:%S"), "accepted_by": who_word(who),
+              "outcomes_sha256": digest, "replaces": was}
+    pending = folder / f"{BASELINE}.{os.getpid()}"
+    seal.write_json(pending, record)
+    os.replace(str(pending), str(seal.writable(folder / BASELINE)))          # whole or not at all
+    with open(seal.writable(folder / BASELINE_LOG), "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, sort_keys=True) + "\n")
+    return [f"corpus {lane}: the baseline is now run {newest.name} at {newest.parent.name[:9]} ({report['files']} files) — "
+            f"accepted {record['accepted_at']} by {record['accepted_by']}"
+            + (f"; it replaces {word(was)}" if was else "; the lane had no accepted baseline before")]
 
 
 def status(seal: Seal) -> List[str]:
@@ -918,22 +1093,16 @@ def status(seal: Seal) -> List[str]:
             lines.append(f"corpus {lane}: no run yet")
             continue
         newest = runs[-1]
-        report = json.loads((newest / "report.json").read_text(encoding="utf-8"))
+        try:
+            report = json.loads((newest / "report.json").read_text(encoding="utf-8"))
+            results = _outcomes(newest) if report.get("engine_present", True) else {}
+        except (OSError, ValueError):
+            lines.append(f"newest {lane} run: {newest.name} — RED its report cannot be read back")
+            continue
         lines.append(f"newest {lane} run: {newest.name}")
-        lines += render(report)[: 3 + len(report["engines"])]
-        if not report.get("engine_present", True):
-            continue
-        earlier = [r for r in runs[:-1] if json.loads((r / "report.json").read_text(encoding="utf-8")).get("engine_present", True)]
-        if not earlier:
-            lines.append("  changed since the previous run: no previous run (this one is the baseline)")
-            continue
-        previous = earlier[-1]
-        delta = diff(json.loads((previous / "outcomes.json").read_text(encoding="utf-8")),
-                     json.loads((newest / "outcomes.json").read_text(encoding="utf-8")), LANES[lane][1])
-        lines.append(f"  changed since {previous.name} at {previous.parent.name[:9]}: {delta['changed']} of "
-                     f"{delta['compared']} files (new in this run {delta['only_new']}, not in this run {delta['only_old']})")
-        for transition, n in sorted(delta["transitions"].items(), key=lambda kv: (-kv[1], kv[0])):
-            lines.append(f"    {transition} x{n}")
+        # Judged against the baseline as it stands NOW: an `accept` since the run changes the answer.
+        lines += head_lines(report, against_baseline(seal, lane, results, LANES[lane][1], this_run=newest)
+                            if report.get("engine_present", True) else None)
     return lines
 
 
@@ -943,6 +1112,9 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     parser = argparse.ArgumentParser(prog="corpus_run.py", description="the real-data corpus harness (host side)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    accepting = sub.add_parser("accept")
+    accepting.add_argument("lane")
+    accepting.add_argument("--by", default="unknown")
     host = sub.add_parser("host")
     host.add_argument("lane", choices=["prepare"] + sorted(LANES))
     host.add_argument("--sha", required=True)
@@ -959,6 +1131,8 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
         seal = seal or Seal.here()
         if args.command == "status":
             lines, code = status(seal), EXIT_GREEN
+        elif args.command == "accept":
+            lines, code = accept(seal, args.lane, args.by), EXIT_GREEN
         elif args.lane == "prepare":
             sys.path.insert(0, args.bin)
             code, lines = prepare(seal, Path(args.out))
