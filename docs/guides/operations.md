@@ -77,6 +77,17 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   each lane, every RED run and whatever `<root>/latest*` names stay, with their `bin/<stamp>` and agent plist. The
   corpus lanes do the same for `~/corpus/reports/<lane>/` (the newest 20, every RED run and the baseline stay) and
   remove work folders older than six hours that a dead run left.
+- *The 50% floor* (DECISIONS 2026-11-18; `testbed_host.py clean`). A run uses as much disk as it needs. Once its
+  verdict and summary are written, its scratch goes: xcresult bundles, overlays, patched test-run files; each log is
+  cut to its last 200 lines under its own name; `run.log`, `summary.txt`, the verdict files and `*.tests.tsv` stay
+  (a few KB; `tidy.txt` records it). The summary gets one line, e.g. `disk: free 52% after cleanup (lowest 38% during
+  the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB`. At the start and the end, under the
+  lock: finished runs not yet tidied are tidied and `~/corpus/work/<stamp>-<lane>` folders removed; below 50% free,
+  unfinished runs go oldest first, then `videoscan-<root>-dd-suite` and `-dd` — only when that reaches the floor
+  (a cold build costs 10-25 min). Deletion is confined by real path to `<root>`, `~/corpus/work` and those two
+  caches; never the corpus media, documents, reports, state or `live/`; never through a link or into a mount; refused
+  unless the lock names the run. The scheduled jobs' caches (`videoscan-nightly-*`, `-analysis-dd`,
+  `~/Library/Caches/VideoScan/*`) and `~/Library/Logs/VideoScan` are theirs, not this cleanup's.
 - *The quiet window.* The M4's 14:00 scheduled run does **not** wait for the lock: `scripts/nightly_gauntlet.sh` runs
   its suite anyway and skips only its gauntlet, so a lane still running at 14:00 means two suites at once. A lane
   therefore refuses to START (exit 5; `--force` overrides) when the scheduled run begins within the lane's own

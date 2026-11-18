@@ -109,7 +109,8 @@ class HostDeepLaneTests(unittest.TestCase):
         p, log, summary = self.host('d2')
         self.assertEqual(p.returncode, 0, log)
         self.assertIn('OUTCOME GREEN', log)
-        self.assertNotIn(' — ', log.splitlines()[-1] if log.strip() else '')
+        outcome = next((line for line in log.splitlines() if line.startswith('OUTCOME ')), '')
+        self.assertNotIn(' — ', outcome, 'a GREEN OUTCOME line carries no reason')
         self.assertIn('deep: GREEN every stage passed', summary)
 
     def test_red_run_is_outcome_red_and_exit_1(self):

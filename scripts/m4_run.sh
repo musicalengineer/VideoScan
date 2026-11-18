@@ -91,6 +91,15 @@
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
+# The 50% floor (DECISIONS 2026-11-18, scripts/testbed_host.py clean): a run may use as much disk as it
+# needs; once its verdict and summary are written, its scratch goes (xcresult bundles, overlays, patched
+# test-run files; each log cut to its last 200 lines under its own name) and the summary gets one line:
+#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB
+# At the start, and again at the end, under the lock: finished runs not yet tidied are tidied and
+# ~/corpus/work/<stamp>-<lane> folders removed; below 50% free, unfinished runs go oldest first, then the
+# build caches below — only when that reaches the floor. Deletion is confined by real path to <root>,
+# ~/corpus/work and those two caches, never follows a link, and refuses unless the lock names this run.
+#
 # Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
 # suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
 # 6.9 GB together on the M4, 2026-11-17), xcresult bundles per run (~50–300 MB
@@ -781,6 +790,12 @@ host_main() {   # __host <lane> <sha> <stamp>
     # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
     # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
     [ -f "$SCRIPT_DIR/testbed_host.py" ] && python3 "$SCRIPT_DIR/testbed_host.py" prune "$H_ROOT" --current "$OUT" 2>&1
+    # The 50% floor (DECISIONS 2026-11-18), still under the lock: finished runs give up their scratch,
+    # dead corpus work goes, and below 50% free older unfinished runs (then the build caches, only when
+    # that reaches the floor). One "disk:" line here; the run itself may use as much disk as it needs.
+    local clean_tool=""
+    [ -f "$SCRIPT_DIR/testbed_host.py" ] && clean_tool="$SCRIPT_DIR/testbed_host.py"
+    [ -n "$clean_tool" ] && python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase start 2>&1
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
     [ "$lane" = testbed ] && ln -sfn "$OUT" "$H_ROOT/latest-testbed"
     # The testbed worktree is mutated HERE, under the lock, never by the
@@ -805,6 +820,13 @@ host_main() {   # __host <lane> <sha> <stamp>
     VERDICT=GREEN
     AMBER_WHY=""
     WHY=""
+    # The lowest free figure while the lanes work (testbed_host.py sample). Started with fd 9 closed:
+    # it must never hold the testbed lock. It stops itself on the stop file or when this shell is gone.
+    local sampler=""
+    if [ -n "$clean_tool" ]; then
+        python3 "$clean_tool" sample "$H_ROOT" "$OUT" 9>&- &
+        sampler=$!
+    fi
     case "$lane" in
         deep)  host_deep ;;
         ui)    host_ui ;;
@@ -813,6 +835,26 @@ host_main() {   # __host <lane> <sha> <stamp>
         corpus) host_corpus "$sha" "$stamp" ;;
         testbed) host_testbed "$sha" "$stamp" ;;
     esac
+    # Summarized: the verdict is decided and summary.txt written. Now this run gives up its scratch,
+    # and the summary (and a testbed run block) gets the disk line: free now, the lowest, the start.
+    if [ -n "$sampler" ]; then
+        : >"$OUT/disk-sample.stop"
+        wait "$sampler" 2>/dev/null
+    fi
+    if [ -n "$clean_tool" ]; then
+        local disk_line
+        disk_line="$(python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end 2>/dev/null)"
+        [ -n "$disk_line" ] || disk_line="disk: cleanup said nothing"
+        if [ -f "$OUT/testbed-block.txt" ]; then
+            # A testbed run: the line closes the block (what `status` shows), and the summary is the block
+            # again followed by the lanes own lines, as host_testbed laid it out.
+            echo "$disk_line" >>"$OUT/testbed-block.txt"
+            { cat "$OUT/testbed-block.txt"; sed -n '/^— the lanes/,$p' "$OUT/summary.txt"; } >"$OUT/summary.txt.new" \
+                && mv "$OUT/summary.txt.new" "$OUT/summary.txt"
+        else
+            echo "$disk_line" >>"$OUT/summary.txt"
+        fi
+    fi
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
     sed 's/^/  /' "$OUT/summary.txt"
