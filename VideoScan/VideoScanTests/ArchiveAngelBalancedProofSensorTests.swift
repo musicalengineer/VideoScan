@@ -90,5 +90,8 @@ struct ArchiveAngelBalancedProofSensorTests {
         // The job hands the engine's outcome only to the log and to the note.
         #expect(Self.count(#"\.(isProven|playsTheSame|differences)\b|outcome\.evidence\b"#, in: job) == 0,
                 "ArchiveAngelJob looks inside a proof outcome")
+        // Nor matches on it (Codex #317 F1): no `case .notProven`, no `switch outcome`, no `outcome ==`.
+        #expect(Self.count(#"\.(proven|sameContent|notProven|couldNotCheck)\b|switch\s+outcome\b|outcome\s*[!=]="#, in: job) == 0,
+                "ArchiveAngelJob branches on a proof outcome")
     }
 }

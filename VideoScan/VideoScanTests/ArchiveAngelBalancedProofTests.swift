@@ -32,14 +32,31 @@ import VideoScanCore
 actor BalancedProofProbe {
     private(set) var calls: [(original: String, balanced: String)] = []
     private(set) var bufferBefore: [String: String]?
+    /// Every row of plan.json as it was on disk when the proof began (JSON).
+    private(set) var rowsBefore: [String]?
     private(set) var cancelled = false
+    private var released = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
 
-    func called(_ original: String, _ balanced: String, buffer: [String: String]) {
+    func called(_ original: String, _ balanced: String, buffer: [String: String], rows: [String]? = nil) {
         calls.append((original, balanced))
         bufferBefore = buffer
+        rowsBefore = rows
     }
     func noteCancelled() { cancelled = true }
     var started: Bool { !calls.isEmpty }
+
+    /// A gate the proof waits at after it saw its cancellation — a wait
+    /// that cancellation does not end (a checked continuation).
+    func waitForRelease() async {
+        if released { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+    func release() {
+        released = true
+        for c in waiting { c.resume() }
+        waiting.removeAll()
+    }
 }
 
 enum BalancedProofBench {
@@ -120,12 +137,43 @@ enum BalancedProofBench {
         return out
     }
 
-    /// A proof that records what it was handed and the buffer as it was, then answers `outcome`.
+    /// One row as plan.json holds it, without the proof's note (sorted keys,
+    /// whole-second dates — the store's own encoding).
+    static func rowJSON(_ entry: ArchiveAngelPlan.Entry) -> String {
+        var e = entry
+        e.balancedCopyProof = nil
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        enc.dateEncodingStrategy = .iso8601
+        return (try? enc.encode(e)).flatMap { String(bytes: $0, encoding: .utf8) } ?? "unencodable row"
+    }
+
+    /// Every row of the batch's plan.json, as on disk now.
+    static func rowsOnDisk(_ batchDir: String) -> [String]? {
+        (try? ArchiveAngelPlanStore.load(batchDir: batchDir))?.entries.map(rowJSON)
+    }
+
+    /// A proof that records what it was handed, the buffer and the rows as
+    /// they were, then answers `outcome`.
     static func recording(_ probe: BalancedProofProbe, answering outcome: Proof.Outcome) -> ArchiveAngelBalancedProof.Prover {
         { original, balanced in
             let batchDir = URL(fileURLWithPath: balanced).deletingLastPathComponent().deletingLastPathComponent().path
-            await probe.called(original, balanced, buffer: bufferDigest(batchDir))
+            await probe.called(original, balanced, buffer: bufferDigest(batchDir), rows: rowsOnDisk(batchDir))
             return outcome
+        }
+    }
+
+    /// A proof that sees its cancellation, then does not return until the
+    /// test opens the gate — so the test can look at the buffer while the
+    /// proof is still "reading".
+    static func gated(_ probe: BalancedProofProbe) -> ArchiveAngelBalancedProof.Prover {
+        { original, balanced in
+            let batchDir = URL(fileURLWithPath: balanced).deletingLastPathComponent().deletingLastPathComponent().path
+            await probe.called(original, balanced, buffer: bufferDigest(batchDir))
+            while !Task.isCancelled { try? await Task.sleep(nanoseconds: 20_000_000) }
+            await probe.noteCancelled()
+            await probe.waitForRelease()
+            throw CancellationError()
         }
     }
 
@@ -407,6 +455,11 @@ struct ArchiveAngelBalancedProofTests {
             // Inside the run: what Prepare wrote is byte for byte what it was when the proof began.
             let before = try #require(await probe.bufferBefore)
             #expect(!before.isEmpty && B.bufferDigest(job.plan.batchDir) == before, "\(name): the buffer changed during the proof")
+            // Every field of every row (Codex #317 F1: notes, names, dates — all of it), as
+            // plan.json held it when the proof began, against the row after, note aside.
+            let rowsBefore = try #require(await probe.rowsBefore)
+            #expect(job.plan.entries.map(B.rowJSON) == rowsBefore, "\(name): a row changed during the proof")
+            #expect(B.rowsOnDisk(job.plan.batchDir) == rowsBefore, "\(name): a row changed on disk")
             #expect(await probe.calls.count == 1)
             #expect(job.plan.entries.first?.balancedCopyProof?.line == AP.note(for: outcome).line, "\(name)")
         }
@@ -476,9 +529,18 @@ struct ArchiveAngelBalancedProofTests {
         let b = try B.bench("proof_skip"); defer { b.sb.cleanup() }
         let rec = try B.leftOnlyMov(b)
         let probe = BalancedProofProbe()
-        let job = await B.run(b, rec, customProver: B.hanging(probe)) { job in
+        let job = await B.run(b, rec, customProver: B.gated(probe)) { job in
             #expect(await B.waitUntilStarted(probe), "the proof never started")
+            let folder = URL(fileURLWithPath: job.plan.batchDir).appendingPathComponent(rec.id.uuidString).path
             #expect(job.skip(entryID: rec.id))
+            // The proof has seen the Skip but is still inside its read (Codex #317 F2):
+            // its files must still be there — the folder goes only after it exits.
+            let deadline = Date().addingTimeInterval(30)
+            while !(await probe.cancelled), Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+            #expect(await probe.cancelled, "the Skip stopped the proof")
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            #expect(FileManager.default.fileExists(atPath: folder), "the row's folder was removed while the proof was still reading it")
+            await probe.release()
         }
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
         #expect(await probe.cancelled)
