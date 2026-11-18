@@ -93,5 +93,9 @@ struct ArchiveAngelBalancedProofSensorTests {
         // Nor matches on it (Codex #317 F1): no `case .notProven`, no `switch outcome`, no `outcome ==`.
         #expect(Self.count(#"\.(proven|sameContent|notProven|couldNotCheck)\b|switch\s+outcome\b|outcome\s*[!=]="#, in: job) == 0,
                 "ArchiveAngelJob branches on a proof outcome")
+        // Nor on the note's words (Codex #319): the job never reads `.verdict`, `.line` or `.detail`
+        // (a property read; `ArchiveAngelScorer.verdict(…)` is another thing, a call).
+        #expect(Self.count(#"\.(verdict|detail)\b(?!\s*\()|note\(for:[^)]*\)\.line\b"#, in: job) == 0,
+                "ArchiveAngelJob reads the proof's note")
     }
 }

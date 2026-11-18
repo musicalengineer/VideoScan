@@ -45,6 +45,10 @@ actor BalancedProofProbe {
     }
     func noteCancelled() { cancelled = true }
     var started: Bool { !calls.isEmpty }
+    /// Every row EXACTLY as the job held it in memory when the proof began
+    /// (Codex #319: the JSON comparison is whole-second for dates).
+    private(set) var entriesBefore: [ArchiveAngelPlan.Entry]?
+    func held(_ entries: [ArchiveAngelPlan.Entry]?) { entriesBefore = entries }
 
     /// A gate the proof waits at after it saw its cancellation — a wait
     /// that cancellation does not end (a checked continuation).
@@ -57,6 +61,12 @@ actor BalancedProofProbe {
         for c in waiting { c.resume() }
         waiting.removeAll()
     }
+}
+
+/// The job under test, for an injected proof to look at (main actor, so Sendable).
+@MainActor
+final class BalancedProofJobRef {
+    weak var job: ArchiveAngelJob?
 }
 
 enum BalancedProofBench {
@@ -94,6 +104,8 @@ enum BalancedProofBench {
         r.audioCodec = audioCodec
         r.audioChannels = "2"
         r.isPlayable = "Yes"
+        // As a scan stores it: the file's modification time, to the nanosecond on APFS.
+        r.dateModifiedRaw = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         return r
     }
 
@@ -110,9 +122,11 @@ enum BalancedProofBench {
     @MainActor
     static func run(_ b: Bench, _ rec: VideoRecord, prover: Proof.Outcome? = nil,
                     customProver: ArchiveAngelBalancedProof.Prover? = nil, proofOn: Bool = true,
+                    ref: BalancedProofJobRef? = nil,
                     during: (@MainActor (ArchiveAngelJob) async -> Void)? = nil) async -> ArchiveAngelJob {
         let job = ArchiveAngelJob(model: b.model, center: b.center, count: 1, makeLossless: false,
                                   bufferRoot: b.buffer, explicitRecordIDs: [rec.id])
+        ref?.job = job
         job.provesBalancedCopiesOverride = proofOn
         if let customProver { job.balancedCopyProver = customProver }
         if let outcome = prover { job.balancedCopyProver = { _, _ in outcome } }
@@ -155,10 +169,12 @@ enum BalancedProofBench {
 
     /// A proof that records what it was handed, the buffer and the rows as
     /// they were, then answers `outcome`.
-    static func recording(_ probe: BalancedProofProbe, answering outcome: Proof.Outcome) -> ArchiveAngelBalancedProof.Prover {
+    static func recording(_ probe: BalancedProofProbe, answering outcome: Proof.Outcome,
+                          ref: BalancedProofJobRef? = nil) -> ArchiveAngelBalancedProof.Prover {
         { original, balanced in
             let batchDir = URL(fileURLWithPath: balanced).deletingLastPathComponent().deletingLastPathComponent().path
             await probe.called(original, balanced, buffer: bufferDigest(batchDir), rows: rowsOnDisk(batchDir))
+            if let ref { await probe.held(await MainActor.run { ref.job?.plan.entries }) }
             return outcome
         }
     }
@@ -449,7 +465,8 @@ struct ArchiveAngelBalancedProofTests {
             let b = try B.bench("proof_\(name)"); defer { b.sb.cleanup() }
             let rec = try B.leftOnlyMov(b)
             let probe = BalancedProofProbe()
-            let job = await B.run(b, rec, customProver: B.recording(probe, answering: outcome))
+            let ref = BalancedProofJobRef()
+            let job = await B.run(b, rec, customProver: B.recording(probe, answering: outcome, ref: ref), ref: ref)
             let got = B.decisions(job, original: rec, model: b.model)
             #expect(got == baseline, "\(name): a decision moved\n— with the proof —\n\(got)\n— proof off —\n\(baseline)")
             // Inside the run: what Prepare wrote is byte for byte what it was when the proof began.
@@ -460,6 +477,11 @@ struct ArchiveAngelBalancedProofTests {
             let rowsBefore = try #require(await probe.rowsBefore)
             #expect(job.plan.entries.map(B.rowJSON) == rowsBefore, "\(name): a row changed during the proof")
             #expect(B.rowsOnDisk(job.plan.batchDir) == rowsBefore, "\(name): a row changed on disk")
+            // And EXACTLY, in memory, to the last bit of every date (Codex #319).
+            let held = try #require(await probe.entriesBefore)
+            #expect(held.allSatisfy { $0.balancedCopyProof == nil } && !held.isEmpty)
+            let after = job.plan.entries.map { e -> ArchiveAngelPlan.Entry in var e = e; e.balancedCopyProof = nil; return e }
+            #expect(after == held, "\(name): a row changed in memory during the proof")
             #expect(await probe.calls.count == 1)
             #expect(job.plan.entries.first?.balancedCopyProof?.line == AP.note(for: outcome).line, "\(name)")
         }
