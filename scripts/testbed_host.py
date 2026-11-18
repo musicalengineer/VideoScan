@@ -9,6 +9,7 @@
     testbed_host.py show <file> [--under <dir>] [--match <regex>] [--tail N]
     testbed_host.py clean <root> --current <run dir> --phase start|end
     testbed_host.py sample <root> <run dir>
+    testbed_host.py stop <root> <run dir>
 
 clean and sample (DECISIONS 2026-11-18, the M4 kept at least 50% free): see the section
 "clean" below. clean runs at a run start and once its summary is written, under the lock it
@@ -251,6 +252,7 @@ CORPUS_PROTECTED = ("media", "live", "state", "reports", "corpus-sha-v1.txt", "c
 CLEAN_BUDGET = 900                # seconds: a cleanup past it stops and says so; the run still reaches OUTCOME
 O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 O_READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK      # NONBLOCK: a FIFO never stalls an open (Codex #322 F6)
+LOCKED = 0x2 | 0x4 | 0x20000 | 0x40000                    # UF/SF IMMUTABLE and APPEND: such a file stays, whatever we do
 
 
 class Refused(Exception):
@@ -366,6 +368,7 @@ class Confine:
         except Refused:
             self.work_fd = None
         self.work = os.path.join(corpus, "work")
+        self.caches_dir = os.path.join(self.home, "Library", "Caches")
         self.caches_fd, self.caches = None, []
         try:
             library = self._keep(_open_dir("Library", self.home_fd, self.dev))
@@ -373,8 +376,8 @@ class Confine:
             for suffix in ("-dd-suite", "-dd"):
                 name = "videoscan-m4run" + suffix
                 info = _lstat_at(self.caches_fd, name)
-                if info is not None and stat.S_ISDIR(info.st_mode):
-                    self.caches.append(name)
+                if info is not None and stat.S_ISDIR(info.st_mode) and not self.guarded(os.path.join(self.caches_dir, name)):
+                    self.caches.append(name)                 # a cache that holds a protected destination is not one (Codex #323 R2)
         except Refused:
             self.caches_fd, self.caches = None, []
 
@@ -394,11 +397,41 @@ class Confine:
         """True when a target (by the path it was reached at) overlaps a protected destination."""
         return any(path == p or path.startswith(p + "/") or p.startswith(path + "/") for p in self.protected)
 
+    def inside(self, dir_fd: int) -> bool:
+        """Where an open folder IS now (the kernel answer, F_GETPATH), not where it was opened: strictly
+        inside ~/m4run/out or ~/corpus/work, or inside one of the two caches, and overlapping nothing
+        protected. Asked before every unlink, rmdir, rename and write (Codex #323 R3: a folder moved
+        out of the roots after it was opened is left alone). A move that lands between this answer and
+        the very next call is the one race left; it needs a second process renaming folders under
+        ~/m4run while this run holds the lock and no lane runs."""
+        try:
+            where = fcntl.fcntl(dir_fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
+        except (OSError, AttributeError, ValueError):
+            return False
+        roots = [self.out] + ([self.work] if self.work_fd is not None else [])
+        caches = [os.path.join(self.caches_dir, name) for name in self.caches]
+        # The three parents themselves are allowed: in them this code acts only on names it chose
+        # (<stamp>-<lane> run and work folders, its own two caches).
+        parents = roots + ([self.caches_dir] if self.caches else [])
+        ok = (where in parents or any(where.startswith(r + "/") for r in roots)
+              or any(where == c or where.startswith(c + "/") for c in caches))
+        return ok and not self.guarded(where)
+
+    def remove(self, dir_fd: int, name: str):
+        """Remove the entry `name` of an open folder, the whole of it or none of it: a tree with a
+        mount anywhere in it is refused before anything goes (Codex #323 R4). Returns
+        (reclaimed bytes, removed whole)."""
+        if self.scan_at(dir_fd, name)[1]:
+            return 0, False
+        return self.remove_at(dir_fd, name)
+
     def remove_at(self, dir_fd: int, name: str):
         """Remove the entry `name` of an open folder, a whole tree when it is one. Returns
         (reclaimed bytes, removed whole). A link is unlinked as itself; a hard link loses only its
         own name (its bytes are not counted: another name keeps them, F7); a folder on another
         volume is not entered; no flag is changed (a locked file stays, and says so)."""
+        if not self.inside(dir_fd):
+            return 0, False
         info = _lstat_at(dir_fd, name)
         if info is None:
             return 0, True
@@ -407,7 +440,7 @@ class Confine:
                 os.unlink(name, dir_fd=dir_fd)
             except OSError:
                 return 0, False
-            return (info.st_blocks * 512 if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 else 0), True
+            return _reclaim(info), True
         try:
             fd = _open_dir(name, dir_fd, self.dev)
         except Refused:
@@ -422,31 +455,48 @@ class Confine:
                 whole = whole and ok
         finally:
             os.close(fd)
-        if whole:
+        if whole and self.inside(dir_fd):
             try:
                 os.rmdir(name, dir_fd=dir_fd)
             except OSError:
                 whole = False
+        else:
+            whole = False
         return freed, whole
 
-    def reclaimable_at(self, dir_fd: int, name: str) -> int:
-        """What removing the entry would give back: regular files with one name, on this volume."""
+    def scan_at(self, dir_fd: int, name: str):
+        """(what removing the entry would give back, whether a mount is in it). Given back: regular
+        files with one name and no lock flag, in folders with no lock flag (F7, Codex #323 R5)."""
         info = _lstat_at(dir_fd, name)
         if info is None:
-            return 0
+            return 0, False
         if not stat.S_ISDIR(info.st_mode):
-            return info.st_blocks * 512 if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 else 0
+            return _reclaim(info), False
         try:
-            fd = _open_dir(name, dir_fd, self.dev)
-        except Refused:
-            return 0
+            fd = os.open(name, O_DIR, dir_fd=dir_fd)
+        except OSError:
+            return 0, False
         try:
-            return sum(self.reclaimable_at(fd, entry) for entry in os.listdir(fd))
+            if os.fstat(fd).st_dev != self.dev:
+                return 0, True
+            total, mount = 0, False
+            for entry in os.listdir(fd):
+                got, found = self.scan_at(fd, entry)
+                total += got
+                mount = mount or found
+            return (0 if getattr(info, "st_flags", 0) & LOCKED else total), mount
         finally:
             os.close(fd)
 
 
-def _shorten_at(dir_fd: int, name: str) -> bool:
+def _reclaim(info) -> int:
+    """Bytes a removed name gives back: a regular file with one name and no lock flag, else nothing."""
+    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and not getattr(info, "st_flags", 0) & LOCKED:
+        return info.st_blocks * 512
+    return 0
+
+
+def _shorten_at(dir_fd: int, name: str, inside=lambda fd: True) -> bool:
     """Cut a log to its last TAIL_LINES lines under its own name, in its open folder (a new file
     renamed over it, both relative to the folder descriptor). False for a link, a FIFO or a file
     with a second name: never read, its name is removed by the caller instead."""
@@ -471,12 +521,14 @@ def _shorten_at(dir_fd: int, name: str) -> bool:
     finally:
         os.close(fd)
     temporary = name + ".tidy-new"
+    if not inside(dir_fd):
+        return False
     try:
         os.unlink(temporary, dir_fd=dir_fd)                  # a leftover of a stopped cleanup
     except OSError:
         pass
     text = "[tidied: the last %d of %d lines are kept]\n%s\n" % (TAIL_LINES, lines, "\n".join(tail))
-    if not _write_at(dir_fd, temporary, text, create=True):
+    if not _write_at(dir_fd, temporary, text, create=True) or not inside(dir_fd):
         return False
     try:
         os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
@@ -522,12 +574,15 @@ def tidy(conf: Confine, run_name: str):
     freed = removed = refused = shortened = 0
     opened = [run_fd]
     try:
-        if _lstat_at(run_fd, "tidy.txt") is not None:
+        if _lstat_at(run_fd, "tidy.txt") is not None or not conf.inside(run_fd):
             return None
         folders = [run_fd]
         while folders:
             folder = folders.pop(0)
             for name in sorted(os.listdir(folder)):
+                if not conf.inside(folder):
+                    refused += 1                             # the folder moved out of the roots: nothing more in it
+                    break
                 info = _lstat_at(folder, name)
                 if info is None:
                     continue
@@ -545,18 +600,19 @@ def tidy(conf: Confine, run_name: str):
                 if stat.S_ISLNK(info.st_mode):
                     refused += 1                             # a link is left as it is: never followed, never ours
                     continue
-                if name.endswith(".log") and _shorten_at(folder, name):
+                if name.endswith(".log") and _shorten_at(folder, name, conf.inside):
                     shortened += 1
                     continue
-                got, whole = conf.remove_at(folder, name)
+                got, whole = conf.remove(folder, name)
                 freed += got
                 if whole:
                     removed += 1
                 else:
                     refused += 1
-        _write_at(run_fd, "tidy.txt",
-                  "tidied %s: removed %d items (%.2f GB), %d logs cut to their last %d lines, %d left (a link, a mount or a locked file)\n"
-                  % (time.strftime("%Y-%m-%d %H:%M:%S"), removed, freed / 1e9, shortened, TAIL_LINES, refused), create=True)
+        if conf.inside(run_fd):
+            _write_at(run_fd, "tidy.txt",
+                      "tidied %s: removed %d items (%.2f GB), %d logs cut to their last %d lines, %d left (a link, a mount or a locked file)\n"
+                      % (time.strftime("%Y-%m-%d %H:%M:%S"), removed, freed / 1e9, shortened, TAIL_LINES, refused), create=True)
         return freed, removed, refused
     finally:
         for fd in opened:
@@ -608,7 +664,13 @@ def _current_fd(conf: Confine, current: str) -> int:
     if (not RUN_NAME.match(name)
             or os.path.dirname(current) not in (conf.out, os.path.join(os.environ.get("HOME", ""), "m4run", "out"))):
         raise Refused("the current run is not a run folder of this root")
-    return _open_dir(name, conf.out_fd, conf.dev)
+    if conf.guarded(os.path.join(conf.out, name)):
+        raise Refused("the current run overlaps a protected corpus folder")   # Codex #323 R2
+    fd = _open_dir(name, conf.out_fd, conf.dev)
+    if not conf.inside(fd):
+        os.close(fd)
+        raise Refused("the current run is not inside the run root")
+    return fd
 
 
 def clean(root: str, current: str, phase: str, disk=disk_space) -> str:
@@ -669,7 +731,7 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
             if (not RUN_WORK.match(name) or info is None or not stat.S_ISDIR(info.st_mode)
                     or conf.guarded(os.path.join(conf.work, name))):
                 continue
-            got, whole = conf.remove_at(conf.work_fd, name)
+            got, whole = conf.remove(conf.work_fd, name)
             work_bytes += got
             if whole:
                 work_folders += 1
@@ -693,11 +755,11 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
     removed += old_bytes + work_bytes
     caches_note = ""
     if free < target and conf.caches:
-        sizes = [conf.reclaimable_at(conf.caches_fd, name) for name in conf.caches]
+        sizes = [conf.scan_at(conf.caches_fd, name)[0] for name in conf.caches]
         if free + sum(sizes) >= target:
             cache_bytes = 0
             for name in conf.caches:
-                got, whole = conf.remove_at(conf.caches_fd, name)
+                got, whole = conf.remove(conf.caches_fd, name)
                 cache_bytes += got
                 if not whole:
                     refused += 1
@@ -710,7 +772,8 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
             caches_note = "; build caches kept (%.1f GB would not reach the floor)" % (sum(sizes) / 1e9)
     under = "" if free >= target else ", UNDER by %.1f GB" % ((target - free) / 1e9)
     if phase == "start":
-        _write_at(cur_fd, "disk-start.txt", "%d %d\n" % (free, total))
+        if conf.inside(cur_fd):
+            _write_at(cur_fd, "disk-start.txt", "%d %d\n" % (free, total))
         head = "disk: free %s at the start (floor %d%%%s)" % (_pct(free, total), FLOOR * 100, under)
     else:
         start = _pair_at(cur_fd, "disk-start.txt")
@@ -722,6 +785,68 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
     if refused:
         tail += "; could not be removed %d (a link, a mount or a locked file)" % refused
     return head + tail + caches_note
+
+
+def _replace_at(conf: Confine, dir_fd: int, name: str, data: bytes) -> bool:
+    """Replace a file of the run folder whole: a new file renamed over the name, both through the
+    folder descriptor, only while the folder is inside the run root."""
+    temporary = name + ".disk-new"
+    try:
+        os.unlink(temporary, dir_fd=dir_fd)
+    except OSError:
+        pass
+    if not conf.inside(dir_fd) or not _write_at(dir_fd, temporary, data.decode("utf-8", "replace"), create=True):
+        return False
+    try:
+        os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except OSError:
+        return False
+    return True
+
+
+def _plain_or_absent(dir_fd: int, name: str) -> bool:
+    info = _lstat_at(dir_fd, name)
+    return info is None or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+
+
+def record(root: str, current: str, line: str) -> bool:
+    """Put the disk line into the summary of the run holding the lock, through its folder descriptor
+    (Codex #323 R1: never a planted link, a FIFO or a second name). A testbed run: the line closes its
+    block (what status shows) and the summary is the block again, then the lanes own lines."""
+    conf = Confine(root)
+    try:
+        cur_fd = _current_fd(conf, current)
+    except Refused:
+        conf.close()
+        return False
+    conf.fds.append(cur_fd)
+    try:
+        if not _plain_or_absent(cur_fd, "summary.txt") or not _plain_or_absent(cur_fd, "testbed-block.txt"):
+            return False
+        summary = _read_at(cur_fd, "summary.txt", MAX_SHOW * 16)
+        add = (line + "\n").encode("utf-8")
+        if _lstat_at(cur_fd, "testbed-block.txt") is None:
+            return _replace_at(conf, cur_fd, "summary.txt", summary + add)
+        block = _read_at(cur_fd, "testbed-block.txt", MAX_SHOW) + add
+        marker = "\u2014 the lanes".encode("utf-8")
+        lines = summary.splitlines(keepends=True)
+        at = next((i for i, text in enumerate(lines) if text.startswith(marker)), None)
+        rest = b"".join(lines[at:]) if at is not None else summary
+        return _replace_at(conf, cur_fd, "testbed-block.txt", block) and _replace_at(conf, cur_fd, "summary.txt", block + rest)
+    finally:
+        conf.close()
+
+
+def stop_marker(root: str, out: str) -> None:
+    """Tell the sampler to stop: a new empty marker in the run folder, through its descriptor. Anything
+    already at that name (a planted link, a FIFO) is left as it is; the sampler stops on its presence."""
+    conf = Confine(root)
+    try:
+        cur_fd = _current_fd(conf, out)
+        conf.fds.append(cur_fd)
+        _write_at(cur_fd, "disk-sample.stop", "", create=True)
+    finally:
+        conf.close()
 
 
 def sample(root: str, out: str, disk=disk_space, interval: float = SAMPLE_SECONDS) -> None:
@@ -743,7 +868,8 @@ def sample(root: str, out: str, disk=disk_space, interval: float = SAMPLE_SECOND
             free, total = disk(os.path.join(conf.home, "m4run"))
             if low is None or free < low:
                 low = free
-                _write_at(cur_fd, "disk-low.txt", "%d %d\n" % (low, total))
+                if conf.inside(cur_fd):
+                    _write_at(cur_fd, "disk-low.txt", "%d %d\n" % (low, total))
             if stopped():
                 return
             waited = 0.0
@@ -970,17 +1096,30 @@ def main(argv: list) -> int:
         signal.signal(signal.SIGALRM, stop)
         signal.alarm(CLEAN_BUDGET)                          # a stuck syscall is interrupted, the line still comes (F6)
         try:
-            print(clean(argv[1], argv[3], argv[5]))
-            return 0
+            line, rc = clean(argv[1], argv[3], argv[5]), 0
         except OverBudget:
-            print("disk: cleanup stopped at its %d s budget" % CLEAN_BUDGET)
-            return 1
+            line, rc = "disk: cleanup stopped at its %d s budget" % CLEAN_BUDGET, 1
         except Refused as error:
-            print("disk: cleanup refused (%s)" % error)
-            return 2
+            line, rc = "disk: cleanup refused (%s)" % error, 2
         except Exception as error:                         # noqa: BLE001 — the run must reach its OUTCOME
-            print("disk: cleanup failed (%s)" % type(error).__name__)
-            return 1
+            line, rc = "disk: cleanup failed (%s)" % type(error).__name__, 1
+        if argv[5] == "end":
+            try:
+                recorded = record(argv[1], argv[3], line)
+            except Exception:                              # noqa: BLE001 — said on stderr instead (the run log)
+                recorded = False
+            if not recorded:
+                print(line + " (not written into the summary)", file=sys.stderr)
+        signal.alarm(0)
+        print(line)
+        return rc
+    if len(argv) == 3 and argv[0] == "stop":
+        try:
+            stop_marker(argv[1], argv[2])
+            return 0
+        except Refused as error:
+            print("stop refused: %s" % error, file=sys.stderr)
+            return 2
     if len(argv) == 3 and argv[0] == "sample":
         try:
             sample(argv[1], argv[2])

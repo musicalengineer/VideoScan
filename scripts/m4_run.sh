@@ -842,24 +842,16 @@ host_main() {   # __host <lane> <sha> <stamp>
     # and the summary (and a testbed run block) gets the disk line: free now, the lowest, the start.
     if [ -n "$sampler" ]; then
         # It looks for the stop file every second; give it 30 and go on without it (never an unbounded wait, F6).
-        : >"$OUT/disk-sample.stop"
+        # The marker is made by the helper through the run folder descriptor: never through a planted link (Codex #323 R1).
+        python3 "$clean_tool" stop "$H_ROOT" "$OUT" 2>/dev/null
         local waited=0
         while kill -0 "$sampler" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 1; waited=$((waited + 1)); done
         kill -0 "$sampler" 2>/dev/null || wait "$sampler" 2>/dev/null
     fi
     if [ -n "$clean_tool" ]; then
-        local disk_line
-        disk_line="$(python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end 2>/dev/null)"
-        [ -n "$disk_line" ] || disk_line="disk: cleanup said nothing"
-        if [ -f "$OUT/testbed-block.txt" ]; then
-            # A testbed run: the line closes the block (what `status` shows), and the summary is the block
-            # again followed by the lanes own lines, as host_testbed laid it out.
-            echo "$disk_line" >>"$OUT/testbed-block.txt"
-            { cat "$OUT/testbed-block.txt"; sed -n '/^— the lanes/,$p' "$OUT/summary.txt"; } >"$OUT/summary.txt.new" \
-                && mv "$OUT/summary.txt.new" "$OUT/summary.txt"
-        else
-            echo "$disk_line" >>"$OUT/summary.txt"
-        fi
+        # The helper writes the disk line into summary.txt (a testbed run: also the end of its block) through
+        # the run folder descriptor (Codex #323 R1); if it cannot, it says the line on stderr, into run.log.
+        python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end >/dev/null
     fi
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"

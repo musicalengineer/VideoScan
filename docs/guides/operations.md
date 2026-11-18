@@ -89,7 +89,10 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   #322: a name swapped for a link after a check cannot redirect anything; a mount is never entered); the only folders
   it holds are `~/m4run/out`, `~/corpus/work` (skipped if any protected corpus name is a link) and those two caches.
   Never the corpus media, documents, reports, state or `live/`; no lock flag is ever cleared (a locked file stays and
-  is counted); only one-name files count as reclaimable; refused unless the lock names the run; 900 s budget. The scheduled jobs' caches (`videoscan-nightly-*`, `-analysis-dd`,
+  is counted); only one-name, unlocked files count as reclaimable; before every unlink, rename or write the folder is
+  asked where it is now (`F_GETPATH`) and must still be inside those roots; a tree with a mount anywhere in it is
+  refused whole; the stop marker and the disk line are written by the helper through the run folder descriptor;
+  refused unless the lock names the run; 900 s budget. The scheduled jobs' caches (`videoscan-nightly-*`, `-analysis-dd`,
   `~/Library/Caches/VideoScan/*`) and `~/Library/Logs/VideoScan` are theirs, not this cleanup's.
 - *The quiet window.* The M4's 14:00 scheduled run does **not** wait for the lock: `scripts/nightly_gauntlet.sh` runs
   its suite anyway and skips only its gauntlet, so a lane still running at 14:00 means two suites at once. A lane

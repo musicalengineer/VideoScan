@@ -33,7 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO / 'tests'))
 import testbed_host as th  # noqa: E402
 from test_m4_run_suite_lane import probe  # noqa: E402
-from test_m4_run_testbed_lane import TestbedScene  # noqa: E402
+from test_m4_run_testbed_lane import STUB_CORPUS, TestbedScene  # noqa: E402
 
 GB = 10 ** 9
 PROTECTED = ('corpus-sha-v1.txt', 'corpus-manifest-v1.json', 'catalog-source-backup.sqlite', 'THIS_IS_TEST_DATA.txt',
@@ -545,6 +545,114 @@ class CodexFindingsTests(CleanCase):
         self.assertTrue(all(c.exists() for c in self.s.caches), 'caches dropped for bytes another name keeps')
         self.assertIn('build caches kept', line)
         self.assertEqual(media.read_bytes()[:1], b'm')
+
+
+class CodexReReviewTests(CleanCase):
+    """Codex #323 (the re-review of the descriptor rewrite), each finding as its reproduction."""
+
+    def test_r2_a_cache_holding_a_protected_destination_is_never_removed(self):
+        build = self.s.caches[1] / 'Build'
+        build.mkdir(parents=True)
+        (build / 'family.mov').write_bytes(b'f' * 4_000_000)
+        shutil.rmtree(self.s.corpus / 'media')
+        os.symlink(build, self.s.corpus / 'media')
+        run = self.current()
+        self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 2_000_000, 0))
+        self.assertTrue((build / 'family.mov').exists(), 'a cache that holds the corpus media was removed')
+
+    def test_r2_a_current_run_that_is_a_protected_destination_is_never_written(self):
+        run = self.current()
+        (run / 'disk-start.txt').write_text('precious')
+        shutil.rmtree(self.s.corpus / 'state')
+        os.symlink(run, self.s.corpus / 'state')
+        try:
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        except th.Refused:
+            pass
+        self.assertEqual((run / 'disk-start.txt').read_text(), 'precious')
+
+    def test_r3_a_folder_moved_out_of_the_roots_before_its_entries_go_is_left_alone(self):
+        old = self.s.run('o1', outcome='GREEN')
+        (old / 'victim.mov').write_bytes(b'scratch')
+        adopted = self.s.corpus / 'media' / 'adopted'
+        real = os.listdir
+        state = {'done': False}
+
+        def hooked(arg=None):
+            names = real(arg) if arg is not None else real()
+            if not state['done'] and isinstance(arg, int) and 'victim.mov' in names:
+                state['done'] = True
+                os.rename(old, adopted)                      # the folder now lives under the corpus media
+            return names
+        os.listdir = hooked
+        self.addCleanup(setattr, os, 'listdir', real)
+        run = self.current()
+        self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertTrue((adopted / 'victim.mov').exists(), 'a file was unlinked in a folder that had moved into the corpus media')
+        self.assertTrue((adopted / 'suite-app.xcresult' / 'Data' / 'blob').exists())
+
+    def test_r4_a_tree_with_a_mount_inside_is_refused_whole(self):
+        old = self.s.run('o1', outcome='GREEN')
+        inner = old / 'suite-app.xcresult' / 'mounted'
+        inner.mkdir()
+        mounted = mount_image(self.tmp.name, inner)
+        if not mounted:
+            self.skipTest('hdiutil could not attach a disk image here')
+        try:
+            (inner / 'keep.mov').write_bytes(b'on another volume')
+            run = self.current()
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+            self.assertEqual((inner / 'keep.mov').read_bytes(), b'on another volume')
+            self.assertTrue((old / 'suite-app.xcresult' / 'Data' / 'blob').exists(), 'a tree with a mount in it was partly deleted')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
+
+    def test_r5_locked_bytes_are_not_counted_as_reclaimable(self):
+        self.s.cache(1, 4_000_000)
+        os.chflags(self.s.caches[1] / 'Build' / 'blob', 0x2)       # UF_IMMUTABLE: it stays whatever we do
+        self.s.cache(0, 2_000_000)
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 6_000_000, 0))
+        self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache was dropped on a forecast counting locked bytes')
+        self.assertIn('build caches kept', line)
+
+
+class RunnerShellWriteTests(TestbedScene):
+    """Codex #323 R1: the runner writes its stop marker and the disk line only through the helper's door."""
+
+    def setUp(self):
+        super().setUp()
+        self.env['VIDEOSCAN_TESTBED_FAKE_DISK'] = f'{1000 * GB}:{100 * GB}'
+        self.media = self.home / 'corpus' / 'media' / 'clip.mov'
+        self.media.parent.mkdir(parents=True)
+        self.media.write_bytes(b'family')
+
+    def plant_during_the_lane(self, code):
+        stub = STUB_CORPUS.replace('sys.exit(plan["exit"])', code + '\nsys.exit(plan["exit"])')
+        (self.install / 'corpus_run.py').write_text(stub)
+
+    def test_r1_a_planted_link_at_the_stop_marker_is_never_written_through(self):
+        self.plant_during_the_lane(
+            'run = os.path.dirname(out)\n'
+            'stop = os.path.join(run, "disk-sample.stop")\n'
+            'os.path.lexists(stop) or os.symlink(os.path.join(os.environ["HOME"], "corpus/media/clip.mov"), stop)')
+        p, log, summary, _ = self.host('l1')
+        self.assertEqual(self.media.read_bytes(), b'family', 'the stop marker was written through a planted link')
+        self.assertRegex(log, r'(?m)^OUTCOME ')
+
+    def test_r1_a_planted_fifo_at_the_stop_marker_never_holds_the_outcome(self):
+        self.plant_during_the_lane(
+            'run = os.path.dirname(out)\n'
+            'stop = os.path.join(run, "disk-sample.stop")\n'
+            'os.path.lexists(stop) or os.mkfifo(stop)')
+        stamp = 'l2'
+        try:
+            p = subprocess.run(['/bin/bash', str(self.install / 'm4_run.sh'), '__host', 'testbed', self.sha, stamp, '--host', 'm4'],
+                               capture_output=True, text=True, env=self.env, timeout=90)
+        except subprocess.TimeoutExpired:
+            self.fail('a FIFO at the stop marker held the run before its OUTCOME')
+        log = (self.root / 'out' / f'{stamp}-testbed' / 'run.log').read_text()
+        self.assertRegex(log, r'(?m)^OUTCOME ')
 
 
 class LockTests(CleanCase):
