@@ -1323,7 +1323,7 @@ got=$(diag_case "$SANDBOX/host-hung.log" 12000 false 3 true 65)
 NIGHTLY="$SCRIPT_DIR/nightly_local_tests.sh"
 PREFLIGHT_LINE=$(grep -n '^check_machine_setup$' "$NIGHTLY" | cut -d: -f1)
 CORE_LINE2=$(grep -n '^run_core_package_tests "\$REPO/VideoScan/VideoScanCore"' "$NIGHTLY" | cut -d: -f1)
-DIAG_LINE=$(grep -n '^    apply_test_host_start_diagnosis /tmp/nightly-test-output.log "\$TOTAL"$' "$NIGHTLY" | cut -d: -f1)
+DIAG_LINE=$(grep -n '^    apply_test_host_start_diagnosis "\$NIGHTLY_TEST_LOG" "\$TOTAL"$' "$NIGHTLY" | cut -d: -f1)
 ZERO_PUBLISH_LINE=$(grep -n 'publish_row "\$(with_person_metrics "\$(make_status_row "\$STATUS" "\$REASON"' "$NIGHTLY" | cut -d: -f1)
 if [ -n "$PREFLIGHT_LINE" ] && [ -n "$CORE_LINE2" ] && [ "$PREFLIGHT_LINE" -lt "$CORE_LINE2" ] &&
    [ -n "$DIAG_LINE" ] && [ -n "$ZERO_PUBLISH_LINE" ] && [ "$DIAG_LINE" -lt "$ZERO_PUBLISH_LINE" ]; then

@@ -130,8 +130,45 @@
 #       the next reset (Codex #276 F2). The row is queued instead.
 #     - NOT here (cut after four Codex rounds, #275–#278; parked in
 #       docs/BACKLOG.md): a record for a run that is cut off part-way.
+#
+#   2026-11-17 (on-demand-r1): ON-DEMAND MODE, for scripts/m4_run.sh suite
+#       nightly_local_tests.sh --on-demand <out dir> --repo <worktree> --dd <cache root>
+#     The same machine preflight, Core lane, Release build, app suite, parsers
+#     and verdict precedence as the scheduled run (one engine), against a
+#     checked-out worktree, and NOTHING published: publish_row writes the row
+#     to <out dir>/suite-row.json instead of the metrics branch (no worktree,
+#     commit, push or pending queue), the page summary is not rebuilt, and no
+#     fetch/pull, person/Hallie/coverage metrics, model smoke, complexity
+#     baseline or repo-traffic step runs. Its logs and xcresult live in
+#     <out dir> (kept), its DerivedData and Core scratch under <cache root>
+#     (own caches: the scheduled run's /tmp files and
+#     ~/Library/Caches/videoscan-nightly-* are never touched). With no
+#     arguments the script behaves exactly as before.
+#     Tests: tests/test_m4_run_suite_lane.py.
 
 set -u
+
+NIGHTLY_ON_DEMAND=0
+NIGHTLY_ON_DEMAND_OUT=""
+NIGHTLY_ON_DEMAND_REPO=""
+NIGHTLY_ON_DEMAND_DD=""
+nightly_usage() {
+    echo "usage: nightly_local_tests.sh [--on-demand <out dir> --repo <worktree> --dd <cache root>]" >&2
+    exit 2
+}
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --on-demand) NIGHTLY_ON_DEMAND=1; NIGHTLY_ON_DEMAND_OUT="${2:-}"; shift 2 || nightly_usage ;;
+        --repo) NIGHTLY_ON_DEMAND_REPO="${2:-}"; shift 2 || nightly_usage ;;
+        --dd) NIGHTLY_ON_DEMAND_DD="${2:-}"; shift 2 || nightly_usage ;;
+        *) nightly_usage ;;
+    esac
+done
+if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
+    [ -d "$NIGHTLY_ON_DEMAND_OUT" ] && [ -d "$NIGHTLY_ON_DEMAND_REPO" ] && [ -n "$NIGHTLY_ON_DEMAND_DD" ] || nightly_usage
+elif [ -n "$NIGHTLY_ON_DEMAND_REPO$NIGHTLY_ON_DEMAND_DD" ]; then
+    nightly_usage
+fi
 
 NIGHTLY_SCRIPT_VERSION="2026-11-10-summary-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
@@ -181,6 +218,28 @@ NIGHTLY_BUILD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_BUILD_TIMEOUT_SECONDS:-5400}"
 NIGHTLY_TEST_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS:-7200}"
 NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS="${VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS:-10}"
 NIGHTLY_WATCHDOG_DID_TIMEOUT=false
+# The scheduled run's working files and caches; on demand, the run's own.
+NIGHTLY_BUILD_LOG="/tmp/nightly-build-output.log"
+NIGHTLY_TEST_LOG="/tmp/nightly-test-output.log"
+NIGHTLY_XCRESULT="/tmp/nightly-results.xcresult"
+NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
+NIGHTLY_CORE_SCRATCH="$HOME/Library/Caches/videoscan-nightly-core-build"
+if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
+    REPO="$NIGHTLY_ON_DEMAND_REPO"
+    LOGFILE="$NIGHTLY_ON_DEMAND_OUT/suite.log"
+    NIGHTLY_BUILD_LOG="$NIGHTLY_ON_DEMAND_OUT/suite-app-build.log"
+    NIGHTLY_TEST_LOG="$NIGHTLY_ON_DEMAND_OUT/suite-app-test.log"
+    NIGHTLY_XCRESULT="$NIGHTLY_ON_DEMAND_OUT/suite-app.xcresult"
+    VIDEOSCAN_NIGHTLY_CORE_LOG="$NIGHTLY_ON_DEMAND_OUT/suite-core-test.log"
+    NIGHTLY_DD="$NIGHTLY_ON_DEMAND_DD/app"
+    NIGHTLY_CORE_SCRATCH="$NIGHTLY_ON_DEMAND_DD/core"
+    # Never used on demand (publish_row returns before them). Pointed into the
+    # run's own directory anyway, so that no fault in that gate can reach the
+    # scheduled run's metrics worktree (publish_row resets it, commits into it
+    # and `rm -rf`s it) or its pending-rows queue.
+    METRICS_WT="$NIGHTLY_ON_DEMAND_OUT/unused-metrics-wt"
+    PENDING_QUEUE="$NIGHTLY_ON_DEMAND_OUT/unused-pending.jsonl"
+fi
 
 mkdir -p "$LOGDIR"
 exec > "$LOGFILE" 2>&1
@@ -434,7 +493,10 @@ run_core_package_tests() {
     # (default 900 s, ~9x that) means a hang: stop there, name the test that
     # was running, and leave `sample` stacks of the test process beside the
     # nightly log so the next hang is diagnosable from the morning.
-    sample_core_lane_environment &
+    # 9>&-: the sampler (and the `sleep 300` that outlives its kill) must not
+    # inherit the testbed lock on fd 9 (scripts/testbed_lock.py), or the lock
+    # stays held for up to five minutes after a short run has ended.
+    sample_core_lane_environment 9>&- &
     local sampler_pid=$!
     rm -f "$NIGHTLY_CORE_SAMPLE_FILE"
     NSUnbufferedIO=YES \
@@ -578,6 +640,7 @@ print(json.dumps({"model_smoke_status": status, "model_smoke_reason": reason,
 # a Mac missing a model (or whose real-model smoke is red) is NOT green; an
 # already-red verdict keeps its own reason (model_smoke_* still say why).
 apply_model_smoke_verdict() {
+    [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ] && return 0      # the lane does not run on demand (app + Core only)
     if [ "$STATUS" = "ok" ] && [ "${MODEL_SMOKE_STATUS:-not-run}" != "ok" ]; then
         STATUS="failed"
         REASON="model-smoke-${MODEL_SMOKE_REASON:-not-run}"
@@ -632,6 +695,9 @@ record_timed_out_test_result() {
 # 67.078%). Compare Release nights with Release nights.
 collect_optional_post_test_metrics() {
     COV_LOGIC="null"
+    # On demand: the verdict only. Coverage, the person evaluator and the
+    # Hallie lanes are the scheduled run's.
+    [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ] && return 0
     if [ -d /tmp/nightly-results.xcresult ]; then
         log "xcresult exists, extracting coverage..."
         xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 \
@@ -925,6 +991,13 @@ esac
 #         2 if neither remote publication nor the local queue append worked.
 publish_row() {
     local new_row="$1"
+    if [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ]; then
+        # On demand (scripts/m4_run.sh suite): the row is this run's verdict
+        # file, never a metrics row — no worktree, no commit, no push, no queue.
+        log "On-demand row (not published): $new_row"
+        printf '%s\n' "$new_row" > "$NIGHTLY_ON_DEMAND_OUT/suite-row.json" || return 2
+        return 0
+    fi
     log "Publishing row: $new_row"
 
     # Always fetch with prune so stale ref state can't block worktree-add.
@@ -1118,8 +1191,9 @@ fi
 # Sync with origin/main. We don't gate on being IN sync, just attempt
 # to fast-forward when we're behind and on main. Ahead-of-origin is
 # fine — the SHA in the row makes it traceable.
-git fetch origin main --quiet
-if [ "$BRANCH" = "main" ]; then
+# On demand: the caller chose the commit; nothing is fetched or pulled.
+[ "$NIGHTLY_ON_DEMAND" = 1 ] || git fetch origin main --quiet
+if [ "$BRANCH" = "main" ] && [ "$NIGHTLY_ON_DEMAND" != 1 ]; then
     BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
     if [ "$BEHIND" -gt 0 ] && ! $DIRTY; then
         log "Pulling $BEHIND commits from origin/main..."
@@ -1141,6 +1215,7 @@ log "Commit: $COMMIT ($COMMIT_DATE)"
 rebuild_page_summary() {
     local tool="$REPO/tools/publish_metrics.py" out
     [ "${VIDEOSCAN_NIGHTLY_SUMMARY:-1}" = 0 ] && return 0
+    [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ] && return 0      # an on-demand run never changes the page
     if [ ! -f "$tool" ]; then log "Page summary: skipped ($tool not found)"; return 0; fi
     out="$(python3 "$tool" --summary-only 2>&1 | tail -1)"
     log "Page summary: ${out:-no output}"
@@ -1149,7 +1224,7 @@ trap rebuild_page_summary EXIT
 
 # Establish the pre-build readiness state. This guarantees even a build
 # failure publishes the desired red 0 when no quality benchmark is configured.
-refresh_person_metrics
+[ "$NIGHTLY_ON_DEMAND" = 1 ] || refresh_person_metrics
 
 # ── Machine preflight (GH #360 item 5): before any build ─────────────
 check_machine_setup
@@ -1162,10 +1237,17 @@ fi
 
 # ── VideoScanCore package tests (before the app build; see the lane note) ──
 run_core_package_tests "$REPO/VideoScan/VideoScanCore" \
-    "$HOME/Library/Caches/videoscan-nightly-core-build"
+    "$NIGHTLY_CORE_SCRATCH"
 
 # ── Model lane: required weights + real-model audio smoke (2026-11-05) ──
+# On demand: app + Core only. The lane is recorded as not-run in the row and
+# stays out of the verdict (it needs this Mac's venv and weights, not the commit).
+if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
+    MODEL_SMOKE_REASON="on-demand"
+    MODEL_SMOKE_JSON='{"model_smoke_status":"not-run","model_smoke_reason":"on-demand"}'
+else
 run_model_smoke_lane "$REPO"
+fi
 
 # ── Build ───────────────────────────────────────────────────────────
 # DerivedData lives under ~/Library/Caches, NOT /tmp. macOS garbage-collects
@@ -1173,7 +1255,7 @@ run_model_smoke_lane "$REPO"
 # as `module file '…Foundation….pcm' not found` and fails the build with rc=65
 # (nightly false failure 2026-06-23). A stable cache dir avoids that, and a
 # clean-and-retry-once guards against any residual module-cache corruption.
-NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
+# NIGHTLY_DD is set at the top (the scheduled cache, or the on-demand one).
 # Every product path derives from NIGHTLY_CONFIGURATION here, in one place.
 NIGHTLY_PRODUCTS_DIR="$NIGHTLY_DD/Build/Products/$NIGHTLY_CONFIGURATION"
 NIGHTLY_APP_BINARY="$NIGHTLY_PRODUCTS_DIR/VideoScan.app/Contents/MacOS/VideoScan"
@@ -1191,7 +1273,7 @@ fi
 # Release + ENABLE_TESTABILITY=YES (so @testable imports resolve in an
 # optimised build) + arm64, with coverage on top for the dashboard.
 run_nightly_build() {
-    local build_log="/tmp/nightly-build-output.log"
+    local build_log="$NIGHTLY_BUILD_LOG"
     run_with_process_group_watchdog \
         "$NIGHTLY_BUILD_TIMEOUT_SECONDS" \
         "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
@@ -1244,17 +1326,23 @@ BUILD_END=$(date +%s)
 log "Build done in $((BUILD_END - BUILD_START))s"
 
 # ── Test ────────────────────────────────────────────────────────────
-rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
+rm -rf "$NIGHTLY_XCRESULT" "$NIGHTLY_TEST_LOG"
 log "Running ALL tests ($NIGHTLY_CONFIGURATION) with coverage..."
 log "  (VideoScanUITests target skipped: all its tests are plan-skipped, and the"
 log "   locked-screen launchd session can't enable automation mode — see 2026-07-07-r1)"
 TEST_START=$(date +%s)
+# The scheduled run removes its /tmp test log and xcresult when it ends (the log
+# is already in $LOGFILE); an on-demand run keeps its own as evidence.
+remove_test_artifacts() {
+    [ "$NIGHTLY_ON_DEMAND" = 1 ] && return 0
+    rm -rf "$NIGHTLY_XCRESULT" "$NIGHTLY_TEST_LOG"
+}
 # A private-process-group watchdog guarantees this call returns to the
 # publication path even if xcodebuild or a test blocks in a kernel read.
 run_with_process_group_watchdog \
     "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
-    /tmp/nightly-test-output.log \
+    "$NIGHTLY_TEST_LOG" \
     xcodebuild test-without-building \
     -project VideoScan/VideoScan.xcodeproj \
     -scheme VideoScan \
@@ -1262,13 +1350,13 @@ run_with_process_group_watchdog \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "$NIGHTLY_DD" \
     -enableCodeCoverage YES \
-    -resultBundlePath /tmp/nightly-results.xcresult \
+    -resultBundlePath "$NIGHTLY_XCRESULT" \
     -skip-testing:VideoScanUITests \
     ENABLE_TESTABILITY=YES \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=
 TEST_RC=$?
 TEST_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
-cat /tmp/nightly-test-output.log 2>/dev/null || true
+cat "$NIGHTLY_TEST_LOG" 2>/dev/null || true
 TEST_END=$(date +%s)
 ELAPSED=$((TEST_END - TEST_START))
 if $TEST_TIMED_OUT; then
@@ -1280,7 +1368,7 @@ fi
 # ── Parse results ───────────────────────────────────────────────────
 # parse_test_counts / parse_crashed_tests are defined above the run (the
 # VideoScanCore lane needs them before the app build; 2026-10-18).
-parse_test_counts /tmp/nightly-test-output.log
+parse_test_counts "$NIGHTLY_TEST_LOG"
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISSUE_TESTS} passed with known issues)"
 [ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
@@ -1290,7 +1378,7 @@ log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISS
 # count is still honest, but we want the row to flag this so a sudden
 # pass-count drop isn't blamed on the wrong thing.
 UI_RUNNER_HUNG=false
-if grep -qE 'test runner hung|Timed out while enabling automation' /tmp/nightly-test-output.log 2>/dev/null; then
+if grep -qE 'test runner hung|Timed out while enabling automation' "$NIGHTLY_TEST_LOG" 2>/dev/null; then
     UI_RUNNER_HUNG=true
     log "Note: UI test runner hung/timed out (unit-test count is still valid)"
 fi
@@ -1304,13 +1392,13 @@ apply_model_smoke_verdict
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?
 if [ "$POST_TEST_ROUTE_RC" -eq 124 ]; then
-    rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
+    remove_test_artifacts
     exit 1
 fi
 
 if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
-    apply_test_host_start_diagnosis /tmp/nightly-test-output.log "$TOTAL"
+    apply_test_host_start_diagnosis "$NIGHTLY_TEST_LOG" "$TOTAL"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
     exit 1
@@ -1328,17 +1416,20 @@ publish_current_test_result
 # Removals only, verified before commit; works in its own worktree at
 # origin/main and never touches this (possibly dirty) checkout. Refused or
 # failed = 🔴 in the morning digest. Never changes this run's exit code.
+# Neither this nor the traffic step runs on demand (both write outside the run).
+if [ "$NIGHTLY_ON_DEMAND" != 1 ]; then
 CX_PY="$REPO/venv/bin/python3"
 [ -x "$CX_PY" ] || CX_PY=python3
 log "Complexity baseline: $("$CX_PY" "$REPO/scripts/complexity_baseline_nightly.py" --repo "$REPO" 2>&1 | tail -1)"
+fi
 
 # ── Repo traffic: who looked at / cloned the public repo (Rick 2026-11-10) ──
 # GitHub keeps 14 days; this saves each day and names a new fork, star or
 # referring site. Always exits 0; the session-start banner reads latest.json.
-log "Repo traffic: $(python3 "$REPO/scripts/repo_traffic.py" 2>&1 | tail -1)"
+[ "$NIGHTLY_ON_DEMAND" = 1 ] || log "Repo traffic: $(python3 "$REPO/scripts/repo_traffic.py" 2>&1 | tail -1)"
 
 # ── Cleanup ─────────────────────────────────────────────────────────
-rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
+remove_test_artifacts
 log "=== Nightly test run complete (publish rc=$PUBLISH_RC, status=$STATUS) ==="
 
 # Exit code reflects test result so launchd's status is honest.
