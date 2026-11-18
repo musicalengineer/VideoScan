@@ -191,13 +191,19 @@ enum FootageFolders {
         var contentKeys: [String]
         /// Event / person / other — the folder's colour (2026-10-19).
         var kind: FolderKind
+        /// The machine's era guess (grey), not one of Rick's folders
+        /// (MachineEstimateFolders.swift). Rick's folders outrank these in
+        /// the join (`split`) and come first in the list.
+        var byMachine: Bool
 
-        init(id: UUID = UUID(), title: String, dateWords: String? = nil, contentKeys: [String], kind: FolderKind = .event) {
+        init(id: UUID = UUID(), title: String, dateWords: String? = nil, contentKeys: [String], kind: FolderKind = .event,
+             byMachine: Bool = false) {
             self.id = id
             self.title = title
             self.dateWords = dateWords
             self.contentKeys = contentKeys
             self.kind = kind
+            self.byMachine = byMachine
         }
 
         init(_ e: ConfirmedEvent) {
@@ -296,6 +302,8 @@ enum FootageFolders {
         let id: UUID
         let title: String
         var kind: FolderKind = .event
+        /// The machine's era guess (grey) — see `Event.byMachine`.
+        var byMachine = false
         var summary = Summary()
         var keys = SortKeys()
         /// Indices into `Index.families`.
@@ -313,10 +321,6 @@ enum FootageFolders {
         var foldersOf: [UUID: [UUID]] = [:]
         var folders: [UUID: Folder] = [:]
         var keysOf: [UUID: SortKeys] = [:]
-        /// The folders are the machine's era guesses (Show ▸ Folders by
-        /// Machine Estimate), not Rick's: read-only, no store knows their
-        /// ids. Set by the model after the join; false for Rick's folders.
-        var estimated = false
 
         static let empty = Index()
 
@@ -334,9 +338,10 @@ enum FootageFolders {
         index.keysOf.reserveCapacity(rows.count)
         for r in rows { index.keysOf[r.id] = r.keys }
         let ownEvent = ownEvents(rows: rows, events: events)
+        let machine = Set(events.lazy.filter(\.byMachine).map(\.id))
         var folderFamilies: [UUID: [Int]] = [:]
         for component in components(rows) {
-            for (eventID, members) in split(component, ownEvent: ownEvent) {
+            for (eventID, members) in split(component, ownEvent: ownEvent, machine: machine) {
                 guard eventID != nil || members.count > 1 else { continue }   // a loose single file needs no family
                 let fam = family(members)
                 index.families.append(fam)
@@ -401,12 +406,26 @@ enum FootageFolders {
     /// leading folders (every folder tied for the most votes — so a version
     /// of a recording that is in two folders shows in both, and a 2 : 1
     /// family still sends it to the majority only).
-    static func split(_ component: [Row], ownEvent: [UUID: [UUID]]) -> [(UUID?, [Row])] {
+    ///
+    /// RICK'S FOLDERS OUTRANK THE MACHINE'S (2026-11-17, the one folder
+    /// view): `machine` holds the ids of the grey era-guess folders. When any
+    /// member of the family is in one of Rick's folders, the machine's
+    /// guesses are ignored for the whole family — a version that has an era
+    /// of its own still follows its recording into Rick's folder instead of
+    /// being split off into a grey one. O(component) extra, no copy of the map.
+    static func split(_ component: [Row], ownEvent: [UUID: [UUID]], machine: Set<UUID> = []) -> [(UUID?, [Row])] {
+        let ricks = !machine.isEmpty && component.contains { r in
+            (ownEvent[r.id] ?? []).contains { !machine.contains($0) }
+        }
+        func ownOf(_ id: UUID) -> [UUID] {
+            let es = ownEvent[id] ?? []
+            return ricks ? es.filter { !machine.contains($0) } : es
+        }
         let group = copyGroups(component)
         var familyVotes: [UUID: Int] = [:]
         var groupVotes: [String: [UUID: Int]] = [:]
         for r in component {
-            for e in ownEvent[r.id] ?? [] {
+            for e in ownOf(r.id) {
                 familyVotes[e, default: 0] += 1
                 groupVotes[group[r.id] ?? "", default: [:]][e, default: 0] += 1
             }
@@ -415,7 +434,7 @@ enum FootageFolders {
         let leading = leaders(familyVotes)
         var buckets: [UUID: [Row]] = [:]
         for r in component {
-            let own = ownEvent[r.id] ?? []
+            let own = ownOf(r.id)
             let es = !own.isEmpty ? own : (groupVotes[group[r.id] ?? ""].map(leaders) ?? leading)
             for e in es { buckets[e, default: []].append(r) }
         }
@@ -567,7 +586,7 @@ enum FootageFolders {
     // MARK: The folder and its summary
 
     static func folder(_ e: Event, families: [Int], in index: Index, byID: [UUID: Row]) -> Folder {
-        var f = Folder(id: e.id, title: e.title, kind: e.kind, families: families)
+        var f = Folder(id: e.id, title: e.title, kind: e.kind, byMachine: e.byMachine, families: families)
         var s = Summary()
         var earliest: Date?
         var latest: Date?
@@ -643,19 +662,17 @@ enum FootageFolders {
     struct Display: Sendable, Equatable {
         var rows: [DisplayRow] = []
         var summaries: [UUID: Summary] = [:]
-        /// Composed under Show ▸ Folders Only (top level): the table says
-        /// "no folders match" when `rows` is empty, rather than going blank.
-        var foldersOnly = false
         static let empty = Display()
     }
 
     /// The display for the table: `visible` are the filter's survivors in
     /// the table's order; `open` the twisted folders; `scope` narrows to
-    /// one event or one family (then every folder is open). `foldersOnly`
-    /// (Show ▸ Folders Only) drops the loose rows at the top level; a scope
-    /// is an explicit narrowing and is shown as it is.
-    static func compose(index: Index, visible: [UUID], sort: Sort, open: Set<UUID>, scope: Scope?,
-                        foldersOnly: Bool = false) -> Display {
+    /// one event or one family (then every folder is open). A folder shows
+    /// only when one of its members is visible, with only those members —
+    /// so the Show filters and the search apply inside folders and a folder
+    /// they empty is not listed. (Folders first, then the loose files, is
+    /// the top level's order: FootageFolderLevel.top.)
+    static func compose(index: Index, visible: [UUID], sort: Sort, open: Set<UUID>, scope: Scope?) -> Display {
         let visibleSet = Set(visible)
         switch scope {
         case .family(let id)?:
@@ -665,8 +682,7 @@ enum FootageFolders {
             return Display(rows: [.folder(f)] + members(of: f, index: index, visibleSet: visibleSet, sort: sort),
                            summaries: [f.id: f.summary])
         case nil:
-            var d = folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open,
-                                  foldersOnly: foldersOnly)
+            var d = folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open)
             d.rows = uniqueRowIDs(d.rows)
             return d
         }
@@ -695,21 +711,18 @@ enum FootageFolders {
     /// One call for tests: index + compose with every row visible and
     /// every folder open unless told otherwise.
     static func build(rows: [Row], events: [Event], sort: Sort = .byName, open: Set<UUID>? = nil,
-                      scope: Scope? = nil, visible: [UUID]? = nil, foldersOnly: Bool = false) -> Display {
+                      scope: Scope? = nil, visible: [UUID]? = nil) -> Display {
         let idx = index(rows: rows, events: events)
         return compose(index: idx, visible: visible ?? rows.map(\.id), sort: sort,
-                       open: open ?? Set(idx.folders.keys), scope: scope, foldersOnly: foldersOnly)
+                       open: open ?? Set(idx.folders.keys), scope: scope)
     }
 
     /// Loose rows (already in the table's order) merged with the folders
     /// present (sorted by the same key) — one pass, no re-sort of the
     /// loose rows. A loose file with copies or versions carries them under
     /// it, where its first visible member sits ("a family is not a folder,
-    /// it is the file"); a lone file is one plain row. `foldersOnly`: no
-    /// loose rows at all — a folder still shows when any visible member
-    /// matches, so search and filters keep working inside folders.
-    static func folderDisplay(index: Index, visible: [UUID], visibleSet: Set<UUID>, sort: Sort, open: Set<UUID>,
-                              foldersOnly: Bool = false) -> Display {
+    /// it is the file"); a lone file is one plain row.
+    static func folderDisplay(index: Index, visible: [UUID], visibleSet: Set<UUID>, sort: Sort, open: Set<UUID>) -> Display {
         var loose: [[DisplayRow]] = []
         var present: [UUID] = []
         var seenFolders = Set<UUID>()
@@ -717,8 +730,6 @@ enum FootageFolders {
         for id in visible {
             if let es = index.foldersOf[id], !es.isEmpty {
                 for e in es where seenFolders.insert(e).inserted { present.append(e) }
-            } else if foldersOnly {
-                continue   // a file in no folder: hidden under Folders Only
             } else if let fi = index.familyOf[id] {
                 if seenFamilies.insert(fi).inserted {
                     loose.append(familyRows(index.families[fi], index: index, visibleSet: visibleSet, sort: sort))
@@ -729,7 +740,6 @@ enum FootageFolders {
         }
         let folders = present.compactMap { index.folders[$0] }.sorted { sort.precedes($0.keys, $1.keys) }
         var d = Display()
-        d.foldersOnly = foldersOnly
         d.rows.reserveCapacity(visible.count + folders.count)
         var fi = 0, li = 0
         while li < loose.count || fi < folders.count {

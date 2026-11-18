@@ -91,15 +91,27 @@ enum RebuildAudioFix {
         return ["-r", rate]
     }
 
+    /// Sound timestamp args: for a raw-DV source, the Balance Audio job's
+    /// own packet-timestamp rewrite (`BalanceAudioFix.soundTimestampArgs`,
+    /// GH #482 — without it the QuickTime copy of a tape whose sound runs
+    /// fast stores every sample and does not play the last of them). A
+    /// bitstream filter on timestamps only, never a sample. Empty for every
+    /// other container. Pure.
+    static func soundTimestampArgs(containerFormat: String) -> [String] {
+        BalanceAudioFix.soundTimestampArgs(containerFormat: containerFormat)
+    }
+
     /// Full ffmpeg argument vector. `-map 0:v?` is the optional-map
     /// form (matches zero video streams without erroring, for
     /// audio-only sources); only the FIRST audio stream is carried —
     /// this is a playable repair copy, not an archival mirror.
     /// `-c:v copy` stream-copies the picture verbatim; ONLY the audio
-    /// is re-encoded. Pure — tested as strings.
+    /// is re-encoded (`soundTimestampArgs`, raw DV only, follow its
+    /// encoder). Pure — tested as strings.
     static func ffmpegArgs(input: String,
                            output: String,
-                           inputArgs: [String] = []) -> [String] {
+                           inputArgs: [String] = [],
+                           soundTimestampArgs: [String] = []) -> [String] {
         var args: [String] = ["-hide_banner", "-nostdin", "-y"]
         args += inputArgs
         args += ["-i", input]
@@ -107,7 +119,10 @@ enum RebuildAudioFix {
             "-map", "0:v?",
             "-map", "0:a:0",
             "-c:v", "copy",
-            "-c:a", outputAudioCodec,
+            "-c:a", outputAudioCodec
+        ]
+        args += soundTimestampArgs
+        args += [
             "-map_metadata", "0",
             "-progress", "pipe:2",
             output
@@ -496,7 +511,8 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
             output: partialURL.path,
             inputArgs: RebuildAudioFix.inputArgs(
                 containerFormat: shape.containerFormat,
-                rFrameRate: shape.videoRFrameRate))
+                rFrameRate: shape.videoRFrameRate),
+            soundTimestampArgs: RebuildAudioFix.soundTimestampArgs(containerFormat: shape.containerFormat))
         verifyLog.info("rebuild render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
 
         monitor.start()

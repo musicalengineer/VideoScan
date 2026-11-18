@@ -299,7 +299,7 @@ final class VideoScanModel: ObservableObject {
     /// attention surface observes (chip, toolbar dot, menu row, band),
     /// published from the same pass. Logic in Analyze/CatalogFreshnessSnapshot.swift.
     let catalogFreshness = CatalogFreshnessSnapshot()
-    /// Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16):
+    /// Footage folders (Show ▸ Folders, 2026-10-16; one view 2026-11-17):
     /// the ONE snapshot the Catalog's folder view observes — the join
     /// (families, folders, summaries) from the same debounced pass, only
     /// while the option is on and the pane is on screen. Logic in

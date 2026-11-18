@@ -54,10 +54,6 @@ struct CatalogContent: View {
     /// beside `archivedSearchHitIDs`, never in a view body.
     @State var archivedSearchSampledHitCount: Int = 0
     let filterTargetPaths: Set<String>
-    /// The Volumes-pane labels behind `filterTargetPaths` (sorted; empty =
-    /// no volume filter) — for the Folders Only empty note's words only.
-    /// Defaulted so the memberwise init's existing callers stay valid.
-    var selectedVolumeLabels: [String] = []
     /// The Person ▾ picker's choice (2026-10-24, CatalogPersonFilter.swift);
     /// nil = Everyone. A value, not the store: the table refreshes when it
     /// changes (CatalogContent+Table.swift).
@@ -74,16 +70,11 @@ struct CatalogContent: View {
     // Show ▸ hidden-records reveals are gone, so removed, set-aside and
     // superseded rows are always hidden here. A focus set — "Show in
     // Catalog" on specific records — still lists exactly what was asked for.)
-    /// Show ▸ Events & Copies as Folders (2026-10-16, docs/design/
-    /// footage_folders_2026_10_16.md). Off (the default) = the linear
-    /// table exactly as before; on = the folder view
-    /// (CatalogContent+FolderTable.swift). Remembered per user by the
-    /// parent (CatalogFootageFoldersSetting).
+    /// Show ▸ Folders (the one folder view, 2026-11-17; footage folders
+    /// since 2026-10-16). Off (the default) = the linear table exactly as
+    /// before; on = the folder view (CatalogContent+FolderTable.swift).
+    /// The parent passes CatalogShowFilterStore.foldersOn — a value here.
     var showFootageFolders: Bool = false
-    /// Show ▸ Folders Only (2026-10-19): with the folder view on, only the
-    /// folders and their members — no loose files. The parent keeps it
-    /// implying `showFootageFolders` (CatalogFoldersOnlyRule).
-    var showFoldersOnly: Bool = false
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -601,18 +592,14 @@ struct CatalogContent: View {
     /// expression too many for the CI toolchain's type-checker — same
     /// class as the CatalogView and FamilyTreeView splits. Pure extraction.
     /// The empty table's one line (CatalogEmptyNote): the search's "No
-    /// matches", or Folders Only's "No folders match". O(1) reads.
+    /// matches", the filters', or the person's. O(1) reads.
     @ViewBuilder
     private var catalogEmptyNote: some View {
         switch CatalogEmptyNote.pick(rowsEmpty: tableData.isEmpty, searching: !searchText.isEmpty,
-                                     foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil
-                                         && tableState.foldersOnlyFindsNothing,
                                      personChosen: personFilter != nil,
                                      // A focus set ignores the filters: they are not why it is empty.
                                      filtersActive: !viewFilters.isEmpty && filterByIDs.isEmpty) {
         case .noMatches: noMatchesOverlay
-        case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels, personName: personFilter?.name,
-                                              foldersExist: !model.footageFolders.index.folders.isEmpty)
         case .noPerson: personEmptyNote
         case .filtered: filteredEmptyNote
         case .none: EmptyView()

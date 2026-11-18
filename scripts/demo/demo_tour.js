@@ -129,15 +129,15 @@ function isChecked(item) { const m = attr(item, 'AXMenuItemMarkChar'); return !!
 function closeMenu() { SE.keyCode(53); rearm(); }  // Escape
 
 function folders() {
-    say('folders', 'The catalog as folders: events and copies, grouped');
-    const item = showMenuItem('Events & Copies as Folders');
+    say('folders', 'The catalog as folders: your folders, the machine\'s era guesses in grey, then every loose file');
+    const item = showMenuItem('Folders');
     if (!item) { console.log('  (skipped: Show menu not found)'); closeMenu(); return; }
     const wasOn = isChecked(item);
     if (wasOn) { closeMenu(); wait(PACE * 1.5); return; }
     item.actions['AXPress'].perform(); rearm();
     try { wait(PACE * 1.5); }
     finally {
-        const again = showMenuItem('Events & Copies as Folders');   // put it back off
+        const again = showMenuItem('Folders');   // put it back off
         if (again && isChecked(again)) { again.actions['AXPress'].perform(); rearm(); }
         else closeMenu();
     }

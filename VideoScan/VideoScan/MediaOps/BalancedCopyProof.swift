@@ -42,14 +42,23 @@
 //   4. NOTHING ELSE CHANGES THE DISPLAY. Per picture stream the header
 //      states the same size, pixel format, aspect ratios, field order,
 //      colour range/space/transfer/primaries and stream side data (display
-//      matrix, …); the sound has one PCM track of the same format laid out
+//      matrix, …) — one exception, named and not refused: a YUV picture's
+//      colour range stated `tv` by one file and left unstated by the other
+//      is displayed limited-range by FFmpeg either way; the sound has one PCM track of the same format laid out
 //      plainly as left + right; and no decoded track that plays by default
 //      in the original has lost that flag (a QuickTime track switched off).
 //   5. BOTH READS WERE WHOLE. ffmpeg exited 0 with nothing at error level,
 //      ended with its own clean-exit line, read of every decoded stream the
 //      packets the packet pass listed, decoded with zero errors, muxed as
 //      many frames as were folded here, and the decoded length of each
-//      stream is the length its header states (where it states one).
+//      stream is the length its header states (where it states one: raw
+//      DV states none — ffprobe's figure for it is an estimate from the
+//      bit rate, kept only to budget the decode's time). The ORIGINAL's
+//      decode may be LONGER than stated by less than one frame or one
+//      sound packet — an edit list that ends inside the last frame, which
+//      FFmpeg plays whole; that is named for the original, and the copy
+//      is held to all FFmpeg played. The copy's own read gets no such
+//      allowance.
 //   6. BOTH FILES STAYED PUT (resolved paths, identity stamps, no
 //      cancellation — unchanged from the first design).
 //
@@ -84,6 +93,22 @@
 // packet-identical in the copy. The dropped track is then a named
 // difference held by the original.
 //
+// RAW DV SOUND (GH #482, measured 2026-11-18): raw DV holds its sound inside
+// each picture frame, with no timestamps of its own, and a camcorder's
+// sample clock is not locked to its picture. FFmpeg stamps that sound by
+// the running sample count and RE-ANCHORS it to the picture whenever the two
+// are a whole frame apart, so a real tape's sound decodes in several runs
+// that overlap (clock fast) or leave a gap (slow) — one in 27 minutes on
+// the tape that showed it (inferred: 1,602 samples, a frame's worth, lay
+// outside its copy's edit list). The job's QuickTime copy plays the same
+// samples back to back. Rule 2 holds the copy to the original's RUNS,
+// so such a pair is NOT THE SAME; `NotProven.soundReanchored` says exactly
+// that, with the counts. The rule is not relaxed here: whether a sound that
+// ends some tens of milliseconds later against the picture may stand for
+// the original is the owner's to rule. A re-anchor that steps back past the
+// start of the packet before it cannot be written as a timeline at all
+// (ffmpeg: "Non-monotonic DTS"): COULD NOT CHECK.
+//
 // What it does NOT prove (said plainly so no caller assumes it):
 //   - anything a player other than FFmpeg does with fields FFmpeg ignores
 //     (a QuickTime `mvhd`/`mdhd` duration that disagrees with the sample
@@ -101,7 +126,8 @@
 //
 // Shape: the facts and outcomes (here); pure `decide` over measured `Facts`
 // (BalancedCopyProofRules.swift); one `@concurrent` `measure` that gathers
-// them (BalancedCopyProofMeasure.swift) through ProcessRunner / ToolLocator.
+// them (BalancedCopyProofMeasure.swift, and the decode pass's log read back
+// in BalancedCopyProofReadLog.swift) through ProcessRunner / ToolLocator.
 // (An `enum` with no cases is Swift's namespace ≈ a C++ struct of statics.)
 //
 // Cost: FIVE whole-file reads — the levels pass over the original
@@ -169,24 +195,66 @@ enum BalancedCopyProof {
         /// The stream's `side_data_list` as canonical JSON (keys sorted); "" = none.
         var sideData: String = ""
 
+        /// The colour range FFmpeg DISPLAYS this picture in: the one the
+        /// header states, or — when it states none — limited range ("tv")
+        /// for a YUV pixel format. nil = unstated in a format whose default
+        /// this proof does not vouch for (the full-range `yuvj…` formats,
+        /// RGB, grey, palette).
+        var displayedColorRange: String? {
+            if !colorRange.isEmpty { return colorRange }
+            return pixelFormat.hasPrefix("yuv") && !pixelFormat.hasPrefix("yuvj") ? "tv" : nil
+        }
+
+        /// The colour range is stated by ONE of the two headers, and the
+        /// other's picture is displayed in that range anyway — in practice
+        /// `tv` against unstated, for YUV. A named difference, not a display
+        /// difference. (Found on real media 2026-11-18: an Avid `ACLR` atom
+        /// on DV in QuickTime; FFmpeg's QuickTime muxer cannot write a range
+        /// for DV, so the job's copy states none.) Full range against
+        /// anything else is never this.
+        func statesRangeOnOneSideOnly(against copy: PictureConfiguration) -> Bool {
+            (colorRange.isEmpty != copy.colorRange.isEmpty)
+                && displayedColorRange != nil && displayedColorRange == copy.displayedColorRange
+        }
+
         /// A picture stream whose size and pixel format ffprobe could read.
         var describesAPicture: Bool { (width ?? 0) > 0 && (height ?? 0) > 0 && !pixelFormat.isEmpty }
 
-        /// The first DISPLAY field `copy` states differently ("width 320 →
-        /// 304"). Extradata is not one: it is the decoder's, and the decoded
-        /// frames answer for it.
-        func displayDifference(from copy: PictureConfiguration) -> String? {
+        /// One DISPLAY field the two headers state differently ("" = unstated).
+        struct FieldDifference: Sendable, Equatable {
+            var name: String
+            var original: String
+            var copy: String
+        }
+
+        /// Every DISPLAY field `copy` states differently, in the order they
+        /// are checked. Extradata is not one: it is the decoder's, and the
+        /// decoded frames answer for it.
+        func displayDifferences(from copy: PictureConfiguration) -> [FieldDifference] {
             func text(_ n: Int?) -> String { n.map(String.init) ?? "" }
-            let fields: [(name: String, original: String, copy: String)] = [
-                ("width", text(width), text(copy.width)), ("height", text(height), text(copy.height)),
-                ("pixel format", pixelFormat, copy.pixelFormat),
-                ("sample aspect ratio", sampleAspect, copy.sampleAspect),
-                ("display aspect ratio", displayAspect, copy.displayAspect),
-                ("field order", fieldOrder, copy.fieldOrder), ("colour range", colorRange, copy.colorRange),
-                ("colour space", colorSpace, copy.colorSpace), ("colour transfer", colorTransfer, copy.colorTransfer),
-                ("colour primaries", colorPrimaries, copy.colorPrimaries), ("side data", sideData, copy.sideData)
+            let fields: [FieldDifference] = [
+                .init(name: "width", original: text(width), copy: text(copy.width)),
+                .init(name: "height", original: text(height), copy: text(copy.height)),
+                .init(name: "pixel format", original: pixelFormat, copy: copy.pixelFormat),
+                .init(name: "sample aspect ratio", original: sampleAspect, copy: copy.sampleAspect),
+                .init(name: "display aspect ratio", original: displayAspect, copy: copy.displayAspect),
+                .init(name: "field order", original: fieldOrder, copy: copy.fieldOrder),
+                .init(name: "colour range", original: colorRange, copy: copy.colorRange),
+                .init(name: "colour space", original: colorSpace, copy: copy.colorSpace),
+                .init(name: "colour transfer", original: colorTransfer, copy: copy.colorTransfer),
+                .init(name: "colour primaries", original: colorPrimaries, copy: copy.colorPrimaries),
+                .init(name: "side data", original: sideData, copy: copy.sideData)
             ]
-            guard let field = fields.first(where: { $0.original != $0.copy }) else { return nil }
+            return fields.filter { $0.original != $0.copy }
+        }
+
+        /// The first field by which `copy` would be DISPLAYED differently
+        /// ("width 320 → 304") — every field of `displayDifferences` but a
+        /// colour range stated on one side only (`statesRangeOnOneSideOnly`).
+        func displayDifference(from copy: PictureConfiguration) -> String? {
+            let sameRange = statesRangeOnOneSideOnly(against: copy)
+            guard let field = displayDifferences(from: copy).first(where: { !(sameRange && $0.name == "colour range") })
+            else { return nil }
             func shown(_ value: String) -> String {
                 value.isEmpty ? "none" : (value.count > 96 ? String(value.prefix(96)) + "…" : value)
             }
@@ -288,6 +356,12 @@ enum BalancedCopyProof {
         var tags: [String: String] = [:]
         /// How many chapter marks it has.
         var chapters = 0
+        /// Raw DV only: the length ffprobe ESTIMATES from the bit rate (the
+        /// file states none). Used to budget the decode's time, never to
+        /// judge a read: measured 2026-11-18, the estimate is exact for a
+        /// 3-minute file, one tick of 1/60000 s short at 19 minutes and two
+        /// at an hour. nil = the container states its lengths.
+        var estimatedSeconds: Double?
 
         var containerWords: Set<String> { Set(container.split(separator: ",").map { $0.lowercased() }) }
         /// The QuickTime family: the one whose edit lists can hide stored media.
@@ -341,7 +415,19 @@ enum BalancedCopyProof {
         /// Samples behind each of those digests.
         var channelSamples: [Int64] = []
 
-        var soundSamples: Int64? { soundSegments.map { $0.reduce(0) { $0 + $1.samples } } }
+        /// Samples on the timeline. nil = not read, or a total that does not
+        /// fit in 64 bits (no file has one; a count that cannot be held is no
+        /// count — and adding past Int64.max would TRAP, GH #483 item 3).
+        var soundSamples: Int64? {
+            guard let soundSegments else { return nil }
+            var total: Int64 = 0
+            for run in soundSegments {
+                let (sum, overflow) = total.addingReportingOverflow(run.samples)
+                guard !overflow else { return nil }
+                total = sum
+            }
+            return total
+        }
     }
 
     /// Everything `decide` looks at. Built by `measure`; built by hand in
@@ -378,7 +464,9 @@ enum BalancedCopyProof {
         var kind: Kind
         /// The file that HOLDS the thing — what a Trash offer must name
         /// before that file goes. It says nothing about the other file: the
-        /// thing was not compared. nil = not a holding at all: the two
+        /// thing was not compared (one exception says so in its own words:
+        /// a colour range tag the other file does not state, compared and
+        /// found to display the same). nil = not a holding at all: the two
         /// files store the same pictures differently (container, encoding,
         /// decoder configuration).
         var heldBy: Holder?
@@ -460,6 +548,12 @@ enum BalancedCopyProof {
         case pictureDiffers(originalIndex: Int, String)
         /// The sound is not placed on the timeline as the original's is.
         case soundPlacementDiffers(String)
+        /// The same placement difference, in the one shape a raw DV tape
+        /// gives it (GH #482): every sample is the original's, in order, but
+        /// FFmpeg reads the ORIGINAL's sound as re-anchored to the picture
+        /// `times` times — runs that overlap (the tape's sample clock ran
+        /// fast) or leave a gap (slow) — and the copy plays back to back.
+        case soundReanchored(times: Int, overlapSamples: Int64, gapSamples: Int64, sampleRateHz: Int)
         /// The channel the copy leaves behind is not silent.
         case discardedChannelNotSilent(channel: Int, peakDBFS: Double)
         /// A sound track the copy leaves behind is not silent, or the DV
@@ -473,7 +567,7 @@ enum BalancedCopyProof {
         /// The plain sentence a caller may show or log.
         var message: String { detail + " — the original is kept" }
 
-        private var detail: String { soundDetail ?? pictureDetail }
+        private var detail: String { placementDetail ?? soundDetail ?? pictureDetail }
 
         /// The reasons that are about the sound. nil = it is about the picture or the tracks.
         private var soundDetail: String? {
@@ -491,8 +585,6 @@ enum BalancedCopyProof {
             case .channelLayoutNotStereo(let file, let layout):
                 return "\(file)'s channels are not laid out as plain left and right "
                     + "(\(layout.isEmpty ? "no layout stated" : layout))"
-            case .soundPlacementDiffers(let what):
-                return "the balanced copy's sound does not play at the original's times (\(what))"
             case .discardedChannelNotSilent(_, let peak):
                 return "the original's other channel is not silent (peak \(BalancedCopyProof.level(peak)))"
             case .spareSoundTrack(let what):
@@ -503,7 +595,24 @@ enum BalancedCopyProof {
             case .soundDiffers(let original, let balanced):
                 return "the balanced copy's sound is not the original's live channel, sample for sample "
                     + "(sha256 \(BalancedCopyProof.short(original)) ≠ \(BalancedCopyProof.short(balanced)))"
-            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers:
+            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers, .soundPlacementDiffers, .soundReanchored:
+                return nil
+            }
+        }
+
+        /// The reasons that are about WHERE the sound sits on the timeline.
+        private var placementDetail: String? {
+            switch self {
+            case .soundPlacementDiffers(let what):
+                return "the balanced copy's sound does not play at the original's times (\(what))"
+            case .soundReanchored(let times, let overlap, let gap, let rate):
+                let net = Double(overlap) - Double(gap)
+                let ends = net == 0 ? "at the same time"
+                    : String(format: "%.1f ms ", abs(net) / Double(max(rate, 1)) * 1000) + (net > 0 ? "later" : "earlier")
+                return "the original is raw DV and its sound is re-anchored to the picture \(times) time\(times == 1 ? "" : "s") "
+                    + "as FFmpeg reads it (\(overlap) samples overlap, \(gap) samples of gap); the balanced copy plays the "
+                    + "same samples back to back, so its sound ends \(ends) against the picture"
+            default:
                 return nil
             }
         }

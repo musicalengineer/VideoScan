@@ -15,47 +15,14 @@ enum FootageFolderWords {
 
     // MARK: The Show option
 
-    /// Show ▸ "Events & Copies as Folders".
-    static let showOptionTitle = "Events & Copies as Folders"
-    static let showOptionHelpOn = "Confirmed events are folders, like the Finder's list view: click a folder's triangle to see its footage in place, or double-click it to open it, with the copies and versions under each recording. Click to go back to the plain list."
-    static let showOptionHelpOff = "Click to see each confirmed event as a folder (Finder list view): a folder's triangle shows its footage in place; double-click opens it, with the copies and versions under each recording."
-    /// The pill in the Showing box while the option is on.
-    static let showingPill = "As folders"
-    /// The UserDefaults key the option is remembered under.
-    static let settingKey = "catalog.footageFolders"
-
-    /// Show ▸ "Folders Only" (Rick 2026-10-19): the folder view with the
-    /// loose files left out. Turning it on turns the folder view on.
-    static let foldersOnlyTitle = "Folders Only"
-    static let foldersOnlySymbol = "rectangle.stack"
-    static let foldersOnlySymbolOn = "rectangle.stack.fill"
-    static let foldersOnlyHelp = "Show only your folders and what's in them — files in no folder are hidden. Click again to show everything."
-    /// The pill in the Showing box (it stands in for "As folders").
-    static let foldersOnlyPill = "Folders only"
-    /// The folder view's one pill: "Folders only" stands in for "As folders".
-    static func showingPill(foldersOnly: Bool) -> String {
-        foldersOnly ? foldersOnlyPill : showingPill
-    }
-    /// Its own UserDefaults key, read as strictly as the folder view's.
-    static let foldersOnlySettingKey = "catalog.foldersOnly"
-    /// The table's line when Folders Only is on and no folder matches.
-    static let foldersOnlyEmpty = "No folders match — make one with right-click \u{25B8} New Folder with Selection"
-    /// The same line when a Volumes-pane selection is why nothing shows:
-    /// folders exist, but none has a file on the selected volume(s). No
-    /// selection, or no folders at all → today's line.
-    static func foldersOnlyEmpty(volumeLabels: [String], personName: String? = nil, foldersExist: Bool) -> String {
-        // A chosen person (the Catalog's Person picker, 2026-10-24) is named
-        // first: it is the narrower of the two filters.
-        if foldersExist, let personName {
-            let scope = volumeLabels.isEmpty ? "" : " on " + (volumeLabels.count == 1
-                ? CatalogShowingSummary.volumePill(labels: volumeLabels)?.text ?? "" : "the selected volumes")
-            return "No folders with \(personName)\(scope) match — choose Everyone in the Person menu to see the whole catalog"
-        }
-        guard foldersExist, !volumeLabels.isEmpty else { return foldersOnlyEmpty }
-        let which = volumeLabels.count == 1 ? CatalogShowingSummary.volumePill(labels: volumeLabels)?.text ?? ""
-                                            : "the selected volumes"
-        return "No folders on \(which) match — click the volume pill in the Showing line to see the whole catalog"
-    }
+    /// Show ▸ "Folders" — the ONE folder view (DECISIONS 2026-11-17; it
+    /// replaced Events & Copies as Folders, Folders Only and Folders by
+    /// Machine Estimate). The Showing box says the same word.
+    static let showOptionTitle = "Folders"
+    static let showOptionHelpOn = "Showing every folder first — yours in colour, the machine's era guesses in grey — then every file in no folder. A folder's triangle shows its files; drag a file onto one of your folders (or right-click \u{25B8} Add to Folder) to file it. Click to go back to the plain list."
+    static let showOptionHelpOff = "Click to see every folder — yours and the machine's era guesses in grey — above the files in no folder, so you can drag files into your folders."
+    /// The pill in the Showing box while the view is on: the menu's word.
+    static let showingPill = showOptionTitle
 
     // MARK: Glyphs (one per relation, as the design names them)
 
@@ -158,8 +125,8 @@ enum FootageFolderWords {
     }
     static func copiesScopeTitle(_ filename: String) -> String { "Copies & related: \(filename)" }
 
-    static let legend = "\(madeFromGlyph) made from it\u{2003}\(copyGlyph) copy\u{2003}\(clipGlyph) clip of it\u{2003}\(sameEventGlyph) same event"
-    static let legendHelp = "How a row relates to the recording above it. A folder's triangle (or \u{2192} / \u{2190}) shows or hides its footage in place, \u{2325}-click for every folder; double-click a folder (or \u{2318}\u{2193}) to open it; \u{2318}\u{2191}, Back or Esc returns to the catalog."
+    static let legend = "\(madeFromGlyph) made from it\u{2003}\(copyGlyph) copy\u{2003}\(clipGlyph) clip of it\u{2003}\(sameEventGlyph) same event\u{2003}grey folder: the machine's era guess, not confirmed"
+    static let legendHelp = "How a row relates to the recording above it. A folder's triangle (or \u{2192} / \u{2190}) shows or hides its footage in place, \u{2325}-click for every folder; double-click a folder (or \u{2318}\u{2193}) to open it; \u{2318}\u{2191}, Back or Esc returns to the catalog.\n\n" + MachineEstimateWords.legend
 
     // MARK: Right-click
 
@@ -233,8 +200,16 @@ enum FootageFolderWords {
     /// Any other folder: a neutral grey that still reads on the dark theme.
     static let otherFolderTint = Color(white: 0.62)
 
-    /// Event blue, person green, other grey.
-    static func folderTint(for kind: FolderKind) -> Color {
+    /// The machine's era-guess folder (2026-11-17, "Rick's (blue) and the
+    /// machine's (grey)"): a darker grey than Rick's "other" folders and its
+    /// own symbol, so a guess is never mistaken for a folder he made.
+    static let machineFolderTint = Color(white: 0.48)
+    static let machineFolderSymbol = "questionmark.folder.fill"
+
+    /// Event blue, person green, other grey — Rick's own folders; a folder
+    /// the machine guessed is always the machine grey.
+    static func folderTint(for kind: FolderKind, byMachine: Bool = false) -> Color {
+        if byMachine { return machineFolderTint }
         switch kind {
         case .event: return folderTint
         case .person: return personFolderTint
