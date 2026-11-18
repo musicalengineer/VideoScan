@@ -9455,7 +9455,10 @@
       "tests": [
         "avidColourRangeAtom",
         "colourRangeStatedOnOneSide",
+        "editListEndingInsideTheLastFrame",
         "ffprobeEstimatesRawDVLength",
+        "overReadDecisions",
+        "overReadOfTheOriginal",
         "rawDVLengthsAreEstimates"
       ]
     },
@@ -40677,7 +40680,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 785,
+      "expected_floor": 788,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

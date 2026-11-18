@@ -26,6 +26,22 @@
 // round, YUV formats only) is a NAMED difference held by the file that
 // states it; `pc` against anything else is still refused.
 
+//
+// FINDING 3 — the same DV-in-QuickTime file, once finding 2 let it through:
+// "the original was not read to the end". Evidence: every packet read, no
+// error, 108,013 frames; the picture decoded to 3604.037371 s and the header
+// states 3604.036703 — the decode is 668 µs LONGER, two ticks of 1/2997 s,
+// a fiftieth of one frame; the sound decoded 34 samples MORE than stated.
+// The file's edit list ends just inside its last frame, and FFmpeg plays a
+// frame it has begun (and the sound packet with it) whole. A decode that is
+// LONGER than the header states is not a short read. For the ORIGINAL only,
+// a decode longer than stated by less than one frame (picture) or one
+// packet (sound) is a whole read, and the header that ends early is NAMED
+// for the original; the copy is then held to everything FFmpeg played of
+// the original. The COPY's read is judged as strictly as before: its header
+// is this app's own, and a copy that plays past — or short of — what it
+// states is not vouched for.
+
 import Foundation
 import Testing
 @testable import VideoScan
@@ -60,6 +76,25 @@ enum QuickTimePatch {
         guard let found = atoms(data, from: parent.offset + header, to: parent.offset + parent.size).first(where: { $0.type == type })
         else { throw NotThatFile() }
         return found
+    }
+
+    /// `movie` with every track's (single, version 0) edit shortened by
+    /// `ticks` of the movie's time scale: an edit list that ends inside the
+    /// last frame, as an Avid export's did.
+    static func shorteningEdits(by ticks: Int, in movie: Data) throws -> Data {
+        var data = movie
+        guard let moov = atoms(data, from: 0, to: data.count).first(where: { $0.type == "moov" }) else { throw NotThatFile() }
+        var edited = 0
+        for trak in atoms(data, from: moov.offset + 8, to: moov.offset + moov.size) where trak.type == "trak" {
+            guard let edts = try? child("edts", of: trak, in: data), let elst = try? child("elst", of: edts, in: data),
+                  data[elst.offset + 8] == 0, uint32(data, at: elst.offset + 12) == 1 else { continue }
+            let duration = uint32(data, at: elst.offset + 16)
+            guard duration > ticks else { throw NotThatFile() }
+            data.replaceSubrange(elst.offset + 16..<elst.offset + 20, with: bytes(duration - ticks))
+            edited += 1
+        }
+        guard edited > 0 else { throw NotThatFile() }
+        return data
     }
 
     /// `movie` with an Avid colour-range atom (`ACLR`; 1 = video range,
@@ -291,5 +326,122 @@ struct BalancedCopyProofCorpusFindingsTests {
         } else {
             #expect(outcome == .notProven(.pictureConfigurationDiffers("picture stream 0: colour range pc → none")), "\(outcome)")
         }
+    }
+
+    // MARK: Finding 3 — the original's header ends inside its last frame
+
+    @Test("FINDING 3 (rule): a decode LONGER than the header states, by less than one frame or one packet, is a whole read for the ORIGINAL — and never for the copy; a short read, or one that runs a whole frame over, is refused for both")
+    func overReadOfTheOriginal() throws {
+        // The corpus file's own numbers: 108,013 frames of 100/2997 s; 168,940 sound packets.
+        var layout = try #require(Proof.layout(fromProbeJSON: Data("""
+        {"streams":[
+          {"index":0,"codec_type":"audio","codec_name":"pcm_s16be","sample_fmt":"s16","sample_rate":"48000","channels":2,
+           "channel_layout":"stereo","time_base":"1/48000","duration":"3604.036667"},
+          {"index":1,"codec_type":"video","codec_name":"dvvideo","time_base":"1/2997","duration":"3604.036703",
+           "width":720,"height":480,"pix_fmt":"yuv411p"}],
+         "format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2"}}
+        """.utf8)))
+        layout.carried[0].packets = 108_013
+        layout.sound[0].packets = 168_940
+        let kept = layout.sound[0]
+        func read(pictureEnd: Double = 3604.037371, samples: Int64 = 172_993_794) -> Proof.ReadReport {
+            var read = Proof.ReadReport()
+            read.streams = [0: Proof.StreamRead(packets: 168_940, decodeErrors: 0), 1: Proof.StreamRead(packets: 108_013, decodeErrors: 0)]
+            (read.muxed, read.folded) = ([0: 108_013, 1: 168_940], [0: 108_013, 1: 168_940])
+            read.pictures[1] = Proof.PictureRead(frames: 108_013, sha256: Table.framesHash, firstSeconds: 0, endSeconds: pictureEnd)
+            read.soundSegments = [Proof.SoundSegment(start: 0, samples: samples)]
+            return read
+        }
+        func shortfall(_ read: Proof.ReadReport, original: Bool) -> Proof.ReadShortfall? {
+            Proof.readShortfall(layout, read: read, kept: kept, overReadIsWhole: original)
+        }
+        // As the corpus run found it: the copy's rule (and the old rule for both) refuses the picture, 668 µs over…
+        #expect(shortfall(read(), original: false) == .pictureLength(stream: 1, decodedSeconds: 3604.037371, statedSeconds: 3604.036703))
+        // …and the sound, 34 samples over, once the picture is exact.
+        #expect(shortfall(read(pictureEnd: 3604.036703), original: false)
+                == .soundLength(decodedSamples: 172_993_794, statedSeconds: 3604.036667))
+        // For the ORIGINAL both are whole reads.
+        #expect(shortfall(read(), original: true) == nil)
+        // One whole frame over (33.4 ms), or one whole sound packet (1,024 samples): not this — refused.
+        #expect(shortfall(read(pictureEnd: 3604.036703 + 0.0334), original: true) != nil)
+        #expect(shortfall(read(samples: 172_993_760 + 1100), original: true)
+                == .soundLength(decodedSamples: 172_994_860, statedSeconds: 3604.036667))
+        // SHORT is short, whoever's file it is; and a length that is not a number is never whole.
+        #expect(shortfall(read(pictureEnd: 3604.036), original: true) != nil)
+        #expect(shortfall(read(samples: 172_993_700), original: true) != nil)
+        #expect(shortfall(read(pictureEnd: .nan), original: true) != nil)
+        #expect(shortfall(read(pictureEnd: .infinity), original: true) != nil)
+        // Inside the ordinary slack nothing changes for either file.
+        #expect(shortfall(read(pictureEnd: 3604.036703, samples: 172_993_760), original: false) == nil)
+        #expect(shortfall(read(pictureEnd: 3604.036703, samples: 172_993_760), original: true) == nil)
+    }
+
+    @Test("FINDING 3 (decision table): the original's early-ending header is NAMED for the original and the pair is the same content; the same on the COPY is could not check")
+    func overReadDecisions() {
+        // 50 frames of 40 ms, 94 sound packets of ~1,021 samples (the table's good pair).
+        let original = Proof.decide(Table.poisoned {
+            $0.original.carried[0].statedSeconds = 1.998
+            $0.original.sound[0].statedSeconds = 2 - 100.0 / 48_000
+        })
+        #expect(original.differences == [
+            Proof.Difference(kind: .playback, heldBy: .original,
+                             what: "a header that ends 2.000 ms before the end of picture stream 0 as FFmpeg plays it (the last frame is played whole)"),
+            Proof.Difference(kind: .playback, heldBy: .original,
+                             what: "a header that ends 100 samples before the end of the sound as FFmpeg plays it (the last packet is played whole)")
+        ], "\(original)")
+        #expect(original.playsTheSame && !original.isProven)
+        // The copy's own header: strict, as before.
+        #expect(Proof.decide(Table.poisoned { $0.balanced.carried[0].statedSeconds = 1.998 })
+                == .couldNotCheck("the balanced copy was not read to the end (picture stream 0: 2.000 s decoded, 1.998 s stated)"))
+        #expect(Proof.decide(Table.poisoned { $0.balanced.sound[0].statedSeconds = 2 - 100.0 / 48_000 })
+                == .couldNotCheck("the balanced copy was not read to the end (96000 sound samples decoded, 1.998 s stated)"))
+        // The original, a whole frame over or short: could not check.
+        #expect(!Proof.decide(Table.poisoned { $0.original.carried[0].statedSeconds = 1.96 }).playsTheSame)
+        #expect(!Proof.decide(Table.poisoned { $0.original.carried[0].statedSeconds = 2.002 }).playsTheSame)
+        #expect(!Proof.decide(Table.poisoned { $0.original.sound[0].statedSeconds = 2 - 1100.0 / 48_000 }).playsTheSame)
+    }
+
+    @Test("FINDING 3 (media): a QuickTime original whose edit list ends inside its last frame, balanced by the job's own render, is the SAME CONTENT with the early end named; a COPY with such an edit list is could not check",
+          .timeLimit(.minutes(3)))
+    func editListEndingInsideTheLastFrame() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("early_end")
+        defer { try? fm.removeItem(at: dir) }
+        let whole = try Media.original(in: dir, .movProResPCM16)
+        // 100 ticks of the movie's 1/48000 s: 2.08 ms of a 40 ms frame, 100 samples of a 1,024-sample packet.
+        let original = dir.appendingPathComponent("test_proof_early_end.mov").path
+        try QuickTimePatch.shorteningEdits(by: 100, in: Data(contentsOf: URL(fileURLWithPath: whole)))
+            .write(to: URL(fileURLWithPath: original))
+        let stated = try await layout(of: original)
+        #expect(stated.sound.first?.statedSeconds == 1.997917, "the fixture's sound must state 100 samples less: \(String(describing: stated.sound.first?.statedSeconds))")
+
+        let balanced = try await Media.balance(original)
+        let measured = await Proof.measurement(original: original, balanced: balanced)
+        guard case .sameContent(let evidence, let differs) = measured.outcome else {
+            Issue.record("expected the same content with the early end named, got \(measured.outcome)")
+            return
+        }
+        // FFmpeg played all of it — the last frame and its sound whole — and the copy holds all of that.
+        #expect(evidence.soundSamples == 96_000 && evidence.streams.first?.frames == 50)
+        #expect(differs.contains(Proof.Difference(
+            kind: .playback, heldBy: .original,
+            what: "a header that ends 100 samples before the end of the sound as FFmpeg plays it (the last packet is played whole)")),
+                "\(differs)")
+        // (1.997917 s lands on a tick of the picture's 1/12800 s time base 2.109 ms before its end.)
+        #expect(differs.contains(Proof.Difference(
+            kind: .playback, heldBy: .original,
+            what: "a header that ends 2.109 ms before the end of picture stream 0 as FFmpeg plays it (the last frame is played whole)")),
+                "\(differs)")
+
+        // The other way round — the whole file as the original, the early-ending one as its "copy": not vouched for.
+        let rebalanced = try await Media.balance(whole)
+        let early = dir.appendingPathComponent("early_balanced.mov").path
+        try QuickTimePatch.shorteningEdits(by: 100, in: Data(contentsOf: URL(fileURLWithPath: rebalanced)))
+            .write(to: URL(fileURLWithPath: early))
+        guard case .couldNotCheck(let reason) = await Proof.measure(original: whole, balanced: early) else {
+            Issue.record("a copy whose header ends early must be could not check")
+            return
+        }
+        #expect(reason.hasPrefix("the balanced copy was not read to the end ("), "\(reason)")
     }
 }

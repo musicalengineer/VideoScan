@@ -18,8 +18,8 @@
 //            and sample counts (listed, read, decoded, stated, stored), the
 //            sound's runs on the timeline, and every display field the two
 //            headers state differently. Needs a ref whose engine has
-//            `measurement`, `estimatedSeconds` and `statesRangeOnOneSideOnly`
-//            (2026-11-18); an older ref does not build.
+//            `measurement`, `estimatedSeconds`, `statesRangeOnOneSideOnly`
+//            and `earlyEndingHeader` (2026-11-18); an older ref does not build.
 // The balanced copy is removed from work/ as soon as its proof is recorded,
 // so at most one copy is on disk (worst case: the size of the largest
 // one-sided corpus file plus its PCM sound).
@@ -166,6 +166,10 @@ enum CorpusProofEvidence {
         default: break
         }
         if let estimate = facts.original.estimatedSeconds { out.append("o_estimated_us:" + micros(estimate)) }
+        if let kept, facts.originalRead != nil {
+            let early = Proof.earlyEndingHeader(of: facts.original, read: facts.originalRead, kept: kept).count
+            if early > 0 { out.append("o_header_ends_early:\(early)") }
+        }
         return out
     }
 
@@ -230,7 +234,8 @@ enum CorpusProofEvidence {
             ("original", facts.original, facts.originalRead, kept, "the original"),
             ("balanced_copy", facts.balanced, facts.balancedRead, copySound, "the balanced copy")]
         for (word, layout, read, sound, name) in files {
-            guard let shortfall = Proof.readShortfall(layout, read: read, kept: sound),
+            // The engine's own asymmetry: the original's decode may run under one frame or packet past its header.
+            guard let shortfall = Proof.readShortfall(layout, read: read, kept: sound, overReadIsWhole: word == "original"),
                   shortfall.sentence(called: name) == reason else { continue }
             var out = ["variant:" + CorpusWords.caseName(shortfall), "variant_file:" + word]
             switch shortfall {

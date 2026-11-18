@@ -53,7 +53,12 @@
 //      many frames as were folded here, and the decoded length of each
 //      stream is the length its header states (where it states one: raw
 //      DV states none — ffprobe's figure for it is an estimate from the
-//      bit rate, kept only to budget the decode's time).
+//      bit rate, kept only to budget the decode's time). The ORIGINAL's
+//      decode may be LONGER than stated by less than one frame or one
+//      sound packet — an edit list that ends inside the last frame, which
+//      FFmpeg plays whole; that is named for the original, and the copy
+//      is held to all FFmpeg played. The copy's own read gets no such
+//      allowance.
 //   6. BOTH FILES STAYED PUT (resolved paths, identity stamps, no
 //      cancellation — unchanged from the first design).
 //
