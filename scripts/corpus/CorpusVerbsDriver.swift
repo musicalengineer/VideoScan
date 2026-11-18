@@ -55,12 +55,14 @@ import VideoScanCore
 @testable import VideoScan
 
 @MainActor
-private final class VerbsStage {
+final class VerbsStage {
     let run: CorpusRun
     let items: [CorpusConfig.Item]
     let vol: String
     let scratch: String
     var started = Date()
+    /// Files the engines reported moving to the Trash (compared with what is found there).
+    var trashedByEngines = 0
 
     init(run: CorpusRun, vol: String, scratch: String) {
         self.run = run
@@ -140,159 +142,202 @@ final class CorpusVerbsDriver: XCTestCase {
         // The engines' Trash under a test host is a folder in TMPDIR: it must be this run's.
         guard TestEnvironment.isTestHost, CorpusRun.isUnder(NSTemporaryDirectory(), config.work),
               CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work) else { return refuse("trash_not_in_the_run") }
-        guard CorpusRun.isUnder(archive, workRoot), CorpusRun.isUnder(archive, config.work) else {
+        guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, config.work) else {
             return refuse("archive_root_outside_corpus_work")
         }
 
         let stage = VerbsStage(run: run, vol: vol, scratch: scratch)
         for item in stage.items { run.begin(item) }
 
-        // ── The trash and catalog verbs: one model over the clones ──
+        // The trash and catalog verbs: one model over the clones.
         let model = stage.makeModel("verbs")
-        do {
-            model.records = try await run.loadCatalog().records
-        } catch {
-            return XCTFail("corpus harness refused: catalog_would_not_open")
-        }
-        var trashedByEngine = 0
+        guard let records = try? await run.loadCatalog().records else { return XCTFail("corpus harness refused: catalog_would_not_open") }
+        model.records = records
+        await stage.group(model)
+        await stage.trashCopy(model)
+        await stage.dedupe(model)
+        await stage.trashLast(model)
+        await stage.removeThenRescan(model)
 
-        stage.entering("group")
-        await stage.scan(model)
+        // Promote: a second model, a scratch Master Archive.
+        if !stage.items("promote").isEmpty {
+            guard let again = try? await run.loadCatalog().records else { return XCTFail("corpus harness refused: catalog_would_not_open") }
+            let archiveModel = stage.makeModel("promote")
+            archiveModel.records = again
+            await stage.promote(archiveModel, archive: archive)
+        }
+
+        let trashFiles = stage.intact()
+        run.progress.write(["ev": "verbs", "trashFiles": trashFiles, "trashedByEngines": stage.trashedByEngines,
+                            "records": model.records.count])
+        for item in stage.items { run.end(item) }
+        run.done()
+    }
+}
+
+// The steps, each the engine's own entry point followed by one word per file.
+extension VerbsStage {
+
+    /// Update Catalog over the clones, then Find Duplicates.
+    func group(_ model: VideoScanModel) async {
+        entering("group")
+        await scan(model)
         await model.analyzeDuplicates()
-        for item in stage.items("dup") {
-            let rows = stage.paths(item).flatMap { stage.rows(model, at: $0) }
-            let groups = Set(rows.compactMap(\.duplicateGroupID))
-            let word = rows.count < stage.paths(item).count ? "rows:\(rows.count)_of_\(stage.paths(item).count)"
-                : (groups.count == 1 && rows.allSatisfy { $0.duplicateGroupID != nil }) ? "grouped" : "not_grouped"
-            stage.say(item, "group", word, kinds: rows.map { CorpusWords.caseName($0.duplicateDisposition as Any) }.sorted())
+        for item in items("dup") {
+            let found = paths(item).flatMap { rows(model, at: $0) }
+            let groups = Set(found.compactMap(\.duplicateGroupID))
+            let word = found.count < paths(item).count ? "rows:\(found.count)_of_\(paths(item).count)"
+                : (groups.count == 1 && found.allSatisfy { $0.duplicateGroupID != nil }) ? "grouped" : "not_grouped"
+            say(item, "group", word, kinds: found.map { CorpusWords.caseName($0.duplicateDisposition as Any) }.sorted())
         }
+    }
 
-        stage.entering("trash_copy")
-        for item in stage.items("dup") {
-            guard let copy = item.copies?.last, let row = stage.rows(model, at: copy).first(where: stage.isLive) else {
-                stage.say(item, "trash_copy", "no_row")
+    /// Move to Trash as ⌘⌫ does it: the plan, then the routine under `confirmed`. Returns the
+    /// word for the routine's outcome, or the plan's refusal.
+    private func moveToTrash(_ model: VideoScanModel, _ row: VideoRecord, dropWarning: Bool) async -> (warned: Bool, word: String) {
+        let plan = model.catalogTrashPlan(for: [row])
+        if let refused = plan.refused.first { return (false, "refused:" + refused.reason.rawValue) }
+        let warned = plan.onlyCopy.contains(row.id)
+        var confirmed = plan
+        if dropWarning { confirmed.onlyCopy = [] }               // the yes a person gave before it became the only copy
+        let result = await model.trashSelectedRecords([row], confirmed: confirmed)
+        let kind = result.items.first.map { CorpusWords.caseName($0.outcome.kind) } ?? "no_outcome"
+        if kind == "moved" { trashedByEngines += 1 }
+        return (warned, kind)
+    }
+
+    /// Move to Trash on one extra clone while two other copies exist.
+    func trashCopy(_ model: VideoScanModel) async {
+        entering("trash_copy")
+        for item in items("dup") {
+            guard let copy = item.copies?.last, let row = rows(model, at: copy).first(where: isLive) else {
+                say(item, "trash_copy", "no_row")
                 continue
             }
-            let plan = model.catalogTrashPlan(for: [row])
-            if let refused = plan.refused.first {
-                stage.say(item, "trash_copy", "refused:" + refused.reason.rawValue)
-                continue
-            }
-            let warned = plan.onlyCopy.contains(row.id)
-            let result = await model.trashSelectedRecords([row], confirmed: plan)
-            let kind = result.items.first.map { CorpusWords.caseName($0.outcome.kind) } ?? "no_outcome"
-            if kind == "moved" { trashedByEngine += 1 }
-            stage.say(item, "trash_copy", (warned ? "only_copy_warned:" : "another_copy_known:") + kind)
+            let (warned, word) = await moveToTrash(model, row, dropWarning: false)
+            say(item, "trash_copy", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "another_copy_known:") + word)
         }
+    }
 
-        stage.entering("dedupe")
+    /// Delete Duplicates over the clone volume: each clone's plan entry status.
+    func dedupe(_ model: VideoScanModel) async {
+        entering("dedupe")
         let job = DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live,
                                       planRoot: URL(fileURLWithPath: scratch + "/plans", isDirectory: true))
         job.start()
         await job.task?.value
-        for item in stage.items("dup") {
+        for item in items("dup") {
             guard let plan = job.plan else {
-                stage.say(item, "dedupe", "no_plan")
+                say(item, "dedupe", "no_plan")
                 continue
             }
-            let wanted = Set(stage.paths(item).map(CorpusRun.resolved))
+            let wanted = Set(paths(item).map(CorpusRun.resolved))
             let entries = plan.entries.filter { wanted.contains(CorpusRun.resolved($0.path)) }
-            trashedByEngine += entries.filter { $0.status == .trashed }.count
-            stage.say(item, "dedupe", entries.isEmpty ? "no_entry" : VerbsStage.tally(entries.map { CorpusWords.caseName($0.status) }),
-                      kinds: entries.contains { $0.keeperMatchedByStoredFixity == true } ? ["keeper_matched_by_stored_fixity"] : [])
+            trashedByEngines += entries.filter { $0.status == .trashed }.count
+            say(item, "dedupe", entries.isEmpty ? "no_entry" : VerbsStage.tally(entries.map { CorpusWords.caseName($0.status) }),
+                kinds: entries.contains { $0.keeperMatchedByStoredFixity == true } ? ["keeper_matched_by_stored_fixity"] : [])
         }
+    }
 
-        stage.entering("trash_last")
-        for item in stage.items("dup") {
-            let surviving = stage.paths(item).filter { FileManager.default.fileExists(atPath: $0) }
-            guard surviving.count == 1, let row = stage.rows(model, at: surviving[0]).first(where: stage.isLive) else {
-                stage.say(item, "trash_last", "survivors:\(surviving.count)")
+    /// Move to Trash on the last surviving copy, confirmed WITHOUT the only-copy warning.
+    func trashLast(_ model: VideoScanModel) async {
+        entering("trash_last")
+        for item in items("dup") {
+            let surviving = paths(item).filter { FileManager.default.fileExists(atPath: $0) }
+            guard surviving.count == 1, let row = rows(model, at: surviving[0]).first(where: isLive) else {
+                say(item, "trash_last", "survivors:\(surviving.count)")
                 continue
             }
-            let plan = model.catalogTrashPlan(for: [row])
-            if let refused = plan.refused.first {
-                stage.say(item, "trash_last", "refused:" + refused.reason.rawValue)
-                continue
-            }
-            let warned = plan.onlyCopy.contains(row.id)
-            var unwarned = plan                                  // the confirmation a person gave before it became the only copy
-            unwarned.onlyCopy = []
-            let result = await model.trashSelectedRecords([row], confirmed: unwarned)
-            let kind = result.items.first.map { CorpusWords.caseName($0.outcome.kind) } ?? "no_outcome"
-            if kind == "moved" { trashedByEngine += 1 }
-            stage.say(item, "trash_last", (warned ? "only_copy_warned:" : "not_warned_as_only_copy:") + kind)
+            let (warned, word) = await moveToTrash(model, row, dropWarning: true)
+            say(item, "trash_last", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "not_warned_as_only_copy:") + word)
         }
+    }
 
-        stage.entering("purge")
+    /// Remove (purge) and Remove from Catalog (set aside), then a real rescan
+    /// (the owner's doubt of 2026-11-17: does a removed or set-aside file come BACK?).
+    func removeThenRescan(_ model: VideoScanModel) async {
+        entering("purge")
         var before: [String: String] = [:]
-        let purging = stage.items("purge").compactMap { item in stage.rows(model, at: item.path).first(where: stage.isLive).map { (item, $0) } }
+        let purging = items("purge").compactMap { item in rows(model, at: item.path).first(where: isLive).map { (item, $0) } }
         model.purgeRecords(ids: Set(purging.map { $0.1.id }))
         for (item, row) in purging { before[item.sha] = row.isPurged ? "purged" : "not_purged" }
-        let aside = stage.items("set_aside").compactMap { item in stage.rows(model, at: item.path).first(where: stage.isLive).map { (item, $0) } }
+        let aside = items("set_aside").compactMap { item in rows(model, at: item.path).first(where: isLive).map { (item, $0) } }
         model.removeFromCatalog(recordIDs: aside.map { $0.1.id })
         for (item, row) in aside { before[item.sha] = row.isSetAside ? "set_aside" : row.isPurged ? "purged" : "unchanged" }
-        await stage.scan(model)                                  // the owner's doubt of 2026-11-17: does it come BACK?
-        for (role, step) in [("purge", "purge"), ("set_aside", "set_aside")] {
-            for item in stage.items(role) {
-                let rows = stage.rows(model, at: item.path)
-                let after = rows.isEmpty ? "no_row" : rows.contains(where: stage.isLive) ? "came_back" : "stayed_removed"
-                stage.say(item, step, (before[item.sha] ?? "no_row_before") + ",rescan:" + after, kinds: ["rows:\(rows.count)"])
+        await scan(model)
+        for role in ["purge", "set_aside"] {
+            for item in items(role) {
+                let found = rows(model, at: item.path)
+                let after = found.isEmpty ? "no_row" : found.contains(where: isLive) ? "came_back" : "stayed_removed"
+                say(item, role, (before[item.sha] ?? "no_row_before") + ",rescan:" + after, kinds: ["rows:\(found.count)"])
             }
         }
+    }
 
-        // ── Promote: a second model, a scratch Master Archive ──
-        stage.entering("promote")
-        let promoting = stage.items("promote")
-        if !promoting.isEmpty {
-            let archiveModel = stage.makeModel("promote")
-            guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, config.work),
-                  let records = try? await run.loadCatalog().records else { return refuse("archive_root_outside_corpus_work") }
-            archiveModel.records = records
-            var root = ""
-            do {
-                root = try archiveModel.initializeMasterArchive(at: URL(fileURLWithPath: archive, isDirectory: true)).rootPath
-            } catch {
-                for item in promoting { stage.say(item, "promote", "error:" + CorpusWords.caseName(error)) }
-            }
-            if !root.isEmpty, CorpusRun.isUnder(root, config.work) {
-                let rows = promoting.compactMap { item in stage.rows(archiveModel, at: item.path).first(where: stage.isLive).map { (item, $0) } }
-                var outcomes: [PromoteToArchiveJob.FileOutcome] = []
-                if let plan = archiveModel.buildPromotePlan(recordIDs: rows.map { $0.1.id }) {
-                    let promote = PromoteToArchiveJob(plan: plan, model: archiveModel)
-                    promote.start()
-                    await promote.task?.value
-                    outcomes = promote.outcomes
-                }
-                for item in promoting {
-                    guard let row = rows.first(where: { $0.0.sha == item.sha })?.1 else {
-                        stage.say(item, "promote", "no_row")
-                        continue
-                    }
-                    guard let outcome = outcomes.first(where: { $0.recordID == row.id }) else {
-                        stage.say(item, "promote", outcomes.isEmpty ? "no_plan" : "no_outcome")
-                        continue
-                    }
-                    var word = CorpusWords.caseName(outcome.kind) + (outcome.refusalCode.map { ":" + $0 } ?? "")
-                    var kinds: [String] = outcome.notLocked == nil ? [] : ["not_locked"]
-                    if outcome.kind == .promoted || outcome.kind == .adopted {
-                        let landed = URL(fileURLWithPath: root).appendingPathComponent(outcome.detail)
-                        let digest = CorpusRun.isUnder(landed.path, root) ? (try? CatalogStore.sha256HexStreaming(fileURL: landed)) : nil
-                        if digest == item.sha { kinds.append("archive_copy_matches") } else { word += "_MISMATCH" }
-                    }
-                    stage.say(item, "promote", word, kinds: kinds)
-                }
-                Self.unlock(under: root, inside: config.work)
-            } else if !root.isEmpty {
-                for item in promoting { stage.say(item, "promote", "refused_by_harness") }
-            }
+    /// Initialize a Master Archive in the run's scratch folder and Promote into it.
+    func promote(_ model: VideoScanModel, archive: String) async {
+        entering("promote")
+        let promoting = items("promote")
+        // Checked again here, by the real home, immediately before the archive is made.
+        guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, run.config.work) else {
+            for item in promoting { say(item, "promote", "refused_by_harness") }
+            return
         }
+        let root: String
+        do {
+            root = try model.initializeMasterArchive(at: URL(fileURLWithPath: archive, isDirectory: true)).rootPath
+        } catch {
+            for item in promoting { say(item, "promote", "error:" + CorpusWords.caseName(error)) }
+            return
+        }
+        guard CorpusRun.isUnder(root, run.config.work) else {
+            for item in promoting { say(item, "promote", "refused_by_harness") }
+            return
+        }
+        let found = promoting.compactMap { item in rows(model, at: item.path).first(where: isLive).map { (item, $0) } }
+        var outcomes: [PromoteToArchiveJob.FileOutcome] = []
+        if let plan = model.buildPromotePlan(recordIDs: found.map { $0.1.id }) {
+            let job = PromoteToArchiveJob(plan: plan, model: model)
+            job.start()
+            await job.task?.value
+            outcomes = job.outcomes
+        }
+        for item in promoting {
+            guard let row = found.first(where: { $0.0.sha == item.sha })?.1 else {
+                say(item, "promote", "no_row")
+                continue
+            }
+            guard let outcome = outcomes.first(where: { $0.recordID == row.id }) else {
+                say(item, "promote", outcomes.isEmpty ? "no_plan" : "no_outcome")
+                continue
+            }
+            let (word, kinds) = VerbsStage.promoteWord(outcome, sha: item.sha, root: root)
+            say(item, "promote", word, kinds: kinds)
+        }
+        VerbsStage.unlock(under: root, inside: run.config.work)
+    }
 
-        // ── Invariant: every clone is still its SHA-256, at its path or in the engines' Trash ──
-        stage.entering("intact")
-        var (inTrash, trashFiles) = Self.digestsInTheTrash()
-        for item in stage.items {
+    /// The promote job's outcome as a word; a file that landed is re-hashed against its SHA-256.
+    nonisolated static func promoteWord(_ outcome: PromoteToArchiveJob.FileOutcome, sha: String, root: String) -> (String, [String]) {
+        var word = CorpusWords.caseName(outcome.kind) + (outcome.refusalCode.map { ":" + $0 } ?? "")
+        var kinds: [String] = outcome.notLocked == nil ? [] : ["not_locked"]
+        if outcome.kind == .promoted || outcome.kind == .adopted {
+            let landed = URL(fileURLWithPath: root).appendingPathComponent(outcome.detail)
+            let digest = CorpusRun.isUnder(landed.path, root) ? (try? CatalogStore.sha256HexStreaming(fileURL: landed)) : nil
+            if digest == sha { kinds.append("archive_copy_matches") } else { word += "_MISMATCH" }
+        }
+        return (word, kinds)
+    }
+
+    /// Invariant: every clone is still its SHA-256, at its path or in the engines' Trash.
+    /// Returns how many files the Trash holds.
+    func intact() -> Int {
+        entering("intact")
+        let found = VerbsStage.digestsInTheTrash()
+        var inTrash = found.digests
+        for item in items {
             var words: [String] = []
-            for path in stage.paths(item) {
+            for path in paths(item) {
                 if FileManager.default.fileExists(atPath: path) {
                     let digest = try? CatalogStore.sha256HexStreaming(fileURL: URL(fileURLWithPath: path))
                     words.append(digest == item.sha ? "intact" : "MISMATCH")
@@ -303,16 +348,13 @@ final class CorpusVerbsDriver: XCTestCase {
                     words.append("LOST")
                 }
             }
-            stage.say(item, "intact", VerbsStage.tally(words))
+            say(item, "intact", VerbsStage.tally(words))
         }
-        run.progress.write(["ev": "verbs", "trashFiles": trashFiles, "trashedByEngines": trashedByEngine,
-                            "records": model.records.count])
-        for item in stage.items { run.end(item) }
-        run.done()
+        return found.files
     }
 
     /// The SHA-256 of every file in the engines' test-host Trash (how many of each), and the file count.
-    private static func digestsInTheTrash() -> (digests: [String: Int], files: Int) {
+    nonisolated static func digestsInTheTrash() -> (digests: [String: Int], files: Int) {
         var digests: [String: Int] = [:]
         var files = 0
         guard let walker = FileManager.default.enumerator(at: MediaTrash.testHostTrash, includingPropertiesForKeys: [.isRegularFileKey]) else {
@@ -327,7 +369,7 @@ final class CorpusVerbsDriver: XCTestCase {
 
     /// Promote locks what it archives (UF_IMMUTABLE). Cleared here, on files under the run's
     /// scratch archive only, so the run's work folder can be removed.
-    private static func unlock(under root: String, inside work: String) {
+    nonisolated static func unlock(under root: String, inside work: String) {
         guard CorpusRun.isUnder(root, work), let walker = FileManager.default.enumerator(atPath: root) else { return }
         for case let relative as String in walker {
             let path = root + "/" + relative

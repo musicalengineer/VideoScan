@@ -1103,10 +1103,10 @@ class VerbsLaneTests(unittest.TestCase):
         for guard in ('CorpusRun.open(lane: "verbs")', 'CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work)',
                       'CorpusRun.isUnder(NSTemporaryDirectory(), config.work)', 'TestEnvironment.isTestHost',
                       'CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
-                      'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, config.work)',
-                      'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live', 'model.catalogTrashPlan(for: [row])',
-                      'model.purgeRecords(ids:', 'model.removeFromCatalog(recordIDs:', 'PromoteToArchiveJob(plan: plan, model: archiveModel)',
-                      'archiveModel.initializeMasterArchive(at: URL(fileURLWithPath: archive'):
+                      'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, run.config.work)',
+                      'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live', 'model.catalogTrashPlan(for: [row])', 'model.trashSelectedRecords([row], confirmed: confirmed)',
+                      'model.purgeRecords(ids:', 'model.removeFromCatalog(recordIDs:', 'PromoteToArchiveJob(plan: plan, model: model)',
+                      'model.initializeMasterArchive(at: URL(fileURLWithPath: archive'):
             self.assertIn(guard, code, guard)
         self.assertLess(code.index('refuse("trash_not_in_the_run")'), code.index('trashSelectedRecords'), 'the Trash is proven before any verb')
         self.assertLess(code.index('refuse("archive_root_outside_corpus_work")'), code.index('initializeMasterArchive'))
