@@ -9423,6 +9423,182 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofCoverageTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofCoverageTests"
+      ],
+      "tests": [
+        "attachmentIsCouldNotCheck",
+        "bigEndianOriginalLittleEndianCopy",
+        "droppedSubtitleIsNamed",
+        "longerCopyIsRefused",
+        "monoAndSurroundOriginals",
+        "reorderedPacketsAreRefused",
+        "reorderedPictureStreamsAreRefused",
+        "sameSizeReplacementMidRunIsCouldNotCheck",
+        "soundOnlyPairIsProven"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofDecisionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofDecisionTests"
+      ],
+      "tests": [
+        "chapterMarks",
+        "containerEncodingAndConfigurationDifferences",
+        "couldNotCheckTable",
+        "decodeArgsVector",
+        "differencesAreOrdered",
+        "engineSourceIsReadOnly",
+        "everyReasonHasASentence",
+        "hashCodecTable",
+        "headerVerdictNeedsNoReads",
+        "hiddenMediaIsNamedPerFile",
+        "hundredThousandDecisions",
+        "layoutParse",
+        "liveChannelTable",
+        "logLinesAreAlwaysOneLine",
+        "logLinesNameFilesVerdictEvidenceAndDifferences",
+        "namedDifferencesAreNeverProven",
+        "notProvenBalancedSoundShape",
+        "notProvenLossyOriginal",
+        "notProvenOriginalShape",
+        "notProvenPictureDiffers",
+        "notProvenPictureStreamSet",
+        "notProvenSoundDiffers",
+        "otherTracksAreNamedPerFile",
+        "poisonedFactsNeverProve",
+        "provenForRightOnlyAndMono",
+        "provenWhenEverythingHolds",
+        "spareSoundTrackRule",
+        "tagsAreNamedPerFile",
+        "trackFlags"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofHardeningTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofHardeningTests"
+      ],
+      "tests": [
+        "cancellationDuringTheClosingStampsIsCouldNotCheck",
+        "codexQuietSineIsUnderTheCeilingAndTheEvidenceSaysSo",
+        "croppedDecoderConfigurationIsRefused",
+        "editListTrimmedCopyIsRefused",
+        "hissJustOverTheCeilingIsRefused",
+        "lateSoundOriginalStillProves",
+        "parentFolderRetargetIsCouldNotCheck",
+        "quietPassageOnTheDiscardedChannelIsRefused",
+        "retimedPictureIsRefused",
+        "shiftedSoundIsRefused",
+        "silentShortReadIsCouldNotCheck",
+        "stderrOutputWithExitZeroIsCouldNotCheck",
+        "symlinkRetargetIsCouldNotCheck",
+        "wrongChannelLayoutInWAVIsRefused",
+        "wrongChannelLayoutIsRefused",
+        "zeroExitPartialReadNeverProvesAShortCopy"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofMediaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofMediaTests"
+      ],
+      "tests": [
+        "attenuatedSoundIsRefused",
+        "cancelledCheckIsCouldNotCheck",
+        "differingChannelsAreRefused",
+        "evidenceIsTrueAndTheProofIsReadOnly",
+        "extraOrMissingStream",
+        "fileChangedDuringTheCheckIsCouldNotCheck",
+        "losslessWrappersPlayTheSame",
+        "lossyOriginalIsNotProven",
+        "reencodedPictureIsRefused",
+        "rightOnlyIsProvenAgainstTheRightChannel",
+        "swappedFilesAreRefused",
+        "truncatedCopyIsRefused",
+        "twoSoundTracksOutsideDVAreNotProven",
+        "unmeasurableIsCouldNotCheck"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPacketTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPacketTests"
+      ],
+      "tests": [
+        "changedDisplayMatrixIsRefused",
+        "internalRetimeWithEqualTotalsIsRefused",
+        "repartitionedSubtitlePacketsAreRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPresentationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPresentationTests"
+      ],
+      "tests": [
+        "aCopyThatStartsLateAsAWholeIsRefused",
+        "aFrameThatNeedsConvertingIsCouldNotCheck",
+        "aPassThatCannotBeBelievedIsCouldNotCheck",
+        "aPictureScaledBackToItsFirstSizeIsRefused",
+        "aPictureThatChangesShapeMidStreamIsCouldNotCheck",
+        "aTrackSwitchedOffIsRefused",
+        "changedPaletteIsRefused",
+        "changedSubtitleConfigurationIsRefused",
+        "containerAndMetadataAreNamed",
+        "decoderConfigurationIsNamed",
+        "editListHidingPictureWithIdenticalPacketsIsRefused",
+        "equalLengthsOfDifferentHiddenMediaAreNamed",
+        "headerDurationThatLiesIsCouldNotCheck",
+        "interiorSoundRetimeIsRefused",
+        "losslessReencodeIsNamed",
+        "storedButNotPlayedMediaIsNamed",
+        "twoTrackDVWithASilentSpareTrack",
+        "twoTrackDVWithSoundOnTheSpareTrackIsRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofRuleTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofRuleTests"
+      ],
+      "tests": [
+        "channelLayoutTable",
+        "discardedChannelTable",
+        "displayTable",
+        "frameLedgerChannelFold",
+        "frameLedgerFaults",
+        "frameLedgerPictureFold",
+        "frameLedgerTimeline",
+        "ledgersAtScale",
+        "levelText",
+        "logAtScale",
+        "logRecordParse",
+        "packetLedgerFaults",
+        "packetLedgerFold",
+        "readReportFromACleanLog",
+        "readReportRefusals",
+        "readVerdictTable",
+        "singleLineAndQuoted"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BoundaryTests.swift",
@@ -40403,7 +40579,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 655,
+      "expected_floor": 761,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40613,6 +40789,13 @@
         "VideoScanTests/FrameIndexMediaMatrixTests",
         "VideoScanTests/FrameSearchLifecycleTests",
         "VideoScanTests/FrameSearchRegressionTests",
+        "VideoScanTests/BalancedCopyProofDecisionTests",
+        "VideoScanTests/BalancedCopyProofMediaTests",
+        "VideoScanTests/BalancedCopyProofHardeningTests",
+        "VideoScanTests/BalancedCopyProofRuleTests",
+        "VideoScanTests/BalancedCopyProofCoverageTests",
+        "VideoScanTests/BalancedCopyProofPacketTests",
+        "VideoScanTests/BalancedCopyProofPresentationTests",
         "VideoScanTests/CatalogRowsTests",
         "VideoScanTests/CatalogRowsScaleTests",
         "VideoScanTests/CatalogRowsSensorTests",
