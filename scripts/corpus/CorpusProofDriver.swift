@@ -238,7 +238,9 @@ enum CorpusProofEvidence {
             }
             return out
         }
-        return ["variant:not_the_read_rule"]
+        // Not the read rule's sentence. One of ffmpeg's own fixed phrases is worth a word of its own: a raw DV
+        // tape whose sound is re-anchored back past the packet before it cannot be written as a timeline.
+        return ["variant:not_the_read_rule"] + (reason.contains("Non-monotonic DTS") ? ["decode_fault:non_monotonic_dts"] : [])
     }
 
     /// The `side_data_type` names in a stream's side data (canonical JSON), as words.

@@ -103,7 +103,7 @@ enum BalancedCopyProofMedia {
             input: original, output: output,
             mapArgs: BalanceAudioFix.mapArgs(audioStreams: analysis.shape.audioStreams,
                                              programStreamIndex: analysis.programStreamIndex),
-            panFilter: pan,
+            panFilter: BalanceAudioFix.soundFilter(panFilter: pan, shape: analysis.shape),
             audioArgs: BalanceAudioFix.audioEncodeArgs(sourceCodec: analysis.shape.audioCodec,
                                                        bitRateBitsPerSec: analysis.shape.audioBitRate),
             inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape))

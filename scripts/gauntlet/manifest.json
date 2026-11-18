@@ -9424,6 +9424,26 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalanceAudioUnlockedDVTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalanceAudioUnlockedDVTests"
+      ],
+      "tests": [
+        "aCopyWithAnUnplayedTailIsRefusedByTheJob",
+        "aRunawayTapeIsCouldNotCheckWithTheErrorNamed",
+        "otherCadencesAreCarriedWhole",
+        "reanchoredDecisionTable",
+        "rebuildAudioArguments",
+        "rebuildAudioPlaysToTheLastSample",
+        "soundFilterTable",
+        "theProofNamesAReanchoredTape",
+        "unlockedSoundPlaysToTheLastSample",
+        "unplayedSoundTable"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BalancedCopyProofCoverageTests.swift",
       "stage": "regression",
       "suites": [
@@ -9596,6 +9616,23 @@
         "readReportRefusals",
         "readVerdictTable",
         "singleLineAndQuoted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofTotalityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofTotalityTests"
+      ],
+      "tests": [
+        "absurdLengths",
+        "evidenceIsTypedAndComplete",
+        "fractionEdges",
+        "frameCountSumOverflow",
+        "frameLedgerNeverTraps",
+        "placementAtTheEdgesOfInt64",
+        "timelineSumOverflow"
       ]
     },
     {
@@ -40623,7 +40660,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 761,
+      "expected_floor": 778,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40844,7 +40881,9 @@
         "VideoScanTests/CatalogRowsScaleTests",
         "VideoScanTests/CatalogRowsSensorTests",
         "VideoScanTests/ShowFiltersShowingBoxAuditTests",
-        "VideoScanTests/ShowFiltersAuditSensorTests"
+        "VideoScanTests/ShowFiltersAuditSensorTests",
+        "VideoScanTests/BalanceAudioUnlockedDVTests",
+        "VideoScanTests/BalancedCopyProofTotalityTests"
       ]
     },
     {

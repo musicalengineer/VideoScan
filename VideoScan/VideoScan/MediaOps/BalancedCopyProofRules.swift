@@ -25,14 +25,37 @@ extension BalancedCopyProof {
     }
 
     /// A length in plain words: "1.969 s" under a minute, then "8:34", "1:02:03".
+    /// Total: a length that is not a number is written as printf writes it
+    /// ("nan s", "inf s"), and one too long to convert (`Int(aDouble)` traps
+    /// past Int.max, GH #483 item 3) is said to be that.
     static func length(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 60 else { return String(format: "%.3f s", seconds) }
+        guard seconds < 1e15 else { return "more than 31 million years" }
         let whole = Int(seconds.rounded())
         let (h, m, s) = (whole / 3600, whole % 3600 / 60, whole % 60)
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
     static func side(_ channel: Int) -> String { channel == 0 ? "left" : "right" }
+
+    /// |a − b|, for ANY two Int64: the difference of two 64-bit numbers
+    /// always fits unsigned, where `abs(a - b)` traps on overflow and on
+    /// Int64.min (GH #483 item 3). (`&-` is wrapping subtraction ≈ C's
+    /// unsigned arithmetic; read back unsigned it is the true difference.)
+    static func distance(_ a: Int64, _ b: Int64) -> UInt64 {
+        a >= b ? UInt64(bitPattern: a &- b) : UInt64(bitPattern: b &- a)
+    }
+
+    /// The sum of some counts for a sentence; Int.max when it does not fit.
+    static func total(_ counts: some Sequence<Int>) -> Int {
+        var sum = 0
+        for count in counts {
+            let (next, overflow) = sum.addingReportingOverflow(count)
+            guard !overflow else { return .max }
+            sum = next
+        }
+        return sum
+    }
 
     /// The original channel a balanced copy must equal: 0 = left, 1 = right.
     /// nil = the class is not one the balance job fixes. Mirrors
@@ -316,20 +339,21 @@ extension BalancedCopyProof {
             guard got.decodeErrors == 0 else { return .decodeErrors(stream: index) }
         }
         guard !read.folded.isEmpty, read.muxed == read.folded else {
-            return .framesNotAllFolded(muxed: read.muxed.values.reduce(0, +), folded: read.folded.values.reduce(0, +))
+            return .framesNotAllFolded(muxed: total(read.muxed.values), folded: total(read.folded.values))
         }
         for picture in file.pictures {
             guard let played = read.pictures[picture.index], played.frames > 0 else {
                 return .noPictureFrames(stream: picture.index)
             }
             let decodedSeconds = played.endSeconds - played.firstSeconds
-            if let stated = picture.statedSeconds, abs(decodedSeconds - stated) > picture.timingSlackSeconds {
+            // `!(… <= slack)`, not `… > slack`: a length that is not a number is never agreement.
+            if let stated = picture.statedSeconds, !(abs(decodedSeconds - stated) <= picture.timingSlackSeconds) {
                 return .pictureLength(stream: picture.index, decodedSeconds: decodedSeconds, statedSeconds: stated)
             }
         }
-        guard let kept, let samples = read.soundSamples, samples > 0 else { return .noSoundSamples }
+        guard let kept, kept.sampleRateHz > 0, let samples = read.soundSamples, samples > 0 else { return .noSoundSamples }
         if let stated = kept.statedSeconds,
-           abs(Double(samples) / Double(kept.sampleRateHz) - stated) > kept.statedLengthSlackSeconds {
+           !(abs(Double(samples) / Double(kept.sampleRateHz) - stated) <= kept.statedLengthSlackSeconds) {
             return .soundLength(decodedSamples: samples, statedSeconds: stated)
         }
         return nil
@@ -411,16 +435,42 @@ extension BalancedCopyProof {
         guard left == right else { return .refused(.notProven(.channelsDiffer(left: left, right: right))) }
         guard left == source else { return .refused(.notProven(.soundDiffers(original: source, balanced: left))) }
         guard segments.count == copied.count else {
+            if let reanchored = reanchored(facts, original: segments, copy: copied) { return .refused(.notProven(reanchored)) }
             return .refused(.notProven(.soundPlacementDiffers(
                 "the original's sound plays in \(segments.count) unbroken runs, the balanced copy's in \(copied.count)")))
         }
         for (i, (a, b)) in zip(segments, copied).enumerated()
-        where a.samples != b.samples || abs(a.start - b.start) > Int64(soundTimingToleranceSamples) {
+        where a.samples != b.samples || distance(a.start, b.start) > UInt64(soundTimingToleranceSamples) {
             return .refused(.notProven(.soundPlacementDiffers(
                 "run \(i + 1): \(a.samples) samples from sample time \(a.start), "
                 + "in the balanced copy \(b.samples) from \(b.start)")))
         }
         return .held(source)
+    }
+
+    /// A placement difference in the one shape a raw DV tape gives it
+    /// (GH #482), so the refusal can say what it is: the original is raw DV
+    /// — whose sound has no timestamps of its own; FFmpeg stamps it by the
+    /// running sample count and re-anchors it to the picture whenever the
+    /// two are a whole frame apart — its sound decodes in several runs, and
+    /// the copy plays ONE run from the same start. Called only after the
+    /// samples were found equal. Still NOT THE SAME: the placement rule is
+    /// not relaxed, only named. nil = any other difference (the general
+    /// reason stands), including runs whose ends do not fit in 64 bits.
+    static func reanchored(_ facts: Facts, original: [SoundSegment], copy: [SoundSegment]) -> NotProven? {
+        guard facts.original.containerWords == ["dv"], original.count > 1, copy.count == 1,
+              let rate = keptSound(facts)?.sampleRateHz, let first = original.first,
+              distance(first.start, copy[0].start) <= UInt64(soundTimingToleranceSamples) else { return nil }
+        var overlap: Int64 = 0, gap: Int64 = 0
+        for (before, after) in zip(original, original.dropFirst()) {
+            let (end, endOverflows) = before.start.addingReportingOverflow(before.samples)
+            let (step, stepOverflows) = after.start.subtractingReportingOverflow(end)
+            guard !endOverflows, !stepOverflows, step != .min else { return nil }
+            let (sum, sumOverflows) = (step < 0 ? overlap : gap).addingReportingOverflow(abs(step))
+            guard !sumOverflows else { return nil }
+            if step < 0 { overlap = sum } else { gap = sum }
+        }
+        return .soundReanchored(times: original.count - 1, overlapSamples: overlap, gapSamples: gap, sampleRateHz: rate)
     }
 
     /// The DV rule, measured (DECISIONS 2026-11-17): every sound track the

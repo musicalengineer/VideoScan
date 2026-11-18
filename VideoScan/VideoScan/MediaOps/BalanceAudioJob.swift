@@ -30,7 +30,9 @@ import os
 // VIDEO IS NEVER RE-ENCODED: `-c copy` stream-copies every mapped
 // stream (`-map 0` for single-audio sources — v1-identical; video +
 // program track for multi-audio), then `-c:a …` overrides ONLY the
-// audio (which must pass through the pan filter). PCM sources re-encode
+// audio (which must pass through the pan filter; raw DV sound also has
+// its timestamps rewritten from the sample count — see "Raw-DV sound
+// timestamps", GH #482). PCM sources re-encode
 // to the same PCM codec (lossless); lossy sources stay in their codec
 // family at ≥ the source bitrate. The container is preserved (same
 // extension ⇒ same muxer).
@@ -48,7 +50,8 @@ import os
 //   - Stall watchdog on ffmpeg's progress stream.
 //   - POST-FIX VERIFICATION before promotion: the analyzer re-runs on
 //     the partial and must classify it dualMono, with the video codec
-//     unchanged, stream count preserved, and duration within tolerance.
+//     unchanged, stream count preserved, and duration within tolerance;
+//     and a lossless copy must PLAY all the sound it STORES (GH #482).
 //     A verification failure deletes the partial and fails loudly.
 //
 // Unlike CleanupJob there is NO scratch/RAM-disk phase: this is a remux
@@ -171,6 +174,46 @@ enum BalanceAudioFix {
         case .mono: return "pan=stereo|c0=c0|c1=c0"
         case .trueStereo, .dualMono, .silent, .multichannel: return nil
         }
+    }
+
+    // MARK: Raw-DV sound timestamps (GH #482)
+    //
+    // Raw DV holds its sound inside each picture frame, and a camcorder's
+    // sample clock is not locked to its picture: a frame holds 1580…1620
+    // samples at 48 kHz, not the nominal 1601.6. ffmpeg's dv demuxer stamps
+    // the sound by its running sample count and re-anchors it to the
+    // picture whenever the two are a whole frame apart — so on a tape whose
+    // sound runs fast, the re-anchor steps back a frame and the packets
+    // overlap in time. The QuickTime muxer stores every PCM sample back to
+    // back but writes the sound track's length and edit list from the
+    // timestamp span, so the overlap total was stored and NOT PLAYED (real
+    // tape, 27:18, 1,784 samples fast: one re-anchor, 1,602 samples outside
+    // the edit list, the last packet unplayed).
+    //
+    // The fix: after the pan, the sound's timestamps are rewritten from the
+    // SAMPLE COUNT (`asetpts`: first timestamp kept, then one tick a
+    // sample). No sample is added, dropped or changed — `asetpts` touches
+    // timestamps only — and QuickTime stores PCM back to back whatever the
+    // timestamps say, so the stored samples are the same; only the edit
+    // list now covers all of them. Raw DV only: it is the one source whose
+    // sound has no timestamps of its own, and the one whose copy changes
+    // container. A Matroska file's gaps are real and must stay where they
+    // are.
+    //
+    // What this does NOT do: keep the sound re-anchored to the picture. The
+    // copy plays the tape's samples back to back (as it did before the
+    // fix), so against the picture its sound ends later (fast tape) or
+    // earlier (slow tape) by the tape's whole clock difference — 37 ms on
+    // that 27-minute tape — where ffmpeg's reading of the raw DV file steps
+    // a frame at each re-anchor. The balanced-copy proof names that.
+
+    /// Rewrites sound timestamps as first-timestamp + samples-so-far.
+    static let sampleCountTimestamps = "asetpts=STARTPTS+N/SR/TB"
+
+    /// The sound's whole filter chain: the pan, then — raw DV only — the
+    /// timestamp rewrite above. Pure.
+    static func soundFilter(panFilter: String, shape: AudioBalanceStreamShape) -> String {
+        isRawDVContainer(shape.containerFormat) ? "\(panFilter),\(sampleCountTimestamps)" : panFilter
     }
 
     /// Audio encoder arguments: PCM in → SAME PCM codec out (lossless);
@@ -559,7 +602,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
             mapArgs: BalanceAudioFix.mapArgs(
                 audioStreams: analysis.shape.audioStreams,
                 programStreamIndex: analysis.programStreamIndex),
-            panFilter: pan,
+            panFilter: BalanceAudioFix.soundFilter(panFilter: pan, shape: analysis.shape),
             audioArgs: BalanceAudioFix.audioEncodeArgs(
                 sourceCodec: analysis.shape.audioCodec,
                 bitRateBitsPerSec: analysis.shape.audioBitRate),
@@ -596,6 +639,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
             try await Self.verifyOffMain(partialPath: partialURL.path,
                                          source: analysis.shape,
                                          sourceDuration: durationSeconds)
+            try await Self.verifySoundIsAllPlayed(partialPath: partialURL.path)
         } catch {
             monitor.stop()
             if error is CancellationError || Task.isCancelled || state == .cancelling {
@@ -745,6 +789,30 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
             guard delta <= BalanceAudioFix.durationToleranceSeconds else {
                 throw BalanceVerificationError(
                     message: String(format: "duration drifted %.2fs", delta))
+            }
+        }
+    }
+
+    /// The copy must PLAY all the sound it STORES (GH #482): one header
+    /// read of the partial, judged by `unplayedSoundMismatch`. A read that
+    /// fails is a refusal, never a pass.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private static func verifySoundIsAllPlayed(partialPath: String) async throws {
+        let run = await ProcessRunner.runProcess(
+            executable: ToolLocator.ffprobePath, arguments: BalanceAudioFix.soundLengthArgs(input: partialPath),
+            stdoutLimitBytes: 1 << 20, deadlineSeconds: 60)
+        try Task.checkCancellation()
+        guard run.exitCode == 0, let data = run.stdout?.data(using: .utf8),
+              let tracks = BalanceAudioFix.soundLengths(fromProbeJSON: data) else {
+            throw BalanceVerificationError(message: "the balanced copy's sound lengths could not be read back")
+        }
+        for track in tracks {
+            if let mismatch = BalanceAudioFix.unplayedSoundMismatch(
+                codec: track.codec, sampleRateHz: track.sampleRateHz,
+                storedSamples: track.storedSamples, playedSeconds: track.playedSeconds) {
+                throw BalanceVerificationError(message: mismatch)
             }
         }
     }

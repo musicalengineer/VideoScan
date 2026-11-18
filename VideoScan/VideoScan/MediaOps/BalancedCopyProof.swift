@@ -84,6 +84,22 @@
 // packet-identical in the copy. The dropped track is then a named
 // difference held by the original.
 //
+// RAW DV SOUND (GH #482, measured 2026-11-18): raw DV holds its sound inside
+// each picture frame, with no timestamps of its own, and a camcorder's
+// sample clock is not locked to its picture. FFmpeg stamps that sound by
+// the running sample count and RE-ANCHORS it to the picture whenever the two
+// are a whole frame apart, so a real tape's sound decodes in several runs
+// that overlap (clock fast) or leave a gap (slow) — one in 27 minutes on
+// the tape that showed it (inferred: 1,602 samples, a frame's worth, lay
+// outside its copy's edit list). The job's QuickTime copy plays the same
+// samples back to back. Rule 2 holds the copy to the original's RUNS,
+// so such a pair is NOT THE SAME; `NotProven.soundReanchored` says exactly
+// that, with the counts. The rule is not relaxed here: whether a sound that
+// ends some tens of milliseconds later against the picture may stand for
+// the original is the owner's to rule. A re-anchor that steps back past the
+// start of the packet before it cannot be written as a timeline at all
+// (ffmpeg: "Non-monotonic DTS"): COULD NOT CHECK.
+//
 // What it does NOT prove (said plainly so no caller assumes it):
 //   - anything a player other than FFmpeg does with fields FFmpeg ignores
 //     (a QuickTime `mvhd`/`mdhd` duration that disagrees with the sample
@@ -101,7 +117,8 @@
 //
 // Shape: the facts and outcomes (here); pure `decide` over measured `Facts`
 // (BalancedCopyProofRules.swift); one `@concurrent` `measure` that gathers
-// them (BalancedCopyProofMeasure.swift) through ProcessRunner / ToolLocator.
+// them (BalancedCopyProofMeasure.swift, and the decode pass's log read back
+// in BalancedCopyProofReadLog.swift) through ProcessRunner / ToolLocator.
 // (An `enum` with no cases is Swift's namespace ≈ a C++ struct of statics.)
 //
 // Cost: FIVE whole-file reads — the levels pass over the original
@@ -358,7 +375,19 @@ enum BalancedCopyProof {
         /// Samples behind each of those digests.
         var channelSamples: [Int64] = []
 
-        var soundSamples: Int64? { soundSegments.map { $0.reduce(0) { $0 + $1.samples } } }
+        /// Samples on the timeline. nil = not read, or a total that does not
+        /// fit in 64 bits (no file has one; a count that cannot be held is no
+        /// count — and adding past Int64.max would TRAP, GH #483 item 3).
+        var soundSamples: Int64? {
+            guard let soundSegments else { return nil }
+            var total: Int64 = 0
+            for run in soundSegments {
+                let (sum, overflow) = total.addingReportingOverflow(run.samples)
+                guard !overflow else { return nil }
+                total = sum
+            }
+            return total
+        }
     }
 
     /// Everything `decide` looks at. Built by `measure`; built by hand in
@@ -477,6 +506,12 @@ enum BalancedCopyProof {
         case pictureDiffers(originalIndex: Int, String)
         /// The sound is not placed on the timeline as the original's is.
         case soundPlacementDiffers(String)
+        /// The same placement difference, in the one shape a raw DV tape
+        /// gives it (GH #482): every sample is the original's, in order, but
+        /// FFmpeg reads the ORIGINAL's sound as re-anchored to the picture
+        /// `times` times — runs that overlap (the tape's sample clock ran
+        /// fast) or leave a gap (slow) — and the copy plays back to back.
+        case soundReanchored(times: Int, overlapSamples: Int64, gapSamples: Int64, sampleRateHz: Int)
         /// The channel the copy leaves behind is not silent.
         case discardedChannelNotSilent(channel: Int, peakDBFS: Double)
         /// A sound track the copy leaves behind is not silent, or the DV
@@ -490,7 +525,7 @@ enum BalancedCopyProof {
         /// The plain sentence a caller may show or log.
         var message: String { detail + " — the original is kept" }
 
-        private var detail: String { soundDetail ?? pictureDetail }
+        private var detail: String { placementDetail ?? soundDetail ?? pictureDetail }
 
         /// The reasons that are about the sound. nil = it is about the picture or the tracks.
         private var soundDetail: String? {
@@ -508,8 +543,6 @@ enum BalancedCopyProof {
             case .channelLayoutNotStereo(let file, let layout):
                 return "\(file)'s channels are not laid out as plain left and right "
                     + "(\(layout.isEmpty ? "no layout stated" : layout))"
-            case .soundPlacementDiffers(let what):
-                return "the balanced copy's sound does not play at the original's times (\(what))"
             case .discardedChannelNotSilent(_, let peak):
                 return "the original's other channel is not silent (peak \(BalancedCopyProof.level(peak)))"
             case .spareSoundTrack(let what):
@@ -520,7 +553,24 @@ enum BalancedCopyProof {
             case .soundDiffers(let original, let balanced):
                 return "the balanced copy's sound is not the original's live channel, sample for sample "
                     + "(sha256 \(BalancedCopyProof.short(original)) ≠ \(BalancedCopyProof.short(balanced)))"
-            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers:
+            case .streamsDiffer, .pictureConfigurationDiffers, .pictureDiffers, .soundPlacementDiffers, .soundReanchored:
+                return nil
+            }
+        }
+
+        /// The reasons that are about WHERE the sound sits on the timeline.
+        private var placementDetail: String? {
+            switch self {
+            case .soundPlacementDiffers(let what):
+                return "the balanced copy's sound does not play at the original's times (\(what))"
+            case .soundReanchored(let times, let overlap, let gap, let rate):
+                let net = Double(overlap) - Double(gap)
+                let ends = net == 0 ? "at the same time"
+                    : String(format: "%.1f ms ", abs(net) / Double(max(rate, 1)) * 1000) + (net > 0 ? "later" : "earlier")
+                return "the original is raw DV and its sound is re-anchored to the picture \(times) time\(times == 1 ? "" : "s") "
+                    + "as FFmpeg reads it (\(overlap) samples overlap, \(gap) samples of gap); the balanced copy plays the "
+                    + "same samples back to back, so its sound ends \(ends) against the picture"
+            default:
                 return nil
             }
         }
