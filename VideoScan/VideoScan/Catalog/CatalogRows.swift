@@ -152,8 +152,8 @@ enum CatalogRows {
     }
 
     /// The Show ▸ filters (additive — each one narrows further): the pure
-    /// per-record ones from the enum's own table (Audio Only, Videos Missing
-    /// Sound, Needs a Date), then Not Yet Archived, then Hide Other Versions
+    /// per-record ones from the enum's own table (Audio Only, Videos with
+    /// Sound, Videos Missing Sound, Needs a Date), then Not Yet Archived, then Hide Other Versions
     /// LAST so it picks among the rows the others left.
     private static func applyShowFilters(_ rows: [VideoRecord], _ state: State, _ result: inout Result) -> [VideoRecord] {
         var out = rows

@@ -19,18 +19,21 @@
 // once: the filters that remain are carried over, the ones the 2026-11-17 trims
 // removed and anything unknown are dropped, and the log says which.
 //
-// FIVE TICKS (DECISIONS 2026-11-17, "final shape for now"): Audio Only, Videos
-// Missing Sound, Not Yet Archived, Needs a Date, Hide Other Versions. No tick =
-// everything is listed. The media-kind section (Videos / Audio Only / All
+// SIX TICKS (DECISIONS 2026-11-17, "final shape for now"; Videos with Sound
+// came back 2026-11-18): Audio Only, Videos with Sound, Videos Missing Sound,
+// Not Yet Archived, Needs a Date, Hide Other Versions. No tick = everything is
+// listed. The media-kind section (Videos / Audio Only / All
 // Kinds) is gone: its stored value (`catalogKindFacet`) is migrated ONCE here —
 // Audio Only becomes the Audio Only tick, the other two become no tick — then
 // deleted, and the log says what happened. Unpaired Only, Has Master Copy and
 // the awaiting-confirmation filter are dropped from a stored set, named in the
 // log (that list now lives in the Media File Operations window).
 //
-// ONE RULE. Audio Only and Videos Missing Sound cannot both be on (together
-// they empty the table): turning one on turns the other off, in the same
-// change and the same log line.
+// ONE RULE. The three KIND ticks — Audio Only, Videos with Sound, Videos
+// Missing Sound (`CatalogViewFilter.kinds`) — are one choice: at most one is
+// on. Turning one on turns the others off, in the same change and the same
+// log line. (Audio Only with either video tick empties the table; the two
+// video ticks overlap but Rick asked for them to untick each other.)
 //
 // THE FOLDERS SWITCH (DECISIONS 2026-11-17: "one folder view showing every
 // folder, Rick's (blue) and the machine's (grey), with the media files beside
@@ -45,7 +48,7 @@
 // CatalogPersonFilterStore pattern, #337 — no new VideoScanModel state), so
 // the Steward on the Triage tab reaches it while the Catalog view is not alive.
 //
-// COST. A set of at most five small enums and two UserDefaults writes per
+// COST. A set of at most six small enums and two UserDefaults writes per
 // change; no records are read here. Worst-case memory: a few hundred bytes.
 //
 // (For Rick: an `ObservableObject` with `@Published private(set)` ≈ a C++
@@ -74,6 +77,11 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     /// the media-kind section's "Audio Only" (2026-11-17): the same rule,
     /// `streamType == .audioOnly`.
     case audioOnly
+    /// Videos that HAVE a sound track (DECISIONS 2026-11-18, "Videos with
+    /// Sound returns"): a real picture stream — not cover art — plus at least
+    /// one audio stream. Presence only, never quality. The rule is in
+    /// VideoWithSound.swift.
+    case videosWithSound
     /// Videos whose sound is missing: no audio stream (unless the audio half
     /// is paired), measured silent, or stored as damaged. The rule and the
     /// standings that count are in VideoMissingSound.swift.
@@ -97,6 +105,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     var title: String {
         switch self {
         case .audioOnly:          return "Audio Only"
+        case .videosWithSound:    return "Videos with Sound"
         case .videosMissingSound: return "Videos Missing Sound"
         case .notYetArchived:     return "Not Yet Archived"
         case .needsDate:          return "Needs a Date"
@@ -107,6 +116,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     var icon: String {
         switch self {
         case .audioOnly:          return "waveform"
+        case .videosWithSound:    return "speaker.wave.2"
         case .videosMissingSound: return "speaker.slash"
         case .notYetArchived:     return "archivebox"
         case .needsDate:          return "calendar.badge.exclamationmark"
@@ -119,6 +129,9 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .audioOnly:
             return "Only files with sound and no picture (music, audio halves)."
+        case .videosWithSound:
+            return "Only videos that have a sound track. Whether the sound is good is not checked: "
+                + "one-sided, silent or damaged sound still counts. Album cover art is not a picture."
         case .videosMissingSound:
             return "Only videos whose sound is missing: no sound track (unless its audio file is paired), silent, or damaged. "
                 + "Not left-only or right-only sound, not mono, not files whose sound was never checked, "
@@ -139,6 +152,7 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     var recordPredicate: ((VideoRecord) -> Bool)? {
         switch self {
         case .audioOnly:          return { $0.streamType == .audioOnly }
+        case .videosWithSound:    return VideoWithSound.matches
         case .videosMissingSound: return VideoMissingSound.matches
         case .needsDate:          return pfRecordNeedsDate
         case .notYetArchived, .onePerFootage:
@@ -146,13 +160,14 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// The filter that cannot be on with this one (they empty the table).
-    var excludes: CatalogViewFilter? {
-        switch self {
-        case .audioOnly:          return .videosMissingSound
-        case .videosMissingSound: return .audioOnly
-        default:                  return nil
-        }
+    /// The three kind ticks, in menu order: one choice, at most one on
+    /// (DECISIONS 2026-11-18: "the three untick each other").
+    static let kinds: [CatalogViewFilter] = [.audioOnly, .videosWithSound, .videosMissingSound]
+
+    /// The filters that cannot be on with this one: the other kind ticks for
+    /// a kind tick, nothing for the rest.
+    var excludes: Set<CatalogViewFilter> {
+        Self.kinds.contains(self) ? Set(Self.kinds).subtracting([self]) : []
     }
 
     /// The members of `set` in menu order — every list of filter names is
@@ -356,7 +371,7 @@ final class CatalogShowFilterStore: ObservableObject {
 
     /// The media-kind section's stored value, turned into the filter set ONCE
     /// (DECISIONS 2026-11-17: no tick = everything): "audioOnly" → the Audio
-    /// Only tick on (Videos Missing Sound, which it excludes, off); "videoBearing"
+    /// Only tick on (the other kind ticks, which it excludes, off); "videoBearing"
     /// and "everything" → no tick. The key is deleted whatever it held — a
     /// number, garbage text — so this never runs twice. Returns the set to
     /// use and the one line to log; (the same set, nil) when there was no
@@ -390,17 +405,28 @@ final class CatalogShowFilterStore: ObservableObject {
         var next = set
         if on {
             next.insert(filter)
-            if let other = filter.excludes { next.remove(other) }
+            next.subtract(filter.excludes)
         } else {
             next.remove(filter)
         }
         return next
     }
 
-    /// A set no surface could have produced (Audio Only with Videos Missing
-    /// Sound, from a hand-edited setting) made legal: Audio Only wins.
+    /// A set no surface could have produced (two kind ticks, from a
+    /// hand-edited setting) made legal: the first kind in menu order wins
+    /// (Audio Only, then Videos with Sound), as it always has.
     nonisolated static func legal(_ set: Set<CatalogViewFilter>) -> Set<CatalogViewFilter> {
-        set.contains(.audioOnly) && set.contains(.videosMissingSound) ? set.subtracting([.videosMissingSound]) : set
+        legalized(set).set
+    }
+
+    /// `legal`, plus the kind that won and the kinds it dropped (for the
+    /// launch line). `kept` is nil when nothing was dropped.
+    nonisolated static func legalized(_ set: Set<CatalogViewFilter>)
+        -> (set: Set<CatalogViewFilter>, kept: CatalogViewFilter?, dropped: [CatalogViewFilter]) {
+        let on = CatalogViewFilter.kinds.filter(set.contains)
+        guard let first = on.first, on.count > 1 else { return (set, nil, []) }
+        let dropped = Array(on.dropFirst())
+        return (set.subtracting(dropped), first, dropped)
     }
 
     /// "Not Yet Archived, Needs a Date" in menu order; "none" for the empty set.
@@ -466,11 +492,15 @@ final class CatalogShowFilterStore: ObservableObject {
             else if let words = removed[token] { gone.append(words) }
             else { unknown.append(String(token.prefix(60))) }
         }
-        let legalSet = legal(filters)
+        let fixed = legalized(filters)
+        let legalSet = fixed.set
         var parts: [String] = []
         if !gone.isEmpty { parts.append("dropped, no longer in the menu: " + gone.joined(separator: ", ")) }
         if !unknown.isEmpty { parts.append("dropped, not known to this build: " + unknown.joined(separator: ", ")) }
-        if legalSet != filters { parts.append("dropped Videos Missing Sound: it cannot be on with Audio Only") }
+        if let kept = fixed.kept {
+            parts.append("dropped " + fixed.dropped.map(\.title).joined(separator: ", ")
+                         + ": only one of Audio Only, Videos with Sound, Videos Missing Sound can be on; kept " + kept.title)
+        }
         let changed = !parts.isEmpty
         var note = origin
         if !parts.isEmpty { note += (origin.isEmpty ? " (" : "; ") + parts.joined(separator: "; ") }

@@ -2,8 +2,9 @@
 // The ONE owner of the Catalog ▸ Show filter set (CatalogShowFilterStore.swift,
 // 2026-11-17).
 //
-//   LOGIC      the five ticks; turn on / off / clear; Audio Only and Videos
-//              Missing Sound exclude each other; the persisted value
+//   LOGIC      the six ticks; turn on / off / clear; the three kind ticks
+//              (Audio Only, Videos with Sound, Videos Missing Sound) exclude
+//              each other; the persisted value
 //              round-trips under stable keys; the old label-keyed value
 //              migrates once, dropping the removed filters and anything
 //              unknown; a stable-key value holding a removed filter drops it
@@ -15,7 +16,7 @@
 //   ISOLATION  a poisoned stored value (a number, data, garbage text) — the
 //              filter set's or the old media-kind setting's — restores as no
 //              filters, never crashes, and is rewritten clean.
-//   SCALE      N/A — five enums; no records are read.
+//   SCALE      N/A — six enums; no records are read.
 //   MEDIA      N/A — no media is opened.
 // The sensor (nothing else writes the keys) is ShowFiltersAuditSensorTests;
 // the truth test (the box names exactly the set) is in CatalogShowingSummaryTests.
@@ -47,19 +48,19 @@ struct CatalogShowFilterStoreTests {
 
     // MARK: LOGIC
 
-    @Test("LOGIC: the menu's final shape (2026-11-17) — five ticks, in this order, stable keys, the menu's words")
-    func theFiveTicks() {
+    @Test("LOGIC: the menu's shape (2026-11-17, Videos with Sound back 2026-11-18) — six ticks, in this order, stable keys, the menu's words")
+    func theSixTicks() {
         #expect(CatalogViewFilter.allCases.map(\.title) == [
-            "Audio Only", "Videos Missing Sound", "Not Yet Archived", "Needs a Date", "Hide Other Versions",
+            "Audio Only", "Videos with Sound", "Videos Missing Sound", "Not Yet Archived", "Needs a Date", "Hide Other Versions",
         ])
         #expect(CatalogViewFilter.allCases.map(\.rawValue) == [
-            "audioOnly", "videosMissingSound", "notYetArchived", "needsDate", "onePerFootage",
+            "audioOnly", "videosWithSound", "videosMissingSound", "notYetArchived", "needsDate", "onePerFootage",
         ])
         for f in CatalogViewFilter.allCases {
             #expect(!f.icon.isEmpty && !f.help.isEmpty)
             #expect(f.rawValue != f.title, "\(f): the stored key must not be the display label")
         }
-        #expect(Set(CatalogViewFilter.allCases.map(\.icon)).count == 5, "each tick has its own glyph")
+        #expect(Set(CatalogViewFilter.allCases.map(\.icon)).count == CatalogViewFilter.allCases.count, "each tick has its own glyph")
         // The pure per-record filters carry a predicate; the model-backed one and the group pass do not.
         let modelBacked: Set<CatalogViewFilter> = [.notYetArchived, .onePerFootage]
         for f in CatalogViewFilter.allCases {
@@ -109,9 +110,9 @@ struct CatalogShowFilterStoreTests {
 
     @Test("LOGIC: Audio Only and Videos Missing Sound cannot both be on — turning one on turns the other off")
     func theSoundPairIsMutuallyExclusive() {
-        #expect(CatalogViewFilter.audioOnly.excludes == .videosMissingSound)
-        #expect(CatalogViewFilter.videosMissingSound.excludes == .audioOnly)
-        for f in [CatalogViewFilter.notYetArchived, .needsDate, .onePerFootage] { #expect(f.excludes == nil, "\(f)") }
+        #expect(CatalogViewFilter.audioOnly.excludes == [.videosWithSound, .videosMissingSound])
+        #expect(CatalogViewFilter.videosMissingSound.excludes == [.audioOnly, .videosWithSound])
+        for f in [CatalogViewFilter.notYetArchived, .needsDate, .onePerFootage] { #expect(f.excludes.isEmpty, "\(f)") }
         withDefaults { defaults in
             let lines = Lines()
             let s = store(defaults, lines)
@@ -138,6 +139,88 @@ struct CatalogShowFilterStoreTests {
             #expect(store(defaults, relaunch).active == [.audioOnly])
             #expect(relaunch.all.first?.contains("dropped Videos Missing Sound") == true)
             #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "audioOnly")
+        }
+    }
+
+    // DECISIONS 2026-11-18: "the three untick each other; nothing ticked = everything".
+    @Test("LOGIC: the three kind ticks untick each other — every on/off from every state, one line per change")
+    func theThreeKindTicksUntickEachOther() {
+        let kinds = CatalogViewFilter.kinds
+        #expect(kinds == [.audioOnly, .videosWithSound, .videosMissingSound], "menu order")
+        #expect(CatalogViewFilter.videosWithSound.excludes == [.audioOnly, .videosMissingSound])
+        for k in kinds { #expect(!k.excludes.contains(k) && k.excludes.count == 2, "\(k)") }
+        // The pure rule, from every legal starting set over the six filters: turning a kind on
+        // leaves exactly that kind on and every other filter as it was; turning it off touches nothing else.
+        let all = CatalogViewFilter.allCases
+        for mask in 0..<(1 << all.count) {
+            let start = CatalogShowFilterStore.legal(Set(all.enumerated().filter { mask & (1 << $0.offset) != 0 }.map(\.element)))
+            for k in kinds {
+                let on = CatalogShowFilterStore.applying(k, on: true, to: start)
+                #expect(on.intersection(kinds) == [k], "\(start) + \(k)")
+                #expect(on.subtracting(kinds) == start.subtracting(kinds), "\(start) + \(k): another filter changed")
+                let off = CatalogShowFilterStore.applying(k, on: false, to: start)
+                #expect(off == start.subtracting([k]), "\(start) - \(k)")
+            }
+        }
+        withDefaults { defaults in
+            let lines = Lines()
+            let s = store(defaults, lines)
+            s.set(.notYetArchived, on: true, by: .showMenu)
+            s.set(.videosMissingSound, on: true, by: .showMenu)
+            lines.all.removeAll()
+            s.set(.videosWithSound, on: true, by: .showMenu)
+            #expect(s.active == [.videosWithSound, .notYetArchived])
+            #expect(lines.all == ["Catalog Show filters: on: Videos with Sound; off: Videos Missing Sound (by Show menu) "
+                                    + "→ now Videos with Sound, Not Yet Archived"])
+            s.set(.audioOnly, on: true, by: .showMenu)
+            #expect(s.active == [.audioOnly, .notYetArchived])
+            #expect(lines.all.last == "Catalog Show filters: on: Audio Only; off: Videos with Sound (by Show menu) "
+                                        + "→ now Audio Only, Not Yet Archived")
+            s.set(.videosWithSound, on: true, by: .showMenu)
+            s.set(.videosWithSound, on: false, by: .showMenu)
+            #expect(s.active == [.notYetArchived], "off turns nothing else on")
+            // Persisted under its stable key, and restored.
+            s.set(.videosWithSound, on: true, by: .showMenu)
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == "videosWithSound,notYetArchived")
+            #expect(store(defaults, Lines()).active == [.videosWithSound, .notYetArchived])
+        }
+    }
+
+    @Test("LOGIC: a stored set holding two or three kind ticks (hand-edited) keeps the first in menu order and says which it dropped",
+          arguments: [("videosWithSound,videosMissingSound,needsDate", Set<CatalogViewFilter>([.videosWithSound, .needsDate]),
+                       "dropped Videos Missing Sound: only one of Audio Only, Videos with Sound, Videos Missing Sound can be on; kept Videos with Sound"),
+                      ("audioOnly,videosWithSound", Set<CatalogViewFilter>([.audioOnly]),
+                       "dropped Videos with Sound: only one of Audio Only, Videos with Sound, Videos Missing Sound can be on; kept Audio Only"),
+                      ("videosMissingSound,videosWithSound,audioOnly", Set<CatalogViewFilter>([.audioOnly]),
+                       "dropped Videos with Sound, Videos Missing Sound: only one of Audio Only, Videos with Sound, Videos Missing Sound can be on; kept Audio Only")])
+    func twoKindTicksStoredAreMadeLegal(stored: String, expected: Set<CatalogViewFilter>, words: String) {
+        withDefaults { defaults in
+            defaults.set(stored, forKey: CatalogShowFilterStore.key)
+            let lines = Lines()
+            #expect(store(defaults, lines).active == expected)
+            #expect(lines.all.count == 1 && lines.all[0].contains(words), "\(lines.all)")
+            #expect(defaults.string(forKey: CatalogShowFilterStore.key) == CatalogShowFilterStore.encode(expected), "rewritten legal")
+            let again = Lines()
+            #expect(store(defaults, again).active == expected)
+            #expect(again.all == ["Catalog Show filters: restored at launch → " + CatalogShowFilterStore.names(expected)])
+        }
+    }
+
+    @Test("LOGIC: every value the five-tick build could have stored still loads unchanged after Videos with Sound arrives")
+    func theFiveTickBuildsSettingsStillLoad() {
+        let five: [CatalogViewFilter] = [.audioOnly, .videosMissingSound, .notYetArchived, .needsDate, .onePerFootage]
+        for mask in 0..<(1 << five.count) {
+            let set = Set(five.enumerated().filter { mask & (1 << $0.offset) != 0 }.map(\.element))
+            guard !(set.contains(.audioOnly) && set.contains(.videosMissingSound)) else { continue }   // that build never wrote this
+            withDefaults { defaults in
+                let raw = CatalogViewFilter.ordered(set).map(\.rawValue).joined(separator: ",")
+                defaults.set(raw, forKey: CatalogShowFilterStore.key)
+                let lines = Lines()
+                #expect(store(defaults, lines).active == set, "\(raw)")
+                #expect(lines.all == ["Catalog Show filters: restored at launch → " + CatalogShowFilterStore.names(set)],
+                        "nothing dropped, nothing migrated: \(lines.all)")
+                #expect(defaults.string(forKey: CatalogShowFilterStore.key) == raw, "not rewritten")
+            }
         }
     }
 

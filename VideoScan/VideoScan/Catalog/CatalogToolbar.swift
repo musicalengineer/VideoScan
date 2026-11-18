@@ -329,11 +329,12 @@ struct CatalogToolbar<Dashboard: View>: View {
             // and ⌘⌫ (VideoScanModel+TrashSelection.swift).
 
             Menu {
-                // The Show menu's final shape for now (DECISIONS 2026-11-17):
-                // five filter ticks — no tick lists everything — and two
-                // switches that are not filters (disconnected media, the
-                // folder view). The media-kind section is gone: Audio Only
-                // is one of the five.
+                // The Show menu's final shape for now (DECISIONS 2026-11-17,
+                // Videos with Sound back 2026-11-18): six filter ticks — no
+                // tick lists everything — and two switches that are not
+                // filters (disconnected media, the folder view). The
+                // media-kind section is gone: Audio Only, Videos with Sound
+                // and Videos Missing Sound are the three kind ticks.
                 // Baseline reachability opt-out (2026-07-20). Reachable-only
                 // is the DEFAULT; this toggle lifts that baseline. Kept in its
                 // own section ABOVE the additive filters — and deliberately
@@ -356,7 +357,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 }
                 Section("Show files — filters") {
                     // Every row asks the ONE store (which applies the
-                    // Audio Only / Videos Missing Sound exclusion, persists
+                    // three kind ticks' exclusion, persists
                     // and logs); the words are the filter's `title`, the
                     // same ones the Showing box uses.
                     ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
