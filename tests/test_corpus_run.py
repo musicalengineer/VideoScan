@@ -171,6 +171,7 @@ class CorpusScene:
                removal=('removedFromCatalog', 'gone'))
         for n in range(20, 30):
             db.add(f'/Volumes/OtherDrive/unrelated {n}.mp4', digest=sha_of(n), size=10 + n)
+        self.pair_source(db)
         db.conn.execute("CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")     # GRDB's own, as in a real catalog
         db.conn.executemany("INSERT INTO grdb_migrations VALUES (?)", [("v1",), ("v2",)])
         db.conn.execute("UPDATE catalog_state SET master_archive = ? WHERE singleton = 1",
@@ -182,6 +183,30 @@ class CorpusScene:
             leftover.unlink()
         folder.rmdir()
         self.source_hash = hashlib.sha256(self.source.read_bytes()).hexdigest()
+
+    GROUP = '11111111-2222-3333-4444-555555555555'
+
+    def pair_source(self, db):
+        """Pair links as a real catalog holds them. File 1 (the Avid video half) and file 2: an
+        import-era link each (an import run, its items, legacy_pair_ids) in one pair group. File 0:
+        an import-era link the app later CLEARED (row_knowledge 'pair' = {}). A file that is not in
+        the corpus: paired too. The run is left open — the schema refuses to insert a finished one."""
+        c = db.conn
+        ids = {row[1]: row[0] for row in c.execute("SELECT id, full_path FROM files WHERE removal_state IS NULL")}
+        c.execute("INSERT INTO import_runs (run_id, started_at, source_sha256, source_generation, integrity_run_id, "
+                  "audit_run_started_at, audit_run_finished_at, audit_generation, integrity_started_at, integrity_generation) "
+                  "VALUES ('run-1', 1, ?, 3, 'integrity', 1, 2, 3, 3, 3)", ('a' * 64,))
+        paired = [self.FILES[1][1], self.FILES[2][1], self.FILES[0][1], '/Volumes/OtherDrive/unrelated 20.mp4']
+        for ordinal, path in enumerate(paired):
+            c.execute("INSERT INTO import_items (import_run, source_file, source_ordinal, item_kind, source_key, landed_table, landed_ref) "
+                      "VALUES ('run-1', 'catalog.json', ?, 'row', ?, 'files', ?)", (ordinal, ids[path], ids[path]))
+            c.execute("INSERT INTO legacy_pair_ids (import_run, source_ordinal, json_row_id, paired_with_id, pair_group_id) "
+                      "VALUES ('run-1', ?, ?, ?, ?)", (ordinal, ids[path], None if ordinal else ids[paired[1]],
+                                                       self.GROUP if ordinal < 2 else '99999999-0000-0000-0000-00000000000%d' % ordinal))
+        for value in ('{"pairGroupID": "old", "pairConfidence": "low"}', '{}'):                    # the newest word wins: cleared
+            c.execute("INSERT INTO row_knowledge (file_id, field, value_json, set_at, source, generation) "
+                      "VALUES (?, 'pair', ?, 5, 'app:correlate', 3)", (ids[self.FILES[0][1]], value))
+        self.ids = ids
 
     def catalog(self):
         return sqlite3.connect(f'file:{self.seal.state / DB}?mode=ro', uri=True)
@@ -340,11 +365,63 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(conn.execute('SELECT master_archive FROM catalog_state').fetchone()[0], None)
         self.assertEqual(conn.execute('SELECT count(*) FROM user_dates').fetchone()[0], 1)
         self.assertEqual(conn.execute('SELECT count(*) FROM workflow_tags').fetchone()[0], 1)
-        for family_text in ('transcripts', 'captions', 'people_tags', 'tombstones'):
+        for family_text in ('transcripts', 'captions', 'people_tags', 'tombstones', 'import_runs', 'import_items', 'legacy_pair_ids'):
             self.assertEqual(conn.execute(f'SELECT count(*) FROM {family_text}').fetchone()[0], 0, family_text)
         conn.close()
         self.assertIn('GREEN 3 rows for 3 manifest files', lines[0])
         self.assertTrue((self.scene.seal.state / LATCH).is_file())
+
+    def test_pair_links_are_carried_as_the_apps_own_row_knowledge_rows(self):
+        # D. The Avid halves read as unpaired: the import evidence cannot be carried (a finished run is
+        # refused, an open one names every occurrence), so each link goes in through row_knowledge.
+        code, lines = cr.prepare(self.scene.seal)
+        conn = self.scene.catalog()
+        rows = conn.execute("SELECT f.full_path, k.field, k.value_json, k.source, k.import_run, k.digest = f.content_digest "
+                            "FROM row_knowledge k JOIN files f ON f.id = k.file_id ORDER BY f.full_path").fetchall()
+        conn.close()
+        media = str(self.scene.corpus / 'media')
+        self.assertEqual(len(rows), 2, 'one link per paired corpus file; the cleared link and the file outside the corpus are not carried')
+        ids = self.scene.ids
+        video, other = self.scene.FILES[1][1], self.scene.FILES[2][1]
+        want = {media + video: {'pairGroupID': self.scene.GROUP, 'pairedWithID': ids[other]},
+                media + other: {'pairGroupID': self.scene.GROUP}}
+        for path, field, value, source, import_run, digest_matches in rows:
+            self.assertEqual((field, source, import_run, digest_matches), ('pair', 'app:corpus-prepare', None, 1))
+            self.assertEqual(json.loads(value), want[path])
+        self.assertIn('  pair links carried: 2 (2 from the import, 0 the app\'s own) — 1 pairs with two or more halves in the corpus, '
+                      '0 halves whose partner is not in the corpus', lines)
+        prepared = json.loads((self.scene.seal.state / 'prepare.json').read_text())
+        self.assertEqual((prepared['transform_version'], prepared['counts']['pair_links']), (cr.TRANSFORM_VERSION, 2))
+
+    def test_the_apps_later_word_replaces_the_imports_and_a_lone_half_is_counted(self):
+        src = sqlite3.connect(self.scene.source)
+        ids = self.scene.ids
+        src.execute("INSERT INTO row_knowledge (file_id, field, value_json, set_at, source, generation) VALUES (?, 'pair', ?, 9, 'app:correlate', 3)",
+                    (ids[self.scene.FILES[2][1]], json.dumps(dict(pairGroupID='aaaaaaaa-0000-0000-0000-000000000001', pairConfidence='high'))))
+        src.execute("INSERT INTO row_knowledge (file_id, field, value_json, set_at, source, generation) VALUES (?, 'pair', 'null', 9, 'app:correlate', 3)",
+                    (ids[self.scene.FILES[1][1]],))
+        src.commit()
+        src.close()
+        for leftover in self.scene.corpus.glob(cr.SOURCE_BACKUP + '-*'):
+            leftover.unlink()
+        _, lines = cr.prepare(self.scene.seal)
+        conn = self.scene.catalog()
+        rows = conn.execute("SELECT value_json FROM row_knowledge").fetchall()
+        conn.close()
+        self.assertEqual([json.loads(r[0]) for r in rows], [dict(pairGroupID='aaaaaaaa-0000-0000-0000-000000000001', pairConfidence='high')])
+        self.assertIn("pair links carried: 1 (0 from the import, 1 the app's own) — 0 pairs with two or more halves in the corpus, "
+                      "1 halves whose partner is not in the corpus", '\n'.join(lines))
+
+    def test_a_lane_refuses_a_sealed_catalog_built_by_an_older_transform(self):
+        cr.prepare(self.scene.seal)
+        entries = cr.load_manifest(self.scene.seal)
+        cr.sealed_state_ready(self.scene.seal, entries)
+        record = self.scene.seal.state / 'prepare.json'
+        for poison in (json.dumps(dict(json.loads(record.read_text()), transform_version=1)), '{not json', '[]'):
+            record.write_text(poison)
+            with self.assertRaises(cr.Refused) as refused:
+                cr.sealed_state_ready(self.scene.seal, entries)
+            self.assertIn('run `scripts/corpus_run.sh prepare`', str(refused.exception))
 
     def test_the_source_backup_is_never_written(self):
         cr.prepare(self.scene.seal)
@@ -516,7 +593,7 @@ class LaneTests(unittest.TestCase):
         self.assertEqual(report['seal']['homeSealed'], True)
         outcomes = json.loads((self.scene.report_dir() / 'outcomes.json').read_text())
         self.assertEqual(sorted(outcomes), sorted(sha_of(n) for n in range(3)))
-        self.assertEqual(outcomes[sha_of(1)]['outcome'], 'probe=OK check=Problem audio=not_checked')
+        self.assertEqual(outcomes[sha_of(1)]['outcome'], 'probe=OK check=Problem audio=not_checked pair=not_run')
         self.assertEqual(outcomes[sha_of(1)]['check_kinds'], ['truncation:Problem'])
         summary = (self.scene.out / 'corpus-summary.txt').read_text()
         self.assertIn('corpus check: GREEN 3 files', summary)
@@ -1196,6 +1273,44 @@ class HousekeepingTests(unittest.TestCase):
         self.assertFalse(dead.exists())
         self.assertTrue((live / 'archive' / 'file.bin').exists())
         self.assertEqual((outside / 'keep.txt').read_text(), 'keep', 'a symlink in the work folder was followed')
+
+
+class PairEngineTests(unittest.TestCase):
+    """D. `check` reports the pair link; an engine the baseline never had is not a change."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_check_lane_has_a_pair_engine_and_the_driver_reads_the_apps_own_link(self):
+        self.assertEqual(cr.LANES['check'][1], ['probe', 'check', 'audio', 'pair'])
+        driver = (SCRIPTS / 'corpus' / 'CorpusCheckDriver.swift').read_text()
+        for needle in ('await run.engine(item, "pair")', 'record.pairGroupID', 'record.pairedWith', 'CatalogPairGroups.isHalf(record)',
+                       'record.soundPresenceContext.soundPartnerName', '"paired_partner_in_corpus"', '"paired_partner_absent"', '"unpaired"'):
+            self.assertIn(needle, driver, needle)
+
+    def test_a_new_engine_is_not_a_change_against_a_baseline_that_never_ran_it(self):
+        self.scene.run()                                                             # the baseline: three engines
+        self.assertEqual(json.loads((self.scene.report_dir() / 'outcomes.json').read_text())[sha_of(0)].get('pair'), 'not_run')
+        stored = self.scene.report_dir() / 'outcomes.json'
+        old = json.loads(stored.read_text())
+        for record in old.values():                                                  # as a run from before the pair engine stored it
+            record.pop('pair', None)
+            record.pop('pair_kinds', None)
+        stored.write_text(json.dumps(old))
+        self.scene.plan['engines'] = ['probe', 'check', 'audio', 'pair']
+        self.scene.plan['files'] = {sha_of(1): dict(pair='paired_partner_in_corpus')}
+        self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_GREEN)
+        self.assertIn('0 of 3 files changed', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertIn('  pair: OK 2, paired_partner_in_corpus 1', (self.scene.out / 'corpus-summary.txt').read_text())
+        # Once a run with the engine is the baseline, a moved pair word IS a change.
+        cr.accept(self.scene.seal, 'check', 'x')
+        self.scene.plan['files'] = {sha_of(1): dict(pair='unpaired')}
+        self.assertEqual(self.scene.run(stamp='20261118_100000_3'), cr.EXIT_AMBER)
+        self.assertIn(f'    {sha_of(1)[:12]} pair: paired_partner_in_corpus -> unpaired', (self.scene.out / 'corpus-summary.txt').read_text().splitlines())
 
 
 class ScaleTests(unittest.TestCase):

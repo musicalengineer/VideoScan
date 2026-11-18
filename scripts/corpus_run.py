@@ -9,7 +9,7 @@ runs ON THE M4; `scripts/corpus_run.sh` launches it from the Ultra through
 `--ref` checkout). It is also fed to `python3 - status` over ssh.
 
   host prepare   build the sealed state: ~/corpus/state/<the catalog file>
-  host check     probe · Check Media (quick) · Verify Audio, every corpus file
+  host check     probe · Check Media (quick) · Verify Audio · the A/V pair link, every corpus file
   host proof     Balance Audio into work/, then the balanced-copy proof
   host verbs     the verbs that move, trash and promote — on CLONES in work/
   status         the newest run of each lane, judged against the lane's baseline
@@ -104,7 +104,7 @@ MARKER = "THIS_IS_TEST_DATA.txt"
 MANIFEST = "corpus-manifest-v1.json"
 SHA_LIST = "corpus-sha-v1.txt"
 SOURCE_BACKUP = "catalog-source-backup.sqlite"
-TRANSFORM_VERSION = 1
+TRANSFORM_VERSION = 2            # 2: pair links carried as row_knowledge 'pair' rows
 
 OVERLAY_DIR = "VideoScan/VideoScanTests/CorpusHarnessOverlay"     # untracked, in the testbed, for one run
 PROOF_ENGINE_GLOB = "VideoScan/VideoScan/MediaOps/BalancedCopyProof*.swift"
@@ -112,7 +112,7 @@ PROOF_STRATUM = "one-sided sound"
 
 # lane -> (XCTest class, its engines in order, default per-file deadline in seconds, driver sources)
 LANES = {
-    "check": ("CorpusCheckDriver", ["probe", "check", "audio"], 300,
+    "check": ("CorpusCheckDriver", ["probe", "check", "audio", "pair"], 300,
               ["CorpusDriverSupport.swift", "CorpusCheckDriver.swift"]),
     "proof": ("CorpusProofDriver", ["balance", "proof"], 3600,
               ["CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
@@ -307,14 +307,25 @@ def missing_or_wrong_size(entries: Iterable[Entry]) -> Tuple[int, int]:
 #                     files_path_change_clears_audit_stamp does on a move)
 #   user_dates, workflow_tags   the rows for those digests (Check Media's
 #                     sound-presence rule reads the date and the tags)
+#   row_knowledge     ONE 'pair' row per chosen file that has an A/V pair link
+#                     in the source: the link the app would load for that row
+#                     — the newest row_knowledge 'pair' value of the row, else
+#                     its import-era link (import_items → legacy_pair_ids) —
+#                     written the way the app itself writes a link today
+#                     (field 'pair', source 'app:corpus-prepare', the JSON
+#                     object the loader reads). The import evidence itself is
+#                     NOT carried: `import_runs_open_first` refuses a finished
+#                     run and a run cannot be finished without every one of
+#                     its occurrences; row_knowledge is the schema's own door
+#                     for a link, and the loader lets it win. The ids inside a
+#                     link are carried verbatim, so a half whose partner is
+#                     not in the corpus keeps a link to a row that is not here.
 #
 # Everything else is left empty. NOT carried, and why: other copies of the
 # same content and removed rows (no corpus file stands behind them);
 # captions, transcripts, notes, people (family text the engines do not
-# need); pair links — they live in the import evidence (import_runs →
-# import_items → legacy_pair_ids) and `import_runs_open_first` refuses a
-# finished run, so a video half reads as unpaired here. volume_uuid and the
-# identity stamps still describe the ORIGINAL drive and file.
+# need); the import evidence. volume_uuid and the identity stamps still
+# describe the ORIGINAL drive and file.
 
 CARRIED_BY_DIGEST = ("user_dates", "workflow_tags")
 AUDIT_COLUMNS = ("audit_seen_volume_uuid", "audit_seen_mount_from", "audit_seen_device_key", "audit_seen_at")
@@ -407,6 +418,7 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, ro
                      "FROM src.files f JOIN chosen c ON c.file_id = f.id ORDER BY f.id", binds)
         for table in CARRIED_BY_DIGEST:
             conn.execute(f"INSERT INTO main.{table} SELECT * FROM src.{table} WHERE digest IN (SELECT sha FROM chosen)")
+        pairs = carry_pair_links(conn)
         conn.execute("COMMIT")
 
         integrity = [row[0] for row in conn.execute("PRAGMA main.integrity_check")]
@@ -420,12 +432,64 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, ro
         counts["source_triggers"] = conn.execute("SELECT count(*) FROM src.sqlite_master WHERE type = 'trigger'").fetchone()[0]
         counts["source_files"] = conn.execute("SELECT count(*) FROM src.files").fetchone()[0]
         counts["schema_version"] = conn.execute("SELECT schema_version FROM main.catalog_state").fetchone()[0]
+        counts.update(pairs)
         return counts
     except sqlite3.Error as error:
         # The engine's words name tables, columns and triggers — never a row's values.
         raise Refused("refused: the schema would not take the transform — " + str(error).splitlines()[0][:160])
     finally:
         conn.close()
+
+
+def carry_pair_links(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Inside the build transaction: one row_knowledge 'pair' row per chosen file whose source
+    row has an A/V pair link (see the transform's notes above). Returns counts: links carried,
+    how many came from each source, and how many pair groups have two or more halves here."""
+    have = {row[0] for row in conn.execute("SELECT name FROM src.sqlite_master WHERE type = 'table'")}
+    links: Dict[str, str] = {}
+    counts = {"pair_links": 0, "pair_links_from_import": 0, "pair_links_from_app": 0, "pair_groups_whole": 0,
+              "pair_halves_alone": 0}
+    if "row_knowledge" not in have or "row_knowledge" not in {
+            row[0] for row in conn.execute("SELECT name FROM main.sqlite_master WHERE type = 'table'")}:
+        return counts                                        # a catalog from before the link had a table of its own
+    if {"import_items", "legacy_pair_ids"} <= have:
+        for file_id, paired_with, group in conn.execute(
+                "SELECT ii.landed_ref, lp.paired_with_id, lp.pair_group_id FROM src.import_items ii "
+                "JOIN src.legacy_pair_ids lp ON lp.import_run = ii.import_run AND lp.source_ordinal = ii.source_ordinal "
+                "JOIN chosen c ON c.file_id = ii.landed_ref "
+                "WHERE ii.source_file = 'catalog.json' AND ii.landed_table = 'files'"):
+            link = {k: v for k, v in (("pairedWithID", paired_with), ("pairGroupID", group)) if v is not None}
+            links[file_id] = json.dumps(link, sort_keys=True)
+            counts["pair_links_from_import"] += 1
+    for file_id, value in conn.execute(
+            "SELECT rk.file_id, rk.value_json FROM src.row_knowledge rk JOIN chosen c ON c.file_id = rk.file_id "
+            "WHERE rk.field = 'pair' AND rk.write_id = (SELECT max(write_id) FROM src.row_knowledge "
+            "WHERE file_id = rk.file_id AND field = 'pair')"):
+        if file_id in links:
+            counts["pair_links_from_import"] -= 1            # the app's later word replaces the import's
+        links[file_id] = value
+        counts["pair_links_from_app"] += 1
+    generation = 0
+    if "generation" in _columns(conn, "src", "generations"):
+        generation = int(conn.execute("SELECT coalesce(max(generation), 0) FROM src.generations").fetchone()[0])
+    groups: Counter = Counter()
+    now = int(time.time())
+    for file_id, value in sorted(links.items()):
+        try:
+            link = json.loads(value)
+        except ValueError:
+            link = None
+        if not isinstance(link, dict) or not link:           # '{}' and 'null' both say: no link
+            counts["pair_links_from_app"] -= 1
+            continue
+        conn.execute("INSERT INTO main.row_knowledge (file_id, digest, field, value_json, set_at, source, import_run, generation) "
+                     "SELECT id, content_digest, 'pair', ?, ?, 'app:corpus-prepare', NULL, ? FROM main.files WHERE id = ?",
+                     (json.dumps(link, sort_keys=True), now, generation, file_id))
+        counts["pair_links"] += 1
+        groups[str(link.get("pairGroupID") or link.get("pairedWithID") or file_id)] += 1
+    counts["pair_groups_whole"] = sum(1 for n in groups.values() if n >= 2)
+    counts["pair_halves_alone"] = sum(1 for n in groups.values() if n == 1)
+    return counts
 
 
 def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optional[Path] = None) -> Dict[str, int]:
@@ -507,7 +571,10 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
                  f"migrations={counts['grdb_migrations']}; schema v{counts['schema_version']}, "
                  f"{counts['triggers']} of {counts['source_triggers']} triggers in place; "
                  f"source backup rows={counts['source_files']} (not opened for writing)")
-    lines.append("  not carried: other copies and removed rows, pair links, captions/transcripts/notes/people, the Master Archive designation")
+    lines.append(f"  pair links carried: {counts['pair_links']} ({counts['pair_links_from_import']} from the import, "
+                 f"{counts['pair_links_from_app']} the app's own) — {counts['pair_groups_whole']} pairs with two or more halves "
+                 f"in the corpus, {counts['pair_halves_alone']} halves whose partner is not in the corpus")
+    lines.append("  not carried: other copies and removed rows, the import evidence, captions/transcripts/notes/people, the Master Archive designation")
     if out is not None:
         Path(out, "corpus-summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return EXIT_GREEN, lines
@@ -521,6 +588,13 @@ def sealed_state_ready(seal: Seal, entries: List[Entry]) -> Path:
     verdict = verify_catalog(seal, database, entries)
     if not verdict["ok"]:
         raise Refused("refused: the sealed catalog no longer matches the corpus — run `scripts/corpus_run.sh prepare`")
+    try:
+        built_by = json.loads((seal.state / "prepare.json").read_text(encoding="utf-8")).get("transform_version")
+    except (OSError, ValueError, AttributeError):
+        built_by = None
+    if built_by != TRANSFORM_VERSION:
+        raise Refused(f"refused: the sealed catalog was built by transform {word(str(built_by))}, this harness wants "
+                      f"{TRANSFORM_VERSION} — run `scripts/corpus_run.sh prepare`")
     return database
 
 
@@ -1168,6 +1242,8 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
     for sha in sorted(set(old) & set(new)):
         words = []
         for e in engines:
+            if e not in old[sha]:
+                continue                                     # an engine the lane did not have then: nothing to compare
             a, b = old[sha].get(e, "not_run"), new[sha].get(e, "not_run")
             if a != b:
                 transitions[f"{e}: {a} -> {b}"] += 1
