@@ -9436,6 +9436,7 @@
         "reanchoredDecisionTable",
         "rebuildAudioArguments",
         "rebuildAudioPlaysToTheLastSample",
+        "rewrittenTimestampsAreExact",
         "soundFilterTable",
         "theProofNamesAReanchoredTape",
         "unlockedSoundPlaysToTheLastSample",
@@ -40660,7 +40661,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 778,
+      "expected_floor": 779,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

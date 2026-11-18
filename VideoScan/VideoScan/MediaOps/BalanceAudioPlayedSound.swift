@@ -10,9 +10,11 @@ import Foundation
 
 extension BalanceAudioFix {
 
-    /// How many samples a lossless copy may store beyond what its header
-    /// says it plays: one, plus ffprobe's six-decimal rounding.
-    static let unplayedSoundToleranceSamples = 1.5
+    /// How far the stored count may exceed what the header says is played
+    /// and still be "all of it": under one sample. The slack is only for
+    /// ffprobe's six printed decimals (±0.024 of a sample at 48 kHz, ±0.1 at
+    /// 192 kHz); one whole sample outside the edit list is a breach.
+    static let unplayedSoundToleranceSamples = 0.5
 
     /// Post-render rule: a LOSSLESS balanced copy in the QuickTime family
     /// must play all the sound it stores. `storedSamples` = the samples the

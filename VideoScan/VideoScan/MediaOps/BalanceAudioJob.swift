@@ -191,7 +191,7 @@ enum BalanceAudioFix {
     // the edit list, the last packet unplayed).
     //
     // The fix: after the pan, the sound's timestamps are rewritten from the
-    // SAMPLE COUNT (`asetpts`: first timestamp kept, then one tick a
+    // SAMPLE COUNT (`asetpts`: first timestamp kept, then exactly one tick a
     // sample). No sample is added, dropped or changed — `asetpts` touches
     // timestamps only — and QuickTime stores PCM back to back whatever the
     // timestamps say, so the stored samples are the same; only the edit
@@ -208,7 +208,14 @@ enum BalanceAudioFix {
     // a frame at each re-anchor. The balanced-copy proof names that.
 
     /// Rewrites sound timestamps as first-timestamp + samples-so-far.
-    static let sampleCountTimestamps = "asetpts=STARTPTS+N/SR/TB"
+    /// `round(…)` is load-bearing: `asetpts` TRUNCATES its result, and the
+    /// bare idiom `N/SR/TB` is floating point — measured 2026-11-18, it lands
+    /// one sample early about once a second (24024/48000×48000 → 24023),
+    /// which is again a timestamp that spans fewer samples than are stored.
+    /// Rounded, the result is exact for any tape (a double holds integers
+    /// to 2^53 samples), and a tape that never re-anchors is rendered byte
+    /// for byte as it was before the fix.
+    static let sampleCountTimestamps = "asetpts=STARTPTS+round(N/SR/TB)"
 
     /// The sound's whole filter chain: the pan, then — raw DV only — the
     /// timestamp rewrite above. Pure.
