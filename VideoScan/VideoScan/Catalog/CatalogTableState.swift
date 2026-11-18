@@ -60,6 +60,21 @@ struct CatalogTableState: DynamicProperty {
     /// cell painter compares, not a data reload).
     @State var angelBadgeRevision: Int = 0
 
+    /// Rows that are listed although they no longer match a Show filter:
+    /// selected when an edit changed them, kept until the selection moves
+    /// (CatalogRows.swift, THE HELD ROW). Written by computeFiltered, read
+    /// by the filename cell (the mark) and by the selection handler (the
+    /// release). Empty almost always.
+    @State var noLongerMatchingIDs: Set<UUID> = []
+    /// Ticks after a record edit (`.videoScanCatalogMutated`), debounced —
+    /// what makes the table re-apply its filters at the edit, not at some
+    /// later unrelated refresh. @State, not @StateObject, for the same
+    /// Swift 6 reason as `folderPaintClock` below.
+    @State var editClock = CatalogEditClock()
+    /// The clock revision the rows were last refreshed for (a @Published
+    /// publisher replays its value on subscribe; this makes the replay a no-op).
+    @State var editRevisionSeen: UInt64 = 0
+
     /// Which pane has the keyboard, for the Space monitor (see
     /// CatalogPaneFocusMirror). Written only by `.onChange(of: focusedPane)`.
     @State var paneFocusMirror = CatalogPaneFocusMirror()
@@ -170,19 +185,44 @@ extension CatalogContent {
     var folderRows: [FootageFolderTableRow] { tableState.folderRows }
 
     /// Recompute the rows, then keep the file selection only for rows the
-    /// filter still shows (Rick 2026-10-06: "drop highlighted files that a
+    /// table still lists (Rick 2026-10-06: "drop highlighted files that a
     /// filter or search hides" — Finder's rule; a hidden selection was a
     /// ⌘⌫ / Promote trap). Never touches keyboard focus. With the folder
     /// view on, the folder display follows the new rows (a no-op otherwise)
     /// and prunes again against what it shows when it lands
     /// (`rebuildFolderRows` → `pruneSelectionToDisplay`).
-    func refreshRows() {
-        tableData = computeFiltered()
+    ///
+    /// `afterEdit` (2026-11-17): the refresh was caused by the DATA changing
+    /// (a record edit, a job's writes, a batch landing) — not by Rick
+    /// changing a filter, the search or the scope. Then a row that is
+    /// selected and listed stays listed even if a Show filter no longer
+    /// matches it (marked; it leaves when the selection moves off it), so an
+    /// edit never makes the row under the cursor vanish. A filter, search or
+    /// scope change holds nothing: Finder's rule above. Either way the
+    /// selection ends up a subset of the listed rows.
+    func refreshRows(afterEdit: Bool = false) {
+        let hold = afterEdit ? CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData) : []
+        tableData = computeFiltered(holding: hold)
         // A selected folder row is not a record: it stays selected.
         let kept = CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)
             .union(selectedIDs.intersection(tableState.folderIDs))
         if kept != selectedIDs { selectedIDs = kept }
         refreshFolderDisplay()
+    }
+
+    /// The selection changed: a held row Rick has moved off leaves now.
+    /// O(1) unless a held row was released (then one refresh).
+    func releaseHeldRowsIfSelectionMoved() {
+        let held = tableState.noLongerMatchingIDs
+        guard !held.isEmpty, !held.isSubset(of: selectedIDs) else { return }
+        refreshRows(afterEdit: true)
+    }
+
+    /// The edit clock ticked: re-apply the filters now, holding the selection.
+    func catalogEdited(revision: UInt64) {
+        guard revision != tableState.editRevisionSeen else { return }
+        tableState.editRevisionSeen = revision
+        refreshRows(afterEdit: true)
     }
 
     // MARK: The displayed selection — ONE source of truth for every row action

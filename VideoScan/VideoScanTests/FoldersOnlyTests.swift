@@ -206,7 +206,7 @@ struct FoldersOnlySensorTests {
         let toolbar = try code("CatalogToolbar.swift")
         let section = try #require(toolbar.range(of: "Section(\"Show files — as folders\") {"))
         #expect(toolbar[section.upperBound...].prefix(160).contains("FoldersOnlyShowToggle(isOn: $showFoldersOnly)"))
-        let clear = try #require(toolbar.range(of: "Button(\"Clear All Filters\")"))
+        let clear = try #require(toolbar.range(of: "Button(CatalogShowingSummary.clearAllFiltersTitle)"))
         #expect(!toolbar[clear.upperBound...].prefix(80).contains("showFoldersOnly"), "a view shape, not a filter")
         #expect(FootageFolderWords.foldersOnlyHelp
                 == "Show only your folders and what's in them — files in no folder are hidden. Click again to show everything.")

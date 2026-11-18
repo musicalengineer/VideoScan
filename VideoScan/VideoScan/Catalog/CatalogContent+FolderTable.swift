@@ -723,17 +723,23 @@ struct FoldersOnlyShowToggle: View {
 
 /// Which line an empty Catalog table shows. The search emptying the table
 /// outright wins; then Folders Only finding no folder (top level, the
-/// folder view on — the caller folds those in). Pure, so tests pin it.
+/// folder view on — the caller folds those in); then the Show filters; then
+/// the Person picker. Pure, so tests pin it.
 /// (For Rick: an enum class returned by a tiny pure chooser.)
 enum CatalogEmptyNote: Equatable {
-    case none, noMatches, noFolders, noPerson
+    case none, noMatches, noFolders, noPerson, filtered
 
     /// `personChosen`: the Person picker names someone (2026-10-24) — an
     /// empty table then says so, by name, instead of a blank pane.
+    /// `filtersActive`: a Show filter is on and in force (2026-11-17) — an
+    /// empty table then names the filters and offers Clear All Filters. It
+    /// goes before the person line: clearing the filters is one click, and
+    /// if the person is the reason the person line shows next.
     static func pick(rowsEmpty: Bool, searching: Bool, foldersOnlyFindsNothing: Bool,
-                     personChosen: Bool = false) -> CatalogEmptyNote {
+                     personChosen: Bool = false, filtersActive: Bool = false) -> CatalogEmptyNote {
         if rowsEmpty && searching { return .noMatches }
         if foldersOnlyFindsNothing { return .noFolders }
+        if rowsEmpty && filtersActive { return .filtered }
         return rowsEmpty && personChosen ? .noPerson : .none
     }
 }

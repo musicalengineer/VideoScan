@@ -67,23 +67,19 @@ struct CatalogToolbar<Dashboard: View>: View {
     let avidBinCount: Int
     let avidBinFiles: Int
     @Binding var showPairsOnly: Bool
-    @Binding var viewFilters: Set<CatalogViewFilter>
+    /// The Show ▸ filters' ONE owner (CatalogShowFilterStore.swift). The
+    /// toolbar reads `active` and asks the store for every change, naming
+    /// itself — it holds no filter set of its own.
+    @ObservedObject var showFilters: CatalogShowFilterStore
+    /// The focus banner's caption while a focus set ("Show in Catalog", an
+    /// A/V pair) overrides every filter; nil otherwise. The Showing box then
+    /// says the focus instead of listing filters that are not in force.
+    let focusLabel: String?
     /// Baseline reachability opt-out (2026-07-20). Reachable-only is the
     /// DEFAULT; when this is ON the catalog also shows media on disconnected
     /// volumes. Persisted in @AppStorage("catalog.showDisconnectedMedia") by
-    /// the parent. NOT part of `viewFilters` — "Clear All Filters" leaves it.
+    /// the parent. NOT one of the Show filters — "Clear All Filters" leaves it.
     @Binding var showDisconnectedMedia: Bool
-    /// When on, purged rows render alongside active rows (italic + orange).
-    /// Persisted in @AppStorage("catalogShowRemoved") by the parent.
-    @Binding var showRemoved: Bool
-    /// When on, set-aside rows (catalog scope: photos / music / audio with
-    /// no matching video) render alongside active rows (italic + purple).
-    /// Persisted in @AppStorage("catalogShowSetAside") by the parent.
-    @Binding var showSetAside: Bool
-    /// When on, superseded rows (originals retired by a confirmed repair,
-    /// GH #132) render alongside active rows (italic + brown). Session-
-    /// scoped @State in the parent — deliberately NOT persisted.
-    @Binding var showSuperseded: Bool
     /// Show ▸ Events & Copies as Folders (2026-10-16): confirmed events as
     /// folders, copies and versions under their recording. Remembered by
     /// the parent (CatalogFootageFoldersSetting). Off by default.
@@ -107,28 +103,26 @@ struct CatalogToolbar<Dashboard: View>: View {
     let onSelectPerson: (UUID?) -> Void
 
     /// True when the View menu holds any non-default state — an active
-    /// filter, one of the hidden-record reveals that moved into the
-    /// menu on 2026-08-11, or the folder view. Drives the menu's filled
+    /// filter or the folder view. (The hidden-record reveals — Removed, Set
+    /// aside, Superseded originals — left the menu 2026-11-17; those rows
+    /// are always hidden in this list.) Drives the menu's filled
     /// icon so a toggle buried one click deep still announces itself.
     private var viewIsModified: Bool {
-        !viewFilters.isEmpty || showRemoved || showSetAside || showSuperseded || showFootageFolders
+        !showFilters.active.isEmpty || showFootageFolders
     }
 
     /// Plain values for the Showing box — a handful of Bools, no records.
     private var showingState: CatalogShowingSummary.State {
         CatalogShowingSummary.State(
-            kindFacet: model.kindFacetSetting.facet,
-            viewFilters: viewFilters,
+            viewFilters: showFilters.active,
             showPairsOnly: showPairsOnly,
             showDisconnectedMedia: showDisconnectedMedia,
-            showRemoved: showRemoved,
-            showSetAside: showSetAside,
-            showSuperseded: showSuperseded,
             footageFolders: showFootageFolders,
             foldersOnly: showFoldersOnly,
             // Reading the revision is what makes a flip redraw this box.
             estimateFolders: estimateFoldersRevision >= 0 && showFootageFolders && model.footageFolders.estimated,
             hasMasterArchive: model.masterArchive != nil,
+            focusLabel: focusLabel,
             selectedVolumeLabels: selectedVolumeLabels,
             selectedPersonName: selectedPerson?.name)
     }
@@ -167,21 +161,8 @@ struct CatalogToolbar<Dashboard: View>: View {
     // identical work to the table filter running 250 ms-debounced in
     // parallel. CatalogContent.computeFiltered() now derives the badge
     // count from its own single pass — over the same purge → set-aside
-    // → kind-facet base (#124) the old pfSearchBadgeBase scan used —
+    // → superseded base the old pfSearchBadgeBase scan used —
     // and publishes it up through ContentView (`searchHitCount` above).
-
-    /// Facet chip binding — explicit save() on every change (@Published
-    /// kills didSet; same pattern as the catalog-scope binding in
-    /// ScanOptionsMenu).
-    private var kindFacetBinding: Binding<CatalogKindFacet> {
-        Binding(
-            get: { model.kindFacetSetting.facet },
-            set: { newVal in
-                model.kindFacetSetting.facet = newVal
-                model.saveKindFacetSetting()
-            }
-        )
-    }
 
     /// "+ Filter" menu next to the search field. Each pick appends a
     /// field-prefix token (or a complete `stream:...` token) to the
@@ -201,9 +182,8 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Button("Notes")       { insertSearchPrefix("notes:") }
             }
             Section("Structural") {
-                // GH #124: the facet-family grammar. type:video is the
-                // video-BEARING bucket (V+A or video-only), matching the
-                // toolbar facet chip's Videos spelling.
+                // GH #124: the media-kind grammar. type:video is the
+                // video-BEARING bucket (V+A or video-only).
                 Menu("Media kind") {
                     Button("Video (any)")    { insertSearchToken("type:video") }
                     Button("Video only")     { insertSearchToken("type:video-only") }
@@ -315,7 +295,8 @@ struct CatalogToolbar<Dashboard: View>: View {
                     canCombine: canCombine,
                     isCombining: isCombining,
                     showPairsOnly: $showPairsOnly,
-                    viewFilters: $viewFilters,
+                    onePerFootage: showFilters.active.contains(.onePerFootage),
+                    onSetOnePerFootage: { showFilters.set(.onePerFootage, on: $0, by: .analyzeMenu) },
                     onUpdateNow: onUpdateNow,
                     onAnalyzeSelectedDuplicates: onAnalyzeDuplicatesSelected,
                     onAnalyzeSelectedFootage: onFindSimilarFootageOfSelected,
@@ -359,23 +340,11 @@ struct CatalogToolbar<Dashboard: View>: View {
             // and ⌘⌫ (VideoScanModel+TrashSelection.swift).
 
             Menu {
-                // Media kind, merged in from the old standalone "All
-                // Kinds" chip (Rick 2026-08-11: the two menus overlapped).
-                // It is a view narrowing like everything else here, so it
-                // belongs in the same menu — and the label below still
-                // names the active facet, so the default-off state stays
-                // visible without its own button.
-                Section("Show files — media kind") {
-                    Picker("Media kind", selection: kindFacetBinding) {
-                        ForEach(CatalogKindFacet.allCases) { facet in
-                            Label(facet.label, systemImage: facet.icon)
-                                .tag(facet)
-                                .help(facet.help)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                }
+                // The Show menu's final shape for now (DECISIONS 2026-11-17):
+                // five filter ticks — no tick lists everything — and two
+                // switches that are not filters (disconnected media, the
+                // folder view). The media-kind section is gone: Audio Only
+                // is one of the five.
                 // Baseline reachability opt-out (2026-07-20). Reachable-only
                 // is the DEFAULT; this toggle lifts that baseline. Kept in its
                 // own section ABOVE the additive filters — and deliberately
@@ -393,30 +362,20 @@ struct CatalogToolbar<Dashboard: View>: View {
                           : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
                 }
                 Section("Show files — filters") {
+                    // Every row asks the ONE store (which applies the
+                    // Audio Only / Videos Missing Sound exclusion, persists
+                    // and logs); the words are the filter's `title`, the
+                    // same ones the Showing box uses.
                     ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
                         Toggle(isOn: Binding(
-                            get: { viewFilters.contains(filter) },
-                            set: { on in
-                                if on { viewFilters.insert(filter) }
-                                else  { viewFilters.remove(filter) }
-                            }
+                            get: { showFilters.active.contains(filter) },
+                            set: { showFilters.set(filter, on: $0, by: .showMenu) }
                         )) {
-                            Label(filter.rawValue, systemImage: filter.icon)
+                            Label(filter.title, systemImage: filter.icon)
                         }
+                        .help(filter.help)
                     }
                 }
-                // Hidden-record reveals, moved off the toolbar row into
-                // this menu (Rick 2026-08-11 — the middle of the window
-                // was too busy for a new user). They are view state, so
-                // the View menu is their natural home; Tidy Catalog
-                // stayed a button because it PERFORMS an action rather
-                // than toggling what you can see.
-                //
-                // Moving them costs the at-a-glance colour cue the
-                // toolbar buttons gave, so the menu's own icon now fills
-                // in when any of them is on — otherwise you could leave
-                // "Show removed" enabled, see italic orange rows, and
-                // have nothing on screen explaining why.
                 // Footage folders (Rick 2026-10-16, docs/design/
                 // footage_folders_2026_10_16.md): a view SHAPE, not a
                 // filter — its own section, left alone by Clear All
@@ -429,33 +388,9 @@ struct CatalogToolbar<Dashboard: View>: View {
                         estimateFoldersRevision &+= 1   // the Showing box's pill reads the store: draw again
                     }
                 }
-                Section("Show files — hidden records") {
-                    Toggle(isOn: $showRemoved) {
-                        Label("Removed", systemImage: showRemoved
-                              ? "eye.trianglebadge.exclamationmark"
-                              : "eye.slash")
-                    }
-                    .help(showRemoved
-                          ? "Removed (purged) records are visible — italic + orange. Click to hide."
-                          : "Click to show removed records alongside active ones.")
-
-                    Toggle(isOn: $showSetAside) {
-                        Label("Set aside", systemImage: "archivebox")
-                    }
-                    .help(showSetAside
-                          ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
-                          : "Click to show the files Set Aside Photos & Music set aside (photos, music, audio with no matching video).")
-
-                    Toggle(isOn: $showSuperseded) {
-                        Label("Superseded originals", systemImage: "arrow.triangle.swap")
-                    }
-                    .help(showSuperseded
-                          ? "Superseded originals (replaced by a confirmed repair) are visible — italic + brown. Right-click one to restore it. Click to hide."
-                          : "Click to show originals that a confirmed repair has replaced. Their files are never touched.")
-                }
-                if !viewFilters.isEmpty {
+                if !showFilters.active.isEmpty {
                     Divider()
-                    Button("Clear All Filters") { viewFilters.removeAll() }
+                    Button(CatalogShowingSummary.clearAllFiltersTitle) { showFilters.clearAll(by: .showMenu) }
                 }
                 // Maintenance: one-click reversible removal of the extensionless
                 // files ffprobe can't read (caches/previews/app data) that the
@@ -470,32 +405,31 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Button("Remove \(junkCount) Unreadable Extensionless File\(junkCount == 1 ? "" : "s")") {
                         _ = model.softDeleteUnreadableExtensionless()
                     }
-                    .help("Hide non-media files with no extension that ffprobe can't read (caches, previews, app data). Files on disk are not deleted; toggle Show Removed to restore.")
+                    .help("Hide non-media files with no extension that ffprobe can't read (caches, previews, app data). Files on disk are not deleted.")
                 }
             } label: {
                 HStack(spacing: 3) {
                     // Filled whenever ANY view state is non-default —
-                    // filters or the hidden-record reveals above. A
+                    // a filter or the folder view. A
                     // toggle hidden in a menu with no outward sign is
-                    // how you end up staring at orange rows wondering
-                    // what changed.
+                    // how you end up wondering what changed.
                     Image(systemName: "line.3.horizontal.decrease.circle\(viewIsModified ? ".fill" : "")")
                     Text("Show")
                 }
-                .foregroundColor(model.kindFacetSetting.facet == .videoBearing
-                                 ? .primary : .teal)
             }
             .menuStyle(.button)
             .vsGlassButtonStyle()
             .fixedSize()
-            .help("Choose which files are shown — media kind, filters, and hidden records")
+            .help("Choose which files are shown — filters and folders. No filter ticked lists everything.")
 
-            // "Showing: Videos · Not yet archived · Connected drives" — a
+            // "Not Yet Archived · Connected drives" — a
             // highlighted box beside the Show menu saying in plain words
             // what the table is filtered to (Rick 2026-08-22: "humans
             // looking at lots of data need bright clear reminders").
-            // Green = the to-do view (archived hidden), blue = archived
-            // included. Click flips between the two.
+            // It is a READOUT, not a control (2026-11-17: a click on it
+            // used to flip Not Yet Archived — a filter changing with no
+            // menu and no log line). The Show menu is the one place to
+            // change a filter.
             // A Volumes-pane selection is the FIRST pill, in the accent
             // colour, and clicking it clears the selection (Rick
             // 2026-10-24: a forgotten selection hid 14 of 17 folders).
@@ -506,14 +440,6 @@ struct CatalogToolbar<Dashboard: View>: View {
                 onSelectPerson(CatalogShowingSummary.personSelection(after: .clearPerson, selectedPerson?.id))
             }
             CatalogShowingBox(state: showingState)
-                .onTapGesture {
-                    if viewFilters.contains(.notYetArchived) {
-                        viewFilters.remove(.notYetArchived)
-                    } else if model.masterArchive != nil {
-                        viewFilters.remove(.hasMasterCopy)
-                        viewFilters.insert(.notYetArchived)
-                    }
-                }
 
             // The TOTAL CATALOG · ARCHIVED · UNIQUE figures live on the
             // volume-table footer line above (Rick 2026-09-12: a second

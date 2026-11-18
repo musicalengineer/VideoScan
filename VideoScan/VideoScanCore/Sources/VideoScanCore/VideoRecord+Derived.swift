@@ -57,7 +57,7 @@ extension VideoRecord {
     /// one-click confirmation (GH #132): it was derived from another
     /// record by a repair operation, and `repairConfirmedDate` is still
     /// nil. Human confirmation is the permanent gate — this drives the
-    /// "Repaired — Awaiting Confirmation" worklist filter.
+    /// waiting list in the Media File Operations window.
     public var isAwaitingConfirmation: Bool {
         derivedFrom != nil
             && repairConfirmedDate == nil

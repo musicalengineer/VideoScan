@@ -133,11 +133,20 @@ struct CatalogPaneFocusSensorTests {
     /// row trigger goes through refreshRows; only onAppear recomputes alone.
     @Test func filterTriggersPruneTheSelection() throws {
         let table = try code("CatalogContent+Table.swift")
-        // 18 since 2026-10-24: the Person ▾ picker's trigger (onChange of
-        // personFilter) goes through refreshRows like every other filter.
-        #expect(occurrences(of: "refreshRows()", in: table) == 18)
+        // 18 since 2026-10-24 (the Person ▾ picker's trigger). Since
+        // 2026-11-17 they are two kinds (and the three hidden-record reveal
+        // triggers are gone with their menu rows; the media-kind trigger went
+        // the same day with the media-kind section): the 8 triggers Rick pulls
+        // himself (a filter, the search, a scope, a reveal) prune a hidden
+        // selection; the 6 data triggers go through
+        // refreshRows(afterEdit: true), which holds the selected row
+        // (CatalogRows.swift) — the selection stays a subset of the rows.
+        #expect(occurrences(of: "refreshRows()", in: table) == 8)
+        #expect(occurrences(of: "refreshRows(afterEdit: true)", in: table) == 6)
         #expect(occurrences(of: "tableData = computeFiltered()", in: table) == 1, "only onAppear")
-        #expect(try code("CatalogTableState.swift").contains("CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)"))
+        let state = try code("CatalogTableState.swift")
+        #expect(state.contains("let kept = CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)"),
+                "after every refresh the selection is cut to the listed rows")
     }
 }
 

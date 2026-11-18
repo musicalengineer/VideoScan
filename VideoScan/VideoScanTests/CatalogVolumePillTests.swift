@@ -34,10 +34,10 @@ private typealias Summary = CatalogShowingSummary
 
 private func texts(_ s: Summary.State) -> [String] { Summary.pills(for: s).map(\.text) }
 
-/// Rick's exact view: All kinds, a Master Archive (Including archived),
+/// Rick's exact view: no Show filter, a Master Archive (Including archived),
 /// Folders Only, connected drives.
 private func ricksState(_ labels: [String]) -> Summary.State {
-    Summary.State(kindFacet: .everything, footageFolders: true, foldersOnly: true,
+    Summary.State(footageFolders: true, foldersOnly: true,
                   hasMasterArchive: true, selectedVolumeLabels: labels)
 }
 
@@ -52,14 +52,14 @@ struct CatalogVolumePillLogicTests {
 
     @Test func noSelectionHasNoVolumePill() {
         let s = ricksState([])
-        #expect(texts(s) == ["All kinds", "Including archived", "Folders only", "Connected drives"])
+        #expect(texts(s) == ["Including archived", "Folders only", "Connected drives"])
         #expect(!Summary.pills(for: s).contains { $0.emphasis == .volume || $0.action == .clearVolumes })
         #expect(Summary.volumePill(labels: []) == nil)
     }
 
     @Test func oneVolumeIsTheFirstPillByItsPaneLabel() throws {
         let pills = Summary.pills(for: ricksState(["CrucialX9"]))
-        #expect(pills.map(\.text) == ["CrucialX9", "All kinds", "Including archived", "Folders only", "Connected drives"])
+        #expect(pills.map(\.text) == ["CrucialX9", "Including archived", "Folders only", "Connected drives"])
         let first = try #require(pills.first)
         #expect(first.emphasis == .volume, "accent-coloured, stands out from the others")
         #expect(first.action == .clearVolumes, "clicking it clears the selection")
@@ -78,22 +78,22 @@ struct CatalogVolumePillLogicTests {
 
     @Test func theSpokenSentenceCarriesTheVolumePill() {
         #expect(Summary.sentence(for: ricksState(["CrucialX9"]))
-                == "Showing CrucialX9, All kinds, Including archived, Folders only, Connected drives")
-        #expect(Summary.sentence(for: ricksState(["A", "B"])).hasPrefix("Showing Selected volumes, All kinds"))
-        #expect(Summary.sentence(for: ricksState([])) == "Showing All kinds, Including archived, Folders only, Connected drives")
+                == "Showing CrucialX9, Including archived, Folders only, Connected drives")
+        #expect(Summary.sentence(for: ricksState(["A", "B"])).hasPrefix("Showing Selected volumes, Including archived"))
+        #expect(Summary.sentence(for: ricksState([])) == "Showing Including archived, Folders only, Connected drives")
     }
 
     @Test func theBoxTextLeavesTheVolumeToItsOwnPill() {
         // The volume pill is drawn as its own accent button in front of the
         // box; the box's joined text must not say it a second time.
         #expect(Summary.boxPills(for: ricksState(["CrucialX9"])).map(\.text)
-                == ["All kinds", "Including archived", "Folders only", "Connected drives"])
+                == ["Including archived", "Folders only", "Connected drives"])
     }
 
     @Test func clearingViaThePillEmptiesTheSelection() {
         let sel: Set<UUID> = [UUID(), UUID()]
         #expect(Summary.volumeSelection(after: .clearVolumes, sel).isEmpty)
-        for other: Summary.Pill.Action in [.none, .toggleArchived, .toggleDrives] {
+        for other: Summary.Pill.Action in [.none, .clearPerson] {
             #expect(Summary.volumeSelection(after: other, sel) == sel, "\(other) leaves the selection alone")
         }
     }
@@ -191,7 +191,7 @@ struct CatalogVolumePillRegressionTests {
         let first = try #require(Summary.pills(for: ricksState(["CrucialX9"])).first)
         #expect(first.text == "CrucialX9" && first.action == .clearVolumes)
         #expect(Summary.sentence(for: ricksState(["CrucialX9"])).hasPrefix("Showing CrucialX9, "))
-        #expect(Summary.pills(for: ricksState([])).first?.text == "All kinds", "cleared: back to the whole catalog, no pill")
+        #expect(Summary.pills(for: ricksState([])).first?.text == "Including archived", "cleared: back to the whole catalog, no pill")
     }
 }
 

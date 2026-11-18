@@ -333,25 +333,34 @@ nonisolated func pfPlaceFieldMatches(value: String, rec: VideoRecord) -> Bool {
     return UserPlaceEntry.matches(value, against: place)
 }
 
-/// "No place yet" review-queue predicate (CatalogViewFilter.noPlaceYet):
-/// true when Rick has not entered a place. Derived from `userPlaceStatus`
-/// so it can never disagree with the inspector's status line.
-nonisolated func pfRecordHasNoPlace(_ rec: VideoRecord) -> Bool {
-    rec.userPlaceStatus == .unplaced
-}
-
-/// "Confirmed date" predicate (CatalogViewFilter.confirmedDate, Rick
-/// 2026-10-31): true when the record carries Rick's OWN date — `userDate`,
+/// "Confirmed date" predicate (Rick 2026-10-31; the Show filter of that name
+/// was inverted into Needs a Date on 2026-11-17 — `pfRecordNeedsDate` below —
+/// and this stays for the File Journey and the machine-era readers): true
+/// when the record carries Rick's OWN date — `userDate`,
 /// loaded from the `user_dates` table, at either confidence ("known" or his
 /// best guess: both are his) — and that date is a well-formed reduced-ISO
 /// date. Derived from `userDateStatus` so it can never disagree with the
 /// inspector's status line; a machine date (inferred, container, file stamp)
 /// never counts. A malformed stored value (the loader already refuses one;
 /// an in-memory or imported one could still arrive) is not a confirmed date.
-/// Pure, nonisolated, O(1) — runs inside the Catalog's filter pass.
+/// Pure, nonisolated, O(1).
 nonisolated func pfRecordHasConfirmedDate(_ rec: VideoRecord) -> Bool {
     guard rec.userDateStatus != .unconfirmed, let date = rec.userDate else { return false }
     return UserDateEntry.canonicalize(date) != nil
+}
+
+/// "Needs a Date" (CatalogViewFilter.needsDate, Rick 2026-11-17): the record
+/// has no usable FILING date — Promote would put it under Undated/. ONE rule:
+/// this is `ArchiveCategorySnapshot.needsDate`, the Archive tab's "Needs a
+/// Date" list, which asks the same `RecordDateResolver` the promote flow uses
+/// for placement (Rick's date, then the container's, the dossier's, the
+/// filename's). So a row with a good camera date is NOT listed, and a row
+/// Rick dated — at either confidence — leaves the list.
+/// Pure, nonisolated, per-record (no catalog pass; a few field reads and one
+/// filename pattern match) — runs inside the Catalog's event-driven filter
+/// pass, 100k rows inside CatalogRowsScaleTests' budget.
+nonisolated func pfRecordNeedsDate(_ rec: VideoRecord) -> Bool {
+    ArchiveCategorySnapshot.needsDate(rec)
 }
 
 /// `notes:` field match — the union across the userNotes split
@@ -404,16 +413,21 @@ nonisolated func pfStreamTypeAliasMatches(value: String, recordType: StreamType)
     }
 }
 
-/// Structural filter for `type:` / `kind:` tokens — the FACET-family
-/// grammar (GH #124, shared spelling with the #117 v2 facet work).
+/// Structural filter for `type:` / `kind:` tokens — the media-kind
+/// grammar (GH #124, shared spelling with the #117 v2 facet work; the
+/// Show menu's media-kind section it once mirrored left on 2026-11-17,
+/// the grammar stays):
+///     type:video       → videoAndAudio | videoOnly
+///     type:video-only  → videoOnly
+///     type:audio       → audioOnly
+///     type:both / :av  → videoAndAudio
+///     type:failed      → ffprobeFailed        type:none → noStreams
 /// Differs from the legacy `stream:` grammar in ONE deliberate way:
-/// `type:video` means "video-bearing" (videoAndAudio OR videoOnly) to
-/// match the facet chip's Videos bucket, whereas `stream:video` has
-/// always meant strictly videoOnly and keeps meaning that (back-compat).
-/// `type:video-only` is the strict spelling here. NOTE: a search token
-/// is an ASSERTION of confirmed streams, so `type:video` does NOT match
-/// ffprobeFailed/noStreams even though the videoBearing VIEW facet keeps
-/// those rows visible — the view is a safety net, the query is a claim.
+/// `type:video` means "video-bearing" (videoAndAudio OR videoOnly),
+/// whereas `stream:video` has always meant strictly videoOnly and keeps
+/// meaning that (back-compat). `type:video-only` is the strict spelling
+/// here. NOTE: a search token is an ASSERTION of confirmed streams, so
+/// `type:video` does NOT match ffprobeFailed/noStreams — the query is a claim.
 /// Unknown values return false (typo → empty results, not everything),
 /// same contract as `pfStreamTypeAliasMatches`.
 nonisolated func pfMediaKindAliasMatches(value: String, recordType: StreamType) -> Bool {
@@ -611,27 +625,6 @@ nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String
     return tokens.allSatisfy { pfCatalogTokenMatches($0, rec) }
 }
 
-// MARK: - Family tagging predicates (Step 5)
-//
-// Pure helpers powering the catalog's "Has Family" / "Untagged" filters and
-// the People column. The catalog table calls these directly so the same
-// rules drive screen and tests with no behavioural drift.
-
-/// True if `rec` has at least one detected OR suspected person tag.
-/// Drives the "Has Family" catalog filter — fastest way to surface
-/// keeper-candidate footage.
-nonisolated func pfRecordHasAnyPerson(_ rec: VideoRecord) -> Bool {
-    !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty
-}
-
-/// True if `rec` has no person tags at all in either array. Drives the
-/// "Untagged (junk candidate)" filter — these are the rows where a
-/// family scan found nothing recognisable, so they're the highest-yield
-/// triage targets for deletion / archival.
-nonisolated func pfRecordIsUntagged(_ rec: VideoRecord) -> Bool {
-    rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty
-}
-
 // MARK: - Triage disposition (issue #66, pattern 3)
 //
 // junkScore today is just a column. Promote it to a triage assist:
@@ -820,9 +813,10 @@ nonisolated func pfSupersededRecords(_ records: [VideoRecord]) -> [VideoRecord] 
 }
 
 /// Repair copies waiting for Rick's one-click confirmation (GH #132) —
-/// the "Repaired — Awaiting Confirmation" worklist. Pure wrapper over
-/// the derived flag so the view filter, badge math, and tests share one
-/// definition.
+/// the list the Media File Operations window shows
+/// (RepairsAwaitingConfirmation.swift; it was a Show filter until
+/// 2026-11-17). Pure wrapper over the derived flag so the list and the tests
+/// share one definition.
 nonisolated func pfAwaitingConfirmation(_ rec: VideoRecord) -> Bool {
     rec.isAwaitingConfirmation
 }
@@ -867,28 +861,23 @@ nonisolated func pfApplySupersededFilter(
 }
 
 /// The record base the toolbar's search-hit badge counts over. MUST be
-/// the same purge → set-aside → kind-facet pre-filter, in the same
-/// order, that `computeFiltered()` applies before running the search —
+/// the same purge → set-aside → superseded pre-filter, in the same
+/// order, that `CatalogRows.rows` applies before running the search —
 /// otherwise the badge counts rows the table hides (QA fix, 2026-07-15:
 /// the badge was counting set-aside records that a default search could
-/// never show; GH #124 extends the same contract to the facet — with
-/// the default Videos facet a ".m4a" search must not claim 80k hits the
-/// table shows zero of. The chip is the visible tell for why, and
-/// flipping it to All Kinds restores the wide count.)
+/// never show). The media-kind leg (GH #124) left with the media-kind
+/// section on 2026-11-17: every kind is searched.
 nonisolated func pfSearchBadgeBase(
     _ records: [VideoRecord],
     showRemoved: Bool,
     showSetAside: Bool,
-    showSuperseded: Bool,
-    kindFacet: CatalogKindFacet
+    showSuperseded: Bool
 ) -> [VideoRecord] {
-    pfApplyKindFacet(
-        pfApplySupersededFilter(
-            pfApplySetAsideFilter(
-                pfApplyPurgeFilter(records, showRemoved: showRemoved),
-                showSetAside: showSetAside),
-            showSuperseded: showSuperseded),
-        facet: kindFacet)
+    pfApplySupersededFilter(
+        pfApplySetAsideFilter(
+            pfApplyPurgeFilter(records, showRemoved: showRemoved),
+            showSetAside: showSetAside),
+        showSuperseded: showSuperseded)
 }
 
 /// Volume-membership predicate for the catalog's Volume filter. A record

@@ -85,6 +85,10 @@ struct CatalogFilenameCell: View {
     /// plain-state colour is dimmed — a purged / set-aside / superseded
     /// state keeps its own colour, and a selected row stays legible.
     var dimmed: Bool = false
+    /// The row is listed although it no longer matches a Show filter — it
+    /// was selected when an edit changed it (CatalogRows.swift). A small
+    /// orange filter glyph after the name, and the reason leads the tooltip.
+    var noLongerMatches: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -102,6 +106,12 @@ struct CatalogFilenameCell: View {
                 // purged-orange (highest priority) and the rest.
                 .italic(isOffline || record.isPurged || record.isSetAside || record.isSuperseded)
                 .foregroundColor(filenameColor)
+            if noLongerMatches {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.orange)
+                    .accessibilityLabel(CatalogRows.noLongerMatchingHelp)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
@@ -119,7 +129,7 @@ struct CatalogFilenameCell: View {
                     .padding(.horizontal, -4)
             }
         }
-        .help(tooltip)
+        .help(noLongerMatches ? CatalogRows.noLongerMatchingHelp + "\n\n" + tooltip : tooltip)
     }
 
     /// The ladder's colour, dimmed to secondary only for a plain copy row.

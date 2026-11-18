@@ -6536,8 +6536,7 @@
         "onePerGroupFromEvidence",
         "picksFromFresh",
         "predicate",
-        "refloorsAtPickTime",
-        "roundTrip"
+        "refloorsAtPickTime"
       ]
     },
     {
@@ -11022,7 +11021,6 @@
         "UniversalSearchMatchingTests",
         "CatalogSearchBarTests",
         "PeopleSortKeyTests",
-        "FamilyTaggingPredicateTests",
         "CatalogSearchTokenizeAndTests",
         "SearchFieldPrefixTokenizerTests",
         "SearchFieldPrefixMatchingTests"
@@ -11063,15 +11061,7 @@
         "filenameSubstringMatch",
         "filenameSubstringMatch",
         "fullComposedQuery",
-        "hasAnyPersonFalseWhenEmpty",
-        "hasAnyPersonTrueWhenBoth",
-        "hasAnyPersonTrueWhenConfirmed",
-        "hasAnyPersonTrueWhenSuspectedOnly",
         "ignoresLongerDigitRuns",
-        "isUntaggedAndHasAnyPersonAreInverses",
-        "isUntaggedFalseWhenConfirmed",
-        "isUntaggedFalseWhenSuspected",
-        "isUntaggedTrueWhenBothEmpty",
         "mixedPhraseFieldSubstring",
         "mixedTiersConfirmedComesFirstInKey",
         "mixedTokens",
@@ -11677,16 +11667,17 @@
         "CatalogShowingSummaryTests"
       ],
       "tests": [
-        "archivePillIsTheOnlyGreenOneAndIsClickable",
-        "defaultWithoutMasterArchiveSaysVideosOnConnectedDrives",
-        "encodingIsDeterministicRegardlessOfSetOrder",
-        "everyFilterHasPlainWordsAndNoRawMenuLabelLeaks",
-        "filterSetRoundTripsAndSurvivesUnknownTokens",
+        "defaultWithoutMasterArchiveSaysEverythingOnConnectedDrives",
+        "emptyTableFromFiltersAloneIsNotBlank",
         "focusModeReplacesEveryPill",
         "kitchenSinkReadsInFixedOrder",
-        "masterArchiveAddsTheArchivePillInTheSecondSlot",
+        "masterArchiveAddsTheArchivePillAfterEverything",
+        "noLineHidesAFilter",
+        "oneVocabulary",
         "splitKeepsOrderAndCountsBothSides",
-        "splitOf100kStaysUnderBudget"
+        "splitOf100kStaysUnderBudget",
+        "theBoxNamesExactlyTheActiveSet",
+        "theToDoPillIsTheOnlyGreenOneAndNoBoxPillIsAButton"
       ]
     },
     {
@@ -13394,13 +13385,11 @@
       "tests": [
         "chipCountEqualsTheStoresCount",
         "chipExistsInTheFilterRow",
-        "chipIsAFilterCase",
         "filterKeepsExactlyTheDatedRows",
         "malformedUserDateNeverCounts",
+        "needsDateFollowsTheStoredDates",
         "predicateFollowsTheUserDate",
-        "predicateTableCoversEveryFilter",
-        "removedRowIsNotInTheTable",
-        "showingBoxNamesTheChip"
+        "removedRowIsNotInTheTable"
       ]
     },
     {
@@ -24045,27 +24034,15 @@
       "path": "VideoScan/VideoScanTests/MediaKindFacetTests.swift",
       "stage": "unit",
       "suites": [
-        "KindFacetTruthTableTests",
-        "KindFacetPersistenceTests",
         "KindFacetSearchGrammarTests",
-        "DisplayCodecTests",
-        "KindFacetScaleTests"
+        "DisplayCodecTests"
       ],
       "tests": [
-        "absentKeyRestoresDefault",
-        "applyFacetFiltersRecords",
         "audioCodecFillsInForAudioOnly",
-        "badgeBaseHonorsFacet",
         "bothEmptyStaysEmpty",
         "codecFieldMatchesBothCodecFields",
-        "defaultFacetIsVideoBearing",
-        "facetFilter100kWithinBudget",
-        "fullTruthTable",
         "legacyStreamGrammarUnchanged",
         "mediaKindAliasTable",
-        "persistedTokensAreStable",
-        "poisonedValueFallsBackToDefault",
-        "roundTripEachCase",
         "typeTokenMatchesThroughCatalogMatcher",
         "typeTokenizes",
         "videoCodecWinsWhenPresent"
@@ -28644,12 +28621,15 @@
         "correlatorSkipsSupersededRecords",
         "duplicateDetectorIgnoresSupersededDuplicates",
         "exportsCarrySupersededRecords",
+        "poisonedWaitingRecords",
         "searchBadgeBaseMatchesComputeFilteredOrder",
         "supersededFilterBudgetAt100k",
         "supersededFilterHidesByDefaultAndRevealsOnToggle",
+        "theListDrainsThroughTheOneEngine",
+        "theWaitingListIsTheAwaitingRuleOverLiveRows",
         "threeHiddenStatesComposeIndependently",
         "unsupersedeClearsMarkerAndReturnsRecordToActive",
-        "viewFilterCaseExistsWithFriendlyLabel",
+        "waitingListAt100k",
         "worklistComposesWithTheHiddenStateFilters",
         "worklistDrainsAsRepairsAreConfirmed"
       ]
@@ -30064,7 +30044,6 @@
         "skippingTheFirstTwentyFiveSetsBringsTheNextOnesForward",
         "theBestDateIsThePersonsThenTheInferredThenTheFilesThenTheFileSystems",
         "theCatalogDoorAddsOnePerFootageAndKeepsTheOtherFilters",
-        "theCatalogDoorKeepsFiltersThisBuildDoesNotKnow",
         "theEventsCoverageLineSaysHowManyClipsCanBePlaced",
         "theHousekeepingLanesFollowInOrderEachInItsOwn",
         "theKeeperReasonIsTheFirstThingItWonOn",
@@ -30211,7 +30190,7 @@
         "theFolderIsFoundAndHasItsFiles",
         "theFolderReachesDeletionOnlyThroughTheExistingFrontDoor",
         "theJunkCardHasNoDeleteAction",
-        "theJunkLineIsStillTriagesAndTheCatalogStillUsesTheFilterKey",
+        "theJunkLineIsStillTriagesAndTheCatalogDoorAsksTheFilterStore",
         "theOccasionIsTheAngelsLabellerAndTheFirstTrialsGuessIsGone",
         "theTriageTabKeepsItsTableAndAnalyzeMenuUnderThePane",
         "theViewsDoNoRecordsWork"
@@ -31273,7 +31252,6 @@
         "exactMatchRule",
         "legacyJSONDecodesWithNilUserPlaceFields",
         "legacyRecordReencodesWithoutUserPlaceKeys",
-        "noPlaceYetPredicate",
         "nothingSeeded",
         "ordering",
         "placeFieldSearchIsExactNotSubstringOfTranscript",
@@ -32358,8 +32336,7 @@
       ],
       "tests": [
         "workspaceActive_codableRoundTrip",
-        "workspaceActive_defaultAndClone",
-        "workspaceFilter_predicate"
+        "workspaceActive_defaultAndClone"
       ]
     },
     {
@@ -36561,6 +36538,93 @@
         "warmingLoadsTheModelAndUnloadingDropsItUntilTheNextQuestion",
         "weightsThatCannotBeFoundKeepTheirOwnWordsAndAFailedLoadIsTriedAgain"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogShowFilterStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogShowFilterStoreTests"
+      ],
+      "tests": [
+        "everySubsetRoundTrips",
+        "everyWriterLogs",
+        "garbageText",
+        "kindFacetMigrationKeepsTheSetLegal",
+        "migrationOfTheKindFacet",
+        "migrationOfTheOldStoredValue",
+        "poisonedKindFacet",
+        "poisonedStoredValues",
+        "removedStableTokensAreDroppedAndNamed",
+        "retiredRevealsAreForcedOff",
+        "setClearAndPersistenceRoundTrip",
+        "stableKeyWinsAndUnknownTokensAreNamed",
+        "theFiveTicks",
+        "theSeedRunsOnce",
+        "theSoundPairIsMutuallyExclusive",
+        "theWritersAreDistinct"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRowsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRowsTests",
+        "CatalogRowsScaleTests",
+        "CatalogRowsSensorTests"
+      ],
+      "tests": [
+        "anUnselectedRowLeavesAtOnce",
+        "audioOnly",
+        "computeFilteredIsAnAdapter",
+        "filtersComposeWithTheBaseGates",
+        "focusIgnoresEveryFilter",
+        "heldNeverOutlivesTheBaseGates",
+        "heldUnderTheArchiveFilterAndSearch",
+        "heldWithPairsOnly",
+        "hideOtherVersionsCollapsesIdenticalBytes",
+        "hundredThousandRows",
+        "needsDateFollowsTheEdit",
+        "needsDateIsThePromoteRule",
+        "noFilterListsEverything",
+        "notYetArchived",
+        "onePerFootage",
+        "pairsOnly",
+        "poisonedHeldSet",
+        "searchBadgeAndArchivedHits",
+        "theHeldRowStaysUntilTheSelectionMoves",
+        "theOwnersTagIsRespected",
+        "theTableHoldsOnlyAfterAnEdit",
+        "videosMissingSoundFollowsTheOneEngine",
+        "videosMissingSoundOnRecordShapes",
+        "whichStandingsCount"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ShowFiltersAuditTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ShowFiltersShowingBoxAuditTests",
+        "ShowFiltersAuditSensorTests"
+      ],
+      "tests": [
+        "everyActiveFilterIsNamed",
+        "noFilterMeansEverything",
+        "noSecondKindControl",
+        "noViewOwnsAFilterSet",
+        "onlyTheStoreNamesTheKindFacetKey",
+        "onlyTheStoreTouchesThePersistedKeys",
+        "showingBoxIsToldAboutFocusMode",
+        "theAwaitingListLivesInMediaFileOperations",
+        "theEmptyNoteIsToldAboutFilters",
+        "theHiddenRecordRevealsAreGone",
+        "theRemovedFiltersAreOfferedNowhere",
+        "theShowingBoxDoesNotTruncateFilters",
+        "theShowingBoxHasNoTapGesture",
+        "theTableFollowsCatalogEdits"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -39317,7 +39381,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3846,
+      "expected_floor": 3856,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39686,7 +39750,6 @@
         "VideoScanTests/EventsSensorTests",
         "VideoScanTests/FamilyAssetIdentityDirectoryTests",
         "VideoScanTests/FamilyScoringTests",
-        "VideoScanTests/FamilyTaggingPredicateTests",
         "VideoScanTests/FamilyTaggingTests",
         "VideoScanTests/FamilyTreeBirthCountriesPropertyTests",
         "VideoScanTests/FamilyTreeFocusSceneTests",
@@ -40050,7 +40113,8 @@
         "VideoScanTests/ObservationsProductionDoorTests",
         "VideoScanTests/ObservationsReadDoorTests",
         "VideoScanTests/ObservationsStoreBehaviourTests",
-        "VideoScanTests/SigLIPInputTests"
+        "VideoScanTests/SigLIPInputTests",
+        "VideoScanTests/CatalogShowFilterStoreTests"
       ]
     },
     {
@@ -40448,7 +40512,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 725,
+      "expected_floor": 761,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40664,7 +40728,12 @@
         "VideoScanTests/BalancedCopyProofRuleTests",
         "VideoScanTests/BalancedCopyProofCoverageTests",
         "VideoScanTests/BalancedCopyProofPacketTests",
-        "VideoScanTests/BalancedCopyProofPresentationTests"
+        "VideoScanTests/BalancedCopyProofPresentationTests",
+        "VideoScanTests/CatalogRowsTests",
+        "VideoScanTests/CatalogRowsScaleTests",
+        "VideoScanTests/CatalogRowsSensorTests",
+        "VideoScanTests/ShowFiltersShowingBoxAuditTests",
+        "VideoScanTests/ShowFiltersAuditSensorTests"
       ]
     },
     {

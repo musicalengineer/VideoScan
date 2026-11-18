@@ -284,7 +284,7 @@ and available play-history evidence. Malformed/old-rule evidence is ignored and 
 Spotlight use count is an optional signal; in-app play-count fields were deferred.
 
 Grades: A ready ≥100; B nearly ready 60–99; C candidate 25–59;
-D weak 1–24; X excluded. Catalog Archive Candidates means A+B;
+D weak 1–24; X excluded. the Archive candidates set (the catalog badge, the panel's Show in Catalog) means A+B;
 Angel selection can rank A–D, subject to current floor/identity checks.
 Evidence reuse requires freshness, completeness, enough candidates, and current revalidation;
 stale or insufficient evidence falls back to the candidate walk.
@@ -528,7 +528,7 @@ So the smallest useful file is:
 1. **Floors** (`floors`) are checked in order. The first one that fires excludes the file, and its reason is the one you see.
 2. **Signals** (`signals`) each add one printed evidence line. The score is the sum of the lines.
 3. **Grades** (`grades`) turn the score into a letter: A ≥ `a`, B ≥ `b`, C ≥ `c`, D ≥ `d`, otherwise X.
-4. **Classes** (`recommend`) put every file into exactly one class. These classes are the only numbers the app shows: the Angel strip's "N ready · M need a date · K prepared", the catalog's badge, and Show ▸ Archive Candidates.
+4. **Classes** (`recommend`) put every file into exactly one class. These classes are the only numbers the app shows: the Angel strip's "N ready · M need a date · K prepared", and the catalog's badge. (Show ▸ Archive Candidates was removed 2026-11-17; the panel's Show in Catalog lists the same files.)
 
 | Class | Default rule |
 |---|---|
@@ -633,7 +633,7 @@ When **Find Similar Footage** has run, every file it grouped carries its footage
 
 - only groups Find Similar Footage rated **Likely or stronger** collapse; a Possible group is shown to you, never decided for you;
 - keys are merged: a file in a footage group AND a duplicate group joins both, so a byte copy seen only through its duplicate group and its twin seen through the footage group are one recording (never two Ready rows, never both in a batch);
-- the recommended lists, the counts, the catalog badge and Show ▸ Archive Candidates show **one** file per footage group — the copy you marked Keep, else the group's likely original, else the best-ranked — and the others become **Another copy** ("Same footage as X — that one is recommended");
+- the recommended lists, the counts and the catalog badge show **one** file per footage group — the copy you marked Keep, else the group's likely original, else the best-ranked — and the others become **Another copy** ("Same footage as X — that one is recommended");
 - a prepared batch takes at most one member of a footage group (the same rule as a duplicate group).
 
 **To turn it off**, list the collapse keys without it:

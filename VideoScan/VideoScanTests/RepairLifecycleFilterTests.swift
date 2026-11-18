@@ -9,6 +9,7 @@
 // CatalogSetAsideMigrationTests (badge base), CatalogSearchBudgetSensor-
 // Tests (100k scale budget).
 
+import Combine
 import Testing
 import Foundation
 @testable import VideoScan
@@ -94,13 +95,13 @@ struct RepairLifecycleFilterTests {
 
         let defaultBase = pfSearchBadgeBase(all,
                                             showRemoved: false, showSetAside: false,
-                                            showSuperseded: false, kindFacet: .everything)
+                                            showSuperseded: false)
         #expect(defaultBase.map(\.filename) == ["clip.mov"],
                 "the badge must never count rows the default table hides")
 
         let revealBase = pfSearchBadgeBase(all,
                                            showRemoved: false, showSetAside: false,
-                                           showSuperseded: true, kindFacet: .everything)
+                                           showSuperseded: true)
         #expect(revealBase.count == 2)
     }
 
@@ -201,19 +202,10 @@ struct AwaitingConfirmationWorklistTests {
         return r
     }
 
-    @Test func viewFilterCaseExistsWithFriendlyLabel() {
-        // The View-menu item is generated from allCases — pin the case,
-        // its family-language label, and its icon.
-        #expect(CatalogViewFilter.allCases.contains(.awaitingConfirmation))
-        #expect(CatalogViewFilter.awaitingConfirmation.rawValue == "Repaired — Awaiting Confirmation")
-        #expect(CatalogViewFilter.awaitingConfirmation.icon == "checkmark.seal")
-    }
-
     @Test func worklistComposesWithTheHiddenStateFilters() {
-        // computeFiltered()'s order: purge → set-aside → superseded →
-        // kind facet → … → view filters. An awaiting repair passes; a
-        // confirmed repair, a plain record, and a superseded original
-        // (its repair confirmed) do not.
+        // The hidden-state order: purge → set-aside → superseded, then the
+        // awaiting rule. An awaiting repair passes; a confirmed repair, a
+        // plain record, and a superseded original (its repair confirmed) do not.
         let awaiting = makeRepair(name: "a_RepairedAudio.mov", confirmed: false)
         let confirmed = makeRepair(name: "b_RepairedAudio.mov", confirmed: true)
         let plain = VideoRecord()
@@ -230,7 +222,6 @@ struct AwaitingConfirmationWorklistTests {
         var out = pfApplyPurgeFilter(all, showRemoved: false)
         out = pfApplySetAsideFilter(out, showSetAside: false)
         out = pfApplySupersededFilter(out, showSuperseded: false)
-        out = pfApplyKindFacet(out, facet: .videoBearing)
         out = out.filter(pfAwaitingConfirmation)
 
         #expect(out.map(\.filename) == ["a_RepairedAudio.mov"],
@@ -256,6 +247,141 @@ struct AwaitingConfirmationWorklistTests {
         #expect(model.confirmRepair(repairID: repair.id))
         #expect(model.records.filter(pfAwaitingConfirmation).isEmpty,
                 "confirming removes the repair from the worklist")
+    }
+
+    // MARK: The list in the Media File Operations window (2026-11-17)
+    //
+    // The awaiting-confirmation list left the Catalog's Show menu; the MFO
+    // window shows it from RepairsAwaitingConfirmationStore.
+
+    private func plain(_ name: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.fullPath = "/Volumes/T/\(name)"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        return r
+    }
+
+    @Test("LOGIC: the MFO list is the awaiting rule over live rows — each waiting repair once, in catalog order, naming its original")
+    func theWaitingListIsTheAwaitingRuleOverLiveRows() {
+        typealias Store = RepairsAwaitingConfirmationStore
+        let tape = plain("tape.mov"), reel = plain("reel.mov")
+        let waiting = makeRepair(name: "tape_RepairedAudio.mov", confirmed: false)
+        waiting.derivedFrom = tape.id
+        let adopted = makeRepair(name: "reel_fixed_elsewhere.mov", confirmed: false)
+        adopted.derivedFrom = reel.id
+        adopted.derivationKind = "externalRepair"
+        let done = makeRepair(name: "done_RepairedAudio.mov", confirmed: true)
+        let trimmed = plain("tape_trim.mov")
+        trimmed.derivedFrom = tape.id
+        trimmed.derivationKind = "trim"
+        let orphan = makeRepair(name: "orphan_RepairedAudio.mov", confirmed: false)   // its original is not in the catalog
+        let trashed = makeRepair(name: "trashed_RepairedAudio.mov", confirmed: false)
+        trashed.derivedFrom = tape.id
+        trashed.purgedAt = Date()
+        let aside = makeRepair(name: "aside_RepairedAudio.mov", confirmed: false)
+        aside.derivedFrom = tape.id
+        aside.setAsideReason = "still-image"
+        let replaced = makeRepair(name: "replaced_RepairedAudio.mov", confirmed: false)
+        replaced.derivedFrom = tape.id
+        replaced.supersededByID = UUID()
+        let all = [tape, waiting, reel, done, trimmed, adopted, orphan, trashed, aside, replaced]
+
+        let items = Store.items(in: all)
+        #expect(items.map(\.filename) == ["tape_RepairedAudio.mov", "reel_fixed_elsewhere.mov", "orphan_RepairedAudio.mov"])
+        #expect(items.map(\.id) == [waiting.id, adopted.id, orphan.id])
+        #expect(items.map(\.originalName) == ["tape.mov", "reel.mov", nil])
+        #expect(items.map(\.canConfirm) == [true, true, false], "a copy whose original is gone offers no confirm (the engine refuses it)")
+        // ONE rule: every item is a record pfAwaitingConfirmation names, and every live one it names is an item.
+        let live = all.filter { pfAwaitingConfirmation($0) && !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
+        #expect(items.map(\.id) == live.map(\.id))
+        // Every row that offers Sounds Good is one the engine accepts; the orphan is the one it skips.
+        let model = VideoScanModel()
+        model.records = all
+        #expect(model.confirmRepairs(repairIDs: Set(items.map(\.id))) == items.filter(\.canConfirm).count)
+        #expect(RepairsAwaitingConfirmationStore.items(in: model.records).map(\.id) == [orphan.id])
+        // Words.
+        #expect(Store.title(count: 1) == "1 repaired copy is waiting for you to confirm it")
+        #expect(Store.title(count: 3) == "3 repaired copies are waiting for you to confirm them")
+        #expect(Store.replaces("tape.mov") == "replaces tape.mov")
+        #expect(Store.replaces(nil).contains("cannot be confirmed"))
+        #expect(Store.items(in: []).isEmpty)
+    }
+
+    @Test("LOGIC: Sounds Good from the MFO list is the one confirm engine — the row leaves, the original is superseded, undo brings it back")
+    func theListDrainsThroughTheOneEngine() {
+        let model = VideoScanModel()
+        let original = plain("tape.mov")
+        let repair = makeRepair(name: "tape_RepairedAudio.mov", confirmed: false)
+        repair.derivedFrom = original.id
+        model.records = [original, repair]
+        let store = RepairsAwaitingConfirmationStore()
+        var publishes = 0
+        let watch = store.$items.dropFirst().sink { _ in publishes += 1 }
+        defer { watch.cancel() }
+
+        store.refresh(from: model.records)
+        #expect(store.items.map(\.id) == [repair.id] && publishes == 1)
+        store.refresh(from: model.records)
+        #expect(publishes == 1, "an unchanged list is not published again")
+
+        // What the section's button does.
+        #expect(model.confirmRepairs(repairIDs: [repair.id]) == 1)
+        store.refresh(from: model.records)
+        #expect(store.items.isEmpty && publishes == 2)
+        #expect(original.supersededByID == repair.id && repair.repairConfirmedDate != nil, "the engine's own stamps")
+        #expect(original.purgedAt == nil, "the original is hidden, never removed")
+
+        // The Catalog's undo banner puts the repair back on the list.
+        #expect(model.undoConfirmRepair())
+        store.refresh(from: model.records)
+        #expect(store.items.map(\.id) == [repair.id])
+    }
+
+    @Test("ISOLATION: poisoned repair records — a copy derived from itself, the same row twice, an unknown kind — never crash or duplicate a row")
+    func poisonedWaitingRecords() {
+        typealias Store = RepairsAwaitingConfirmationStore
+        let selfDerived = makeRepair(name: "self.mov", confirmed: false)
+        selfDerived.derivedFrom = selfDerived.id
+        #expect(Store.items(in: [selfDerived]).map(\.originalName) == ["self.mov"])
+        let unknownKind = makeRepair(name: "odd.mov", confirmed: false)
+        unknownKind.derivationKind = "not-a-kind"
+        let noKind = makeRepair(name: "nokind.mov", confirmed: false)
+        noKind.derivationKind = nil
+        #expect(Store.items(in: [unknownKind, noKind]).isEmpty)
+        // Two originals carrying the same id (a catalog that holds a row twice): one name is used, nothing traps.
+        let original = plain("tape.mov")
+        let repair = makeRepair(name: "tape_RepairedAudio.mov", confirmed: false)
+        repair.derivedFrom = original.id
+        let items = Store.items(in: [original, original, repair])
+        #expect(items.count == 1 && items[0].originalName == "tape.mov")
+        // An empty name is still a row.
+        let nameless = makeRepair(name: "", confirmed: false)
+        #expect(Store.items(in: [nameless]).count == 1)
+    }
+
+    @Test("SCALE: the MFO list over 100k records — one pass, inside the budget, with and without waiting repairs")
+    func waitingListAt100k() {
+        let corpus = CatalogSearchProfileBench.makeRickShapedCorpus(100_000)
+        var t0 = Date()
+        #expect(RepairsAwaitingConfirmationStore.items(in: corpus).isEmpty)
+        var elapsed = Date().timeIntervalSince(t0)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.5), "no repairs waiting: \(elapsed)s for 100k records")
+        // 200 repairs wait (far more than a real catalog holds), each derived from another record.
+        for i in 0..<200 {
+            let repair = corpus[i * 400 + 1]
+            repair.derivedFrom = corpus[i * 400].id
+            repair.derivationKind = "rebuildAudio"
+            repair.purgedAt = nil
+            repair.setAsideReason = nil
+            repair.supersededByID = nil
+        }
+        t0 = Date()
+        let items = RepairsAwaitingConfirmationStore.items(in: corpus)
+        elapsed = Date().timeIntervalSince(t0)
+        #expect(items.count == 200)
+        #expect(items.filter(\.canConfirm).count == 200)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.5), "200 waiting: \(elapsed)s for 100k records")
     }
 }
 

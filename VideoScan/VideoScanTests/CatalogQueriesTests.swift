@@ -510,62 +510,6 @@ struct PeopleSortKeyTests {
     }
 }
 
-// MARK: - Family tagging predicate tests (Step 5)
-
-struct FamilyTaggingPredicateTests {
-
-    private func record(detected: [String] = [], suspected: [String] = []) -> VideoRecord {
-        let r = VideoRecord()
-        r.fullPath = "/v/clip.mov"
-        r.detectedPeople = detected
-        r.suspectedPeople = suspected
-        return r
-    }
-
-    @Test func hasAnyPersonTrueWhenConfirmed() {
-        #expect(pfRecordHasAnyPerson(record(detected: ["Donna"])))
-    }
-
-    @Test func hasAnyPersonTrueWhenSuspectedOnly() {
-        #expect(pfRecordHasAnyPerson(record(suspected: ["Donna"])))
-    }
-
-    @Test func hasAnyPersonTrueWhenBoth() {
-        #expect(pfRecordHasAnyPerson(record(detected: ["Donna"], suspected: ["Tim"])))
-    }
-
-    @Test func hasAnyPersonFalseWhenEmpty() {
-        #expect(!pfRecordHasAnyPerson(record()))
-    }
-
-    @Test func isUntaggedTrueWhenBothEmpty() {
-        #expect(pfRecordIsUntagged(record()))
-    }
-
-    @Test func isUntaggedFalseWhenConfirmed() {
-        #expect(!pfRecordIsUntagged(record(detected: ["Donna"])))
-    }
-
-    @Test func isUntaggedFalseWhenSuspected() {
-        #expect(!pfRecordIsUntagged(record(suspected: ["Donna"])))
-    }
-
-    @Test func isUntaggedAndHasAnyPersonAreInverses() {
-        // Filter design invariant: every record falls into exactly one
-        // of "Has Family" or "Untagged" — these two filters partition
-        // the catalog cleanly.
-        let cases = [
-            record(),
-            record(detected: ["Donna"]),
-            record(suspected: ["Tim"]),
-            record(detected: ["Donna"], suspected: ["Tim"])
-        ]
-        for r in cases {
-            #expect(pfRecordHasAnyPerson(r) != pfRecordIsUntagged(r))
-        }
-    }
-}
-
 // MARK: - Triage disposition tests (Issue #66, pattern 3)
 
 

@@ -118,19 +118,19 @@ struct CatalogPersonFilterLogicTests {
 struct CatalogPersonPillTests {
 
     private func state(volumes: [String] = [], person: String? = nil, focus: String? = nil) -> Summary.State {
-        Summary.State(kindFacet: .everything, hasMasterArchive: true, focusLabel: focus,
+        Summary.State(hasMasterArchive: true, focusLabel: focus,
                       selectedVolumeLabels: volumes, selectedPersonName: person)
     }
 
     @Test func noPersonNoPill() {
         #expect(Summary.personPill(name: nil) == nil)
         #expect(!Summary.pills(for: state()).contains { $0.emphasis == .person || $0.action == .clearPerson })
-        #expect(Summary.pills(for: state()).map(\.text) == ["All kinds", "Including archived", "Connected drives"])
+        #expect(Summary.pills(for: state()).map(\.text) == ["Everything", "Including archived", "Connected drives"])
     }
 
     @Test func thePersonPillFollowsTheVolumePillThenTheBox() throws {
         let pills = Summary.pills(for: state(volumes: ["CrucialX9"], person: "Dana"))
-        #expect(pills.map(\.text) == ["CrucialX9", "Dana", "All kinds", "Including archived", "Connected drives"])
+        #expect(pills.map(\.text) == ["CrucialX9", "Dana", "Everything", "Including archived", "Connected drives"])
         let person = try #require(pills.first { $0.emphasis == .person })
         #expect(person.text == "Dana" && person.action == .clearPerson)
         #expect(Summary.pills(for: state(person: "Dana")).map(\.text).first == "Dana", "no volume: it leads")
@@ -139,7 +139,7 @@ struct CatalogPersonPillTests {
 
     @Test func theSpokenSentenceCarriesIt() {
         #expect(Summary.sentence(for: state(volumes: ["CrucialX9"], person: "Dana"))
-                == "Showing CrucialX9, Dana, All kinds, Including archived, Connected drives")
+                == "Showing CrucialX9, Dana, Everything, Including archived, Connected drives")
         #expect(Summary.personHelp(name: "Dana") == "Showing only videos of Dana — click to show everyone")
     }
 
@@ -150,7 +150,7 @@ struct CatalogPersonPillTests {
     @Test func clickingThePillClearsToEveryoneAndNothingElseDoes() {
         let chosen: UUID? = UUID()
         #expect(Summary.personSelection(after: .clearPerson, chosen) == nil)
-        for other: Summary.Pill.Action in [.none, .toggleArchived, .toggleDrives, .clearVolumes] {
+        for other: Summary.Pill.Action in [.none, .clearVolumes] {
             #expect(Summary.personSelection(after: other, chosen) == chosen, "\(other) leaves the person alone")
         }
         let vols: Set<UUID> = [UUID()]
@@ -313,13 +313,19 @@ struct CatalogPersonFilterSensorTests {
     /// catalog's hits, the volume filter's contract) and before the volume
     /// filter (which then sees the smaller set).
     @Test func computeFilteredAppliesItAfterTheSearchBeforeTheVolumeFilter() throws {
-        let src = try code("CatalogHelpers.swift")
-        let body = try #require(src.range(of: "func computeFiltered() -> [VideoRecord] {"))
+        // The steps live in the pure rows function since 2026-11-17
+        // (CatalogRows.swift); computeFiltered hands it the picker's choice
+        // and the model's search index.
+        let src = try code("CatalogRows.swift")
+        let body = try #require(src.range(of: "private static func scope("))
         let tail = String(src[body.upperBound...])
-        let search = try #require(tail.range(of: "model.searchIndex.filter(records:"))
-        let person = try #require(tail.range(of: "CatalogPersonFilter.apply(out, person: personFilter)"))
-        let volume = try #require(tail.range(of: "pfRecordOnSelectedVolume($0, prefixes: prefixes)"))
+        let search = try #require(tail.range(of: "state.engines.search(out, state.searchText)"))
+        let person = try #require(tail.range(of: "CatalogPersonFilter.apply(out, person: state.person)"))
+        let volume = try #require(tail.range(of: "pfRecordOnSelectedVolume($0, prefixes: state.volumePrefixes)"))
         #expect(search.lowerBound < person.lowerBound && person.lowerBound < volume.lowerBound)
+        let helpers = try code("CatalogHelpers.swift")
+        #expect(helpers.contains("state.person = personFilter"))
+        #expect(helpers.contains("model.searchIndex.filter(records: rows, query: query)"))
     }
 
     @Test func oneMatcherAndNoPersistence() throws {

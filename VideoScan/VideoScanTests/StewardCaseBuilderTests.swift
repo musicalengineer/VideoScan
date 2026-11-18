@@ -686,39 +686,27 @@ struct StewardSkipStoreTests {
         #expect(StewardSkipStore.decode(StewardSkipStore.encode(facts)) == facts)
     }
 
-    /// Isolation: the Catalog door adds ONE filter to whatever is stored,
-    /// through the Catalog's own encoder, in the defaults it is handed.
+    /// Isolation: the Catalog door adds ONE filter to whatever is on, through
+    /// the Catalog's one filter store — which keeps the others, persists and
+    /// logs "by Steward". No store in this window → nothing changes.
+    @MainActor
     @Test func theCatalogDoorAddsOnePerFootageAndKeepsTheOtherFilters() {
         withStore { _, defaults in
-            defaults.set(CatalogShowingSummary.encode([.notYetArchived, .ratedOnly]), forKey: StewardCatalogDoor.viewFiltersKey)
-            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
-            let after = CatalogShowingSummary.decode(defaults.string(forKey: StewardCatalogDoor.viewFiltersKey) ?? "")
-            #expect(after == [.notYetArchived, .ratedOnly, .onePerFootage])
-            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
-            #expect(CatalogShowingSummary.decode(defaults.string(forKey: StewardCatalogDoor.viewFiltersKey) ?? "") == after, "idempotent")
-            // Poisoned: a non-string under the key is treated as "no filters".
-            defaults.set(7, forKey: StewardCatalogDoor.viewFiltersKey)
-            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
-            #expect(CatalogShowingSummary.decode(defaults.string(forKey: StewardCatalogDoor.viewFiltersKey) ?? "") == [.onePerFootage])
+            var lines: [String] = []
+            defaults.set("notYetArchived,needsDate", forKey: CatalogShowFilterStore.key)
+            let filters = CatalogShowFilterStore(defaults: defaults, log: { lines.append($0) })
+            lines.removeAll()
+            #expect(StewardCatalogDoor.turnOnOnePerFootage(in: filters))
+            #expect(filters.active == [.notYetArchived, .needsDate, .onePerFootage])
+            #expect(lines == ["Catalog Show filters: on: Hide Other Versions (by Steward) → now Not Yet Archived, Hide Other Versions, Needs a Date"])
+            #expect(StewardCatalogDoor.turnOnOnePerFootage(in: filters))
+            #expect(lines.count == 1, "idempotent: already on — no second line")
+            #expect(CatalogShowFilterStore(defaults: defaults, log: { _ in }).active == [.notYetArchived, .needsDate, .onePerFootage],
+                    "the Catalog tab restores it")
+            #expect(!StewardCatalogDoor.turnOnOnePerFootage(in: nil), "no store: refused, nothing written")
         }
     }
 
-    /// F11: a filter this build does not know (a later build's, renamed) is
-    /// KEPT when the door re-writes the setting — it is not ours to drop.
-    @Test func theCatalogDoorKeepsFiltersThisBuildDoesNotKnow() {
-        withStore { _, defaults in
-            let key = StewardCatalogDoor.viewFiltersKey
-            let unknown = "A Filter From Another Build"
-            defaults.set(CatalogShowingSummary.encode([.notYetArchived]) + CatalogShowingSummary.separator + unknown, forKey: key)
-            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
-            let raw = defaults.string(forKey: key) ?? ""
-            #expect(raw.split(separator: Character(CatalogShowingSummary.separator)).map(String.init).contains(unknown),
-                    "the unknown filter was dropped: \(raw)")
-            #expect(CatalogShowingSummary.decode(raw) == [.notYetArchived, .onePerFootage])
-            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
-            #expect(defaults.string(forKey: key) == raw, "idempotent, unknown filter included")
-        }
-    }
 }
 
 // MARK: - Scale

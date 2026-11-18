@@ -35,6 +35,6 @@ struct FootageGroupBadge: View {
         let who = f.rank == 0
             ? (f.originalInCatalog ? "This is the likely original." : "This is the best available — the camera original is probably not in the catalog.")
             : "This one is a \(f.role.label)."
-        return "\(f.groupSize) files are probably the same footage (\(f.confidence.label)). \(who) Right-click → Find Similar Footage… to compare them; Show → One Per Footage hides the repeats. They are not all the same bytes — never delete on this alone."
+        return "\(f.groupSize) files are probably the same footage (\(f.confidence.label)). \(who) Right-click → Find Similar Footage… to compare them; Show → Hide Other Versions lists each recording once. They are not all the same bytes — never delete on this alone."
     }
 }

@@ -36,7 +36,7 @@ public func previewVolumeRoot(forPath path: String) -> String {
 // MARK: - Persisted setting (explicit-save pattern)
 
 /// Persisted wrapper for the sweep preference. Follows the
-/// CatalogKindFacetSetting explicit-save pattern: restored(from:) at
+/// CatalogScopeSettings explicit-save pattern: restored(from:) at
 /// startup, save(to:) on every user change, defaults INJECTED so tests
 /// never touch the real preferences plist (settings-pollution class).
 /// No didSet magic — the @Published owner (VideoScanModel) must call

@@ -1,8 +1,8 @@
 // ArchiveAngelEvidencePickTests.swift
 // Archive Angel Assessment → Angel job: the job picks from FRESH, COMPLETE
 // evidence with enough eligible records and re-checks the floor per pick;
-// anything else → nil (the caller walks). Plus the catalog filter's
-// encode/decode round trip for the new Show ▸ Archive candidates case.
+// anything else → nil (the caller walks). Plus the candidate set's lookup
+// (the Show ▸ Archive Candidates filter that read it was removed 2026-11-17).
 
 import Foundation
 import Testing
@@ -195,16 +195,7 @@ struct ArchiveAngelEvidencePickTests {
 @Suite("Archive Angel — catalog filter")
 struct ArchiveAngelCatalogFilterTests {
 
-    @Test("Show ▸ Archive candidates round-trips through the persisted filter string and has words + icon")
-    func roundTrip() {
-        let encoded = CatalogShowingSummary.encode([.archiveCandidates, .notYetArchived])
-        #expect(CatalogShowingSummary.decode(encoded) == [.archiveCandidates, .notYetArchived])
-        #expect(CatalogShowingSummary.words(for: .archiveCandidates) == "Archive Angel candidates")
-        #expect(CatalogViewFilter.archiveCandidates.icon == "sparkles")
-        #expect(CatalogViewFilter.allCases.contains(.archiveCandidates))
-    }
-
-    @Test("the filter predicate is a Set lookup over grades A+B")
+    @Test("the candidate set is a Set lookup over grades A+B")
     @MainActor
     func predicate() {
         let store = ArchiveAngelEvidenceStore(directory: FileManager.default.temporaryDirectory

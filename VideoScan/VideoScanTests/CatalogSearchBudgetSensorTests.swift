@@ -91,12 +91,9 @@ struct CatalogSearchBudgetSensorTests {
         // pfSearchBadgeBase semantics" risk from the diagnosis.
         for q in ["donna", "1993", "1990s", "donna 1990s"] {
             let derived = Self.settledPass(corpus, index, q).badge
-            // kindFacet .everything = the pre-#124 base; settledPass
-            // applies no facet, so the two sides stay comparable. The
-            // facet layer itself is pinned by MediaKindFacetTests.
             let oldToolbarScan = index.count(
                 records: pfSearchBadgeBase(corpus, showRemoved: false, showSetAside: false,
-                                           showSuperseded: false, kindFacet: .everything),
+                                           showSuperseded: false),
                 query: q)
             #expect(derived == oldToolbarScan,
                     "PR B badge for '\(q)' (\(derived)) != old toolbar scan (\(oldToolbarScan))")

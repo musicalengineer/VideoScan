@@ -39,7 +39,6 @@ struct CatalogAllVolumesDefaultTests {
             showPairsOnly: false,
             viewFilters: [],
             showDisconnectedMedia: true,   // no reachability probes in a unit test
-            showRemoved: false,
             previewImage: nil,
             previewFilename: "",
             previewOfflineVolumeName: nil,

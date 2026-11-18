@@ -33,6 +33,11 @@ struct ContentView: View {
     /// Catalog →" can set it before the Catalog tab is rebuilt; in memory
     /// only, so launch always shows Everyone.
     @StateObject private var catalogPersonFilter = CatalogPersonFilterStore()
+    /// The Catalog's Show filters — the ONE owner of the active set
+    /// (CatalogShowFilterStore.swift). Here, above the tabs, so the Steward on
+    /// the Triage tab reaches it while the Catalog view is not alive, and so
+    /// launch restores and logs the set once.
+    @StateObject private var catalogShowFilters = CatalogShowFilterStore.production()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     /// Family Tree tab dot: pulsing while a FamilySearch download runs in
     /// Terminal, green when it's ready to install, orange on a problem.
@@ -161,6 +166,8 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .environmentObject(catalogPersonFilter)
             .environment(\.catalogPersonFilterReference, catalogPersonFilter)
+            .environmentObject(catalogShowFilters)
+            .environment(\.catalogShowFilterReference, catalogShowFilters)
         }
         .frame(minWidth: 900, minHeight: 600)
         // The click hook acts only in THIS window (never another window or
@@ -265,99 +272,8 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Catalog View Filter
-
-enum CatalogViewFilter: String, CaseIterable, Hashable {
-    // .onlineOnly retired 2026-07-20: reachable-only is now the DEFAULT
-    // catalog baseline (opt-out via "Show disconnected media"), not an
-    // opt-in additive filter. See CatalogContent.showDisconnectedMedia.
-    case videoAndAudioOnly = "Video+Audio Only"
-    case unpairedOnly     = "Unpaired Only"
-    case ratedOnly        = "Rated Only"
-    case hasFamily        = "Has Family"
-    case workspaceOnly    = "In Workspace"
-    case untaggedOnly     = "Untagged (junk candidate)"
-    /// Repair-lifecycle worklist (GH #132 P3): repair copies waiting
-    /// for Rick's one-click "Sounds Good" — the listen-then-confirm
-    /// queue. Backed by pfAwaitingConfirmation.
-    case awaitingConfirmation = "Repaired — Awaiting Confirmation"
-    /// Master Archive (2026-08-15): live sources without a promoted copy
-    /// (the "what still needs promoting" worklist). Backed by
-    /// pfNotYetArchived (memoized reverse index — O(1) per record).
-    case notYetArchived = "Not Yet Archived"
-    /// Master Archive: sources that HAVE a promoted copy.
-    case hasMasterCopy = "Has Master Copy"
-    /// Archive Angel phase 2 (2026-09-09): records the background scoring
-    /// sweep rates as archive candidates. O(1) per record — a Set lookup
-    /// in the evidence sidecar (ArchiveAngelEvidenceStore.candidateIDs).
-    case archiveCandidates = "Archive Candidates"
-    /// Hand-entered place review queue (Rick 2026-09-12): records with no
-    /// `userPlace` yet — the "where was this?" to-do list, the sibling of
-    /// the undated queue. O(1) per record (a nil check).
-    case noPlaceYet = "No Place Yet"
-    /// Find Similar Footage (2026-09-23): show each footage group once —
-    /// its best-ranked VISIBLE member (the likely original when it is on a
-    /// connected drive) — plus every ungrouped file. O(rows) in the
-    /// event-driven computeFiltered pass (FootageOnePerGroup), never in a
-    /// view body.
-    case onePerFootage = "One Per Footage"
-    /// Confirmed date (Rick 2026-10-31: "so I can quickly scroll through and
-    /// double check the dates are consistent"): records carrying Rick's OWN
-    /// date — `userDate`, the `user_dates` table's value, at either
-    /// confidence — never a machine date. Backed by pfRecordHasConfirmedDate;
-    /// O(1) per record (a nil check + a short parse).
-    case confirmedDate = "Confirmed Date"
-
-    var icon: String {
-        switch self {
-        case .videoAndAudioOnly:    return "film"
-        case .unpairedOnly:         return "exclamationmark.triangle"
-        case .ratedOnly:            return "star.fill"
-        case .hasFamily:            return "person.2.fill"
-        case .workspaceOnly:        return "hammer.fill"
-        case .untaggedOnly:         return "questionmark.folder"
-        case .awaitingConfirmation: return "checkmark.seal"
-        case .notYetArchived:       return "archivebox"
-        case .hasMasterCopy:        return "archivebox.fill"
-        case .archiveCandidates:    return "sparkles"
-        case .noPlaceYet:           return "mappin.slash"
-        case .onePerFootage:        return "square.stack.3d.up"
-        case .confirmedDate:        return "calendar.badge.checkmark"
-        }
-    }
-
-    /// The pure per-record test behind this filter — nil for the filters
-    /// that need the model (the archive index, the Angel sidecar) or a
-    /// whole-group pass (one per footage). `computeFiltered` applies every
-    /// non-nil one in declaration order, in ONE place; a new pure filter
-    /// ships here and needs no new branch there. Filters are independent
-    /// per-record predicates, so their order among themselves does not
-    /// change the rows. (≈ a C++ table of function pointers keyed by the
-    /// enum, instead of a chain of ifs.)
-    var recordPredicate: ((VideoRecord) -> Bool)? {
-        switch self {
-        case .videoAndAudioOnly:    return { $0.streamType == .videoAndAudio }
-        case .unpairedOnly:         return { ($0.streamType == .videoOnly || $0.streamType == .audioOnly) && $0.pairedWith == nil }
-        case .ratedOnly:            return { $0.starRating > 0 }
-        case .hasFamily:            return pfRecordHasAnyPerson
-        // Workspace chip: records the user actively imported into the triage
-        // workspace. Orthogonal to lifecycleStage — a Cataloged record can
-        // also be workspace-active.
-        case .workspaceOnly:        return { $0.workspaceActive }
-        case .untaggedOnly:         return pfRecordIsUntagged
-        // Repair-lifecycle worklist (GH #132 P3): repair copies still waiting
-        // for Rick's confirmation.
-        case .awaitingConfirmation: return pfAwaitingConfirmation
-        // "No place yet" (2026-09-12): the place review queue. nil check.
-        case .noPlaceYet:           return pfRecordHasNoPlace
-        // "Confirmed date" (Rick 2026-10-31): the rows carrying Rick's own
-        // date, for one scroll that double-checks them.
-        case .confirmedDate:        return pfRecordHasConfirmedDate
-        case .notYetArchived, .hasMasterCopy, .archiveCandidates, .onePerFootage:
-            return nil
-        }
-    }
-}
+// (CatalogViewFilter and the store that owns the active set live in
+// Catalog/CatalogShowFilterStore.swift since 2026-11-17.)
 
 // MARK: - Volume Filter
 
@@ -523,36 +439,22 @@ struct CatalogView: View {
     // Volume pane height: the VSplitView divider (rootSplit,
     // CatalogVolumePaneSplit.swift).
     @State private var showPairsOnly = false
-    @State private var catalogViewFilters: Set<CatalogViewFilter> = []
-    /// The filter set, persisted (2026-08-22). Until now the Show ▸ filters
-    /// were session-only, so "Not yet archived" — the catalog's whole
-    /// point once a Master Archive exists — had to be re-ticked every
-    /// launch. Encoded by CatalogShowingSummary; mirrored from
-    /// `catalogViewFilters` in onChange, loaded once in onAppear. Absent
-    /// key = first run → `seedDefaultViewFilters`.
-    @AppStorage("catalog.viewFilters") private var persistedViewFilters: String = ""
-    @State private var didLoadPersistedViewFilters = false
+    /// The Show ▸ filters that are on. Owned by the ONE store
+    /// (CatalogShowFilterStore, above the tabs in ContentView): this view
+    /// reads `showFilters.active` and never writes it — every change goes
+    /// through the store's methods, which persist and log it.
+    @EnvironmentObject var showFilters: CatalogShowFilterStore
     /// Baseline reachability opt-out (2026-07-20). Reachable-only is the
     /// DEFAULT — the catalog table shows only media on currently-mounted
     /// volumes. Flipping this ON lifts that baseline and shows disconnected
     /// media too. Persisted across launches; default OFF. NOT one of the
-    /// additive `catalogViewFilters`, so "Clear All Filters" leaves it alone.
+    /// additive Show filters, so "Clear All Filters" leaves it alone.
     /// `@AppStorage` ≈ a persisted-in-NSUserDefaults bool.
     @AppStorage("catalog.showDisconnectedMedia") private var showDisconnectedMedia = false
-    /// Whether purged ("removed from catalog") rows are included in the table.
-    /// Persisted across launches like other catalog UI prefs.
-    /// Default OFF — purged rows hidden until the user opts in.
-    @AppStorage("catalogShowRemoved") private var showRemoved: Bool = false
-    /// Whether set-aside rows (video-only catalog scope: photos / music /
-    /// audio with no matching video) are included in the table. Default
-    /// OFF — set-aside rows hidden until the user opts in. Independent of
-    /// `showRemoved` (distinct states, distinct toggles).
-    @AppStorage("catalogShowSetAside") private var showSetAside: Bool = false
-    /// Whether superseded rows (originals retired by a confirmed repair,
-    /// GH #132) are included in the table. Session-scoped `@State` —
-    /// deliberately NOT persisted (Manager decision 2026-07-24): the
-    /// default view should always come back clean on relaunch.
-    @State private var showSuperseded: Bool = false
+    // (The Show ▸ hidden-records reveals — Removed, Set aside, Superseded
+    // originals — were removed 2026-11-17: those rows are always hidden in
+    // this list. Their stored values are deleted at launch by
+    // CatalogShowFilterStore.retireHiddenRecordReveals.)
     /// Show ▸ Events & Copies as Folders (2026-10-16). Off by default;
     /// remembered per user through CatalogFootageFoldersSetting (read
     /// strictly — a poisoned value reads as off), written on every flip
@@ -824,11 +726,9 @@ struct CatalogView: View {
             avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
             avidBinFiles: model.avidBinResults.count,
             showPairsOnly: $showPairsOnly,
-            viewFilters: $catalogViewFilters,
+            showFilters: showFilters,
+            focusLabel: filterByIDs.isEmpty ? nil : focusLabel,
             showDisconnectedMedia: $showDisconnectedMedia,
-            showRemoved: $showRemoved,
-            showSetAside: $showSetAside,
-            showSuperseded: $showSuperseded,
             showFootageFolders: $showFootageFolders,
             showFoldersOnly: $showFoldersOnly,
             selectedVolumeLabels: selectedVolumeLabels,
@@ -880,16 +780,10 @@ struct CatalogView: View {
             selectedVolumeLabels: selectedVolumeLabels,
             personFilter: personFilter.selected,
             showPairsOnly: showPairsOnly,
-            viewFilters: catalogViewFilters,
+            viewFilters: showFilters.active,
             showDisconnectedMedia: showDisconnectedMedia,
-            showRemoved: showRemoved,
-            showSetAside: showSetAside,
-            showSuperseded: showSuperseded,
             showFootageFolders: showFootageFolders,
             showFoldersOnly: showFoldersOnly,
-            // Media-kind facet (GH #124) — persisted on the model,
-            // flipped by the toolbar facet chip.
-            kindFacet: model.kindFacetSetting.facet,
             filterByIDs: filterByIDs,
             focusMatchScore: focusMatchScore,
             focusLabel: focusLabel,
@@ -971,7 +865,8 @@ struct CatalogView: View {
                 // Make Folder…: the focus is done; the new folder shows in
                 // Show ▸ As folders (the table selects and opens it).
                 showFoldersWithoutFocus()
-            }
+            },
+            onClearViewFilters: { showFilters.clearAll(by: .emptyTable) }
         )
     }
 
@@ -1024,10 +919,6 @@ struct CatalogView: View {
                     model.archivistSearchRequest = nil
                 }
             }
-            .onChange(of: catalogViewFilters) {
-                guard didLoadPersistedViewFilters else { return }
-                persistedViewFilters = CatalogShowingSummary.encode(catalogViewFilters)
-            }
             .onChange(of: showFootageFolders) {
                 CatalogFootageFoldersSetting.set(showFootageFolders)
                 // The folder view off turns the estimate view off with it.
@@ -1041,7 +932,7 @@ struct CatalogView: View {
             .onChange(of: volumeShowFilter) { volumeShowFilterDidChange() }
             // A Master Archive designated AFTER first run flips the default
             // to the to-do view once (never again — the user's choice wins).
-            .onChange(of: model.masterArchive != nil) { seedDefaultViewFiltersIfUntouched() }
+            .onChange(of: model.masterArchive != nil) { showFilters.seedDefaultIfUntouched(hasMasterArchive: model.masterArchive != nil) }
             .onDisappear {
                 // CatalogView's @State selection ceases to be a visible
                 // current row when this tab leaves the hierarchy.
@@ -1933,35 +1824,18 @@ extension CatalogView {
     }
 }
 
-// MARK: - Persisted Show filters (2026-08-22)
+// MARK: - Persisted view settings
 
 extension CatalogView {
-    /// UserDefaults key written the first time the filter set is seeded,
-    /// so the "Not yet archived" default is applied exactly once.
-    static let viewFiltersSeededKey = "catalog.viewFilters.seeded"
-
-    /// Load the persisted filter set on first appearance; seed the
-    /// default when nothing was ever saved.
+    /// First appearance: the volume Show setting is loaded, and the Show
+    /// filters' one-time default is offered to the store (which owns the
+    /// filter set, its persistence and its log line — this view writes none
+    /// of them).
     func loadPersistedViewFiltersIfNeeded() {
-        guard !didLoadPersistedViewFilters else { return }
-        catalogViewFilters = CatalogShowingSummary.decode(persistedViewFilters)
-        didLoadPersistedViewFilters = true
-        volumeShowFilter = VolumeShowFilter.decode(persistedVolumeShow)
-        didLoadVolumeShow = true
-        seedDefaultViewFiltersIfUntouched()
-    }
-
-    /// Once a Master Archive exists, the catalog defaults to the to-do
-    /// view (Rick 2026-08-22: "when I am browsing the main catalog, it is
-    /// really the 'To be archived' catalog"). Applied ONCE per install;
-    /// after that the pill / Show menu is the user's call.
-    func seedDefaultViewFiltersIfUntouched() {
-        guard didLoadPersistedViewFilters, model.masterArchive != nil else { return }
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: Self.viewFiltersSeededKey) else { return }
-        defaults.set(true, forKey: Self.viewFiltersSeededKey)
-        if !catalogViewFilters.contains(.hasMasterCopy) {
-            catalogViewFilters.insert(.notYetArchived)
+        if !didLoadVolumeShow {
+            volumeShowFilter = VolumeShowFilter.decode(persistedVolumeShow)
+            didLoadVolumeShow = true
         }
+        showFilters.seedDefaultIfUntouched(hasMasterArchive: model.masterArchive != nil)
     }
 }
