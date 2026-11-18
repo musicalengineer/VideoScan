@@ -373,7 +373,7 @@ start_run() {
     if [ "$LANE" = corpus ] || [ "$LANE" = testbed ]; then
         # The harness's host side and its driver sources, per run like the runner itself.
         local f
-        for f in corpus_run.py catalog_db.py corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift corpus/CorpusVerbsDriver.swift; do
+        for f in corpus_run.py catalog_db.py corpus/CorpusSeal.swift corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift corpus/CorpusVerbsDriver.swift; do
             copy_to_host "$SCRIPT_DIR/$f" "$bin/$(basename "$f")" || die "could not install $f on $H_NAME"
         done
     fi
@@ -819,6 +819,12 @@ case "$LANE" in
     __host)
         [ ${#POS[@]} -eq 3 ] || die "__host <lane> <sha> <stamp>" 2
         case "${POS[0]}" in ui|deep|all|suite) ;; corpus) corpus_args_ok ;; testbed) testbed_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
+        # The host side of the corpus lanes does its work HERE: `--host m4` is only a label, so the
+        # Mac itself must be the M4 before a worktree is checked out or a file written (Codex #311 F5).
+        case "${POS[0]}" in corpus|testbed)
+            [ "$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" = ricksm4 ] \
+                || die "the corpus lanes run only on the M4; this Mac is not the M4" 2 ;;
+        esac
         host_main "${POS[@]}" ;;
     ""|-h|--help) usage ;;
     *) die "unknown lane '$LANE' (ui|deep|all|suite|testbed|corpus|status)" 2 ;;

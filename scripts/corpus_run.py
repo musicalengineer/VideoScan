@@ -30,8 +30,17 @@ THE SEAL (every entry point passes `Seal.check` first; tests/test_corpus_run.py)
   2. ~/corpus exists and carries THIS_IS_TEST_DATA.txt;
   3. the state root resolves (symlinks followed) under ~/corpus/state and is
      nowhere near "Library/Application Support";
-  4. every path this file writes resolves under ~/corpus/{state,work,reports}
-     (`Seal.writable`) — never under /Volumes, ~/corpus/media or ~/corpus/live.
+  4. ~/corpus/{state,work,reports} ARE those folders: one that is a symlink, or
+     resolves anywhere but directly under the corpus folder, is refused — a
+     `work` pointing into `media` would otherwise make media "writable";
+  5. every path this file writes resolves under ~/corpus/{state,work,reports}
+     (`Seal.writable`) — and never under /Volumes, ~/corpus/media or
+     ~/corpus/live, whatever it resolved through;
+  6. what it READS BACK as its own (the sealed catalog, a stored run, a
+     baseline) must resolve inside the folder it belongs to (`Seal.contained`):
+     a symlink out — to a live catalog, to a file elsewhere — is refused;
+  7. files written into the lane's <out> folder (`out_write`) never follow a
+     symlink and never land in the corpus's read-only parts.
   The home directory comes from the account database (pwd), not $HOME, so an
   overridden HOME cannot move the seal. There is no flag, environment
   variable or config key that relaxes any of it.
@@ -90,6 +99,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -113,11 +123,11 @@ PROOF_STRATUM = "one-sided sound"
 # lane -> (XCTest class, its engines in order, default per-file deadline in seconds, driver sources)
 LANES = {
     "check": ("CorpusCheckDriver", ["probe", "check", "audio", "pair"], 300,
-              ["CorpusDriverSupport.swift", "CorpusCheckDriver.swift"]),
+              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift"]),
     "proof": ("CorpusProofDriver", ["balance", "proof"], 3600,
-              ["CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
+              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
     "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
-              3600, ["CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
+              3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
 }
 VERBS_SAMPLE = 20                                # files the verbs lane clones (--limit changes it)
 VERBS_ROLES = ("dup", "purge", "set_aside", "promote")     # dealt round-robin over the sample
@@ -185,7 +195,30 @@ class Seal:
         resolved = os.path.realpath(str(self.state))
         if "/Library/Application Support" in resolved or resolved.startswith("/Volumes/"):
             raise Refused("refused: the state root resolves to a live location")
+        # The three writable folders, and media, are themselves — never an alias (Codex #311 F1).
+        corpus_real = os.path.realpath(str(self.corpus))
+        for name in ("state", "work", "reports", "media"):
+            folder = self.corpus / name
+            if os.path.islink(str(folder)) or (os.path.lexists(str(folder))
+                                               and os.path.realpath(str(folder)) != os.path.join(corpus_real, name)):
+                raise Refused(f"refused: ~/corpus/{name} is a symlink or resolves somewhere else — the corpus folders must be themselves")
         return self
+
+    def pristine(self, path: Path) -> bool:
+        """True when `path` resolves inside the parts of the corpus nothing may write: the media
+        copies, the read-only mount, or one of the corpus documents."""
+        if _under(path, self.media) or _under(path, self.corpus / "live"):
+            return True
+        resolved = os.path.realpath(str(path))
+        return any(resolved == os.path.realpath(str(self.corpus / name)) for name in (MANIFEST, SHA_LIST, SOURCE_BACKUP, MARKER))
+
+    def contained(self, path: Path, root: Path) -> Path:
+        """`path`, or Refused unless it resolves inside `root` (which itself must be inside the
+        corpus): for what the harness reads back as its own. A symlink out is refused before
+        anything is opened (Codex #311 F4)."""
+        if not _under(root, self.corpus) or not _under(path, root) or os.path.islink(str(path)):
+            raise Refused("refused: a file the harness reads back as its own resolves outside the folder it belongs to")
+        return Path(path)
 
     def writable(self, path: Path) -> Path:
         """`path`, or Refused unless it resolves inside ~/corpus/{state,work,reports}."""
@@ -193,6 +226,8 @@ class Seal:
         resolved = os.path.realpath(str(path))
         if resolved.startswith("/Volumes/") or "/Library/Application Support" in resolved:
             raise Refused("refused: a write was aimed at a live location")
+        if self.pristine(path):
+            raise Refused("refused: a write was aimed at the pristine corpus (the corpus sources are read-only)")
         if not any(_under(path, root) for root in (self.state, self.work_root, self.reports)):
             raise Refused("refused: a write was aimed outside ~/corpus/{state,work,reports} (the corpus sources are read-only)")
         return path
@@ -208,10 +243,25 @@ class Seal:
     def write_json(self, path: Path, value) -> None:
         self.write_text(path, json.dumps(value, indent=1, sort_keys=True) + "\n")
 
+    def out_write(self, out: Path, name: str, text: str, append: bool = False) -> None:
+        """One of the lane's own files in its <out> folder (~/m4run/out/<run>/, outside the
+        corpus): counts and words only. Never through a symlink, never into the corpus's
+        read-only parts or a live location (Codex #311 F2)."""
+        target = Path(out) / name
+        resolved = os.path.realpath(str(target))
+        if (os.path.islink(str(target)) or self.pristine(target) or resolved.startswith("/Volumes/")
+                or "/Library/Application Support" in resolved):
+            raise Refused("refused: a lane's output file would land somewhere it must not")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+        fd = os.open(str(target), flags, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+
 
 # ── Words that may leave the M4 ───────────────────────────────────────────
 
 _NOT_WORD = re.compile(r"[^A-Za-z0-9_,:+\-]")
+_LONG_HEX = re.compile(r"[0-9a-fA-F]{24,}")      # a digest (or most of one) is not a word: only `sha_prefix` shortens one
 
 
 def word(text, limit: int = 64) -> str:
@@ -222,7 +272,7 @@ def word(text, limit: int = 64) -> str:
     text = "" if text is None else str(text)
     if not text:
         return "none"
-    if _NOT_WORD.search(text) or len(text) > limit:
+    if _NOT_WORD.search(text) or len(text) > limit or _LONG_HEX.search(text):
         return "scrubbed"
     return text
 
@@ -435,8 +485,11 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, ro
         counts.update(pairs)
         return counts
     except sqlite3.Error as error:
-        # The engine's words name tables, columns and triggers — never a row's values.
-        raise Refused("refused: the schema would not take the transform — " + str(error).splitlines()[0][:160])
+        # The engine's own message goes to the lane's log on the M4 (stderr), never into what a
+        # caller reads back: a trigger's words are the schema's, but nothing here proves it (Codex #311 F8).
+        print("corpus prepare: sqlite said: " + str(error), file=sys.stderr)
+        raise Refused(f"refused: the schema would not take the transform ({type(error).__name__}; "
+                      "the engine's message is in corpus.log on the M4)")
     finally:
         conn.close()
 
@@ -457,7 +510,7 @@ def carry_pair_links(conn: sqlite3.Connection) -> Dict[str, int]:
                 "SELECT ii.landed_ref, lp.paired_with_id, lp.pair_group_id FROM src.import_items ii "
                 "JOIN src.legacy_pair_ids lp ON lp.import_run = ii.import_run AND lp.source_ordinal = ii.source_ordinal "
                 "JOIN chosen c ON c.file_id = ii.landed_ref "
-                "WHERE ii.source_file = 'catalog.json' AND ii.landed_table = 'files'"):
+                "WHERE ii.item_kind = 'row' AND ii.landed_table = 'files'"):     # 'row' = an occurrence of the old catalog file (the schema's CHECK)
             link = {k: v for k, v in (("pairedWithID", paired_with), ("pairGroupID", group)) if v is not None}
             links[file_id] = json.dumps(link, sort_keys=True)
             counts["pair_links_from_import"] += 1
@@ -496,6 +549,9 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optio
     """Through the scripts' read-only door: every manifest file has a row, every row's file
     exists with the row's size, and the catalog names no Master Archive."""
     import catalog_db
+    seal.contained(database, Path(database).parent)          # the file itself, never a link to another catalog
+    if not (_under(database, seal.state) or _under(database, seal.work_root)):
+        raise Refused("refused: the catalog to verify is not inside ~/corpus/{state,work}")
     conn = catalog_db.connect(database)
     try:
         rows = conn.execute("SELECT content_digest, full_path, size_bytes, removal_state FROM files").fetchall()
@@ -576,7 +632,7 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
                  f"in the corpus, {counts['pair_halves_alone']} halves whose partner is not in the corpus")
     lines.append("  not carried: other copies and removed rows, the import evidence, captions/transcripts/notes/people, the Master Archive designation")
     if out is not None:
-        Path(out, "corpus-summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        seal.out_write(Path(out), "corpus-summary.txt", "\n".join(lines) + "\n")
     return EXIT_GREEN, lines
 
 
@@ -660,6 +716,8 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
                 record[engine] = "not_run"
             else:
                 record[engine], cut = "crash", True
+        if sha not in ended and not cut:
+            record["unfinished"] = True                      # the host died after its last answer and before `end` (Codex #311 F6)
         record["settled"] = True
         settled += 1
     return settled, refusal
@@ -712,7 +770,8 @@ def patch_xctestrun(source: Path, dest: Path, environment: Dict[str, str]) -> No
         return value
     with open(source, "rb") as f:
         plist = plistlib.load(f)
-    with open(dest, "wb") as f:
+    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)    # a new file, never through a link
+    with os.fdopen(fd, "wb") as f:
         plistlib.dump(patch(plist), f)
 
 
@@ -764,6 +823,12 @@ class Lane:
                                  capture_output=True, text=True).stdout.strip()
         if tracked:
             raise Refused("refused: this ref tracks files in the harness's overlay folder")
+        # The overlay's parent is the testbed's own test folder: a ref that makes it (or anything
+        # above it) a symlink would send the driver sources somewhere else (Codex #311 F2).
+        parent = (self.worktree / OVERLAY_DIR).parent
+        expected = os.path.join(os.path.realpath(str(self.worktree)), os.path.dirname(OVERLAY_DIR))
+        if os.path.realpath(str(parent)) != expected or self.seal.pristine(parent) or _under(self.worktree, self.seal.corpus):
+            raise Refused("refused: the testbed's test folder is not a folder of the testbed (a symlink in this ref?)")
         self.clear_overlay()
         overlay = self.worktree / OVERLAY_DIR
         overlay.mkdir(parents=True)
@@ -799,6 +864,8 @@ class Lane:
         sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home),
                   "TMPDIR": str(self.work / "tmp") + "/", "VS_CORPUS_CONFIG": str(config)}
         patched = xctestrun.with_name(f"corpus-{self.stamp}-{self.launches}.xctestrun")    # beside it: __TESTROOT__ is relative
+        if os.path.lexists(str(patched)) or seal.pristine(patched) or _under(patched, seal.corpus):
+            raise Refused("refused: the patched test-run file would land somewhere it must not")
         patch_xctestrun(xctestrun, patched, sealed)
         env = dict(os.environ)
         env.update({k: v for k, v in sealed.items() if k != "VS_CORPUS_CONFIG"})
@@ -886,6 +953,8 @@ class Lane:
                 totals[e][outcome] += 1
                 if outcome in ("crash", "timeout") or outcome.startswith("error") or any(w in outcome for w in LOSS_WORDS):
                     failures[e + ":" + outcome] += 1
+            if record.get("unfinished"):
+                failures["end:crash"] += 1                   # RED: a file that began and never ended
         return {"lane": self.lane, "sha": self.sha, "stamp": self.stamp, "host": self.seal.hostname,
                 "engine_present": engine_present, "files": len(results),
                 "bytes": sum(r.get("size", 0) for r in results.values()),
@@ -904,7 +973,7 @@ class Lane:
         seal.mkdir(self.report_dir)
         outcomes = {}
         for sha, record in results.items():
-            kept = {k: v for k, v in record.items() if k != "settled"}
+            kept = {k: v for k, v in record.items() if k not in ("settled",)}
             kept["outcome"] = outcome_of(record, self.engines)
             outcomes[sha] = kept
         seal.write_json(self.report_dir / "outcomes.json", outcomes)
@@ -912,9 +981,8 @@ class Lane:
         text = render(report, per_file=outcomes if self.lane in ("proof", "verbs") else None, against=report.get("against"))
         text += self.housekeeping
         seal.write_text(self.report_dir / "report.txt", "\n".join(text) + "\n")
-        (self.out / "corpus-summary.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
-        (self.out / VERDICT_FILE).write_text(json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n",
-                                             encoding="utf-8")
+        seal.out_write(self.out, "corpus-summary.txt", "\n".join(text) + "\n")
+        seal.out_write(self.out, VERDICT_FILE, json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n")
         self.lines = text
 
     def go(self) -> int:
@@ -937,7 +1005,7 @@ class Lane:
                 if self.build() != 0:
                     self.lines = [f"corpus {self.lane}: RED the driver did not build against {self.sha[:9]} "
                                   "(corpus-build.log on the host); no file was run"]
-                    (self.out / "corpus-summary.txt").write_text(self.lines[0] + "\n", encoding="utf-8")
+                    seal.out_write(self.out, "corpus-summary.txt", self.lines[0] + "\n")
                     return EXIT_RED
                 entries, database = self.stage(entries, database)
                 results, hello = self.run_files(entries, database)
@@ -968,20 +1036,22 @@ class Lane:
             note = "  the run's work folder could NOT be removed whole (it is still on the M4 under ~/corpus/work)"
             self.lines.append(note)
             try:
-                with open(self.out / "corpus-summary.txt", "a", encoding="utf-8") as f:
-                    f.write(note + "\n")
-            except OSError:
+                self.seal.out_write(self.out, "corpus-summary.txt", note + "\n", append=True)
+            except (OSError, Refused):
                 pass
 
 
 def media_sweep(seal: Seal, entries: List[Entry]) -> Dict[str, Tuple[int, int]]:
-    """Size and modification time of every corpus file, by SHA-256, plus the count of files
-    under ~/corpus/media (key `files`): what must be identical before and after a verbs run."""
+    """Size, modification time, file flags, link count and inode of every corpus file, by
+    SHA-256, plus the count of files under ~/corpus/media (key `files`): what must be identical
+    before and after a verbs run."""
     seen: Dict[str, Tuple[int, int]] = {}
     for e in entries:
         try:
-            st = os.stat(str(e.path))
-            seen[e.sha] = (st.st_size, st.st_mtime_ns)
+            st = os.lstat(str(e.path))
+            # size, mtime — and the flags, the number of names and the inode: a lock cleared, a
+            # hard link made into the run, or the file replaced, moves none of the first two.
+            seen[e.sha] = (st.st_size, st.st_mtime_ns, getattr(st, "st_flags", 0), st.st_nlink, st.st_ino)
         except OSError:
             seen[e.sha] = (-1, -1)
     seen["files"] = (sum(len(names) for _, _, names in os.walk(str(seal.media))), 0)
@@ -1178,7 +1248,7 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
         return lines
     if report.get("media"):
         media = report["media"]
-        lines.append(f"  corpus media sweep (size + mtime of {media['swept']} files, before and after): {media['changed']} changed, "
+        lines.append(f"  corpus media sweep (size, mtime, flags, links and inode of {media['swept']} files, before and after): {media['changed']} changed, "
                      f"file count {media['files_delta']:+d}" + (" — RED: ~/corpus/media was touched" if media["changed"] or media["files_delta"] else " — untouched"))
         lines.append(f"  clones: {report.get('clones')} (roles: {_counts(report.get('roles') or {})}); free space on the M4 "
                      f"{report.get('free_delta_bytes', 0) / 1e9:+.2f} GB while the run's work folder was still there")
@@ -1229,7 +1299,15 @@ def verdict_facts(report: dict) -> dict:
 def lane_runs(seal: Seal, lane: str) -> List[Path]:
     """Every stored run of a lane, oldest first (the stamp sorts by time)."""
     root = seal.reports / lane
-    runs = [p.parent for p in root.glob("*/*/report.json")] if root.is_dir() else []
+    runs = []
+    for report in root.glob("*/*/report.json") if root.is_dir() else []:
+        run = report.parent
+        # A run is a real folder inside reports/<lane>/<commit>/, holding real files: a symlinked
+        # run, commit folder, report or outcomes file is not a run (Codex #311 F4).
+        if (re.fullmatch(r"[0-9a-f]{40}", run.parent.name) and re.fullmatch(r"[0-9A-Za-z_]+", run.name)
+                and not any(os.path.islink(str(p)) for p in (run, run.parent, report, run / "outcomes.json"))
+                and _under(run, root)):
+            runs.append(run)
     return sorted(runs, key=lambda p: p.name)
 
 
@@ -1240,11 +1318,13 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
     moved: List[Tuple[str, str]] = []
     kinds_changed = 0
     for sha in sorted(set(old) & set(new)):
+        if not isinstance(old[sha], dict) or not isinstance(new[sha], dict):
+            continue
         words = []
         for e in engines:
             if e not in old[sha]:
                 continue                                     # an engine the lane did not have then: nothing to compare
-            a, b = old[sha].get(e, "not_run"), new[sha].get(e, "not_run")
+            a, b = word(old[sha].get(e, "not_run")), word(new[sha].get(e, "not_run"))   # a stored file is not trusted to hold words
             if a != b:
                 transitions[f"{e}: {a} -> {b}"] += 1
                 words.append(f"{e}: {a} -> {b}")
@@ -1289,6 +1369,8 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
             if not re.fullmatch(r"[0-9a-f]{40}", record["sha"]) or not re.fullmatch(r"[0-9A-Za-z_]+", record["run"]):
                 raise ValueError("not a run")
             run = seal.reports / lane / record["sha"] / record["run"]
+            if run not in lane_runs(seal, lane):
+                raise ValueError("not a stored run of this lane")
             if hashlib.sha256((run / "outcomes.json").read_bytes()).hexdigest() != record["outcomes_sha256"]:
                 raise ValueError("changed")
             _outcomes(run)
@@ -1332,15 +1414,20 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
     return against
 
 
+_RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES)))     # work/<stamp>-<lane>
+
+
 def _unlock_tree(folder: str) -> None:
-    """Clear the user immutable flag (what Promote sets on what it archives) under `folder`."""
+    """Clear the user immutable flag (what Promote sets on what it archives) under `folder` —
+    on regular files with ONE name only: a hard link could share its inode with a file outside
+    the run, and clearing the flag here would clear it there (Codex #311 F3)."""
     for parent, _, names in os.walk(folder):
         for name in names:
             path = os.path.join(parent, name)
             try:
-                flags = os.lstat(path).st_flags
-                if flags & 0x2:                              # UF_IMMUTABLE
-                    os.lchflags(path, flags & ~0x2)
+                info = os.lstat(path)
+                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_flags & 0x2:     # UF_IMMUTABLE
+                    os.lchflags(path, info.st_flags & ~0x2)
             except (OSError, AttributeError):
                 continue
 
@@ -1352,6 +1439,7 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
     baseline cannot be read back — the stored runs are then the evidence. Work folders older
     than STALE_WORK_SECONDS are what a run that died left behind: removed, unlocked first."""
     lines = []
+    seal.check()                                             # nothing is removed unless the folders are themselves
     keep = KEEP_RUNS if keep is None else keep
     baseline, _, problem = baseline_of(seal, lane)
     runs = lane_runs(seal, lane)
@@ -1378,8 +1466,9 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
     stale = 0
     for folder in sorted(seal.work_root.iterdir()) if seal.work_root.is_dir() else []:
         try:
-            if folder.is_symlink() or not folder.is_dir() or now - folder.lstat().st_mtime < STALE_WORK_SECONDS:
-                continue
+            if (folder.is_symlink() or not folder.is_dir() or not _RUN_WORK.fullmatch(folder.name)
+                    or now - folder.lstat().st_mtime < STALE_WORK_SECONDS):
+                continue                                     # not a run's folder (Codex #311 F7), or not old
         except OSError:
             continue
         _unlock_tree(str(seal.writable(folder)))
@@ -1391,8 +1480,10 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
 
 
 def who_word(text) -> str:
-    """Who accepted a baseline, as one word: `rickb@RicksUltra`."""
-    return re.sub(r"[^A-Za-z0-9_.@-]", "_", str(text or "unknown"))[:64] or "unknown"
+    """Who accepted a baseline, as one word: `rickb@RicksUltra`. No dot (nothing shaped like a
+    file name), no long run of hex."""
+    name = re.sub(r"[^A-Za-z0-9_@-]", "_", str(text or "unknown"))[:48] or "unknown"
+    return "scrubbed" if _LONG_HEX.search(name) else name
 
 
 def accept(seal: Seal, lane: str, who: str) -> List[str]:
@@ -1509,8 +1600,13 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     except Refused as refusal:
         lines, code = [f"corpus: RED {refusal}"], EXIT_REFUSED
         out = getattr(args, "out", None)
-        if out and os.path.isdir(out):
-            Path(out, "corpus-summary.txt").write_text(lines[0] + "\n", encoding="utf-8")
+        # The refusal is said in the lane's <out> too — but never on a Mac that is not the M4
+        # (there the harness writes nothing at all), and never through a symlink (Codex #311 F2).
+        if out and os.path.isdir(out) and seal is not None and seal.hostname in ALLOWED_HOSTS:
+            try:
+                seal.out_write(Path(out), "corpus-summary.txt", lines[0] + "\n")
+            except (OSError, Refused):
+                pass
     print("\n".join(lines))
     return code
 

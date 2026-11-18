@@ -368,13 +368,16 @@ extension VerbsStage {
     }
 
     /// Promote locks what it archives (UF_IMMUTABLE). Cleared here, on files under the run's
-    /// scratch archive only, so the run's work folder can be removed.
+    /// scratch archive only, so the run's work folder can be removed. Never on a file that
+    /// has a second name (Codex #311 F3).
     nonisolated static func unlock(under root: String, inside work: String) {
         guard CorpusRun.isUnder(root, work), let walker = FileManager.default.enumerator(atPath: root) else { return }
         for case let relative as String in walker {
             let path = root + "/" + relative
             var info = stat()
-            if lstat(path, &info) == 0, info.st_flags & UInt32(UF_IMMUTABLE) != 0 {
+            // A regular file with ONE name: a hard link could share its inode with a file outside the run.
+            if lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
+               info.st_flags & UInt32(UF_IMMUTABLE) != 0 {
                 _ = lchflags(path, info.st_flags & ~UInt32(UF_IMMUTABLE))
             }
         }

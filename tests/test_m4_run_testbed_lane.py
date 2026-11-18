@@ -83,6 +83,10 @@ class TestbedScene(Testbed):
         (self.install / 'corpus_run.py').write_text(STUB_CORPUS)
         self.corpus('check')
         self.corpus('proof')
+        # The host side of the corpus lanes runs only on the M4 (Codex #311 F5): a stand-in `hostname` says this is it.
+        (self.bin / 'hostname').write_text(FAKE_HOSTNAME)
+        (self.bin / 'hostname').chmod(0o755)
+        self.env['PATH'] = f"{self.bin}:{os.environ['PATH']}"
 
     def corpus(self, lane, exit_code=0, verdict='GREEN', summary='', lane_facts='default', **more):
         if lane_facts == 'default':
@@ -334,7 +338,7 @@ class ArgumentAndDryRunTests(unittest.TestCase):
         out = p.stdout
         self.assertIn(f'm4_run: testbed on M4 at {sha[:9]}', out)
         self.assertIn(f'push -q ricksm4.local:dev/VideoScan {sha}:refs/m4run/{sha}', out)
-        for name in ('nightly_local_tests.sh', 'corpus_run.py', 'catalog_db.py', 'CorpusDriverSupport.swift',
+        for name in ('nightly_local_tests.sh', 'corpus_run.py', 'catalog_db.py', 'CorpusSeal.swift', 'CorpusDriverSupport.swift',
                      'CorpusCheckDriver.swift', 'CorpusProofDriver.swift', 'CorpusVerbsDriver.swift', 'testbed_lock.py', 'm4_run_summary.py'):
             self.assertRegex(out, rf'install .*{name} -> ricksm4\.local:.*/m4run/bin/\d{{8}}_\d{{6}}_\d+/{name}')
         self.assertIn('under one hold of the lock: the suite lane, then corpus_run.py host check, then corpus_run.py host proof', out)
@@ -364,7 +368,7 @@ class CallerOnTheM4Tests(TestbedScene):
         (self.repo / 'scripts/corpus').mkdir(parents=True)
         for name in RUNNER_FILES:
             shutil.copy(SCRIPTS / name, self.repo / 'scripts' / name)
-        for name in ('corpus_run.py', 'catalog_db.py', 'corpus/CorpusDriverSupport.swift', 'corpus/CorpusCheckDriver.swift',
+        for name in ('corpus_run.py', 'catalog_db.py', 'corpus/CorpusSeal.swift', 'corpus/CorpusDriverSupport.swift', 'corpus/CorpusCheckDriver.swift',
                      'corpus/CorpusProofDriver.swift', 'corpus/CorpusVerbsDriver.swift'):
             (self.repo / 'scripts' / name).write_text(STUB_CORPUS)
         shutil.rmtree(self.work)                            # the host adds its testbed worktree from the repo

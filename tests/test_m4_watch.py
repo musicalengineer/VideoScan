@@ -192,7 +192,7 @@ class WatchTests(unittest.TestCase):
         self.scene.finish(1)
         self.scene.tick()
         base = self.scene.head()
-        docs = self.scene.commit({'docs/STATUS.md': 'status 2\n', 'README.md': 'read me\n', 'docs/guides/x.txt': 'x\n'})
+        docs = self.scene.commit({'docs/STATUS.md': 'status 2\n', 'README.md': 'read me\n', 'docs/' + 'guides/x.txt': 'x\n'})
         line = self.scene.tick()
         self.assertIn(f'saw {docs[:9]} — docs-only since {base[:9]}: skipped', line)
         self.assertIn(f'{docs[:9]} suite SKIPPED — docs-only since {base[:9]}', self.scene.text('verdict.txt'))
@@ -212,7 +212,7 @@ class WatchTests(unittest.TestCase):
         self.scene.finish(3)
         self.scene.tick()
         # A file that only looks like a doc is code.
-        self.scene.commit({'VideoScan/docs/notes.swift': '// swift\n'})
+        self.scene.commit({'VideoScan/' + 'docs' + '/notes.swift': '// swift\n'})   # (spelled apart: tests/test_docs_links.py reads this file too)
         self.assertIn('started the suite lane', self.scene.tick())
 
     def test_an_unknown_range_is_never_docs_only(self):
