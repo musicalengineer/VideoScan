@@ -87,7 +87,9 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   and the last testbed run: lane, commit, START and OUTCOME times, verdict word, summary lines, a testbed run's lanes,
   and the push watcher's verdict line.
 
-**The push trigger** (`scripts/m4_watch.py`; DECISIONS 2026-11-17: the suite runs on every push to `main`). One tick
+**The push trigger** (`scripts/m4_watch.py`; DECISIONS 2026-11-17: the suite runs on every push to `main`). *Built and
+tested 2026-11-18; NOT installed on the M4 — installing a standing agent there is Rick's to do or to allow (the table
+below is the whole of it).* One tick
 every 300 s from a LaunchAgent in the M4's GUI session (`com.videoscan.m4watch`). A tick fetches `origin/main` into
 its own ref (`refs/m4watch/main` in the M4's `~/dev/VideoScan`; no branch or worktree moves) and starts **at most
 one** `m4_run.sh suite --host m4local --ref <sha>` for the newest commit — the same lane, lock and quiet window as a
@@ -190,6 +192,11 @@ its turn behind a suite or gauntlet run. The engines run in the app's unit-test 
 and the background service are inert there) with its home redirected into `~/corpus/state/home`; the driver sources
 (`scripts/corpus/*.swift`) are laid over the testbed as untracked files for the run, so a commit that predates the
 harness can be run. A crash or a deadline in one file is recorded and the run goes on.
+
+First real `verbs` run, M4, 2026-11-17 23:11 (`2b65a9575`): 170 s (the build 143 s), 20 files / 30 clones, the media
+sweep 0 changed of 234, 6 files in the run's Trash folder = 6 the engines reported, 0 in the app's own test-host Trash,
+the work folder removed afterwards. `prepare` (transform 2) on the real backup: 94 pair links carried, 6 pairs with both
+halves in the corpus, 82 halves whose partner is not.
 
 What the sealed catalog carries beyond the rows: each file's A/V pair link (transform 2: one `row_knowledge` 'pair'
 row per paired file, the way the app writes a link; the import evidence itself cannot be carried — a finished import
