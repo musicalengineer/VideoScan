@@ -681,6 +681,8 @@ class StatusTests(unittest.TestCase):
         text = '\n'.join(cr.status(self.scene.seal))
         self.assertIn('newest check run: 20261117_120000_1', text)
         self.assertIn('no previous run (this one is the baseline)', text)
+        self.assertLess(text.index('  probe:'), text.index('  check:'), "engines read in the lane's order")
+        self.assertLess(text.index('  check:'), text.index('  audio:'))
 
     def test_status_shows_what_changed_as_counts_and_transitions_only(self):
         self.scene.run()

@@ -806,7 +806,8 @@ def _counts(counter: Dict[str, int]) -> str:
 
 
 def render(report: dict, per_file: Optional[Dict[str, dict]] = None) -> List[str]:
-    lane, engines = report["lane"], list(report["engines"].keys())
+    lane = report["lane"]
+    engines = [e for e in LANES[lane][1] if e in report["engines"]]         # the lane's own order, not the JSON's
     if not report.get("engine_present", True):
         return [f"corpus {lane}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
                 "(MediaOps/BalancedCopyProof*.swift); run it with a --ref that contains it"]
@@ -887,7 +888,7 @@ def status(seal: Seal) -> List[str]:
             continue
         previous = earlier[-1]
         delta = diff(json.loads((previous / "outcomes.json").read_text(encoding="utf-8")),
-                     json.loads((newest / "outcomes.json").read_text(encoding="utf-8")), list(report["engines"].keys()))
+                     json.loads((newest / "outcomes.json").read_text(encoding="utf-8")), LANES[lane][1])
         lines.append(f"  changed since {previous.name} at {previous.parent.name[:9]}: {delta['changed']} of "
                      f"{delta['compared']} files (new in this run {delta['only_new']}, not in this run {delta['only_old']})")
         for transition, n in sorted(delta["transitions"].items(), key=lambda kv: (-kv[1], kv[0])):
