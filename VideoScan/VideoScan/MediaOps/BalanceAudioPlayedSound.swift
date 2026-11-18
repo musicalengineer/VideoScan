@@ -25,16 +25,19 @@ extension BalanceAudioFix {
     /// list applied. nil = acceptable, or not this rule's (lossy codecs keep
     /// encoder priming outside the edit list by design; a container with no
     /// sample table to count); non-nil = the breach, in plain words. Pure.
+    /// `copy` names the copy in the sentence (Repair Now's rewritten copy
+    /// shares the rule, GH #484; the default keeps Balance's words).
     static func unplayedSoundMismatch(codec: String, sampleRateHz: Int,
-                                      storedSamples: Int64?, playedSeconds: Double?) -> String? {
+                                      storedSamples: Int64?, playedSeconds: Double?,
+                                      copy: String = "balanced copy") -> String? {
         guard codec.lowercased().hasPrefix("pcm_"), let storedSamples, let playedSeconds else { return nil }
         let hidden = Double(storedSamples) - playedSeconds * Double(sampleRateHz)
         guard sampleRateHz > 0, storedSamples >= 0, hidden.isFinite else {
-            return "the balanced copy's stored and played sound lengths could not be read"
+            return "the \(copy)'s stored and played sound lengths could not be read"
         }
         guard hidden > unplayedSoundToleranceSamples else { return nil }
         let samples = hidden < 1e15 ? String(Int64(hidden.rounded())) : "more than 10^15"
-        return "the balanced copy would not play all the sound it stores (\(samples) samples, "
+        return "the \(copy) would not play all the sound it stores (\(samples) samples, "
             + String(format: "%.1f ms", hidden / Double(sampleRateHz) * 1000) + ", are outside its edit list)"
     }
 

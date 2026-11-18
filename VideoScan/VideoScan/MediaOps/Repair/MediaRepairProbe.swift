@@ -115,6 +115,7 @@ enum MediaRepairProbe {
         }
         struct Format: Decodable {
             let duration: String?
+            let format_name: String?
         }
         let streams: [Stream]?
         let format: Format?
@@ -147,7 +148,61 @@ enum MediaRepairProbe {
                                                 durationSeconds: $0.duration.flatMap(Double.init))
             },
             durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0,
-            picture: picture)
+            picture: picture,
+            containerFormat: parsed.format?.format_name ?? "")
+    }
+
+    /// Late streams kept per scan (bounds memory; one is enough to refuse).
+    static let lateStreamLimit = 64
+
+    /// Streams FFmpeg's demuxer creates part-way through `path`
+    /// (`MediaRepairCommand.streamDiscoveryArgs`): ONE read of the whole
+    /// file, nothing decoded or written. A read that fails throws — never
+    /// "no late streams". Memory: the log is streamed line by line (stderr
+    /// cap 16 KB); at most `lateStreamLimit` entries are kept (a few KB).
+    /// `heartbeat` = every progress block (the stall watchdog's tick).
+    @concurrent
+    static func lateStreams(path: String, inputArgs: [String], control: ProcessControl?,
+                            heartbeat: (@Sendable () -> Void)? = nil) async throws -> [MediaRepairLateStream] {
+        let ffmpeg = try tool(ToolLocator.ffmpegPath, "ffmpeg")
+        let found = OSAllocatedUnfairLock(initialState: [MediaRepairLateStream]())
+        let r = await ProcessRunner.runProcess(
+            executable: ffmpeg, arguments: MediaRepairCommand.streamDiscoveryArgs(input: path, inputArgs: inputArgs),
+            stderrLine: { line in
+                if let late = MediaRepairCommand.lateStream(fromLogLine: line) {
+                    found.withLock { if $0.count < lateStreamLimit { $0.append(late) } }
+                } else if line.hasPrefix("progress=") {
+                    heartbeat?()
+                }
+            },
+            stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, control: control)
+        try Task.checkCancellation()
+        guard r.exitCode == 0 else {
+            throw ProbeFailure(message: "the original couldn't be read to the end to list its sound tracks (exit \(r.exitCode))")
+        }
+        return found.withLock { $0 }
+    }
+
+    /// The played-what-it-stores rule (GH #482, BalanceAudioFix's) on a
+    /// rewritten copy: one header read; nil = every sound track plays all
+    /// it stores (or is not the rule's: not PCM, not QuickTime). A read
+    /// that fails is a failure, never a pass. Bounded: ≤ 1 MB of JSON.
+    @concurrent
+    static func unplayedSoundFailure(path: String, control: ProcessControl?) async throws -> String? {
+        let ffprobe = try tool(ToolLocator.ffprobePath, "ffprobe")
+        let r = await ProcessRunner.runProcess(
+            executable: ffprobe, arguments: BalanceAudioFix.soundLengthArgs(input: path),
+            stdoutLimitBytes: 1 << 20, deadlineSeconds: 120, control: control)
+        try Task.checkCancellation()
+        guard r.exitCode == 0, let json = r.stdout,
+              let tracks = BalanceAudioFix.soundLengths(fromProbeJSON: Data(json.utf8)) else {
+            return "the copy's stored and played sound lengths could not be read back"
+        }
+        return tracks.lazy.compactMap {
+            BalanceAudioFix.unplayedSoundMismatch(codec: $0.codec, sampleRateHz: $0.sampleRateHz,
+                                                  storedSamples: $0.storedSamples, playedSeconds: $0.playedSeconds,
+                                                  copy: "repaired copy")
+        }.first
     }
 
     /// How many pictures Remove repeated frames would keep (a read-only

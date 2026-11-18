@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 352,
+ "entry_count": 351,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -206,10 +206,6 @@
    "ccn": 11,
    "nloc": 149
   },
-  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.computeFiltered": {
-   "ccn": 18,
-   "nloc": 72
-  },
   "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfCatalogTokenMatches": {
    "ccn": 20,
    "nloc": 30
@@ -227,8 +223,8 @@
    "nloc": 49
   },
   "VideoScan/VideoScan/Catalog/CatalogToolbar.swift::CatalogToolbar.body": {
-   "ccn": 29,
-   "nloc": 237
+   "ccn": 21,
+   "nloc": 200
   },
   "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::CatalogView.scanTargetsPane": {
    "ccn": 19,
