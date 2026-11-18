@@ -239,7 +239,8 @@ TAIL_LINES = 200
 TAIL_BYTES = 64 * 1024
 SAMPLE_SECONDS = 15
 CORPUS_LANES = ("check", "proof", "verbs")
-RUN_WORK = re.compile(r"^[0-9A-Za-z_]+-(" + "|".join(CORPUS_LANES) + r")$")       # ~/corpus/work/<stamp>-<lane>
+# ~/corpus/work/<stamp>-<lane>, and <stamp>-coverage (the raw profiles of scripts/corpus_coverage.py)
+RUN_WORK = re.compile(r"^[0-9A-Za-z_]+-(" + "|".join(CORPUS_LANES + ("coverage",)) + r")$")
 CORPUS_OUT = re.compile(r"^corpus-(" + "|".join(CORPUS_LANES) + r")$")             # <run>/corpus-<lane> in a testbed run
 KEEP_FILES = frozenset({"run.log", "summary.txt", "testbed-block.txt", "lanes.tsv", "suite-row.json", "corpus-summary.txt",
                         "corpus-verdict.json", "disk-start.txt", "disk-low.txt", "tidy.txt"})
