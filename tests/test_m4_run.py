@@ -530,7 +530,7 @@ class CallerMutationTests(unittest.TestCase):
         self.repo = home / 'dev' / 'VideoScan'
         (self.repo / 'scripts').mkdir(parents=True)
         (self.repo / 'fake').mkdir()
-        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py'):
             shutil.copy(REPO / 'scripts' / name, self.repo / 'scripts' / name)
         gauntlet = self.repo / 'scripts' / 'run_gauntlet.sh'
         gauntlet.write_text(FAKE_GAUNTLET_ENV_HOLD)

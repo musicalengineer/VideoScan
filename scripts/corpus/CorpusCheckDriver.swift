@@ -10,6 +10,11 @@
 //           applyingSoundPresence with the record's context, card) → the
 //           report card's verdict word, and the rows that are not OK
 //   audio   VerifyAudioProbe.diagnose        → verdict word + finding kinds
+//   pair    the record's A/V pair link as the catalog loaded it (carried by
+//           `prepare` since transform 2): `unpaired`, `paired_partner_in_corpus`
+//           or `paired_partner_absent`, and whether the app counts the row as
+//           a pair half (CatalogPairGroups.isHalf) and names a sound partner
+//           for it (the sound-presence rule's own input) — no file is read
 // The record comes from the sealed corpus catalog; a file the catalog has no
 // record for is `no_record`.
 
@@ -28,10 +33,12 @@ final class CorpusCheckDriver: XCTestCase {
             return XCTFail("corpus harness refused: \(refusal.word)")
         }
         let contexts: [String: SoundPresenceContext]
+        let pairs: [String: PairFacts]
         do {
             let loaded = try await run.loadCatalog()
             contexts = Dictionary(loaded.records.map { ($0.fullPath, $0.soundPresenceContext) },
                                   uniquingKeysWith: { first, _ in first })
+            pairs = CorpusCheckDriver.pairFacts(loaded.records)
         } catch let refusal as CorpusRefusal {
             return XCTFail("corpus harness refused: \(refusal.word)")
         }
@@ -80,8 +87,36 @@ final class CorpusCheckDriver: XCTestCase {
                 case .notChecked: return ("not_checked", kinds)
                 }
             }
+            await run.engine(item, "pair") {
+                guard let facts = pairs[item.path] else { return ("no_record", []) }
+                return (facts.word, facts.kinds)
+            }
             run.end(item)
         }
         run.done()
+    }
+
+    struct PairFacts: Sendable {
+        let word: String
+        let kinds: [String]
+    }
+
+    /// Each record's pair link as loaded, by path. A link is a pair group or a partner id; the
+    /// partner is "in the corpus" when another loaded record shares the group or is the partner.
+    static func pairFacts(_ records: [VideoRecord]) -> [String: PairFacts] {
+        var groupSizes: [UUID: Int] = [:]
+        for record in records {
+            if let group = record.pairGroupID { groupSizes[group, default: 0] += 1 }
+        }
+        var facts: [String: PairFacts] = [:]
+        for record in records where facts[record.fullPath] == nil {
+            let linked = record.pairGroupID != nil || record.pairedWith != nil || record.pendingPairedWithID != nil
+            let partnerHere = record.pairedWith != nil || (record.pairGroupID.map { (groupSizes[$0] ?? 0) > 1 } ?? false)
+            var kinds = [CatalogPairGroups.isHalf(record) ? "counted_as_a_half" : "not_counted_as_a_half"]
+            if record.soundPresenceContext.soundPartnerName != nil { kinds.append("sound_partner_named") }
+            facts[record.fullPath] = PairFacts(word: !linked ? "unpaired" : partnerHere ? "paired_partner_in_corpus" : "paired_partner_absent",
+                                               kinds: kinds)
+        }
+        return facts
     }
 }

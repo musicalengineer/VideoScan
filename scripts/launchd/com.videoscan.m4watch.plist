@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The push watcher on the M4 (scripts/m4_watch.py; DECISIONS 2026-11-17, "The idle M4 becomes
+  part of the merge workflow"). One short tick every 300 s in the GUI session; a tick starts at
+  most one `m4_run.sh suite` run for the newest untested commit on origin/main.
+
+  This is a TEMPLATE: __HOME__ is replaced by scripts/m4_watch_install.sh, which installs it as
+  ~/Library/LaunchAgents/com.videoscan.m4watch.plist on the M4 and runs a PINNED copy of the
+  scripts from ~/m4run/bin/watch (never from a checkout). Uninstall: scripts/m4_watch_install.sh uninstall.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.videoscan.m4watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__HOME__/m4run/bin/watch/m4_watch.py</string>
+    <string>tick</string>
+  </array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>__HOME__/m4run/watch/agent.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/m4run/watch/agent.log</string>
+</dict>
+</plist>

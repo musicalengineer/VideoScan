@@ -22,16 +22,18 @@ deep and UI tests **on demand**, not on every commit; per-commit checking is the
 | "run the UI tests on the M4" | `scripts/m4_run.sh ui [--only <UITestClass>[,…]]` | a Debug build-for-testing, then the VideoScan-UI (Smoke) and VideoScan-Gauntlet plans, each under a watchdog |
 | "everything on the M4" | `scripts/m4_run.sh all` | deep, then ui (not the suite) |
 | "run the full suite on the M4 for this branch" | `scripts/m4_run.sh suite --ref <rev> [--wait]` | the nightly's own runner, `nightly_local_tests.sh --on-demand`: machine preflight, Core (`swift test`, Release), Release build, the whole app suite; **nothing published** |
-| "… on the M5 Ultra" | add `--host ultra` | the same, in the Ultra's testbed worktree |
-| "how's the M4 run?" | `scripts/m4_run.sh status` | reads `<root>/latest` back |
+| "run the testbed on the M4 for this branch" | `scripts/m4_run.sh testbed --ref <rev> [--wait]` | the suite lane, then corpus `check`, then corpus `proof` (§1a), under ONE hold of the lock; one summary block, one verdict. M4 only |
+| "… on the M5 Ultra" | add `--host ultra` | the same, in the Ultra's testbed worktree (never the testbed or corpus lanes) |
+| "how's the M4 run?" | `scripts/m4_run.sh status [--json]` | reads `<root>/latest` back; `--json` is one object for machines |
 
 What it does: resolves `--ref` (default `main`) to a commit; refuses if a run holds the host's lock or it is the
-nightly window (01:30–06:00 host time; `--force` overrides); on the M4 pushes `<sha>:refs/m4run/<sha>` (a new ref per
+nightly window (01:30–06:00 host time; `--force` overrides) or the quiet window before the M4's 14:00 scheduled run
+(below); on the M4 pushes `<sha>:refs/m4run/<sha>` (a new ref per
 commit, never forced, never a branch); checks the host's testbed worktree out at the commit (detached; refuses a dirty
 one); installs itself under `<root>/bin`; and starts a one-shot LaunchAgent in the host's GUI session (an ssh job has
 no window server and a locked keychain). The host writes `<root>/out/<stamp>-<lane>/` (`run.log` with START/OUTCOME,
 `summary.txt`, per-plan logs, `.xcresult`, `.tests.tsv`) and points `<root>/latest` at it. Roots: M4 `~/m4run`, Ultra
-`~/ultrarun`; one Debug DerivedData per host (~15 GB); xcresults are kept (prune `<root>/out` by hand). Builds are
+`~/ultrarun`; one Debug DerivedData per host (~15 GB). Builds are
 ad-hoc signed; the UI suites run against the gauntlet fixtures and a temp catalog, never a real catalog or volume.
 Tests: `tests/test_m4_run.py`, `tests/test_m4_run_deep_lane.py`, `tests/test_m4_run_suite_lane.py`.
 
@@ -51,6 +53,70 @@ suite run even after a later ui/deep run (`<root>/latest-suite`). `--wait` exits
 for the other lanes. Timing budgets are strict, as in the scheduled run. Measured on the M4, 2026-11-17, warm caches:
 56 min (Core 16, Release build 10, app tests 30; 13,941 + 2,587 tests); the first run's cold builds add ~8 min.
 
+**The testbed lane** (2026-11-18). `testbed` is the three lanes above run back to back by the same functions (no
+second implementation), each judged on its own; a later lane still runs after an earlier RED. The summary opens with
+one block, e.g.
+
+```
+testbed: AMBER at 5112b8697 — 3 lanes, wall 5400s
+  suite         GREEN   3360s  app 13941 passed, 0 failed, 14 skipped; core 2587 passed, 0 failed, 0 skipped
+  corpus check  AMBER    621s  234 files — probe: probed 208, unopenable 26 · check: … · audio: … · pair: …
+                               against its accepted baseline <run> at <commit>: 2 of 234 files changed (new 0, absent 0)
+                                 check: OK -> Problem x2
+                                 3f9a1c0b7d2e check: OK -> Problem
+  corpus proof  GREEN   1221s  8 files — balance: balanced 8 · proof: …
+```
+
+RED if any lane is RED, else NORUN if any lane could not run (the machine preflight; a ref with no engine for the
+lane), else AMBER, else GREEN. `--wait` exits 0 only for GREEN or AMBER (1 RED · 2 NORUN / refused / the wait gave
+up). `status` shows the last testbed run's block after a later run of another lane (`<root>/latest-testbed`). Each
+corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of `testbed`; run it by itself.
+
+**Housekeeping, the quiet window, `status --json`** (2026-11-18; `scripts/testbed_host.py`).
+- *Prune.* Every lane, at its start and under the lock, removes old run folders from `<root>/out`: the newest 10 of
+  each lane, every RED run and whatever `<root>/latest*` names stay, with their `bin/<stamp>` and agent plist. The
+  corpus lanes do the same for `~/corpus/reports/<lane>/` (the newest 20, every RED run and the baseline stay) and
+  remove work folders older than six hours that a dead run left.
+- *The quiet window.* The M4's 14:00 scheduled run does **not** wait for the lock: `scripts/nightly_gauntlet.sh` runs
+  its suite anyway and skips only its gauntlet, so a lane still running at 14:00 means two suites at once. A lane
+  therefore refuses to START (exit 5; `--force` overrides) when the scheduled run begins within the lane's own
+  expected length: testbed 120 min, all 90, suite 75, deep 60, corpus 45, ui 30.
+- *`<root>/testbed.conf`* on the host (optional; `KEY=value`, never executed): `KEEP=10`, `SCHEDULED=1400` (HHMM, comma
+  separated), `QUIET_MINUTES=90`.
+- *What a caller reads back* (2026-11-18, Codex #315): a run folder is made NEW by the run (an existing one is refused,
+  exit 4; `~/m4run` and `~/m4run/out` must not be symlinks); every log is opened without following a link and only
+  with one name; a corpus lane's summary is copied into the run's summary only when the helper finished its lane, and
+  `status` prints run files only through `testbed_host.py show` (no link, one name, lines that could carry a file name,
+  a corpus path or a digest withheld). The caller passes `--start-by` (when the next window opens); the host refuses a
+  run that reaches its lock after it. The watcher's runs pass `--unless-ran`: the host refuses (exit 6, `OUTCOME
+  REFUSED already-run <verdict>`) a commit a run under `out/` already took to a verdict, checked under the lock.
+- *Deletion receipts in the `verbs` lane:* Move to Trash and Delete Duplicates write their receipt where the engine
+  chooses — under a test host the system temporary folder on the M4, outside the run — and take no folder for it. The
+  lane records each receipt's place as a word and a count in the summary; it moves none and changes no engine.
+- *`status --json`*: the lock (`idle` / `running` and the holder's words) and, for the last run, the last suite run
+  and the last testbed run: lane, commit, START and OUTCOME times, verdict word, summary lines, a testbed run's lanes,
+  and the push watcher's verdict line.
+
+**The push trigger** (`scripts/m4_watch.py`; DECISIONS 2026-11-17: the suite runs on every push to `main`). *Built and
+tested 2026-11-18; NOT installed on the M4 — installing a standing agent there is Rick's to do or to allow (the table
+below is the whole of it).* One tick
+every 300 s from a LaunchAgent in the M4's GUI session (`com.videoscan.m4watch`). A tick fetches `origin/main` into
+its own ref (`refs/m4watch/main` in the M4's `~/dev/VideoScan`; no branch or worktree moves) and starts **at most
+one** `m4_run.sh suite --host m4local --ref <sha>` for the newest commit — the same lane, lock and quiet window as a
+run by hand, nothing published. It never runs a commit twice (its own verdicts, and any suite or testbed run under
+`~/m4run/out` that reached GREEN / AMBER / RED), skips a range that is docs-only since the last commit it settled,
+waits when the testbed is busy or inside a window, retries once a run that ended without an OUTCOME, and gives up
+after three refused starts. `scripts/m4_run.sh status` shows `push watcher: <time> <commit> suite <VERDICT> — <the
+suite line>` and the last tick; the files are `~/m4run/watch/{verdict.txt, tick.txt, history.log, state.json}`.
+
+| | |
+|---|---|
+| Install / reinstall | `scripts/m4_watch_install.sh install` — a pinned copy of the scripts in `~/m4run/bin/watch` (the commit in `VERSION`; never run from a checkout), the plist in `~/Library/LaunchAgents/com.videoscan.m4watch.plist`, `launchctl bootstrap gui/<uid>` |
+| Uninstall (rollback) | `scripts/m4_watch_install.sh uninstall` — boots the agent out and moves the plist to `~/m4run/watch/uninstalled/`; a run it started keeps going |
+| Look | `scripts/m4_watch_install.sh status` |
+
+It refuses any Mac but the M4. To update the pinned scripts after a change, install again.
+
 **A logout of the host's GUI session stops a run** (any lane): launchd SIGTERMs the agent's shell, the app-hosted
 test host dies mid-test, and no OUTCOME is written (2026-11-17, the first real suite run, 55 minutes in). `status` then
 says `ENDED WITHOUT AN OUTCOME` and `--wait` exits (suite: 2) instead of polling out its budget. Do not log the M4's
@@ -69,10 +135,10 @@ password (testing.md §4).
   "happy": the newest green commit and what main has on top of it; shows, never blocks).
 - **Failure classes** `machine-setup:<what>` (Xcode first launch, a modal or privacy prompt, with a screenshot) instead
   of a generic red; the UI stage of `scripts/gauntlet/manifest.json` adapted from "blocked" suite by suite.
-- The automatic trigger (every push to `main` runs the suite lane; DECISIONS 2026-11-17) and the PROCESS.md wording
-  for which merges wait for the M4's verdict. The real-media testbed SSD (BACKLOG).
+- The PROCESS.md wording for which merges wait for the M4's verdict (Rick reviews it). The real-media testbed SSD
+  (BACKLOG).
 
-### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17)
+### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17, phase 2 2026-11-18)
 
 *Rule: DECISIONS 2026-11-17, "The M4 holds a real-data test corpus". The header comments of `scripts/corpus_run.py`
 and `scripts/corpus/CorpusDriverSupport.swift` are the reference.*
@@ -88,8 +154,9 @@ reports counts.
 | `corpus-manifest-v1.json`, `corpus-sha-v1.txt` | each file's SHA-256, size, original path and stratum |
 | `catalog-source-backup.sqlite` | the catalog backup the sealed catalog is derived from (never written) |
 | `state/` | the sealed state `prepare` builds: the corpus catalog, `prepare.json`, the test host's home |
-| `work/<run>/` | a run's working files; removed when the run ends |
+| `work/<run>/` | a run's working files (the `verbs` lane's clones, scratch Trash and scratch archive); removed when the run ends |
 | `reports/<lane>/<commit>/<run>/` | `report.json`, `report.txt`, per-file `outcomes.json` keyed by SHA-256 |
+| `reports/<lane>/baseline.json` | the run `accept` blessed as the lane's baseline (the run, its commit, who, when, the SHA-256 of its outcomes); `baseline-history.jsonl` beside it |
 
 **Hard rules** (each is a guard in code, pinned by `tests/test_corpus_run.py`):
 - Nothing of the corpus goes into git, a commit message, a pushed log or a report to a person or a model beyond: file
@@ -98,17 +165,36 @@ reports counts.
 - The harness refuses to start unless the hostname is the M4's and its state root is under `~/corpus/state/`. It never
   runs on the M5 Ultra, never opens the live catalog, never touches the Master Archive, never starts catalog sync or
   viewer publishing; the sealed catalog names no Master Archive.
-- The corpus sources are read-only. Engines that write, write under `~/corpus/work/<run>/`. Phase 1 has no Trash,
-  delete or relocate verb.
+- The corpus sources are read-only. Engines that write, write under `~/corpus/work/<run>/`. The verbs that move, trash
+  or promote run only in the `verbs` lane and only on **clones** under that folder: never on `~/corpus/media`, never
+  into the Finder Trash, never into an archive root outside `~/corpus/work`. The Trash is the run's own folder
+  (`work/<run>/trash`), given to each engine through the engine's own injectable Trash step (Delete Duplicates:
+  `hooks.trashItem`; Move to Trash: the routine's `fileOperation` seam, which records the row as removed outright) —
+  the app's own Trash call under a test host lands in the system's temporary folder, outside the run, and macOS gives
+  no way to move it; that folder is counted afterwards and a file found there is RED. The lane sweeps the size,
+  modification time, flags, link count and inode of every corpus file before and after; any difference is RED.
+- The seal is checked twice: `Seal` in `scripts/corpus_run.py`, and `scripts/corpus/CorpusSeal.swift` inside the test
+  host (one pure function, pinned by behaviour: `tests/test_corpus_run.py` compiles it and asks it about real folders).
+  The corpus folders must be themselves (a `work` that is a symlink is refused); a run's work folder is made new; what
+  the harness reads back as its own (the sealed catalog, a stored run, a baseline) is refused if it is a link.
 - No credential is in the repo. The harness never signals a process: a file past its deadline is cut by the test host
   exiting itself, and the lane sits under `m4_run.sh`'s lane watchdog.
 
 | From the Ultra | What happens on the M4 |
 |---|---|
 | `scripts/corpus_run.sh prepare` | builds the sealed catalog from the backup: only the manifest's rows, paths rewritten to the copies; verifies every file has a row and every row's file exists at its size. Idempotent |
-| `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio on every file, at that commit |
+| `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio · the A/V pair link, on every file, at that commit |
 | `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on the one-sided-sound files; says so when the ref has no proof engine |
-| `scripts/corpus_run.sh status` | the lock, then each lane's newest run and what changed since the previous one (counts and outcome-word transitions) |
+| `scripts/corpus_run.sh run verbs [--ref <rev>]` | ~20 files, stratified and sized to fit, cloned (`cp -c`, no extra space) into `work/<run>/vol/`; a catalog over the clones; then the app's real engines: Update Catalog + Find Duplicates + Delete Duplicates on three byte-identical clones, Move to Trash on an extra copy and on the last copy, Remove and Remove from Catalog each followed by a rescan (does the row come back?), Promote into a scratch archive; every clone re-hashed afterwards |
+| `scripts/corpus_run.sh status` | the lock, then each lane's newest run judged against its baseline: counts, outcome-word transitions, each changed file by SHA-256 prefix |
+| `scripts/corpus_run.sh accept <check\|proof\|verbs>` | blesses the lane's newest run as its baseline; refused for a run that crashed or timed out, a `--limit` run, or a run with no engine |
+
+**A lane's verdict is the diff.** Each run is compared, file by file, with the lane's baseline — the accepted run, or
+until one is accepted the lane's first whole clean run. **AMBER**: some file's outcome word moved; each is listed
+(`<sha prefix> <engine>: <old> -> <new>`, 40 in a summary, all of them in the run's `report.json` on the M4). **RED**:
+a file crashed an engine or ran past its deadline (whatever the baseline holds), a clone was lost or changed, the
+corpus media was touched, or the accepted baseline cannot be read back. **GREEN**: nothing moved. An engine's own
+`error:…` word is an outcome like any other. After looking at an AMBER run and agreeing with it: `accept`.
 
 Options: `--wait`, `--dry-run`, `--deadline <seconds per file>`, `--limit <n files>`. It runs through
 `scripts/m4_run.sh corpus` — the same lock, per-run LaunchAgent and `--ref` checkout as the other lanes — so it waits
@@ -117,9 +203,17 @@ and the background service are inert there) with its home redirected into `~/cor
 (`scripts/corpus/*.swift`) are laid over the testbed as untracked files for the run, so a commit that predates the
 harness can be run. A crash or a deadline in one file is recorded and the run goes on.
 
-What the sealed catalog does **not** carry: other copies and removed rows of the same content, pair links (a video
-half reads as unpaired), captions, transcripts, notes, people. Volume ids and identity stamps still describe the
-original drive. Phase 1 trusts the corpus's own SHA-256 list and checks sizes; it does not re-hash 130 GB per run.
+First real `verbs` run, M4, 2026-11-17 23:11 (`2b65a9575`): 170 s (the build 143 s), 20 files / 30 clones, the media
+sweep 0 changed of 234, 6 files in the run's Trash folder = 6 the engines reported, 0 in the app's own test-host Trash,
+the work folder removed afterwards. `prepare` (transform 2) on the real backup: 94 pair links carried, 6 pairs with both
+halves in the corpus, 82 halves whose partner is not.
+
+What the sealed catalog carries beyond the rows: each file's A/V pair link (transform 2: one `row_knowledge` 'pair'
+row per paired file, the way the app writes a link; the import evidence itself cannot be carried — a finished import
+run is refused by the schema). A half whose partner is not in the corpus keeps its link and reads
+`paired_partner_absent`. Not carried: other copies and removed rows of the same content, captions, transcripts, notes,
+people. Volume ids and identity stamps still describe the original drive. After a harness change that bumps the
+transform, run `prepare` once; a lane refuses a sealed catalog built by another version. Phase 1 trusts the corpus's own SHA-256 list and checks sizes; it does not re-hash 130 GB per run.
 
 ## 2. Storage layout
 

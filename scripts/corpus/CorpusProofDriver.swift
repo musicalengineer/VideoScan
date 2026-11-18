@@ -235,8 +235,11 @@ enum CorpusProofEvidence {
             ("balanced_copy", facts.balanced, facts.balancedRead, copySound, "the balanced copy")]
         for (word, layout, read, sound, name) in files {
             // The engine's own asymmetry: the original's decode may run under one frame or packet past its header.
-            guard let shortfall = Proof.readShortfall(layout, read: read, kept: sound, overReadIsWhole: word == "original"),
-                  shortfall.sentence(called: name) == reason else { continue }
+            // Which file the reason is about comes from the reason's subject; the engine's sentence
+            // itself is never compared, kept or written (the privacy rule: words and numbers only).
+            guard reason.hasPrefix(name),
+                  let shortfall = Proof.readShortfall(layout, read: read, kept: sound, overReadIsWhole: word == "original")
+            else { continue }
             var out = ["variant:" + CorpusWords.caseName(shortfall), "variant_file:" + word]
             switch shortfall {
             case .packetsNotCounted(let stream), .decodeErrors(let stream), .noPictureFrames(let stream):

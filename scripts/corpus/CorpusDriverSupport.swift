@@ -14,14 +14,20 @@
 // files and reports one JSON line per event to the run's progress file.
 // The Python side folds those lines into the report.
 //
-// THE SEAL, checked here again because this is the process that touches the
-// media (fail closed — any miss writes `refused` and the test stops):
+// THE SEAL is CorpusSeal.swift (one pure function, Foundation only, pinned by
+// behaviour); `CorpusRun.open` gathers the facts and asks it. It is checked
+// here again because this is the process that touches the media (fail closed
+// — any miss is `refused` and the test stops):
 //   - the hostname is the M4's;
 //   - the real home (account database, not $HOME) holds corpus/THIS_IS_TEST_DATA.txt;
 //   - config, catalog, work and progress resolve under ~/corpus/{state,work};
-//   - $HOME and Application Support resolve under ~/corpus/state (the
-//     patched .xctestrun took effect), and this IS a test host;
-//   - the catalog names no Master Archive and every path is under ~/corpus/media.
+//   - $HOME and Application Support resolve under ~/corpus/state, or (the
+//     verbs lane) under the run's own work folder — the patched .xctestrun
+//     took effect — and this IS a test host;
+//   - the catalog names no Master Archive and every record is under
+//     ~/corpus/media, or (the verbs lane) under the run's folder of clones;
+//   - the verbs lane's clone, archive and scratch folders are under the run's
+//     work folder, which is under ~/corpus/work.
 //
 // Deadline: a file that overruns `deadlineSeconds` is recorded as `timeout`
 // and the test host EXITS ITSELF (`_exit`); the Python side relaunches for
@@ -39,22 +45,6 @@ import Foundation
 import XCTest
 import VideoScanCore
 @testable import VideoScan
-
-struct CorpusConfig: Decodable, Sendable {
-    struct Item: Decodable, Sendable {
-        let sha: String
-        let path: String
-    }
-    let lane: String
-    let corpusRoot: String
-    let stateRoot: String
-    let catalog: String
-    let mediaRoot: String
-    let work: String
-    let progress: String
-    let deadlineSeconds: Double
-    let pending: [Item]
-}
 
 struct CorpusRefusal: Error {
     let word: String
@@ -151,8 +141,6 @@ final class CorpusDeadline: @unchecked Sendable {
 }
 
 final class CorpusRun: @unchecked Sendable {
-    static let allowedHosts: Set<String> = ["ricksm4"]
-
     let config: CorpusConfig
     let progress: CorpusProgress
     let deadline: CorpusDeadline
@@ -168,52 +156,44 @@ final class CorpusRun: @unchecked Sendable {
         return String(cString: dir)
     }
 
-    static func resolved(_ path: String) -> String {
-        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    }
+    static func resolved(_ path: String) -> String { CorpusSeal.resolved(path) }
 
-    static func isUnder(_ path: String, _ root: String) -> Bool {
-        let p = resolved(path), r = resolved(root)
-        return p == r || p.hasPrefix(r + "/")
-    }
+    static func isUnder(_ path: String, _ root: String) -> Bool { CorpusSeal.isUnder(path, root) }
 
     static func hostname() -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         guard gethostname(&buffer, buffer.count - 1) == 0 else { return "" }
-        let name = String(bytes: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? ""
-        return (name.split(separator: ".").first.map(String.init) ?? "").lowercased()
+        return String(bytes: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? ""
     }
 
-    /// Reads the config the Python side wrote and proves the seal. `lane` is the
-    /// driver's own lane: a config for another lane is refused.
+    /// Reads the config the Python side wrote and proves the seal (`CorpusSeal.refusal`: one
+    /// pure function, pinned by behaviour in tests/test_corpus_run.py). `lane` is the driver's
+    /// own lane: a config for another lane is refused. A refusal is written to the run's
+    /// progress file only when that file is itself proven to be inside the corpus work folder.
     static func open(lane: String) throws -> CorpusRun {
         guard let configPath = ProcessInfo.processInfo.environment["VS_CORPUS_CONFIG"], !configPath.isEmpty else {
             throw XCTSkip("the corpus harness did not launch this test (no VS_CORPUS_CONFIG)")
         }
-        let corpus = realHome() + "/corpus"
-        let state = corpus + "/state", work = corpus + "/work", media = corpus + "/media"
-        guard allowedHosts.contains(hostname()) else { throw CorpusRefusal(word: "not_the_m4") }
-        guard FileManager.default.fileExists(atPath: corpus + "/THIS_IS_TEST_DATA.txt") else { throw CorpusRefusal(word: "no_test_data_marker") }
-        guard isUnder(configPath, work), let data = FileManager.default.contents(atPath: configPath),
-              let config = try? JSONDecoder().decode(CorpusConfig.self, from: data) else {
-            throw CorpusRefusal(word: "config_outside_the_corpus")
-        }
-        guard isUnder(config.progress, work), isUnder(config.work, work) else { throw CorpusRefusal(word: "work_outside_the_corpus") }
-        let progress = try CorpusProgress(path: config.progress)
-        func refuse(_ word: String) -> CorpusRefusal {
-            progress.write(["ev": "refused", "why": word])
-            return CorpusRefusal(word: word)
-        }
-        guard config.lane == lane else { throw refuse("config_is_for_another_lane") }
-        guard resolved(config.corpusRoot) == resolved(corpus), isUnder(config.stateRoot, state),
-              isUnder(config.catalog, state), resolved(config.mediaRoot) == resolved(media) else {
-            throw refuse("state_root_outside_the_corpus")
-        }
-        guard TestEnvironment.isTestHost else { throw refuse("not_a_test_host") }
+        // The gate first: on the wrong Mac, without the marker, or with a config outside
+        // ~/corpus/work, nothing is read — not even the config (Codex #313 F6).
+        let loaded = CorpusSeal.loadConfig(hostname: hostname(), realHome: realHome(), configPath: configPath,
+                                           read: { FileManager.default.contents(atPath: $0) })
+        if let word = loaded.refusal { throw CorpusRefusal(word: word) }
+        let config = loaded.config
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.path ?? "/"
-        guard isUnder(NSHomeDirectory(), state), isUnder(appSupport, state) else { throw refuse("home_not_sealed") }
-        guard config.pending.allSatisfy({ isUnder($0.path, media) }) else { throw refuse("a_file_is_outside_the_corpus") }
-        return CorpusRun(config: config, progress: progress)
+        let input = CorpusSealInput(hostname: hostname(), realHome: realHome(), configPath: configPath, lane: lane, config: config,
+                                    homeDirectory: NSHomeDirectory(), applicationSupport: appSupport,
+                                    isTestHost: TestEnvironment.isTestHost)
+        if let word = CorpusSeal.refusal(input) {
+            // Say why in the progress file — but only when that file is proven to be this run's own.
+            if let config, CorpusSeal.progressIsProven(config, realHome: realHome()),
+               let progress = try? CorpusProgress(path: config.progress) {
+                progress.write(["ev": "refused", "why": word])
+            }
+            throw CorpusRefusal(word: word)
+        }
+        guard let config else { throw CorpusRefusal(word: "config_outside_the_corpus") }
+        return CorpusRun(config: config, progress: try CorpusProgress(path: config.progress))
     }
 
     /// The sealed catalog through Core's read-only door for a non-writer. Refuses
@@ -225,7 +205,7 @@ final class CorpusRun: @unchecked Sendable {
             progress.write(["ev": "refused", "why": "catalog_would_not_open"])
             throw CorpusRefusal(word: "catalog_would_not_open")
         case .success(let loaded):
-            let media = config.mediaRoot
+            let media = config.volRoot ?? config.mediaRoot       // the verbs lane's catalog names its clones
             guard loaded.masterArchiveJSON == nil else {
                 progress.write(["ev": "refused", "why": "catalog_names_a_master_archive"])
                 throw CorpusRefusal(word: "catalog_names_a_master_archive")
