@@ -131,6 +131,8 @@ HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes th
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
 BASELINE, BASELINE_LOG = "baseline.json", "baseline-history.jsonl"     # in reports/<lane>/
 CUT_WORDS = ("crash", "timeout")                # an engine that died or overran on a file: RED
+KEEP_RUNS = 20                                   # stored runs kept per lane (plus the baseline and every RED run)
+STALE_WORK_SECONDS = 6 * 3600                    # a work folder this old belongs to no live run (lanes hold the testbed lock)
 LISTED = 40                                      # changed files a summary lists; the rest are counted
 VERDICT_FILE = "corpus-verdict.json"      # in <out>: the lane's verdict as counts, for m4_run_summary.py --testbed
 
@@ -673,6 +675,7 @@ class Lane:
         self.build_seconds = 0.0
         self.overlay_installed = False
         self.closing: Dict[str, int] = {}
+        self.housekeeping: List[str] = []
 
     # -- the overlay: untracked driver sources in the testbed, for this run only
 
@@ -833,6 +836,7 @@ class Lane:
         seal.write_json(self.report_dir / "outcomes.json", outcomes)
         seal.write_json(self.report_dir / "report.json", report)
         text = render(report, per_file=outcomes if self.lane in ("proof", "verbs") else None, against=report.get("against"))
+        text += self.housekeeping
         seal.write_text(self.report_dir / "report.txt", "\n".join(text) + "\n")
         (self.out / "corpus-summary.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
         (self.out / VERDICT_FILE).write_text(json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n",
@@ -847,6 +851,7 @@ class Lane:
         entries = self.scope(entries)
         if not entries:
             raise Refused("refused: no corpus file is in this lane's scope")
+        self.housekeeping = prune(seal, self.lane)
         seal.mkdir(self.work)
         try:
             if not self.engine_present():
@@ -883,15 +888,7 @@ class Lane:
         work = str(self.seal.writable(self.work))
         if not os.path.isdir(work):
             return
-        for folder, _, names in os.walk(work):
-            for name in names:
-                path = os.path.join(folder, name)
-                try:
-                    flags = os.lstat(path).st_flags
-                    if flags & 0x2 and _under(Path(folder), self.work):          # UF_IMMUTABLE
-                        os.lchflags(path, flags & ~0x2)
-                except OSError:
-                    continue
+        _unlock_tree(work)
         shutil.rmtree(work, ignore_errors=True)
         if os.path.isdir(work):
             note = "  the run's work folder could NOT be removed whole (it is still on the M4 under ~/corpus/work)"
@@ -1257,6 +1254,64 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
         except (OSError, ValueError):
             pass
     return against
+
+
+def _unlock_tree(folder: str) -> None:
+    """Clear the user immutable flag (what Promote sets on what it archives) under `folder`."""
+    for parent, _, names in os.walk(folder):
+        for name in names:
+            path = os.path.join(parent, name)
+            try:
+                flags = os.lstat(path).st_flags
+                if flags & 0x2:                              # UF_IMMUTABLE
+                    os.lchflags(path, flags & ~0x2)
+            except (OSError, AttributeError):
+                continue
+
+
+def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float] = None) -> List[str]:
+    """Housekeeping at the start of a lane (the 115 GB the M4 has free is the corpus's own disk).
+    Stored runs of the lane: the newest `keep`, every RED run and the BASELINE are kept; the
+    rest go, and a commit folder left empty with them. Nothing is pruned while the accepted
+    baseline cannot be read back — the stored runs are then the evidence. Work folders older
+    than STALE_WORK_SECONDS are what a run that died left behind: removed, unlocked first."""
+    lines = []
+    keep = KEEP_RUNS if keep is None else keep
+    baseline, _, problem = baseline_of(seal, lane)
+    runs = lane_runs(seal, lane)
+    if problem is None and len(runs) > keep:
+        removed = 0
+        for run in runs[:-keep]:
+            if run == baseline:
+                continue
+            try:
+                report = json.loads((run / "report.json").read_text(encoding="utf-8"))
+                if verdict_of(report, report.get("against")) == "RED":
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue                                     # unreadable: left for a person to look at
+            shutil.rmtree(str(seal.writable(run)), ignore_errors=True)
+            removed += 1
+            try:
+                run.parent.rmdir()                           # only when empty
+            except OSError:
+                pass
+        if removed:
+            lines.append(f"  housekeeping: {removed} old {lane} runs removed from the reports (the newest {keep}, the baseline and every RED run stay)")
+    now = time.time() if now is None else now
+    stale = 0
+    for folder in sorted(seal.work_root.iterdir()) if seal.work_root.is_dir() else []:
+        try:
+            if folder.is_symlink() or not folder.is_dir() or now - folder.lstat().st_mtime < STALE_WORK_SECONDS:
+                continue
+        except OSError:
+            continue
+        _unlock_tree(str(seal.writable(folder)))
+        shutil.rmtree(str(folder), ignore_errors=True)
+        stale += 1
+    if stale:
+        lines.append(f"  housekeeping: {stale} work folders left by runs that died were removed")
+    return lines
 
 
 def who_word(text) -> str:

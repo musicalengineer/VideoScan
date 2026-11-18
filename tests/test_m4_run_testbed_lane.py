@@ -37,7 +37,8 @@ sys.path.insert(0, str(REPO / 'tests'))
 import m4_run_summary as ms  # noqa: E402
 from test_m4_run_suite_lane import Testbed, app_log, probe  # noqa: E402
 
-RUNNER_FILES = ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'nightly_local_tests.sh', 'lib/process_group_watchdog.sh')
+RUNNER_FILES = ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py', 'nightly_local_tests.sh',
+                'lib/process_group_watchdog.sh')
 
 # Stand-in for corpus_run.py on the host: plays the lane from $SUITE_FAKE/corpus-<lane>.json
 # ({"exit": n, "facts": {...} | null, "summary": text | null}) and records its call.

@@ -1133,6 +1133,71 @@ class VerbsLaneTests(unittest.TestCase):
         self.assertIn('the baseline is now run 20261118_090000_2', cr.accept(self.scene.seal, 'verbs', 'x')[0])
 
 
+class HousekeepingTests(unittest.TestCase):
+    """E2. At the start of a lane: old stored runs go (never the baseline, never a RED run), and so do work folders a dead run left."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stored(self):
+        return sorted(p.parent.name for p in (self.scene.seal.reports / 'check').glob('*/*/report.json'))
+
+    def test_the_newest_runs_the_baseline_and_every_red_run_stay(self):
+        real, cr.KEEP_RUNS = cr.KEEP_RUNS, 2
+        try:
+            self.scene.run(stamp='20261117_120000_1')                                    # the (implicit) baseline
+            self.scene.plan['files'] = {sha_of(1): dict(crash='check')}
+            self.scene.run(sha='b' * 40, stamp='20261117_130000_2')                      # RED
+            self.scene.plan['files'] = {}
+            for n in range(3, 8):
+                self.scene.run(sha=('c' if n < 6 else 'd') * 40, stamp=f'20261117_1{n}0000_{n}')
+            # Each run prunes at its start: when run 7 started, the stored runs were 1..6.
+            self.assertEqual(self.stored(), ['20261117_120000_1', '20261117_130000_2', '20261117_150000_5',
+                                             '20261117_160000_6', '20261117_170000_7'])
+            self.assertFalse((self.scene.seal.reports / 'check' / ('c' * 40) / '20261117_130000_3').exists())
+            self.assertIn('housekeeping: 1 old check runs removed from the reports', (self.scene.out / 'corpus-summary.txt').read_text())
+            cr.accept(self.scene.seal, 'check', 'x')                                     # run 7 is the baseline now
+            for n in range(8, 12):
+                self.scene.run(sha='e' * 40, stamp=f'20261118_1{n - 8}0000_{n}')
+            self.assertIn('20261117_170000_7', self.stored(), 'the accepted baseline was pruned')
+            self.assertIn('20261117_130000_2', self.stored(), 'the RED run was pruned')
+            self.assertNotIn('20261117_120000_1', self.stored(), 'the old implicit baseline is an ordinary run once another is accepted')
+        finally:
+            cr.KEEP_RUNS = real
+
+    def test_nothing_is_pruned_while_the_baseline_cannot_be_read_back(self):
+        for n in range(1, 5):
+            self.scene.run(stamp=f'20261117_1{n}0000_{n}')
+        (self.scene.seal.reports / 'check' / cr.BASELINE).write_text('{not json')
+        self.assertEqual(cr.prune(self.scene.seal, 'check', keep=1), [])
+        self.assertEqual(len(self.stored()), 4)
+
+    def test_a_work_folder_a_dead_run_left_is_removed_and_a_live_one_is_not(self):
+        seal = self.scene.seal
+        dead, live = seal.work_root / '20261101_000000_1-verbs', seal.work_root / '20261117_235900_2-proof'
+        for folder in (dead, live):
+            (folder / 'archive').mkdir(parents=True)
+            (folder / 'archive' / 'file.bin').write_text('x')
+        if sys.platform == 'darwin':
+            os.chflags(dead / 'archive' / 'file.bin', 0x2)                               # what Promote locked
+        outside = pathlib.Path(self.tmp.name, 'outside')
+        outside.mkdir()
+        (outside / 'keep.txt').write_text('keep')
+        os.symlink(outside, seal.work_root / 'link')
+        old = time.time() - cr.STALE_WORK_SECONDS - 60
+        os.utime(dead, (old, old))
+        os.utime(seal.work_root / 'link', (old, old), follow_symlinks=False)
+        lines = cr.prune(seal, 'check')
+        self.assertEqual(lines, ['  housekeeping: 1 work folders left by runs that died were removed'])
+        self.assertFalse(dead.exists())
+        self.assertTrue((live / 'archive' / 'file.bin').exists())
+        self.assertEqual((outside / 'keep.txt').read_text(), 'keep', 'a symlink in the work folder was followed')
+
+
 class ScaleTests(unittest.TestCase):
 
     def test_diff_and_report_over_100k_files_stay_inside_the_budget(self):

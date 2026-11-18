@@ -511,7 +511,8 @@ class CallerTests(Testbed):
         self.repo = self.home / 'dev' / 'VideoScan'
         self.repo.mkdir(parents=True)
         (self.repo / 'scripts/lib').mkdir(parents=True)
-        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'nightly_local_tests.sh', 'lib/process_group_watchdog.sh'):
+        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py', 'nightly_local_tests.sh',
+                     'lib/process_group_watchdog.sh'):
             shutil.copy(SCRIPTS / name, self.repo / 'scripts' / name)
         self.sha = self.make_repo(self.repo)
         self.env['PATH'] = f"{self.bin}:{os.environ['PATH']}"       # the caller's launchctl and date

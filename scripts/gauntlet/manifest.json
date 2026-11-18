@@ -34223,6 +34223,7 @@
         "test_a_stale_overlay_from_a_dead_run_is_moved_aside_first",
         "test_a_state_root_outside_corpus_state_is_refused",
         "test_a_word_cannot_carry_a_path_a_filename_or_a_sentence",
+        "test_a_work_folder_a_dead_run_left_is_removed_and_a_live_one_is_not",
         "test_accept_blesses_the_newest_run_and_records_who_when_and_which",
         "test_accept_refuses_what_is_not_a_whole_clean_run",
         "test_amber_and_red_follow_the_helpers_exit",
@@ -34240,6 +34241,7 @@
         "test_no_marker_is_not_the_corpus",
         "test_no_ref_tracks_the_overlay_folder_and_the_helper_never_signals",
         "test_nothing_a_caller_reads_back_names_a_file_or_a_path",
+        "test_nothing_is_pruned_while_the_baseline_cannot_be_read_back",
         "test_prepare_and_status_dry_runs",
         "test_prepare_twice_gives_the_same_catalog",
         "test_run_check_ships_the_harness_and_never_runs_on_the_ultra",
@@ -34256,6 +34258,7 @@
         "test_the_front_door_accepts_through_ssh_with_the_helper_on_stdin",
         "test_the_in_app_driver_carries_the_same_seal",
         "test_the_m4_with_its_marker_and_default_state_root_passes",
+        "test_the_newest_runs_the_baseline_and_every_red_run_stay",
         "test_the_result_is_a_sealed_snapshot_with_nothing_beside_it",
         "test_the_sample_is_cloned_and_the_catalog_names_only_the_clones",
         "test_the_sample_is_deterministic_stratified_and_sized_to_fit",
@@ -34312,6 +34315,35 @@
         "test_wait_exits_2_when_the_run_could_not_run",
         "test_zero_app_tests_is_red",
         "test_zero_tests_or_no_number_is_red_whatever_the_status_says"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_testbed_host.py",
+      "stage": "regression",
+      "suites": [
+        "test_testbed_host.py"
+      ],
+      "tests": [
+        "test_a_bin_folder_with_no_run_yet_is_left_alone_until_it_is_a_day_old",
+        "test_a_lane_is_refused_inside_the_quiet_window_and_force_overrides",
+        "test_a_lane_prunes_at_its_start_under_the_lock_and_keeps_itself",
+        "test_a_poisoned_clock_or_conf_never_raises",
+        "test_a_run_with_no_outcome_is_running_only_while_the_lock_names_it",
+        "test_an_idle_host_with_nothing_recorded",
+        "test_each_lane_is_refused_for_its_own_length_before_the_m4s_14_00_run",
+        "test_keep_comes_from_the_conf_and_a_poisoned_conf_is_the_default",
+        "test_no_out_folder_and_a_thousand_runs",
+        "test_only_run_folders_are_ever_touched",
+        "test_poisoned_files_give_nulls_not_a_traceback",
+        "test_status_json_is_one_object_and_only_for_status",
+        "test_the_command_line",
+        "test_the_conf_sets_the_schedule_and_the_window_and_midnight_wraps",
+        "test_the_helper_can_be_shipped_inside_a_heredoc",
+        "test_the_last_run_the_last_suite_and_the_last_testbed",
+        "test_the_newest_n_of_each_lane_and_every_red_run_stay",
+        "test_whatever_latest_names_and_the_current_run_are_never_removed"
       ]
     },
     {
@@ -40590,6 +40622,10 @@
         },
         {
           "name": "tests/test_m4_run_suite_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_testbed_host.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

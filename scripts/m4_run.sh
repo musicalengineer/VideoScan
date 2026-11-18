@@ -7,7 +7,7 @@
 #   scripts/m4_run.sh all    [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh testbed [--ref <rev>] [--wait] [--dry-run]
-#   scripts/m4_run.sh status [--host m4|ultra]
+#   scripts/m4_run.sh status [--host m4|ultra] [--json]
 #   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof|verbs [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
 #
 # What Rick says → what runs (from the phone, over Remote Control):
@@ -53,8 +53,13 @@
 #
 # Shape. The caller (normally the Ultra) never builds anything:
 #   1. resolves --ref (default `main`) to a commit;
-#   2. asks the host whether a run holds its lock (refuses if so) and whether
-#      it is the nightly window (01:30–06:00 host time; --force overrides);
+#   2. asks the host whether a run holds its lock (refuses if so), whether
+#      it is the nightly window (01:30–06:00 host time; --force overrides), and
+#      whether it is the QUIET WINDOW before a scheduled run (the M4's 14:00
+#      testbed: scripts/testbed_host.py window — by default the lane's own
+#      expected length, <root>/testbed.conf changes it; exit 5; --force
+#      overrides). The scheduled run does not wait for the lock — it runs its
+#      suite anyway — so a lane must be finished before it starts;
 #   3. M4 only: `git push ricksm4.local:dev/VideoScan <sha>:refs/m4run/<sha>`
 #      (a new ref per commit — never a forced update, never a branch);
 #   4. installs this script + m4_run_summary.py + testbed_lock.py under
@@ -72,6 +77,8 @@
 # dirty one: M4 ~/m4run/work, Ultra ~/dev/VideoScan-wt/ultra-testbed) — every
 # mutation of the shared testbed happens under the lock, so a second caller is
 # refused before it can touch a live run's tree (Codex 2026-11-05) — writes
+# prunes old run folders (scripts/testbed_host.py prune: the newest 10 of each lane, every RED run and
+# whatever <root>/latest* names are kept; KEEP in <root>/testbed.conf changes the 10), writes
 # <root>/out/<stamp>-<lane>/ {run.log, summary.txt,
 # <plan>.log, <plan>.xcresult, <plan>.tests.tsv}, points <root>/latest at it
 # (a suite run also <root>/latest-suite, so `status` still shows the last suite
@@ -87,19 +94,22 @@
 # Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
 # suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
 # 6.9 GB together on the M4, 2026-11-17), xcresult bundles per run (~50–300 MB
-# each; a suite run's directory 140–420 MB; kept; prune <root>/out by hand), and
+# each; a suite run's directory 140–420 MB; pruned at the start of each lane), and
 # the watchdog budgets below in wall time. A suite run on the M4 with warm caches:
 # 56 min (Core 16, build 10, app tests 30), measured 2026-11-17.
 #
 # Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error (also a run
 #       whose shell was stopped before its OUTCOME: a logout of the host's GUI session, a restart) · 2 usage ·
-#       3 busy · 4 testbed worktree not usable · 5 nightly window.
+#       3 busy · 4 testbed worktree not usable · 5 nightly window or the quiet window before a scheduled run.
 #       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
 #       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
 #       started still exits 3 / 4 / 5 as above. testbed --wait: the same three — 0 only when no
 #       lane is RED or NORUN.
 #
-# Tests: tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
+# `status --json` prints one JSON object for machines (scripts/testbed_host.py status-json): the lock,
+# and the last run, the last suite run and the last testbed run with their verdict words.
+#
+# Tests: tests/test_testbed_host.py (prune, the quiet window, status --json), tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
 # summary line), tests/test_m4_run_deep_lane.py, tests/test_m4_run_suite_lane.py,
 # tests/test_m4_run_testbed_lane.py.
 # Nothing in the tests touches a host.
@@ -199,6 +209,15 @@ lock_probe_snippet() {   # lock_probe_snippet [redirect, e.g. " >file"]
     printf 'PY\n'
 }
 
+# scripts/testbed_host.py run on the host from its own source (no apostrophes in it), as the lock probe is.
+host_tool_snippet() {   # host_tool_snippet <args…>
+    printf "python3 -"
+    printf " '%s'" "$@"
+    printf " <<'PY'\n"
+    cat "$SCRIPT_DIR/testbed_host.py"
+    printf 'PY\n'
+}
+
 status_snippet() {
     # The probe runs into a file, not inside \$( ): /bin/bash 3.2 misparses a
     # heredoc (the helper's source) inside a command substitution.
@@ -287,9 +306,16 @@ start_run() {
         if [ "$FORCE" = 0 ] && [ "$hhmm" -ge 0130 ] && [ "$hhmm" -lt 0600 ] 2>/dev/null; then
             die "it is ${hhmm} on $H_NAME — the nightly runs 02:00; pass --force to run anyway" 5
         fi
+        # The quiet window before a scheduled run (the M4's 14:00 testbed does not wait for the lock).
+        local quiet
+        quiet="$(on_host "$(host_tool_snippet window "$H_ROOT" "$LANE" "$hhmm")" 2>/dev/null)"
+        case "$quiet" in
+            QUIET*) [ "$FORCE" = 1 ] || die "it is ${hhmm} on $H_NAME — ${quiet#QUIET }; pass --force to run anyway" 5 ;;
+        esac
     else
         echo "+ (probe $H_ROOT/lock: refuse early with exit 3 if a live run holds it; the host takes it for real)"
         echo "+ (refuse with exit 5 between 01:30 and 06:00 host time unless --force)"
+        echo "+ (refuse with exit 5 inside the quiet window before a scheduled run on the host unless --force: testbed_host.py window $H_ROOT $LANE <host HHMM>)"
         on_host "$(lock_probe_snippet)"
     fi
     # Test hook: hold here, after the advisory probe and before anything is
@@ -327,6 +353,8 @@ start_run() {
         || die "could not install the summarizer on $H_NAME"
     copy_to_host "$SCRIPT_DIR/testbed_lock.py" "$bin/testbed_lock.py" \
         || die "could not install the lock helper on $H_NAME"
+    copy_to_host "$SCRIPT_DIR/testbed_host.py" "$bin/testbed_host.py" \
+        || die "could not install the housekeeping helper on $H_NAME"
     if [ "$LANE" = suite ] || [ "$LANE" = testbed ]; then
         # The nightly's own runner and its watchdog library, from the caller's
         # checkout like this script: the commit under test need not have them.
@@ -678,6 +706,9 @@ host_main() {   # __host <lane> <sha> <stamp>
     take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || { echo "OUTCOME REFUSED $BUSY"; exit 3; }
     trap drop_lock EXIT
     ln -sfn "$OUT" "$H_ROOT/latest"
+    # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
+    # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
+    [ -f "$SCRIPT_DIR/testbed_host.py" ] && python3 "$SCRIPT_DIR/testbed_host.py" prune "$H_ROOT" --current "$OUT" 2>&1
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
     [ "$lane" = testbed ] && ln -sfn "$OUT" "$H_ROOT/latest-testbed"
     # The testbed worktree is mutated HERE, under the lock, never by the
@@ -718,7 +749,7 @@ host_main() {   # __host <lane> <sha> <stamp>
 
 # ── Arguments ─────────────────────────────────────────────────────────────
 LANE="${1:-}"; [ $# -gt 0 ] && shift
-HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""
+HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""; JSON=0
 CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""
 POS=()
 while [ $# -gt 0 ]; do
@@ -733,6 +764,7 @@ while [ $# -gt 0 ]; do
         --dry-run) DRY=1; shift ;;
         --force) FORCE=1; shift ;;
         --wait) WAIT=1; shift ;;
+        --json) JSON=1; shift ;;
         -h|--help) usage ;;
         --*) die "unknown option $1" 2 ;;
         *) POS+=("$1"); shift ;;
@@ -757,6 +789,7 @@ testbed_args_ok() {
 [ "$LANE" = corpus ] || [ "${POS[0]:-}" = corpus ] || [ -z "$CORPUS_LANE$CORPUS_DEADLINE$CORPUS_LIMIT" ] \
     || die "--corpus-lane/--deadline/--limit apply to the corpus lane" 2
 host_config "$HOST"
+[ "$JSON" = 1 ] && [ "$LANE" != status ] && die "--json applies to status" 2
 
 case "$LANE" in
     corpus)
@@ -772,6 +805,10 @@ case "$LANE" in
         testbed_args_ok
         start_run ;;
     status)
+        if [ "$JSON" = 1 ]; then
+            on_host "$(host_tool_snippet status-json "$H_ROOT" "$H_NAME")" || die "cannot reach $H_NAME (${H_SSH:-local})"
+            exit 0
+        fi
         [ "$DRY" = 1 ] && { on_host "$(status_snippet)"; exit 0; }
         on_host "$(status_snippet)" || die "cannot reach $H_NAME (${H_SSH:-local})" ;;
     __host)
