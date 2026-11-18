@@ -40,7 +40,7 @@ run's script in a mode, installed per run beside `m4_run.sh` (the commit under t
 testbed worktree. It writes its row to `<out>/suite-row.json` instead of the metrics branch and skips everything that
 is not the verdict (fetch/pull, page summary, coverage, person/Hallie lanes, model smoke, complexity baseline, repo
 traffic), so an on-demand run never changes the nightly tile. Own caches (`~/Library/Caches/videoscan-<root>-dd-suite/`
-`{app,core}`, ~25 GB) and own logs in `<out>` (`suite.log`, `suite-app-test.log`, `suite-core-test.log`,
+`{app,core}`, 6.9 GB on the M4) and own logs in `<out>` (`suite.log`, `suite-app-test.log`, `suite-core-test.log`,
 `suite-app.xcresult`); the scheduled run's checkout, caches and `/tmp` files are untouched. Verdict
 (`m4_run_summary.py --suite`): `suite: GREEN|RED <why> — app P passed, F failed, S skipped; core … (sha, seconds, log)`,
 then one line per failed or crashed test with the file and line that declares it in the worktree (or `NOT FOUND`).
@@ -48,7 +48,8 @@ RED also when either lane has no number (zero app tests, zero Core tests). `OUTC
 stopped it (automation mode, Xcode first launch, Metal toolchain): the machine, not the code. `status` shows the last
 suite run even after a later ui/deep run (`<root>/latest-suite`). `--wait` exits 0 GREEN · 1 RED · 2 could not run
 (refused on the host, NORUN, or the wait gave up); a run that never started exits 3 busy / 4 testbed / 5 window as
-for the other lanes. Timing budgets are strict, as in the scheduled run.
+for the other lanes. Timing budgets are strict, as in the scheduled run. Measured on the M4, 2026-11-17, warm caches:
+56 min (Core 16, Release build 10, app tests 30; 13,941 + 2,587 tests); the first run's cold builds add ~8 min.
 
 **A logout of the host's GUI session stops a run** (any lane): launchd SIGTERMs the agent's shell, the app-hosted
 test host dies mid-test, and no OUTCOME is written (2026-11-17, the first real suite run, 55 minutes in). `status` then

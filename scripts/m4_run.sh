@@ -69,8 +69,10 @@
 #
 # Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
 # suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
-# ~25 GB together), xcresult bundles per run (~50–300 MB each, kept; prune
-# <root>/out by hand), and the watchdog budgets below in wall time.
+# 6.9 GB together on the M4, 2026-11-17), xcresult bundles per run (~50–300 MB
+# each; a suite run's directory 140–420 MB; kept; prune <root>/out by hand), and
+# the watchdog budgets below in wall time. A suite run on the M4 with warm caches:
+# 56 min (Core 16, build 10, app tests 30), measured 2026-11-17.
 #
 # Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error (also a run
 #       whose shell was stopped before its OUTCOME: a logout of the host's GUI session, a restart) · 2 usage ·
