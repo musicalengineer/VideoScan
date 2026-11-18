@@ -336,13 +336,17 @@ extension VerbsStage {
         for (item, row) in purging { before[item.sha] = row.isPurged ? "purged" : "not_purged" }
         let aside = items("set_aside").compactMap { item in rows(model, at: item.path).first(where: isLive).map { (item, $0) } }
         model.removeFromCatalog(recordIDs: aside.map { $0.1.id })
-        for (item, row) in aside { before[item.sha] = row.isSetAside ? "set_aside" : row.isPurged ? "purged" : "unchanged" }
+        // The engine decides which rows it sets aside; one it leaves as it was reads `left_alone_by_the_engine`.
+        for (item, row) in aside { before[item.sha] = row.isSetAside ? "set_aside" : row.isPurged ? "purged" : "left_alone_by_the_engine" }
         await scan(model)
         for role in ["purge", "set_aside"] {
             for item in items(role) {
                 let found = rows(model, at: item.path)
-                let after = found.isEmpty ? "no_row" : found.contains(where: isLive) ? "came_back" : "stayed_removed"
-                say(item, role, (before[item.sha] ?? "no_row_before") + ",rescan:" + after, kinds: ["rows:\(found.count)"])
+                // "came_back" only for a row the verb really removed; a row the engine left alone is "still_live".
+                let was = before[item.sha] ?? "no_row_before"
+                let removed = was == "purged" || was == "set_aside"
+                let after = found.isEmpty ? "no_row" : !found.contains(where: isLive) ? "stayed_removed" : removed ? "came_back" : "still_live"
+                say(item, role, was + ",rescan:" + after, kinds: ["rows:\(found.count)"])
             }
         }
     }

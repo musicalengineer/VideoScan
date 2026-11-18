@@ -155,9 +155,16 @@ reports counts.
   viewer publishing; the sealed catalog names no Master Archive.
 - The corpus sources are read-only. Engines that write, write under `~/corpus/work/<run>/`. The verbs that move, trash
   or promote run only in the `verbs` lane and only on **clones** under that folder: never on `~/corpus/media`, never
-  into the Finder Trash (the engines' Trash under a test host is a folder in the run's `TMPDIR`, proven before any
-  verb), never into an archive root outside `~/corpus/work`. The lane sweeps the size and modification time of every
-  corpus file before and after; any difference is RED.
+  into the Finder Trash, never into an archive root outside `~/corpus/work`. The Trash is the run's own folder
+  (`work/<run>/trash`), given to each engine through the engine's own injectable Trash step (Delete Duplicates:
+  `hooks.trashItem`; Move to Trash: the routine's `fileOperation` seam, which records the row as removed outright) —
+  the app's own Trash call under a test host lands in the system's temporary folder, outside the run, and macOS gives
+  no way to move it; that folder is counted afterwards and a file found there is RED. The lane sweeps the size,
+  modification time, flags, link count and inode of every corpus file before and after; any difference is RED.
+- The seal is checked twice: `Seal` in `scripts/corpus_run.py`, and `scripts/corpus/CorpusSeal.swift` inside the test
+  host (one pure function, pinned by behaviour: `tests/test_corpus_run.py` compiles it and asks it about real folders).
+  The corpus folders must be themselves (a `work` that is a symlink is refused); a run's work folder is made new; what
+  the harness reads back as its own (the sealed catalog, a stored run, a baseline) is refused if it is a link.
 - No credential is in the repo. The harness never signals a process: a file past its deadline is cut by the test host
   exiting itself, and the lane sits under `m4_run.sh`'s lane watchdog.
 
