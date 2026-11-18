@@ -9,14 +9,17 @@ M4 only, under the corpus seal of corpus_run.py).
 One instrumented Debug build (`-enableCodeCoverage YES`, its own DerivedData
 <dd>-coverage, kept like the lanes' cache), then, at ONE commit:
   check · proof · verbs   the corpus lanes exactly as `run <lane>` runs them (corpus_run.Lane /
-                          VerbsLane: same drivers, seal, report, baseline diff), each test host
-                          writing its LLVM profile into this run's work folder;
+                          VerbsLane: same drivers, seal, report, baseline diff), each launch with
+                          xcodebuild's own coverage collection on;
   suite (app)             the same build's VideoScanTests (the CI plan's list, the corpus
                           drivers skipped), with the plan's own environment — what the 04:00
                           coverage lane (tools/nightly_coverage.py) measures;
   suite (Core)            `swift test --enable-code-coverage` of the Core package (own scratch
                           <dd>-coverage-core), as the 04:00 lane does.
-Each side's profile is merged (llvm-profdata) and exported as LCOV (llvm-cov) over the app's
+xcodebuild writes each launch's profiles under <dd>/Build/ProfileData; they are MOVED into
+this run's work folder after each launch (corpus_run.collect_profiles). A bare LLVM_PROFILE_FILE
+does not work: the test host is ended without its exit handlers and writes nothing (measured on
+the M4, 2026-11-18). Each side's profile is merged (llvm-profdata) and exported as LCOV (llvm-cov) over the app's
 images; the lines and functions of OUR sources (VideoScan/VideoScan/, VideoScanCore/Sources/)
 are then compared: suite alone, corpus alone, the union, what only the corpus reaches (by area,
 by lane, and the functions ranked by size), and what only the suite reaches.
@@ -35,7 +38,7 @@ it at the end; the report stays under ~/corpus/reports/coverage/<commit>/<stamp>
 
 Worst-case resources: the instrumented DerivedData (~15 GB) and Core scratch (~3 GB), kept
 between runs (one of each; SwiftPM leaves its raw profiles there, a few MB per run). Per run:
-raw profiles ~50-200 MB and five LCOV files ~30-80 MB each in the work folder, removed at the
+raw profiles ~50-200 MB, the suite's result bundle (~0.3-1 GB) and five LCOV files ~30-80 MB each in the work folder, removed at the
 end. Memory: one LCOV line at a time; the sets of covered lines per side (~400k lines x 5
 sides, a few hundred MB at most). Wall: build 15-25 min cold, the app suite ~40 min, Core
 ~15 min, then the three lanes (~10 + ~25 + ~5 min) — about 2 h, inside the corpus lane's
@@ -46,7 +49,6 @@ from __future__ import annotations
 import bisect
 import json
 import os
-import plistlib
 import shutil
 import subprocess
 import time
@@ -302,25 +304,6 @@ def render(result: dict, names: Dict[str, str], sha: str, lane_lines: List[str],
 
 # ── The run (on the M4, inside the corpus seal) ───────────────────────────
 
-def add_environment(source: Path, dest: Path, environment: Dict[str, str]) -> None:
-    """The plan's own .xctestrun with `environment` added to every test target; its test lists
-    stay (the suite is the plan's suite). A new file, never through a link."""
-    def patch(value):
-        if isinstance(value, list):
-            return [patch(v) for v in value]
-        if isinstance(value, dict):
-            out = {k: patch(v) for k, v in value.items()}
-            if "TestBundlePath" in out:
-                out["EnvironmentVariables"] = dict(out.get("EnvironmentVariables") or {}, **environment)
-            return out
-        return value
-    with open(source, "rb") as f:
-        plist = plistlib.load(f)
-    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "wb") as f:
-        plistlib.dump(patch(plist), f)
-
-
 def app_images(derived_data: Path) -> List[Path]:
     """The instrumented images that hold our code: the app's debug dylib (or its executable)
     and the Core framework. The test bundle is left out: its files are not ours to count."""
@@ -406,7 +389,7 @@ class CoverageRun:
                 self.lane_lines += lane.lines[:2] or [f"corpus {name}: wrote no summary"]
             except cr.Refused as refusal:
                 self.lane_lines.append(f"corpus {name}: RED {refusal}")
-            if lane.launches and not any(lane.profiles.glob("*.profraw")):
+            if lane.launches and not any(lane.profiles.glob("*.prof*")):
                 self.problems.append(f"{name}: its test host wrote no profile — stopped before the rest")
                 return False
         return True
@@ -421,18 +404,16 @@ class CoverageRun:
             self.problems.append("suite-app: the instrumented build left no test-run file")
             return
         raw = self.seal.mkdir(self.work / "raw" / "suite-app")
-        patched = xctestrun.with_name(f"corpus-coverage-{self.stamp}-suite.xctestrun")    # beside it: __TESTROOT__ is relative
-        if os.path.lexists(str(patched)) or cr._under(patched, self.seal.corpus):
-            raise cr.Refused("refused: the suite's test-run file would land somewhere it must not")
-        add_environment(xctestrun, patched, {"LLVM_PROFILE_FILE": str(raw) + "/%p-%m.profraw"})
+        started = time.time() - 2
         try:
-            rc = cr._run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched),
+            rc = cr._run([self.xcodebuild, "test-without-building", "-xctestrun", str(xctestrun),
                           "-destination", "platform=macOS,arch=arm64", "-only-testing:VideoScanTests",
-                          *[f"-skip-testing:VideoScanTests/{c}" for c in DRIVER_CLASSES]],
+                          *[f"-skip-testing:VideoScanTests/{c}" for c in DRIVER_CLASSES],
+                          "-enableCodeCoverage", "YES",
+                          "-resultBundlePath", str(self.seal.writable(self.work / "suite-app.xcresult"))],
                          self.seal, self.out, "coverage-suite.log", dict(os.environ), self.worktree)
         finally:
-            if patched.exists():
-                shutil.move(str(patched), str(self.out / patched.name))
+            cr.collect_profiles(self.seal, self.dd, started, raw, "suite")
         self.suite_note = "app tests " + ("passed" if rc == 0 else f"exit {rc} (some failed; coverage still read)")
 
     def run_core(self) -> Optional[Tuple[List[Path], List[Path]]]:
@@ -471,7 +452,7 @@ class CoverageRun:
             roots = sorted({str(self.worktree), os.path.realpath(str(self.worktree))})
             cov = Coverage()
             read: Dict[str, int] = {}
-            sides = [(side, sorted((self.work / "raw" / side).glob("*.profraw")), images)
+            sides = [(side, sorted((self.work / "raw" / side).glob("*.prof*")), images)
                      for side in ("suite-app",) + SUBLANES] + [("suite-core", core_profiles, core_binaries)]
             for side, profiles, objects in sides:
                 lcov = self.export(side, profiles, objects)

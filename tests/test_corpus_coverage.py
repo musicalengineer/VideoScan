@@ -143,7 +143,7 @@ class ReadAndMeasureTests(unittest.TestCase):
         self.assertEqual(names['File.swift:$s9VideoScan3fooyyF'], '$s9VideoScan3fooyyF')
 
 
-# The lane fake, plus: a test host writes a profile where LLVM_PROFILE_FILE says; the suite run
+# The lane fake, plus: with -enableCodeCoverage a test run leaves its profiles under <dd>/Build/ProfileData as xcodebuild does; the suite run
 # (no VS_CORPUS_CONFIG) is recorded and ends; an instrumented build leaves the app's images.
 FAKE_COVERAGE_XCODEBUILD = FAKE_XCODEBUILD.replace(
     '    sys.exit(0)\nrun = plistlib.load',
@@ -154,16 +154,17 @@ FAKE_COVERAGE_XCODEBUILD = FAKE_XCODEBUILD.replace(
     '        os.makedirs(fw, exist_ok=True); open(fw + "/VideoScanCore_-1_PackageProduct", "w").write("image")\n'
     '    sys.exit(0)\nrun = plistlib.load').replace(
     'config = json.load(open(env["VS_CORPUS_CONFIG"]))',
-    'prof = env.get("LLVM_PROFILE_FILE")\n'
-    'if prof and not plan.get("no_profiles"):\n'
-    '    p = prof.replace("%p", str(os.getpid())).replace("%m", "m1")\n'
-    '    open(p, "w").write("raw")\n'
+    'if "-enableCodeCoverage" in args and not plan.get("no_profiles"):\n'
+    '    prof = os.path.join(os.path.dirname(os.path.dirname(args[args.index("-xctestrun") + 1])), "ProfileData", "DEV")\n'
+    '    os.makedirs(prof, exist_ok=True)\n'
+    '    open(os.path.join(prof, "UUID-%d.profraw" % os.getpid()), "w").write("raw")\n'
+    '    open(os.path.join(prof, "Coverage.profdata"), "w").write("merged")\n'
     'if "VS_CORPUS_CONFIG" not in env:\n'
     '    with open(plan["calls"], "a") as f:\n'
     '        f.write(json.dumps({"suite_args": args, "suite_env": env, "suite_keys": sorted(run["TestConfigurations"][0]["TestTargets"][0])}) + "\\n")\n'
     '    sys.exit(plan.get("suite_rc", 0))\n'
     'config = json.load(open(env["VS_CORPUS_CONFIG"]))')
-assert FAKE_COVERAGE_XCODEBUILD.count('LLVM_PROFILE_FILE') == 1 and 'enableCodeCoverage' in FAKE_COVERAGE_XCODEBUILD, \
+assert FAKE_COVERAGE_XCODEBUILD.count('ProfileData') == 1 and 'enableCodeCoverage' in FAKE_COVERAGE_XCODEBUILD, \
     'the lane fake changed shape; this fake no longer extends it'
 
 # xcrun: llvm-profdata merges (the output names the side), llvm-cov prints that side's LCOV, swift-demangle tags names.
@@ -281,12 +282,18 @@ class CoverageRunTests(unittest.TestCase):
         work = str(self.scene.seal.work_root / '20261118_150000_1-coverage')
         lanes = [c for c in calls if 'driver_env' in c]
         self.assertEqual(sorted({c['lane'] for c in lanes}), ['check', 'proof', 'verbs'])
-        for c in lanes:
-            self.assertEqual(c['driver_env']['LLVM_PROFILE_FILE'], f"{work}/raw/{c['lane']}/%p-%m.profraw")
+        tests = [c['args'] for c in calls if c.get('args', [''])[0] == 'test-without-building']
+        self.assertEqual(len(tests), 4, 'three lanes and the suite')
+        for args in tests:
+            self.assertIn('-enableCodeCoverage', args)
+            bundle = args[args.index('-resultBundlePath') + 1]
+            self.assertTrue(bundle.startswith(str(self.scene.seal.work_root) + '/'), 'result bundles go with the work folders')
+        self.assertTrue(any(a == f'{work}/suite-app.xcresult' for t in tests for a in t))
+        profile_data = self.scene.dd.parent / (self.scene.dd.name + '-coverage') / 'Build' / 'ProfileData'
+        self.assertEqual([p for p in profile_data.rglob('*') if p.is_file()], [], 'every profile was moved out of the cache')
         suite = [c for c in calls if 'suite_args' in c]
         self.assertEqual(len(suite), 1)
         args, env = suite[0]['suite_args'], suite[0]['suite_env']
-        self.assertEqual(env['LLVM_PROFILE_FILE'], f'{work}/raw/suite-app/%p-%m.profraw')
         self.assertNotIn('VS_CORPUS_CONFIG', env)
         self.assertNotIn('HOME', env, 'the suite runs in the plan environment, not the sealed corpus home')
         self.assertIn('SkipTestIdentifiers', suite[0]['suite_keys'], "the plan's own test lists stay")
@@ -357,6 +364,23 @@ class CoverageRunTests(unittest.TestCase):
         scene.seal = cr.Seal(scene.home, 'RicksUltra')
         self.assertEqual(scene.run_coverage(), cr.EXIT_REFUSED)
         self.assertEqual(scene.recorded_calls(), [], 'nothing was built on a Mac that is not the M4')
+
+    def test_profiles_are_moved_out_of_the_cache_fresh_ones_only_never_a_link(self):
+        seal = self.scene.seal
+        data = pathlib.Path(self.tmp.name) / 'dd-x' / 'Build' / 'ProfileData' / 'DEV'
+        data.mkdir(parents=True)
+        old, fresh, other = data / 'old.profraw', data / 'new.profraw', data / 'notes.txt'
+        for path in (old, fresh, other):
+            path.write_text('x')
+        os.utime(old, (1, 1))
+        outside = pathlib.Path(self.tmp.name) / 'elsewhere.profraw'
+        outside.write_text('not ours')
+        (data / 'link.profraw').symlink_to(outside)
+        dest = seal.mkdir(seal.work_root / 'r-coverage' / 'raw' / 'check')
+        self.assertEqual(cr.collect_profiles(seal, data.parent.parent.parent, time.time() - 60, dest, 'launch1'), 1)
+        self.assertEqual([p.name for p in dest.iterdir()], ['launch1-DEV-new.profraw'])
+        self.assertFalse(fresh.exists())
+        self.assertTrue(old.exists() and other.exists() and outside.exists())
 
     def test_the_m4_cleanup_knows_a_dead_coverage_runs_work_folder(self):
         self.assertTrue(th.RUN_WORK.match('20261118_150000_1-coverage'))

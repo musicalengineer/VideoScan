@@ -840,6 +840,25 @@ def _run(command: List[str], seal: Seal, out: Path, log_name: str, env: Dict[str
                                env=env, pass_fds=pass_fds)
 
 
+def collect_profiles(seal: Seal, derived_data: Path, since: float, dest: Path, prefix: str) -> int:
+    """The coverage profiles xcodebuild wrote under <dd>/Build/ProfileData at or after `since`
+    (raw .profraw, and the .profdata it merges them into), MOVED into `dest` (a coverage run's
+    work folder, removed with it): nothing accumulates in the cache, and the next launch's files
+    are not mixed with this one's. Never a link; returns how many were moved."""
+    root = Path(derived_data) / "Build" / "ProfileData"
+    moved = 0
+    for path in sorted(root.rglob("*")) if root.is_dir() and not root.is_symlink() else []:
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or path.suffix not in (".profraw", ".profdata") or info.st_mtime < since:
+            continue
+        shutil.move(str(path), str(seal.writable(Path(dest) / f"{prefix}-{path.parent.name}-{path.name}")))
+        moved += 1
+    return moved
+
+
 class Lane:
     """One lane run on the host. `xcodebuild` is a seam for the tests (a fake driver)."""
 
@@ -917,25 +936,31 @@ class Lane:
         home = self.home()
         sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home),
                   "TMPDIR": str(self.work / "tmp") + "/", "VS_CORPUS_CONFIG": str(config)}
-        if self.profiles is not None:                        # %p: one file per test-host process, %m: per instrumented image
-            sealed["LLVM_PROFILE_FILE"] = str(self.seal.writable(self.profiles)) + "/%p-%m.profraw"
         patched = xctestrun.with_name(f"corpus-{self.stamp}-{self.launches}.xctestrun")    # beside it: __TESTROOT__ is relative
         if os.path.lexists(str(patched)) or seal.pristine(patched) or _under(patched, seal.corpus):
             raise Refused("refused: the patched test-run file would land somewhere it must not")
         patch_xctestrun(xctestrun, patched, sealed)
         env = dict(os.environ)
-        env.update({k: v for k, v in sealed.items() if k not in ("VS_CORPUS_CONFIG", "LLVM_PROFILE_FILE")})
+        env.update({k: v for k, v in sealed.items() if k != "VS_CORPUS_CONFIG"})
         for key in ("CLANG_MODULE_CACHE_PATH", "SWIFT_MODULECACHE_PATH", "SWIFTPM_MODULECACHE_OVERRIDE", "XDG_CACHE_HOME"):
             env[key] = str(seal.state / "caches")
+        # Coverage: xcodebuild collects it (the test host is ended without its exit handlers, so a bare
+        # LLVM_PROFILE_FILE writes nothing — measured on the M4, 2026-11-18). Its result bundle goes in
+        # this lane's work folder; its raw profiles are moved out of <dd>/Build/ProfileData afterwards.
+        coverage = (["-enableCodeCoverage", "YES", "-resultBundlePath", str(seal.writable(self.work / f"result-{self.launches}.xcresult"))]
+                    if self.profiles is not None else [])
+        started = time.time() - 2
         try:
             _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination",
                   "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
                   "-test-timeouts-enabled", "NO",            # one test method walks every file; the per-file deadline is the driver's
-                  f"-only-testing:VideoScanTests/{self.test_class}"],
+                  f"-only-testing:VideoScanTests/{self.test_class}", *coverage],
                  self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
                 shutil.move(str(patched), str(self.out / patched.name))
+            if self.profiles is not None:
+                collect_profiles(seal, self.derived_data, started, self.profiles, f"launch{self.launches}")
         return read_events(progress)
 
     # -- what a lane may change about a launch (VerbsLane does)
