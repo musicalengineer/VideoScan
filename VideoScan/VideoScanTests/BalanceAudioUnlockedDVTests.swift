@@ -76,6 +76,24 @@ enum UnlockedDVMedia {
         return out.path
     }
 
+    /// `path` rewritten so that from frame `first` on, every frame says its
+    /// sound is 44.1 kHz and holds that rate's minimum, 1,452 samples (the
+    /// AAUX source pack's frequency field, bits 3–5 of its fifth byte): a
+    /// tape whose recording mode changed part-way. FFmpeg rebuilds its
+    /// filter graph at the change.
+    static func changeSampleRate(of path: String, fromFrame first: Int) throws {
+        let url = URL(fileURLWithPath: path)
+        var bytes = try Data(contentsOf: url)
+        let frames = bytes.count / frameBytes
+        try #require(first < frames)
+        for frame in first..<frames {
+            let at = frame * frameBytes + sourcePackOffset
+            bytes[at + 1] &= 0xC0
+            bytes[at + 4] = (bytes[at + 4] & ~0x38) | (1 << 3)
+        }
+        try bytes.write(to: url)
+    }
+
     /// One channel of a file's first sound track as it is DECODED (16-bit
     /// PCM), by another road than the job or the proof: the `pan` filter to
     /// a raw file. `inputArgs` go before `-i` (`-ignore_editlist 1` gives
@@ -177,15 +195,18 @@ struct BalanceAudioUnlockedDVTests {
         defer { try? fm.removeItem(at: dir) }
         let original = try Media.generate(in: dir, name: "fast", seconds: 4, samplesPerFrame: Self.fast)
         // An ffmpeg that renders as the job did before the fix: the same arguments
-        // with the timestamp rewrite taken back out of the sound's filter chain.
+        // with the timestamp rewrite (`-bsf:a <filter>`) taken back out.
         let tools = dir.appendingPathComponent("tools", isDirectory: true)
         try fm.createDirectory(at: tools, withIntermediateDirectories: true)
         let old = tools.appendingPathComponent("ffmpeg")
         try """
         #!/bin/sh
+        skip=0
         for a do
           shift
-          set -- "$@" "$(printf '%s' "$a" | /usr/bin/sed 's/,asetpts=[^,]*$//')"
+          if [ "$skip" = 1 ]; then skip=0; continue; fi
+          if [ "$a" = "-bsf:a" ]; then skip=1; continue; fi
+          set -- "$@" "$a"
         done
         exec "\(ToolLocator.ffmpegPath)" "$@"
         """.write(to: old, atomically: true, encoding: .utf8)
@@ -237,12 +258,13 @@ struct BalanceAudioUnlockedDVTests {
     // MARK: The rewrite is exact
 
     /// (timestamp, samples) of each sound packet the muxer is handed when
-    /// `original` is rendered with the sound filter `filter`.
-    private func muxerPackets(of original: String, filter: String) async -> [(pts: Int64, samples: Int64)] {
+    /// `original` is rendered with the pan `pan` and the output-side sound
+    /// args `timestampArgs` (the job's, or none).
+    private func muxerPackets(of original: String, pan: String, timestampArgs: [String]) async -> [(pts: Int64, samples: Int64)] {
         let listing = await ProcessRunner.runProcess(
             executable: ToolLocator.ffmpegPath,
-            arguments: ["-v", "error", "-nostdin", "-r", "30000/1001", "-i", original, "-map", "0:a:0", "-af", filter,
-                        "-c:a", "pcm_s16le", "-f", "framecrc", "-"],
+            arguments: ["-v", "error", "-nostdin", "-r", "30000/1001", "-i", original, "-map", "0:a:0", "-af", pan,
+                        "-c:a", "pcm_s16le"] + timestampArgs + ["-f", "framecrc", "-"],
             deadlineSeconds: 120)
         return (listing.stdout ?? "").split(separator: "\n").filter { !$0.hasPrefix("#") }.compactMap { line in
             let fields = line.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -265,14 +287,15 @@ struct BalanceAudioUnlockedDVTests {
         case "fastOnce": Self.fastOnce
         default: nil
         }
-        // 12 s: long enough for a truncating `N/SR/TB` to land one sample early (measured: 10 times in 10 s of locked sound).
+        // 12 s: long enough for a truncating `asetpts=N/SR/TB` — this branch's first cut — to land one sample early
+        // (measured: 10 times in 10 s of locked sound).
         let original = try Media.generate(in: dir, name: cadence, seconds: 12, samplesPerFrame: perFrame)
         let analysis = try await AudioBalanceProbe.analyze(path: original)
         let pan = try #require(BalanceAudioFix.panFilter(for: analysis.classification))
-        let filter = BalanceAudioFix.soundFilter(panFilter: pan, shape: analysis.shape)
-        #expect(filter != pan, "raw DV must get the rewrite")
+        let rewrite = BalanceAudioFix.soundTimestampArgs(containerFormat: analysis.shape.containerFormat)
+        #expect(!rewrite.isEmpty, "raw DV must get the rewrite")
 
-        let packets = await muxerPackets(of: original, filter: filter)
+        let packets = await muxerPackets(of: original, pan: pan, timestampArgs: rewrite)
         #expect(packets.count == 359 || packets.count == 360, "\(packets.count) packets")
         #expect(packets.first?.pts == 0)
         var expected: Int64 = 0
@@ -286,7 +309,7 @@ struct BalanceAudioUnlockedDVTests {
         #expect(expected == Int64(live.count / 2), "the timestamps span \(expected) samples, the tape decodes \(live.count / 2)")
 
         // Without the rewrite the same tape's packets are NOT contiguous exactly when it re-anchors.
-        let before = await muxerPackets(of: original, filter: pan)
+        let before = await muxerPackets(of: original, pan: pan, timestampArgs: [])
         var breaks = 0
         var end: Int64 = 0
         for packet in before {
@@ -297,24 +320,113 @@ struct BalanceAudioUnlockedDVTests {
         #expect((breaks > 0) == reanchors, "\(cadence): \(breaks) breaks without the rewrite")
 
         // Byte for byte the old render when there was nothing to fix.
-        func render(_ soundFilter: String, to name: String) async throws -> Data {
+        func render(_ timestampArgs: [String], to name: String) async throws -> Data {
             let out = dir.appendingPathComponent(name)
             let args = BalanceAudioFix.ffmpegArgs(
                 input: original, output: out.path,
                 mapArgs: BalanceAudioFix.mapArgs(audioStreams: analysis.shape.audioStreams,
                                                  programStreamIndex: analysis.programStreamIndex),
-                panFilter: soundFilter,
+                panFilter: pan,
                 audioArgs: BalanceAudioFix.audioEncodeArgs(sourceCodec: analysis.shape.audioCodec,
-                                                           bitRateBitsPerSec: analysis.shape.audioBitRate),
+                                                           bitRateBitsPerSec: analysis.shape.audioBitRate) + timestampArgs,
                 inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape))
             let result = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath, arguments: args, deadlineSeconds: 120)
             try #require(result.exitCode == 0, "render failed: \(result.stderr.suffix(300))")
             return try Data(contentsOf: out)
         }
         if !reanchors {
-            let old = try await render(pan, to: "old.mov")
-            let new = try await render(filter, to: "new.mov")
+            let old = try await render([], to: "old.mov")
+            let new = try await render(rewrite, to: "new.mov")
             #expect(old == new, "\(cadence): the fixed render differs from the old one though the tape never re-anchors")
+        }
+    }
+
+    // MARK: Codex #312-1 — a tape whose sample rate changes part-way
+
+    /// One re-anchor (as `fastOnce`), then 44.1 kHz from frame 90: FFmpeg
+    /// rebuilds its filter graph there, and a timestamp rewrite that lives
+    /// IN the graph starts counting again from the demuxer's stamp —
+    /// forgetting the samples it had already made room for.
+    private func rateChangingTape(in dir: URL) throws -> String {
+        let original = try Media.generate(in: dir, name: "ratechange", seconds: 8,
+                                          samplesPerFrame: { $0 < 87 ? 1620 : ($0 == 87 ? 1590 : 1602) })
+        try Media.changeSampleRate(of: original, fromFrame: 90)
+        return original
+    }
+
+    @Test("Codex #312-1, Balance Audio: a raw DV tape whose sample rate changes part-way is REFUSED before any render (its sound cannot be measured whole) — and the job's argument vector, rendered anyway, plays every sample it stores",
+          .timeLimit(.minutes(3)))
+    func balanceAndASampleRateChange() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("ratechange_balance")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try rateChangingTape(in: dir)
+        // The job: the one gate (BalanceAudioFix.refusalReason) says no, as it did before this branch. Nothing is written.
+        let job = try await balance(original)
+        guard case .failed(let message) = job.state else {
+            Issue.record("expected the refusal, got \(job.state)")
+            return
+        }
+        #expect(message == BalanceAudioFix.incompleteMeasurementReason && job.wasRefused && job.publishedURL == nil)
+        #expect(try fm.contentsOfDirectory(atPath: dir.path) == ["test_unlocked_ratechange.dv"])
+
+        // The arguments the job WOULD run, should that gate ever let such a tape through: with the packet-level
+        // rewrite the copy plays all it stores across FFmpeg's filter-graph rebuild; without it, it does too (the
+        // render of before this branch) — and with a rewrite that lives in the filter graph it did not (1,598 hidden).
+        func render(_ timestampArgs: [String], filter: String = "pan=stereo|c0=c0|c1=c0", to name: String) async throws -> String {
+            let out = dir.appendingPathComponent(name).path
+            let args = BalanceAudioFix.ffmpegArgs(
+                input: original, output: out, mapArgs: ["-map", "0"], panFilter: filter,
+                audioArgs: ["-c:a", "pcm_s16le"] + timestampArgs, inputArgs: ["-r", "30000/1001"])
+            let result = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath, arguments: args, deadlineSeconds: 120)
+            try #require(result.exitCode == 0, "render failed: \(result.stderr.suffix(300))")
+            return out
+        }
+        let fixed = try await render(BalanceAudioFix.soundTimestampArgs(containerFormat: "dv"), to: "fixed.mov")
+        let old = try await render([], to: "old.mov")
+        let inGraph = try await render([], filter: "pan=stereo|c0=c0|c1=c0,asetpts=STARTPTS+round(N/SR/TB)", to: "in_graph.mov")
+        let stored = try Media.channel(0, of: fixed, in: dir, inputArgs: ["-ignore_editlist", "1"])
+        #expect(stored.count / 2 == 381_215)
+        #expect(try Media.channel(0, of: fixed, in: dir) == stored, "the fixed render hides stored sound")
+        #expect(try Media.channel(1, of: fixed, in: dir) == stored)
+        #expect(try Media.channel(0, of: old, in: dir) == stored, "the render of before this branch played all of it")
+        #expect(try Media.channel(0, of: inGraph, in: dir).count / 2 == 379_617, "the in-graph rewrite is what Codex #312-1 caught")
+        #expect(await Media.picturePackets(of: fixed) == Media.picturePackets(of: original))
+    }
+
+    @Test("REGRESSION Codex #312-1: the same tape through Rebuild Audio Track — every stored sample is played, and they are the samples the render of before this branch stored",
+          .timeLimit(.minutes(3)))
+    func rebuildSurvivesASampleRateChange() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("ratechange_rebuild")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try rateChangingTape(in: dir)
+        let diagnosis = try await VerifyAudioProbe.diagnose(path: original)
+        let model = VideoScanModel()
+        let record = makeBalanceSourceRecord(path: original, durationSeconds: diagnosis.shape.containerDurationSeconds,
+                                             audioCodec: diagnosis.shape.audioCodec)
+        model.records = [record]
+        let job = RebuildAudioJob(record: record, reason: "test", shape: diagnosis.shape, model: model)
+        job.start()
+        await job.task?.value
+        guard case .finished = job.state else {
+            Issue.record("the rebuild did not finish: \(job.state) — \(job.subtitle)")
+            return
+        }
+        let copy = try #require(job.publishedURL).path
+        // The render of before this branch (no timestamp arguments at all), by the job's own builder.
+        let old = dir.appendingPathComponent("old.mov").path
+        let plain = RebuildAudioFix.ffmpegArgs(
+            input: original, output: old,
+            inputArgs: RebuildAudioFix.inputArgs(containerFormat: "dv", rFrameRate: "30000/1001"))
+        let render = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath, arguments: plain, deadlineSeconds: 120)
+        try #require(render.exitCode == 0)
+        for channel in [0, 1] {
+            let stored = try Media.channel(channel, of: copy, in: dir, inputArgs: ["-ignore_editlist", "1"])
+            let played = try Media.channel(channel, of: copy, in: dir)
+            #expect(stored == (try Media.channel(channel, of: old, in: dir, inputArgs: ["-ignore_editlist", "1"])))
+            #expect(played == stored, "channel \(channel): the copy plays \(played.count / 2) of the \(stored.count / 2) samples it stores")
+            #expect(played == (try Media.channel(channel, of: old, in: dir)), "channel \(channel): the old render played more")
         }
     }
 
@@ -353,18 +465,19 @@ struct BalanceAudioUnlockedDVTests {
         #expect(await Media.picturePackets(of: copy) == Media.picturePackets(of: original))
     }
 
-    @Test("SENSOR: Rebuild Audio's arguments — raw DV gets the same timestamp rewrite, before the sound encoder; every other container's vector is unchanged")
+    @Test("SENSOR: Rebuild Audio's arguments — raw DV gets the same packet-timestamp rewrite, after the sound encoder; every other container's vector is unchanged")
     func rebuildAudioArguments() throws {
-        #expect(RebuildAudioFix.soundFilterArgs(containerFormat: "dv") == ["-af", "asetpts=STARTPTS+round(N/SR/TB)"])
+        let rewrite = ["-bsf:a", "setts=ts=if(N\\,PREV_OUTPTS+PREV_OUTDURATION\\,PTS)"]
+        #expect(RebuildAudioFix.soundTimestampArgs(containerFormat: "dv") == rewrite)
         for other in ["mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm", "avi", "mxf", ""] {
-            #expect(RebuildAudioFix.soundFilterArgs(containerFormat: other).isEmpty, "\(other)")
+            #expect(RebuildAudioFix.soundTimestampArgs(containerFormat: other).isEmpty, "\(other)")
         }
         let dv = RebuildAudioFix.ffmpegArgs(input: "/in/clip.dv", output: "/out.mov", inputArgs: ["-r", "30000/1001"],
-                                            soundFilterArgs: RebuildAudioFix.soundFilterArgs(containerFormat: "dv"))
+                                            soundTimestampArgs: RebuildAudioFix.soundTimestampArgs(containerFormat: "dv"))
         #expect(dv == ["-hide_banner", "-nostdin", "-y", "-r", "30000/1001", "-i", "/in/clip.dv", "-map", "0:v?", "-map", "0:a:0",
-                       "-c:v", "copy", "-af", "asetpts=STARTPTS+round(N/SR/TB)", "-c:a", "pcm_s16le", "-map_metadata", "0",
-                       "-progress", "pipe:2", "/out.mov"])
-        #expect(!RebuildAudioFix.ffmpegArgs(input: "/in/a.mov", output: "/out.mov").contains("-af"))
+                       "-c:v", "copy", "-c:a", "pcm_s16le"] + rewrite + ["-map_metadata", "0", "-progress", "pipe:2", "/out.mov"])
+        let plain = RebuildAudioFix.ffmpegArgs(input: "/in/a.mov", output: "/out.mov")
+        #expect(!plain.contains("-bsf:a") && !plain.contains("-af"))
     }
 
     // MARK: What the balanced-copy proof says about such a pair
@@ -476,18 +589,21 @@ struct BalanceAudioUnlockedDVTests {
 
     // MARK: Pure rules
 
-    @Test("SENSOR: the sound filter — raw DV gets its timestamps rewritten from the sample count; every other container gets the pan alone")
-    func soundFilterTable() {
-        func shape(_ container: String) -> AudioBalanceStreamShape {
-            AudioBalanceStreamShape(videoCodec: "dvvideo", totalStreams: 2, videoStreams: 1, audioStreams: 1,
-                                    audioCodec: "pcm_s16le", audioChannels: 2, audioBitRate: nil, durationSeconds: 4,
-                                    audioStreamInfos: [], containerFormat: container, videoRFrameRate: "30000/1001")
-        }
-        let pan = "pan=stereo|c0=c0|c1=c0"
-        #expect(BalanceAudioFix.soundFilter(panFilter: pan, shape: shape("dv")) == pan + ",asetpts=STARTPTS+round(N/SR/TB)")
+    @Test("SENSOR: the timestamp rewrite — raw DV gets ONE bitstream filter on its sound packets (previous timestamp + previous duration; the first keeps its own); every other container gets nothing, and the pan is never touched")
+    func soundTimestampArgsTable() {
+        #expect(BalanceAudioFix.contiguousSoundTimestamps == "setts=ts=if(N\\,PREV_OUTPTS+PREV_OUTDURATION\\,PTS)")
+        #expect(BalanceAudioFix.soundTimestampArgs(containerFormat: "dv") == ["-bsf:a", BalanceAudioFix.contiguousSoundTimestamps])
         for other in ["mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm", "mxf", "avi", ""] {
-            #expect(BalanceAudioFix.soundFilter(panFilter: pan, shape: shape(other)) == pan, "\(other)")
+            #expect(BalanceAudioFix.soundTimestampArgs(containerFormat: other).isEmpty, "\(other)")
         }
+        // In the job's vector: the pan as it always was, the rewrite straight after the sound's encoder.
+        let args = BalanceAudioFix.ffmpegArgs(
+            input: "/in/clip.dv", output: "/out/clip_balanced.mov", mapArgs: ["-map", "0"], panFilter: "pan=stereo|c0=c0|c1=c0",
+            audioArgs: ["-c:a", "pcm_s16le"] + BalanceAudioFix.soundTimestampArgs(containerFormat: "dv"),
+            inputArgs: ["-r", "30000/1001"])
+        #expect(args == ["-hide_banner", "-nostdin", "-y", "-r", "30000/1001", "-i", "/in/clip.dv", "-map", "0", "-c", "copy",
+                         "-af", "pan=stereo|c0=c0|c1=c0", "-c:a", "pcm_s16le", "-bsf:a", BalanceAudioFix.contiguousSoundTimestamps,
+                         "-map_metadata", "0", "-progress", "pipe:2", "/out/clip_balanced.mov"])
     }
 
     @Test("SENSOR: the unplayed-sound rule — lossless QuickTime sound must play what its sample table holds, to the sample; lossy sound (priming) and unread lengths are not judged")

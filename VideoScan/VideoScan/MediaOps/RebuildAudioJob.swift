@@ -91,13 +91,14 @@ enum RebuildAudioFix {
         return ["-r", rate]
     }
 
-    /// Sound filter args: for a raw-DV source, the Balance Audio job's own
-    /// timestamp rewrite (`BalanceAudioFix.sampleCountTimestamps`, GH #482 —
-    /// without it the QuickTime copy of a tape whose sound runs fast stores
-    /// every sample and does not play the last of them). `asetpts` changes
-    /// timestamps only, never a sample. Empty for every other container. Pure.
-    static func soundFilterArgs(containerFormat: String) -> [String] {
-        BalanceAudioFix.isRawDVContainer(containerFormat) ? ["-af", BalanceAudioFix.sampleCountTimestamps] : []
+    /// Sound timestamp args: for a raw-DV source, the Balance Audio job's
+    /// own packet-timestamp rewrite (`BalanceAudioFix.soundTimestampArgs`,
+    /// GH #482 — without it the QuickTime copy of a tape whose sound runs
+    /// fast stores every sample and does not play the last of them). A
+    /// bitstream filter on timestamps only, never a sample. Empty for every
+    /// other container. Pure.
+    static func soundTimestampArgs(containerFormat: String) -> [String] {
+        BalanceAudioFix.soundTimestampArgs(containerFormat: containerFormat)
     }
 
     /// Full ffmpeg argument vector. `-map 0:v?` is the optional-map
@@ -105,23 +106,23 @@ enum RebuildAudioFix {
     /// audio-only sources); only the FIRST audio stream is carried —
     /// this is a playable repair copy, not an archival mirror.
     /// `-c:v copy` stream-copies the picture verbatim; ONLY the audio
-    /// is re-encoded (`soundFilterArgs`, raw DV only, land before its
+    /// is re-encoded (`soundTimestampArgs`, raw DV only, follow its
     /// encoder). Pure — tested as strings.
     static func ffmpegArgs(input: String,
                            output: String,
                            inputArgs: [String] = [],
-                           soundFilterArgs: [String] = []) -> [String] {
+                           soundTimestampArgs: [String] = []) -> [String] {
         var args: [String] = ["-hide_banner", "-nostdin", "-y"]
         args += inputArgs
         args += ["-i", input]
         args += [
             "-map", "0:v?",
             "-map", "0:a:0",
-            "-c:v", "copy"
+            "-c:v", "copy",
+            "-c:a", outputAudioCodec
         ]
-        args += soundFilterArgs
+        args += soundTimestampArgs
         args += [
-            "-c:a", outputAudioCodec,
             "-map_metadata", "0",
             "-progress", "pipe:2",
             output
@@ -511,7 +512,7 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
             inputArgs: RebuildAudioFix.inputArgs(
                 containerFormat: shape.containerFormat,
                 rFrameRate: shape.videoRFrameRate),
-            soundFilterArgs: RebuildAudioFix.soundFilterArgs(containerFormat: shape.containerFormat))
+            soundTimestampArgs: RebuildAudioFix.soundTimestampArgs(containerFormat: shape.containerFormat))
         verifyLog.info("rebuild render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
 
         monitor.start()

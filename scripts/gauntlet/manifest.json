@@ -9432,12 +9432,14 @@
       "tests": [
         "aCopyWithAnUnplayedTailIsRefusedByTheJob",
         "aRunawayTapeIsCouldNotCheckWithTheErrorNamed",
+        "balanceAndASampleRateChange",
         "otherCadencesAreCarriedWhole",
         "reanchoredDecisionTable",
         "rebuildAudioArguments",
         "rebuildAudioPlaysToTheLastSample",
+        "rebuildSurvivesASampleRateChange",
         "rewrittenTimestampsAreExact",
-        "soundFilterTable",
+        "soundTimestampArgsTable",
         "theProofNamesAReanchoredTape",
         "unlockedSoundPlaysToTheLastSample",
         "unplayedSoundTable"
@@ -40675,7 +40677,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 783,
+      "expected_floor": 785,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

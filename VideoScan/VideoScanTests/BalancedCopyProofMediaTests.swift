@@ -103,9 +103,10 @@ enum BalancedCopyProofMedia {
             input: original, output: output,
             mapArgs: BalanceAudioFix.mapArgs(audioStreams: analysis.shape.audioStreams,
                                              programStreamIndex: analysis.programStreamIndex),
-            panFilter: BalanceAudioFix.soundFilter(panFilter: pan, shape: analysis.shape),
+            panFilter: pan,
             audioArgs: BalanceAudioFix.audioEncodeArgs(sourceCodec: analysis.shape.audioCodec,
-                                                       bitRateBitsPerSec: analysis.shape.audioBitRate),
+                                                       bitRateBitsPerSec: analysis.shape.audioBitRate)
+                + BalanceAudioFix.soundTimestampArgs(containerFormat: analysis.shape.containerFormat),
             inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape))
         let result = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath, arguments: args,
                                                     deadlineSeconds: 120)

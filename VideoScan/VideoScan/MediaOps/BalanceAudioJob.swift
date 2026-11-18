@@ -30,9 +30,9 @@ import os
 // VIDEO IS NEVER RE-ENCODED: `-c copy` stream-copies every mapped
 // stream (`-map 0` for single-audio sources — v1-identical; video +
 // program track for multi-audio), then `-c:a …` overrides ONLY the
-// audio (which must pass through the pan filter; raw DV sound also has
-// its timestamps rewritten from the sample count — see "Raw-DV sound
-// timestamps", GH #482). PCM sources re-encode
+// audio (which must pass through the pan filter; raw DV sound packets also
+// have their timestamps made contiguous — see "Raw-DV sound timestamps",
+// GH #482). PCM sources re-encode
 // to the same PCM codec (lossless); lossy sources stay in their codec
 // family at ≥ the source bitrate. The container is preserved (same
 // extension ⇒ same muxer).
@@ -190,15 +190,25 @@ enum BalanceAudioFix {
     // tape, 27:18, 1,784 samples fast: one re-anchor, 1,602 samples outside
     // the edit list, the last packet unplayed).
     //
-    // The fix: after the pan, the sound's timestamps are rewritten from the
-    // SAMPLE COUNT (`asetpts`: first timestamp kept, then exactly one tick a
-    // sample). No sample is added, dropped or changed — `asetpts` touches
-    // timestamps only — and QuickTime stores PCM back to back whatever the
-    // timestamps say, so the stored samples are the same; only the edit
-    // list now covers all of them. Raw DV only: it is the one source whose
-    // sound has no timestamps of its own, and the one whose copy changes
-    // container. A Matroska file's gaps are real and must stay where they
-    // are.
+    // The fix: the sound PACKETS' timestamps are rewritten after the encoder
+    // and before the muxer, so that each packet starts where the one before
+    // it ended (the first keeps its own). No sample is added, dropped or
+    // changed — a bitstream filter that touches timestamps only — and
+    // QuickTime stores PCM back to back whatever the timestamps say, so the
+    // stored samples are the same; only the track length and edit list now
+    // cover all of them. Raw DV only: it is the one source whose sound has
+    // no timestamps of its own, and the one whose copy changes container. A
+    // Matroska file's gaps are real and must stay where they are.
+    //
+    // Why a bitstream filter and not `asetpts` in the sound's filter chain
+    // (this branch's first cut): (1) FFmpeg REBUILDS the filter graph when a
+    // tape's sample rate changes part-way, and a counter that lives in the
+    // graph starts again from the demuxer's stamp, forgetting the samples it
+    // had made room for — the copy hid 1,598 samples the render of before
+    // the fix had played (Codex #312-1); the packet stream is not rebuilt.
+    // (2) `asetpts` truncates a floating-point `N/SR/TB`, one sample early
+    // about once a second unless rounded; previous timestamp + previous
+    // duration is integer arithmetic.
     //
     // What this does NOT do: keep the sound re-anchored to the picture. The
     // copy plays the tape's samples back to back (as it did before the
@@ -207,20 +217,17 @@ enum BalanceAudioFix {
     // that 27-minute tape — where ffmpeg's reading of the raw DV file steps
     // a frame at each re-anchor. The balanced-copy proof names that.
 
-    /// Rewrites sound timestamps as first-timestamp + samples-so-far.
-    /// `round(…)` is load-bearing: `asetpts` TRUNCATES its result, and the
-    /// bare idiom `N/SR/TB` is floating point — measured 2026-11-18, it lands
-    /// one sample early about once a second (24024/48000×48000 → 24023),
-    /// which is again a timestamp that spans fewer samples than are stored.
-    /// Rounded, the result is exact for any tape (a double holds integers
-    /// to 2^53 samples), and a tape that never re-anchors is rendered byte
-    /// for byte as it was before the fix.
-    static let sampleCountTimestamps = "asetpts=STARTPTS+round(N/SR/TB)"
+    /// The `setts` bitstream filter that makes sound packets contiguous:
+    /// packet 0 keeps its timestamp; packet N starts at packet N−1's
+    /// timestamp + duration. (`\,` escapes the commas of `if(…)` from the
+    /// bitstream-filter list parser; there is no shell.)
+    static let contiguousSoundTimestamps = "setts=ts=if(N\\,PREV_OUTPTS+PREV_OUTDURATION\\,PTS)"
 
-    /// The sound's whole filter chain: the pan, then — raw DV only — the
-    /// timestamp rewrite above. Pure.
-    static func soundFilter(panFilter: String, shape: AudioBalanceStreamShape) -> String {
-        isRawDVContainer(shape.containerFormat) ? "\(panFilter),\(sampleCountTimestamps)" : panFilter
+    /// Output-side sound args that rewrite the packets' timestamps — raw
+    /// DV only; empty for every other container (their argument vector is
+    /// what it was). They follow the sound's encoder args. Pure.
+    static func soundTimestampArgs(containerFormat: String) -> [String] {
+        isRawDVContainer(containerFormat) ? ["-bsf:a", contiguousSoundTimestamps] : []
     }
 
     /// Audio encoder arguments: PCM in → SAME PCM codec out (lossless);
@@ -609,10 +616,11 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
             mapArgs: BalanceAudioFix.mapArgs(
                 audioStreams: analysis.shape.audioStreams,
                 programStreamIndex: analysis.programStreamIndex),
-            panFilter: BalanceAudioFix.soundFilter(panFilter: pan, shape: analysis.shape),
+            panFilter: pan,
             audioArgs: BalanceAudioFix.audioEncodeArgs(
                 sourceCodec: analysis.shape.audioCodec,
-                bitRateBitsPerSec: analysis.shape.audioBitRate),
+                bitRateBitsPerSec: analysis.shape.audioBitRate)
+                + BalanceAudioFix.soundTimestampArgs(containerFormat: analysis.shape.containerFormat),
             inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape))
         balanceLog.info("balance render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
 
