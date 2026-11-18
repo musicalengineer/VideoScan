@@ -32,6 +32,15 @@
 // they empty the table): turning one on turns the other off, in the same
 // change and the same log line.
 //
+// THE FOLDERS SWITCH (DECISIONS 2026-11-17: "one folder view showing every
+// folder, Rick's (blue) and the machine's (grey), with the media files beside
+// them … the three folder modes go"). Not a filter — it drops no file and Clear
+// All Filters leaves it — but it is owned here the same way: `foldersOn` is
+// `private(set)`, stored under one stable key, and every flip is one log line
+// naming who. The three retired settings (Events & Copies as Folders, Folders
+// Only, Folders by Machine Estimate) are read ONCE at launch: any of them on →
+// Folders on; all three are deleted and the log says what they were.
+//
 // LIFETIME. ContentView's root owns it as a @StateObject, above the tabs (the
 // CatalogPersonFilterStore pattern, #337 — no new VideoScanModel state), so
 // the Steward on the Triage tab reaches it while the Catalog view is not alive.
@@ -165,10 +174,27 @@ final class CatalogShowFilterStore: ObservableObject {
         case steward = "Steward"
         case emptyTable = "empty-table note"
         case seed = "first-run default"
+        /// New Folder with Selection / Make Folder… and Events' Show in
+        /// Catalog turn the folder view on to reveal the folder.
+        case folderReveal = "a folder reveal"
     }
 
     /// The filters that are on. Read anywhere; written only here.
     @Published private(set) var active: Set<CatalogViewFilter> = []
+    /// Show ▸ Folders — the one folder view. Read anywhere; written only here.
+    @Published private(set) var foldersOn = false
+
+    /// The Folders switch's stable key (a plist Bool). Under the
+    /// "catalog.showFilters" prefix on purpose: the audit sensor already
+    /// refuses that prefix in any other file.
+    nonisolated static let foldersKey = "catalog.showFilters.foldersView"
+    /// The three folder modes' settings, retired 2026-11-17, with the menu
+    /// words the migration line uses. Read once, then deleted.
+    nonisolated static let retiredFolderKeys: [(key: String, words: String)] = [
+        ("catalog.footageFolders", "Events & Copies as Folders"),
+        ("catalog.foldersOnly", "Folders Only"),
+        ("catalog.foldersByMachineEstimate", "Folders by Machine Estimate"),
+    ]
 
     /// The stable-key setting: filter raw values joined by ",".
     nonisolated static let key = "catalog.showFilters.v2"
@@ -227,6 +253,9 @@ final class CatalogShowFilterStore: ObservableObject {
         log(Self.logPrefix + "restored at launch → " + Self.names(restored.filters) + restored.note)
         if let line = kind.line { log(line) }
         if let line = Self.retireHiddenRecordReveals(in: defaults) { log(line) }
+        let folders = Self.restoreFolders(from: defaults)
+        foldersOn = folders.on
+        if let line = folders.line { log(line) }
     }
 
     /// The app's store: the standard defaults and the one log sink.
@@ -256,6 +285,14 @@ final class CatalogShowFilterStore: ObservableObject {
         set(.notYetArchived, on: true, by: .seed)
     }
 
+    /// Show ▸ Folders on or off. No change → no write, no line.
+    func setFolders(_ on: Bool, by writer: Writer) {
+        guard on != foldersOn else { return }
+        foldersOn = on
+        defaults.set(on, forKey: Self.foldersKey)
+        log(Self.foldersLine(on: on, by: writer))
+    }
+
     private func commit(_ next: Set<CatalogViewFilter>, by writer: Writer) {
         guard next != active else { return }
         let line = Self.changeLine(from: active, to: next, by: writer)
@@ -265,6 +302,43 @@ final class CatalogShowFilterStore: ObservableObject {
     }
 
     // MARK: Pure rules (tested without a store)
+
+    /// The one line a Folders flip writes.
+    nonisolated static func foldersLine(on: Bool, by writer: Writer) -> String {
+        logPrefix + (on ? "on: " : "off: ") + FootageFolderWords.showOptionTitle + " (by \(writer.rawValue))"
+    }
+
+    /// The Folders switch at launch, and the line to log (nil = nothing to
+    /// say: a fresh install, or a stored off). Only a plist BOOLEAN is read
+    /// (StrictDefaultsBool: a stored 1 must not turn it on). The stable key
+    /// wins; a retired key still present beside it (an older build wrote it
+    /// back) is cleared silently. Without the stable key the three retired
+    /// settings migrate ONCE — any of them on → on — are deleted, and the
+    /// line names which were on. Never throws, never crashes.
+    nonisolated static func restoreFolders(from defaults: UserDefaults) -> (on: Bool, line: String?) {
+        if let stored = defaults.object(forKey: foldersKey) {
+            for retired in retiredFolderKeys { defaults.removeObject(forKey: retired.key) }
+            guard CFGetTypeID(stored as AnyObject) == CFBooleanGetTypeID() else {
+                defaults.set(false, forKey: foldersKey)
+                return (false, logPrefix + "the stored Folders setting was unreadable and was reset → Folders off")
+            }
+            let on = (stored as? Bool) ?? false
+            return (on, on ? logPrefix + "Folders restored at launch → on" : nil)
+        }
+        var present = false
+        var wasOn: [String] = []
+        for retired in retiredFolderKeys where defaults.object(forKey: retired.key) != nil {
+            present = true
+            if StrictDefaultsBool.read(retired.key, defaults) { wasOn.append(retired.words) }
+            defaults.removeObject(forKey: retired.key)
+        }
+        guard present else { return (false, nil) }
+        let on = !wasOn.isEmpty
+        defaults.set(on, forKey: foldersKey)
+        let said = on ? wasOn.joined(separator: ", ") + (wasOn.count == 1 ? " was" : " were") + " on → Folders on"
+                      : "none was on → Folders off"
+        return (on, logPrefix + "the three folder modes became one Folders switch; " + said)
+    }
 
     /// Delete the retired reveal settings. Returns the one line to log when
     /// a reveal was ON (rows that were listed are hidden again); nil when

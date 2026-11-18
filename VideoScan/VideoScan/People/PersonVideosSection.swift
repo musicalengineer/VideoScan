@@ -377,7 +377,7 @@ struct PersonVideosSection: View {
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
     /// "See all … in the Catalog →": the parent goes through
-    /// CatalogPersonLink (Person ▾ picker set, Folders Only off).
+    /// CatalogPersonLink (Person ▾ picker set).
     let onShowAllInCatalog: () -> Void
 
     /// Built once per reload (PersonVideos.page) — the body only reads it.

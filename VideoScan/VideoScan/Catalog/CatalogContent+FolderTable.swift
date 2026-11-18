@@ -1,5 +1,5 @@
 // CatalogContent+FolderTable.swift
-// Show ▸ Events & Copies as Folders — the Catalog's folder view as a
+// Show ▸ Folders — the Catalog's ONE folder view (2026-11-17), as a
 // two-level Finder (docs/archive/design/footage_folders_2026_10_16.md §2; Rick
 // 2026-10-17: "I'd really like it to look like Finder in this view, with
 // MarksBirthday, Cape1990, etc, then double-click shows the event
@@ -112,9 +112,13 @@ extension CatalogContent {
     }
 
     /// A record row's drag payload: its record, and the folder it is shown
-    /// under (a drag out of a folder is a move).
+    /// under (a drag out of one of Rick's folders is a move). A grey folder
+    /// is the machine's guess, not a folder Rick has: a drag out of it
+    /// carries no folder, so the drop ADDS — the file leaves the grey folder
+    /// because Rick's folders outrank the machine's, and the log says
+    /// "added", never "moved from a folder" that does not exist.
     static func dragPayload(_ row: FootageFolderTableRow) -> String {
-        CatalogRecordDrag.payload(row.ref.record, from: row.inFolder)
+        CatalogRecordDrag.payload(row.ref.record, from: row.inFolder.flatMap { MachineEstimateFolders.isEstimateFolder($0) ? nil : $0 })
     }
 
     /// The folder Table selects rows; the rest of the Catalog selects
@@ -249,7 +253,8 @@ extension CatalogContent {
     @ViewBuilder
     func folderNameCell(_ row: FootageFolderTableRow) -> some View {
         if let eventID = row.eventID {
-            folderTitleCell(title: row.title, kind: row.folder?.kind ?? .event, selected: selectedIDs.contains(eventID))
+            folderTitleCell(title: row.title, kind: row.folder?.kind ?? .event, byMachine: row.folder?.byMachine ?? false,
+                            selected: selectedIDs.contains(eventID))
         } else if let rec = row.record {
             HStack(spacing: 4) {
                 if let relation = row.relation, let glyph = relation.glyph {
@@ -271,13 +276,16 @@ extension CatalogContent {
         }
     }
 
-    private func folderTitleCell(title: String, kind: FolderKind, selected: Bool) -> some View {
+    /// Rick's folder in its kind's colour; the machine's era guess in grey,
+    /// with its own symbol and its title in the secondary colour.
+    private func folderTitleCell(title: String, kind: FolderKind, byMachine: Bool, selected: Bool) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: FootageFolderWords.folderSymbol)
+            Image(systemName: byMachine ? FootageFolderWords.machineFolderSymbol : FootageFolderWords.folderSymbol)
                 .font(FootageFolderWords.folderSymbolFont)
-                .foregroundColor(selected ? .primary : FootageFolderWords.folderTint(for: kind))
+                .foregroundColor(selected ? .primary : FootageFolderWords.folderTint(for: kind, byMachine: byMachine))
             Text(title)
                 .font(FootageFolderWords.folderTitleFont)
+                .foregroundColor(byMachine && !selected ? .secondary : .primary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -354,7 +362,7 @@ extension CatalogContent {
     /// Under the table while the option is on.
     var footageFolderLegend: some View {
         HStack(spacing: 8) {
-            Text(model.footageFolders.index.estimated ? MachineEstimateWords.legend : FootageFolderWords.legend)
+            Text(FootageFolderWords.legend)
                 .font(FootageFolderWords.legendFont)
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -399,8 +407,8 @@ extension CatalogContent {
     /// folder; at the top, the one folder all of them are under. nil for
     /// loose files, a mix, or the plain list.
     private func rowsFolder(_ ids: Set<UUID>) -> UUID? {
-        // Under machine-estimate folders a row is in none of Rick's: Add to
-        // Folder ▸ only, never Move from / Remove from an estimate.
+        // A row in a grey (machine-estimate) folder is in none of Rick's:
+        // Add to Folder ▸ only, never Move from / Remove from an estimate.
         guard showFootageFolders else { return nil }
         let folder: UUID?
         if case .event(let id)? = tableState.folderScope { folder = id } else {
@@ -483,25 +491,7 @@ extension CatalogContent {
         model.footageFolders.compose(visible: tableData.map(\.id),
                                      sort: FootageFolderSort.sort(from: sortOrder),
                                      open: folderComposeOpenSet,
-                                     scope: tableState.folderScope,
-                                     foldersOnly: tableState.folderKeyMirror.foldersOnly)
-    }
-
-    /// Show ▸ Folders Only flipped: mirror it for the key monitor and
-    /// recompose. The rows are the same filter survivors, so no
-    /// `refreshRows` — only the folder display changes.
-    func foldersOnlyOptionChanged() {
-        tableState.folderKeyMirror.foldersOnly = showFoldersOnly
-        refreshFolderDisplay()
-    }
-
-    /// Whether the "No folders match" line shows: the display was composed
-    /// under Folders Only, holds nothing, and the join has landed at least
-    /// once (before that an empty display only means "not built yet").
-    /// Called with each display and each new join. O(1).
-    func updateFoldersOnlyEmptyNote(_ display: FootageFolders.Display) {
-        let empty = display.foldersOnly && display.rows.isEmpty && model.footageFolders.indexPublishCount > 0
-        if tableState.foldersOnlyFindsNothing != empty { tableState.foldersOnlyFindsNothing = empty }
+                                     scope: tableState.folderScope)
     }
 
     /// Every folder the join knows, at the top; nothing inside a scope.
@@ -525,7 +515,6 @@ extension CatalogContent {
     /// A folder the join no longer has (merged, dismissed) sends the
     /// table back to the top. Event handler, never body.
     func rebuildFolderRows(_ display: FootageFolders.Display) {
-        updateFoldersOnlyEmptyNote(display)
         let index = model.footageFolders.index
         if tableState.folderKeyMirror.isOn, let scope = tableState.folderScope, !FootageFolderLevel.exists(scope, in: index) {
             setFolderScope(nil)   // nothing to re-select; the top level's compose is on its way
@@ -573,7 +562,6 @@ extension CatalogContent {
     /// whether to keep the join warm, and compose or clear.
     func footageFoldersOptionChanged(on: Bool) {
         tableState.folderKeyMirror.isOn = on
-        tableState.folderKeyMirror.foldersOnly = on && showFoldersOnly
         model.setFootageFoldersWanted(on)
         if on {
             refreshFolderDisplay()
@@ -591,7 +579,6 @@ extension CatalogContent {
             tableState.folderLevel = .empty
             tableState.expandedFolderIDs = []
             tableState.folderRecordIDs = []
-            tableState.foldersOnlyFindsNothing = false
         }
     }
 
@@ -652,8 +639,7 @@ extension CatalogContent {
                                          inTable: tableData.contains { $0.id == landing.id },
                                          foldersOn: showFootageFolders,
                                          scope: tableState.folderScope,
-                                         index: model.footageFolders.index,
-                                         foldersOnly: showFootageFolders && showFoldersOnly)
+                                         index: model.footageFolders.index)
         switch plan {
         case .select, .openScopeAndSelect:
             let folder = selectDerivative(landing)
@@ -692,42 +678,13 @@ extension CatalogContent {
     }
 }
 
-/// Show ▸ Events & Copies as Folders — the menu row itself (its own view
-/// so the toolbar's body does not grow a branch per word).
-struct FootageFoldersShowToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            Label(FootageFolderWords.showOptionTitle, systemImage: isOn ? "folder.fill" : "folder")
-        }
-        .help(isOn ? FootageFolderWords.showOptionHelpOn : FootageFolderWords.showOptionHelpOff)
-        .accessibilityIdentifier("catalog.show.footageFolders")
-    }
-}
-
-/// Show ▸ Folders Only — its menu row (Rick 2026-10-19). Turning it on
-/// turns the folder view on; the parent applies CatalogFoldersOnlyRule.
-struct FoldersOnlyShowToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            Label(FootageFolderWords.foldersOnlyTitle,
-                  systemImage: isOn ? FootageFolderWords.foldersOnlySymbolOn : FootageFolderWords.foldersOnlySymbol)
-        }
-        .help(FootageFolderWords.foldersOnlyHelp)
-        .accessibilityIdentifier("catalog.show.foldersOnly")
-    }
-}
-
 /// Which line an empty Catalog table shows. The search emptying the table
-/// outright wins; then Folders Only finding no folder (top level, the
-/// folder view on — the caller folds those in); then the Show filters; then
-/// the Person picker. Pure, so tests pin it.
+/// outright wins; then the Show filters; then the Person picker. Pure, so
+/// tests pin it. (Folders Only's "No folders match" went with the mode,
+/// 2026-11-17: the one folder view lists loose files too.)
 /// (For Rick: an enum class returned by a tiny pure chooser.)
 enum CatalogEmptyNote: Equatable {
-    case none, noMatches, noFolders, noPerson, filtered
+    case none, noMatches, noPerson, filtered
 
     /// `personChosen`: the Person picker names someone (2026-10-24) — an
     /// empty table then says so, by name, instead of a blank pane.
@@ -735,42 +692,11 @@ enum CatalogEmptyNote: Equatable {
     /// empty table then names the filters and offers Clear All Filters. It
     /// goes before the person line: clearing the filters is one click, and
     /// if the person is the reason the person line shows next.
-    static func pick(rowsEmpty: Bool, searching: Bool, foldersOnlyFindsNothing: Bool,
+    static func pick(rowsEmpty: Bool, searching: Bool,
                      personChosen: Bool = false, filtersActive: Bool = false) -> CatalogEmptyNote {
         if rowsEmpty && searching { return .noMatches }
-        if foldersOnlyFindsNothing { return .noFolders }
         if rowsEmpty && filtersActive { return .filtered }
         return rowsEmpty && personChosen ? .noPerson : .none
-    }
-}
-
-/// The calm line over the folder table when Folders Only finds no folder
-/// (the search's own "No matches" overlay wins when the search empties
-/// the table outright).
-struct FoldersOnlyEmptyNote: View {
-    /// The Volumes-pane selection's labels (empty = none) and whether the
-    /// join holds any folder at all — together they say whether the
-    /// selection is why nothing shows. Plain values; no records.
-    var volumeLabels: [String] = []
-    /// The Person picker's choice (nil = Everyone) — named when set.
-    var personName: String? = nil
-    var foldersExist = false
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: FootageFolderWords.folderSymbol)
-                .font(.system(size: 28))
-                .foregroundColor(.secondary)
-            Text(FootageFolderWords.foldersOnlyEmpty(volumeLabels: volumeLabels, personName: personName,
-                                                     foldersExist: foldersExist))
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-                .padding(.horizontal, 16)
-        }
-        .padding(40)
-        .accessibilityIdentifier("catalog.foldersOnly.empty")
     }
 }
 

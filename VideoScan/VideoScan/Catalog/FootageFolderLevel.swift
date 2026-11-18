@@ -1,15 +1,16 @@
 // FootageFolderLevel.swift
-// The two Finder levels of Show ▸ Events & Copies as Folders (Rick,
+// The two Finder levels of Show ▸ Folders, the one folder view (Rick,
 // 2026-10-17: "I'd really like it to look like Finder in this view, with
 // MarksBirthday, Cape1990, etc, then double-click shows the event
-// including copies").
+// including copies"; 2026-11-17: every folder, his and the machine's).
 //
 // This is the PRESENTATION step between the join's published display
 // (FootageFolders.compose — untouched) and the table's rows:
 //
 //   top(index:display:)        the TOP level, what a Finder window shows:
-//                              one row per event folder (by date, then by
-//                              name), then the loose files — the rows in
+//                              one row per folder — Rick's first, then the
+//                              machine's grey era guesses, each by date,
+//                              then by name — then the loose files — the rows in
 //                              no event — exactly as the flat view already
 //                              lays them out (a loose file's copies and
 //                              versions stay under it: "a family is not a
@@ -45,6 +46,8 @@ enum FootageFolderLevel {
         let name: String
         /// Event / person / other — the folder glyph's colour.
         var kind: FolderKind = .event
+        /// The machine's era guess (grey), not one of Rick's folders.
+        var byMachine = false
         /// Files counted in the folder (copies included; hidden rows not).
         let items: Int
         let copies: Int
@@ -60,9 +63,13 @@ enum FootageFolderLevel {
         /// "12 items · 3 copies"
         var itemsWords: String { FootageFolderWords.itemsAndCopies(items: items, copies: copies) }
 
-        /// Date, then name — the top level's order (Rick's archive reads
-        /// chronologically; ties by name as the Finder would).
+        /// Rick's folders before the machine's (the one folder view,
+        /// 2026-11-17: his own grouping is what he files into; the grey
+        /// guesses follow), then date, then name — the top level's order
+        /// (Rick's archive reads chronologically; ties by name as the
+        /// Finder would).
         static func precedes(_ a: FolderRow, _ b: FolderRow) -> Bool {
+            if a.byMachine != b.byMachine { return !a.byMachine }
             if a.date != b.date { return a.date < b.date }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
@@ -177,7 +184,7 @@ enum FootageFolderLevel {
 
     static func folderRow(_ folder: FootageFolders.Folder) -> FolderRow {
         let s = folder.summary
-        return FolderRow(id: folder.id, name: folder.title, kind: folder.kind, items: s.files, copies: s.copies, archived: s.archivedCount,
+        return FolderRow(id: folder.id, name: folder.title, kind: folder.kind, byMachine: folder.byMachine, items: s.files, copies: s.copies, archived: s.archivedCount,
                          totalSeconds: s.totalSeconds, totalBytes: s.totalBytes, date: s.date ?? .distantPast,
                          dateWords: dateWords(summary: s))
     }

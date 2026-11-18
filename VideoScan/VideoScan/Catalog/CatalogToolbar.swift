@@ -9,9 +9,6 @@ import SwiftUI
 
 struct CatalogToolbar<Dashboard: View>: View {
     @EnvironmentObject var model: VideoScanModel
-    /// Bumped when Show ▸ Folders by Machine Estimate flips, so the Showing
-    /// box (which reads the folder store, not a binding) is drawn again.
-    @State private var estimateFoldersRevision = 0
     @Environment(\.openWindow) private var openWindow
     let isScanning: Bool
     let isCombining: Bool
@@ -67,9 +64,10 @@ struct CatalogToolbar<Dashboard: View>: View {
     let avidBinCount: Int
     let avidBinFiles: Int
     @Binding var showPairsOnly: Bool
-    /// The Show ▸ filters' ONE owner (CatalogShowFilterStore.swift). The
-    /// toolbar reads `active` and asks the store for every change, naming
-    /// itself — it holds no filter set of its own.
+    /// The Show ▸ filters' ONE owner (CatalogShowFilterStore.swift), and the
+    /// Folders switch's. The toolbar reads `active` / `foldersOn` and asks
+    /// the store for every change, naming itself — it holds no filter set
+    /// and no folder state of its own.
     @ObservedObject var showFilters: CatalogShowFilterStore
     /// The focus banner's caption while a focus set ("Show in Catalog", an
     /// A/V pair) overrides every filter; nil otherwise. The Showing box then
@@ -80,15 +78,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// volumes. Persisted in @AppStorage("catalog.showDisconnectedMedia") by
     /// the parent. NOT one of the Show filters — "Clear All Filters" leaves it.
     @Binding var showDisconnectedMedia: Bool
-    /// Show ▸ Events & Copies as Folders (2026-10-16): confirmed events as
-    /// folders, copies and versions under their recording. Remembered by
-    /// the parent (CatalogFootageFoldersSetting). Off by default.
-    @Binding var showFootageFolders: Bool
-    /// Show ▸ Folders Only (2026-10-19): the folder view without the
-    /// loose files. Implies `showFootageFolders` (the parent applies
-    /// CatalogFoldersOnlyRule); remembered by the parent
-    /// (CatalogFoldersOnlySetting). Off by default.
-    @Binding var showFoldersOnly: Bool
+    // (Show ▸ Folders is `showFilters.foldersOn`: the three folder modes —
+    // Events & Copies as Folders, Folders Only, Folders by Machine Estimate —
+    // became that one switch, 2026-11-17.)
     /// The Volumes-pane selection as the pane's own labels (sorted; empty =
     /// whole catalog). Computed by the parent from the selected scan
     /// targets — O(selected volumes), never records.
@@ -108,7 +100,7 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// are always hidden in this list.) Drives the menu's filled
     /// icon so a toggle buried one click deep still announces itself.
     private var viewIsModified: Bool {
-        !showFilters.active.isEmpty || showFootageFolders
+        !showFilters.active.isEmpty || showFilters.foldersOn
     }
 
     /// Plain values for the Showing box — a handful of Bools, no records.
@@ -117,10 +109,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             viewFilters: showFilters.active,
             showPairsOnly: showPairsOnly,
             showDisconnectedMedia: showDisconnectedMedia,
-            footageFolders: showFootageFolders,
-            foldersOnly: showFoldersOnly,
-            // Reading the revision is what makes a flip redraw this box.
-            estimateFolders: estimateFoldersRevision >= 0 && showFootageFolders && model.footageFolders.estimated,
+            footageFolders: showFilters.foldersOn,
             hasMasterArchive: model.masterArchive != nil,
             focusLabel: focusLabel,
             selectedVolumeLabels: selectedVolumeLabels,
@@ -360,6 +349,10 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .help(showDisconnectedMedia
                           ? "Showing media on disconnected volumes too. Turn off to show only reachable media (the default)."
                           : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
+                    // Show ▸ Folders — the ONE folder view (DECISIONS
+                    // 2026-11-17), beside the other switch that is not a
+                    // filter. Clear All Filters leaves it.
+                    CatalogFoldersSwitch(showFilters: showFilters)
                 }
                 Section("Show files — filters") {
                     // Every row asks the ONE store (which applies the
@@ -374,18 +367,6 @@ struct CatalogToolbar<Dashboard: View>: View {
                             Label(filter.title, systemImage: filter.icon)
                         }
                         .help(filter.help)
-                    }
-                }
-                // Footage folders (Rick 2026-10-16, docs/design/
-                // footage_folders_2026_10_16.md): a view SHAPE, not a
-                // filter — its own section, left alone by Clear All
-                // Filters, remembered per user.
-                Section("Show files — as folders") {
-                    FootageFoldersShowToggle(isOn: $showFootageFolders)
-                    FoldersOnlyShowToggle(isOn: $showFoldersOnly)
-                    MachineEstimateFoldersToggle(folders: model.footageFolders, foldersOn: $showFootageFolders) {
-                        model.setFootageFoldersEstimated($0)
-                        estimateFoldersRevision &+= 1   // the Showing box's pill reads the store: draw again
                     }
                 }
                 if !showFilters.active.isEmpty {
@@ -619,6 +600,26 @@ struct CatalogToolbar<Dashboard: View>: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
+}
+
+// MARK: - Show ▸ Folders
+
+/// The ONE folder control (DECISIONS 2026-11-17): every folder, Rick's and
+/// the machine's grey era guesses, then the files in no folder. It replaced
+/// Events & Copies as Folders, Folders Only and Folders by Machine Estimate.
+/// It holds no state: it reads the store and asks it for every flip, naming
+/// the Show menu; the store persists and logs it.
+struct CatalogFoldersSwitch: View {
+    @ObservedObject var showFilters: CatalogShowFilterStore
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { showFilters.foldersOn },
+                             set: { showFilters.setFolders($0, by: .showMenu) })) {
+            Label(FootageFolderWords.showOptionTitle, systemImage: showFilters.foldersOn ? "folder.fill" : "folder")
+        }
+        .help(showFilters.foldersOn ? FootageFolderWords.showOptionHelpOn : FootageFolderWords.showOptionHelpOff)
+        .accessibilityIdentifier("catalog.show.folders")
+    }
 }
 
 // MARK: - Catalog search help popover

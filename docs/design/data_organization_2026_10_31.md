@@ -223,7 +223,7 @@ Hallie is the Family Archivist window (`VideoScan/VideoScan/Hallie/`, ~200 files
 | `archivist.ollamaModel`, `archivist.ollamaHosts` | Hallie | her model (default `qwen3.8:27b-mlx`) and host list |
 | `archivist.*`, `hallie.ownerFamilySearchID` | Hallie | name, face, voice, web access, who "I" is |
 | `catalog.viewFilters`, `catalog.viewFilters.seeded` | Catalog | the Show chips |
-| `catalog.foldersOnly`, `catalog.footageFolders`, `catalog.showDisconnectedMedia` | Catalog | view switches |
+| `catalog.showFilters.foldersView` (Show ▸ Folders; replaced `catalog.foldersOnly`, `catalog.footageFolders`, `catalog.foldersByMachineEstimate` 2026-11-17, migrated once), `catalog.showDisconnectedMedia` | Catalog | view switches |
 | `catalog.volumeShow`, `catalog.volumePaneHeight`, `catalogKindFacet` | Catalog | panes and facets |
 | `catalogShowRemoved`, `catalogShowSetAside`, `catalogShowUnscannedTargets` | Catalog | more view switches |
 | `CatalogSyncMasterHostname` | sync | which Mac is master (default `RicksM4.local`) |

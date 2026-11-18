@@ -158,21 +158,17 @@ struct CatalogPersonPillTests {
     }
 
     @Test func anEmptyTableNamesThePerson() {
-        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false,
+        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: false,
                                       personChosen: true) == .noPerson)
-        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false,
+        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: false,
                                       personChosen: false) == .none, "Everyone: today's behaviour")
-        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: true, foldersOnlyFindsNothing: false,
+        #expect(CatalogEmptyNote.pick(rowsEmpty: true, searching: true,
                                       personChosen: true) == .noMatches, "the search's own note wins")
-        #expect(CatalogEmptyNote.pick(rowsEmpty: false, searching: false, foldersOnlyFindsNothing: false,
+        #expect(CatalogEmptyNote.pick(rowsEmpty: false, searching: false,
                                       personChosen: true) == .none, "rows showing: no note")
         let words = Summary.personEmptyNote(name: "Dana")
         #expect(words.hasPrefix("No videos of Dana here") && words.contains("Everyone"))
         #expect(Summary.personSearchHint(name: "Dana").contains("videos of Dana"))
-        let folders = FootageFolderWords.foldersOnlyEmpty(volumeLabels: [], personName: "Dana", foldersExist: true)
-        #expect(folders.hasPrefix("No folders with Dana match"))
-        #expect(FootageFolderWords.foldersOnlyEmpty(volumeLabels: [], personName: nil, foldersExist: true)
-                == FootageFolderWords.foldersOnlyEmpty, "no person: today's words")
     }
 }
 
