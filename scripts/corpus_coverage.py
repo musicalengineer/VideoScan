@@ -48,7 +48,6 @@ lines per side (~400k lines x 5 sides, a few hundred MB at most). Wall: build 15
 """
 from __future__ import annotations
 
-import bisect
 import json
 import os
 import shutil
@@ -69,6 +68,7 @@ LISTED = 15                      # functions per list in the summary (all ranked
 KEPT = 400                       # functions per list in coverage.json
 TOOL_TIMEOUT = 1800              # seconds for one xccov view, llvm-profdata merge or llvm-cov export
 EXIT_MEASURED, EXIT_NOT_MEASURED = cr.EXIT_GREEN, cr.EXIT_RED
+UNKNOWN = -1                     # a function's size when no tool gave it
 
 
 # ── Reading LCOV into lines and functions of our sources ──────────────────
@@ -104,6 +104,7 @@ class Coverage:
         self.hit_lines: Dict[str, Dict[str, Set[int]]] = {}
         self.hit_functions: Dict[str, Set[Tuple[str, int]]] = {}
         self.sizes: Dict[Tuple[str, int], int] = {}      # exact executable lines of a function, when xccov says
+        self.seen: Dict[str, Set[str]] = defaultdict(set)  # side -> our source files it carried at all
 
     def read_lcov(self, side: str, text: Iterable[str], roots: Iterable[str]) -> int:
         """One LCOV stream (llvm-cov export -format=lcov) into `side`. Returns the number of our
@@ -123,6 +124,7 @@ class Coverage:
             elif rel is None:
                 continue
             elif line.startswith("DA:"):
+                self.seen[side].add(rel)
                 parts = line[3:].split(",")
                 try:
                     number, count = int(parts[0]), int(float(parts[1]))
@@ -166,6 +168,7 @@ class Coverage:
             if rel is None or not isinstance(entries, list):
                 continue
             files += 1
+            self.seen[side].add(rel)
             for entry in entries:
                 if isinstance(entry, dict) and entry.get("isExecutable") and isinstance(entry.get("line"), int):
                     self.lines[rel].add(entry["line"])
@@ -202,13 +205,28 @@ class Coverage:
         return merged
 
     def owners(self, rel: str) -> Dict[int, Set[int]]:
-        """Each function start of `rel` -> the executable lines it owns (up to the next start)."""
+        """Each function start of `rel` -> the executable lines it owns. A function whose size xccov
+        gave owns that many executable lines from its start; a function starting inside it (a
+        closure) is nested, and once the inner one has its lines the rest go back to the outer one
+        (a stack: C++ analogy, matching braces by counting). Without a size (Core's LCOV) a function
+        owns everything up to the next start. Measured 2026-11-18: next-start alone credited the
+        enclosing function's lines to a one-line closure ("+4 of 1 lines")."""
         starts = sorted(self.starts.get(rel, {}))
         owned: Dict[int, Set[int]] = {s: set() for s in starts}
-        for number in self.lines.get(rel, ()):
-            i = bisect.bisect_right(starts, number) - 1
-            if i >= 0:
-                owned[starts[i]].add(number)
+        stack: List[List[int]] = []                          # [start, lines it may still own]
+        i = 0
+        for number in sorted(self.lines.get(rel, ())):
+            while i < len(starts) and starts[i] <= number:
+                if stack and stack[-1][1] == UNKNOWN:        # no size: the next start ends it, as before
+                    stack.pop()
+                stack.append([starts[i], self.sizes.get((rel, starts[i]), UNKNOWN)])
+                i += 1
+            while stack and stack[-1][1] == 0:
+                stack.pop()
+            if stack:
+                owned[stack[-1][0]].add(number)
+                if stack[-1][1] != UNKNOWN:
+                    stack[-1][1] -= 1
         return owned
 
 
@@ -223,11 +241,12 @@ def measure(cov: Coverage, suite_sides: Iterable[str], corpus_sides: Iterable[st
     fsuite, fcorpus = cov.side_functions(suite_sides), cov.side_functions(corpus_sides)
     areas: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     total: Dict[str, int] = defaultdict(int)
+    app: Dict[str, int] = defaultdict(int)               # the same, Core aside (see `core_seen`)
     only_corpus_files: Dict[str, int] = {}
     for rel, executable in cov.lines.items():
         s, c = suite.get(rel, set()) & executable, corpus.get(rel, set()) & executable
         row = areas[area_of(rel)]
-        for bucket in (row, total):
+        for bucket in (row, total) + (() if rel.startswith(CORE_PREFIX) else (app,)):
             bucket["lines"] += len(executable)
             bucket["suite"] += len(s)
             bucket["corpus"] += len(c)
@@ -240,7 +259,7 @@ def measure(cov: Coverage, suite_sides: Iterable[str], corpus_sides: Iterable[st
     for rel, start in functions:
         row = areas[area_of(rel)]
         hit_s, hit_c = (rel, start) in fsuite, (rel, start) in fcorpus
-        for bucket in (row, total):
+        for bucket in (row, total) + (() if rel.startswith(CORE_PREFIX) else (app,)):
             bucket["functions"] += 1
             bucket["f_suite"] += hit_s
             bucket["f_corpus"] += hit_c
@@ -277,7 +296,9 @@ def measure(cov: Coverage, suite_sides: Iterable[str], corpus_sides: Iterable[st
             out["f_" + key + "_pct"] = pct(bucket["f_" + key], bucket["functions"])
         return out
 
-    return {"total": finish(total), "areas": {k: finish(v) for k, v in sorted(areas.items())}, "lanes": lanes,
+    # Can the corpus be seen in Core at all? Only when some corpus side carried a Core source.
+    core_seen = any(rel.startswith(CORE_PREFIX) for side in corpus_sides for rel in cov.seen.get(side, ()))
+    return {"total": finish(total), "app": finish(app), "core_seen": core_seen, "areas": {k: finish(v) for k, v in sorted(areas.items())}, "lanes": lanes,
             "unreached": unreached, "further": further,
             "files_corpus_only": sorted(only_corpus_files.items(), key=lambda kv: (-kv[1], kv[0]))}
 
@@ -322,6 +343,14 @@ def render(result: dict, names: Dict[str, str], sha: str, lane_lines: List[str],
              f"  union                     lines {_p(t['union_pct'])}  functions {_p(t['f_union_pct'])}"
              f"   (+{t['corpus_only']} lines, +{t['f_corpus_only']} functions only the corpus runs)",
              f"  the suite alone runs {t['suite_only']} lines the corpus never reaches"]
+    a = result.get("app")
+    if a and a.get("lines"):
+        lines.append(f"  app code alone (Core aside, {a['lines']} lines): suite {_p(a['suite_pct'])} · corpus {_p(a['corpus_pct'])}"
+                     f" · union {_p(a['union_pct'])}")
+    if not result.get("core_seen", True):
+        core = t["lines"] - (a or {}).get("lines", 0)
+        lines.append(f"  NOTE: the corpus result bundles carry no Core source: Core ({core} lines) is counted for the suite"
+                     " by Core's own tests and is NOT seen for the corpus (its use of Core reads as 0)")
     lines.append("  by lane: " + " · ".join(
         f"{side} {v['lines']} lines (+{v['corpus_only']} not in the suite, {v['f_corpus_only']} functions)"
         for side, v in result["lanes"].items()))

@@ -34471,11 +34471,13 @@
         "test_a_suite_bundle_without_our_sources_is_not_measured",
         "test_a_view_xccov_cannot_give_is_not_measured_and_stops_at_once",
         "test_core_export_failing_is_said",
+        "test_core_unseen_by_the_corpus_is_said_and_the_app_headline_stands_apart",
         "test_cores_suite_missing_is_said_not_hidden",
         "test_demangle_falls_back_to_the_mangled_name",
         "test_failing_suites_still_measure_and_say_so",
         "test_functions_the_suite_never_enters_are_ranked_by_size",
         "test_lcov_with_end_lines_and_private_names",
+        "test_lines_after_a_nested_closure_go_back_to_the_enclosing_function",
         "test_measured_the_numbers_and_the_ranked_functions",
         "test_nothing_a_caller_reads_back_names_a_corpus_file_or_path",
         "test_one_instrumented_build_and_every_test_host_profiled_inside_the_work_folder",
@@ -34486,6 +34488,7 @@
         "test_the_lanes_store_their_own_runs_and_the_work_folder_goes",
         "test_the_m4_cleanup_knows_a_dead_coverage_runs_work_folder",
         "test_the_seal_still_holds",
+        "test_without_sizes_a_function_owns_up_to_the_next_start",
         "test_xccov_views_read_exact_sizes_and_only_our_sources"
       ]
     },

@@ -141,6 +141,40 @@ class ReadAndMeasureTests(unittest.TestCase):
         self.assertEqual([(e['names'], e['size']) for e in result['unreached']], [(['Balance.f1()'], 42)])
         self.assertEqual(cov.read_xccov('x', {'targets': None}, ['not', 'a', 'dict'], [self.ROOT]), 0)
 
+    def test_lines_after_a_nested_closure_go_back_to_the_enclosing_function(self):
+        # Seen on the M4: a one-line closure at 128 inside checkFrameRate was credited "+4 of 1 lines".
+        files = {self.BALANCE: ([(120, 'Rules.checkFrameRate(_:)', 1), (128, 'closure #1 in Rules.checkFrameRate(_:)', 1)],
+                                {**span(120, 127, 1), 128: 1, **span(129, 132, 0), 140: 0})}
+        report, archive = xccov(self.ROOT, files)
+        sizes = {120: 12, 128: 1}                         # what xccov says: the outer owns 12 lines (120-127, 129-132), the closure 1
+        for fn in report['targets'][0]['files'][0]['functions']:
+            fn['executableLines'] = sizes[fn['lineNumber']]
+        cov = cc.Coverage()
+        cov.read_xccov('check', report, archive, [self.ROOT])
+        owned = cov.owners(self.BALANCE)
+        self.assertEqual(owned[128], {128})
+        self.assertEqual(owned[120], set(range(120, 128)) | set(range(129, 133)))
+        self.assertNotIn(140, owned[120] | owned[128], 'past both counts: no function owns it')
+
+    def test_without_sizes_a_function_owns_up_to_the_next_start(self):
+        cov = self.coverage()                              # LCOV only: no sizes
+        owned = cov.owners(self.BALANCE)
+        self.assertEqual((owned[1], owned[6]), (set(range(1, 6)), set(range(6, 11))))
+
+    def test_core_unseen_by_the_corpus_is_said_and_the_app_headline_stands_apart(self):
+        cov = cc.Coverage()
+        r = self.ROOT
+        cov.read_lcov('suite-app', lcov(r, {self.BALANCE: ([(1, '$s1f1', 1)], span(1, 4, 1))}).splitlines(True), [r])
+        cov.read_lcov('suite-core', lcov(r, {self.MIXER: ([(1, '$s2f3', 1)], span(1, 6, 1))}).splitlines(True), [r])
+        cov.read_lcov('check', lcov(r, {self.BALANCE: ([(1, '$s1f1', 1)], {**span(1, 2, 1), 3: 0, 4: 0})}).splitlines(True), [r])
+        result = cc.measure(cov, cc.SUITE_SIDES, ['check'])
+        self.assertFalse(result['core_seen'])
+        self.assertEqual((result['app']['lines'], result['app']['corpus'], result['total']['lines']), (4, 2, 10))
+        text = '\n'.join(cc.render(result, {}, 'a' * 40, [], 'note'))
+        self.assertIn('app code alone (Core aside, 4 lines): suite 100.0% · corpus 50.0% · union 100.0%', text)
+        self.assertIn('Core (6 lines) is counted for the suite', text)
+        self.assertIn('NOT seen for the corpus', text)
+
     def test_lcov_with_end_lines_and_private_names(self):
         cov = cc.Coverage()
         text = (f'SF:{self.ROOT}/{self.BALANCE}\nFN:3,9,Balance.swift:$s1pv\nFNDA:2,Balance.swift:$s1pv\n'
