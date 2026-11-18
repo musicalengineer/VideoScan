@@ -38,7 +38,8 @@
 //          because ffmpeg's per-stream read counts exist only there. Any
 //          line at error/fatal/panic, any line with no level that is not an
 //          indented metadata continuation, or a log that does not END with
-//          ffmpeg's own clean-exit line is COULD NOT CHECK.
+//          ffmpeg's own clean-exit line is COULD NOT CHECK (the log's
+//          parser: BalancedCopyProofReadLog.swift).
 //
 // Memory, whatever the size of the media: two or three ffprobe JSON
 // documents (1 MiB cap each); the packet ledger (two SHA-256 states and
@@ -174,6 +175,13 @@ extension BalancedCopyProof {
         var layout = FileLayout(
             container: report.format?.format_name ?? "", tags: report.format?.tags ?? [:],
             chapters: report.chapters?.count ?? 0)
+        // Raw DV has no header and states NO length, for picture or sound: ffprobe ESTIMATES one from the
+        // bit rate. The sound's is the picture's, and a camcorder's unlocked sound does not hold 1601.6
+        // samples a frame (dry run 2026-11-17: 27:18 of tape decoded 1,784 samples more). The picture's
+        // falls short of frames × 1001/30000 as the file grows (corpus 2026-11-18: one tick of 1/60000 s
+        // at 19 minutes, two at an hour — three tapes read whole were called "not read to the end").
+        let rawDV = layout.containerWords == ["dv"]
+        if rawDV { layout.estimatedSeconds = streams.compactMap(\.statedSeconds).max() }
         for (position, s) in streams.enumerated() {
             let index = s.index ?? position
             if s.codec_type == "audio" {
@@ -181,15 +189,13 @@ extension BalancedCopyProof {
                     index: index, codec: s.codec_name ?? "", sampleFormat: s.sample_fmt ?? "",
                     sampleRateHz: s.sample_rate.flatMap { Int($0) } ?? 0, channels: s.channels ?? 0,
                     channelLayout: s.channel_layout ?? "", sideData: sideData[position],
-                    // Raw DV states no length for its sound: ffprobe gives the PICTURE's (estimated from
-                    // the bit rate), and a camcorder's unlocked sound does not hold 1601.6 samples a frame
-                    // (dry run 2026-11-17: 27:18 of tape decoded 1,784 samples more than that length).
-                    statedSeconds: layout.containerWords == ["dv"] ? nil : s.statedSeconds,
+                    statedSeconds: rawDV ? nil : s.statedSeconds,
                     tickSeconds: tick(s.time_base), tags: s.tags ?? [:], flags: s.flags))
             } else {
                 layout.carried.append(CarriedStream(
                     index: index, kind: s.codec_type ?? "", codec: s.codec_name ?? "",
-                    tag: s.codec_tag_string ?? "", timeBase: s.time_base ?? "", statedSeconds: s.statedSeconds,
+                    tag: s.codec_tag_string ?? "", timeBase: s.time_base ?? "",
+                    statedSeconds: rawDV ? nil : s.statedSeconds,
                     configuration: s.configuration(sideData: sideData[position]), tags: s.tags ?? [:], flags: s.flags))
             }
         }
@@ -418,11 +424,12 @@ extension BalancedCopyProof {
     }
 
     /// How long a decode pass may take: the levels pass's deadline (it
-    /// scales with the file's size), or twice the longest stated length
-    /// when that is more — decoding and hashing every frame of a
+    /// scales with the file's size), or twice the longest stated (raw DV:
+    /// estimated) length when that is more — decoding and hashing every frame of a
     /// long-GOP recording is slower than reading its bytes.
     static func decodeDeadlineSeconds(bytes: Int64, layout: FileLayout) -> Double {
-        let stated = (layout.carried.compactMap(\.statedSeconds) + layout.sound.compactMap(\.statedSeconds)).max() ?? 0
+        let stated = (layout.carried.compactMap(\.statedSeconds) + layout.sound.compactMap(\.statedSeconds)
+            + [layout.estimatedSeconds].compactMap { $0 }).max() ?? 0
         return max(AudioBalanceProbe.levelsDeadlineSeconds(forFileSizeBytes: bytes), 2 * stated)
     }
 
@@ -519,15 +526,24 @@ extension BalancedCopyProof {
                       let lasting = BalancedCopyProof.fraction(ticks: duration, numerator: stream.numerator,
                                                               denominator: stream.denominator) else { return false }
                 stream.hash.update(data: Data("\(at) \(lasting) \(size) \(pixels)\n".utf8))
+                // Checked: a time plus a duration that does not fit in 64 bits is a fault, not a trap (GH #483 item 3).
+                let (end, overflow) = pts.addingReportingOverflow(duration)
+                guard !overflow else { return false }
                 let tick = Double(stream.numerator) / Double(stream.denominator)
                 if stream.lines == 1 { stream.firstSeconds = Double(pts) * tick }
-                stream.endSeconds = max(stream.endSeconds, Double(pts + duration) * tick)
+                stream.endSeconds = max(stream.endSeconds, Double(end) * tick)
             case .timeline:
                 // The sound's times must be in sample periods: then a
                 // frame's duration IS its sample count.
-                guard stream.numerator == 1, stream.denominator == sampleRateHz, duration > 0 else { return false }
-                if let last = segments.indices.last, abs(pts - (segments[last].start + segments[last].samples)) <= tolerance {
-                    segments[last].samples += duration
+                // Every run kept here ENDS inside 64 bits (checked as it is appended and as it grows), so
+                // `start + samples` below cannot trap; a frame that would break that is a fault (GH #483 item 3).
+                guard stream.numerator == 1, stream.denominator == sampleRateHz, duration > 0,
+                      !pts.addingReportingOverflow(duration).overflow else { return false }
+                if let last = segments.indices.last,
+                   BalancedCopyProof.distance(pts, segments[last].start + segments[last].samples) <= UInt64(tolerance) {
+                    let (grown, overflow) = segments[last].samples.addingReportingOverflow(duration)
+                    guard !overflow, !segments[last].start.addingReportingOverflow(grown).overflow else { return false }
+                    segments[last].samples = grown
                 } else {
                     guard segments.count < BalancedCopyProof.soundSegmentLimit else { return false }
                     segments.append(SoundSegment(start: pts, samples: duration))
@@ -535,7 +551,9 @@ extension BalancedCopyProof {
             case .channel:
                 guard stream.numerator == 1, stream.denominator == sampleRateHz else { return false }
                 stream.hash.update(data: Data("\(size) \(pixels)\n".utf8))
-                stream.samples += duration
+                let (samples, overflow) = stream.samples.addingReportingOverflow(duration)
+                guard !overflow else { return false }
+                stream.samples = samples
             }
             streams[number] = stream
             return true
@@ -566,142 +584,6 @@ extension BalancedCopyProof {
             }
             return out
         }
-    }
-
-    // MARK: - The decode pass's log (pure parse)
-
-    /// One ffmpeg log line under `-v level+…`:
-    /// "[in#0/mov @ 0x…] [verbose] payload" → components, level, payload.
-    struct LogRecord: Equatable {
-        var components: [Substring]
-        var level: Substring
-        var payload: Substring
-    }
-
-    /// Levels `-v error` would have kept quiet.
-    static let quietLogLevels: Set<Substring> = ["warning", "info", "verbose", "debug", "trace"]
-    /// Levels `-v error` prints. One line at any of them refuses the pass.
-    static let loudLogLevels: Set<Substring> = ["error", "fatal", "panic"]
-    /// What ffmpeg logs, at info, when a stream's frames change size or format.
-    static let reconfiguredPayload = "Reconfiguring filter graph"
-    /// What ffmpeg logs last, at verbose, when it finished in order.
-    static let cleanExitPayload = "Exiting with exit code 0"
-
-    /// Split a log line into its "[component @ 0x…]" prefixes, its level and
-    /// its payload. nil = the line does not START that way.
-    static func logRecord(_ line: Substring) -> LogRecord? {
-        var rest = line
-        var components: [Substring] = []
-        while rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
-            let inner = rest[rest.index(after: rest.startIndex)..<close]
-            let after = rest[rest.index(after: close)...]
-            let tail = after.hasPrefix(" ") ? after.dropFirst() : after
-            if quietLogLevels.contains(inner) || loudLogLevels.contains(inner) {
-                return LogRecord(components: components, level: inner, payload: tail)
-            }
-            guard inner.contains(" @ 0x") else { return nil }
-            components.append(inner)
-            rest = tail
-        }
-        return nil
-    }
-
-    /// A line with no level of its own that ffmpeg legitimately prints: the
-    /// continuation of a multi-line METADATA value, which its dump indents.
-    /// Tolerated only straight after an info-level line, and never parsed.
-    static func isMetadataContinuation(_ line: Substring) -> Bool {
-        let blanks = line.prefix(while: { $0 == " " }).count
-        return blanks >= 16 && line.dropFirst(blanks).hasPrefix(": ")
-    }
-
-    /// The digits straight before `marker` in `text` ("94 packets read").
-    static func count(before marker: String, in text: Substring) -> Int64? {
-        guard let found = text.range(of: marker) else { return nil }
-        let digits = text[..<found.lowerBound].reversed().prefix(while: { $0.isASCII && $0.isNumber })
-        return digits.isEmpty ? nil : Int64(String(digits.reversed()))
-    }
-
-    /// "Input stream #0:1 (audio): 94 packets read (…); 94 frames decoded; 0
-    /// decode errors (…);" → (1, "packets read" count, decode errors), or
-    /// "Output stream #0:0 (video): 50 frames encoded; 50 packets muxed (…);"
-    /// → (0, "packets muxed" count, nil). nil = not such a line.
-    static func streamCount(fromPayload payload: Substring, side: String, counting marker: String)
-        -> (index: Int, count: Int, decodeErrors: Int?)? {
-        let text = payload.drop(while: { $0 == " " })
-        let opening = "\(side) stream #0:"
-        guard text.hasPrefix(opening) else { return nil }
-        let rest = text.dropFirst(opening.count)
-        guard let index = Int(rest.prefix(while: { $0.isASCII && $0.isNumber })),
-              let found = count(before: marker, in: rest) else { return nil }
-        return (index, Int(found), count(before: " decode errors", in: rest).map { Int($0) })
-    }
-
-    /// Why a decode pass's log does not vouch for the read; `line` is quoted.
-    struct ReadFault: Error, Equatable {
-        var line: String
-    }
-
-    /// Read one decode pass's whole log into the log's half of a
-    /// `ReadReport`. Success = every line was one `-v error` would have kept
-    /// quiet, the log ends with ffmpeg's own clean exit line, and no stream
-    /// is accounted for twice. `runTag` names this run's astats instances.
-    static func readReport(fromStderr text: String, runTag: String) -> Result<ReadReport, ReadFault> {
-        var report = ReadReport()
-        var announced: [Int: Int] = [:]
-        var last: LogRecord?
-        for line in text.split(whereSeparator: \.isNewline) where !line.allSatisfy(\.isWhitespace) {
-            guard let record = logRecord(line) else {
-                if last?.level == "info", isMetadataContinuation(line) { continue }
-                return .failure(ReadFault(line: String(line)))
-            }
-            guard quietLogLevels.contains(record.level) else { return .failure(ReadFault(line: String(line))) }
-            // A picture or sound that changes shape mid-stream restarts the
-            // filter graph. framehash states a stream's size once, and two
-            // shapes can have one byte count, so nothing after the change
-            // can be held: the pass is refused (Codex #308-1).
-            guard !record.payload.hasPrefix(reconfiguredPayload) else { return .failure(ReadFault(line: String(line))) }
-            last = record
-            let peaks = "astats@\(runTag)s"
-            if !runTag.isEmpty, let component = record.components.first, component.hasPrefix(peaks) {
-                guard let stream = Int(component.dropFirst(peaks.count).prefix(while: { $0.isASCII && $0.isNumber })),
-                      notePeak(record.payload, stream: stream, announced: &announced, in: &report) else {
-                    return .failure(ReadFault(line: String(line)))
-                }
-            } else if let read = streamCount(fromPayload: record.payload, side: "Input", counting: " packets read") {
-                let entry = StreamRead(packets: read.count, decodeErrors: read.decodeErrors)
-                guard report.streams.updateValue(entry, forKey: read.index) == nil else {
-                    return .failure(ReadFault(line: String(line)))
-                }
-            } else if let wrote = streamCount(fromPayload: record.payload, side: "Output", counting: " packets muxed") {
-                guard report.muxed.updateValue(wrote.count, forKey: wrote.index) == nil else {
-                    return .failure(ReadFault(line: String(line)))
-                }
-            }
-        }
-        guard let last, last.payload == cleanExitPayload else {
-            return .failure(ReadFault(line: text.split(whereSeparator: \.isNewline).last.map(String.init)
-                                        ?? "ffmpeg reported nothing about what it read"))
-        }
-        return .success(report)
-    }
-
-    /// One line of a run's astats for one sound stream: "Channel: N" opens
-    /// channel N (they come 1, 2, … in order), "Peak level dB: v" is its
-    /// peak. false = not exactly one peak per channel, in order.
-    private static func notePeak(_ payload: Substring, stream: Int, announced: inout [Int: Int],
-                                 in report: inout ReadReport) -> Bool {
-        let measured = report.peaksDBFS[stream]?.count ?? 0
-        if payload.hasPrefix("Channel:") {
-            let number = Int(payload.dropFirst("Channel:".count).trimmingCharacters(in: .whitespaces))
-            announced[stream, default: 0] += 1
-            return number == announced[stream] && measured == (announced[stream] ?? 0) - 1
-        }
-        if payload.hasPrefix("Peak level dB:") {
-            guard let peak = AstatsOutputParser.parsedDB(String(payload.dropFirst("Peak level dB:".count))),
-                  measured == (announced[stream] ?? 0) - 1 else { return false }
-            report.peaksDBFS[stream, default: []].append(peak)
-        }
-        return true
     }
 
     // MARK: - Measurement (I/O, read only)
@@ -742,6 +624,16 @@ extension BalancedCopyProof {
         }
     }
 
+    /// An outcome with the facts it was decided on — as far as they were
+    /// gathered: nil when the files could not be opened; the headers alone
+    /// when the headers decided it; everything after both decode passes.
+    /// For a caller that reports numbers and may not show the sentence (the
+    /// corpus harness). The outcome is `measure`'s, exactly.
+    struct Measurement: Sendable {
+        var outcome: Outcome
+        var facts: Facts?
+    }
+
     /// Measure both files and decide. Never throws: every failure is an
     /// `Outcome` (`couldNotCheck` when nothing could be measured). The
     /// caller writes `startLine` before and `logLine` after, through the
@@ -756,18 +648,32 @@ extension BalancedCopyProof {
     #endif
     static func measure(original: String, balanced: String, tools: Tools = .located,
                         control: ProcessControl? = nil) async -> Outcome {
+        await measurement(original: original, balanced: balanced, tools: tools, control: control).outcome
+    }
+
+    /// `measure`, with the facts gathered on the way.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func measurement(original: String, balanced: String, tools: Tools = .located,
+                            control: ProcessControl? = nil) async -> Measurement {
+        var gathered: Facts?
         do {
-            return try await measured(original: original, balanced: balanced, tools: tools, control: control)
+            let outcome = try await measured(original: original, balanced: balanced, tools: tools, control: control,
+                                             gathered: &gathered)
+            return Measurement(outcome: outcome, facts: gathered)
         } catch let unchecked as Unchecked {
             proofLog.notice("proof could not check \((original as NSString).lastPathComponent, privacy: .public) ↔ \((balanced as NSString).lastPathComponent, privacy: .public): \(unchecked.reason, privacy: .public)")
-            return .couldNotCheck(unchecked.reason)
+            return Measurement(outcome: .couldNotCheck(unchecked.reason), facts: gathered)
         } catch {
-            return .couldNotCheck("the check was stopped")
+            return Measurement(outcome: .couldNotCheck("the check was stopped"), facts: gathered)
         }
     }
 
+    /// `gathered` is written each time the facts grow, so a step that
+    /// throws leaves what was measured before it.
     private static func measured(original: String, balanced: String, tools: Tools,
-                                 control: ProcessControl?) async throws -> Outcome {
+                                 control: ProcessControl?, gathered: inout Facts?) async throws -> Outcome {
         // Every tool below is handed the RESOLVED paths, never the given ones.
         let files = try located(original: original, balanced: balanced)
         guard FileManager.default.isExecutableFile(atPath: tools.ffmpeg),
@@ -788,11 +694,15 @@ extension BalancedCopyProof {
             originalClass: analysis.classification,
             originalMeasuredInFull: analysis.measuredSilent != nil,
             keptSoundIndex: analysis.programStreamIndex)
+        gathered = facts
         if let verdict = headerVerdict(facts) { return verdict }
         facts.original = try await packets(of: files.original, bytes: files.stamps[0].size, called: "the original",
                                            layout: facts.original, tools: tools, control: control)
         facts.balanced = try await packets(of: files.balanced, bytes: files.stamps[1].size, called: "the balanced copy",
                                            layout: facts.balanced, tools: tools, control: control)
+        gathered = facts
+        // `decode` fills the original's pass, then the copy's: a copy that cannot be decoded leaves the original's.
+        defer { gathered = facts }
         try await decode(&facts, files: files, analysis: analysis, tools: tools, control: control)
 
         // Both given paths must still resolve to the files that were opened
@@ -969,7 +879,7 @@ extension BalancedCopyProof {
             if result.timedOut {
                 throw Unchecked(reason: "decoding \(name) ran out of time after \(Int(deadline)) seconds")
             }
-            let tail = result.stderr.split(whereSeparator: \.isNewline).suffix(2).joined(separator: " · ")
+            let tail = failureLines(fromStderr: result.stderr)
             throw Unchecked(reason: "\(name) could not be decoded to the end (ffmpeg status \(result.exitCode)\(tail.isEmpty ? "" : " — \(tail)"))")
         }
         guard result.stderr.utf8.count < decodeLogLimitBytes else {

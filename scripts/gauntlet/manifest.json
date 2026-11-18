@@ -9424,6 +9424,46 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalanceAudioUnlockedDVTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalanceAudioUnlockedDVTests"
+      ],
+      "tests": [
+        "aCopyWithAnUnplayedTailIsRefusedByTheJob",
+        "aRunawayTapeIsCouldNotCheckWithTheErrorNamed",
+        "balanceAndASampleRateChange",
+        "otherCadencesAreCarriedWhole",
+        "reanchoredDecisionTable",
+        "rebuildAudioArguments",
+        "rebuildAudioPlaysToTheLastSample",
+        "rebuildSurvivesASampleRateChange",
+        "rewrittenTimestampsAreExact",
+        "soundTimestampArgsTable",
+        "theProofNamesAReanchoredTape",
+        "unlockedSoundPlaysToTheLastSample",
+        "unplayedSoundTable"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofCorpusFindingsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofCorpusFindingsTests"
+      ],
+      "tests": [
+        "avidColourRangeAtom",
+        "colourRangeStatedOnOneSide",
+        "editListEndingInsideTheLastFrame",
+        "ffprobeEstimatesRawDVLength",
+        "overReadDecisions",
+        "overReadOfTheOriginal",
+        "rawDVLengthsAreEstimates"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BalancedCopyProofCoverageTests.swift",
       "stage": "regression",
       "suites": [
@@ -9596,6 +9636,23 @@
         "readReportRefusals",
         "readVerdictTable",
         "singleLineAndQuoted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofTotalityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofTotalityTests"
+      ],
+      "tests": [
+        "absurdLengths",
+        "evidenceIsTypedAndComplete",
+        "fractionEdges",
+        "frameCountSumOverflow",
+        "frameLedgerNeverTraps",
+        "placementAtTheEdgesOfInt64",
+        "timelineSumOverflow"
       ]
     },
     {
@@ -40624,7 +40681,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 759,
+      "expected_floor": 786,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40845,7 +40902,10 @@
         "VideoScanTests/CatalogRowsScaleTests",
         "VideoScanTests/CatalogRowsSensorTests",
         "VideoScanTests/ShowFiltersShowingBoxAuditTests",
-        "VideoScanTests/ShowFiltersAuditSensorTests"
+        "VideoScanTests/ShowFiltersAuditSensorTests",
+        "VideoScanTests/BalanceAudioUnlockedDVTests",
+        "VideoScanTests/BalancedCopyProofTotalityTests",
+        "VideoScanTests/BalancedCopyProofCorpusFindingsTests"
       ]
     },
     {

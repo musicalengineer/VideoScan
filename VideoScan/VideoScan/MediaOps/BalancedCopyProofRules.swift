@@ -25,14 +25,37 @@ extension BalancedCopyProof {
     }
 
     /// A length in plain words: "1.969 s" under a minute, then "8:34", "1:02:03".
+    /// Total: a length that is not a number is written as printf writes it
+    /// ("nan s", "inf s"), and one too long to convert (`Int(aDouble)` traps
+    /// past Int.max, GH #483 item 3) is said to be that.
     static func length(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 60 else { return String(format: "%.3f s", seconds) }
+        guard seconds < 1e15 else { return "more than 31 million years" }
         let whole = Int(seconds.rounded())
         let (h, m, s) = (whole / 3600, whole % 3600 / 60, whole % 60)
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
     static func side(_ channel: Int) -> String { channel == 0 ? "left" : "right" }
+
+    /// |a − b|, for ANY two Int64: the difference of two 64-bit numbers
+    /// always fits unsigned, where `abs(a - b)` traps on overflow and on
+    /// Int64.min (GH #483 item 3). (`&-` is wrapping subtraction ≈ C's
+    /// unsigned arithmetic; read back unsigned it is the true difference.)
+    static func distance(_ a: Int64, _ b: Int64) -> UInt64 {
+        a >= b ? UInt64(bitPattern: a &- b) : UInt64(bitPattern: b &- a)
+    }
+
+    /// The sum of some counts for a sentence; Int.max when it does not fit.
+    static func total(_ counts: some Sequence<Int>) -> Int {
+        var sum = 0
+        for count in counts {
+            let (next, overflow) = sum.addingReportingOverflow(count)
+            guard !overflow else { return .max }
+            sum = next
+        }
+        return sum
+    }
 
     /// The original channel a balanced copy must equal: 0 = left, 1 = right.
     /// nil = the class is not one the balance job fixes. Mirrors
@@ -254,48 +277,145 @@ extension BalancedCopyProof {
 
     // MARK: - The decode pass: was the read whole
 
+    /// Why one decode pass was not a whole read of its file. Every case
+    /// carries the numbers it was decided on, so a caller that may not show
+    /// the sentence (the corpus harness) can still say which rule fired.
+    /// (≈ a C++ `std::variant` of small structs; `sentence` is its visitor.)
+    enum ReadShortfall: Sendable, Equatable {
+        /// There is no decode pass for the file.
+        case noAccount
+        /// The packet pass or ffmpeg's log has no count for a decoded stream.
+        case packetsNotCounted(stream: Int)
+        /// ffmpeg read another number of packets than the packet pass listed.
+        case packetCount(stream: Int, read: Int, listed: Int)
+        case decodeErrors(stream: Int)
+        /// ffmpeg wrote another number of frames than were folded here.
+        case framesNotAllFolded(muxed: Int, folded: Int)
+        case noPictureFrames(stream: Int)
+        /// A picture's decoded length is not the length its header states.
+        case pictureLength(stream: Int, decodedSeconds: Double, statedSeconds: Double)
+        case noSoundSamples
+        /// The sound's decoded length is not the length its header states.
+        case soundLength(decodedSamples: Int64, statedSeconds: Double)
+
+        /// The plain sentence, about the file called `name`.
+        func sentence(called name: String) -> String {
+            switch self {
+            case .noAccount:
+                return "\(name)'s decode pass gave no account of what it read"
+            case .packetsNotCounted(let index):
+                return "\(name) was not read to the end (stream \(index): packets not counted)"
+            case .packetCount(let index, let read, let listed):
+                return "\(name) was not read to the end (stream \(index): \(read) of \(listed) packets)"
+            case .decodeErrors(let index):
+                return "\(name) did not decode cleanly (stream \(index))"
+            case .framesNotAllFolded(let muxed, let folded):
+                return "\(name)'s decoded frames did not all arrive (ffmpeg wrote \(muxed), \(folded) were read)"
+            case .noPictureFrames(let index):
+                return "\(name)'s picture stream \(index) gave no frames"
+            case .pictureLength(let index, let decoded, let stated):
+                return "\(name) was not read to the end (picture stream \(index): "
+                    + "\(BalancedCopyProof.length(decoded)) decoded, \(BalancedCopyProof.length(stated)) stated)"
+            case .noSoundSamples:
+                return "\(name)'s sound gave no samples"
+            case .soundLength(let samples, let stated):
+                return "\(name) was not read to the end (\(samples) sound samples decoded, "
+                    + "\(BalancedCopyProof.length(stated)) stated)"
+            }
+        }
+    }
+
+    /// A decoded length agrees with the length a header states: within
+    /// `slack` either way — or longer than stated by LESS than
+    /// `overReadUnder` (0 = no such allowance). A length that is not a
+    /// number agrees with nothing.
+    static func lengthAgrees(decoded: Double, stated: Double, slack: Double, overReadUnder: Double) -> Bool {
+        let over = decoded - stated
+        return abs(over) <= slack || (over > 0 && over < overReadUnder)
+    }
+
     /// One decode pass must have read, of every stream it decoded, the
     /// packets the packet pass listed, with no decode error; ffmpeg must
     /// have muxed exactly the frames folded here; and each decoded stream's
     /// length must be the length its header states, where it states one
-    /// (header, WHAT PLAYS 5). A short read is never agreement.
-    static func readVerdict(_ file: FileLayout, read: ReadReport?, kept: SoundStream?, called name: String) -> Outcome? {
-        guard let read else { return .couldNotCheck("\(name)'s decode pass gave no account of what it read") }
+    /// (header, WHAT PLAYS 5). A short read is never agreement. nil = whole.
+    ///
+    /// `overReadIsWhole` — the ORIGINAL only (corpus 2026-11-18): a decode
+    /// LONGER than stated by less than one frame (picture: the decoded
+    /// length over the frame count) or one packet (sound: likewise over the
+    /// packet count) is whole. A QuickTime edit list may end inside the
+    /// last frame, and FFmpeg plays a frame it has begun, and the sound
+    /// packet with it, whole; a decode that ran LONG did not stop early.
+    /// The copy is then held to all of it. The copy's own read never gets
+    /// this: its header is this app's, and must state what it plays.
+    static func readShortfall(_ file: FileLayout, read: ReadReport?, kept: SoundStream?,
+                              overReadIsWhole: Bool = false) -> ReadShortfall? {
+        guard let read else { return .noAccount }
         let decoded = file.pictures.map { ($0.index, $0.packets) } + file.sound.map { ($0.index, $0.packets) }
         for (index, expected) in decoded {
-            guard let expected, let got = read.streams[index] else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): packets not counted)")
-            }
-            guard got.packets == expected else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): \(got.packets) of \(expected) packets)")
-            }
-            guard got.decodeErrors == 0 else {
-                return .couldNotCheck("\(name) did not decode cleanly (stream \(index))")
-            }
+            guard let expected, let got = read.streams[index] else { return .packetsNotCounted(stream: index) }
+            guard got.packets == expected else { return .packetCount(stream: index, read: got.packets, listed: expected) }
+            guard got.decodeErrors == 0 else { return .decodeErrors(stream: index) }
         }
         guard !read.folded.isEmpty, read.muxed == read.folded else {
-            return .couldNotCheck("\(name)'s decoded frames did not all arrive (ffmpeg wrote \(read.muxed.values.reduce(0, +)), "
-                + "\(read.folded.values.reduce(0, +)) were read)")
+            return .framesNotAllFolded(muxed: total(read.muxed.values), folded: total(read.folded.values))
         }
         for picture in file.pictures {
             guard let played = read.pictures[picture.index], played.frames > 0 else {
-                return .couldNotCheck("\(name)'s picture stream \(picture.index) gave no frames")
+                return .noPictureFrames(stream: picture.index)
             }
+            let decodedSeconds = played.endSeconds - played.firstSeconds
+            let oneFrame = overReadIsWhole ? decodedSeconds / Double(played.frames) : 0
+            // `!agrees`, not `differs`: a length that is not a number is never agreement.
             if let stated = picture.statedSeconds,
-               abs(played.endSeconds - played.firstSeconds - stated) > picture.timingSlackSeconds {
-                return .couldNotCheck("\(name) was not read to the end (picture stream \(picture.index): "
-                    + "\(length(played.endSeconds - played.firstSeconds)) decoded, \(length(stated)) stated)")
+               !lengthAgrees(decoded: decodedSeconds, stated: stated, slack: picture.timingSlackSeconds, overReadUnder: oneFrame) {
+                return .pictureLength(stream: picture.index, decodedSeconds: decodedSeconds, statedSeconds: stated)
             }
         }
-        guard let kept, let samples = read.soundSamples, samples > 0 else {
-            return .couldNotCheck("\(name)'s sound gave no samples")
-        }
+        guard let kept, kept.sampleRateHz > 0, let samples = read.soundSamples, samples > 0 else { return .noSoundSamples }
+        let decodedSeconds = Double(samples) / Double(kept.sampleRateHz)
+        let packets = kept.packets ?? 0
+        let onePacket = overReadIsWhole && packets > 0 ? decodedSeconds / Double(packets) : 0
         if let stated = kept.statedSeconds,
-           abs(Double(samples) / Double(kept.sampleRateHz) - stated) > kept.statedLengthSlackSeconds {
-            return .couldNotCheck("\(name) was not read to the end (\(samples) sound samples decoded, "
-                + "\(length(stated)) stated)")
+           !lengthAgrees(decoded: decodedSeconds, stated: stated, slack: kept.statedLengthSlackSeconds, overReadUnder: onePacket) {
+            return .soundLength(decodedSamples: samples, statedSeconds: stated)
         }
         return nil
+    }
+
+    /// `readShortfall` as an outcome: COULD NOT CHECK, in the file's name.
+    static func readVerdict(_ file: FileLayout, read: ReadReport?, kept: SoundStream?, called name: String,
+                            overReadIsWhole: Bool = false) -> Outcome? {
+        readShortfall(file, read: read, kept: kept, overReadIsWhole: overReadIsWhole)
+            .map { .couldNotCheck($0.sentence(called: name)) }
+    }
+
+    /// What the ORIGINAL's header leaves out that FFmpeg plays: each stream
+    /// whose decode ran past its stated length (`readShortfall` allowed it,
+    /// for the original only). Named for the original, so nobody takes its
+    /// header's length for what was compared.
+    static func earlyEndingHeader(of file: FileLayout, read: ReadReport?, kept: SoundStream) -> [Difference] {
+        var out: [Difference] = []
+        for picture in file.pictures {
+            guard let played = read?.pictures[picture.index], let stated = picture.statedSeconds else { continue }
+            let over = played.endSeconds - played.firstSeconds - stated
+            guard over > picture.timingSlackSeconds else { continue }
+            out.append(Difference(
+                kind: .playback, heldBy: .original,
+                what: "a header that ends " + String(format: "%.3f ms", over * 1000) + " before the end of picture stream "
+                    + "\(picture.index) as FFmpeg plays it (the last frame is played whole)"))
+        }
+        if let samples = read?.soundSamples, let stated = kept.statedSeconds, kept.sampleRateHz > 0 {
+            let over = Double(samples) / Double(kept.sampleRateHz) - stated
+            let count = (over * Double(kept.sampleRateHz)).rounded()
+            if over > kept.statedLengthSlackSeconds, count < 1e15 {
+                out.append(Difference(
+                    kind: .playback, heldBy: .original,
+                    what: "a header that ends \(Int64(count)) samples before the end of the sound as FFmpeg plays it "
+                        + "(the last packet is played whole)"))
+            }
+        }
+        return out
     }
 
     // MARK: - The decode pass: what plays
@@ -369,16 +489,42 @@ extension BalancedCopyProof {
         guard left == right else { return .refused(.notProven(.channelsDiffer(left: left, right: right))) }
         guard left == source else { return .refused(.notProven(.soundDiffers(original: source, balanced: left))) }
         guard segments.count == copied.count else {
+            if let reanchored = reanchored(facts, original: segments, copy: copied) { return .refused(.notProven(reanchored)) }
             return .refused(.notProven(.soundPlacementDiffers(
                 "the original's sound plays in \(segments.count) unbroken runs, the balanced copy's in \(copied.count)")))
         }
         for (i, (a, b)) in zip(segments, copied).enumerated()
-        where a.samples != b.samples || abs(a.start - b.start) > Int64(soundTimingToleranceSamples) {
+        where a.samples != b.samples || distance(a.start, b.start) > UInt64(soundTimingToleranceSamples) {
             return .refused(.notProven(.soundPlacementDiffers(
                 "run \(i + 1): \(a.samples) samples from sample time \(a.start), "
                 + "in the balanced copy \(b.samples) from \(b.start)")))
         }
         return .held(source)
+    }
+
+    /// A placement difference in the one shape a raw DV tape gives it
+    /// (GH #482), so the refusal can say what it is: the original is raw DV
+    /// — whose sound has no timestamps of its own; FFmpeg stamps it by the
+    /// running sample count and re-anchors it to the picture whenever the
+    /// two are a whole frame apart — its sound decodes in several runs, and
+    /// the copy plays ONE run from the same start. Called only after the
+    /// samples were found equal. Still NOT THE SAME: the placement rule is
+    /// not relaxed, only named. nil = any other difference (the general
+    /// reason stands), including runs whose ends do not fit in 64 bits.
+    static func reanchored(_ facts: Facts, original: [SoundSegment], copy: [SoundSegment]) -> NotProven? {
+        guard facts.original.containerWords == ["dv"], original.count > 1, copy.count == 1,
+              let rate = keptSound(facts)?.sampleRateHz, let first = original.first,
+              distance(first.start, copy[0].start) <= UInt64(soundTimingToleranceSamples) else { return nil }
+        var overlap: Int64 = 0, gap: Int64 = 0
+        for (before, after) in zip(original, original.dropFirst()) {
+            let (end, endOverflows) = before.start.addingReportingOverflow(before.samples)
+            let (step, stepOverflows) = after.start.subtractingReportingOverflow(end)
+            guard !endOverflows, !stepOverflows, step != .min else { return nil }
+            let (sum, sumOverflows) = (step < 0 ? overlap : gap).addingReportingOverflow(abs(step))
+            guard !sumOverflows else { return nil }
+            if step < 0 { overlap = sum } else { gap = sum }
+        }
+        return .soundReanchored(times: original.count - 1, overlapSamples: overlap, gapSamples: gap, sampleRateHz: rate)
     }
 
     /// The DV rule, measured (DECISIONS 2026-11-17): every sound track the
@@ -450,7 +596,8 @@ extension BalancedCopyProof {
     }
 
     /// How one paired PICTURE is stored differently though every decoded
-    /// frame is the same: codec or packets, then decoder configuration.
+    /// frame is the same: codec or packets, a colour range tag only one
+    /// file states (displayed the same), then decoder configuration.
     private static func storageDifferences(original: CarriedStream, copy: CarriedStream, held: Evidence.Stream) -> [Difference] {
         var out: [Difference] = []
         let every = "every decoded frame is the same"
@@ -463,6 +610,16 @@ extension BalancedCopyProof {
                                   what: "picture stream \(original.index) (\(original.codec)) is not stored in the same "
                                     + "packets (\(original.packets ?? 0) in the original, \(copy.packets ?? 0) in the "
                                     + "balanced copy); \(every)"))
+        }
+        if original.configuration.statesRangeOnOneSideOnly(against: copy.configuration) {
+            let (holder, stated, other): (Difference.Holder, String, String) = original.configuration.colorRange.isEmpty
+                ? (.balancedCopy, copy.configuration.colorRange, "the original")
+                : (.original, original.configuration.colorRange, "the balanced copy")
+            out.append(Difference(
+                kind: .playback, heldBy: holder,
+                what: "a colour range tag on picture stream \(original.index) (\(stated), "
+                    + "\(stated == "tv" ? "limited" : stated == "pc" ? "full" : "stated") range); \(other) states none, "
+                    + "which FFmpeg displays in the same range"))
         }
         if original.configuration.extradataSHA256 != copy.configuration.extradataSHA256 {
             out.append(Difference(kind: .decoderConfiguration, heldBy: nil,
@@ -491,6 +648,7 @@ extension BalancedCopyProof {
         // A spare DV track was MEASURED, and is named by `spareCheck`; the other sound tracks of the original are those.
         all += ancillaries(of: facts.original, heldBy: .original,
                            played: played(facts.original, read: facts.originalRead, kept: kept))
+        all += earlyEndingHeader(of: facts.original, read: facts.originalRead, kept: kept)
         all += ancillaries(of: facts.balanced, heldBy: .balancedCopy,
                            played: played(facts.balanced, read: facts.balancedRead, kept: copySound))
         if facts.original.container != facts.balanced.container {
@@ -521,7 +679,8 @@ extension BalancedCopyProof {
                                                    balanced: facts.balanced.carried) else {
             return .couldNotCheck("the two files' streams could not be lined up")
         }
-        if let verdict = readVerdict(facts.original, read: facts.originalRead, kept: kept, called: "the original")
+        if let verdict = readVerdict(facts.original, read: facts.originalRead, kept: kept, called: "the original",
+                                     overReadIsWhole: true)
             ?? readVerdict(facts.balanced, read: facts.balancedRead, kept: copySound, called: "the balanced copy") {
             return verdict
         }
