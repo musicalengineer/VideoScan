@@ -256,7 +256,7 @@ final class CatalogTrashGroupTurns {
                 if late.isEmpty { s.moved.append(g.filenames); continue }
                 s.lateLinked.append("\(CatalogPairGroups.list(g.filenames)) moved to the Trash, but the catalog changed during the move: "
                                     + late.joined(separator: "; ")
-                                    + " — a linked file keeps its pair protection; check it (Show Removed ▸ Restore puts the pair back)")
+                                    + " — " + Self.lateLinkedAdvice)
             } else if unit.moved.isEmpty {
                 let group = CatalogPairGroups.HeldGroup(filenames: g.filenames, reason: unit.firstStayReason, ids: g.members)
                 if unit.anyFailed { s.failed.append(group) } else { s.held.append(group) }
@@ -306,9 +306,21 @@ final class CatalogTrashGroupTurns {
             }
             let lateNote = late.isEmpty ? "" : "; the catalog changed during the move: " + late.joined(separator: "; ")
             return (movedText + stayed).joined(separator: "; ") + lateNote
-                + " — put the moved half back (Show Removed ▸ Restore) or move the rest again."
+                + " — " + CatalogTrashGroupTurns.splitAdvice
         }
     }
+
+    // The advice names only routes that exist (GH #481). Show Removed ▸
+    // Restore left the Show menu on 2026-11-17 and a removed row has no
+    // catalog route back "until one is asked for" (DECISIONS), so the words
+    // state the row's marker and the one route there is for the FILE:
+    // Finder's Put Back (`clearRemoval` says the same).
+
+    /// What the person can do after a pair moved while the catalog changed
+    /// about it.
+    nonisolated static let lateLinkedAdvice = "a linked file keeps its pair protection; check it. The moved files are in the Trash and their rows are marked In the Trash; Finder's Put Back returns a file to where it was"
+    /// What the person can do about a SPLIT pair.
+    nonisolated static let splitAdvice = "the moved half is in the Trash and its row is marked In the Trash; Finder's Put Back returns it to where it was, or move the rest again."
 
     /// Where a half that did not move is, as evidenced now: its current
     /// catalog path, "(relinked from …)" when that changed, and a plain
