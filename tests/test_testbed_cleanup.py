@@ -58,7 +58,10 @@ def measure(path):
     seen, used = set(), 0
     for folder, dirs, names in os.walk(path):
         for name in dirs + names:
-            info = os.lstat(os.path.join(folder, name))
+            try:
+                info = os.lstat(os.path.join(folder, name))
+            except OSError:
+                continue                                     # an unreadable folder (a test that locks one)
             if (info.st_dev, info.st_ino) not in seen:
                 seen.add((info.st_dev, info.st_ino))
                 used += info.st_blocks * 512
@@ -766,6 +769,95 @@ def signal_reset():
     import signal
     signal.alarm(0)
     signal.signal(signal.SIGALRM, signal.SIG_DFL)
+
+
+class CodexThirdReReviewTests(CleanCase):
+    """Codex #325 (third re-review), each finding as its reproduction."""
+
+    def test_t1_a_protected_name_it_cannot_inspect_refuses_rather_than_skips(self):
+        build = self.s.caches[1] / 'Build'
+        build.mkdir(parents=True)
+        (build / 'family.mov').write_bytes(b'f' * 2_000_000)
+        shutil.rmtree(self.s.corpus / 'media')
+        os.symlink(build, self.s.corpus / 'media')
+        run = self.current()
+        os.chmod(self.s.corpus, 0o400)                       # listable, but its names cannot be inspected
+        try:
+            try:
+                self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 1_000_000, 0))
+            except th.Refused:
+                pass
+        finally:
+            os.chmod(self.s.corpus, 0o755)
+        self.assertTrue((build / 'family.mov').exists(), 'a protected destination it could not inspect was deleted')
+
+    def test_t2_a_protected_folder_met_in_the_corpus_lane_descent_is_not_entered(self):
+        old = self.s.run('o1', outcome='GREEN')
+        shutil.rmtree(old / 'corpus-check')
+        (self.s.corpus / 'media' / 'family.mov').write_bytes(b'family')
+        inner = FakeDisk(self.s.home, 100 * GB, 0)
+        state = {'done': False}
+
+        def disk(path):
+            if not state['done']:
+                state['done'] = True
+                os.rename(self.s.corpus / 'media', old / 'corpus-check')    # after the identities are taken
+            return inner(path)
+        run = self.current()
+        try:
+            self.clean(run, 'start', disk)
+        except th.Refused:
+            pass
+        self.assertTrue((old / 'corpus-check' / 'family.mov').exists(), 'a protected folder was emptied through the corpus-lane descent')
+
+    def test_t3_a_root_that_moves_while_it_is_opened_is_refused(self):
+        old = self.s.run('o1', outcome='GREEN')
+        kept = self.s.home / 'kept'
+        real = th._open_dir
+        state = {'done': False}
+
+        def hooked(name, dir_fd, dev):
+            fd = real(name, dir_fd, dev)
+            if name == 'out' and not state['done']:
+                state['done'] = True
+                os.rename(self.s.out, kept)
+            return fd
+        run = self.current()
+        th._open_dir = hooked
+        self.addCleanup(setattr, th, '_open_dir', real)
+        try:
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        except th.Refused:
+            pass
+        self.assertTrue((kept / old.name / 'suite-app.xcresult' / 'Data' / 'blob').exists(), 'cleanup worked in a root that had moved')
+
+    def test_t4_the_current_run_is_known_by_identity_not_by_spelling(self):
+        run = self.current()                                  # the lock names out/now-suite
+        os.rename(run, self.s.out / 'NOW-suite')              # the same folder, another case
+        self.clean(run, 'start', full(self.s.home))
+        self.assertTrue((self.s.out / 'NOW-suite' / 'suite-app.xcresult').exists(), 'the run holding the lock was tidied')
+
+    def test_t5_the_tail_write_checks_where_the_folder_is_first(self):
+        old = self.s.run('o1', outcome='GREEN')
+        (old / 'suite.log.tidy-new').write_text('leftover')
+        adopted = self.s.corpus / 'media' / 'adopted'
+        real = os.unlink
+        state = {'done': False}
+
+        def hooked(path, *args, **kwargs):
+            result = real(path, *args, **kwargs)
+            if not state['done'] and str(path) == 'suite.log.tidy-new':
+                state['done'] = True
+                os.rename(old, adopted)
+            return result
+        os.unlink = hooked
+        self.addCleanup(setattr, os, 'unlink', real)
+        run = self.current()
+        try:
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        except th.Refused:
+            pass
+        self.assertFalse((adopted / 'suite.log.tidy-new').exists(), 'a file was created in a folder that had moved into the media')
 
 
 class LockTests(CleanCase):

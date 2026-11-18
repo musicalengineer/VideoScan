@@ -282,10 +282,14 @@ def _open_dir(name: str, dir_fd: int, dev: int) -> int:
 
 
 def _lstat_at(dir_fd: int, name: str):
+    """The entry as itself, or None when it is not there. Any other error refuses: a name that cannot
+    be inspected is never taken for an absent one (Codex #325 T1)."""
     try:
         return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        raise Refused("a name could not be inspected")
 
 
 def _write_at(dir_fd: int, name: str, text: str, create: bool = False) -> bool:
@@ -391,10 +395,42 @@ class Confine:
                     self.caches.append(name)                 # a cache that holds a protected destination is not one (Codex #323 R2)
         except Refused:
             self.caches_fd, self.caches = None, []
-        # The roots as the kernel names them (F_GETPATH), so a later where-is-it answer compares like with like.
-        self.out_where = _where(self.out_fd) or self.out
-        self.work_where = _where(self.work_fd) if self.work_fd is not None else ""
-        self.caches_where = _where(self.caches_fd) if self.caches_fd is not None else ""
+        # The roots as the kernel names them (F_GETPATH), so a later where-is-it answer compares like with like;
+        # each must still be where it was authorized: a fresh open from home finds the same folder, and the
+        # kernel name is that path (Codex #325 T3: a root moved while it was being opened is refused).
+        try:
+            self.out_where = self._verified(self.out_fd, ("m4run", "out"))
+            self.work_where = self._verified(self.work_fd, ("corpus", "work")) if self.work_fd is not None else ""
+            self.caches_where = self._verified(self.caches_fd, ("Library", "Caches")) if self.caches_fd is not None else ""
+        except Refused:
+            self.close()
+            raise
+
+    def _verified(self, fd: int, parts) -> str:
+        fresh, opened = self.home_fd, []
+        try:
+            for part in parts:
+                fresh = _open_dir(part, fresh, self.dev)
+                opened.append(fresh)
+            held, again = os.fstat(fd), os.fstat(fresh)
+            if (held.st_dev, held.st_ino) != (again.st_dev, again.st_ino):
+                raise Refused("a root moved while it was opened")
+        finally:
+            for one in opened:
+                os.close(one)
+        where = _where(fd)
+        if where.lower() != os.path.join(self.home, *parts).lower():
+            raise Refused("a root is not where it was authorized")
+        return where
+
+    def open_dir(self, name: str, dir_fd: int) -> int:
+        """`_open_dir`, and never a protected folder, whatever it is called now (Codex #325 T2)."""
+        fd = _open_dir(name, dir_fd, self.dev)
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) in self.protected_ids:
+            os.close(fd)
+            raise Refused("a protected corpus folder")
+        return fd
 
     def _keep(self, fd: int) -> int:
         self.fds.append(fd)
@@ -456,7 +492,7 @@ class Confine:
                 return 0, False
             return _reclaim(info), True
         try:
-            fd = _open_dir(name, dir_fd, self.dev)
+            fd = self.open_dir(name, dir_fd)
         except Refused:
             return 0, False
         freed, whole = 0, True
@@ -483,7 +519,10 @@ class Confine:
         be opened or listed (the scan is not whole: #324 S3), or a protected folder by (device, inode).
         Given back: regular files with one name and no lock flag, in folders with no lock flag (F7, #323
         R5); a blocked tree gives back nothing (#324 S6)."""
-        info = _lstat_at(dir_fd, name)
+        try:
+            info = _lstat_at(dir_fd, name)
+        except Refused:
+            return 0, True
         if info is None:
             return 0, False
         if (info.st_dev, info.st_ino) in self.protected_ids:
@@ -495,7 +534,8 @@ class Confine:
         except OSError:
             return 0, True
         try:
-            if os.fstat(fd).st_dev != self.dev:
+            opened = os.fstat(fd)
+            if opened.st_dev != self.dev or (opened.st_dev, opened.st_ino) in self.protected_ids:
                 return 0, True
             try:
                 entries = os.listdir(fd)
@@ -559,7 +599,7 @@ def _shorten_at(dir_fd: int, name: str, inside=lambda fd: True) -> bool:
     except OSError:
         pass
     text = "[tidied: the last %d of %d lines are kept]\n%s\n" % (TAIL_LINES, lines, "\n".join(tail))
-    if not _write_at(dir_fd, temporary, text, create=True) or not inside(dir_fd):
+    if not inside(dir_fd) or not _write_at(dir_fd, temporary, text, create=True) or not inside(dir_fd):
         return False
     try:
         os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
@@ -587,7 +627,7 @@ def _run_folders(conf: Confine):
     for name in os.listdir(conf.out_fd):
         info = _lstat_at(conf.out_fd, name)
         if RUN_NAME.match(name) and info is not None and stat.S_ISDIR(info.st_mode):
-            found.append((info.st_mtime, name, _finished_at(conf.out_fd, name, conf.dev)))
+            found.append((info.st_mtime, name, _finished_at(conf.out_fd, name, conf.dev), (info.st_dev, info.st_ino)))
     found.sort()
     return found
 
@@ -599,7 +639,7 @@ def tidy(conf: Confine, run_name: str):
     if not RUN_NAME.match(run_name) or conf.guarded(os.path.join(conf.out, run_name)):
         return None
     try:
-        run_fd = _open_dir(run_name, conf.out_fd, conf.dev)
+        run_fd = conf.open_dir(run_name, conf.out_fd)
     except Refused:
         return None
     freed = removed = refused = shortened = 0
@@ -619,7 +659,7 @@ def tidy(conf: Confine, run_name: str):
                     continue
                 if folder == run_fd and CORPUS_OUT.match(name) and stat.S_ISDIR(info.st_mode):
                     try:
-                        sub = _open_dir(name, run_fd, conf.dev)   # a testbed run: each corpus lane has its own folder
+                        sub = conf.open_dir(name, run_fd)        # a testbed run: each corpus lane has its own folder
                     except Refused:
                         refused += 1
                         continue
@@ -697,7 +737,7 @@ def _current_fd(conf: Confine, current: str) -> int:
         raise Refused("the current run is not a run folder of this root")
     if conf.guarded(os.path.join(conf.out, name)):
         raise Refused("the current run overlaps a protected corpus folder")   # Codex #323 R2
-    fd = _open_dir(name, conf.out_fd, conf.dev)
+    fd = conf.open_dir(name, conf.out_fd)
     if not conf.inside(fd):
         os.close(fd)
         raise Refused("the current run is not inside the run root")
@@ -744,9 +784,10 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
             refused += done[2]
     old_bytes = old_runs = 0
     unfinished = []
-    for _, name, finished in _run_folders(conf):
-        if name == mine:
-            continue                                         # the run holding the lock: only its own end tidies it
+    held = os.fstat(cur_fd)
+    for _, name, finished, identity in _run_folders(conf):
+        if name == mine or identity == (held.st_dev, held.st_ino):
+            continue                                         # the run holding the lock, by identity too (#325 T4: a case-only rename)
         if not finished:
             unfinished.append(name)
             continue
@@ -900,7 +941,11 @@ def sample(root: str, out: str, disk=disk_space, interval: float = SAMPLE_SECOND
     conf.fds.append(cur_fd)
     try:
         parent, low = os.getppid(), None
-        stopped = lambda: _lstat_at(cur_fd, "disk-sample.stop") is not None or os.getppid() != parent   # noqa: E731
+        def stopped() -> bool:
+            try:
+                return _lstat_at(cur_fd, "disk-sample.stop") is not None or os.getppid() != parent
+            except Refused:
+                return True
         while True:
             free, total = disk(os.path.join(conf.home, "m4run"))
             if low is None or free < low:
