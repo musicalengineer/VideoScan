@@ -412,18 +412,21 @@ struct FootageFoldersIsolationTests {
         #expect(d.ids == [a.id, b.id], "copies still fold; nothing else moves")
     }
 
-    /// Anything but a Bool under the key reads as OFF.
+    /// Anything but a Bool under the key reads as OFF. (Since 2026-11-17 the
+    /// switch is Show ▸ Folders, owned by CatalogShowFilterStore, read
+    /// through the same strict read; its migration is OneFolderViewTests.)
     @Test func poisonedShowSettingReadsAsOff() throws {
         let suite = "FootageFoldersTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "absent → off")
-        defaults.set("yes", forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "a string → off, never on")
-        defaults.set(["on": true], forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "a dictionary → off")
-        CatalogFootageFoldersSetting.set(true, defaults)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == true, "a real Bool round-trips")
+        let key = CatalogShowFilterStore.foldersKey
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "absent → off")
+        defaults.set("yes", forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "a string → off, never on")
+        defaults.set(["on": true], forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "a dictionary → off")
+        defaults.set(true, forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == true, "a real Bool round-trips")
     }
 
     /// codex 2026-10-16 P2: a stored NUMBER bridges to Bool through NSNumber
@@ -433,18 +436,20 @@ struct FootageFoldersIsolationTests {
         let suite = "FootageFoldersTests-strict-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(1, forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the integer 1 → off")
-        defaults.set("true", forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the string \"true\" → off")
-        defaults.set(1.0, forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the double 1.0 → off")
-        defaults.set([true], forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "an array holding true → off")
-        defaults.set(true, forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == true, "a plist boolean true → on")
-        defaults.set(false, forKey: CatalogFootageFoldersSetting.key)
-        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "a plist boolean false → off")
+        let key = CatalogShowFilterStore.foldersKey
+        defaults.set(1, forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "the integer 1 → off")
+        defaults.set("true", forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "the string \"true\" → off")
+        defaults.set(1.0, forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "the double 1.0 → off")
+        defaults.set([true], forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "an array holding true → off")
+        defaults.removeObject(forKey: key)   // CFPreferences skips `true` over an equal NSNumber 1.0
+        defaults.set(true, forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == true, "a plist boolean true → on")
+        defaults.set(false, forKey: key)
+        #expect(StrictDefaultsBool.read(key, defaults) == false, "a plist boolean false → off")
     }
 
     @MainActor
@@ -552,21 +557,21 @@ struct FootageFoldersSensorTests {
 @Suite("Footage folders — the Show option and its chrome")
 struct FootageFoldersStructureTests {
 
+    /// Since 2026-11-17 the option is Show ▸ Folders, the one folder view:
+    /// the toolbar asks the store, the parent passes the store's value down,
+    /// and a fresh install starts with it off.
+    @MainActor
     @Test func showOptionExistsAndDefaultsOff() throws {
         let toolbar = try code("CatalogToolbar.swift")
-        #expect(toolbar.contains("FootageFoldersShowToggle(isOn: $showFootageFolders)"), "the Show menu offers it")
-        let toggle = try code("CatalogContent+FolderTable.swift")
-        #expect(toggle.contains("Label(FootageFolderWords.showOptionTitle"))
-        #expect(FootageFolderWords.showOptionTitle == "Events & Copies as Folders")
+        #expect(toolbar.contains("set: { showFilters.setFolders($0, by: .showMenu) }"), "the Show menu offers it")
+        #expect(toolbar.contains("Label(FootageFolderWords.showOptionTitle"))
+        #expect(FootageFolderWords.showOptionTitle == "Folders")
         let content = try code("ContentView.swift")
-        #expect(content.contains("@State private var showFootageFolders: Bool = CatalogFootageFoldersSetting.isOn()"))
-        // The handler also applies CatalogFoldersOnlyRule (2026-10-19), so
-        // it is a block now; the write itself is what is pinned.
-        #expect(content.contains(".onChange(of: showFootageFolders) {")
-                && content.contains("CatalogFootageFoldersSetting.set(showFootageFolders)"),
-                "remembered per user")
-        #expect(CatalogFootageFoldersSetting.isOn(UserDefaults(suiteName: "FootageFolders-empty-\(UUID())") ?? .standard) == false
-                || UserDefaults.standard.object(forKey: CatalogFootageFoldersSetting.key) != nil)
+        #expect(content.contains("showFootageFolders: showFilters.foldersOn,"), "the parent hands down the store's value")
+        let suite = "FootageFolders-empty-\(UUID().uuidString)"
+        let fresh = try #require(UserDefaults(suiteName: suite))
+        defer { fresh.removePersistentDomain(forName: suite) }
+        #expect(CatalogShowFilterStore(defaults: fresh, log: { _ in }).foldersOn == false, "off on a fresh install")
         let helpers = try code("CatalogHelpers.swift")
         #expect(helpers.contains("var showFootageFolders: Bool = false"), "off unless the parent says otherwise")
     }

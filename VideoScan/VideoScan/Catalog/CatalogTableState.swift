@@ -30,15 +30,12 @@ final class CatalogPaneFocusMirror {
 }
 
 /// Reference box the same NSEvent monitor reads for the folder keys
-/// (→ / ← / Esc / ⌘↓ / ⌘↑): whether Show ▸ Events & Copies as Folders is
-/// on. The option is a plain `let` on CatalogContent, which the monitor's
-/// captured copy would read stale; this box is mirrored on every change.
+/// (→ / ← / Esc / ⌘↓ / ⌘↑): whether Show ▸ Folders is on. The option is a
+/// plain `let` on CatalogContent, which the monitor's captured copy would
+/// read stale; this box is mirrored on every change.
 @MainActor
 final class FootageFolderKeyMirror {
     var isOn = false
-    /// Show ▸ Folders Only, for the same reason: a compose started from
-    /// the monitor (a level change) must not bring the loose rows back.
-    var foldersOnly = false
 }
 
 /// The files table's view-owned state. A custom `DynamicProperty` ≈ a C++
@@ -79,7 +76,7 @@ struct CatalogTableState: DynamicProperty {
     /// CatalogPaneFocusMirror). Written only by `.onChange(of: focusedPane)`.
     @State var paneFocusMirror = CatalogPaneFocusMirror()
 
-    // MARK: Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16)
+    // MARK: Footage folders (Show ▸ Folders, 2026-10-16; one view 2026-11-17)
 
     /// Where the Finder is: nil = the top level (folders and loose files);
     /// `.event` = inside that folder (double-click / Return / ⌘↓);
@@ -125,10 +122,6 @@ struct CatalogTableState: DynamicProperty {
     @State var pendingDropSelection: FolderDropLanding?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
-    /// Folders Only is on and its composed top level holds no folder: the
-    /// table shows "No folders match" instead of a blank area. Set in the
-    /// display / index handlers, never in a body.
-    @State var foldersOnlyFindsNothing = false
 
     // MARK: Folders as labels (2026-10-19: a file in many folders)
 
@@ -211,8 +204,15 @@ extension CatalogContent {
     }
 
     /// The selection changed: a held row Rick has moved off leaves now.
-    /// O(1) unless a held row was released (then one refresh).
+    /// O(1) unless a held row was released (then one refresh). The same
+    /// rule holds a selected row's GREY folder in the folder view (the
+    /// machine's era guess may re-file it): the hold is taken and released
+    /// here, and a release that would move the row re-joins once.
+    /// O(selection) while the folder view is on.
     func releaseHeldRowsIfSelectionMoved() {
+        if tableState.folderKeyMirror.isOn, model.footageFolders.holdMachinePlacement(selected: selectedIDs) {
+            model.scheduleFootageFoldersRefresh()
+        }
         let held = tableState.noLongerMatchingIDs
         guard !held.isEmpty, !held.isSubset(of: selectedIDs) else { return }
         refreshRows(afterEdit: true)
@@ -228,7 +228,7 @@ extension CatalogContent {
     // MARK: The displayed selection — ONE source of truth for every row action
 
     /// `ids` ∩ what the table shows right now: the folder display's record
-    /// ids while Show ▸ Events & Copies as Folders is on (members and loose
+    /// ids while Show ▸ Folders is on (members and loose
     /// files under the filter, sort AND scope — never a folder row), the
     /// linear rows otherwise. Every row action — ⌘⌫, Promote, ⌘O, ⌘I,
     /// Return, the row menu — goes through this, never the raw selection

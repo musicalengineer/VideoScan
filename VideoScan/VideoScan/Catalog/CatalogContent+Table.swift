@@ -144,15 +144,13 @@ extension CatalogContent {
             .onChange(of: model.lastConfirmBatch) { refreshRows(afterEdit: true) }
     }
 
-    /// Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16):
+    /// Footage folders (Show ▸ Folders, 2026-10-16; one view 2026-11-17):
     /// the option flipping, the published display landing (the ONLY thing
     /// the folder rows observe), and a derivative landing in the catalog.
     /// Its own stage, same reason as the others (GH #132).
     private var tableWithFolderTriggers: some View {
         tableWithFolderPaintTriggers
             .onChange(of: showFootageFolders, initial: true) { footageFoldersOptionChanged(on: showFootageFolders) }
-            // Show ▸ Folders Only: same rows, a different compose.
-            .onChange(of: showFoldersOnly) { foldersOnlyOptionChanged() }
             .onReceive(folderDisplayPublisher) { rebuildFolderRows($0) }
             // A folder's title answers the search (FootageFolderTitleSearch):
             // a join that lands AFTER the query was typed (the first index
@@ -162,8 +160,6 @@ extension CatalogContent {
             // @Published publisher replays its current value on subscribe,
             // and that one is already what the appear pass filtered with.
             .onReceive(folderIndexPublisher.dropFirst()) { _ in
-                // The first join can land after an equal (empty) display.
-                updateFoldersOnlyEmptyNote(model.footageFolders.display)
                 if showFootageFolders && !searchText.isEmpty { refreshRows() }
             }
             .onChange(of: model.lastDerivativeLanding) {

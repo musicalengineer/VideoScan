@@ -206,25 +206,18 @@ struct PersonPageCuratedPageTests {
                 "the same files the Catalog's Person filter shows")
     }
 
-    /// The link: the picker set to this person, Folders Only off, the
-    /// folder view and everything else left alone; the Catalog tab.
-    @Test func theCatalogLinkSetsThePickerAndTurnsFoldersOnlyOff() throws {
-        let suite = "PersonPageCuratedTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        CatalogFootageFoldersSetting.set(true, defaults)
-        CatalogFoldersOnlySetting.set(true, defaults)
+    /// The link: the picker set to this person, everything else left alone
+    /// (since 2026-11-17 there is no Folders Only to turn off — the one
+    /// folder view lists a person's loose files too); the Catalog tab.
+    @Test func theCatalogLinkSetsThePickerAndNothingElse() throws {
         let store = CatalogPersonFilterStore()
         var p = POIProfile(name: "Dana", referencePath: "")
         p.aliases = ["Dana B."]
 
-        let tab = CatalogPersonLink.showAll(of: p, in: store, defaults: defaults)
+        let tab = CatalogPersonLink.showAll(of: p, in: store)
 
         #expect(tab == MainTab.catalog.rawValue)
         #expect(store.selected?.id == p.uuid && store.selected?.name == "Dana B.")
-        #expect(!CatalogFoldersOnlySetting.isOn(defaults), "Folders Only off")
-        #expect(CatalogFootageFoldersSetting.isOn(defaults), "the folder view itself is left alone")
-        #expect(!CatalogFoldersOnlyRule.launchFoldersOnly(defaults), "the rebuilt Catalog view reads it off")
         store.reload([POIProfile(name: "Ann", referencePath: ""), p])
         #expect(store.selected?.id == p.uuid, "the Catalog's own reload keeps the choice")
     }

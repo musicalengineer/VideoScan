@@ -1,7 +1,9 @@
-// MachineEstimateFoldersTests.swift — Catalog ▸ Show ▸ Folders by Machine
-// Estimate, and the File Journey's "Estimated era" line (Rick 2026-11-13).
-// Core's MachineEraResolverTests own the filing rule's boundaries and the
-// sentence; these pin what the app does with them.
+// MachineEstimateFoldersTests.swift — the machine's grey folders in Catalog ▸
+// Show ▸ Folders (Rick 2026-11-13; one folder view since 2026-11-17), and the
+// File Journey's "Estimated era" line. Core's MachineEraResolverTests own the
+// filing rule's boundaries and the sentence; these pin what the app does with
+// them. The one view itself (blue before grey, holds, the switch) is
+// OneFolderViewTests.swift.
 //
 // Dimensions (CLAUDE.md rule 8):
 //   LOGIC      a row whose content has an era files under its year or its
@@ -12,12 +14,15 @@
 //              the line only when an era is handed in, dated when the machine
 //              made it, and its words say "not confirmed".
 //   ISOLATION  no eras → no folders; an era for a content not in the catalog
-//              is inert; the setting reads off unless a plist true is stored.
+//              is inert.
 //   SCALE      100k rows, 50k with an era, inside the join's Debug budget.
 //   SENSOR     the estimate file writes nothing and names no store; the
-//              folder edit paths refuse while the index is estimated.
+//              folder edit paths refuse on a grey folder's id.
 //   MEDIA      N/A — no media is opened. WRITER quartet: N/A (a view).
 // Synthetic names and digests only.
+// Removed 2026-11-17 with the Folders by Machine Estimate mode:
+// theIndexSaysItIsEstimatedOnlyWhenTold, theSettingIsOffUnlessStoredOn,
+// theJoinTakesRicksFoldersOrTheEstimatesNeverBoth, theShowMenuHasTheToggleAndThePill.
 
 import Foundation
 import Testing
@@ -56,7 +61,7 @@ struct MachineEstimateFoldersLogicTests {
 
         let events = MachineEstimateFolders.events(rows: [eighties, ninety1, noEra], eras: eras)
         #expect(events.map(\.title) == ["1980s (estimated)", "1991 (estimated)"])
-        #expect(events.allSatisfy { $0.kind == .other && $0.dateWords == MachineEstimateWords.folderDateWords })
+        #expect(events.allSatisfy { $0.kind == .other && $0.dateWords == MachineEstimateWords.folderDateWords && $0.byMachine })
 
         let index = FootageFolders.index(rows: [eighties, ninety1, noEra], events: events)
         #expect(index.folders.count == 2)
@@ -136,15 +141,6 @@ struct MachineEstimateFoldersLogicTests {
         #expect(index.folders(of: stranger.id).isEmpty)
         #expect(MachineEstimateWords.legend.contains("unless it was made from one inside"))
     }
-
-    @Test func theIndexSaysItIsEstimatedOnlyWhenTold() {
-        let r = row("clip.mov", digest: hex(1))
-        var index = FootageFolders.index(rows: [r], events: MachineEstimateFolders.events(rows: [r], eras: [hex(1): [era(1980, 1990)]]))
-        #expect(!index.estimated, "the join itself never claims it; the model sets it")
-        let plain = index
-        index.estimated = true
-        #expect(index != plain, "flipping the view is a change the table must see")
-    }
 }
 
 // MARK: - Isolation
@@ -158,19 +154,6 @@ struct MachineEstimateFoldersIsolationTests {
         #expect(MachineEstimateFolders.events(rows: [], eras: [hex(1): [era(1980, 1990)]]).isEmpty,
                 "an era for a content the catalog does not hold makes no folder")
         #expect(MachineEstimateFolders.events(rows: [r], eras: [hex(1): []]).isEmpty, "an empty era list is no era")
-    }
-
-    @Test func theSettingIsOffUnlessStoredOn() throws {
-        let suite = "test.estimateFolders.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        #expect(!MachineEstimateFolders.isOn(defaults), "off by default")
-        defaults.set("garbage", forKey: MachineEstimateFolders.settingKey)
-        #expect(!MachineEstimateFolders.isOn(defaults))
-        MachineEstimateFolders.set(true, defaults)
-        #expect(MachineEstimateFolders.isOn(defaults))
-        MachineEstimateFolders.set(false, defaults)
-        #expect(!MachineEstimateFolders.isOn(defaults))
     }
 }
 
@@ -291,7 +274,7 @@ struct MachineEstimateFoldersSensorTests {
         }
     }
 
-    @Test func everyFolderEditRefusesWhileTheFoldersAreEstimates() throws {
+    @Test func everyFolderEditRefusesOnAGreyFolder() throws {
         let drop = try code("CatalogContent+FolderDrop.swift")
         #expect(drop.contains("guard !MachineEstimateFolders.isEstimateFolder(folderID) else"), "a drop on an estimate folder files nothing")
         let labels = try code("CatalogContent+FolderLabels.swift")
@@ -299,27 +282,9 @@ struct MachineEstimateFoldersSensorTests {
         let table = try code("CatalogContent+FolderTable.swift")
         #expect(table.contains("return folder.flatMap { MachineEstimateFolders.isEstimateFolder($0) ? nil : $0 }"),
                 "no Move from / Remove from an estimate folder")
+        #expect(table.contains("from: row.inFolder.flatMap { MachineEstimateFolders.isEstimateFolder($0) ? nil : $0 }"),
+                "a drag out of a grey folder never claims to move out of it")
         // Codex #290: the gates ask the ROW's id, never a flag that can move ahead of the display.
         for source in [drop, labels] { #expect(!source.contains("index.estimated")) }
-        #expect(try code("ContentView.swift").contains("model.setFootageFoldersEstimated(false)"),
-                "showing one of Rick's own folders leaves the estimate view")
-    }
-
-    @Test func theJoinTakesRicksFoldersOrTheEstimatesNeverBoth() throws {
-        let snapshot = try code("FootageFoldersSnapshot.swift")
-        #expect(snapshot.contains("let own = estimated ? [] : FootageFolders.Event.events("))
-        #expect(snapshot.contains("index.estimated = estimated"))
-    }
-
-    @Test func theShowMenuHasTheToggleAndThePill() throws {
-        #expect(try code("CatalogToolbar.swift").contains("MachineEstimateFoldersToggle("))
-        var state = CatalogShowingSummary.State()
-        state.footageFolders = true
-        #expect(!CatalogShowingSummary.pills(for: state).map(\.text).contains(MachineEstimateWords.pill))
-        state.estimateFolders = true
-        #expect(CatalogShowingSummary.pills(for: state).map(\.text).contains(MachineEstimateWords.pill))
-        state.footageFolders = false
-        #expect(!CatalogShowingSummary.pills(for: state).map(\.text).contains(MachineEstimateWords.pill),
-                "no folder view, no estimate pill")
     }
 }

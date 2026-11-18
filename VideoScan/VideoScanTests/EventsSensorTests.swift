@@ -131,7 +131,7 @@ struct EventsSensorTests {
         #expect(folders.contains("takeFolderRevealRequest()"), "turning the folder view on completes a waiting request")
         let content = try SourceTree.appCode(named: "ContentView.swift")
         #expect(content.contains(".onChange(of: model.pendingCatalogFolderReveal) { handlePendingFolderReveal() }"))
-        #expect(content.contains("showFootageFolders = true"))
+        #expect(content.contains("showFilters.setFolders(true, by: .folderReveal)"), "the folder view turns on through the one store")
     }
 
     @Test("the page's words are pinned")

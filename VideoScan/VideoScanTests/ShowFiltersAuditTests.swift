@@ -49,15 +49,14 @@ struct ShowFiltersShowingBoxAuditTests {
             let s = CatalogShowingSummary.State(viewFilters: [f], hasMasterArchive: hasMasterArchive)
             #expect(!texts(s).contains(CatalogShowingSummary.everything), "\(f) is on but the box says Everything")
         }
-        // The two view switches that drop rows are not "everything" either.
+        // The view switch that drops rows is not "everything" either.
         var pairs = none
         pairs.showPairsOnly = true
         #expect(!texts(pairs).contains(CatalogShowingSummary.everything))
         var folders = none
         folders.footageFolders = true
-        #expect(texts(folders).contains(CatalogShowingSummary.everything), "As folders lists every file, in folders")
-        folders.foldersOnly = true
-        #expect(!texts(folders).contains(CatalogShowingSummary.everything), "Folders Only leaves the loose files out")
+        #expect(texts(folders).contains(CatalogShowingSummary.everything), "Folders lists every file, in folders")
+        #expect(texts(folders).contains("Folders"))
     }
 }
 

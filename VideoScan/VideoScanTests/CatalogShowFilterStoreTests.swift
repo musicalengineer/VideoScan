@@ -346,7 +346,8 @@ struct CatalogShowFilterStoreTests {
     func theWritersAreDistinct() {
         let words = CatalogShowFilterStore.Writer.allCases.map(\.rawValue)
         #expect(Set(words).count == words.count)
-        #expect(words == ["Show menu", "Analyze menu", "Steward", "empty-table note", "first-run default"])
+        // "a folder reveal" (2026-11-17): New Folder / Show in Catalog turning Show ▸ Folders on.
+        #expect(words == ["Show menu", "Analyze menu", "Steward", "empty-table note", "first-run default", "a folder reveal"])
     }
 
     // MARK: The retired hidden-records reveals

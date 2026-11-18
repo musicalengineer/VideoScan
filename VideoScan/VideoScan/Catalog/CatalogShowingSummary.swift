@@ -14,9 +14,10 @@
 //
 // EVERYTHING (2026-11-17, "final shape for now"). No filter ticked means
 // every file is listed, and the box says "Everything" — unless Show Pairs
-// Only or Folders Only narrows the list, in which case it says that instead
-// (the box never calls a narrowed list "Everything"). There is no media-kind
-// word any more: Audio Only is one of the filters.
+// Only narrows the list, in which case it says that instead (the box never
+// calls a narrowed list "Everything"). Show ▸ Folders drops no file, so the
+// box says "Everything · Folders". There is no media-kind word any more:
+// Audio Only is one of the filters.
 //
 // THE BOX TELLS THE TRUTH (2026-11-17 audit). Every filter that is on is
 // named — with or without a Master Archive. When the full line does not fit, the box draws a
@@ -59,14 +60,10 @@ enum CatalogShowingSummary {
         var viewFilters: Set<CatalogViewFilter> = []
         var showPairsOnly = false
         var showDisconnectedMedia = false
-        /// Show ▸ Events & Copies as Folders (2026-10-16) — a view shape,
-        /// not a filter; it gets its own pill so the folder rows explain
-        /// themselves from the Showing box too.
+        /// Show ▸ Folders (the one folder view, 2026-11-17) — a view shape,
+        /// not a filter; it gets its own pill, "Folders", so the folder rows
+        /// explain themselves from the Showing box too.
         var footageFolders = false
-        /// Show ▸ Folders Only — its pill stands in for "As folders".
-        var foldersOnly = false
-        /// Show ▸ Folders by Machine Estimate — its own pill beside the folder one.
-        var estimateFolders = false
         /// A Master Archive is designated. With one, and Not Yet Archived
         /// off, the box says "Including archived" (archived files ARE in
         /// the list then); Not Yet Archived, when on, is named either way.
@@ -183,22 +180,15 @@ enum CatalogShowingSummary {
     /// shown, and the Showing box says so").
     static let everything = "Everything"
 
-    /// Is the list every file in scope? No Show filter, and neither of the
-    /// two view switches that drop rows (Show Pairs Only, Folders Only).
+    /// Is the list every file in scope? No Show filter, and not Show Pairs
+    /// Only (the one view switch that drops rows; the folder view does not).
     static func listsEverything(_ s: State) -> Bool {
-        s.viewFilters.isEmpty && !s.showPairsOnly && !(s.footageFolders && s.foldersOnly)
+        s.viewFilters.isEmpty && !s.showPairsOnly
     }
 
     /// The pills, in reading order: selected volume(s) · the chosen person
     /// · then the box's pills. Focus mode overrides every filter, the volume
     /// and person ones included.
-    /// The folder view's pills: "As folders" / "Folders only", and "By
-    /// machine estimate" beside it while the folders are the machine's guesses.
-    static func folderPills(_ s: State) -> [Pill] {
-        let shape = Pill(FootageFolderWords.showingPill(foldersOnly: s.foldersOnly))
-        return s.estimateFolders ? [shape, Pill(MachineEstimateWords.pill)] : [shape]
-    }
-
     static func pills(for s: State) -> [Pill] {
         guard s.focusLabel == nil else { return boxPills(for: s) }
         let tokens = [volumePill(labels: s.selectedVolumeLabels), personPill(name: s.selectedPersonName)]
@@ -237,7 +227,7 @@ enum CatalogShowingSummary {
         }
         out.append(contentsOf: filters)
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
-        if s.footageFolders { out.append(contentsOf: folderPills(s)) }
+        if s.footageFolders { out.append(Pill(FootageFolderWords.showingPill)) }
 
         out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives"))
         return out
