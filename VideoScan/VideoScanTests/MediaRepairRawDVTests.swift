@@ -315,6 +315,81 @@ struct MediaRepairRawDVTests {
         #expect(try CleanupTestMedia.fingerprint(original) == before)
     }
 
+    // MARK: Codex #318-1 — a second sound track that first appears part-way through the tape
+
+    /// `tape` (locked, left-only), rewritten so that from frame `first` on the
+    /// camcorder records 12-bit / 32 kHz (AAUX source pack: quantization 1,
+    /// frequency 2 — fifth byte's low six bits 0x11; 1,068 samples a frame,
+    /// the 32 kHz NTSC minimum 1,053 + 15). FFmpeg's dv demuxer then carries
+    /// TWO stereo pairs and creates the second sound stream when it reaches
+    /// that frame — after every header read (ffprobe lists one; measured).
+    static func lateSecondPairTape(in dir: URL, name: String, seconds: Int = 4, fromFrame first: Int = 90) throws -> String {
+        let path = try tape(in: dir, name: name, seconds: seconds, samplesPerFrame: nil)
+        let url = URL(fileURLWithPath: path)
+        var bytes = try Data(contentsOf: url)
+        let frames = bytes.count / Media.frameBytes
+        try #require(first < frames)
+        for frame in first..<frames {
+            let at = frame * Media.frameBytes + Media.sourcePackOffset
+            try #require(bytes[at] == 0x50)
+            bytes[at + 1] = (bytes[at + 1] & 0xC0) | 15
+            bytes[at + 4] = (bytes[at + 4] & 0xC0) | 0x11
+        }
+        try bytes.write(to: url)
+        return path
+    }
+
+    @Test("REGRESSION Codex #318-1: a raw DV tape whose second sound track first appears part-way through is REFUSED before any write, on every route that rewrites it — the copy would carry no late pair",
+          .timeLimit(.minutes(3)),
+          arguments: [[MediaRepairFix.rebuildAudio], [.removeRepeatedFrames], [.rebuildAudio, .removeRepeatedFrames],
+                      [.rebuildAudio, .remux]])
+    func lateSecondSoundTrackIsRefused(_ fixes: [MediaRepairFix]) async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("repair_rawdv_late_\(fixes.map(\.rawValue).joined())")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try Self.lateSecondPairTape(in: dir, name: "late")
+        // The fixture is what it claims: one sound stream in the header, a second created at frame 90.
+        let header = try await MediaRepairProbe.summary(path: original, control: nil)
+        try #require(header.containerFormat == "dv" && header.codecs("audio").count == 1)
+        let before = try CleanupTestMedia.fingerprint(original)
+        let listing = F.listing(dir)
+
+        let (outcome, _) = await Self.repair(original, fixes: fixes)
+        guard case .refused(let why) = outcome else {
+            Issue.record("\(fixes): expected refused, got \(outcome)")
+            return
+        }
+        #expect(why == "This raw DV tape gains a sound track part-way through (sound track 2, from 3.0 s), and Repair's copy would leave it out. Nothing was written.", "\(why)")
+        #expect(F.listing(dir) == listing)
+        #expect(try CleanupTestMedia.fingerprint(original) == before)
+    }
+
+    @Test("SENSOR Codex #318-1: the whole-tape scan's log reading — FFmpeg's \"New <kind> stream with index N … DTS:<s>\" line, and nothing else")
+    func lateStreamLogLines() {
+        let line = "[in#0/dv @ 0x7b72c08140] New audio stream with index 2 at pos:10800000 and DTS:3.003s"
+        #expect(MediaRepairCommand.lateStream(fromLogLine: line) == MediaRepairLateStream(kind: "audio", index: 2, seconds: 3.003))
+        #expect(MediaRepairCommand.lateStream(fromLogLine: "[in#0/mpegts @ 0x1] New video stream with index 3 at pos:188 and DTS:NOPTS")
+                == MediaRepairLateStream(kind: "video", index: 3, seconds: nil))
+        for other in ["frame=10 fps=0", "progress=end", "  Stream #0:1: Audio: pcm_s16le, 48000 Hz", "New audio stream", ""] {
+            #expect(MediaRepairCommand.lateStream(fromLogLine: other) == nil, "\(other)")
+        }
+        // The scan reads every packet without decoding or writing anything; the probed rate goes before `-i`.
+        #expect(MediaRepairCommand.streamDiscoveryArgs(input: "/in/t.dv", inputArgs: ["-r", "30000/1001"])
+                == ["-hide_banner", "-nostdin", "-v", "info", "-r", "30000/1001", "-i", "/in/t.dv",
+                    "-map", "0", "-c", "copy", "-progress", "pipe:2", "-f", "null", "-"])
+    }
+
+    @Test("SENSOR Codex #318-1: the refusal sentence — a late sound track by its number among the sound tracks; any other late stream by its index; none, nothing")
+    func lateStreamRefusalTable() {
+        #expect(MediaRepairEngine.lateStreamRefusal([], headerSoundTracks: 1) == nil)
+        #expect(MediaRepairEngine.lateStreamRefusal([MediaRepairLateStream(kind: "audio", index: 2, seconds: 3.003)], headerSoundTracks: 1)
+                == "This raw DV tape gains a sound track part-way through (sound track 2, from 3.0 s), and Repair's copy would leave it out. Nothing was written.")
+        #expect(MediaRepairEngine.lateStreamRefusal([MediaRepairLateStream(kind: "audio", index: 1, seconds: nil)], headerSoundTracks: 0)
+                == "This raw DV tape gains a sound track part-way through (sound track 1), and Repair's copy would leave it out. Nothing was written.")
+        #expect(MediaRepairEngine.lateStreamRefusal([MediaRepairLateStream(kind: "data", index: 3, seconds: 9)], headerSoundTracks: 1)?
+            .contains("gains a data stream part-way through (stream 3, from 9.0 s)") == true)
+    }
+
     // MARK: Codex #316-2 — the played-what-it-stores rule on the writer's own delayed output
 
     @Test("Codex #316-2: the writer's QuickTime muxer states a delayed sound track's length WITHOUT its leading empty edit — so the rule refuses a delayed copy that hides stored sound and accepts one that plays it all",

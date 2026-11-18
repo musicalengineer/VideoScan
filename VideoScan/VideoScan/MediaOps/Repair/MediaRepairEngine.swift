@@ -96,7 +96,7 @@ enum MediaRepairPhase: Int, Sendable, CaseIterable {
 
     var step: String {
         switch self {
-        case .plan: return "reading the picture's frame rate and colour"
+        case .plan: return "reading the original (picture, colour, sound tracks)"
         case .write: return "writing the repaired copy"
         case .prove: return "checking the copy (structure + sampled decode)"
         case .publish: return "saving the copy"
@@ -300,7 +300,7 @@ enum MediaRepairEngine {
         guard rewritesSource(req.recipe) else {
             return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil, source: .none)
         }
-        if req.recipe.picture == .removeRepeatedFrames { progress(.plan, nil) }
+        progress(.plan, nil)
         let summary: MediaRepairStreamSummary
         do {
             summary = try await MediaRepairProbe.summary(path: req.sourcePath, control: control)
@@ -311,12 +311,15 @@ enum MediaRepairEngine {
             return .stop(.refused(reason: "The original's \(req.recipe.picture == .removeRepeatedFrames ? "picture" : "header") couldn't be read (\(error.localizedDescription)). Nothing was written."))
         }
         let source = MediaRepairSourceRules(summary: summary)
-        if let why = rawDVSoundTrackRefusal(req.recipe, summary: summary, source: source) {
-            repairLog.notice("repair REFUSED \(name, privacy: .public): \(why, privacy: .public)")
-            return .stop(.refused(reason: why))
-        }
         if source != .none {
             repairLog.info("repair: \(name, privacy: .public) is raw DV (\(summary.containerFormat, privacy: .public)) — read at its probed rate \(source.inputArgs.joined(separator: " "), privacy: .public), sound timestamps made contiguous (GH #484)")
+            if let stop = await rawDVSoundLayoutStop(req, summary: summary, source: source, control: control,
+                                                     progress: progress) {
+                if case .refused(let why) = stop {
+                    repairLog.notice("repair REFUSED \(name, privacy: .public): \(why, privacy: .public)")
+                }
+                return .stop(stop)
+            }
         }
         guard req.recipe.picture == .removeRepeatedFrames else {
             return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil, source: source)
@@ -334,6 +337,44 @@ enum MediaRepairEngine {
         let tracks = summary.codecs("audio").count
         guard recipe.sound == .rebuild, source != .none, tracks > 1 else { return nil }
         return "This raw DV file has \(tracks) sound tracks, and Rebuild sound writes one — the other\(tracks > 2 ? "s" : "") would be left out. Nothing was written."
+    }
+
+    /// Raw DV's whole sound layout, before the write (Codex #316-1, #318-1):
+    /// the header's tracks against what the pass carries, then ONE read of
+    /// the whole tape for a sound track the dv demuxer creates part-way
+    /// through (a camcorder switched to 12-bit / 32 kHz) — the copy's
+    /// mapping is fixed at the start and would leave it out. nil = go.
+    /// Cost: one demux of the original (no decode; measured in the commit).
+    private static func rawDVSoundLayoutStop(_ req: MediaRepairRequest, summary: MediaRepairStreamSummary,
+                                             source: MediaRepairSourceRules, control: ProcessControl?,
+                                             progress: @escaping Progress) async -> MediaRepairOutcome? {
+        if let why = rawDVSoundTrackRefusal(req.recipe, summary: summary, source: source) {
+            return .refused(reason: why)
+        }
+        let late: [MediaRepairLateStream]
+        do {
+            late = try await MediaRepairProbe.lateStreams(path: req.sourcePath, inputArgs: source.inputArgs,
+                                                          control: control, heartbeat: { progress(.plan, nil) })
+        } catch {
+            if Task.isCancelled || error is CancellationError { return .cancelled }
+            return .refused(reason: "The original couldn't be read to the end to list its sound tracks (\(error.localizedDescription)). Nothing was written.")
+        }
+        return lateStreamRefusal(late, headerSoundTracks: summary.codecs("audio").count).map { .refused(reason: $0) }
+    }
+
+    /// Any stream created part-way through the tape is refused: the copy's
+    /// mapping, fixed at the start, would leave it out. Named by the first
+    /// one (a sound track by its number among the sound tracks). Pure.
+    static func lateStreamRefusal(_ late: [MediaRepairLateStream], headerSoundTracks: Int) -> String? {
+        guard let first = late.first else { return nil }
+        let at = first.seconds.map { String(format: ", from %.1f s", $0) } ?? ""
+        let what: String
+        if first.kind == "audio" {
+            what = "a sound track part-way through (sound track \(headerSoundTracks + 1)\(at))"
+        } else {
+            what = "a \(first.kind) stream part-way through (stream \(first.index)\(at))"
+        }
+        return "This raw DV tape gains \(what), and Repair's copy would leave it out. Nothing was written."
     }
 
     /// Remove repeated frames' half: the justified re-encode plan from the

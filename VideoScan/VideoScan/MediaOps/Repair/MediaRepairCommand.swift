@@ -72,6 +72,35 @@ enum MediaRepairCommand {
          "-of", "json", input]
     }
 
+    /// The whole-file stream discovery (Codex #318-1): every packet read and
+    /// thrown away (`-c copy -f null`: nothing decoded, nothing written).
+    /// FFmpeg's demuxer can CREATE a stream part-way through a file — raw
+    /// DV does when a camcorder switches to 12-bit / 32 kHz and starts a
+    /// second stereo pair — and logs it at info level ("New audio stream
+    /// with index 2 at pos:… and DTS:3.003s"). ffprobe's packet census
+    /// cannot see such a stream: it drops packets of streams created after
+    /// its header read (measured, FFmpeg 9.0.2). `inputArgs` = the raw-DV
+    /// probed rate. `-progress` lines are the stall watchdog's heartbeat.
+    static func streamDiscoveryArgs(input: String, inputArgs: [String]) -> [String] {
+        ["-hide_banner", "-nostdin", "-v", "info"] + inputArgs + ["-i", input,
+         "-map", "0", "-c", "copy", "-progress", "pipe:2", "-f", "null", "-"]
+    }
+
+    /// One `streamDiscoveryArgs` log line → the stream it says FFmpeg
+    /// created part-way through; nil for every other line. Pure.
+    static func lateStream(fromLogLine line: String) -> MediaRepairLateStream? {
+        guard let new = line.range(of: "] New "),
+              let with = line.range(of: " stream with index ", range: new.upperBound..<line.endIndex) else { return nil }
+        let kind = String(line[new.upperBound..<with.lowerBound])
+        let rest = line[with.upperBound...]
+        guard !kind.isEmpty, !kind.contains(" "),
+              let index = Int(rest.prefix { $0.isNumber }) else { return nil }
+        let seconds = line.range(of: "DTS:").flatMap { r in
+            Double(line[r.upperBound...].prefix { $0.isNumber || $0 == "." || $0 == "-" })
+        }
+        return MediaRepairLateStream(kind: kind, index: index, seconds: seconds)
+    }
+
     /// ffprobe: one line per packet, "stream_index,duration,size" (no
     /// decode; the whole file is read once). ffprobe prints the fields in
     /// ITS order, not the order asked for here — pinned on real output by
@@ -118,6 +147,15 @@ struct MediaStreamTally: Equatable, Sendable {
         guard f.count >= 3, let i = Int(f[0]), let size = Int64(f[2]) else { return nil }
         return (i, size, Int64(f[1]) ?? 0)
     }
+}
+
+/// A stream FFmpeg's demuxer created part-way through a file, after every
+/// header read: its kind ("audio", "video", …), container index, and the
+/// time it first appears (nil = unstated).
+struct MediaRepairLateStream: Equatable, Sendable {
+    let kind: String
+    let index: Int
+    let seconds: Double?
 }
 
 /// One file's streams and length, from the header (no decode).
