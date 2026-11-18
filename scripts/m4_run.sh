@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# m4_run.sh — run the UI test plans and/or the deep gauntlet on a test host,
-# on demand, in that host's GUI session (docs/guides/operations.md).
+# m4_run.sh — run the UI test plans, the deep gauntlet or the full suite on a
+# test host, on demand, in that host's GUI session (docs/guides/operations.md).
 #
 #   scripts/m4_run.sh ui     [--host m4|ultra] [--ref <rev>] [--only <UITestClass>[,…]] [--wait] [--dry-run]
 #   scripts/m4_run.sh deep   [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh all    [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
+#   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh status [--host m4|ultra]
 #   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
 #
@@ -13,6 +14,7 @@
 #   "… on the M5 Ultra"                         scripts/m4_run.sh ui --host ultra
 #   "deep test on the M4" / "run the gauntlet"  scripts/m4_run.sh deep
 #   "everything on the M4"                      scripts/m4_run.sh all
+#   "run the full suite on the M4 for <ref>"    scripts/m4_run.sh suite --ref <ref> --wait
 #   "how's the M4 run?"                         scripts/m4_run.sh status
 #
 # Lanes:
@@ -23,6 +25,18 @@
 #         runner knows only m4|m5|m1, so the Ultra runs as "m5"; --queue-only
 #         keeps an on-demand run off the metrics branch).
 #   all   deep, then ui.
+#   suite The full app + Core suite the scheduled nightly runs (~13,900 tests),
+#         by the nightly's own runner: scripts/nightly_local_tests.sh --on-demand
+#         (one engine — the same preflight, Core lane, Release build, parsers
+#         and verdict precedence), installed beside this script per run and
+#         pointed at the testbed worktree. Nothing is published: its row goes
+#         to <out>/suite-row.json, never the metrics branch, and the page is
+#         not rebuilt. Own caches (<DerivedData>-suite/{app,core}), own logs in
+#         <out>; the scheduled run's checkout, caches and /tmp files are not
+#         touched. m4_run_summary.py --suite turns the row into the verdict:
+#         GREEN / RED, or NORUN when the machine preflight stopped it. A lane
+#         with no number (zero app or zero Core tests) is RED. `all` does not
+#         include it.
 #   corpus  the real-data corpus harness (scripts/corpus_run.sh is its front door; M4 only):
 #         scripts/corpus_run.py on the host, under the same lock, agent and --ref checkout.
 #         It refuses any host but the M4 and any state root outside ~/corpus/state.
@@ -49,21 +63,31 @@
 # mutation of the shared testbed happens under the lock, so a second caller is
 # refused before it can touch a live run's tree (Codex 2026-11-05) — writes
 # <root>/out/<stamp>-<lane>/ {run.log, summary.txt,
-# <plan>.log, <plan>.xcresult, <plan>.tests.tsv}, points <root>/latest at it,
-# and prints START/OUTCOME lines into run.log. `status` reads them back.
+# <plan>.log, <plan>.xcresult, <plan>.tests.tsv}, points <root>/latest at it
+# (a suite run also <root>/latest-suite, so `status` still shows the last suite
+# verdict after a later ui or deep run), and prints START/OUTCOME lines into
+# run.log. `status` reads them back.
 #
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
-# Worst-case resources: one Debug DerivedData per host (~15 GB), xcresult
-# bundles per run (~50–300 MB each, kept; prune <root>/out by hand), and the
-# watchdog budgets below in wall time.
+# Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
+# suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
+# 6.9 GB together on the M4, 2026-11-17), xcresult bundles per run (~50–300 MB
+# each; a suite run's directory 140–420 MB; kept; prune <root>/out by hand), and
+# the watchdog budgets below in wall time. A suite run on the M4 with warm caches:
+# 56 min (Core 16, build 10, app tests 30), measured 2026-11-17.
 #
-# Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error · 2 usage ·
+# Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error (also a run
+#       whose shell was stopped before its OUTCOME: a logout of the host's GUI session, a restart) · 2 usage ·
 #       3 busy · 4 testbed worktree not usable · 5 nightly window.
+#       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
+#       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
+#       started still exits 3 / 4 / 5 as above.
 #
 # Tests: tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
-# summary line). Nothing in the tests touches a host.
+# summary line), tests/test_m4_run_deep_lane.py, tests/test_m4_run_suite_lane.py.
+# Nothing in the tests touches a host.
 
 set -uo pipefail
 
@@ -77,15 +101,19 @@ BUILD_BUDGET=2400
 UI_PLAN_BUDGET=1200          # VideoScan-UI (Smoke): one test, normally < 60 s
 GAUNTLET_PLAN_BUDGET=3600    # VideoScan-Gauntlet: 8 classes × ≤ 300 s allowance
 DEEP_BUDGET=14400            # run_gauntlet.sh: ~45 min normally
+# The suite's runner has its own watchdogs (Core 3,600 s; build 5,400 s, twice at
+# worst with its clean retry; tests 7,200 s = 21,600 s); this one is the backstop.
+SUITE_BUDGET=22500
 CORPUS_BUDGET=21600          # corpus lane: a build, then every corpus file under its own per-file deadline
-WAIT_BUDGET=21600
+WAIT_BUDGET=23400            # past every lane's budget, so --wait outlives the run it waits for
+WAIT_POLL="${VIDEOSCAN_M4RUN_WAIT_POLL:-30}"     # seconds between --wait polls (tests shorten it)
 
 usage() {
-    sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
-die() { echo "m4_run: $*" >&2; exit "${2:-1}"; }
+die() { echo "m4_run: $1" >&2; exit "${2:-1}"; }     # die <message> [exit code]
 
 # ── Host configuration ────────────────────────────────────────────────────
 # Same account on every fleet Mac, so $HOME names the host's home too.
@@ -102,6 +130,7 @@ host_config() {
         *) die "unknown host '$1' (m4|ultra)" 2 ;;
     esac
     H_REPO="$HOME/dev/VideoScan"
+    H_SUITE_DD="$H_DD-suite"   # the suite lane's own caches: <it>/app (Release DerivedData), <it>/core (swift test scratch)
     LOCK="$H_ROOT/lock"      # the testbed lock, shared with scripts/nightly_gauntlet.sh (take_lock below)
     # The lock helper beside this script: scripts/ in the repo for the caller,
     # <root>/bin on the host (installed by start_run beside m4_run.sh).
@@ -161,9 +190,27 @@ if [ -e "\$last/run.log" ]; then
   echo "last run: \$(readlink "\$last")"
   grep -E '^(START|OUTCOME)' "\$last/run.log" | sed 's/^/  /'
   [ -f "\$last/summary.txt" ] && sed 's/^/  /' "\$last/summary.txt"
-  grep -q '^OUTCOME' "\$last/run.log" || echo "  now: \$(tail -1 "\$last/run.log")"
+  if ! grep -q '^OUTCOME' "\$last/run.log"; then
+    case "\$probe" in
+      BUSY*) echo "  now: \$(tail -1 "\$last/run.log")" ;;
+      *) echo "  ENDED WITHOUT AN OUTCOME: nothing of this run holds the lock — its shell was stopped (a logout of the GUI session, a restart, a crash); its logs are what is left" ;;
+    esac
+  fi
+  # A live suite run: its runner's last step, and how many tests have finished in each lane.
+  if [ -f "\$last/suite.log" ] && ! grep -q '^OUTCOME' "\$last/run.log"; then
+    echo "  step: \$(grep -E '^\[[0-9:]+\] ' "\$last/suite.log" | grep -v 'Core lane machine' | tail -1)"
+    for lane in core app; do
+      [ -f "\$last/suite-\$lane-test.log" ] && echo "  \$lane tests finished so far: \$(grep -E '(✔|✘|━) Test .* (passed|failed) after |^Test Case .* (passed|failed) \(' "\$last/suite-\$lane-test.log" | grep -cvE 'Test run with [0-9]+ test| recorded an issue ')"
+    done
+  fi
 else
   echo "no run recorded under $H_ROOT"
+fi
+suite='$H_ROOT/latest-suite'
+if [ -e "\$suite/run.log" ] && [ "\$(readlink "\$suite")" != "\$(readlink "\$last")" ]; then
+  echo "last suite run: \$(readlink "\$suite")"
+  grep -E '^(START|OUTCOME)' "\$suite/run.log" | sed 's/^/  /'
+  [ -f "\$suite/summary.txt" ] && sed 's/^/  /' "\$suite/summary.txt"
 fi
 SH
 }
@@ -200,7 +247,7 @@ start_run() {
     local out="$H_ROOT/out/$stamp-$LANE"
 
     echo "m4_run: $LANE on $H_NAME at $short ($REF)${ONLY:+, only $ONLY}"
-    [ "$H_MACHINE" = m5 ] && [ "$LANE" != ui ] && \
+    [ "$H_MACHINE" = m5 ] && [ "$LANE" != ui ] && [ "$LANE" != suite ] && \
         echo "m4_run: note — run_gauntlet.sh has no 'ultra' label; the Ultra runs as --machine m5 --queue-only"
 
     if [ "$DRY" = 0 ]; then
@@ -248,6 +295,16 @@ start_run() {
         || die "could not install the summarizer on $H_NAME"
     copy_to_host "$SCRIPT_DIR/testbed_lock.py" "$bin/testbed_lock.py" \
         || die "could not install the lock helper on $H_NAME"
+    if [ "$LANE" = suite ]; then
+        # The nightly's own runner and its watchdog library, from the caller's
+        # checkout like this script: the commit under test need not have them.
+        on_host "mkdir -p '$bin/lib'" || die "could not prepare $bin/lib on $H_NAME" 4
+        copy_to_host "$SCRIPT_DIR/nightly_local_tests.sh" "$bin/nightly_local_tests.sh" \
+            && copy_to_host "$SCRIPT_DIR/lib/process_group_watchdog.sh" "$bin/lib/process_group_watchdog.sh" \
+            || die "could not install the suite runner on $H_NAME"
+        [ "$DRY" = 1 ] && echo "+ (the host runs $bin/nightly_local_tests.sh --on-demand $out --repo $H_WT --dd $H_SUITE_DD: nothing published)"
+    fi
+
     if [ "$LANE" = corpus ]; then
         # The harness's host side and its driver sources, per run like the runner itself.
         local f
@@ -287,17 +344,33 @@ SH
 }
 
 wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
-    local out="$1" waited=0 line
+    local out="$1" waited=0 line norun=1 free=0
+    [ "$LANE" = suite ] && norun=2       # suite: could-not-run is told apart from RED
     while [ "$waited" -lt "$WAIT_BUDGET" ]; do
-        sleep 30; waited=$((waited + 30))
+        sleep "$WAIT_POLL"; waited=$((waited + WAIT_POLL))
         line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
         if [ -n "$line" ]; then
             on_host "$(status_snippet)"
             # AMBER is not a failure for a --wait caller (exit 0); the line says AMBER.
-            case "$line" in "OUTCOME GREEN"*|"OUTCOME AMBER"*) exit 0 ;; *) exit 1 ;; esac
+            case "$line" in
+                "OUTCOME GREEN"*|"OUTCOME AMBER"*) exit 0 ;;
+                "OUTCOME RED"*) exit 1 ;;
+                *) exit "$norun" ;;          # REFUSED, NORUN
+            esac
+        fi
+        # No OUTCOME and nothing holds the lock, twice running (the agent takes it within a
+        # second of starting): the run's shell is gone — a logout of the host's GUI session
+        # stops the agent (2026-11-17, the first real suite run), so does a restart. Without
+        # this the caller waited out the whole budget for a line that would never come.
+        case "$(on_host "$(lock_probe_snippet)" 2>/dev/null)" in FREE*) free=$((free + 1)) ;; *) free=0 ;; esac
+        if [ "$free" -ge 2 ]; then
+            line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
+            [ -n "$line" ] && continue          # it finished between the two looks
+            on_host "$(status_snippet)"
+            die "the run on $H_NAME ended without an OUTCOME (its shell was stopped: logout, restart or crash) — logs in $out" "$norun"
         fi
     done
-    die "gave up waiting after ${WAIT_BUDGET}s; the run may still be going — scripts/m4_run.sh status --host $HOST"
+    die "gave up waiting after ${WAIT_BUDGET}s; the run may still be going — scripts/m4_run.sh status --host $HOST" "$norun"
 }
 
 # ── Host side (inside the LaunchAgent) ────────────────────────────────────
@@ -309,7 +382,7 @@ wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
 # timeout, else the command's own status.
 run_bounded() {
     local secs="$1" log="$2" cwd="$3"; shift 3
-    M4RUN_REAP="$H_DD/Build/Products/" python3 - "$secs" "$log" "$cwd" "$@" <<'PY'
+    M4RUN_REAP="${REAP_DD:-$H_DD}/Build/Products/" python3 - "$secs" "$log" "$cwd" "$@" <<'PY'
 import os, signal, subprocess, sys
 secs, log, cwd, cmd = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 reap = os.environ.get("M4RUN_REAP", "")
@@ -452,11 +525,45 @@ host_deep() {
     esac
 }
 
+# The full app + Core suite, by the nightly's own runner in its on-demand mode
+# (installed beside this script). The runner writes its log itself (<out>/suite.log)
+# and its row to <out>/suite-row.json; the summary turns the row into the verdict.
+# caffeinate -i: the host must not idle-sleep under a two-hour run (the scheduled run
+# gets the same from scripts/nightly_guarded.sh).
+host_suite() {
+    local t0 rc secs flag=() vrc dirty
+    local REAP_DD="$H_SUITE_DD/app"      # run_bounded reads it (bash locals are visible to callees)
+    t0=$(date +%s)
+    run_bounded "$SUITE_BUDGET" "$OUT/suite-runner.log" "$H_WT" \
+        /usr/bin/caffeinate -i /bin/bash "$SCRIPT_DIR/nightly_local_tests.sh" --on-demand "$OUT" --repo "$H_WT" --dd "$H_SUITE_DD"
+    rc=$?
+    secs=$(( $(date +%s) - t0 ))
+    echo "suite exit=$rc secs=$secs"
+    [ "$rc" = 124 ] && flag=(--timeout)
+    python3 "$SCRIPT_DIR/m4_run_summary.py" --suite "$OUT/suite-row.json" "$rc" "$secs" \
+        --repo "$H_WT" --log "$OUT/suite.log" ${flag[@]+"${flag[@]}"} >>"$OUT/summary.txt"
+    vrc=$?
+    case "$vrc" in
+        0) ;;
+        4) VERDICT=NORUN
+           WHY="$(sed -n '1s/^suite: NORUN \([^ ]*\).*/\1/p' "$OUT/summary.txt")" ;;
+        *) VERDICT=RED ;;
+    esac
+    # The next run refuses a dirty testbed: say now whether this one left it clean.
+    dirty="$(git -C "$H_WT" status --porcelain --untracked-files=no 2>/dev/null)"
+    if [ -n "$dirty" ]; then
+        echo "  testbed worktree NOT clean after the run (the next run will refuse it): $(printf '%s' "$dirty" | tr '\n' ';')" >>"$OUT/summary.txt"
+    else
+        echo "  testbed worktree clean after the run" >>"$OUT/summary.txt"
+    fi
+}
+
 # The real-data corpus harness (DECISIONS 2026-11-17). Everything it does is in
 # scripts/corpus_run.py (installed beside this script); it runs under the lane
 # watchdog with the lock's fd passed on, and writes its own counts-only
 # summary. Exit: 0 GREEN · 3 AMBER (an engine crashed, timed out or errored on
 # some file, or the ref lacks the lane's engine) · anything else RED.
+# It repoints <root>/latest like every lane and never <root>/latest-suite.
 host_corpus() {   # host_corpus <sha> <stamp>
     local t0 rc secs extra=()
     [ -n "$CORPUS_DEADLINE" ] && extra+=(--deadline "$CORPUS_DEADLINE")
@@ -487,12 +594,14 @@ host_main() {   # __host <lane> <sha> <stamp>
     OUT="$H_ROOT/out/$stamp-$lane"
     mkdir -p "$OUT"
     exec >"$OUT/run.log" 2>&1
-    export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    # VIDEOSCAN_M4RUN_TEST_PATH: a test hook (tests/test_m4_run_suite_lane.py puts stand-ins for xcodebuild and swift first).
+    export PATH="${VIDEOSCAN_M4RUN_TEST_PATH:+$VIDEOSCAN_M4RUN_TEST_PATH:}/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     # Lock first: a refused run must not repoint `latest` away from the live one.
     BUSY=""
     take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || { echo "OUTCOME REFUSED $BUSY"; exit 3; }
     trap drop_lock EXIT
     ln -sfn "$OUT" "$H_ROOT/latest"
+    [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
     # The testbed worktree is mutated HERE, under the lock, never by the
     # caller: a second caller's agent is refused above before it can touch
     # the tree a live run is testing (Codex 2026-11-05 re-review 3).
@@ -514,16 +623,18 @@ host_main() {   # __host <lane> <sha> <stamp>
     : >"$OUT/summary.txt"
     VERDICT=GREEN
     AMBER_WHY=""
+    WHY=""
     case "$lane" in
-        deep) host_deep ;;
-        ui)   host_ui ;;
-        all)  host_deep; host_ui ;;
+        deep)  host_deep ;;
+        ui)    host_ui ;;
+        all)   host_deep; host_ui ;;
+        suite) host_suite ;;
         corpus) host_corpus "$sha" "$stamp" ;;
     esac
-    [ "$VERDICT" = AMBER ] || AMBER_WHY=""
-    echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${AMBER_WHY:+ — $AMBER_WHY}"
+    [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
+    echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
     sed 's/^/  /' "$OUT/summary.txt"
-    [ "$VERDICT" != RED ]
+    case "$VERDICT" in GREEN|AMBER) return 0 ;; *) return 1 ;; esac
 }
 
 # ── Arguments ─────────────────────────────────────────────────────────────
@@ -567,7 +678,7 @@ case "$LANE" in
         [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
         corpus_args_ok
         start_run ;;
-    ui|deep|all)
+    ui|deep|all|suite)
         [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
         [ -n "$ONLY" ] && [ "$LANE" != ui ] && die "--only applies to the ui lane" 2
         start_run ;;
@@ -576,8 +687,8 @@ case "$LANE" in
         on_host "$(status_snippet)" || die "cannot reach $H_NAME (${H_SSH:-local})" ;;
     __host)
         [ ${#POS[@]} -eq 3 ] || die "__host <lane> <sha> <stamp>" 2
-        case "${POS[0]}" in ui|deep|all) ;; corpus) corpus_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
+        case "${POS[0]}" in ui|deep|all|suite) ;; corpus) corpus_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
         host_main "${POS[@]}" ;;
     ""|-h|--help) usage ;;
-    *) die "unknown lane '$LANE' (ui|deep|all|corpus|status)" 2 ;;
+    *) die "unknown lane '$LANE' (ui|deep|all|suite|corpus|status)" 2 ;;
 esac

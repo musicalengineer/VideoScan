@@ -867,6 +867,44 @@ class HostHookTests(unittest.TestCase):
             self.assertIn('OUTCOME RED', log)
             self.assertEqual(probe, 'FREE')
 
+    def test_a_corpus_run_leaves_latest_suite_alone_and_status_still_shows_the_suite(self):
+        # main's suite lane keeps <root>/latest-suite so `status` shows the last suite verdict
+        # after a later run of another lane: a corpus run repoints `latest` only.
+        with tempfile.TemporaryDirectory() as home:
+            root, bin_dir = pathlib.Path(home, 'm4run'), pathlib.Path(home, 'bin')
+            work, suite_out = root / 'work', root / 'out' / 'old-suite'
+            work.mkdir(parents=True)
+            suite_out.mkdir(parents=True)
+            bin_dir.mkdir()
+            (suite_out / 'run.log').write_text('START then lane=suite sha=abc\nOUTCOME GREEN then lane=suite sha=abc\n')
+            (suite_out / 'summary.txt').write_text('suite: GREEN app 9 passed\n')
+            os.symlink(suite_out, root / 'latest-suite')
+            os.symlink(suite_out, root / 'latest')
+            for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+                (bin_dir / name).write_bytes((SCRIPTS / name).read_bytes())
+            (bin_dir / 'corpus_run.py').write_text(STUB_HELPER)
+            (bin_dir / 'helper-exit').write_text('0')
+            env = dict(os.environ, HOME=home, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
+                       GIT_COMMITTER_EMAIL='t@t')
+            (work / 'file').write_text('x')
+            for command in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'testbed']):
+                subprocess.run(['git', '-C', str(work), *command], check=True, env=env)
+            sha = subprocess.run(['git', '-C', str(work), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+            p = subprocess.run(['/bin/bash', str(bin_dir / 'm4_run.sh'), '__host', 'corpus', sha, 'c1', '--host', 'm4',
+                                '--corpus-lane', 'check'], capture_output=True, text=True, env=env, timeout=120)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(os.readlink(root / 'latest-suite'), str(suite_out), 'a corpus run overwrote latest-suite')
+            self.assertEqual(os.readlink(root / 'latest'), str(root / 'out/c1-corpus'))
+            dry = subprocess.run(['/bin/bash', str(SCRIPTS / 'm4_run.sh'), 'status', '--dry-run'], capture_output=True,
+                                 text=True, env=env, timeout=60).stdout
+            snippet = dry.split("+ ssh ricksm4.local <<'SH'", 1)[1].split('\n  SH', 1)[0]
+            snippet = '\n'.join(line[4:] if line.startswith('    ') else line for line in snippet.splitlines())
+            out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True, env=env, timeout=30).stdout
+            self.assertIn('lane=corpus corpus-lane=check', out)
+            self.assertIn('corpus check: counts only', out)
+            self.assertIn(f'last suite run: {suite_out}', out)
+            self.assertIn('suite: GREEN app 9 passed', out)
+
     def test_a_helper_that_dies_without_a_summary_is_red_and_says_so(self):
         rc, log, _, _, _, _ = self.host(99, 'h99')
         self.assertEqual(rc, 1, log)

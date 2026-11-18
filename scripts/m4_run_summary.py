@@ -16,7 +16,26 @@ rule 9: a lane that ran nothing proves nothing).
 Usage:
     m4_run_summary.py PLAN LOG RC SECONDS [--timeout] [--tsv PATH]
     m4_run_summary.py --gauntlet RESULT_JSON RC SECONDS [--timeout]
-Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only).
+    m4_run_summary.py --suite ROW_JSON RC SECONDS [--timeout] [--repo WORKTREE] [--log PATH]
+Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only), 4 NORUN (--suite only).
+
+--suite reads the row scripts/nightly_local_tests.sh --on-demand wrote for the
+full app + Core suite (the nightly's own counts, failed names and verdict) and
+prints the verdict line, then one line per failed or crashed test:
+
+    suite: GREEN app 13012 passed, 0 failed, 14 skipped; core 902 passed, 0 failed, 0 skipped (sha=67ff4918f, 4810s, log=…/suite.log)
+    suite: RED failed-tests:1 — app 13011 passed, 1 failed, 14 skipped; core 902 passed, 0 failed, 0 skipped (sha=…, 4810s, log=…)
+      failed (app): theAsideSpeaksTheCorrectedYear() — VideoScan/VideoScanTests/HallieTests.swift:88
+      failed (core): ghost() — NOT FOUND in the repo at this commit
+    suite: NORUN machine-setup:automation-mode — … (the machine, not the code)
+
+RED = the row says failed (build, timeout, failures, crashes, an unexplained
+exit code), there is no row, the runner or the watchdog stopped it, or either
+lane has no number (zero app tests, zero Core tests: CLAUDE.md rule 9). NORUN =
+the machine preflight stopped it before anything ran. Each name is looked up in
+the worktree (`git grep`, at most NAMES_PROVEN names, 60 s each) so a name
+scraped from a log is shown with the file and line that declares it, or marked
+as not found. Memory: the row (a few KB) and one grep's output at a time.
 
 --gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift),
 or that run's history.jsonl row when a published run dir is already gone, and prints ONE line (Rick 2026-11-05, DECISIONS):
@@ -35,6 +54,7 @@ import json
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 # XCTest's per-test line, the same for unit and UI bundles:
@@ -194,9 +214,137 @@ def gauntlet_main(argv):
     return {GREEN: 0, AMBER: 3, RED: 1}[verdict]
 
 
+NORUN = 'NORUN'
+NAMES_PROVEN = 25
+
+
+def _count(row, key):
+    """The row's integer for key, or None when it is absent or not a number."""
+    value = row.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def suite_counts(row, prefix=''):
+    """'13012 passed, 0 failed, 14 skipped' for the app (prefix '') or Core ('core_') lane,
+    or 'no count' when the row carries no number for it."""
+    passed, failed, skipped = (_count(row, prefix + k) for k in ('passed', 'failed', 'skipped'))
+    if passed is None or failed is None:
+        return 'no count'
+    return f"{passed} passed, {failed} failed, {skipped or 0} skipped"
+
+
+def suite_verdict(row, rc, timed_out=False):
+    """(GREEN|RED|NORUN, why) for one on-demand suite row (dict or None). The row's own
+    status is the nightly's verdict; the count checks here are defence in depth: a lane
+    with no number is RED whatever the status says."""
+    if timed_out:
+        return RED, 'watchdog timeout'
+    if not isinstance(row, dict):
+        return RED, f'no result row (runner exit {rc})'
+    reason = str(row.get('reason') or '')
+    if reason.startswith('machine-setup:'):
+        return NORUN, reason
+    if row.get('status') != 'ok':
+        return RED, reason or f"status {row.get('status')!r}"
+    for prefix, name in (('', 'app'), ('core_', 'core')):
+        passed, failed, total = (_count(row, prefix + k) for k in ('passed', 'failed', 'total'))
+        if passed is None or failed is None or total is None:
+            return RED, f'{name} lane has no count'
+        if total == 0 or passed == 0:
+            return RED, f'{name} lane ran zero tests'
+        if failed:
+            return RED, f'{name} failed-tests:{failed}'
+    if row.get('core_status') != 'ok':
+        return RED, f"core-{row.get('core_reason') or 'not-run'}"
+    if rc != 0:
+        return RED, f'runner exit {rc}'
+    return GREEN, ''
+
+
+def name_token(name):
+    """What to look for in the sources: ('func', 'testBar') for a function name in any of
+    the shapes a log prints (`bar()`, `Suite.bar()`, `Suite/bar(x:)`, `-[Mod.Class testBar]`),
+    or ('text', 'A display name') for a quoted Swift Testing display name."""
+    n = name.strip()
+    if len(n) >= 2 and n[0] == '"' and n[-1] == '"':
+        return 'text', n[1:-1]
+    if n.startswith(('-[', '+[')):
+        n = n[2:].rstrip(']').split()[-1]
+    n = n.split('(', 1)[0]
+    for sep in ('/', '.'):
+        n = n.rsplit(sep, 1)[-1]
+    return 'func', n
+
+
+def prove_name(name, repo):
+    """'path:line' (or 'path:line +N more') where the worktree declares the test, else None."""
+    kind, token = name_token(name)
+    if not token or not repo:
+        return None
+    pattern = f'func {token}(' if kind == 'func' else f'"{token}"'
+    try:
+        done = subprocess.run(['git', '-C', repo, 'grep', '-n', '-F', '-e', pattern, '--', '*.swift'],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    hits = [':'.join(line.split(':', 2)[:2]) for line in done.stdout.splitlines() if line.count(':') >= 2]
+    if not hits:
+        return None
+    return hits[0] + (f' +{len(hits) - 1} more' if len(hits) > 1 else '')
+
+
+def suite_name_lines(row, repo):
+    """One line per failed / crashed test, each proven against the worktree."""
+    lines, shown = [], 0
+    groups = (('failed (app)', 'failed_names'), ('crashed (app)', 'crashed_names'), ('failed (core)', 'core_failed_names'))
+    total = sum(len([n for n in (row.get(key) or []) if isinstance(n, str)]) for _, key in groups)
+    for label, key in groups:
+        for name in [n for n in (row.get(key) or []) if isinstance(n, str)]:
+            if shown == NAMES_PROVEN:
+                break
+            where = prove_name(name, repo)
+            lines.append(f"  {label}: {name} — {where or 'NOT FOUND in the repo at this commit'}")
+            shown += 1
+    if total > shown:
+        lines.append(f"  … +{total - shown} more (see the log)")
+    return lines
+
+
+def suite_main(argv):
+    ap = argparse.ArgumentParser(prog='m4_run_summary.py --suite')
+    ap.add_argument('row')
+    ap.add_argument('rc', type=int)
+    ap.add_argument('seconds', type=int)
+    ap.add_argument('--timeout', action='store_true')
+    ap.add_argument('--repo', default='')
+    ap.add_argument('--log', default='')
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return 2
+    try:
+        with open(a.row, encoding='utf-8') as f:
+            row = json.load(f)
+    except (OSError, ValueError):
+        row = None
+    verdict, why = suite_verdict(row, a.rc, a.timeout)
+    facts = row if isinstance(row, dict) else {}
+    counts = f"app {suite_counts(facts)}; core {suite_counts(facts, 'core_')}"
+    tail = f"(sha={str(facts.get('commit') or '?')[:9]}, {a.seconds}s, log={a.log or '?'})"
+    if verdict == NORUN:
+        print(f"suite: NORUN {why} — nothing ran: this is the machine, not the code {tail}")
+    else:
+        print(f"suite: {verdict} {why + ' — ' if why else ''}{counts} {tail}")
+    for line in suite_name_lines(facts, a.repo):
+        print(line)
+    return {GREEN: 0, RED: 1, NORUN: 4}[verdict]
+
+
 def main(argv):
     if argv[:1] == ['--gauntlet']:
         return gauntlet_main(argv[1:])
+    if argv[:1] == ['--suite']:
+        return suite_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('plan')
     ap.add_argument('log')

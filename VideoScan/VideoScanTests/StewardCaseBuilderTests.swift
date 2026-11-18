@@ -698,7 +698,7 @@ struct StewardSkipStoreTests {
             lines.removeAll()
             #expect(StewardCatalogDoor.turnOnOnePerFootage(in: filters))
             #expect(filters.active == [.notYetArchived, .needsDate, .onePerFootage])
-            #expect(lines == ["Catalog Show filters: on: Hide Other Versions (by Steward) → now Not Yet Archived, Hide Other Versions, Needs a Date"])
+            #expect(lines == ["Catalog Show filters: on: Hide Other Versions (by Steward) → now Not Yet Archived, Needs a Date, Hide Other Versions"])
             #expect(StewardCatalogDoor.turnOnOnePerFootage(in: filters))
             #expect(lines.count == 1, "idempotent: already on — no second line")
             #expect(CatalogShowFilterStore(defaults: defaults, log: { _ in }).active == [.notYetArchived, .needsDate, .onePerFootage],

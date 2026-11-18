@@ -20,7 +20,8 @@ deep and UI tests **on demand**, not on every commit; per-commit checking is the
 |---|---|---|
 | "deep test on the M4" / "run the gauntlet" | `scripts/m4_run.sh deep` | `scripts/run_gauntlet.sh --away --machine m4 --queue-only` (all non-UI stages; off the metrics branch) |
 | "run the UI tests on the M4" | `scripts/m4_run.sh ui [--only <UITestClass>[,…]]` | a Debug build-for-testing, then the VideoScan-UI (Smoke) and VideoScan-Gauntlet plans, each under a watchdog |
-| "everything on the M4" | `scripts/m4_run.sh all` | deep, then ui |
+| "everything on the M4" | `scripts/m4_run.sh all` | deep, then ui (not the suite) |
+| "run the full suite on the M4 for this branch" | `scripts/m4_run.sh suite --ref <rev> [--wait]` | the nightly's own runner, `nightly_local_tests.sh --on-demand`: machine preflight, Core (`swift test`, Release), Release build, the whole app suite; **nothing published** |
 | "… on the M5 Ultra" | add `--host ultra` | the same, in the Ultra's testbed worktree |
 | "how's the M4 run?" | `scripts/m4_run.sh status` | reads `<root>/latest` back |
 
@@ -32,7 +33,28 @@ no window server and a locked keychain). The host writes `<root>/out/<stamp>-<la
 `summary.txt`, per-plan logs, `.xcresult`, `.tests.tsv`) and points `<root>/latest` at it. Roots: M4 `~/m4run`, Ultra
 `~/ultrarun`; one Debug DerivedData per host (~15 GB); xcresults are kept (prune `<root>/out` by hand). Builds are
 ad-hoc signed; the UI suites run against the gauntlet fixtures and a temp catalog, never a real catalog or volume.
-Tests: `tests/test_m4_run.py`.
+Tests: `tests/test_m4_run.py`, `tests/test_m4_run_deep_lane.py`, `tests/test_m4_run_suite_lane.py`.
+
+**The suite lane** (2026-11-17, DECISIONS: the idle M4 is part of the merge workflow). One engine: the scheduled
+run's script in a mode, installed per run beside `m4_run.sh` (the commit under test need not have it), pointed at the
+testbed worktree. It writes its row to `<out>/suite-row.json` instead of the metrics branch and skips everything that
+is not the verdict (fetch/pull, page summary, coverage, person/Hallie lanes, model smoke, complexity baseline, repo
+traffic), so an on-demand run never changes the nightly tile. Own caches (`~/Library/Caches/videoscan-<root>-dd-suite/`
+`{app,core}`, 6.9 GB on the M4) and own logs in `<out>` (`suite.log`, `suite-app-test.log`, `suite-core-test.log`,
+`suite-app.xcresult`); the scheduled run's checkout, caches and `/tmp` files are untouched. Verdict
+(`m4_run_summary.py --suite`): `suite: GREEN|RED <why> — app P passed, F failed, S skipped; core … (sha, seconds, log)`,
+then one line per failed or crashed test with the file and line that declares it in the worktree (or `NOT FOUND`).
+RED also when either lane has no number (zero app tests, zero Core tests). `OUTCOME NORUN` = the machine preflight
+stopped it (automation mode, Xcode first launch, Metal toolchain): the machine, not the code. `status` shows the last
+suite run even after a later ui/deep run (`<root>/latest-suite`). `--wait` exits 0 GREEN · 1 RED · 2 could not run
+(refused on the host, NORUN, or the wait gave up); a run that never started exits 3 busy / 4 testbed / 5 window as
+for the other lanes. Timing budgets are strict, as in the scheduled run. Measured on the M4, 2026-11-17, warm caches:
+56 min (Core 16, Release build 10, app tests 30; 13,941 + 2,587 tests); the first run's cold builds add ~8 min.
+
+**A logout of the host's GUI session stops a run** (any lane): launchd SIGTERMs the agent's shell, the app-hosted
+test host dies mid-test, and no OUTCOME is written (2026-11-17, the first real suite run, 55 minutes in). `status` then
+says `ENDED WITHOUT AN OUTCOME` and `--wait` exits (suite: 2) instead of polling out its budget. Do not log the M4's
+console session out, or restart it, while `status` says RUNNING.
 
 **One-time UI setup on a host** (a person at the screen once): Accessibility + Automation for the XCUITest runner; the
 display never sleeps while a run holds the lock (`caffeinate -dimsu`, in the gauntlet); automation mode without a
@@ -47,7 +69,8 @@ password (testing.md §4).
   "happy": the newest green commit and what main has on top of it; shows, never blocks).
 - **Failure classes** `machine-setup:<what>` (Xcode first launch, a modal or privacy prompt, with a screenshot) instead
   of a generic red; the UI stage of `scripts/gauntlet/manifest.json` adapted from "blocked" suite by suite.
-- Later, only if wanted: an automatic trigger, the real-media testbed SSD (BACKLOG).
+- The automatic trigger (every push to `main` runs the suite lane; DECISIONS 2026-11-17) and the PROCESS.md wording
+  for which merges wait for the M4's verdict. The real-media testbed SSD (BACKLOG).
 
 ### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17)
 
