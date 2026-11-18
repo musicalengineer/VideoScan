@@ -685,6 +685,16 @@ final class ArchiveAngel: ObservableObject {
         ArchiveAngelSettings.saveMakeLossless(on, to: environment.defaults)
     }
 
+    /// "Prove balanced copies after Prepare" (REPORT ONLY; default on). Read
+    /// by the Prepare job when its last stage starts.
+    var proveBalancedCopies: Bool { ArchiveAngelSettings.restored(from: environment.defaults).proveBalancedCopies }
+
+    func setProveBalancedCopies(_ on: Bool) {
+        objectWillChange.send()
+        ArchiveAngelSettings.saveProveBalancedCopies(on, to: environment.defaults)
+        note("Archive Angel: \(ArchiveAngelSettings.proveBalancedCopiesTitle) → \(on ? "on" : "off")")
+    }
+
     // MARK: Prepare
 
     /// The start sheet's Start: the Angel picks `count` and prepares them.

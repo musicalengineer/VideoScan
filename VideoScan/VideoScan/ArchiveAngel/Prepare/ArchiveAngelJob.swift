@@ -86,6 +86,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     /// up myself".
     private(set) var preparingEntryID: UUID?
 
+    /// The last stage's proof (REPORT ONLY — ArchiveAngelBalancedProof.swift).
+    /// A seam: tests inject an outcome, a throw, a hang or missing tools.
+    var balancedCopyProver: ArchiveAngelBalancedProof.Prover = ArchiveAngelBalancedProof.engine
+    /// TEST SEAM for "Prove balanced copies after Prepare"; nil = the Angel's
+    /// setting, read when the stage starts.
+    var provesBalancedCopiesOverride: Bool?
+    /// The proof running now — cancelled by Stop, and by a Skip of its row.
+    private var proofTask: Task<BalancedCopyProof.Outcome, Never>?
+
     var title: String {
         explicitRecordIDs == nil
             ? "Archive Angel — consider \(requestedCount)"
@@ -220,6 +229,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         state = .cancelling
         subtitleText = "Cancelling — prepared candidates stay reviewable…"
         currentSubJob?.cancel()
+        proofTask?.cancel()
         task?.cancel()
     }
 
@@ -275,8 +285,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             // `.skipped` status when the sub-job unwinds, deletes the
             // partial companions and continues with the next entry. The
             // buffer folder must NOT be deleted here — ffmpeg may still
-            // have the file open.
+            // have the file open (or the balanced-copy proof be reading it).
             currentSubJob?.cancel()
+            proofTask?.cancel()
             subtitleText = "Skipping \(filename)…"
         } else {
             // Nobody is holding it: reclaim its buffer space and persist
@@ -539,8 +550,21 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         guard await savePlan() else { return }
 
         await prepareEntries(model: model)
+        await endBatch(model: model)
+    }
 
+    /// The batch's ending, once the preparation loop has returned: the
+    /// report-only proof stage (Stage 1c), then "N ready to review". A failed
+    /// plan save ends it with its reason (never "N ready"); a Stop settles
+    /// it — every row prepared before the Stop stays reviewable.
+    private func endBatch(model: VideoScanModel) async {
         if planSaveFailed { return }   // failed with its reason; never "N ready"
+        if stopRequested { _ = await savePlan(); finishCancelled(); return }
+
+        // ── Stage 1c: REPORT ONLY — prove the balanced copies this batch made.
+        // Every row is already prepared and saved; a Stop here keeps them all.
+        await proveBalancedCopies(model: model)
+        if planSaveFailed { return }
         if stopRequested { _ = await savePlan(); finishCancelled(); return }
 
         plan.status = .ready
@@ -667,6 +691,56 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
              + "its partial companions were removed from the buffer, the batch continues")
         _ = await savePlan()
         return true
+    }
+
+    // MARK: Stage 1c — the balanced-copy proof, REPORT ONLY (2026-11-18)
+    //
+    // Runs after EVERY row is prepared, so it never delays another file's
+    // preparation, and a row is already `.ready` and saved before its copy is
+    // read: a proof that fails, throws or is stopped cannot fail the row.
+    // The proof reads both files and writes nothing; this stage writes only
+    // the row's `balancedCopyProof` note and the engine's two log lines.
+    // Nothing that decides (readiness, Promote, holds, gates, Trash) reads it.
+
+    private func proveBalancedCopies(model: VideoScanModel) async {
+        let work = ArchiveAngelBalancedProof.work(in: plan)
+        guard !work.isEmpty else { return }
+        guard provesBalancedCopiesOverride ?? model.archiveAngel.proveBalancedCopies else {
+            note(ArchiveAngelBalancedProof.offLine(count: work.count))
+            return
+        }
+        isIndeterminateValue = true   // the engine reports no progress of its own
+        defer { isIndeterminateValue = false; preparingEntryID = nil }
+        for (n, item) in work.enumerated() {
+            if stopRequested || planSaveFailed { break }
+            // A row skipped since the list was made is not proven.
+            guard let idx = plan.entries.firstIndex(where: { $0.id == item.id }),
+                  plan.entries[idx].status == .ready else { continue }
+            subtitleText = ArchiveAngelBalancedProof.progressLine(position: n + 1, of: work.count, filename: item.filename)
+            // Held like a row being prepared: a Skip of it stops the proof and
+            // leaves the clean-up to `settleSkip` below, after the reads end.
+            preparingEntryID = item.id
+            note(BalancedCopyProof.startLine(original: item.pair.original, balanced: item.pair.balanced))
+            let outcome = await runProof(item.pair)
+            preparingEntryID = nil
+            note(BalancedCopyProof.logLine(original: item.pair.original, balanced: item.pair.balanced, outcome: outcome))
+            if await settleSkip(idx, total: plan.entries.count) { continue }
+            plan.entries[idx].balancedCopyProof = ArchiveAngelBalancedProof.note(for: outcome)
+            _ = await savePlan()
+        }
+    }
+
+    /// One proof in its own task, so a Skip can stop it alone; a Stop of the
+    /// job stops it too (`cancel()`, and the handler for a cancelled job task).
+    private func runProof(_ pair: ArchiveAngelBalancedProof.Pair) async -> BalancedCopyProof.Outcome {
+        let prover = balancedCopyProver
+        // `Task {}` inherits the main actor; `outcome(of:by:)` is @concurrent,
+        // so the reads run off it (≈ posting to a worker pool and joining).
+        let proof = Task { await ArchiveAngelBalancedProof.outcome(of: pair, by: prover) }
+        proofTask = proof
+        defer { proofTask = nil }
+        if stopRequested { proof.cancel() }
+        return await withTaskCancellationHandler { await proof.value } onCancel: { proof.cancel() }
     }
 
     // MARK: Preparation of one entry

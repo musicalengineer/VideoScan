@@ -192,6 +192,16 @@ struct ArchiveAngelReviewSheet: View {
                             .truncationMode(.middle)
                     }
                     companionChips(entry)
+                    if let proof = entry.balancedCopyProof {
+                        // REPORT ONLY (2026-11-18): the proof decides nothing here.
+                        Label(proof.line, systemImage: "rectangle.on.rectangle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help("Report only — this check changes nothing that is promoted or offered for the Trash."
+                                  + (proof.detail.isEmpty ? "" : "\n" + proof.detail.replacingOccurrences(of: " | ", with: "\n")))
+                            .accessibilityIdentifier("archiveAngel.row.balancedCopyProof")
+                    }
                     if entry.status == .ready, let idx {
                         editors(idx, entry: entry)
                     }
