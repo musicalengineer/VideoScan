@@ -174,14 +174,19 @@ final class CorpusRun: @unchecked Sendable {
         guard let configPath = ProcessInfo.processInfo.environment["VS_CORPUS_CONFIG"], !configPath.isEmpty else {
             throw XCTSkip("the corpus harness did not launch this test (no VS_CORPUS_CONFIG)")
         }
-        let config = FileManager.default.contents(atPath: configPath).flatMap { try? JSONDecoder().decode(CorpusConfig.self, from: $0) }
+        // The gate first: on the wrong Mac, without the marker, or with a config outside
+        // ~/corpus/work, nothing is read — not even the config (Codex #313 F6).
+        let loaded = CorpusSeal.loadConfig(hostname: hostname(), realHome: realHome(), configPath: configPath,
+                                           read: { FileManager.default.contents(atPath: $0) })
+        if let word = loaded.refusal { throw CorpusRefusal(word: word) }
+        let config = loaded.config
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.path ?? "/"
         let input = CorpusSealInput(hostname: hostname(), realHome: realHome(), configPath: configPath, lane: lane, config: config,
                                     homeDirectory: NSHomeDirectory(), applicationSupport: appSupport,
                                     isTestHost: TestEnvironment.isTestHost)
         if let word = CorpusSeal.refusal(input) {
-            // Say why in the progress file — but only once that file is proven to be in ~/corpus/work.
-            if let config, !CorpusSeal.beforeTheProgressFileIsProven.contains(word),
+            // Say why in the progress file — but only when that file is proven to be this run's own.
+            if let config, CorpusSeal.progressIsProven(config, realHome: realHome()),
                let progress = try? CorpusProgress(path: config.progress) {
                 progress.write(["ev": "refused", "why": word])
             }

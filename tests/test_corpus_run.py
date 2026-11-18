@@ -526,7 +526,7 @@ class LaneScene(CorpusScene):
     def __init__(self, tmp, with_proof_engine=False):
         super().__init__(tmp)
         base = pathlib.Path(tmp)
-        self.worktree, self.dd, self.out = base / 'testbed', base / 'dd', base / 'out'
+        self.worktree, self.dd, self.out = base / 'testbed', base / 'dd', self.home / 'm4run' / 'out' / '20261117_120000_1-corpus'
         (self.worktree / 'VideoScan' / 'VideoScanTests').mkdir(parents=True)
         (self.worktree / 'VideoScan' / 'VideoScanTests' / 'Existing.swift').write_text('// a test\n')
         if with_proof_engine:
@@ -535,7 +535,7 @@ class LaneScene(CorpusScene):
         env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
         for command in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'testbed']):
             subprocess.run(['git', '-C', str(self.worktree), *command], check=True, env=env)
-        self.out.mkdir()
+        self.out.mkdir(parents=True)
         self.fake = base / 'fake-xcodebuild'
         self.fake.write_text(FAKE_XCODEBUILD)
         self.fake.chmod(0o755)
@@ -985,7 +985,7 @@ class BaselineTests(unittest.TestCase):
         first = self.scene.seal.reports / 'check' / ('a' * 40) / '20261117_120000_1'
         first.mkdir(parents=True)
         (first / 'outcomes.json').write_text(json.dumps(old))
-        (first / 'report.json').write_text(json.dumps(dict(lane='check', failures={}, engine_present=True)))
+        (first / 'report.json').write_text(json.dumps(dict(lane='check', sha='a' * 40, failures={}, engine_present=True)))
         against = cr.against_baseline(self.scene.seal, 'check', new, engines)
         self.assertEqual((against['changed'], len(against['listed']), against['listed_more'], len(against['changes'])),
                          (500, cr.LISTED, 500 - cr.LISTED, 500))
@@ -1199,6 +1199,7 @@ class VerbsLaneTests(unittest.TestCase):
         code = '\n'.join(line for line in driver.splitlines() if not line.lstrip().startswith('//'))
         for guard in ('CorpusRun.open(lane: "verbs")', 'CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work)',
                       'CorpusRun.isUnder(NSTemporaryDirectory(), config.work)', 'TestEnvironment.isTestHost',
+                      'setenv("TMPDIR", runTmp + "/", 1)', 'refuse("tmp_not_in_the_run")',
                       'CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
                       'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, run.config.work)',
                       'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live', 'model.catalogTrashPlan(for: [row])', 'model.trashSelectedRecords([row], confirmed: confirmed)',
@@ -1335,10 +1336,17 @@ import Foundation
 struct Case: Decodable { let hostname, realHome, configPath, lane, home, appSupport: String; let isTestHost: Bool }
 let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
 for c in cases {
-    let config = FileManager.default.contents(atPath: c.configPath).flatMap { try? JSONDecoder().decode(CorpusConfig.self, from: $0) }
-    let input = CorpusSealInput(hostname: c.hostname, realHome: c.realHome, configPath: c.configPath, lane: c.lane, config: config,
-                                homeDirectory: c.home, applicationSupport: c.appSupport, isTestHost: c.isTestHost)
-    print(CorpusSeal.refusal(input) ?? "ok")
+    var reads = 0
+    let loaded = CorpusSeal.loadConfig(hostname: c.hostname, realHome: c.realHome, configPath: c.configPath,
+                                       read: { reads += 1; return FileManager.default.contents(atPath: $0) })
+    var word = loaded.refusal
+    if word == nil {
+        word = CorpusSeal.refusal(CorpusSealInput(hostname: c.hostname, realHome: c.realHome, configPath: c.configPath, lane: c.lane,
+                                                  config: loaded.config, homeDirectory: c.home, applicationSupport: c.appSupport,
+                                                  isTestHost: c.isTestHost))
+    }
+    let proven = loaded.config.map { CorpusSeal.progressIsProven($0, realHome: c.realHome) } ?? false
+    print("\(word ?? "ok")|\(reads)|\(proven)")
 }
 """
 
@@ -1405,7 +1413,8 @@ class SwiftSealTests(unittest.TestCase):
         cases_file.write_text(json.dumps(rows))
         done = subprocess.run([str(self.binary), str(cases_file)], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
-        return done.stdout.split()
+        self.facts = [line.split('|') for line in done.stdout.split()]       # [word, config reads, progress proven]
+        return [fact[0] for fact in self.facts]
 
     def test_the_seal_holds_on_the_m4_and_refuses_every_other_mac(self):
         answers = self.ask(dict(config=self.config()), dict(config=self.config(), hostname='RicksUltra'),
@@ -1466,6 +1475,56 @@ class SwiftSealTests(unittest.TestCase):
             dict(config=self.config(), config_at=outside / 'config.json'))
         self.assertEqual(answers, ['a_verbs_folder_is_outside_the_run'] * 7 + ['work_outside_the_corpus'] * 2
                          + ['a_file_is_outside_the_corpus', 'state_root_outside_the_corpus', 'home_not_sealed', 'config_outside_the_corpus'])
+
+    def test_nothing_is_read_before_the_gate_holds(self):
+        # Codex #313 F6: on the wrong Mac, without the marker, or with a config outside ~/corpus/work, the
+        # config file is not even opened (it could be made to name any file — a live catalog).
+        live = self.home / 'Library' / 'Application Support' / 'VideoScan' / 'catalog.sqlite'
+        live.parent.mkdir(parents=True)
+        live.write_text('the live catalog')
+        answers = self.ask(dict(config=self.config(), hostname='RicksUltra'), dict(config_at=live, hostname='RicksUltra'),
+                           dict(config_at=live), dict(config_at=self.corpus / 'work'), dict(config=self.config()))
+        self.assertEqual(answers, ['not_the_m4', 'not_the_m4', 'config_outside_the_corpus', 'config_outside_the_corpus', 'ok'])
+        self.assertEqual([fact[1] for fact in self.facts], ['0', '0', '0', '0', '1'])
+        (self.corpus / cr.MARKER).unlink()
+        self.ask(dict(config=self.config()))
+        self.assertEqual(self.facts, [['no_test_data_marker', '0', 'false']])
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        self.assertIn('CorpusSeal.loadConfig(hostname: hostname(), realHome: realHome(), configPath: configPath,', support)
+        self.assertEqual(support.count('FileManager.default.contents(atPath:'), 1, 'the one read of the config is the gated one')
+
+    def test_a_path_with_dot_dot_through_a_link_is_never_the_path_checked(self):
+        # Codex #313 F1: `run/jump/../victim` with jump -> media/Volumes is media/victim when opened,
+        # and was run/victim when checked.
+        os.symlink(self.corpus / 'media' / 'Volumes', self.run_dir / 'jump')
+        victim = self.corpus / 'media' / 'victim'
+        victim.write_text('pristine')
+        dotted = str(self.run_dir / 'jump') + '/../victim'
+        answers = self.ask(dict(config=self.config(progress=dotted)),
+                           dict(config=self.config(archiveRoot=str(self.run_dir) + '/jump/../archive')),
+                           dict(config=self.config(scratch=str(self.run_dir) + '/scratch/../scratch')),
+                           dict(config=self.config(work=str(self.run_dir) + '/../run1-verbs')),
+                           dict(config=self.config(), home=str(self.run_dir) + '/jump/../home'),
+                           dict(config=self.config(pending=[dict(sha='a' * 64, path=str(self.run_dir) + '/jump/../vol/a.mov', copies=[])])))
+        self.assertEqual(answers, ['work_outside_the_corpus', 'a_verbs_folder_is_outside_the_run', 'a_verbs_folder_is_outside_the_run',
+                                   'work_outside_the_corpus', 'home_not_sealed', 'a_file_is_outside_the_corpus'])
+        self.assertEqual(self.facts[0][2], 'false', 'a refusal must not be written to such a progress file')
+        self.assertEqual(victim.read_text(), 'pristine')
+
+    def test_the_progress_file_is_this_runs_own(self):
+        # Codex #313 F7: another run's progress file is not this run's; and a refusal is written to the
+        # progress file only when that file is proven to be inside this run.
+        other = self.corpus / 'work' / 'run2-check'
+        other.mkdir()
+        (other / 'progress.jsonl').write_text('')
+        os.symlink(self.corpus / 'live', self.run_dir / 'to-live')
+        answers = self.ask(dict(config=self.config(progress=str(other / 'progress.jsonl'))),
+                           dict(config=self.config(progress=str(self.run_dir))),
+                           dict(config=self.config(progress=str(self.run_dir / 'to-live' / 'p.jsonl'))),
+                           dict(config=self.config(), lane='check'), dict(config=self.config()))
+        self.assertEqual(answers, ['work_outside_the_corpus', 'work_outside_the_corpus', 'work_outside_the_corpus',
+                                   'config_is_for_another_lane', 'ok'])
+        self.assertEqual([fact[2] for fact in self.facts], ['false', 'false', 'false', 'true', 'true'])
 
     def test_a_catalog_that_is_a_link_to_a_live_one_is_refused(self):
         live = self.home / 'Library' / 'Application Support' / 'VideoScan'
@@ -1677,7 +1736,6 @@ class CodexRoundTests(unittest.TestCase):
         poisoned = json.loads(stored.read_text())
         poisoned[sha_of(0)]['check'] = '/Volumes/PrivateDrive/Grandma/Birthday 1988.mov'
         poisoned[sha_of(1)]['audio'] = 'Birthday_1988.mov'
-        poisoned[sha_of(2)] = 'not a record'
         stored.write_text(json.dumps(poisoned))
         self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_AMBER)
         leaves = self.scene.everything_that_leaves() + (self.scene.out / cr.VERDICT_FILE).read_text() + '\n'.join(cr.status(self.scene.seal))
@@ -1708,6 +1766,162 @@ class CodexRoundTests(unittest.TestCase):
             cr.prepare(self.scene.seal)
         self.assertNotIn('Birthday', str(refused.exception))
         self.assertIn('IntegrityError', str(refused.exception))
+
+
+class CodexClosingTests(unittest.TestCase):
+    """Codex #313, the closing pass (block; F3, F5, F6, F7, F9 closed for the class; nine findings on what
+    was left). Each test was seen red with its fix taken back out. The Swift ones are in SwiftSealTests."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+        self.media = self.scene.corpus / 'media'
+        self.victim = self.media / self.scene.files[0][1].lstrip('/')
+        self.pristine = self.victim.read_bytes()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def test_2_a_build_or_test_log_that_is_a_link_is_never_appended_to(self):
+        for name in ('corpus-build.log', 'corpus-test.log'):
+            with self.subTest(name=name):
+                os.symlink(self.victim, self.scene.out / name)
+                self.assertEqual(self.scene.run(), cr.EXIT_REFUSED)
+                self.assertEqual(self.victim.read_bytes(), self.pristine, 'a lane log was appended to a corpus file')
+                (self.scene.out / name).unlink()
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+
+    def test_3_an_out_file_with_a_second_name_is_never_emptied(self):
+        for name in ('corpus-summary.txt', cr.VERDICT_FILE, 'corpus-build.log'):
+            with self.subTest(name=name):
+                target = self.scene.out / name
+                if target.exists():
+                    target.unlink()
+                os.link(self.victim, target)                                # the same inode as the pristine file
+                self.assertIn(self.scene.run(stamp='20261118_090000_2'), (cr.EXIT_REFUSED, cr.EXIT_RED))
+                self.assertEqual(self.victim.read_bytes(), self.pristine, 'a corpus file was emptied through its second name')
+                target.unlink()
+
+    def test_3_the_out_folder_is_a_run_folder_under_m4run_out_and_nothing_else(self):
+        seal = self.scene.seal
+        elsewhere = pathlib.Path(self.tmp.name, 'Documents')
+        elsewhere.mkdir()
+        link = seal.out_root / 'linked-run'
+        os.symlink(elsewhere, link)
+        nested = self.scene.out / 'deeper'
+        nested.mkdir()
+        for out in (elsewhere, link, nested, seal.out_root, seal.corpus / 'work', self.media, self.scene.home):
+            with self.subTest(out=str(out)):
+                with self.assertRaises(cr.Refused):
+                    seal.out_folder(out)
+                with self.assertRaises(cr.Refused):
+                    seal.out_write(out, 'corpus-summary.txt', 'x')
+        self.assertEqual(sorted(p.name for p in elsewhere.iterdir()), [])
+        inside_a_testbed_run = self.scene.out / 'corpus-check'                # what `m4_run.sh testbed` gives a corpus lane
+        inside_a_testbed_run.mkdir()
+        self.assertEqual(seal.out_folder(inside_a_testbed_run), inside_a_testbed_run)
+        os.symlink(elsewhere, self.scene.out / 'corpus-proof')
+        with self.assertRaises(cr.Refused):
+            seal.out_folder(self.scene.out / 'corpus-proof')
+        for name in ('../escape.txt', 'a/b', '', '..'):
+            with self.assertRaises(cr.Refused):
+                seal.out_write(self.scene.out, name, 'x')
+        argv = ['host', 'check', '--sha', 'a' * 40, '--stamp', 's1', '--out', str(elsewhere), '--worktree', str(self.scene.worktree),
+                '--derived-data', str(self.scene.dd), '--bin', str(SCRIPTS / 'corpus')]
+        self.assertEqual(cr.main(argv, seal=seal, xcodebuild=str(self.scene.fake)), cr.EXIT_REFUSED)
+        self.assertEqual(sorted(p.name for p in elsewhere.iterdir()), [], 'a lane wrote into a folder that is not its run folder')
+
+    def test_4_a_work_folder_that_is_already_there_is_not_this_runs(self):
+        # Whatever a run finds in its work folder it put there itself: the folder is made new, or the run refuses.
+        seeded = self.scene.seal.work_root / '20261117_120000_1-verbs'
+        (seeded / 'scratch').mkdir(parents=True)
+        os.symlink(self.media, seeded / 'scratch' / 'ledger-verbs')
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_REFUSED)
+        self.assertIn("a work folder with this run's name is already there", self.summary())
+        self.assertTrue((seeded / 'scratch' / 'ledger-verbs').is_symlink(), "a folder that was not the run's was removed")
+        self.assertEqual(self.scene.recorded_calls(), [])
+        driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+        for guard in ('VerbsStage.isEmptyFolder(scratch), VerbsStage.isEmptyFolder(archive)', 'refuse("a_verbs_folder_is_not_empty")',
+                      'guard mkdir(path, 0o755) == 0, CorpusRun.isUnder(path, scratch), CorpusRun.isUnder(path, run.config.work)',
+                      'guard mkdir(plans, 0o755) == 0, CorpusRun.isUnder(plans, run.config.work)'):
+            self.assertIn(guard, driver, guard)
+        self.assertLess(driver.index('refuse("a_verbs_folder_is_not_empty")'), driver.index('stage.makeModel("verbs")'))
+
+    def test_5_a_lane_folder_or_a_record_that_is_a_link_is_never_read_back(self):
+        self.scene.run()
+        cr.accept(self.scene.seal, 'check', 'x')
+        reports = self.scene.seal.reports
+        outside = pathlib.Path(self.tmp.name, 'outside-reports')
+        shutil.copytree(reports / 'check', outside)
+        record = (reports / 'check' / cr.BASELINE).read_text()
+        # (a) reports/check itself is a link to a folder elsewhere that holds valid-looking runs
+        shutil.rmtree(reports / 'check')
+        os.symlink(outside, reports / 'check')
+        self.assertEqual(cr.lane_runs(self.scene.seal, 'check'), [])
+        self.assertIn('corpus check: no run yet', cr.status(self.scene.seal))
+        os.unlink(reports / 'check')
+        shutil.copytree(outside, reports / 'check')
+        self.assertEqual(len(cr.lane_runs(self.scene.seal, 'check')), 1)
+        # (b) the baseline record is a link to a file elsewhere (here: one that would parse)
+        elsewhere = pathlib.Path(self.tmp.name, 'elsewhere.json')
+        elsewhere.write_text(record)
+        (reports / 'check' / cr.BASELINE).unlink()
+        os.symlink(elsewhere, reports / 'check' / cr.BASELINE)
+        run, _, problem = cr.baseline_of(self.scene.seal, 'check')
+        self.assertEqual(run, None)
+        self.assertIn('cannot be read back', problem)
+        # (c) prepare.json is a link
+        prepared = self.scene.seal.state / 'prepare.json'
+        kept = pathlib.Path(self.tmp.name, 'prepare-elsewhere.json')
+        shutil.move(str(prepared), str(kept))
+        os.symlink(kept, prepared)
+        with self.assertRaises(cr.Refused):
+            cr.sealed_state_ready(self.scene.seal, cr.load_manifest(self.scene.seal))
+        self.assertIn('not prepared', cr.status(self.scene.seal)[0])
+
+    def test_8_status_prints_a_stored_report_as_words_and_numbers_only(self):
+        self.scene.run()
+        stored = self.scene.report_dir() / 'report.json'
+        good = json.loads(stored.read_text())
+        poisoned = dict(good, engines=dict(good['engines'], check={'/Volumes/PrivateDrive/Grandma/Birthday 1988.mov': 1, 'OK': 2},
+                                           audio={sha_of(0): 3}),
+                        failures={'check:Grandma said hello': 1}, files='Lake House', bytes='reel_07', wall_s=[1],
+                        seal=dict(homeSealed='Birthday', testHost=True, archiveDesignation=False, records='reel_07.MXF'))
+        stored.write_text(json.dumps(poisoned))
+        text = '\n'.join(cr.status(self.scene.seal))
+        for name in SECRET_NAMES + ('.mov', '/Volumes', sha_of(0), 'reel_07'):
+            self.assertNotIn(name, text, name)
+        self.assertIn('check: OK 2, scrubbed 1', text)
+        for junk in ('[]', '"text"', json.dumps(dict(good, lane='../../etc')), json.dumps(dict(good, sha='Birthday.mov')), '{not json'):
+            stored.write_text(junk)
+            text = '\n'.join(cr.status(self.scene.seal))
+            self.assertIn('RED its report cannot be read back', text)
+            for name in SECRET_NAMES:
+                self.assertNotIn(name, text)
+
+    def test_9_a_baseline_row_that_is_not_a_record_is_never_an_unchanged_file(self):
+        engines = ['check']
+        delta = cr.diff({'a': 'not a record', 'b': {'check': 'OK'}}, {'a': {'check': 'OK'}, 'b': {'check': 'OK'}}, engines)
+        self.assertEqual((delta['compared'], delta['changed']), (1, 0), 'a malformed row was counted as compared and unchanged')
+        self.scene.run()
+        cr.accept(self.scene.seal, 'check', 'x')
+        stored = self.scene.report_dir() / 'outcomes.json'
+        rows = json.loads(stored.read_text())
+        rows[sha_of(0)] = 'not a record'
+        stored.write_text(json.dumps(rows))
+        record = self.scene.seal.reports / 'check' / cr.BASELINE
+        accepted = json.loads(record.read_text())
+        accepted['outcomes_sha256'] = hashlib.sha256(stored.read_bytes()).hexdigest()       # even "re-accepted" by hand
+        record.write_text(json.dumps(accepted))
+        self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_RED)
+        self.assertIn('the accepted baseline of check cannot be read back', self.summary())
+        record.unlink()                                                                    # and never the implicit baseline
+        self.assertEqual(cr.baseline_of(self.scene.seal, 'check', exclude=self.scene.report_dir(stamp='20261118_090000_2'))[0], None)
+        with self.assertRaises(cr.Refused):
+            cr.accept(self.scene.seal, 'check', 'x') if cr.lane_runs(self.scene.seal, 'check')[-1] == self.scene.report_dir() else (_ for _ in ()).throw(cr.Refused('x'))
 
 
 class ScaleTests(unittest.TestCase):

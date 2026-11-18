@@ -178,6 +178,7 @@ class Seal:
         self.work_root = self.corpus / "work"
         self.reports = self.corpus / "reports"
         self.media = self.corpus / "media"
+        self.out_root = self.home / "m4run" / "out"          # where m4_run.sh puts a run's folder
 
     @classmethod
     def here(cls, state_root: Optional[str] = None) -> "Seal":
@@ -243,18 +244,43 @@ class Seal:
     def write_json(self, path: Path, value) -> None:
         self.write_text(path, json.dumps(value, indent=1, sort_keys=True) + "\n")
 
+    def out_folder(self, out: Path) -> Path:
+        """The lane's <out> folder, or Refused: it is a real folder (no link in its way) directly
+        under ~/m4run/out — the run folder m4_run.sh made — or that run's own corpus-<lane>
+        folder, and nowhere else (Codex #313 F3)."""
+        out = Path(out)
+        root, real = os.path.realpath(str(self.out_root)), os.path.realpath(str(out))
+        run_folder = real == os.path.join(root, out.name)
+        # Inside a testbed run each corpus lane has its own folder in the run folder: <run>/corpus-<lane>.
+        lane_folder = (out.name in {"corpus-" + lane for lane in LANES} and not os.path.islink(str(out.parent))
+                       and real == os.path.join(root, out.parent.name, out.name))
+        if (os.path.islink(str(out)) or not os.path.isdir(str(out)) or not (run_folder or lane_folder)
+                or self.pristine(out) or _under(out, self.corpus)):
+            raise Refused("refused: the lane's output folder is not a run folder under ~/m4run/out")
+        return out
+
+    def out_open(self, out: Path, name: str, append: bool = False) -> int:
+        """A file descriptor on one of the lane's own files in its <out> folder (counts, words
+        and build logs; outside the corpus). The folder is proven (`out_folder`); the file is
+        opened without following a link and must be a regular file with ONE name — a hard link
+        would share its bytes with a file somewhere else — and only then is it emptied
+        (Codex #311 F2, #313 F2/F3)."""
+        if "/" in name or name in ("", ".", ".."):
+            raise Refused("refused: an output file is named by a bare file name")
+        target = self.out_folder(out) / name
+        if os.path.islink(str(target)):
+            raise Refused("refused: a lane's output file would be written through a link")
+        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else 0), 0o644)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            os.close(fd)
+            raise Refused("refused: a lane's output file has a second name or is not a plain file")
+        if not append:
+            os.ftruncate(fd, 0)
+        return fd
+
     def out_write(self, out: Path, name: str, text: str, append: bool = False) -> None:
-        """One of the lane's own files in its <out> folder (~/m4run/out/<run>/, outside the
-        corpus): counts and words only. Never through a symlink, never into the corpus's
-        read-only parts or a live location (Codex #311 F2)."""
-        target = Path(out) / name
-        resolved = os.path.realpath(str(target))
-        if (os.path.islink(str(target)) or self.pristine(target) or resolved.startswith("/Volumes/")
-                or "/Library/Application Support" in resolved):
-            raise Refused("refused: a lane's output file would land somewhere it must not")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
-        fd = os.open(str(target), flags, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(self.out_open(out, name, append), "w", encoding="utf-8") as f:
             f.write(text)
 
 
@@ -645,8 +671,8 @@ def sealed_state_ready(seal: Seal, entries: List[Entry]) -> Path:
     if not verdict["ok"]:
         raise Refused("refused: the sealed catalog no longer matches the corpus — run `scripts/corpus_run.sh prepare`")
     try:
-        built_by = json.loads((seal.state / "prepare.json").read_text(encoding="utf-8")).get("transform_version")
-    except (OSError, ValueError, AttributeError):
+        built_by = json.loads(seal.contained(seal.state / "prepare.json", seal.state).read_text(encoding="utf-8")).get("transform_version")
+    except (OSError, ValueError, AttributeError, Refused):
         built_by = None
     if built_by != TRANSFORM_VERSION:
         raise Refused(f"refused: the sealed catalog was built by transform {word(str(built_by))}, this harness wants "
@@ -775,15 +801,16 @@ def patch_xctestrun(source: Path, dest: Path, environment: Dict[str, str]) -> No
         plistlib.dump(patch(plist), f)
 
 
-def _run(command: List[str], log: Path, env: Dict[str, str], cwd: Path) -> int:
-    """One child, output appended to `log`, waited for. Never signalled from here. fd 9 is the
-    testbed lock (m4_run.sh take_lock): passed on so the lock lives as long as the work."""
+def _run(command: List[str], seal: Seal, out: Path, log_name: str, env: Dict[str, str], cwd: Path) -> int:
+    """One child, output appended to the lane's own log in <out> (opened through the seal: never
+    through a link, Codex #313 F2), waited for. Never signalled from here. fd 9 is the testbed
+    lock (m4_run.sh take_lock): passed on so the lock lives as long as the work."""
     try:
         os.fstat(9)
         pass_fds: Tuple[int, ...] = (9,)
     except OSError:
         pass_fds = ()
-    with open(log, "ab") as f:
+    with os.fdopen(seal.out_open(out, log_name, append=True), "ab") as f:
         f.write(("\n$ " + " ".join(command[:6]) + " …\n").encode())
         f.flush()
         return subprocess.call(command, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT,
@@ -846,7 +873,7 @@ class Lane:
         rc = _run([self.xcodebuild, "build-for-testing", "-project", str(self.worktree / "VideoScan/VideoScan.xcodeproj"),
                    "-scheme", "VideoScan", "-configuration", "Debug", "-destination", "platform=macOS",
                    "-derivedDataPath", str(self.derived_data), "CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"],
-                  self.out / "corpus-build.log", dict(os.environ), self.worktree)
+                  self.seal, self.out, "corpus-build.log", dict(os.environ), self.worktree)
         self.build_seconds = time.time() - t0
         return rc
 
@@ -876,7 +903,7 @@ class Lane:
                   "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
                   "-test-timeouts-enabled", "NO",            # one test method walks every file; the per-file deadline is the driver's
                   f"-only-testing:VideoScanTests/{self.test_class}"],
-                 self.out / "corpus-test.log", env, self.worktree)
+                 self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
                 shutil.move(str(patched), str(self.out / patched.name))
@@ -993,8 +1020,15 @@ class Lane:
         entries = self.scope(entries)
         if not entries:
             raise Refused("refused: no corpus file is in this lane's scope")
+        seal.out_folder(self.out)
         self.housekeeping = prune(seal, self.lane)
-        seal.mkdir(self.work)
+        # The run's work folder is made by this run and by nothing before it: whatever is found
+        # in it later (the verbs lane's scratch, its archive) was put there by this run (Codex #313 F4).
+        seal.mkdir(seal.work_root)
+        try:
+            os.mkdir(str(seal.writable(self.work)))
+        except FileExistsError:
+            raise Refused("refused: a work folder with this run's name is already there — it is not this run's")
         try:
             if not self.engine_present():
                 report = self.report({}, {}, time.time() - t0, engine_present=False)
@@ -1300,6 +1334,9 @@ def lane_runs(seal: Seal, lane: str) -> List[Path]:
     """Every stored run of a lane, oldest first (the stamp sorts by time)."""
     root = seal.reports / lane
     runs = []
+    if (lane not in LANES or os.path.islink(str(root)) or os.path.islink(str(seal.reports))
+            or os.path.realpath(str(root)) != os.path.join(os.path.realpath(str(seal.reports)), lane)):
+        return runs                                          # reports/<lane> is itself, or the lane has no runs (Codex #313 F5)
     for report in root.glob("*/*/report.json") if root.is_dir() else []:
         run = report.parent
         # A run is a real folder inside reports/<lane>/<commit>/, holding real files: a symlinked
@@ -1317,9 +1354,8 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
     transitions = Counter()
     moved: List[Tuple[str, str]] = []
     kinds_changed = 0
-    for sha in sorted(set(old) & set(new)):
-        if not isinstance(old[sha], dict) or not isinstance(new[sha], dict):
-            continue
+    shared = sorted(sha for sha in set(old) & set(new) if isinstance(old[sha], dict) and isinstance(new[sha], dict))
+    for sha in shared:
         words = []
         for e in engines:
             if e not in old[sha]:
@@ -1332,7 +1368,7 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
             moved.append((sha, "; ".join(words)))
         elif any(sorted(old[sha].get(e + "_kinds") or []) != sorted(new[sha].get(e + "_kinds") or []) for e in engines):
             kinds_changed += 1
-    return {"compared": len(set(old) & set(new)), "changed": len(moved), "only_new": len(set(new) - set(old)),
+    return {"compared": len(shared), "changed": len(moved), "only_new": len(set(new) - set(old)),
             "only_old": len(set(old) - set(new)), "transitions": dict(transitions), "moved": moved,
             "kinds_changed": kinds_changed}
 
@@ -1343,8 +1379,9 @@ def usable_runs(seal: Seal, lane: str) -> List[Tuple[Path, dict]]:
     runs = []
     for run in lane_runs(seal, lane):
         try:
-            report = json.loads((run / "report.json").read_text(encoding="utf-8"))
-            if isinstance(report, dict) and report.get("engine_present", True) and (run / "outcomes.json").is_file():
+            report = clean_report(json.loads((run / "report.json").read_text(encoding="utf-8")))
+            if report["engine_present"]:
+                _outcomes(run)                               # readable, and every row a record
                 runs.append((run, report))
         except (OSError, ValueError):
             continue
@@ -1353,8 +1390,8 @@ def usable_runs(seal: Seal, lane: str) -> List[Tuple[Path, dict]]:
 
 def _outcomes(run: Path) -> Dict[str, dict]:
     value = json.loads((run / "outcomes.json").read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError("outcomes.json is not a table")
+    if not isinstance(value, dict) or not all(isinstance(row, dict) for row in value.values()):
+        raise ValueError("outcomes.json is not a table of records")      # a row that is not a record compares as nothing (Codex #313 F9)
     return value
 
 
@@ -1363,8 +1400,9 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
     reports/<lane>/baseline.json exists — proven still to be the run that was accepted, by the
     SHA-256 of its outcomes — else the lane's first whole clean run other than `exclude`."""
     record_path = seal.reports / lane / BASELINE
-    if record_path.exists():
+    if os.path.lexists(str(record_path)):
         try:
+            seal.contained(record_path, seal.reports)        # the record itself, never a link to a file elsewhere
             record = json.loads(record_path.read_text(encoding="utf-8"))
             if not re.fullmatch(r"[0-9a-f]{40}", record["sha"]) or not re.fullmatch(r"[0-9A-Za-z_]+", record["run"]):
                 raise ValueError("not a run")
@@ -1374,7 +1412,7 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
             if hashlib.sha256((run / "outcomes.json").read_bytes()).hexdigest() != record["outcomes_sha256"]:
                 raise ValueError("changed")
             _outcomes(run)
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, Refused):
             return None, {}, (f"the accepted baseline of {lane} cannot be read back (missing, or changed since it was "
                               f"accepted) — look, then `scripts/corpus_run.sh accept {lane}` blesses a run again")
         return run, {"what": "its accepted baseline", "accepted_at": word(str(record.get("accepted_at", "")).replace(" ", "_")),
@@ -1499,7 +1537,7 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
         raise Refused(f"refused: {lane} has no run to accept")
     newest = runs[-1]
     try:
-        report = json.loads((newest / "report.json").read_text(encoding="utf-8"))
+        report = clean_report(json.loads((newest / "report.json").read_text(encoding="utf-8")))
         digest = hashlib.sha256((newest / "outcomes.json").read_bytes()).hexdigest()
         _outcomes(newest)
     except (OSError, ValueError):
@@ -1512,8 +1550,8 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
         raise Refused(f"refused: the newest {lane} run was limited to {report['limit']} files — a partial run is never the baseline")
     folder = seal.reports / lane
     try:
-        was = json.loads((folder / BASELINE).read_text(encoding="utf-8")).get("run")
-    except (OSError, ValueError, AttributeError):
+        was = json.loads(seal.contained(folder / BASELINE, seal.reports).read_text(encoding="utf-8")).get("run")
+    except (OSError, ValueError, AttributeError, Refused):
         was = None
     record = {"lane": lane, "run": newest.name, "sha": newest.parent.name, "files": report["files"],
               "accepted_at": time.strftime("%Y-%m-%d %H:%M:%S"), "accepted_by": who_word(who),
@@ -1528,14 +1566,42 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
             + (f"; it replaces {word(was)}" if was else "; the lane had no accepted baseline before")]
 
 
+def clean_report(report) -> dict:
+    """A STORED report as `status` may print it: rebuilt from words and numbers only. A report
+    file is read back from disk and is not trusted to hold what `report()` wrote — a counter's
+    key, the seal's values or a number could be anything (Codex #313 F8). Raises ValueError for
+    a file that is not a report of a known lane."""
+    if not isinstance(report, dict) or report.get("lane") not in LANES or not re.fullmatch(r"[0-9a-f]{40}", str(report.get("sha"))):
+        raise ValueError("not a report")
+
+    def number(value, default=0):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+    def counter(value) -> Dict[str, int]:
+        return {word(k): int(number(v)) for k, v in value.items()} if isinstance(value, dict) else {}
+
+    lane = report["lane"]
+    engines = report.get("engines") if isinstance(report.get("engines"), dict) else {}
+    seal_facts = report.get("seal") if isinstance(report.get("seal"), dict) else {}
+    return {"lane": lane, "sha": report["sha"], "engine_present": report.get("engine_present", True) is not False,
+            "files": int(number(report.get("files"))), "bytes": number(report.get("bytes")),
+            "media_seconds": number(report.get("media_seconds")), "wall_s": number(report.get("wall_s")),
+            "build_s": number(report.get("build_s")), "launches": int(number(report.get("launches"))),
+            "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
+            "engines": {e: counter(engines.get(e)) for e in LANES[lane][1] if e in engines},
+            "failures": counter(report.get("failures")),
+            "seal": {k: (seal_facts.get(k) if isinstance(seal_facts.get(k), (bool, int)) else None)
+                     for k in ("homeSealed", "testHost", "archiveDesignation", "records")}}
+
+
 def status(seal: Seal) -> List[str]:
     seal.check()
     lines = []
     try:
-        prepared = json.loads((seal.state / "prepare.json").read_text(encoding="utf-8"))
-        lines.append(f"corpus: prepared {prepared['prepared_at']} — {prepared['verify']['rows']} rows, "
-                     f"{prepared['files']} files, {prepared['bytes'] / 1e9:.1f} GB")
-    except (OSError, ValueError, KeyError):
+        prepared = json.loads(seal.contained(seal.state / "prepare.json", seal.state).read_text(encoding="utf-8"))
+        lines.append(f"corpus: prepared {word(str(prepared['prepared_at']).replace(' ', '_'))} — {int(prepared['verify']['rows'])} rows, "
+                     f"{int(prepared['files'])} files, {float(prepared['bytes']) / 1e9:.1f} GB")
+    except (OSError, ValueError, KeyError, TypeError, Refused):
         lines.append("corpus: not prepared — run `scripts/corpus_run.sh prepare`")
     for lane in LANES:
         runs = lane_runs(seal, lane)
@@ -1544,7 +1610,7 @@ def status(seal: Seal) -> List[str]:
             continue
         newest = runs[-1]
         try:
-            report = json.loads((newest / "report.json").read_text(encoding="utf-8"))
+            report = clean_report(json.loads((newest / "report.json").read_text(encoding="utf-8")))
             results = _outcomes(newest) if report.get("engine_present", True) else {}
         except (OSError, ValueError):
             lines.append(f"newest {lane} run: {newest.name} — RED its report cannot be read back")

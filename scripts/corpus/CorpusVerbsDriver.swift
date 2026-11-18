@@ -34,9 +34,13 @@
 //     run's work folder under ~/corpus/work (CorpusRun.open);
 //   - the archive root is under ~/corpus/work — checked again here, by the
 //     real home, immediately before the archive is initialized;
-//   - the Trash the engines use is their test-host folder under this run's
-//     TMPDIR (`MediaTrash.testHostTrash`), proven to be inside the work folder
-//     before any verb runs. The Finder Trash is never reachable from a test host.
+//   - the Trash the engines use is their test-host folder in the process's
+//     temporary folder (`MediaTrash.testHostTrash`). This process points its
+//     TMPDIR at the run's tmp folder and then PROVES both are inside the work
+//     folder before any verb runs. The Finder Trash is never reachable from a
+//     test host;
+//   - the scratch and archive folders are empty real folders, and every store
+//     folder the driver hands a model is made by the driver, new.
 //
 // Privacy: outcome words are enum case names, the catalog trash plan's refusal
 // raw values, the promote job's refusal codes and counts. No engine sentence
@@ -90,11 +94,30 @@ final class VerbsStage {
         Dictionary(grouping: words, by: { $0 }).map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: ",")
     }
 
-    func makeModel(_ name: String) -> VideoScanModel {
+    /// A model whose stores are in the run's scratch folder — each store's folder made here,
+    /// new, and proven to be inside the run before the model is given it. nil = refused.
+    func makeModel(_ name: String) -> VideoScanModel? {
+        var folders: [URL] = []
+        for kind in ["catalog-", "ledger-"] {
+            let path = scratch + "/" + kind + name
+            guard mkdir(path, 0o755) == 0, CorpusRun.isUnder(path, scratch), CorpusRun.isUnder(path, run.config.work) else { return nil }
+            folders.append(URL(fileURLWithPath: path, isDirectory: true))
+        }
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: URL(fileURLWithPath: scratch + "/catalog-" + name, isDirectory: true))
-        model.mediaLedger = MediaLedger(directory: URL(fileURLWithPath: scratch + "/ledger-" + name, isDirectory: true))
+        model.catalogStore = CatalogStore(directory: folders[0])
+        model.mediaLedger = MediaLedger(directory: folders[1])
         return model
+    }
+
+    /// A real directory (not a link to one).
+    nonisolated static func isRealFolder(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFDIR
+    }
+
+    /// A real directory with nothing in it.
+    nonisolated static func isEmptyFolder(_ path: String) -> Bool {
+        isRealFolder(path) && (try? FileManager.default.contentsOfDirectory(atPath: path))?.isEmpty == true
     }
 
     /// Update Catalog over the clones: the production scan, waited for.
@@ -139,18 +162,30 @@ final class CorpusVerbsDriver: XCTestCase {
         guard config.pending.allSatisfy({ item in ([item.path] + (item.copies ?? [])).allSatisfy { CorpusRun.isUnder($0, vol) } }) else {
             return refuse("a_verbs_file_is_not_a_clone")
         }
-        // The engines' Trash under a test host is a folder in TMPDIR: it must be this run's.
-        guard TestEnvironment.isTestHost, CorpusRun.isUnder(NSTemporaryDirectory(), config.work),
-              CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work) else { return refuse("trash_not_in_the_run") }
+        // The engines' Trash under a test host is a folder in the process's temporary folder
+        // (`MediaTrash.testHostTrash`, fixed at its first use): it must be this run's. An
+        // app-hosted test is given the system's per-user temporary folder whatever TMPDIR the
+        // launcher asked for (first M4 run, 2026-11-17: refused here), so this process points its
+        // own TMPDIR at the run's tmp folder — and then PROVES where the temporary folder and
+        // the Trash are before any verb. Anything else is a refusal, never a fallback.
+        guard TestEnvironment.isTestHost else { return refuse("not_a_test_host") }
+        let runTmp = config.work + "/tmp"
+        guard VerbsStage.isRealFolder(runTmp), CorpusRun.isUnder(runTmp, config.work) else { return refuse("tmp_not_in_the_run") }
+        setenv("TMPDIR", runTmp + "/", 1)
+        guard CorpusRun.isUnder(NSTemporaryDirectory(), config.work) else { return refuse("tmp_not_in_the_run") }
+        guard CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work) else { return refuse("trash_not_in_the_run") }
         guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, config.work) else {
             return refuse("archive_root_outside_corpus_work")
         }
+        // The scratch and archive folders are EMPTY real folders made for this run: nothing in
+        // them — a link named like a store this driver is about to make — predates it (Codex #313 F4).
+        guard VerbsStage.isEmptyFolder(scratch), VerbsStage.isEmptyFolder(archive) else { return refuse("a_verbs_folder_is_not_empty") }
 
         let stage = VerbsStage(run: run, vol: vol, scratch: scratch)
         for item in stage.items { run.begin(item) }
 
         // The trash and catalog verbs: one model over the clones.
-        let model = stage.makeModel("verbs")
+        guard let model = stage.makeModel("verbs") else { return refuse("a_store_folder_is_not_this_runs") }
         guard let records = try? await run.loadCatalog().records else { return XCTFail("corpus harness refused: catalog_would_not_open") }
         model.records = records
         await stage.group(model)
@@ -162,7 +197,7 @@ final class CorpusVerbsDriver: XCTestCase {
         // Promote: a second model, a scratch Master Archive.
         if !stage.items("promote").isEmpty {
             guard let again = try? await run.loadCatalog().records else { return XCTFail("corpus harness refused: catalog_would_not_open") }
-            let archiveModel = stage.makeModel("promote")
+            guard let archiveModel = stage.makeModel("promote") else { return refuse("a_store_folder_is_not_this_runs") }
             archiveModel.records = again
             await stage.promote(archiveModel, archive: archive)
         }
@@ -222,8 +257,14 @@ extension VerbsStage {
     /// Delete Duplicates over the clone volume: each clone's plan entry status.
     func dedupe(_ model: VideoScanModel) async {
         entering("dedupe")
+        let plans = scratch + "/plans"
+        guard mkdir(plans, 0o755) == 0, CorpusRun.isUnder(plans, run.config.work) else {
+            for item in items("dup") { say(item, "dedupe", "refused_by_harness") }
+            return
+        }
+        let planRoot = URL(fileURLWithPath: plans, isDirectory: true)
         let job = DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live,
-                                      planRoot: URL(fileURLWithPath: scratch + "/plans", isDirectory: true))
+                                      planRoot: planRoot)
         job.start()
         await job.task?.value
         for item in items("dup") {
