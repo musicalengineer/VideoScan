@@ -114,7 +114,8 @@ for item in config["pending"]:
         os._exit(139)
     say(ev="end", sha=item["sha"])
 if config["lane"] == "verbs":
-    say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0), records=len(config["pending"]))
+    say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0),
+        strayTrashFiles=plan.get("stray", 0), records=len(config["pending"]))
 say(ev="done")
 '''
 
@@ -1078,7 +1079,8 @@ class VerbsLaneTests(unittest.TestCase):
         self.assertIn('corpus verbs: GREEN 3 files', text)
         self.assertIn('corpus media sweep (size, mtime, flags, links and inode of 3 files, before and after): 0 changed, file count +0 — untouched', text)
         self.assertIn(f'clones: {3 + cr.VERBS_COPIES} (roles: dup 1, purge 1, set_aside 1)', text)
-        self.assertIn("the engines' test-host Trash (under the run's work folder; never the Finder Trash): 2 files, the engines reported moving 2", text)
+        self.assertIn("the run's own Trash folder (under its work folder; never the Finder Trash): 2 files, the engines reported moving 2; "
+                      "files found in the app's own test-host Trash outside the run: 0", text)
         self.assertIn('  by role:', text)
         self.assertIn('    set_aside (1): ', text)
         self.assertNotIn('by container', text)
@@ -1103,6 +1105,12 @@ class VerbsLaneTests(unittest.TestCase):
         self.assertEqual(json.loads((self.scene.out / cr.VERDICT_FILE).read_text())['verdict'], 'RED')
         with self.assertRaises(cr.Refused):
             cr.accept(self.scene.seal, 'verbs', 'x')
+
+    def test_a_clone_that_left_the_run_through_the_apps_own_trash_call_is_red(self):
+        self.scene.plan['stray'] = 1
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_RED)
+        self.assertIn("files found in the app's own test-host Trash outside the run: 1", self.summary())
+        self.assertIn('trash:LOST_outside_the_run 1', self.summary())
 
     def test_a_file_added_under_media_is_seen_by_the_sweep(self):
         entries = cr.load_manifest(self.scene.seal)
@@ -1197,18 +1205,24 @@ class VerbsLaneTests(unittest.TestCase):
     def test_the_verbs_driver_carries_its_own_seal_and_never_reaches_the_finder_trash(self):
         driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
         code = '\n'.join(line for line in driver.splitlines() if not line.lstrip().startswith('//'))
-        for guard in ('CorpusRun.open(lane: "verbs")', 'CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work)',
-                      'CorpusRun.isUnder(NSTemporaryDirectory(), config.work)', 'TestEnvironment.isTestHost',
-                      'setenv("TMPDIR", runTmp + "/", 1)', 'refuse("tmp_not_in_the_run")',
+        for guard in ('CorpusRun.open(lane: "verbs")', 'TestEnvironment.isTestHost',
+                      'guard mkdir(trash, 0o755) == 0, CorpusRun.isUnder(trash, config.work), VerbsStage.isEmptyFolder(trash)',
+                      'hooks.trashItem = { url in try VerbsTrash.move(url, into: trash, work: work) }',
+                      'fileOperation: { url in _ = try VerbsTrash.move(url, into: trash, work: work) }',
+                      'guard CorpusRun.isUnder(url.path, work), CorpusRun.isUnder(trash, work), VerbsStage.isRealFolder(trash)',
+                      'VerbsStage.digests(in: MediaTrash.testHostTrash.path).files', '"strayTrashFiles": stray',
                       'CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
                       'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, run.config.work)',
-                      'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live', 'model.catalogTrashPlan(for: [row])', 'model.trashSelectedRecords([row], confirmed: confirmed)',
+                      'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: hooks, planRoot: planRoot)', 'model.catalogTrashPlan(for: [row])', 'model.trashSelectedRecords([row], confirmed: confirmed,',
                       'model.purgeRecords(ids:', 'model.removeFromCatalog(recordIDs:', 'PromoteToArchiveJob(plan: plan, model: model)',
                       'model.initializeMasterArchive(at: URL(fileURLWithPath: archive'):
             self.assertIn(guard, code, guard)
         self.assertLess(code.index('refuse("trash_not_in_the_run")'), code.index('trashSelectedRecords'), 'the Trash is proven before any verb')
         self.assertLess(code.index('refuse("archive_root_outside_corpus_work")'), code.index('initializeMasterArchive'))
-        for never in ('trashItem(', 'removeItem', 'unlink(', 'FamilyArchive', '/Volumes', 'fileOperation:', 'mediaRoot', '.note', 'kill('):
+        self.assertEqual(code.count('trashSelectedRecords('), 1, 'one call, and it carries the file-operation seam')
+        self.assertEqual(code.count('DeleteDuplicatesJob('), 1)
+        for never in ('trashItem(', 'removeItem', 'unlink(', 'FamilyArchive', '/Volumes', 'hooks: .live', 'MediaTrash.move', 'mediaRoot', '.note',
+                      'kill('):
             self.assertNotIn(never, code, never)
         self.assertIn('info.st_nlink == 1', code, 'a file with a second name is never unlocked')
 

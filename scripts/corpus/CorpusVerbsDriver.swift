@@ -14,7 +14,9 @@
 //               Duplicates (`analyzeDuplicates`): did the three byte-identical
 //               clones of a `dup` file land in one group?
 //   trash_copy  Move to Trash (⌘⌫: `catalogTrashPlan` + `trashSelectedRecords`)
-//               on one extra clone while two other copies exist.
+//               on one extra clone while two other copies exist. (Through the
+//               routine's file-operation seam: the row is then recorded as
+//               removed outright, not as "in the Trash" — the gates are real.)
 //   dedupe      Delete Duplicates (`DeleteDuplicatesJob`) over the clone volume:
 //               the plan's entry status for each clone of the file.
 //   trash_last  Move to Trash on the last surviving copy, confirmed WITHOUT
@@ -26,7 +28,7 @@
 //               Promote (`PromoteToArchiveJob`, the real sound gate); the
 //               archived copy is re-hashed against the file's SHA-256.
 //   intact      Every clone of the file is hashed where it now is: at its path
-//               (`intact`), in the engines' test-host Trash (`in_trash_intact`),
+//               (`intact`), in the run's Trash folder (`in_trash_intact`),
 //               or — RED — `LOST` / `MISMATCH`.
 //
 // THE VERBS SEAL (on top of CorpusRun.open's; any miss is `refused`):
@@ -34,11 +36,14 @@
 //     run's work folder under ~/corpus/work (CorpusRun.open);
 //   - the archive root is under ~/corpus/work — checked again here, by the
 //     real home, immediately before the archive is initialized;
-//   - the Trash the engines use is their test-host folder in the process's
-//     temporary folder (`MediaTrash.testHostTrash`). This process points its
-//     TMPDIR at the run's tmp folder and then PROVES both are inside the work
-//     folder before any verb runs. The Finder Trash is never reachable from a
-//     test host;
+//   - THE TRASH is the run's own folder (work/<run>/trash), made new here:
+//     Delete Duplicates is given it through the job's `hooks.trashItem` seam,
+//     Move to Trash through the routine's `fileOperation` seam (`VerbsTrash`
+//     refuses a file or a folder outside the run). The app's own Trash call is
+//     never the one that runs; a test host is still required, so that if a
+//     step were ever missed the file could only reach the app's test-host
+//     folder — which is counted afterwards and must be empty — never the
+//     Finder Trash;
 //   - the scratch and archive folders are empty real folders, and every store
 //     folder the driver hands a model is made by the driver, new.
 //
@@ -64,15 +69,18 @@ final class VerbsStage {
     let items: [CorpusConfig.Item]
     let vol: String
     let scratch: String
+    /// The run's own Trash folder: where every engine's Trash step is pointed.
+    let trash: String
     var started = Date()
     /// Files the engines reported moving to the Trash (compared with what is found there).
     var trashedByEngines = 0
 
-    init(run: CorpusRun, vol: String, scratch: String) {
+    init(run: CorpusRun, vol: String, scratch: String, trash: String) {
         self.run = run
         self.items = run.config.pending
         self.vol = vol
         self.scratch = scratch
+        self.trash = trash
     }
 
     func items(_ role: String) -> [CorpusConfig.Item] { items.filter { $0.role == role } }
@@ -141,6 +149,21 @@ final class VerbsStage {
     func isLive(_ record: VideoRecord) -> Bool { !record.isPurged && !record.isSetAside && !record.isSuperseded }
 }
 
+/// The run's own Trash: the step every engine is given in place of the app's.
+enum VerbsTrash {
+    /// Moves `url` into `trash` under a new name (no clobber) and returns where it went. Refuses
+    /// a file that is not inside the run, and a trash folder that is not.
+    static func move(_ url: URL, into trash: String, work: String) throws -> URL {
+        guard CorpusRun.isUnder(url.path, work), CorpusRun.isUnder(trash, work), VerbsStage.isRealFolder(trash) else {
+            throw CorpusRefusal(word: "trash_step_outside_the_run")
+        }
+        let name = UUID().uuidString + (url.pathExtension.isEmpty ? "" : "." + url.pathExtension)
+        let destination = URL(fileURLWithPath: trash, isDirectory: true).appendingPathComponent(name)
+        try FileManager.default.moveItem(at: url, to: destination)
+        return destination
+    }
+}
+
 final class CorpusVerbsDriver: XCTestCase {
 
     @MainActor
@@ -162,18 +185,18 @@ final class CorpusVerbsDriver: XCTestCase {
         guard config.pending.allSatisfy({ item in ([item.path] + (item.copies ?? [])).allSatisfy { CorpusRun.isUnder($0, vol) } }) else {
             return refuse("a_verbs_file_is_not_a_clone")
         }
-        // The engines' Trash under a test host is a folder in the process's temporary folder
-        // (`MediaTrash.testHostTrash`, fixed at its first use): it must be this run's. An
-        // app-hosted test is given the system's per-user temporary folder whatever TMPDIR the
-        // launcher asked for (first M4 run, 2026-11-17: refused here), so this process points its
-        // own TMPDIR at the run's tmp folder — and then PROVES where the temporary folder and
-        // the Trash are before any verb. Anything else is a refusal, never a fallback.
+        // THE TRASH. Under a test host the app's one Trash call moves a file into a folder in the
+        // system's per-user temporary folder — never the Finder Trash, but not inside this run
+        // either (macOS gives NSTemporaryDirectory() no way to be moved: two real M4 runs were
+        // refused here on 2026-11-17). So every engine is given its own injectable Trash step,
+        // which moves the file into THIS run's trash folder (`VerbsTrash`), and the app's
+        // test-host folder is checked afterwards to be empty. A test host is still required:
+        // if a step were ever missed, the file could reach that temporary folder, not a Trash.
         guard TestEnvironment.isTestHost else { return refuse("not_a_test_host") }
-        let runTmp = config.work + "/tmp"
-        guard VerbsStage.isRealFolder(runTmp), CorpusRun.isUnder(runTmp, config.work) else { return refuse("tmp_not_in_the_run") }
-        setenv("TMPDIR", runTmp + "/", 1)
-        guard CorpusRun.isUnder(NSTemporaryDirectory(), config.work) else { return refuse("tmp_not_in_the_run") }
-        guard CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work) else { return refuse("trash_not_in_the_run") }
+        let trash = config.work + "/trash"
+        guard mkdir(trash, 0o755) == 0, CorpusRun.isUnder(trash, config.work), VerbsStage.isEmptyFolder(trash) else {
+            return refuse("trash_not_in_the_run")
+        }
         guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, config.work) else {
             return refuse("archive_root_outside_corpus_work")
         }
@@ -181,7 +204,7 @@ final class CorpusVerbsDriver: XCTestCase {
         // them — a link named like a store this driver is about to make — predates it (Codex #313 F4).
         guard VerbsStage.isEmptyFolder(scratch), VerbsStage.isEmptyFolder(archive) else { return refuse("a_verbs_folder_is_not_empty") }
 
-        let stage = VerbsStage(run: run, vol: vol, scratch: scratch)
+        let stage = VerbsStage(run: run, vol: vol, scratch: scratch, trash: trash)
         for item in stage.items { run.begin(item) }
 
         // The trash and catalog verbs: one model over the clones.
@@ -203,8 +226,10 @@ final class CorpusVerbsDriver: XCTestCase {
         }
 
         let trashFiles = stage.intact()
+        // The app's own test-host Trash folder (outside the run) must hold nothing: every step was given the run's.
+        let stray = VerbsStage.digests(in: MediaTrash.testHostTrash.path).files
         run.progress.write(["ev": "verbs", "trashFiles": trashFiles, "trashedByEngines": stage.trashedByEngines,
-                            "records": model.records.count])
+                            "strayTrashFiles": stray, "records": model.records.count])
         for item in stage.items { run.end(item) }
         run.done()
     }
@@ -227,15 +252,20 @@ extension VerbsStage {
         }
     }
 
-    /// Move to Trash as ⌘⌫ does it: the plan, then the routine under `confirmed`. Returns the
-    /// word for the routine's outcome, or the plan's refusal.
+    /// Move to Trash as ⌘⌫ does it: the plan, then the routine under `confirmed`, with the
+    /// routine's file operation pointed at the run's Trash folder (its `fileOperation` seam —
+    /// the gates, the only-copy hold and the result are the engine's; the row is then recorded
+    /// as removed outright rather than as "in the Trash", which is what that seam does).
+    /// Returns the word for the routine's outcome, or the plan's refusal.
     private func moveToTrash(_ model: VideoScanModel, _ row: VideoRecord, dropWarning: Bool) async -> (warned: Bool, word: String) {
         let plan = model.catalogTrashPlan(for: [row])
         if let refused = plan.refused.first { return (false, "refused:" + refused.reason.rawValue) }
         let warned = plan.onlyCopy.contains(row.id)
         var confirmed = plan
         if dropWarning { confirmed.onlyCopy = [] }               // the yes a person gave before it became the only copy
-        let result = await model.trashSelectedRecords([row], confirmed: confirmed)
+        let (trash, work) = (trash, run.config.work)
+        let result = await model.trashSelectedRecords([row], confirmed: confirmed,
+                                                      fileOperation: { url in _ = try VerbsTrash.move(url, into: trash, work: work) })
         let kind = result.items.first.map { CorpusWords.caseName($0.outcome.kind) } ?? "no_outcome"
         if kind == "moved" { trashedByEngines += 1 }
         return (warned, kind)
@@ -263,8 +293,10 @@ extension VerbsStage {
             return
         }
         let planRoot = URL(fileURLWithPath: plans, isDirectory: true)
-        let job = DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live,
-                                      planRoot: planRoot)
+        var hooks = SignatureVerification.Hooks.live
+        let (trash, work) = (trash, run.config.work)
+        hooks.trashItem = { url in try VerbsTrash.move(url, into: trash, work: work) }     // the job's own Trash seam
+        let job = DeleteDuplicatesJob(model: model, volumePath: vol, hooks: hooks, planRoot: planRoot)
         job.start()
         await job.task?.value
         for item in items("dup") {
@@ -374,7 +406,7 @@ extension VerbsStage {
     /// Returns how many files the Trash holds.
     func intact() -> Int {
         entering("intact")
-        let found = VerbsStage.digestsInTheTrash()
+        let found = VerbsStage.digests(in: trash)
         var inTrash = found.digests
         for item in items {
             var words: [String] = []
@@ -394,11 +426,12 @@ extension VerbsStage {
         return found.files
     }
 
-    /// The SHA-256 of every file in the engines' test-host Trash (how many of each), and the file count.
-    nonisolated static func digestsInTheTrash() -> (digests: [String: Int], files: Int) {
+    /// The SHA-256 of every file under `folder` (how many of each), and the file count.
+    nonisolated static func digests(in folder: String) -> (digests: [String: Int], files: Int) {
         var digests: [String: Int] = [:]
         var files = 0
-        guard let walker = FileManager.default.enumerator(at: MediaTrash.testHostTrash, includingPropertiesForKeys: [.isRegularFileKey]) else {
+        guard let walker = FileManager.default.enumerator(at: URL(fileURLWithPath: folder, isDirectory: true),
+                                                          includingPropertiesForKeys: [.isRegularFileKey]) else {
             return (digests, files)
         }
         for case let url as URL in walker where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {

@@ -72,8 +72,11 @@ followed by a real rescan, and Promote into a scratch archive under work/<run>/.
 Nothing under ~/corpus/media is ever a target: the lane proves it by a size+mtime
 sweep of every corpus file before and after (any difference is RED), and the
 in-app driver proves every surviving clone still matches its SHA-256. The Trash
-is the engines' own test-host folder under the run's TMPDIR — never the Finder
-Trash; the archive root is refused unless it is under ~/corpus/work.
+is a folder in the run's own work folder, given to each engine through its own
+injectable Trash step — never the Finder Trash, and not the app's test-host
+Trash either (that one is in the system's temporary folder, outside the run:
+it is counted afterwards and must be empty); the archive root is refused
+unless it is under ~/corpus/work.
 
 This file never signals a process. A file that overruns its deadline is cut
 by the driver exiting its own test host (CorpusDriverSupport.swift); the
@@ -950,7 +953,7 @@ class Lane:
                 if ev.get("ev") == "hello" and not hello:
                     hello = {k: ev.get(k) for k in ("homeSealed", "records", "archiveDesignation", "testHost")}
                 if ev.get("ev") == "verbs":                  # the verbs driver's closing counts
-                    self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "records")
+                    self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "strayTrashFiles", "records")
                                     if isinstance(ev.get(k), int) and not isinstance(ev.get(k), bool)}
             settled, refusal = settle(events, self.engines, results)
             if refusal:
@@ -1203,6 +1206,8 @@ class VerbsLane(Lane):
         report["clones"] = len(self.roles) + sum(len(c) for c in self.copies.values())
         report["free_delta_bytes"] = shutil.disk_usage(str(self.seal.corpus)).free - self.free_before
         report["trash"] = self.closing
+        if self.closing.get("strayTrashFiles"):              # RED: a clone left the run through the app's own Trash call
+            report["failures"]["trash:LOST_outside_the_run"] = self.closing["strayTrashFiles"]
         if changed or files_delta:
             report["failures"]["media:MISMATCH"] = changed + abs(files_delta)       # RED: the pristine copies moved
 
@@ -1287,8 +1292,9 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
         lines.append(f"  clones: {report.get('clones')} (roles: {_counts(report.get('roles') or {})}); free space on the M4 "
                      f"{report.get('free_delta_bytes', 0) / 1e9:+.2f} GB while the run's work folder was still there")
         trash = report.get("trash") or {}
-        lines.append(f"  the engines' test-host Trash (under the run's work folder; never the Finder Trash): "
-                     f"{trash.get('trashFiles', 'no count of')} files, the engines reported moving {trash.get('trashedByEngines', 'no count')}")
+        lines.append(f"  the run's own Trash folder (under its work folder; never the Finder Trash): "
+                     f"{trash.get('trashFiles', 'no count of')} files, the engines reported moving {trash.get('trashedByEngines', 'no count')}; "
+                     f"files found in the app's own test-host Trash outside the run: {trash.get('strayTrashFiles', 'no count')}")
     lines.append("  by role:" if lane == "verbs" else "  by stratum:")
     for name, row in sorted(report["by_stratum"].items()):
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))

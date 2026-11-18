@@ -34209,6 +34209,7 @@
         "test_a_check_lane_config_over_media_holds_and_a_home_outside_the_seal_does_not",
         "test_a_clean_run_is_green_and_reports_counts_by_stratum_and_format",
         "test_a_clone_is_only_ever_made_from_media_into_this_runs_work_folder",
+        "test_a_clone_that_left_the_run_through_the_apps_own_trash_call_is_red",
         "test_a_corpus_folder_that_is_an_alias_is_refused",
         "test_a_corpus_run_leaves_latest_suite_alone_and_status_still_shows_the_suite",
         "test_a_crash_in_one_file_does_not_stop_the_run",
