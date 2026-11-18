@@ -311,6 +311,10 @@ enum MediaRepairEngine {
             return .stop(.refused(reason: "The original's \(req.recipe.picture == .removeRepeatedFrames ? "picture" : "header") couldn't be read (\(error.localizedDescription)). Nothing was written."))
         }
         let source = MediaRepairSourceRules(summary: summary)
+        if let why = rawDVSoundTrackRefusal(req.recipe, summary: summary, source: source) {
+            repairLog.notice("repair REFUSED \(name, privacy: .public): \(why, privacy: .public)")
+            return .stop(.refused(reason: why))
+        }
         if source != .none {
             repairLog.info("repair: \(name, privacy: .public) is raw DV (\(summary.containerFormat, privacy: .public)) — read at its probed rate \(source.inputArgs.joined(separator: " "), privacy: .public), sound timestamps made contiguous (GH #484)")
         }
@@ -318,6 +322,18 @@ enum MediaRepairEngine {
             return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil, source: source)
         }
         return await picturePreflight(req, summary: summary, source: source, control: control, progress: progress)
+    }
+
+    /// Codex #316-1: Rebuild sound writes ONE sound track (`0:a:0`). A raw DV
+    /// file with several (the 12-bit camcorder shape: two stereo pairs, both
+    /// possibly live) would lose all but the first in the copy — refused
+    /// before the write. Raw DV only: before GH #484 such a rebuild never
+    /// published; every other container keeps its behaviour (first track). Pure.
+    static func rawDVSoundTrackRefusal(_ recipe: MediaRepairRecipe, summary: MediaRepairStreamSummary,
+                                       source: MediaRepairSourceRules) -> String? {
+        let tracks = summary.codecs("audio").count
+        guard recipe.sound == .rebuild, source != .none, tracks > 1 else { return nil }
+        return "This raw DV file has \(tracks) sound tracks, and Rebuild sound writes one — the other\(tracks > 2 ? "s" : "") would be left out. Nothing was written."
     }
 
     /// Remove repeated frames' half: the justified re-encode plan from the

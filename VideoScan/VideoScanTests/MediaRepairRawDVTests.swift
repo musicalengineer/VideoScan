@@ -288,6 +288,60 @@ struct MediaRepairRawDVTests {
         #expect(url.pathExtension == "mov")
     }
 
+    // MARK: Codex #316-1 — raw DV with two sound tracks (the 12-bit camcorder shape)
+
+    @Test("REGRESSION Codex #316-1: Rebuild sound on a raw DV file with TWO sound tracks is REFUSED before any write — it would keep only the first pair; nothing is written",
+          .timeLimit(.minutes(2)),
+          arguments: [[MediaRepairFix.rebuildAudio], [.rebuildAudio, .remux]])
+    func twoSoundTracksAreRefused(_ fixes: [MediaRepairFix]) async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("repair_rawdv_2pair_\(fixes.count)")
+        defer { try? fm.removeItem(at: dir) }
+        let original = try BalanceAudioTestMedia.generateTwoAudioPairs(
+            into: dir, label: "both_live", pair1: "\(BalanceAudioTestMedia.programTone)|\(BalanceAudioTestMedia.programTone)",
+            pair2: "\(BalanceAudioTestMedia.programTone2)|\(BalanceAudioTestMedia.programTone2)", container: .dv)
+        let summary = try await MediaRepairProbe.summary(path: original, control: nil)
+        try #require(summary.containerFormat == "dv" && summary.codecs("audio").count == 2)
+        let before = try CleanupTestMedia.fingerprint(original)
+        let listing = F.listing(dir)
+
+        let (outcome, _) = await Self.repair(original, fixes: fixes, seconds: 2)
+        guard case .refused(let why) = outcome else {
+            Issue.record("expected refused, got \(outcome)")
+            return
+        }
+        #expect(why == "This raw DV file has 2 sound tracks, and Rebuild sound writes one — the other would be left out. Nothing was written.", "\(why)")
+        #expect(F.listing(dir) == listing)
+        #expect(try CleanupTestMedia.fingerprint(original) == before)
+    }
+
+    // MARK: Codex #316-2 — the played-what-it-stores rule on the writer's own delayed output
+
+    @Test("Codex #316-2: the writer's QuickTime muxer states a delayed sound track's length WITHOUT its leading empty edit — so the rule refuses a delayed copy that hides stored sound and accepts one that plays it all",
+          .timeLimit(.minutes(2)),
+          arguments: [false, true])
+    func delayedSoundIsJudgedOnTheWritersOwnOutput(_ contiguous: Bool) async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("repair_rawdv_delay_\(contiguous)")
+        defer { try? fm.removeItem(at: dir) }
+        let tape = try Self.tape(in: dir, name: "fast", samplesPerFrame: Self.fast)
+        let copy = dir.appendingPathComponent("test_delayed.mov").path
+        try BalanceAudioTestMedia.runFFmpeg(
+            ["-r", "30000/1001", "-i", tape, "-itsoffset", "0.4", "-r", "30000/1001", "-i", tape,
+             "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "pcm_s24le"]
+            + (contiguous ? ["-bsf:a", Self.setts] : []),
+            output: copy)
+        let stored = try Media.channel(0, of: copy, in: dir, inputArgs: ["-ignore_editlist", "1"])
+        let played = try Media.channel(0, of: copy, in: dir)
+        #expect((played == stored) == contiguous, "fixture: played \(played.count / 2), stored \(stored.count / 2)")
+        let verdict = try await MediaRepairProbe.unplayedSoundFailure(path: copy, control: nil)
+        if contiguous {
+            #expect(verdict == nil, "\(verdict ?? "")")
+        } else {
+            #expect(verdict?.contains("the repaired copy would not play all the sound it stores") == true, "\(verdict ?? "nil")")
+        }
+    }
+
     // MARK: DV inside AVI
 
     /// `dvPath`'s frames as a TYPE 1 DV AVI: one interleaved `iavs` stream,

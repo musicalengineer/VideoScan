@@ -24328,12 +24328,14 @@
       "tests": [
         "aCopyWithAnUnplayedTailIsNotPublished",
         "combinedPassArguments",
+        "delayedSoundIsJudgedOnTheWritersOwnOutput",
         "dvInsideAVI",
         "rawDVWithoutSound",
         "rebuildOnTheMatrix",
         "rebuildSoundOnRawDV",
         "removeRepeatedFramesOnRawDV",
         "sourceRulesTable",
+        "twoSoundTracksAreRefused",
         "unreadableHeaderIsRefusedBeforeAnyWrite",
         "whatTheProofsSay"
       ]
@@ -40701,7 +40703,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 796,
+      "expected_floor": 798,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
