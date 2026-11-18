@@ -26,7 +26,11 @@ import os
 //      its colour tags / aspect / chroma (MediaRepairParity.compareRewritten).
 //      Adding sound from another file must keep the picture packet for
 //      packet and carry that file's sound track (compareAddedSound).
+//      A rewritten copy must play all the sound it stores (GH #482/#484:
+//      PCM in QuickTime, BalanceAudioFix.unplayedSoundMismatch).
 //      Then ≤ 5 short windows of the copy are decoded.
+//      A pass that rewrites a RAW DV original reads it at its probed rate
+//      and writes its sound's timestamps contiguous (MediaRepairSourceRules).
 //   4. PUBLISH with the one no-clobber rename (ExclusivePublish:
 //      RENAME_EXCL, else link(2), else refuse). A name that appeared while
 //      we worked is NEVER written over and NEVER published beside — the
@@ -239,8 +243,10 @@ enum MediaRepairEngine {
     /// Preflight's answer: go (with the justified picture plan when the recipe
     /// needs one), or stop with an outcome — nothing written either way.
     enum Preflight: Equatable, Sendable {
-        /// `picture` = the justified re-encode plan (repeated frames only).
-        case go(picture: MediaRepairPicturePlan?)
+        /// `picture` = the justified re-encode plan (repeated frames only);
+        /// `source` = what the original's container asks of a pass that
+        /// rewrites it (raw DV, GH #484; `.none` for every other pass).
+        case go(picture: MediaRepairPicturePlan?, source: MediaRepairSourceRules)
         case stop(MediaRepairOutcome)
     }
 
@@ -248,8 +254,9 @@ enum MediaRepairEngine {
     static func run(_ req: MediaRepairRequest, tools: Tools = .located,
                     control: ProcessControl?, progress: @escaping Progress) async -> MediaRepairOutcome {
         let picture: MediaRepairPicturePlan?
+        let source: MediaRepairSourceRules
         switch await preflight(req, tools: tools, control: control, progress: progress) {
-        case .go(let plan): picture = plan
+        case .go(let plan, let rules): (picture, source) = (plan, rules)
         case .stop(let outcome): return outcome
         }
         // ---- First write: this run's own reserved partial.
@@ -260,7 +267,8 @@ enum MediaRepairEngine {
             return .failed(reason: "Could not start the repaired copy: \(error.localizedDescription)", keptAt: nil)
         }
         defer { partial.release() }
-        if let stop = await partial.write(req, tools: tools, picture: picture, control: control, progress: progress) {
+        if let stop = await partial.write(req, tools: tools, picture: picture, source: source, control: control,
+                                          progress: progress) {
             return stop
         }
         progress(.prove, nil)
@@ -272,8 +280,16 @@ enum MediaRepairEngine {
         }
     }
 
-    /// Every refusal, then (for repeated frames) the justified picture plan — all
-    /// before the first write.
+    /// Does this pass rewrite the original through ffmpeg's own reading of
+    /// its container (and so need `MediaRepairSourceRules`)? The lossless
+    /// remux keeps the container; the add-sound mux is Combine's. Pure.
+    static func rewritesSource(_ recipe: MediaRepairRecipe) -> Bool {
+        !recipe.isLossless && recipe.addedSoundPath == nil
+    }
+
+    /// Every refusal, then — for a pass that rewrites the original — its
+    /// header (the container's rules; for repeated frames also the justified
+    /// picture plan): all before the first write.
     static func preflight(_ req: MediaRepairRequest, tools: Tools, control: ProcessControl?,
                           progress: @escaping Progress) async -> Preflight {
         let name = (req.sourcePath as NSString).lastPathComponent
@@ -281,17 +297,34 @@ enum MediaRepairEngine {
             repairLog.notice("repair REFUSED \(name, privacy: .public): \(why, privacy: .public)")
             return .stop(.refused(reason: why))
         }
-        guard req.recipe.picture == .removeRepeatedFrames else {
-            return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil)
+        guard rewritesSource(req.recipe) else {
+            return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil, source: .none)
         }
-        progress(.plan, nil)
+        if req.recipe.picture == .removeRepeatedFrames { progress(.plan, nil) }
         let summary: MediaRepairStreamSummary
         do {
             summary = try await MediaRepairProbe.summary(path: req.sourcePath, control: control)
         } catch {
             if Task.isCancelled || error is CancellationError { return .stop(.cancelled) }
-            return .stop(.refused(reason: "The original's picture couldn't be read (\(error.localizedDescription)). Nothing was written."))
+            // The proof reads this same header after the write; a header that
+            // can't be read now could never prove the copy — say so before writing.
+            return .stop(.refused(reason: "The original's \(req.recipe.picture == .removeRepeatedFrames ? "picture" : "header") couldn't be read (\(error.localizedDescription)). Nothing was written."))
         }
+        let source = MediaRepairSourceRules(summary: summary)
+        if source != .none {
+            repairLog.info("repair: \(name, privacy: .public) is raw DV (\(summary.containerFormat, privacy: .public)) — read at its probed rate \(source.inputArgs.joined(separator: " "), privacy: .public), sound timestamps made contiguous (GH #484)")
+        }
+        guard req.recipe.picture == .removeRepeatedFrames else {
+            return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil, source: source)
+        }
+        return await picturePreflight(req, summary: summary, source: source, control: control, progress: progress)
+    }
+
+    /// Remove repeated frames' half: the justified re-encode plan from the
+    /// original's header, and the sound lining up with the shorter picture.
+    private static func picturePreflight(_ req: MediaRepairRequest, summary: MediaRepairStreamSummary,
+                                         source: MediaRepairSourceRules, control: ProcessControl?,
+                                         progress: @escaping Progress) async -> Preflight {
         guard let facts = summary.picture else {
             return .stop(.refused(reason: "This file has no picture to repair. Nothing was written."))
         }
@@ -301,7 +334,7 @@ enum MediaRepairEngine {
             if let stop = await soundAlignmentStop(req, summary: summary, plan: plan, control: control, progress: progress) {
                 return .stop(stop)
             }
-            return Task.isCancelled ? .stop(.cancelled) : .go(picture: plan)
+            return Task.isCancelled ? .stop(.cancelled) : .go(picture: plan, source: source)
         }
     }
 
@@ -351,9 +384,10 @@ struct MediaRepairPartial: Sendable {
     /// The recipe's one ffmpeg pass into the partial. nil = written.
     @concurrent
     func write(_ req: MediaRepairRequest, tools: MediaRepairEngine.Tools, picture: MediaRepairPicturePlan?,
-               control: ProcessControl?, progress: @escaping MediaRepairEngine.Progress) async -> MediaRepairOutcome? {
+               source: MediaRepairSourceRules, control: ProcessControl?,
+               progress: @escaping MediaRepairEngine.Progress) async -> MediaRepairOutcome? {
         progress(.write, 0)
-        let args = req.recipe.ffmpegArgs(input: req.sourcePath, output: url.path, picture: picture)
+        let args = req.recipe.ffmpegArgs(input: req.sourcePath, output: url.path, picture: picture, source: source)
         repairLog.info("repair write: ffmpeg \(args.joined(separator: " "), privacy: .public)")
         let duration = req.sourceDurationSeconds
         // A muxer's closing pass (QuickTime's +faststart, which the add-sound
@@ -423,6 +457,13 @@ struct MediaRepairPartial: Sendable {
             structure = MediaRepairParity.compareRewritten(source: before, output: after, recipe: req.recipe, picture: picture)
         }
         guard case .identical(let detail) = structure else { return structure }
+        // A rewritten copy must PLAY all the sound it STORES (GH #482's rule,
+        // BalanceAudioFix's — PCM in QuickTime; nothing else is judged). The
+        // remux is proved packet for packet; the add-sound mux by its own census.
+        if MediaRepairEngine.rewritesSource(req.recipe),
+           let why = try await MediaRepairProbe.unplayedSoundFailure(path: partial.path, control: control) {
+            return .different(reason: why)
+        }
         heartbeat()
         if let why = try await MediaRepairProbe.sampledDecodeFailure(path: partial.path, durationSeconds: after.durationSeconds,
                                                                      control: control) {

@@ -24319,6 +24319,26 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairRawDVTests.swift",
+      "stage": "regression",
+      "suites": [
+        "MediaRepairRawDVTests"
+      ],
+      "tests": [
+        "aCopyWithAnUnplayedTailIsNotPublished",
+        "combinedPassArguments",
+        "dvInsideAVI",
+        "rawDVWithoutSound",
+        "rebuildOnTheMatrix",
+        "rebuildSoundOnRawDV",
+        "removeRepeatedFramesOnRawDV",
+        "sourceRulesTable",
+        "unreadableHeaderIsRefusedBeforeAnyWrite",
+        "whatTheProofsSay"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MediaSignaturesTests.swift",
@@ -40681,7 +40701,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 786,
+      "expected_floor": 796,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40838,6 +40858,7 @@
         "VideoScanTests/FileDossierStoreTests",
         "VideoScanTests/HallieViewerCatalogTests",
         "VideoScanTests/JunkDeleteActionRegressionTests",
+        "VideoScanTests/MediaRepairRawDVTests",
         "VideoScanTests/OriginTrailWestIndiesTests",
         "VideoScanTests/P0TruthFixtureTests",
         "VideoScanTests/P0TruthRegressionTests",

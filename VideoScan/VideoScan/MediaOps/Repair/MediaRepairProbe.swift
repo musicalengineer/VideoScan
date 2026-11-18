@@ -115,6 +115,7 @@ enum MediaRepairProbe {
         }
         struct Format: Decodable {
             let duration: String?
+            let format_name: String?
         }
         let streams: [Stream]?
         let format: Format?
@@ -147,7 +148,30 @@ enum MediaRepairProbe {
                                                 durationSeconds: $0.duration.flatMap(Double.init))
             },
             durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0,
-            picture: picture)
+            picture: picture,
+            containerFormat: parsed.format?.format_name ?? "")
+    }
+
+    /// The played-what-it-stores rule (GH #482, BalanceAudioFix's) on a
+    /// rewritten copy: one header read; nil = every sound track plays all
+    /// it stores (or is not the rule's: not PCM, not QuickTime). A read
+    /// that fails is a failure, never a pass. Bounded: ≤ 1 MB of JSON.
+    @concurrent
+    static func unplayedSoundFailure(path: String, control: ProcessControl?) async throws -> String? {
+        let ffprobe = try tool(ToolLocator.ffprobePath, "ffprobe")
+        let r = await ProcessRunner.runProcess(
+            executable: ffprobe, arguments: BalanceAudioFix.soundLengthArgs(input: path),
+            stdoutLimitBytes: 1 << 20, deadlineSeconds: 120, control: control)
+        try Task.checkCancellation()
+        guard r.exitCode == 0, let json = r.stdout,
+              let tracks = BalanceAudioFix.soundLengths(fromProbeJSON: Data(json.utf8)) else {
+            return "the copy's stored and played sound lengths could not be read back"
+        }
+        return tracks.lazy.compactMap {
+            BalanceAudioFix.unplayedSoundMismatch(codec: $0.codec, sampleRateHz: $0.sampleRateHz,
+                                                  storedSamples: $0.storedSamples, playedSeconds: $0.playedSeconds,
+                                                  copy: "repaired copy")
+        }.first
     }
 
     /// How many pictures Remove repeated frames would keep (a read-only

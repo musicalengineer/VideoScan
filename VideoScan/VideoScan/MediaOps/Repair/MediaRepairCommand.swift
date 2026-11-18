@@ -62,11 +62,12 @@ enum MediaRepairCommand {
          "-of", "json", input]
     }
 
-    /// ffprobe: each stream's kind and codec, and the container's length
-    /// (header only) — the proof for a pass that re-encodes.
+    /// ffprobe: each stream's kind and codec, and the container's name and
+    /// length (header only) — the proof for a pass that re-encodes, and the
+    /// raw-DV test for one (MediaRepairSourceRules, GH #484).
     static func summaryArgs(input: String) -> [String] {
         ["-v", "error",
-         "-show_entries", "format=duration:stream=index,codec_type,codec_name,duration,pix_fmt,r_frame_rate,avg_frame_rate,"
+         "-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,duration,pix_fmt,r_frame_rate,avg_frame_rate,"
          + "color_primaries,color_transfer,color_space,color_range,sample_aspect_ratio,field_order",
          "-of", "json", input]
     }
@@ -137,11 +138,15 @@ struct MediaRepairStreamSummary: Equatable, Sendable {
     var durationSeconds: Double
     /// The first picture stream's facts (nil = no picture).
     var picture: MediaRepairPictureFacts?
+    /// ffprobe's `format_name` ("dv", "mov,mp4,m4a,3gp,3g2,mj2", …); "" = unstated.
+    var containerFormat: String
 
-    init(streams: [Stream], durationSeconds: Double, picture: MediaRepairPictureFacts? = nil) {
+    init(streams: [Stream], durationSeconds: Double, picture: MediaRepairPictureFacts? = nil,
+         containerFormat: String = "") {
         self.streams = streams
         self.durationSeconds = durationSeconds
         self.picture = picture
+        self.containerFormat = containerFormat
     }
 
     /// The codecs of one kind ("video" / "audio"), in stream order.
