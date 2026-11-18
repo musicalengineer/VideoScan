@@ -212,6 +212,9 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         #expect(result.groupNotes.contains { $0.contains("test_ll.X.mxf") && $0.contains("was linked during the move") },
                 "\(result.groupNotes)")
         #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "never plain success: \(result.groupNotes)")
+        // GH #481: the advice names no route that left the Show menu (2026-11-17).
+        #expect(!result.groupNotes.contains { $0.contains("Show Removed") }, "\(result.groupNotes)")
+        #expect(result.groupNotes.contains { $0.contains(CatalogTrashGroupTurns.lateLinkedAdvice) }, "\(result.groupNotes)")
         #expect(await consoleLine(d.model, containing: "changed during the move 1") != nil)
         #expect(exists(x), "the late sibling keeps its file and its pair protection")
         // Codex #201 F3: the presenter surfaces the warning though every file moved.
@@ -370,6 +373,8 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         #expect(a.removal?.state == .removedFromCatalog, "the concurrent marker is not overwritten")
         #expect(result.groupNeedsAttention, "\(result.groupNotes)")
         #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+        // Codex #481 F1: the advice never claims a marker the row does not carry.
+        #expect(!result.groupNotes.contains { $0.contains("marked In the Trash") }, "\(result.groupNotes)")
     }
 
     @Test("codex #202 F3: a member set aside or superseded during the move is reported", arguments: ["setAside", "superseded"])

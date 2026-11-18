@@ -179,9 +179,9 @@ struct ArchivePromotePlan: Sendable {
 // MARK: - Reverse index (memoized)
 
 /// source-id → archive-copy record and copy-id → source-id, rebuilt at
-/// most once per `RecordsVersion` (the CatalogHelpers memo discipline:
-/// count catches add/remove, `volumeAggregatesRevision` catches in-place
-/// stamps). Memory: two dictionaries of UUID → ref / UUID → UUID over the
+/// most once per `RecordsVersion` (count catches add/remove,
+/// `catalogMutationRevision` catches in-place stamps — see the model's
+/// `promotionIndexVersion`, GH #481). Memory: two dictionaries of UUID → ref / UUID → UUID over the
 /// promoted subset only — bytes per promoted record, not per record.
 @MainActor
 final class ArchivePromotionIndex {
@@ -647,8 +647,18 @@ extension VideoScanModel {
 
     // MARK: Reverse index
 
-    private var promotionIndexVersion: RecordsVersion {
-        RecordsVersion(count: records.count, revision: volumeAggregatesRevision)
+    /// The promotion index's cache tag. GH #481: keyed on
+    /// `catalogMutationRevision` — bumped by `records.didSet`, every catalog
+    /// save and `notifyVolumeAggregatesStale` — not on
+    /// `volumeAggregatesRevision`, which in-place writers such as Analyze
+    /// Duplicates (dup groups) and the full-file hash writer (a copy's
+    /// `contentFixity`) never bump; the filters read stale until an
+    /// unrelated bulk mutation. Cost: one O(records) rebuild on the first
+    /// lookup after a mutation, never one per lookup (MasterArchiveScaleTests).
+    /// Every caller that hands the index a version uses this one, so two
+    /// keys never alternate and thrash the rebuild.
+    var promotionIndexVersion: RecordsVersion {
+        RecordsVersion(count: records.count, revision: Int(truncatingIfNeeded: catalogMutationRevision))
     }
 
     /// The archive copy promoted from `record`, or nil. O(1) after the

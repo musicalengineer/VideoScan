@@ -7744,6 +7744,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivePromotionIndexFreshnessTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchivePromotionIndexFreshnessTests"
+      ],
+      "tests": [
+        "analyzeDuplicatesRefreshesNotYetArchived",
+        "oneRebuildPerMutation",
+        "storedCopyFixityRefreshesHasMasterCopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveProtectionFollowupTests.swift",
@@ -12313,6 +12326,18 @@
         "deadToolbarSheetsAreGone",
         "ignoreListFollowsWhatMoved",
         "rowMenuAndShortcutShareOneFunction"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashGroupTurnsWordsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogTrashGroupTurnsWordsTests"
+      ],
+      "tests": [
+        "lateLinkedAdviceWords",
+        "splitLineWords"
       ]
     },
     {
@@ -40767,7 +40792,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 805,
+      "expected_floor": 810,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40994,7 +41019,9 @@
         "VideoScanTests/ShowFiltersAuditSensorTests",
         "VideoScanTests/BalanceAudioUnlockedDVTests",
         "VideoScanTests/BalancedCopyProofTotalityTests",
-        "VideoScanTests/BalancedCopyProofCorpusFindingsTests"
+        "VideoScanTests/BalancedCopyProofCorpusFindingsTests",
+        "VideoScanTests/ArchivePromotionIndexFreshnessTests",
+        "VideoScanTests/CatalogTrashGroupTurnsWordsTests"
       ]
     },
     {
