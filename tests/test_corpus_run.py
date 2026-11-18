@@ -1334,10 +1334,14 @@ class PairEngineTests(unittest.TestCase):
             record.pop('pair_kinds', None)
         stored.write_text(json.dumps(old))
         self.scene.plan['engines'] = ['probe', 'check', 'audio', 'pair']
-        self.scene.plan['files'] = {sha_of(1): dict(pair='paired_partner_in_corpus')}
+        self.scene.plan['files'] = {sha_of(n): dict(pair='paired_partner_in_corpus' if n == 1 else 'unpaired',
+                                                    pair_kinds=['not_counted_as_a_half']) for n in range(3)}
         self.assertEqual(self.scene.run(stamp='20261118_090000_2'), cr.EXIT_GREEN)
         self.assertIn('0 of 3 files changed', (self.scene.out / 'corpus-summary.txt').read_text())
-        self.assertIn('  pair: OK 2, paired_partner_in_corpus 1', (self.scene.out / 'corpus-summary.txt').read_text())
+        # First real testbed run, 2026-11-18: "finding kinds moved in 234 files" — every file, only because the
+        # new engine has kinds and the baseline had no such engine.
+        self.assertNotIn('finding kinds moved', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertIn('  pair: unpaired 2, paired_partner_in_corpus 1', (self.scene.out / 'corpus-summary.txt').read_text())
         # Once a run with the engine is the baseline, a moved pair word IS a change.
         cr.accept(self.scene.seal, 'check', 'x')
         self.scene.plan['files'] = {sha_of(1): dict(pair='unpaired')}

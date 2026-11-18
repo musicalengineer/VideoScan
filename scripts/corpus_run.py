@@ -1372,7 +1372,8 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
                 words.append(f"{e}: {a} -> {b}")
         if words:
             moved.append((sha, "; ".join(words)))
-        elif any(sorted(old[sha].get(e + "_kinds") or []) != sorted(new[sha].get(e + "_kinds") or []) for e in engines):
+        elif any(sorted(old[sha].get(e + "_kinds") or []) != sorted(new[sha].get(e + "_kinds") or [])
+                 for e in engines if e in old[sha]):         # an engine the lane did not have then has no kinds to compare
             kinds_changed += 1
     return {"compared": len(shared), "changed": len(moved), "only_new": len(set(new) - set(old)),
             "only_old": len(set(old) - set(new)), "transitions": dict(transitions), "moved": moved,
