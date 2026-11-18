@@ -550,20 +550,21 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         guard await savePlan() else { return }
 
         await prepareEntries(model: model)
-        await endBatch(model: model)
+        // The setting is read here, when the proof stage is about to start.
+        await endBatch(provingBalancedCopies: provesBalancedCopiesOverride ?? model.archiveAngel.proveBalancedCopies)
     }
 
     /// The batch's ending, once the preparation loop has returned: the
     /// report-only proof stage (Stage 1c), then "N ready to review". A failed
     /// plan save ends it with its reason (never "N ready"); a Stop settles
     /// it — every row prepared before the Stop stays reviewable.
-    private func endBatch(model: VideoScanModel) async {
+    private func endBatch(provingBalancedCopies proving: Bool) async {
         if planSaveFailed { return }   // failed with its reason; never "N ready"
         if stopRequested { _ = await savePlan(); finishCancelled(); return }
 
         // ── Stage 1c: REPORT ONLY — prove the balanced copies this batch made.
         // Every row is already prepared and saved; a Stop here keeps them all.
-        await proveBalancedCopies(model: model)
+        await proveBalancedCopies(enabled: proving)
         if planSaveFailed { return }
         if stopRequested { _ = await savePlan(); finishCancelled(); return }
 
@@ -702,10 +703,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     // the row's `balancedCopyProof` note and the engine's two log lines.
     // Nothing that decides (readiness, Promote, holds, gates, Trash) reads it.
 
-    private func proveBalancedCopies(model: VideoScanModel) async {
+    private func proveBalancedCopies(enabled: Bool) async {
         let work = ArchiveAngelBalancedProof.work(in: plan)
         guard !work.isEmpty else { return }
-        guard provesBalancedCopiesOverride ?? model.archiveAngel.proveBalancedCopies else {
+        guard enabled else {
             note(ArchiveAngelBalancedProof.offLine(count: work.count))
             return
         }
