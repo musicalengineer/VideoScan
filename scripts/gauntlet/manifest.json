@@ -34468,7 +34468,9 @@
       "tests": [
         "test_a_function_both_enter_where_the_corpus_reaches_further_is_listed",
         "test_a_side_with_no_profile_is_not_measured",
-        "test_an_export_that_fails_is_not_measured",
+        "test_a_suite_bundle_without_our_sources_is_not_measured",
+        "test_a_view_xccov_cannot_give_is_not_measured_and_stops_at_once",
+        "test_core_export_failing_is_said",
         "test_cores_suite_missing_is_said_not_hidden",
         "test_demangle_falls_back_to_the_mangled_name",
         "test_failing_suites_still_measure_and_say_so",
@@ -34478,13 +34480,13 @@
         "test_nothing_a_caller_reads_back_names_a_corpus_file_or_path",
         "test_one_instrumented_build_and_every_test_host_profiled_inside_the_work_folder",
         "test_only_our_sources_are_read",
-        "test_profiles_are_moved_out_of_the_cache_fresh_ones_only_never_a_link",
         "test_run_coverage_ships_the_module_and_is_m4_only",
         "test_scale_100k_lines_inside_a_budget",
         "test_suite_corpus_union_and_both_differences",
         "test_the_lanes_store_their_own_runs_and_the_work_folder_goes",
         "test_the_m4_cleanup_knows_a_dead_coverage_runs_work_folder",
-        "test_the_seal_still_holds"
+        "test_the_seal_still_holds",
+        "test_xccov_views_read_exact_sizes_and_only_our_sources"
       ]
     },
     {

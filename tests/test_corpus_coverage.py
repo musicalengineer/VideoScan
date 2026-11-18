@@ -5,10 +5,10 @@ Pinned without the M4, real media, a real build or real LLVM tools:
             the corpus drivers, packages); suite / corpus / union / corpus-only / suite-only
             are counted right; the functions the suite never enters are ranked by size, and
             the ones the corpus takes further by the lines it adds;
-  the run   ONE instrumented build; each lane's test host and the suite's get an
-            LLVM_PROFILE_FILE inside the run's work folder; the suite is the plan's own
+  the run   ONE instrumented build; each lane launch and the suite collect coverage into a
+            result bundle inside the run's work folder, read with xccov; the suite is the plan's own
             VideoScanTests with the corpus drivers skipped; the lanes still store their own
-            runs; the work folder (raw profiles, LCOV) is gone afterwards; a side with no
+            runs; the work folder (bundles, views, LCOV) is gone afterwards; a side with no
             profile is RED "not measured", never a number; Core's suite failing is said;
   privacy   nothing a caller reads back names a corpus file or path;
   scale     a 100k-line LCOV is read and compared inside a time budget;
@@ -49,6 +49,18 @@ def lcov(root, files):
             out.append(f'DA:{number},{count}')
         out.append('end_of_record')
     return '\n'.join(out) + '\n'
+
+
+def xccov(root, files):
+    """The same spec as `lcov`, as xccov's two JSON views: (report, archive)."""
+    report = {"targets": [{"name": "VideoScan.app", "files": [
+        {"path": f"{root}/{rel}", "functions": [
+            {"name": name, "lineNumber": start, "executionCount": count,
+             "executableLines": sum(1 for n in lines if n >= start and not any(s > start and n >= s for s, _, _ in functions))}
+            for start, name, count in functions]} for rel, (functions, lines) in files.items()]}]}
+    archive = {f"{root}/{rel}": [{"line": n, "isExecutable": True, "executionCount": c} for n, c in sorted(lines.items())]
+               + [{"line": 999, "isExecutable": False}] for rel, (functions, lines) in files.items()}
+    return report, archive
 
 
 def span(a, b, count):
@@ -114,6 +126,21 @@ class ReadAndMeasureTests(unittest.TestCase):
         result = cc.measure(cov, ['suite-app'], ['check'])
         self.assertEqual([(e['names'], e['new_lines'], e['size']) for e in result['further']], [(['$s1f1'], 4, 9)])
 
+    def test_xccov_views_read_exact_sizes_and_only_our_sources(self):
+        files = {self.BALANCE: ([(1, 'Balance.f1()', 2), (6, 'closure #1 in Balance.f1()', 0)], {**span(1, 5, 2), **span(6, 7, 0)}),
+                 'VideoScan/VideoScanTests/BalanceTests.swift': ([(1, 'T', 1)], span(1, 9, 1))}
+        report, archive = xccov(self.ROOT, files)
+        report['targets'][0]['files'][0]['functions'][0]['executableLines'] = 42        # xccov's own count wins
+        cov = cc.Coverage()
+        self.assertEqual(cov.read_xccov('check', report, archive, [self.ROOT]), 1)
+        self.assertEqual(cov.lines[self.BALANCE], set(range(1, 8)))
+        self.assertEqual(cov.hit_lines['check'][self.BALANCE], set(range(1, 6)))
+        self.assertEqual(cov.hit_functions['check'], {(self.BALANCE, 1)})
+        self.assertEqual(cov.sizes[(self.BALANCE, 1)], 42)
+        result = cc.measure(cov, [], ['check'])
+        self.assertEqual([(e['names'], e['size']) for e in result['unreached']], [(['Balance.f1()'], 42)])
+        self.assertEqual(cov.read_xccov('x', {'targets': None}, ['not', 'a', 'dict'], [self.ROOT]), 0)
+
     def test_lcov_with_end_lines_and_private_names(self):
         cov = cc.Coverage()
         text = (f'SF:{self.ROOT}/{self.BALANCE}\nFN:3,9,Balance.swift:$s1pv\nFNDA:2,Balance.swift:$s1pv\n'
@@ -141,9 +168,10 @@ class ReadAndMeasureTests(unittest.TestCase):
     def test_demangle_falls_back_to_the_mangled_name(self):
         names = cc.demangle(['File.swift:$s9VideoScan3fooyyF', '$s9VideoScan3baryyF'], xcrun='/nonexistent/xcrun')
         self.assertEqual(names['File.swift:$s9VideoScan3fooyyF'], '$s9VideoScan3fooyyF')
+        self.assertEqual(cc.demangle(['Balance.f1()'], xcrun='/nonexistent/xcrun'), {}, "xccov's names are already readable")
 
 
-# The lane fake, plus: with -enableCodeCoverage a test run leaves its profiles under <dd>/Build/ProfileData as xcodebuild does; the suite run
+# The lane fake, plus: with -enableCodeCoverage a test run leaves its result bundle where it is told; the suite run
 # (no VS_CORPUS_CONFIG) is recorded and ends; an instrumented build leaves the app's images.
 FAKE_COVERAGE_XCODEBUILD = FAKE_XCODEBUILD.replace(
     '    sys.exit(0)\nrun = plistlib.load',
@@ -155,26 +183,30 @@ FAKE_COVERAGE_XCODEBUILD = FAKE_XCODEBUILD.replace(
     '    sys.exit(0)\nrun = plistlib.load').replace(
     'config = json.load(open(env["VS_CORPUS_CONFIG"]))',
     'if "-enableCodeCoverage" in args and not plan.get("no_profiles"):\n'
-    '    prof = os.path.join(os.path.dirname(os.path.dirname(args[args.index("-xctestrun") + 1])), "ProfileData", "DEV")\n'
-    '    os.makedirs(prof, exist_ok=True)\n'
-    '    open(os.path.join(prof, "UUID-%d.profraw" % os.getpid()), "w").write("raw")\n'
-    '    open(os.path.join(prof, "Coverage.profdata"), "w").write("merged")\n'
+    '    os.makedirs(args[args.index("-resultBundlePath") + 1])\n'
     'if "VS_CORPUS_CONFIG" not in env:\n'
     '    with open(plan["calls"], "a") as f:\n'
     '        f.write(json.dumps({"suite_args": args, "suite_env": env, "suite_keys": sorted(run["TestConfigurations"][0]["TestTargets"][0])}) + "\\n")\n'
     '    sys.exit(plan.get("suite_rc", 0))\n'
     'config = json.load(open(env["VS_CORPUS_CONFIG"]))')
-assert FAKE_COVERAGE_XCODEBUILD.count('ProfileData') == 1 and 'enableCodeCoverage' in FAKE_COVERAGE_XCODEBUILD, \
+assert FAKE_COVERAGE_XCODEBUILD.count('-resultBundlePath') == 1 and 'enableCodeCoverage' in FAKE_COVERAGE_XCODEBUILD, \
     'the lane fake changed shape; this fake no longer extends it'
 
-# xcrun: llvm-profdata merges (the output names the side), llvm-cov prints that side's LCOV, swift-demangle tags names.
+# xcrun: xccov prints a side's view (the bundle's folder names the side); llvm-profdata/llvm-cov for Core's LCOV; swift-demangle tags names.
 FAKE_XCRUN = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 plan = json.load(open(os.environ["FAKE_PLAN"]))
 with open(plan["calls"], "a") as f:
     f.write(json.dumps({"xcrun": args}) + "\n")
-if args[0] == "llvm-profdata":
+if args[0] == "xccov":
+    bundle = args[-1]
+    side = os.path.basename(os.path.dirname(bundle))
+    path = os.path.join(plan["lcov"], side + "." + args[2].lstrip("-") + ".json")
+    if not os.path.isdir(bundle) or not os.path.exists(path):
+        sys.exit(1)
+    sys.stdout.write(open(path).read())
+elif args[0] == "llvm-profdata":
     open(args[args.index("-o") + 1], "w").write("merged")
 elif args[0] == "llvm-cov":
     side = os.path.basename([a for a in args if a.startswith("-instr-profile=")][0]).split(".")[0]
@@ -218,14 +250,19 @@ class CoverageScene(LaneScene):
         root = str(self.worktree)
         balance, mixer = APP + 'MediaOps/Balance.swift', CORE + 'Audio/Mixer.swift'
         self.sides = {
-            'suite-app': lcov(root, {balance: ([(1, '$s1f1', 4), (6, '$s1f2', 0)], {**span(1, 5, 4), **span(6, 10, 0)})}),
-            'suite-core': lcov(root, {mixer: ([(1, '$s2f3', 0), (10, '$s2f4', 2)], {**span(1, 3, 0), **span(10, 12, 2)})}),
-            'check': lcov(root, {balance: ([(6, '$s1f2', 3)], span(6, 8, 3))}),
-            'proof': lcov(root, {mixer: ([(1, '$s2f3', 1)], span(1, 3, 1))}),
-            'verbs': lcov(root, {balance: ([(1, '$s1f1', 1)], span(1, 5, 1))}),
+            'suite-app': {balance: ([(1, 'Balance.f1()', 4), (6, 'Balance.f2()', 0)], {**span(1, 5, 4), **span(6, 10, 0)})},
+            'suite-core': {mixer: ([(1, '$s2f3', 0), (10, '$s2f4', 2)], {**span(1, 3, 0), **span(10, 12, 2)})},
+            'check': {balance: ([(1, 'Balance.f1()', 0), (6, 'Balance.f2()', 3)], {**span(1, 5, 0), **span(6, 8, 3), 9: 0, 10: 0})},
+            'proof': {mixer: ([(1, '$s2f3', 1)], span(1, 3, 1))},
+            'verbs': {balance: ([(1, 'Balance.f1()', 1)], span(1, 5, 1))},
         }
-        for side, text in self.sides.items():
-            (self.lcov_dir / f'{side}.lcov').write_text(text)
+        for side, spec in self.sides.items():
+            if side == 'suite-core':
+                (self.lcov_dir / 'suite-core.lcov').write_text(lcov(root, spec))
+                continue
+            report, archive = xccov(root, spec)
+            (self.lcov_dir / f'{side}.report.json').write_text(json.dumps(report))
+            (self.lcov_dir / f'{side}.archive.json').write_text(json.dumps(archive))
 
     def run_coverage(self, **extra):
         self.plan_path.write_text(json.dumps(self.plan))
@@ -262,12 +299,12 @@ class CoverageRunTests(unittest.TestCase):
         self.assertRegex(summary, r'union +lines 87\.5%')
         self.assertIn('+6 lines, +2 functions only the corpus runs', summary)
         self.assertIn('the suite alone runs 3 lines the corpus never reaches', summary)
-        self.assertIn('1. demangled $s1f2  [MediaOps Balance.swift:6; 5 lines; check]', summary)
+        self.assertIn('1. Balance.f2()  [MediaOps Balance.swift:6; 5 lines; check]', summary)
         self.assertIn('2. demangled $s2f3  [Core/Audio Mixer.swift:1; 3 lines; proof]', summary)
         report = self.scene.seal.reports / 'coverage' / ('a' * 40) / '20261118_150000_1'
         stored = json.loads((report / 'coverage.json').read_text())
         self.assertEqual(stored['total']['corpus_only'], 6)
-        self.assertEqual(stored['unreached'][0]['name'], 'demangled $s1f2')
+        self.assertEqual(stored['unreached'][0]['name'], 'Balance.f2()')
         self.assertEqual((report / 'coverage.txt').read_text(), summary)
 
     def test_one_instrumented_build_and_every_test_host_profiled_inside_the_work_folder(self):
@@ -288,9 +325,9 @@ class CoverageRunTests(unittest.TestCase):
             self.assertIn('-enableCodeCoverage', args)
             bundle = args[args.index('-resultBundlePath') + 1]
             self.assertTrue(bundle.startswith(str(self.scene.seal.work_root) + '/'), 'result bundles go with the work folders')
-        self.assertTrue(any(a == f'{work}/suite-app.xcresult' for t in tests for a in t))
-        profile_data = self.scene.dd.parent / (self.scene.dd.name + '-coverage') / 'Build' / 'ProfileData'
-        self.assertEqual([p for p in profile_data.rglob('*') if p.is_file()], [], 'every profile was moved out of the cache')
+        self.assertIn(f'{work}/raw/suite-app/result-1.xcresult', [t[t.index('-resultBundlePath') + 1] for t in tests])
+        for lane in ('check', 'proof', 'verbs'):
+            self.assertIn(f'{work}/raw/{lane}/result-1.xcresult', [t[t.index('-resultBundlePath') + 1] for t in tests])
         suite = [c for c in calls if 'suite_args' in c]
         self.assertEqual(len(suite), 1)
         args, env = suite[0]['suite_args'], suite[0]['suite_env']
@@ -303,13 +340,12 @@ class CoverageRunTests(unittest.TestCase):
         core = [c['swift'] for c in calls if 'swift' in c]
         self.assertEqual(core[0][:2], ['test', '--package-path'])
         self.assertIn('--enable-code-coverage', core[0])
+        views = [c['xcrun'] for c in calls if c.get('xcrun', [''])[0] == 'xccov']
+        self.assertEqual(sorted({v[2] for v in views}), ['--archive', '--report'])
+        self.assertEqual(len(views), 8, 'two views of each of four result bundles')
         exports = [c['xcrun'] for c in calls if c.get('xcrun', [''])[0] == 'llvm-cov']
-        self.assertEqual(len(exports), 5)
-        app_export = [a for a in exports if 'suite-app.profdata' in ' '.join(a)][0]
-        self.assertTrue(app_export[4].endswith('VideoScan.debug.dylib'), app_export)
-        self.assertEqual(app_export[5], '-object')
-        self.assertTrue(app_export[6].endswith('VideoScanCore_-1_PackageProduct'), app_export)
-        self.assertFalse(any('VideoScanTests' in a for a in app_export), 'the test bundle is not our code to count')
+        self.assertEqual(len(exports), 1, "only Core's own suite goes through llvm-cov")
+        self.assertTrue(exports[0][-1].endswith('VideoScanCorePackageTests'))
 
     def test_the_lanes_store_their_own_runs_and_the_work_folder_goes(self):
         self.scene.run_coverage()
@@ -325,7 +361,8 @@ class CoverageRunTests(unittest.TestCase):
         self.assertEqual(self.scene.run_coverage(), cr.EXIT_RED)
         summary = self.scene.summary()
         self.assertIn('corpus coverage: RED not measured', summary)
-        self.assertIn('check: its test host wrote no profile — stopped before the rest', summary)
+        self.assertIn('check: no result bundle was written', summary)
+        self.assertIn('check: no coverage from its test host — stopped before the rest', summary)
         calls = self.scene.recorded_calls()
         self.assertEqual(sorted({c['lane'] for c in calls if 'driver_env' in c}), ['check'], 'proof and verbs were not run for nothing')
         self.assertFalse(any('suite_args' in c or 'swift' in c for c in calls), 'neither suite was run for nothing')
@@ -333,10 +370,21 @@ class CoverageRunTests(unittest.TestCase):
         self.assertFalse((self.scene.seal.reports / 'coverage').exists())
         self.assertEqual(list(self.scene.seal.work_root.iterdir()), [])
 
-    def test_an_export_that_fails_is_not_measured(self):
-        (self.scene.lcov_dir / 'check.lcov').unlink()
+    def test_a_view_xccov_cannot_give_is_not_measured_and_stops_at_once(self):
+        (self.scene.lcov_dir / 'check.archive.json').unlink()
         self.assertEqual(self.scene.run_coverage(), cr.EXIT_RED)
-        self.assertIn('check: llvm-cov could not export', self.scene.summary())
+        self.assertIn('check: xccov could not read a result bundle (archive)', self.scene.summary())
+        self.assertFalse(any('suite_args' in c for c in self.scene.recorded_calls()))
+
+    def test_a_suite_bundle_without_our_sources_is_not_measured(self):
+        (self.scene.lcov_dir / 'suite-app.archive.json').write_text(json.dumps({'/elsewhere/Package/X.swift': []}))
+        self.assertEqual(self.scene.run_coverage(), cr.EXIT_RED)
+        self.assertIn('suite-app: its result bundles hold no coverage of our sources', self.scene.summary())
+
+    def test_core_export_failing_is_said(self):
+        (self.scene.lcov_dir / 'suite-core.lcov').unlink()
+        self.assertEqual(self.scene.run_coverage(), cr.EXIT_GREEN)
+        self.assertIn('suite-core: llvm-cov could not export', self.scene.summary())
 
     def test_failing_suites_still_measure_and_say_so(self):
         self.scene.plan.update(suite_rc=65, core_rc=1)
@@ -364,23 +412,6 @@ class CoverageRunTests(unittest.TestCase):
         scene.seal = cr.Seal(scene.home, 'RicksUltra')
         self.assertEqual(scene.run_coverage(), cr.EXIT_REFUSED)
         self.assertEqual(scene.recorded_calls(), [], 'nothing was built on a Mac that is not the M4')
-
-    def test_profiles_are_moved_out_of_the_cache_fresh_ones_only_never_a_link(self):
-        seal = self.scene.seal
-        data = pathlib.Path(self.tmp.name) / 'dd-x' / 'Build' / 'ProfileData' / 'DEV'
-        data.mkdir(parents=True)
-        old, fresh, other = data / 'old.profraw', data / 'new.profraw', data / 'notes.txt'
-        for path in (old, fresh, other):
-            path.write_text('x')
-        os.utime(old, (1, 1))
-        outside = pathlib.Path(self.tmp.name) / 'elsewhere.profraw'
-        outside.write_text('not ours')
-        (data / 'link.profraw').symlink_to(outside)
-        dest = seal.mkdir(seal.work_root / 'r-coverage' / 'raw' / 'check')
-        self.assertEqual(cr.collect_profiles(seal, data.parent.parent.parent, time.time() - 60, dest, 'launch1'), 1)
-        self.assertEqual([p.name for p in dest.iterdir()], ['launch1-DEV-new.profraw'])
-        self.assertFalse(fresh.exists())
-        self.assertTrue(old.exists() and other.exists() and outside.exists())
 
     def test_the_m4_cleanup_knows_a_dead_coverage_runs_work_folder(self):
         self.assertTrue(th.RUN_WORK.match('20261118_150000_1-coverage'))

@@ -16,31 +16,33 @@ One instrumented Debug build (`-enableCodeCoverage YES`, its own DerivedData
                           coverage lane (tools/nightly_coverage.py) measures;
   suite (Core)            `swift test --enable-code-coverage` of the Core package (own scratch
                           <dd>-coverage-core), as the 04:00 lane does.
-xcodebuild writes each launch's profiles under <dd>/Build/ProfileData; they are MOVED into
-this run's work folder after each launch (corpus_run.collect_profiles). A bare LLVM_PROFILE_FILE
-does not work: the test host is ended without its exit handlers and writes nothing (measured on
-the M4, 2026-11-18). Each side's profile is merged (llvm-profdata) and exported as LCOV (llvm-cov) over the app's
-images; the lines and functions of OUR sources (VideoScan/VideoScan/, VideoScanCore/Sources/)
+Coverage is collected by xcodebuild into each launch's result bundle (kept in this run's work
+folder) and read with xccov, exactly as the 04:00 lane reads the suite: `--archive --json` for
+lines, `--report --json` for functions (exact executable lines, readable names). A bare
+LLVM_PROFILE_FILE does not work (the test host is ended without its exit handlers), and with
+-xctestrun xcodebuild leaves no raw profile on disk — both measured on the M4, 2026-11-18.
+Core's own suite: SwiftPM's profiles merged (llvm-profdata) and exported as LCOV (llvm-cov). The lines and functions of OUR sources (VideoScan/VideoScan/, VideoScanCore/Sources/)
 are then compared: suite alone, corpus alone, the union, what only the corpus reaches (by area,
 by lane, and the functions ranked by size), and what only the suite reaches.
 
 Same build for the app suite and the corpus: their line maps are identical, so a line is a
 line. Core's own suite is a second binary of the same sources; its lines are matched by
 (file, line). A FUNCTION is (file, first line): Swift's closures and accessors are functions
-of their own; accessors that start on one line count once. A function's SIZE is the
-executable lines from its first line up to the next function's in the same file —
-approximate where a closure sits inside a function (the closure's lines are its own).
+of their own; accessors that start on one line count once. A function's SIZE is xccov's count
+of its executable lines (from Core's LCOV: the lines up to the next function's start); the
+lines the corpus ADDS inside a function are counted up to the next function's start.
 
-PRIVACY. Profiles hold counters and the names of OUR functions — nothing of the media. What
+PRIVACY. Coverage holds counters and the names of OUR functions — nothing of the media. What
 this file writes is numbers, area names, our source files' names and our functions'
-demangled names. Raw profiles and LCOV live in ~/corpus/work/<stamp>-coverage/ and go with
+names. Result bundles, xccov views and LCOV live in ~/corpus/work/<stamp>-coverage/ and go with
 it at the end; the report stays under ~/corpus/reports/coverage/<commit>/<stamp>/ on the M4.
 
 Worst-case resources: the instrumented DerivedData (~15 GB) and Core scratch (~3 GB), kept
-between runs (one of each; SwiftPM leaves its raw profiles there, a few MB per run). Per run:
-raw profiles ~50-200 MB, the suite's result bundle (~0.3-1 GB) and five LCOV files ~30-80 MB each in the work folder, removed at the
-end. Memory: one LCOV line at a time; the sets of covered lines per side (~400k lines x 5
-sides, a few hundred MB at most). Wall: build 15-25 min cold, the app suite ~40 min, Core
+between runs (one of each; SwiftPM leaves its raw profiles there, a few MB per run). Per run, in the
+work folder and removed at the end: four or more result bundles (~0.1-0.5 GB each), their xccov
+views (report ~15 MB, archive ~45 MB each; measured 2026-11-18) and Core's LCOV. Memory: one
+archive view parsed at a time (~45 MB of JSON, under 1 GB in Python) plus the sets of covered
+lines per side (~400k lines x 5 sides, a few hundred MB at most). Wall: build 15-25 min cold, the app suite ~40 min, Core
 ~15 min, then the three lanes (~10 + ~25 + ~5 min) — about 2 h, inside the corpus lane's
 6 h watchdog. Python 3.9 floor (the M4's /usr/bin/python3).
 """
@@ -65,7 +67,7 @@ DRIVER_CLASSES = ("CorpusCheckDriver", "CorpusProofDriver", "CorpusVerbsDriver")
 SUITE_SIDES = ("suite-app", "suite-core")
 LISTED = 15                      # functions per list in the summary (all ranked ones go to coverage.json, capped)
 KEPT = 400                       # functions per list in coverage.json
-TOOL_TIMEOUT = 1800              # seconds for one llvm-profdata merge or llvm-cov export
+TOOL_TIMEOUT = 1800              # seconds for one xccov view, llvm-profdata merge or llvm-cov export
 EXIT_MEASURED, EXIT_NOT_MEASURED = cr.EXIT_GREEN, cr.EXIT_RED
 
 
@@ -101,6 +103,7 @@ class Coverage:
         self.starts: Dict[str, Dict[int, Set[str]]] = defaultdict(lambda: defaultdict(set))
         self.hit_lines: Dict[str, Dict[str, Set[int]]] = {}
         self.hit_functions: Dict[str, Set[Tuple[str, int]]] = {}
+        self.sizes: Dict[Tuple[str, int], int] = {}      # exact executable lines of a function, when xccov says
 
     def read_lcov(self, side: str, text: Iterable[str], roots: Iterable[str]) -> int:
         """One LCOV stream (llvm-cov export -format=lcov) into `side`. Returns the number of our
@@ -147,6 +150,42 @@ class Coverage:
                     functions.add((rel, named[name]))
             elif line == "end_of_record":
                 rel = None
+        return files
+
+    def read_xccov(self, side: str, report: dict, archive: dict, roots: Iterable[str]) -> int:
+        """One result bundle's coverage into `side`: `archive` is `xccov view --archive --json`
+        ({path: [{line, isExecutable, executionCount}]}), `report` is `xccov view --report --json`
+        (targets -> files -> functions {name, lineNumber, executionCount, executableLines}).
+        Returns the number of our source files the archive held."""
+        roots = list(roots)
+        lines = self.hit_lines.setdefault(side, defaultdict(set))
+        functions = self.hit_functions.setdefault(side, set())
+        files = 0
+        for path, entries in (archive.items() if isinstance(archive, dict) else ()):
+            rel = relative(str(path), roots)
+            if rel is None or not isinstance(entries, list):
+                continue
+            files += 1
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("isExecutable") and isinstance(entry.get("line"), int):
+                    self.lines[rel].add(entry["line"])
+                    if (entry.get("executionCount") or 0) > 0:
+                        lines[rel].add(entry["line"])
+        for target in (report.get("targets") or []) if isinstance(report, dict) else ():
+            for f in target.get("files") or []:
+                rel = relative(str(f.get("path", "")), roots)
+                if rel is None:
+                    continue
+                for fn in f.get("functions") or []:
+                    start = fn.get("lineNumber")
+                    if not isinstance(start, int):
+                        continue
+                    self.starts[rel][start].add(str(fn.get("name", "?")))
+                    size = fn.get("executableLines")
+                    if isinstance(size, int):
+                        self.sizes[(rel, start)] = max(size, self.sizes.get((rel, start), 0))
+                    if (fn.get("executionCount") or 0) > 0:
+                        functions.add((rel, start))
         return files
 
     def side_lines(self, sides: Iterable[str]) -> Dict[str, Set[int]]:
@@ -215,7 +254,7 @@ def measure(cov: Coverage, suite_sides: Iterable[str], corpus_sides: Iterable[st
             if (rel, start) not in fcorpus:
                 continue
             lanes = [side for side in corpus_sides if (rel, start) in cov.hit_functions.get(side, set())]
-            entry = {"file": rel, "area": area_of(rel), "start": start, "size": len(body),
+            entry = {"file": rel, "area": area_of(rel), "start": start, "size": cov.sizes.get((rel, start), len(body)),
                      "new_lines": len(body & new), "lanes": lanes, "names": sorted(cov.starts[rel][start])}
             if (rel, start) not in fsuite:
                 unreached.append(entry)
@@ -248,8 +287,11 @@ def measure(cov: Coverage, suite_sides: Iterable[str], corpus_sides: Iterable[st
 def demangle(names: List[str], xcrun: str = "xcrun") -> Dict[str, str]:
     """Mangled -> readable (swift-demangle --simplified). A private function's profile name
     carries its file in front (`File.swift:$s…` / `…;$s…`); that part is dropped. When the tool
-    fails, the mangled name stands."""
-    bare = [n[n.find("$s"):] if "$s" in n else n for n in names]
+    fails, the mangled name stands. Names that are not mangled (xccov's) are kept as they are."""
+    names = [n for n in names if "$s" in n]
+    if not names:
+        return {}
+    bare = [n[n.find("$s"):] for n in names]
     try:
         done = subprocess.run([xcrun, "swift-demangle", "--simplified", "--compact"], input="\n".join(bare) + "\n",
                               capture_output=True, text=True, timeout=300)
@@ -304,18 +346,6 @@ def render(result: dict, names: Dict[str, str], sha: str, lane_lines: List[str],
 
 # ── The run (on the M4, inside the corpus seal) ───────────────────────────
 
-def app_images(derived_data: Path) -> List[Path]:
-    """The instrumented images that hold our code: the app's debug dylib (or its executable)
-    and the Core framework. The test bundle is left out: its files are not ours to count."""
-    contents = derived_data / "Build" / "Products" / "Debug" / "VideoScan.app" / "Contents"
-    images = [p for p in (contents / "MacOS" / "VideoScan.debug.dylib", contents / "MacOS" / "VideoScan") if p.is_file()][:1]
-    for framework in sorted((contents / "Frameworks").glob("VideoScanCore*.framework")):
-        binary = framework / framework.name[: -len(".framework")]
-        if binary.exists():
-            images.append(Path(os.path.realpath(str(binary))))
-    return images
-
-
 class CoverageRun:
     """`host coverage`: the three corpus lanes on an instrumented build, the suite on the same
     build, Core's suite, then the comparison. A lane's own verdict is its own (stored and
@@ -336,6 +366,9 @@ class CoverageRun:
         self.lane_lines: List[str] = []
         self.problems: List[str] = []
         self.suite_note = ""
+        self.cov = Coverage()
+        self.read: Dict[str, int] = {}
+        self.roots = sorted({str(self.worktree), os.path.realpath(str(self.worktree))})
 
     def tool(self, command: List[str], log_name: str, stdout_to: Optional[Path] = None) -> int:
         """One tool, its output into this run's log in <out> (or `stdout_to`), bounded."""
@@ -352,29 +385,57 @@ class CoverageRun:
             except subprocess.TimeoutExpired:
                 return 124
 
-    def export(self, side: str, profiles: List[Path], images: List[Path]) -> Optional[Path]:
-        """Merge `profiles` and export LCOV over `images`; None (and a problem said) when there is nothing to export."""
-        if not profiles:
-            self.problems.append(f"{side}: no profile was written")
-            return None
-        if not images:
-            self.problems.append(f"{side}: no instrumented image was found")
-            return None
+    def read_bundles(self, side: str) -> int:
+        """Every result bundle of `side` (raw/<side>/result-N.xcresult; a lane relaunched after a
+        crash has several) read with xccov into the coverage, as the 04:00 lane reads its own.
+        Returns our source files read; a problem is said when there is none."""
+        bundles = sorted((self.work / "raw" / side).glob("*.xcresult"))
+        if not bundles:
+            self.problems.append(f"{side}: no result bundle was written")
+            return 0
+        files = 0
+        for n, bundle in enumerate(bundles, 1):
+            views = {}
+            for view in ("report", "archive"):
+                dest = self.work / f"{side}-{n}.{view}.json"
+                if self.tool([self.xcrun, "xccov", "view", f"--{view}", "--json", str(bundle)], "coverage-tools.log",
+                             stdout_to=dest) != 0:
+                    self.problems.append(f"{side}: xccov could not read a result bundle ({view})")
+                    break
+                try:
+                    with open(str(dest), encoding="utf-8") as f:
+                        views[view] = json.load(f)
+                except (OSError, ValueError):
+                    self.problems.append(f"{side}: xccov's {view} was not JSON")
+                    break
+            else:
+                files = max(files, self.cov.read_xccov(side, views["report"], views["archive"], self.roots))
+        if not files:
+            self.problems.append(f"{side}: its result bundles hold no coverage of our sources")
+        self.read[side] = files
+        return files
+
+    def read_lcov_side(self, side: str, profiles: List[Path], binaries: List[Path]) -> int:
+        """Core's own suite: SwiftPM's raw profiles merged and exported as LCOV over its test binary."""
+        if not profiles or not binaries:
+            self.problems.append(f"{side}: " + ("no profile was written" if not profiles else "no test binary was found"))
+            return 0
         merged, lcov = self.work / f"{side}.profdata", self.work / f"{side}.lcov"
         if self.tool([self.xcrun, "llvm-profdata", "merge", "-sparse", *map(str, profiles), "-o",
                       str(self.seal.writable(merged))], "coverage-tools.log") != 0:
             self.problems.append(f"{side}: llvm-profdata could not merge its profiles")
-            return None
-        objects = [str(images[0])] + [x for image in images[1:] for x in ("-object", str(image))]
-        if self.tool([self.xcrun, "llvm-cov", "export", "-format=lcov", f"-instr-profile={merged}", *objects],
+            return 0
+        if self.tool([self.xcrun, "llvm-cov", "export", "-format=lcov", f"-instr-profile={merged}", str(binaries[0])],
                      "coverage-tools.log", stdout_to=lcov) != 0:
             self.problems.append(f"{side}: llvm-cov could not export")
-            return None
-        return lcov
+            return 0
+        with open(str(lcov), encoding="utf-8", errors="replace") as stream:
+            self.read[side] = self.cov.read_lcov(side, stream, self.roots)
+        return self.read[side]
 
     def run_lanes(self) -> bool:
-        """The three lanes. False, at once, when a lane's test host wrote no profile: the build is
-        not instrumented or the profile path was not honoured, and the next ~90 min would measure nothing."""
+        """The three lanes, each read as soon as it ends. False, at once, when a lane ran and its
+        bundles hold no coverage of our sources: the next ~90 min would measure nothing."""
         for name in SUBLANES:
             out = self.out / f"corpus-{name}"
             if not out.is_dir():
@@ -389,8 +450,8 @@ class CoverageRun:
                 self.lane_lines += lane.lines[:2] or [f"corpus {name}: wrote no summary"]
             except cr.Refused as refusal:
                 self.lane_lines.append(f"corpus {name}: RED {refusal}")
-            if lane.launches and not any(lane.profiles.glob("*.prof*")):
-                self.problems.append(f"{name}: its test host wrote no profile — stopped before the rest")
+            if lane.launches and not self.read_bundles(name):
+                self.problems.append(f"{name}: no coverage from its test host — stopped before the rest")
                 return False
         return True
 
@@ -404,16 +465,11 @@ class CoverageRun:
             self.problems.append("suite-app: the instrumented build left no test-run file")
             return
         raw = self.seal.mkdir(self.work / "raw" / "suite-app")
-        started = time.time() - 2
-        try:
-            rc = cr._run([self.xcodebuild, "test-without-building", "-xctestrun", str(xctestrun),
-                          "-destination", "platform=macOS,arch=arm64", "-only-testing:VideoScanTests",
-                          *[f"-skip-testing:VideoScanTests/{c}" for c in DRIVER_CLASSES],
-                          "-enableCodeCoverage", "YES",
-                          "-resultBundlePath", str(self.seal.writable(self.work / "suite-app.xcresult"))],
-                         self.seal, self.out, "coverage-suite.log", dict(os.environ), self.worktree)
-        finally:
-            cr.collect_profiles(self.seal, self.dd, started, raw, "suite")
+        rc = cr._run([self.xcodebuild, "test-without-building", "-xctestrun", str(xctestrun),
+                      "-destination", "platform=macOS,arch=arm64", "-only-testing:VideoScanTests",
+                      *[f"-skip-testing:VideoScanTests/{c}" for c in DRIVER_CLASSES],
+                      "-enableCodeCoverage", "YES", "-resultBundlePath", str(self.seal.writable(raw / "result-1.xcresult"))],
+                     self.seal, self.out, "coverage-suite.log", dict(os.environ), self.worktree)
         self.suite_note = "app tests " + ("passed" if rc == 0 else f"exit {rc} (some failed; coverage still read)")
 
     def run_core(self) -> Optional[Tuple[List[Path], List[Path]]]:
@@ -445,20 +501,12 @@ class CoverageRun:
         try:
             if self.run_lanes():
                 self.run_suite()
-                core_profiles, core_binaries = self.run_core()
-            else:
-                core_profiles, core_binaries = [], []
-            images = app_images(self.dd)
-            roots = sorted({str(self.worktree), os.path.realpath(str(self.worktree))})
-            cov = Coverage()
-            read: Dict[str, int] = {}
-            sides = [(side, sorted((self.work / "raw" / side).glob("*.prof*")), images)
-                     for side in ("suite-app",) + SUBLANES] + [("suite-core", core_profiles, core_binaries)]
-            for side, profiles, objects in sides:
-                lcov = self.export(side, profiles, objects)
-                if lcov is not None:
-                    with open(str(lcov), encoding="utf-8", errors="replace") as stream:
-                        read[side] = cov.read_lcov(side, stream, roots)
+                self.read_bundles("suite-app")
+                for side in SUBLANES[1:]:
+                    if side not in self.read:
+                        self.problems.append(f"{side}: the lane did not run")
+                self.read_lcov_side("suite-core", *self.run_core())
+            cov, read = self.cov, self.read
             missing = [s for s in ("suite-app",) + SUBLANES if not read.get(s)]
             if missing or not cov.lines:
                 self.lines = [f"corpus coverage: RED not measured at {self.sha[:9]} — no coverage for "
@@ -490,7 +538,7 @@ class CoverageRun:
             self.remove_work()
 
     def remove_work(self) -> None:
-        """The raw profiles and LCOV go with this run's work folder (the M4's own test scratch,
+        """The result bundles, xccov views and Core's LCOV go with this run's work folder (the M4's own test scratch,
         DECISIONS 2026-11-18)."""
         work = str(self.seal.writable(self.work))
         if os.path.isdir(work):
