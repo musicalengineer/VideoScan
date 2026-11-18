@@ -7,6 +7,7 @@
 #   scripts/m4_run.sh all    [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh status [--host m4|ultra]
+#   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
 #
 # What Rick says → what runs (from the phone, over Remote Control):
 #   "run the gauntlet UI tests on the M4"       scripts/m4_run.sh ui
@@ -36,6 +37,9 @@
 #         GREEN / RED, or NORUN when the machine preflight stopped it. A lane
 #         with no number (zero app or zero Core tests) is RED. `all` does not
 #         include it.
+#   corpus  the real-data corpus harness (scripts/corpus_run.sh is its front door; M4 only):
+#         scripts/corpus_run.py on the host, under the same lock, agent and --ref checkout.
+#         It refuses any host but the M4 and any state root outside ~/corpus/state.
 #
 # Shape. The caller (normally the Ultra) never builds anything:
 #   1. resolves --ref (default `main`) to a commit;
@@ -100,11 +104,12 @@ DEEP_BUDGET=14400            # run_gauntlet.sh: ~45 min normally
 # The suite's runner has its own watchdogs (Core 3,600 s; build 5,400 s, twice at
 # worst with its clean retry; tests 7,200 s = 21,600 s); this one is the backstop.
 SUITE_BUDGET=22500
+CORPUS_BUDGET=21600          # corpus lane: a build, then every corpus file under its own per-file deadline
 WAIT_BUDGET=23400            # past every lane's budget, so --wait outlives the run it waits for
 WAIT_POLL="${VIDEOSCAN_M4RUN_WAIT_POLL:-30}"     # seconds between --wait polls (tests shorten it)
 
 usage() {
-    sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -282,6 +287,8 @@ start_run() {
     local bin="$H_ROOT/bin/$stamp" label="$H_LABEL.$stamp"
     on_host "mkdir -p '$bin' '$H_ROOT/out'" || die "could not prepare $bin on $H_NAME" 4
     [ "$DRY" = 1 ] && echo "+ (the host checks out $sha into $H_WT under the testbed lock, refusing a dirty tree)"
+    [ "$DRY" = 1 ] && [ "$LANE" = corpus ] && \
+        echo "+ (the host runs corpus_run.py host $CORPUS_LANE: refused unless the hostname is the M4's and the state root is under ~/corpus/state)"
 
     copy_to_host "$SELF" "$bin/m4_run.sh" || die "could not install the runner on $H_NAME"
     copy_to_host "$SCRIPT_DIR/m4_run_summary.py" "$bin/m4_run_summary.py" \
@@ -298,9 +305,20 @@ start_run() {
         [ "$DRY" = 1 ] && echo "+ (the host runs $bin/nightly_local_tests.sh --on-demand $out --repo $H_WT --dd $H_SUITE_DD: nothing published)"
     fi
 
+    if [ "$LANE" = corpus ]; then
+        # The harness's host side and its driver sources, per run like the runner itself.
+        local f
+        for f in corpus_run.py catalog_db.py corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift; do
+            copy_to_host "$SCRIPT_DIR/$f" "$bin/$(basename "$f")" || die "could not install $f on $H_NAME"
+        done
+    fi
+
     local args=("$bin/m4_run.sh" __host "$LANE" "$sha" "$stamp" --host "$HOST")
     [ -n "$ONLY" ] && args+=(--only "$ONLY")
     [ -n "$PLAN_TIMEOUT" ] && args+=(--plan-timeout "$PLAN_TIMEOUT")
+    [ -n "$CORPUS_LANE" ] && args+=(--corpus-lane "$CORPUS_LANE")
+    [ -n "$CORPUS_DEADLINE" ] && args+=(--deadline "$CORPUS_DEADLINE")
+    [ -n "$CORPUS_LIMIT" ] && args+=(--limit "$CORPUS_LIMIT")
     local plist
     plist="$(plist_xml "$label" "${args[@]}")"
     # A per-run label: bootstrapping never boots out a live run's agent. Agents
@@ -540,6 +558,37 @@ host_suite() {
     fi
 }
 
+# The real-data corpus harness (DECISIONS 2026-11-17). Everything it does is in
+# scripts/corpus_run.py (installed beside this script); it runs under the lane
+# watchdog with the lock's fd passed on, and writes its own counts-only
+# summary. Exit: 0 GREEN · 3 AMBER (an engine crashed, timed out or errored on
+# some file, or the ref lacks the lane's engine) · anything else RED.
+# It repoints <root>/latest like every lane and never <root>/latest-suite.
+host_corpus() {   # host_corpus <sha> <stamp>
+    local t0 rc secs extra=()
+    [ -n "$CORPUS_DEADLINE" ] && extra+=(--deadline "$CORPUS_DEADLINE")
+    [ -n "$CORPUS_LIMIT" ] && extra+=(--limit "$CORPUS_LIMIT")
+    t0=$(date +%s)
+    run_bounded "$CORPUS_BUDGET" "$OUT/corpus.log" "$H_WT" \
+        python3 "$SCRIPT_DIR/corpus_run.py" host "$CORPUS_LANE" --sha "$1" --stamp "$2" --out "$OUT" \
+        --worktree "$H_WT" --derived-data "$H_DD" --bin "$SCRIPT_DIR" ${extra[@]+"${extra[@]}"}
+    rc=$?
+    secs=$(( $(date +%s) - t0 ))
+    echo "corpus $CORPUS_LANE exit=$rc secs=$secs"
+    if [ -f "$OUT/corpus-summary.txt" ]; then
+        cat "$OUT/corpus-summary.txt" >>"$OUT/summary.txt"
+    else
+        echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
+    fi
+    case "$rc" in
+        0) ;;
+        3) [ "$VERDICT" = GREEN ] && VERDICT=AMBER
+           AMBER_WHY="corpus $CORPUS_LANE: see the summary" ;;
+        124) echo "corpus $CORPUS_LANE: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
+        *) VERDICT=RED ;;
+    esac
+}
+
 host_main() {   # __host <lane> <sha> <stamp>
     local lane="$1" sha="$2" stamp="$3"
     OUT="$H_ROOT/out/$stamp-$lane"
@@ -566,7 +615,7 @@ host_main() {   # __host <lane> <sha> <stamp>
     else
         git -C "$H_REPO" worktree add -q --detach "$H_WT" "$sha" || { echo "OUTCOME REFUSED cannot add worktree $H_WT at $sha (from $H_REPO)"; exit 4; }
     fi
-    echo "START $(date '+%F %T') host=$H_NAME lane=$lane sha=$sha${ONLY:+ only=$ONLY}"
+    echo "START $(date '+%F %T') host=$H_NAME lane=$lane${CORPUS_LANE:+ corpus-lane=$CORPUS_LANE} sha=$sha${ONLY:+ only=$ONLY}"
     if [ "$(git -C "$H_WT" rev-parse HEAD 2>/dev/null)" != "$sha" ]; then
         echo "OUTCOME RED testbed $H_WT is not at $sha"
         exit 1
@@ -580,6 +629,7 @@ host_main() {   # __host <lane> <sha> <stamp>
         ui)    host_ui ;;
         all)   host_deep; host_ui ;;
         suite) host_suite ;;
+        corpus) host_corpus "$sha" "$stamp" ;;
     esac
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
@@ -590,6 +640,7 @@ host_main() {   # __host <lane> <sha> <stamp>
 # ── Arguments ─────────────────────────────────────────────────────────────
 LANE="${1:-}"; [ $# -gt 0 ] && shift
 HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""
+CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""
 POS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -597,6 +648,9 @@ while [ $# -gt 0 ]; do
         --ref) REF="${2:-}"; shift 2 || usage ;;
         --only) ONLY="${2:-}"; shift 2 || usage ;;
         --plan-timeout) PLAN_TIMEOUT="${2:-}"; shift 2 || usage ;;
+        --corpus-lane) CORPUS_LANE="${2:-}"; shift 2 || usage ;;
+        --deadline) CORPUS_DEADLINE="${2:-}"; shift 2 || usage ;;
+        --limit) CORPUS_LIMIT="${2:-}"; shift 2 || usage ;;
         --dry-run) DRY=1; shift ;;
         --force) FORCE=1; shift ;;
         --wait) WAIT=1; shift ;;
@@ -607,9 +661,23 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$PLAN_TIMEOUT" ] && ! [[ "$PLAN_TIMEOUT" =~ ^[0-9]+$ ]] && die "--plan-timeout wants seconds" 2
 [ -n "$ONLY" ] && ! [[ "$ONLY" =~ ^[A-Za-z0-9_,]+$ ]] && die "--only wants UI test class names (A,B)" 2
+[ -n "$CORPUS_DEADLINE" ] && ! [[ "$CORPUS_DEADLINE" =~ ^[0-9]+$ ]] && die "--deadline wants seconds" 2
+[ -n "$CORPUS_LIMIT" ] && ! [[ "$CORPUS_LIMIT" =~ ^[0-9]+$ ]] && die "--limit wants a number of files" 2
+# The corpus lane: the M4 only (never the Ultra, Rick's machine), and its options belong to it alone.
+corpus_args_ok() {
+    [ "$HOST" = m4 ] || die "the corpus harness runs only on the M4 (--host $HOST refused)" 2
+    case "$CORPUS_LANE" in prepare|check|proof) ;; *) die "--corpus-lane wants prepare|check|proof" 2 ;; esac
+    [ -z "$ONLY$PLAN_TIMEOUT" ] || die "--only/--plan-timeout do not apply to the corpus lane" 2
+}
+[ "$LANE" = corpus ] || [ "${POS[0]:-}" = corpus ] || [ -z "$CORPUS_LANE$CORPUS_DEADLINE$CORPUS_LIMIT" ] \
+    || die "--corpus-lane/--deadline/--limit apply to the corpus lane" 2
 host_config "$HOST"
 
 case "$LANE" in
+    corpus)
+        [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
+        corpus_args_ok
+        start_run ;;
     ui|deep|all|suite)
         [ ${#POS[@]} -eq 0 ] || die "unexpected argument ${POS[0]}" 2
         [ -n "$ONLY" ] && [ "$LANE" != ui ] && die "--only applies to the ui lane" 2
@@ -619,8 +687,8 @@ case "$LANE" in
         on_host "$(status_snippet)" || die "cannot reach $H_NAME (${H_SSH:-local})" ;;
     __host)
         [ ${#POS[@]} -eq 3 ] || die "__host <lane> <sha> <stamp>" 2
-        case "${POS[0]}" in ui|deep|all|suite) ;; *) die "bad lane ${POS[0]}" 2 ;; esac
+        case "${POS[0]}" in ui|deep|all|suite) ;; corpus) corpus_args_ok ;; *) die "bad lane ${POS[0]}" 2 ;; esac
         host_main "${POS[@]}" ;;
     ""|-h|--help) usage ;;
-    *) die "unknown lane '$LANE' (ui|deep|all|suite|status)" 2 ;;
+    *) die "unknown lane '$LANE' (ui|deep|all|suite|corpus|status)" 2 ;;
 esac

@@ -5,7 +5,7 @@
 The fleet: the **M5 Ultra** Mac Studio (`RicksUltra`, Rick's interactive machine since 2026-10-27/28), the **M4** Max Mac Studio (`RicksM4`, the headless deep-test host), the **M5 Pro** MacBook (`ricksm5.local`) and the **M1** MacBook Pro for overflow. This guide holds the operational facts that are not rules: how the deep-test host runs, how storage is laid out, how to check the Thunderbolt 5 link. The background helper's launchd job is in `docs/design/background_service.md`; where every App Support file lives, and what each catalog table holds, is in `docs/design/data_organization_2026_10_31.md`; backups of the catalog are `sqlite3 … ".backup"` only (CLAUDE.md), and the off-site copy plan is a STATUS date (2026-11-01).
 
 ## Contents
-1. The M4 deep-test host (built 2026-10-28; what is still planned) · 2. Storage layout (the facts that hold) · 3. Thunderbolt 5 link check
+1. The M4 deep-test host (built 2026-10-28; what is still planned) · 1a. The real-data corpus on the M4 · 2. Storage layout (the facts that hold) · 3. Thunderbolt 5 link check
 
 ## 1. The M4 deep-test host
 
@@ -71,6 +71,55 @@ password (testing.md §4).
   of a generic red; the UI stage of `scripts/gauntlet/manifest.json` adapted from "blocked" suite by suite.
 - The automatic trigger (every push to `main` runs the suite lane; DECISIONS 2026-11-17) and the PROCESS.md wording
   for which merges wait for the M4's verdict. The real-media testbed SSD (BACKLOG).
+
+### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17)
+
+*Rule: DECISIONS 2026-11-17, "The M4 holds a real-data test corpus". The header comments of `scripts/corpus_run.py`
+and `scripts/corpus/CorpusDriverSupport.swift` are the reference.*
+
+**What it is.** A curated copy of real family media on the M4, chosen by stratum (one-sided sound, edit lists, Avid
+halves, codec/container combinations, …), with the two documents that describe it and a `.backup` of the catalog, all
+under `~/corpus/` on the M4 and marked `THIS_IS_TEST_DATA.txt`. Automation runs the app's own engines across it and
+reports counts.
+
+| Under `~/corpus/` on the M4 | What |
+|---|---|
+| `media/Volumes/<VolumeName>/…` | the copies (read-only for the harness) |
+| `corpus-manifest-v1.json`, `corpus-sha-v1.txt` | each file's SHA-256, size, original path and stratum |
+| `catalog-source-backup.sqlite` | the catalog backup the sealed catalog is derived from (never written) |
+| `state/` | the sealed state `prepare` builds: the corpus catalog, `prepare.json`, the test host's home |
+| `work/<run>/` | a run's working files; removed when the run ends |
+| `reports/<lane>/<commit>/<run>/` | `report.json`, `report.txt`, per-file `outcomes.json` keyed by SHA-256 |
+
+**Hard rules** (each is a guard in code, pinned by `tests/test_corpus_run.py`):
+- Nothing of the corpus goes into git, a commit message, a pushed log or a report to a person or a model beyond: file
+  counts, sizes, durations, container/codec names, outcome words and a SHA-256 prefix. No filenames, no paths below the
+  corpus root, no caption or transcript text, no frames, no audio. Reports stay on the M4.
+- The harness refuses to start unless the hostname is the M4's and its state root is under `~/corpus/state/`. It never
+  runs on the M5 Ultra, never opens the live catalog, never touches the Master Archive, never starts catalog sync or
+  viewer publishing; the sealed catalog names no Master Archive.
+- The corpus sources are read-only. Engines that write, write under `~/corpus/work/<run>/`. Phase 1 has no Trash,
+  delete or relocate verb.
+- No credential is in the repo. The harness never signals a process: a file past its deadline is cut by the test host
+  exiting itself, and the lane sits under `m4_run.sh`'s lane watchdog.
+
+| From the Ultra | What happens on the M4 |
+|---|---|
+| `scripts/corpus_run.sh prepare` | builds the sealed catalog from the backup: only the manifest's rows, paths rewritten to the copies; verifies every file has a row and every row's file exists at its size. Idempotent |
+| `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio on every file, at that commit |
+| `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on the one-sided-sound files; says so when the ref has no proof engine |
+| `scripts/corpus_run.sh status` | the lock, then each lane's newest run and what changed since the previous one (counts and outcome-word transitions) |
+
+Options: `--wait`, `--dry-run`, `--deadline <seconds per file>`, `--limit <n files>`. It runs through
+`scripts/m4_run.sh corpus` — the same lock, per-run LaunchAgent and `--ref` checkout as the other lanes — so it waits
+its turn behind a suite or gauntlet run. The engines run in the app's unit-test host (the shared catalog store, sync
+and the background service are inert there) with its home redirected into `~/corpus/state/home`; the driver sources
+(`scripts/corpus/*.swift`) are laid over the testbed as untracked files for the run, so a commit that predates the
+harness can be run. A crash or a deadline in one file is recorded and the run goes on.
+
+What the sealed catalog does **not** carry: other copies and removed rows of the same content, pair links (a video
+half reads as unpaired), captions, transcripts, notes, people. Volume ids and identity stamps still describe the
+original drive. Phase 1 trusts the corpus's own SHA-256 list and checks sizes; it does not re-hash 130 GB per run.
 
 ## 2. Storage layout
 
