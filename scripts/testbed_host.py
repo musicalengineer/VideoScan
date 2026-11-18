@@ -4,6 +4,9 @@
     testbed_host.py prune <root> [--current <run dir>] [--keep N]
     testbed_host.py status-json <root> <host name>
     testbed_host.py window <root> <lane> <HHMM>
+    testbed_host.py start-by <root> <lane> <HHMM> <epoch>
+    testbed_host.py ran <root> <40-hex sha> [<run dir to ignore>]
+    testbed_host.py show <file> [--under <dir>] [--match <regex>] [--tail N]
 
 prune (run by m4_run.sh at the start of every lane, under the testbed lock). <root>/out
 holds one folder per run, 140-420 MB each for a suite run; nothing removed them before.
@@ -36,6 +39,18 @@ done before the scheduled run begins: testbed 120, all 90, suite 75, deep 60, co
 ui 30 minutes. (The scheduled run does NOT wait for the lock: scripts/nightly_gauntlet.sh
 runs its suite anyway and skips only its gauntlet, so an overlap is two suites at once.)
 
+start-by answers, at the moment the caller checks the windows, the latest moment (epoch
+seconds) the lane may still START: the next 01:30 or the next quiet-window start, whichever
+comes first. The caller passes it to the host side, which refuses a run that reaches its lock
+after it (Codex #315-6: a check that passed at 01:29 must not let a run start at 01:31).
+
+show prints a file a caller will read back (a summary, a run log, a testbed block) only through
+a door that proves it: opened without following a link, a regular file with ONE name, inside
+--under when given, at most 256 KB — and each line that could carry a name is withheld (a media
+file extension, a run of 41+ hex or of 24+ hex that is not a commit id after "sha=", a path
+below /Volumes, ~/corpus/media or ~/corpus/live, a home path that is not the run root). A file that fails the door prints one line saying so (Codex
+#315-3: `status` never prints unvalidated text).
+
 No apostrophes anywhere in this file: m4_run.sh ships it to the host inside a heredoc.
 Memory: one run.log (KBs) at a time. Python 3.9 is the floor. Tests: tests/test_testbed_host.py.
 """
@@ -46,6 +61,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 
@@ -299,6 +315,94 @@ def window(root: str, lane: str, hhmm: str) -> str:
     return "OK"
 
 
+NIGHTLY_START = "0130"            # the 01:30-06:00 window m4_run.sh refuses (its own check, by the clock)
+
+
+def minutes_left(root: str, lane: str, hhmm: str):
+    """Minutes from <HHMM> until the next moment the lane may no longer start, or None."""
+    now = _minutes(hhmm)
+    if now is None:
+        return None
+    values = conf(root)
+    scheduled = values.get("SCHEDULED")
+    times = scheduled.split(",") if scheduled is not None else SCHEDULED_DEFAULT.get(os.path.basename(root.rstrip("/")), [])
+    quiet = _number(values.get("QUIET_MINUTES"), QUIET_DEFAULT.get(lane, 60), 0, 720)
+    starts = [_minutes(NIGHTLY_START)]
+    if quiet > 0:
+        starts += [(at - quiet) % 1440 for at in (_minutes(t) for t in times) if at is not None]
+    return min((start - now) % 1440 for start in starts)
+
+
+def start_by(root: str, lane: str, hhmm: str, epoch: str) -> str:
+    left = minutes_left(root, lane, hhmm)
+    if left is None or not epoch.isdigit():
+        return ""
+    whole = int(epoch) - int(epoch) % 60                # the start of the current minute
+    return str(whole + left * 60)
+
+
+MAX_SHOW = 256 * 1024
+_WITHHELD = re.compile(
+    r"\.(mov|mp4|m4v|mxf|dv|avi|mkv|mts|m2ts|mpg|mpeg|vob|wav|aif|aiff|m4a|mp3|3gp|webm|jpg|jpeg|png|heic)\b"
+    r"|[0-9a-fA-F]{41,}|(?<!sha=)(?<![0-9a-fA-F])[0-9a-fA-F]{24,40}(?![0-9a-fA-F])"
+    r"|/Volumes/|corpus/media/|corpus/live/|/Users/[^/ ]+/(?!m4run/)|[\x00-\x08\x0b-\x1f\x7f]",
+    re.IGNORECASE)
+
+
+def show(path: str, under: str = "", match: str = "", tail: int = 0) -> list:
+    """The lines of a file a caller may read back (see the module text), or one line saying why not."""
+    try:
+        if os.path.islink(path) or (under and os.path.realpath(os.path.dirname(os.path.abspath(path))) != os.path.realpath(under)):
+            return ["(withheld: not a file of this run)"]
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return []
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            return ["(withheld: not a plain file of this run)"]
+        data = os.read(fd, MAX_SHOW + 1)
+    finally:
+        os.close(fd)
+    lines = data[:MAX_SHOW].decode("utf-8", errors="replace").splitlines()
+    if match:
+        lines = [line for line in lines if re.search(match, line)]
+    if tail:
+        lines = lines[-tail:]
+    return [("(a line was withheld: it did not read as counts and words)" if _WITHHELD.search(line) else line) for line in lines]
+
+
+RAN = ("GREEN", "AMBER", "RED")
+
+
+def ran(root: str, sha: str, ignore: str = "") -> str:
+    """The verdict of a suite or testbed run of `sha` under <root>/out that reached GREEN, AMBER
+    or RED (the newest such), or "". What the push watcher asks UNDER the testbed lock, before
+    it starts a run (Codex #315-5). Run logs are read without following a link."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return ""
+    out = os.path.join(root, "out")
+    try:
+        names = sorted(os.listdir(out), reverse=True)
+    except OSError:
+        return ""
+    skip = os.path.realpath(ignore) if ignore else ""
+    for name in names:
+        m = RUN_NAME.match(name)
+        path = os.path.join(out, name)
+        if not m or m.group(2) not in ("suite", "testbed") or os.path.islink(path) or os.path.realpath(path) == skip:
+            continue
+        verdict, started = "", False
+        for line in show(os.path.join(path, "run.log")):
+            if line.startswith("START ") and (" sha=" + sha) in line:
+                started = True
+            elif line.startswith("OUTCOME ") and len(line.split()) > 1:
+                verdict = line.split()[1]
+        if started and verdict in RAN:
+            return verdict
+    return ""
+
+
 def main(argv: list) -> int:
     if len(argv) >= 2 and argv[0] == "prune":
         current, keep, rest = "", 0, argv[2:]
@@ -316,6 +420,26 @@ def main(argv: list) -> int:
         return 0
     if len(argv) == 4 and argv[0] == "window":
         print(window(argv[1], argv[2], argv[3]))
+        return 0
+    if len(argv) in (3, 4) and argv[0] == "ran":
+        print(ran(argv[1], argv[2], argv[3] if len(argv) == 4 else ""))
+        return 0
+    if len(argv) == 5 and argv[0] == "start-by":
+        print(start_by(argv[1], argv[2], argv[3], argv[4]))
+        return 0
+    if len(argv) >= 2 and argv[0] == "show":
+        under, match, tail, rest = "", "", 0, argv[2:]
+        while rest:
+            if rest[0] == "--under" and len(rest) > 1:
+                under, rest = rest[1], rest[2:]
+            elif rest[0] == "--match" and len(rest) > 1:
+                match, rest = rest[1], rest[2:]
+            elif rest[0] == "--tail" and len(rest) > 1 and rest[1].isdigit():
+                tail, rest = int(rest[1]), rest[2:]
+            else:
+                return 2
+        for line in show(argv[1], under, match, tail):
+            print(line)
         return 0
     print(__doc__, file=sys.stderr)
     return 2

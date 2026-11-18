@@ -26,7 +26,9 @@ A tick, in order (state in <root>/watch/state.json, written whole or not at all)
      commits pushed while a run was going are never queued one by one.
   5. Never the same commit twice: a commit this watcher has a verdict for, or that
      any suite or testbed run under <root>/out already ran to GREEN, AMBER or RED
-     (a run started by hand counts), is not run again.
+     (a run started by hand counts), is not run again. Asked twice: here, and by the
+     host side again UNDER the testbed lock (`--unless-ran`), so a run by hand that
+     finishes between the two is still seen (OUTCOME REFUSED already-run <verdict>).
   6. A docs-only range is skipped: when every path changed since the last commit the
      watcher settled is under docs/ or is a Markdown file, the commit is recorded as
      SKIPPED docs-only. An unknown range (no settled commit yet, history rewritten)
@@ -172,7 +174,8 @@ class Watch:
     # -- reading runs back
 
     def outcome_of(self, out: str):
-        """(verdict word or None, the first summary line) of a run folder."""
+        """(verdict word or None, the first summary line) of a run folder. A refusal reads
+        "REFUSED:<its first word>" (already-run, window, busy:, ...) so the tick can tell them apart."""
         verdict = None
         try:
             with open(os.path.join(out, "run.log"), encoding="utf-8", errors="replace") as f:
@@ -180,6 +183,10 @@ class Watch:
                     if line.startswith("OUTCOME "):
                         parts = line.split()
                         verdict = parts[1] if len(parts) > 1 else None
+                        if verdict == "REFUSED" and len(parts) > 2:
+                            verdict = "REFUSED:" + parts[2]
+                            if parts[2] == "already-run" and len(parts) > 3:
+                                verdict += ":" + parts[3]
         except OSError:
             return None, ""
         summary = ""
@@ -289,7 +296,19 @@ class Watch:
                 self.state["current"] = None
                 self.settle(sha, verdict, summary)
                 saw += " — the run of %s ended %s" % (sha[:9], verdict)
-            elif verdict is not None:                           # REFUSED: it never ran (lost the lock, a dirty testbed)
+            elif verdict is not None and verdict.startswith("REFUSED:already-run:") and verdict.split(":")[2] in RAN:
+                # The host found, UNDER the lock, a run of this commit that reached a verdict: one
+                # by hand that finished after this tick looked (Codex #315-5). Recorded, not run.
+                self.state["current"] = None
+                self.state["runs"][sha] = max(0, (_count(self.state["runs"], sha) or 1) - 1)
+                self.settle(sha, verdict.split(":")[2], "run by hand under %s/out; not run again" % os.path.basename(self.root))
+                saw += " — %s was already run (%s), found under the lock: recorded, not run again" % (sha[:9], verdict.split(":")[2])
+            elif verdict is not None and verdict.split(":")[1:2] in (["window"], ["busy"]):
+                # It reached the lock after a window opened, or behind another run: the commit is not at fault.
+                self.state["current"] = None
+                self.state["runs"][sha] = max(0, (_count(self.state["runs"], sha) or 1) - 1)
+                saw += " — the start of %s waited (%s): tried again next tick" % (sha[:9], verdict.split(":")[1])
+            elif verdict is not None:                           # REFUSED: it never ran (a dirty testbed, ...)
                 self.state["current"] = None
                 self.state["runs"][sha] = max(0, (_count(self.state["runs"], sha) or 1) - 1)
                 failures = _count(self.state["start_failures"], sha) + 1
@@ -326,7 +345,7 @@ class Watch:
         return saw + " — " + self.start(head)
 
     def start(self, sha: str) -> str:
-        code, text = self.call([self.bash, self.runner, LANE, "--host", "m4local", "--ref", sha], START_TIMEOUT)
+        code, text = self.call([self.bash, self.runner, LANE, "--host", "m4local", "--ref", sha, "--unless-ran"], START_TIMEOUT)
         if code == 0:
             m = re.search(r"started — output (\S+)", text)
             if m:

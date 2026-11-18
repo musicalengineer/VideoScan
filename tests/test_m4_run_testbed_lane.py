@@ -198,7 +198,7 @@ class HostTestbedLaneTests(TestbedScene):
         p, log, summary, out = self.host('d1')
         self.assertEqual(p.returncode, 1, log)
         self.assertRegex(log, r'(?m)^OUTCOME RED .* — suite GREEN · corpus check GREEN · corpus proof RED$')
-        self.assertIn('corpus proof: RED no summary was written (rc=99', summary)
+        self.assertIn('corpus proof: RED the harness stopped (rc=99; see corpus.log on the M4)', summary)
         self.assertRegex(summary, r"(?m)^  corpus proof  RED +\d+s  no facts file")
         self.assertEqual(summary.count('corpus check: GREEN counts only'), 1)
         self.assertFalse((out / 'corpus-summary.txt').exists(), "each corpus lane's files are in its own folder")

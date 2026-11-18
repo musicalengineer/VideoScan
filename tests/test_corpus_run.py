@@ -42,6 +42,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(REPO / 'tests'))
 import catalog_db  # noqa: E402
 import corpus_run as cr  # noqa: E402
+import testbed_host as th  # noqa: E402
 from catalog_sqlite_fixture import Catalog  # noqa: E402
 
 DB = catalog_db.DATABASE_FILE_NAME
@@ -115,7 +116,8 @@ for item in config["pending"]:
     say(ev="end", sha=item["sha"])
 if config["lane"] == "verbs":
     say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0),
-        strayTrashFiles=plan.get("stray", 0), records=len(config["pending"]))
+        strayTrashFiles=plan.get("stray", 0), receiptsInRun=plan.get("receipts", [0, 0])[0],
+        receiptsOutsideTheRun=plan.get("receipts", [0, 0])[1], records=len(config["pending"]))
 say(ev="done")
 '''
 
@@ -2082,7 +2084,7 @@ class HostHookTests(unittest.TestCase):
             work = root / 'work'
             work.mkdir(parents=True)
             bin_dir.mkdir()
-            for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+            for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py'):
                 (bin_dir / name).write_bytes((SCRIPTS / name).read_bytes())
             (bin_dir / 'corpus_run.py').write_text(STUB_HELPER)
             (bin_dir / 'helper-exit').write_text(str(code))
@@ -2142,7 +2144,7 @@ class HostHookTests(unittest.TestCase):
             (suite_out / 'summary.txt').write_text('suite: GREEN app 9 passed\n')
             os.symlink(suite_out, root / 'latest-suite')
             os.symlink(suite_out, root / 'latest')
-            for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+            for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py'):
                 (bin_dir / name).write_bytes((SCRIPTS / name).read_bytes())
             (bin_dir / 'corpus_run.py').write_text(STUB_HELPER)
             (bin_dir / 'helper-exit').write_text('0')
@@ -2170,7 +2172,215 @@ class HostHookTests(unittest.TestCase):
     def test_a_helper_that_dies_without_a_summary_is_red_and_says_so(self):
         rc, log, _, _, _, _ = self.host(99, 'h99')
         self.assertEqual(rc, 1, log)
-        self.assertIn('RED no summary was written', log)
+        self.assertIn('corpus check: RED the harness stopped (rc=99; see corpus.log on the M4)', log)
+
+
+# Stand-in for corpus_run.py that misbehaves on purpose (Codex #315-3): it lays its summary down as a
+# LINK to a private file, writes a summary line that names a file, or both, then exits as told.
+ROGUE_HELPER = r"""#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+out = args[args.index("--out") + 1]
+here = os.path.dirname(os.path.abspath(__file__))
+mode = open(os.path.join(here, "rogue-mode")).read().split()
+summary = os.path.join(out, "corpus-summary.txt")
+if "link" in mode:
+    os.symlink(os.path.join(here, "private.txt"), summary)
+if "name" in mode:
+    open(summary, "w").write("corpus check: GREEN 3 files\n  Grandma Birthday 1988.mov: OK\n  check: OK 3\n")
+sys.exit(int(mode[0]))
+"""
+
+PRIVATE = 'Grandma said the Lake House secret'
+
+
+class CodexRound3Tests(unittest.TestCase):
+    """Codex #315 (round 3, block, 6 findings). Each test was seen RED with its fix taken back out."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = pathlib.Path(os.path.realpath(self.tmp.name), 'home')
+        self.root = self.home / 'm4run'
+        self.bin_dir = self.home / 'bin'
+        self.work = self.root / 'work'
+        self.work.mkdir(parents=True)
+        self.bin_dir.mkdir()
+        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py', 'testbed_host.py'):
+            (self.bin_dir / name).write_bytes((SCRIPTS / name).read_bytes())
+        (self.bin_dir / 'corpus_run.py').write_text(ROGUE_HELPER)
+        (self.bin_dir / 'private.txt').write_text(PRIVATE + '\n')
+        self.victim = self.home / 'pristine.mov'
+        self.victim.write_bytes(b'pristine bytes')
+        self.env = dict(os.environ, HOME=str(self.home), GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
+                        GIT_COMMITTER_EMAIL='t@t', PATH=f"{as_the_m4(self.home)}:{os.environ['PATH']}")
+        (self.work / 'file').write_text('x')
+        for command in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'testbed']):
+            subprocess.run(['git', '-C', str(self.work), *command], check=True, env=self.env)
+        self.sha = subprocess.run(['git', '-C', str(self.work), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def host(self, stamp, mode='0'):
+        (self.bin_dir / 'rogue-mode').write_text(mode)
+        return subprocess.run(['/bin/bash', str(self.bin_dir / 'm4_run.sh'), '__host', 'corpus', self.sha, stamp, '--host', 'm4',
+                               '--corpus-lane', 'check'], capture_output=True, text=True, env=self.env, timeout=120)
+
+    def status(self):
+        dry = subprocess.run(['/bin/bash', str(SCRIPTS / 'm4_run.sh'), 'status', '--dry-run'], capture_output=True, text=True,
+                             env=self.env, timeout=60).stdout
+        snippet = dry.split("+ ssh ricksm4.local <<'SH'", 1)[1].split('\n  SH', 1)[0]
+        snippet = '\n'.join(line[4:] if line.startswith('    ') else line for line in snippet.splitlines())
+        return subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True, env=self.env, timeout=60).stdout
+
+    # 1 — persistent writers
+
+    def test_1_a_persistent_file_that_is_a_second_name_of_a_corpus_file_is_never_written(self):
+        scene = CorpusScene(self.tmp.name + '/scene')
+        media = scene.corpus / 'media' / scene.files[0][1].lstrip('/')
+        before = media.read_bytes()
+        scene.seal.mkdir(scene.seal.state)
+        os.link(media, scene.seal.state / 'prepare.json')                 # a hard link: no symlink to see
+        with self.assertRaises(cr.Refused) as refused:
+            cr.prepare(scene.seal)
+        self.assertIn('second name', str(refused.exception))
+        self.assertEqual(media.read_bytes(), before)
+        (scene.seal.state / 'prepare.json').unlink()
+        os.symlink(media, scene.seal.state / 'prepare.json')
+        with self.assertRaises(cr.Refused):
+            cr.prepare(scene.seal)
+        self.assertEqual(media.read_bytes(), before)
+
+    def test_1_the_baseline_history_is_never_appended_through_a_second_name(self):
+        scene = LaneScene(self.tmp.name + '/lane')
+        media = scene.corpus / 'media' / scene.files[1][1].lstrip('/')
+        before = media.read_bytes()
+        scene.run()
+        os.link(media, scene.seal.reports / 'check' / cr.BASELINE_LOG)
+        with self.assertRaises(cr.Refused):
+            cr.accept(scene.seal, 'check', 'x')
+        self.assertEqual(media.read_bytes(), before)
+        for writer in (lambda p: scene.seal.write_text(p, 'x'), lambda p: scene.seal.write_json(p, {'a': 1})):
+            target = scene.seal.reports / 'check' / 'some.json'
+            os.link(media, target)
+            with self.assertRaises(cr.Refused):
+                writer(target)
+            target.unlink()
+        self.assertEqual(media.read_bytes(), before)
+
+    # 2 — the shell's own writes
+
+    def test_2_a_run_folder_that_is_already_there_is_never_written_into(self):
+        for how in ('symlink', 'hardlink'):
+            with self.subTest(how=how):
+                stamp = 'pre' + how
+                out = self.root / 'out' / f'{stamp}-corpus'
+                out.mkdir(parents=True)
+                for name in ('run.log', 'summary.txt'):
+                    (os.symlink if how == 'symlink' else os.link)(self.victim, out / name)
+                p = self.host(stamp)
+                self.assertEqual(p.returncode, 4, p.stderr)
+                self.assertIn('a run folder is made new, never reused', p.stderr)
+                self.assertEqual(self.victim.read_bytes(), b'pristine bytes', 'the shell truncated a file it did not make')
+
+    def test_2_an_aliased_m4run_or_out_folder_is_refused_by_the_shell_and_by_the_seal(self):
+        elsewhere = self.home / 'Documents'
+        elsewhere.mkdir()
+        os.symlink(elsewhere, self.root / 'out')
+        p = self.host('alias1')
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn('symlink', p.stderr)
+        self.assertEqual(sorted(os.listdir(elsewhere)), [])
+        seal = cr.Seal(self.home, 'ricksm4')
+        (elsewhere / 'run1-corpus').mkdir()
+        with self.assertRaises(cr.Refused) as refused:
+            seal.out_folder(self.root / 'out' / 'run1-corpus')
+        self.assertIn('~/m4run or ~/m4run/out', str(refused.exception))
+        os.unlink(self.root / 'out')
+        real_root = self.home / 'm4run-real'
+        shutil.move(str(self.root), str(real_root))
+        os.symlink(real_root, self.root)
+        p = self.host('alias2')
+        self.assertEqual(p.returncode, 4, p.stderr)
+
+    def test_2_the_bounded_runner_never_appends_its_log_through_a_link(self):
+        text = (SCRIPTS / 'm4_run.sh').read_text()
+        function = text[text.index('run_bounded() {'):text.index('\n}\n', text.index('run_bounded() {')) + 3]
+        for how in ('symlink', 'hardlink'):
+            with self.subTest(how=how):
+                log = self.home / f'{how}.log'
+                (os.symlink if how == 'symlink' else os.link)(self.victim, log)
+                script = function + f'\nrun_bounded 30 {log} {self.home} /bin/echo appended\n'
+                p = subprocess.run(['/bin/bash', '-c', script], capture_output=True, text=True, env=self.env, timeout=60)
+                self.assertEqual(p.returncode, 125, p.stdout + p.stderr)
+                self.assertEqual(self.victim.read_bytes(), b'pristine bytes')
+                log.unlink()
+
+    # 3 — reading a summary back
+
+    def test_3_a_refusing_helpers_linked_summary_is_never_read_back(self):
+        p = self.host('leak1', '2 link')
+        self.assertEqual(p.returncode, 1, p.stderr)
+        out = self.root / 'out' / 'leak1-corpus'
+        text = (out / 'run.log').read_text() + (out / 'summary.txt').read_text() + self.status()
+        self.assertNotIn(PRIVATE, text)
+        self.assertIn('corpus check: RED refused by the harness (rc=2', text)
+
+    def test_3_a_summary_that_is_a_link_or_names_a_file_is_withheld_even_when_the_helper_finished(self):
+        p = self.host('leak2', '0 link')
+        text = (self.root / 'out' / 'leak2-corpus' / 'summary.txt').read_text() + self.status()
+        self.assertNotIn(PRIVATE, text)
+        self.assertIn('(withheld: not a file of this run)', text)
+        p = self.host('leak3', '0 name')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = (self.root / 'out' / 'leak3-corpus' / 'summary.txt').read_text() + self.status()
+        self.assertNotIn('Birthday', text)
+        self.assertIn('(a line was withheld: it did not read as counts and words)', text)
+        self.assertIn('  check: OK 3', text)
+
+    def test_3_status_never_prints_a_file_it_cannot_prove(self):
+        self.host('s1', '0')
+        out = self.root / 'out' / 's1-corpus'
+        (out / 'summary.txt').unlink()
+        os.symlink(self.bin_dir / 'private.txt', out / 'summary.txt')
+        with open(out / 'run.log', 'a') as f:
+            f.write('OUTCOME GREEN 2026-11-18 01:00:00 lane=corpus sha=abc — /Volumes/PrivateDrive/Grandma/Birthday 1988.mov\n')
+        text = self.status()
+        self.assertNotIn(PRIVATE, text)
+        self.assertNotIn('Birthday', text)
+        self.assertIn('lane=corpus corpus-lane=check sha=' + self.sha, text, 'a commit id after sha= is not a digest')
+        probe = self.home / 'probe.txt'
+        probe.write_text('\n'.join(['digest ' + 'ab' * 32, 'sha=' + 'ab' * 32, 'part ' + 'ab' * 15, 'commit sha=' + 'a' * 40,
+                                    'count 1234567']) + '\n')
+        self.assertEqual(th.show(str(probe)), ['(a line was withheld: it did not read as counts and words)'] * 3
+                         + ['commit sha=' + 'a' * 40, 'count 1234567'])
+        private = self.bin_dir / 'private.txt'
+        second = self.home / 'second-name.txt'
+        os.link(private, second)                                        # a summary that is a second name of a private file
+        self.assertEqual(th.show(str(second)), ['(withheld: not a plain file of this run)'])
+        self.assertEqual(th.show(str(private), under=str(self.home)), ['(withheld: not a file of this run)'])
+
+    # 4 — where the engines put their deletion receipts
+
+    def test_4_the_lane_says_where_the_engines_receipts_went_and_moves_nothing(self):
+        # Codex #315-4: Move to Trash and Delete Duplicates write a receipt into a folder the engines choose
+        # (under a test host, the system temporary folder). They take no folder for it, and the lane does not
+        # change an engine (MediaOps is data-risk): it records each receipt's place as a word and a count.
+        scene = LaneScene(self.tmp.name + '/receipts')
+        scene.plan['engines'] = VERBS
+        scene.plan['files'] = {sha_of(0): dict(trash_copy='only_copy_warned:moved', trash_copy_kinds=['receipt_outside_the_run'],
+                                               dedupe='skipped:2', dedupe_kinds=['receipt_outside_the_run'])}
+        scene.plan['receipts'] = [0, 3]
+        self.assertEqual(scene.run('verbs'), cr.EXIT_GREEN)
+        summary = (scene.out / 'corpus-summary.txt').read_text()
+        self.assertIn('deletion receipts the engines wrote: 0 inside the run, 3 outside it (the system temporary folder on the M4: '
+                      'the engines take no folder for a receipt; recorded, not moved)', summary)
+        self.assertIn('trash_copy[receipt_outside_the_run]', summary)
+        driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+        for pin in ('lastReceipt = receiptWord(result.receipt)', 'let jobReceipt = receiptWord(job.receiptURL)',
+                    '"receiptsOutsideTheRun": stage.receiptsOutsideTheRun', 'kinds: word.hasPrefix("refused:") ? [] : [lastReceipt]'):
+            self.assertIn(pin, driver, pin)
+        self.assertNotIn('DeletionReceipt(', driver, 'the lane makes no receipt of its own and moves none')
 
 
 if __name__ == '__main__':

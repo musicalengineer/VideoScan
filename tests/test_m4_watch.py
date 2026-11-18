@@ -146,7 +146,7 @@ class WatchTests(unittest.TestCase):
         head = self.scene.head()
         line = self.scene.tick()
         self.assertRegex(line, r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d saw ' + head[:9] + r' — started the suite lane \(run 1 of at most 2\)$')
-        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {head}'])
+        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {head} --unless-ran'])
         self.assertEqual(self.scene.text('tick.txt').strip(), line)
         self.assertEqual(self.scene.text('verdict.txt'), '', 'no verdict until the run has one')
         # The watcher fetched into its own ref and moved nothing else in the M4's checkout.
@@ -183,7 +183,7 @@ class WatchTests(unittest.TestCase):
         self.scene.finish(1, 'RED', 'suite: RED failed-tests:1 — app 8 passed, 1 failed, 0 skipped; core 4 passed, 0 failed, 0 skipped')
         line = self.scene.tick()
         self.assertIn(f'saw {newest[:9]} — the run of {first[:9]} ended RED — started the suite lane', line)
-        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {first}', f'suite --host m4local --ref {newest}'])
+        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {first} --unless-ran', f'suite --host m4local --ref {newest} --unless-ran'])
         self.assertNotIn(middle, ' '.join(self.scene.calls()), 'commits are never queued one by one')
         self.assertIn(f'{first[:9]} suite RED — suite: RED failed-tests:1', self.scene.text('verdict.txt'))
 
@@ -202,7 +202,7 @@ class WatchTests(unittest.TestCase):
         self.scene.tick()
         code = self.scene.commit({'scripts/tool.py': 'x = 1\n'})
         self.assertIn('started the suite lane', self.scene.tick())
-        self.assertEqual(self.scene.calls()[-1], f'suite --host m4local --ref {code}')
+        self.assertEqual(self.scene.calls()[-1], f'suite --host m4local --ref {code} --unless-ran')
         # Docs AND code since the last settled commit, seen in one tick: it runs.
         self.scene.finish(2)
         self.scene.tick()
@@ -256,7 +256,7 @@ class WatchTests(unittest.TestCase):
         newer = self.scene.commit({'VideoScan/App.swift': 'let a = 9\n'})
         line = self.scene.tick()
         self.assertIn('started the suite lane (run 1 of at most 2)', line)
-        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {first}', f'suite --host m4local --ref {newer}'])
+        self.assertEqual(self.scene.calls(), [f'suite --host m4local --ref {first} --unless-ran', f'suite --host m4local --ref {newer} --unless-ran'])
         self.assertIn(f'{first[:9]} suite NO-OUTCOME', self.scene.text('history.log'))
 
     def test_busy_and_the_quiet_window_wait_without_counting_against_the_commit(self):
@@ -288,7 +288,7 @@ class WatchTests(unittest.TestCase):
             with open(self.scene.root / 'out' / f'run{n}-suite' / 'run.log', 'w') as f:
                 f.write('OUTCOME REFUSED testbed worktree has local changes:\n')
         line = self.scene.tick()
-        self.assertIn(f'the start of {head[:9]} was refused on the host (REFUSED) — nothing to do (settled START-FAILED)', line)
+        self.assertIn(f'the start of {head[:9]} was refused on the host (REFUSED:testbed) — nothing to do (settled START-FAILED)', line)
         self.assertEqual(len(self.scene.calls()), 3)
 
     def test_a_commit_already_run_by_hand_is_recorded_and_not_run_again(self):
@@ -367,7 +367,7 @@ class WatchTests(unittest.TestCase):
                       'refs/heads/main:refs/heads', 'refs/remotes', 'metrics', 'catalog.sqlite', 'ssh'):
             self.assertNotIn(never, code, never)
         self.assertIn('"+refs/heads/main:" + REF', code)
-        self.assertIn('[self.bash, self.runner, LANE, "--host", "m4local", "--ref", sha]', code)
+        self.assertIn('[self.bash, self.runner, LANE, "--host", "m4local", "--ref", sha, "--unless-ran"]', code)
         self.assertNotIn("'", source, 'the watcher may be shipped inside a heredoc')
 
 
@@ -430,6 +430,59 @@ class EndToEndTests(Testbed):
         value = json.loads(subprocess.run(['/bin/bash', str(self.pinned / 'm4_run.sh'), 'status', '--host', 'm4local', '--json'],
                                           capture_output=True, text=True, env=self.env, timeout=60).stdout)
         self.assertIn('suite GREEN', value['watch'])
+
+    def test_a_run_by_hand_that_finishes_after_the_tick_looked_is_caught_under_the_lock(self):
+        # Codex #315-5: the tick asks "already run?" (no: the run by hand has no OUTCOME yet); that run
+        # then finishes and frees the lock before the watcher's run takes it. The host side asks again
+        # UNDER the lock and refuses; the next tick records the hand run's verdict. No second START.
+        by_hand = self.root / 'out' / '20261118_010000_1-suite'
+        by_hand.mkdir(parents=True)
+        (by_hand / 'run.log').write_text(f'START 2026-11-18 01:00:00 host=M4 lane=suite sha={self.sha}\n')
+        saved = dict(os.environ)
+        os.environ.update(self.env)
+        try:
+            watch = mw.Watch(str(self.root), str(self.repo), str(self.pinned / 'm4_run.sh'), 'RicksM4', git=GIT)
+            looked = watch.already_run
+
+            def finishes_right_after(sha):
+                answer = looked(sha)
+                with open(by_hand / 'run.log', 'a') as f:
+                    f.write('OUTCOME AMBER 2026-11-18 01:59:00 lane=suite sha=x\n')
+                return answer
+            watch.already_run = finishes_right_after
+            first = watch.tick()
+            self.assertIn('started the suite lane', first)
+            out = pathlib.Path(json.loads((self.root / 'watch' / 'state.json').read_text())['current']['out'])
+            import time
+            deadline = time.time() + 60
+            while time.time() < deadline and 'OUTCOME' not in ((out / 'run.log').read_text() if (out / 'run.log').exists() else ''):
+                time.sleep(0.2)
+            log = (out / 'run.log').read_text()
+            self.assertIn(f'OUTCOME REFUSED already-run AMBER — sha={self.sha[:9]}', log)
+            self.assertNotIn('START', log, 'the commit was run a second time')
+            watch.already_run = looked
+            second = watch.tick()
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        self.assertIn(f'{self.sha[:9]} was already run (AMBER), found under the lock: recorded, not run again', second)
+        self.assertRegex((self.root / 'watch' / 'verdict.txt').read_text(), self.sha[:9] + ' suite AMBER — run by hand')
+        self.assertFalse(any(' test-without-building ' in c or c.startswith('swift') for c in self.calls()), 'the suite ran')
+
+    def test_the_host_side_refuses_an_already_run_commit_only_when_asked(self):
+        out = self.root / 'out' / 'x1-testbed'
+        out.mkdir(parents=True)
+        (out / 'run.log').write_text(f'START now host=M4 lane=testbed sha={self.sha}\nOUTCOME RED then lane=testbed sha=x\n')
+        work = self.root / 'work'
+        subprocess.run([GIT, '-C', str(self.repo), 'worktree', 'add', '-q', '--detach', str(work), self.sha], check=True, env=self.git_env)
+        p = subprocess.run(['/bin/bash', str(self.pinned / 'm4_run.sh'), '__host', 'suite', self.sha, 'u1', '--host', 'm4', '--unless-ran'],
+                           capture_output=True, text=True, env=self.env, timeout=120)
+        self.assertEqual(p.returncode, 6)
+        self.assertIn('OUTCOME REFUSED already-run RED', (self.root / 'out' / 'u1-suite' / 'run.log').read_text())
+        self.assertEqual(self.calls(), [])
+        p = subprocess.run(['/bin/bash', str(self.pinned / 'm4_run.sh'), '__host', 'suite', self.sha, 'u2', '--host', 'm4'],
+                           capture_output=True, text=True, env=self.env, timeout=180)
+        self.assertEqual(p.returncode, 0, (self.root / 'out' / 'u2-suite' / 'run.log').read_text())
 
     def assert_nothing_published(self):
         self.assertFalse((self.fake / 'tripped').exists())

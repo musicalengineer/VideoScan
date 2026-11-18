@@ -74,6 +74,23 @@ final class VerbsStage {
     var started = Date()
     /// Files the engines reported moving to the Trash (compared with what is found there).
     var trashedByEngines = 0
+    /// Where the engines wrote their deletion receipts (Codex #315-4). The engines take no folder for
+    /// it — under a test host it is the system temporary folder, outside the run — so the lane only
+    /// RECORDS where each one went; it moves nothing and changes no engine.
+    var lastReceipt = "no_receipt"
+    var receiptsInRun = 0
+    var receiptsOutsideTheRun = 0
+
+    /// One word for a receipt the engine reports, and the count it belongs to.
+    func receiptWord(_ url: URL?) -> String {
+        guard let url else { return "no_receipt" }
+        if CorpusRun.isUnder(url.path, run.config.work) {
+            receiptsInRun += 1
+            return "receipt_in_run"
+        }
+        receiptsOutsideTheRun += 1
+        return "receipt_outside_the_run"
+    }
 
     init(run: CorpusRun, vol: String, scratch: String, trash: String) {
         self.run = run
@@ -229,7 +246,8 @@ final class CorpusVerbsDriver: XCTestCase {
         // The app's own test-host Trash folder (outside the run) must hold nothing: every step was given the run's.
         let stray = VerbsStage.digests(in: MediaTrash.testHostTrash.path).files
         run.progress.write(["ev": "verbs", "trashFiles": trashFiles, "trashedByEngines": stage.trashedByEngines,
-                            "strayTrashFiles": stray, "records": model.records.count])
+                            "strayTrashFiles": stray, "receiptsInRun": stage.receiptsInRun,
+                            "receiptsOutsideTheRun": stage.receiptsOutsideTheRun, "records": model.records.count])
         for item in stage.items { run.end(item) }
         run.done()
     }
@@ -268,6 +286,7 @@ extension VerbsStage {
                                                       fileOperation: { url in _ = try VerbsTrash.move(url, into: trash, work: work) })
         let kind = result.items.first.map { CorpusWords.caseName($0.outcome.kind) } ?? "no_outcome"
         if kind == "moved" { trashedByEngines += 1 }
+        lastReceipt = receiptWord(result.receipt)
         return (warned, kind)
     }
 
@@ -280,7 +299,7 @@ extension VerbsStage {
                 continue
             }
             let (warned, word) = await moveToTrash(model, row, dropWarning: false)
-            say(item, "trash_copy", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "another_copy_known:") + word)
+            say(item, "trash_copy", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "another_copy_known:") + word, kinds: word.hasPrefix("refused:") ? [] : [lastReceipt])
         }
     }
 
@@ -299,6 +318,7 @@ extension VerbsStage {
         let job = DeleteDuplicatesJob(model: model, volumePath: vol, hooks: hooks, planRoot: planRoot)
         job.start()
         await job.task?.value
+        let jobReceipt = receiptWord(job.receiptURL)          // one receipt for the job
         for item in items("dup") {
             guard let plan = job.plan else {
                 say(item, "dedupe", "no_plan")
@@ -308,7 +328,8 @@ extension VerbsStage {
             let entries = plan.entries.filter { wanted.contains(CorpusRun.resolved($0.path)) }
             trashedByEngines += entries.filter { $0.status == .trashed }.count
             say(item, "dedupe", entries.isEmpty ? "no_entry" : VerbsStage.tally(entries.map { CorpusWords.caseName($0.status) }),
-                kinds: entries.contains { $0.keeperMatchedByStoredFixity == true } ? ["keeper_matched_by_stored_fixity"] : [])
+                kinds: (entries.contains { $0.keeperMatchedByStoredFixity == true } ? ["keeper_matched_by_stored_fixity"] : [])
+                    + [jobReceipt])
         }
     }
 
@@ -322,7 +343,7 @@ extension VerbsStage {
                 continue
             }
             let (warned, word) = await moveToTrash(model, row, dropWarning: true)
-            say(item, "trash_last", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "not_warned_as_only_copy:") + word)
+            say(item, "trash_last", word.hasPrefix("refused:") ? word : (warned ? "only_copy_warned:" : "not_warned_as_only_copy:") + word, kinds: word.hasPrefix("refused:") ? [] : [lastReceipt])
         }
     }
 

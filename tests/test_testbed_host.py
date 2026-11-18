@@ -305,6 +305,48 @@ class RunnerHookTests(Testbed):
         return subprocess.run(['/bin/bash', str(self.repo / 'scripts/m4_run.sh'), 'suite', '--host', 'ultra', '--ref', self.sha, *extra],
                               capture_output=True, text=True, env=self.env, timeout=180)
 
+    def test_a_run_that_reaches_its_lock_after_the_window_opened_is_refused_there(self):
+        # Codex #315-6: the caller checks at 01:29 and passes; the run reaches the host side at 01:31.
+        (self.fake / 'hhmm').write_text('0129')
+        (self.fake / 'epoch').write_text('1700000000')
+        (self.bin / 'date').write_text('#!/bin/sh\n[ "$1" = "+%H%M" ] && { cat "$SUITE_FAKE/hhmm"; exit 0; }\n'
+                                       '[ "$1" = "+%s" ] && { cat "$SUITE_FAKE/epoch"; exit 0; }\nexec /bin/date "$@"\n')
+        (self.bin / 'date').chmod(0o755)
+        gate = pathlib.Path(self.tmp_gate()) / 'gate'
+        gate.write_text('')
+        env = dict(self.env, VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE=str(gate))
+        caller = subprocess.Popen(['/bin/bash', str(self.repo / 'scripts/m4_run.sh'), 'suite', '--host', 'ultra', '--ref', self.sha, '--wait'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        deadline = time.time() + 60
+        while not pathlib.Path(str(gate) + '.paused').exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(pathlib.Path(str(gate) + '.paused').exists(), 'the caller never reached its pause')
+        (self.fake / 'hhmm').write_text('0131')
+        (self.fake / 'epoch').write_text('1700000120')                    # two minutes later
+        gate.unlink()
+        stdout, stderr = caller.communicate(timeout=180)
+        self.assertEqual(caller.returncode, 2, stdout + stderr)
+        run = next((self.root / 'out').glob('*-suite'))
+        log = (run / 'run.log').read_text()
+        self.assertIn('OUTCOME REFUSED window: the run reached its lock after the next window opened', log)
+        self.assertNotIn('START', log)
+        self.assertEqual([c for c in self.calls() if not c.startswith('git ')], [], 'the suite ran inside the window')
+
+    def test_force_carries_no_deadline_and_a_direct_host_call_has_none(self):
+        self.clock('0129')
+        p = self.caller('--dry-run')
+        self.assertIn('--start-by <the epoch the next window opens>', p.stdout)
+        self.assertEqual(th.minutes_left(str(self.root), 'suite', '0129'), 1)
+        self.assertEqual(th.minutes_left(str(self.root), 'suite', '0600'), 1170)     # 06:00 to the next 01:30
+        self.assertEqual(th.start_by(str(self.root), 'suite', '0129', '1700000070'), str(1700000040 + 60))   # 30 s into a minute: by the next minute's start
+        (self.root / 'testbed.conf').write_text('SCHEDULED=1400\nQUIET_MINUTES=75\n')
+        self.assertEqual(th.minutes_left(str(self.root), 'suite', '1200'), 45)
+
+    def tmp_gate(self):
+        folder = self.home / 'gate'
+        folder.mkdir(exist_ok=True)
+        return folder
+
     def test_a_lane_is_refused_inside_the_quiet_window_and_force_overrides(self):
         (self.root / 'testbed.conf').write_text('SCHEDULED=1400\n')
         self.clock('1330')

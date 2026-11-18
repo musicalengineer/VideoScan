@@ -100,7 +100,9 @@
 #
 # Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error (also a run
 #       whose shell was stopped before its OUTCOME: a logout of the host's GUI session, a restart) · 2 usage ·
-#       3 busy · 4 testbed worktree not usable · 5 nightly window or the quiet window before a scheduled run.
+#       3 busy · 4 testbed worktree not usable (or a run folder that already exists) · 5 nightly window or the
+#       quiet window before a scheduled run (also when the run reaches its lock after the window opened) ·
+#       6 (--unless-ran, the push watcher's) that commit was already run to a verdict.
 #       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
 #       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
 #       started still exits 3 / 4 / 5 as above. testbed --wait: the same three — 0 only when no
@@ -221,10 +223,20 @@ host_tool_snippet() {   # host_tool_snippet <args…>
     printf 'PY\n'
 }
 
+# vs_show: a shell function on the host that prints a file through `testbed_host.py show` — no
+# link followed, one-name regular files only, lines that could carry a name withheld (Codex
+# #315-3: status never prints unvalidated text). Its source rides inline, like the lock probe's.
+show_function_snippet() {
+    printf "vs_show() {\npython3 - show \"\$@\" <<'PY'\n"
+    cat "$SCRIPT_DIR/testbed_host.py"
+    printf 'PY\n}\n'
+}
+
 status_snippet() {
     # The probe runs into a file, not inside \$( ): /bin/bash 3.2 misparses a
     # heredoc (the helper's source) inside a command substitution.
     cat <<SH
+$(show_function_snippet)
 $(lock_probe_snippet " >'$H_ROOT/.probe'")
 probe="\$(cat '$H_ROOT/.probe' 2>/dev/null)"
 case "\$probe" in
@@ -234,17 +246,17 @@ esac
 last='$H_ROOT/latest'
 if [ -e "\$last/run.log" ]; then
   echo "last run: \$(readlink "\$last")"
-  grep -E '^(START|OUTCOME)' "\$last/run.log" | sed 's/^/  /'
-  [ -f "\$last/summary.txt" ] && sed 's/^/  /' "\$last/summary.txt"
+  vs_show "\$last/run.log" --match '^(START|OUTCOME)' | sed 's/^/  /'
+  [ -f "\$last/summary.txt" ] && vs_show "\$last/summary.txt" | sed 's/^/  /'
   if ! grep -q '^OUTCOME' "\$last/run.log"; then
     case "\$probe" in
-      BUSY*) echo "  now: \$(tail -1 "\$last/run.log")" ;;
+      BUSY*) echo "  now: \$(vs_show "\$last/run.log" --tail 1)" ;;
       *) echo "  ENDED WITHOUT AN OUTCOME: nothing of this run holds the lock — its shell was stopped (a logout of the GUI session, a restart, a crash); its logs are what is left" ;;
     esac
   fi
   # A live suite run: its runner's last step, and how many tests have finished in each lane.
   if [ -f "\$last/suite.log" ] && ! grep -q '^OUTCOME' "\$last/run.log"; then
-    echo "  step: \$(grep -E '^\[[0-9:]+\] ' "\$last/suite.log" | grep -v 'Core lane machine' | tail -1)"
+    echo "  step: \$(vs_show "\$last/suite.log" --match '^\[[0-9:]+\] ' | grep -v 'Core lane machine' | tail -1)"
     for lane in core app; do
       [ -f "\$last/suite-\$lane-test.log" ] && echo "  \$lane tests finished so far: \$(grep -E '(✔|✘|━) Test .* (passed|failed) after |^Test Case .* (passed|failed) \(' "\$last/suite-\$lane-test.log" | grep -cvE 'Test run with [0-9]+ test| recorded an issue ')"
     done
@@ -255,16 +267,16 @@ fi
 suite='$H_ROOT/latest-suite'
 if [ -e "\$suite/run.log" ] && [ "\$(readlink "\$suite")" != "\$(readlink "\$last")" ]; then
   echo "last suite run: \$(readlink "\$suite")"
-  grep -E '^(START|OUTCOME)' "\$suite/run.log" | sed 's/^/  /'
-  [ -f "\$suite/summary.txt" ] && sed 's/^/  /' "\$suite/summary.txt"
+  vs_show "\$suite/run.log" --match '^(START|OUTCOME)' | sed 's/^/  /'
+  [ -f "\$suite/summary.txt" ] && vs_show "\$suite/summary.txt" | sed 's/^/  /'
 fi
-[ -f '$H_ROOT/watch/verdict.txt' ] && echo "push watcher: \$(head -1 '$H_ROOT/watch/verdict.txt')"
-[ -f '$H_ROOT/watch/tick.txt' ] && echo "push watcher, last tick: \$(head -1 '$H_ROOT/watch/tick.txt')"
+[ -f '$H_ROOT/watch/verdict.txt' ] && echo "push watcher: \$(vs_show '$H_ROOT/watch/verdict.txt' --tail 1)"
+[ -f '$H_ROOT/watch/tick.txt' ] && echo "push watcher, last tick: \$(vs_show '$H_ROOT/watch/tick.txt' --tail 1)"
 testbed='$H_ROOT/latest-testbed'
 if [ -e "\$testbed/run.log" ] && [ "\$(readlink "\$testbed")" != "\$(readlink "\$last")" ]; then
   echo "last testbed run: \$(readlink "\$testbed")"
-  grep -E '^(START|OUTCOME)' "\$testbed/run.log" | sed 's/^/  /'
-  [ -f "\$testbed/testbed-block.txt" ] && sed 's/^/  /' "\$testbed/testbed-block.txt"
+  vs_show "\$testbed/run.log" --match '^(START|OUTCOME)' | sed 's/^/  /'
+  [ -f "\$testbed/testbed-block.txt" ] && vs_show "\$testbed/testbed-block.txt" | sed 's/^/  /'
 fi
 SH
 }
@@ -317,10 +329,17 @@ start_run() {
         case "$quiet" in
             QUIET*) [ "$FORCE" = 1 ] || die "it is ${hhmm} on $H_NAME — ${quiet#QUIET }; pass --force to run anyway" 5 ;;
         esac
+        # The host side re-checks when it takes the lock: a run that reaches it after the next
+        # window has opened is refused there (Codex #315-6). --force carries no deadline.
+        if [ "$FORCE" = 0 ]; then
+            START_BY="$(on_host "$(host_tool_snippet start-by "$H_ROOT" "$LANE" "$hhmm" "$(on_host 'date +%s')")" 2>/dev/null)"
+            [[ "$START_BY" =~ ^[0-9]+$ ]] || die "could not work out when the next window opens on $H_NAME" 1
+        fi
     else
         echo "+ (probe $H_ROOT/lock: refuse early with exit 3 if a live run holds it; the host takes it for real)"
         echo "+ (refuse with exit 5 between 01:30 and 06:00 host time unless --force)"
         echo "+ (refuse with exit 5 inside the quiet window before a scheduled run on the host unless --force: testbed_host.py window $H_ROOT $LANE <host HHMM>)"
+        echo "+ (unless --force: --start-by <the epoch the next window opens>; the host refuses a run that reaches its lock after it)"
         on_host "$(lock_probe_snippet)"
     fi
     # Test hook: hold here, after the advisory probe and before anything is
@@ -384,6 +403,8 @@ start_run() {
     [ -n "$CORPUS_LANE" ] && args+=(--corpus-lane "$CORPUS_LANE")
     [ -n "$CORPUS_DEADLINE" ] && args+=(--deadline "$CORPUS_DEADLINE")
     [ -n "$CORPUS_LIMIT" ] && args+=(--limit "$CORPUS_LIMIT")
+    [ -n "$START_BY" ] && args+=(--start-by "$START_BY")
+    [ "$UNLESS_RAN" = 1 ] && args+=(--unless-ran)
     local plist
     plist="$(plist_xml "$label" "${args[@]}")"
     # A per-run label: bootstrapping never boots out a live run's agent. Agents
@@ -458,7 +479,18 @@ try:
     os.fstat(9); pass_fds = (9,)
 except OSError:
     pass_fds = ()
-with open(log, "ab") as f:
+# The log is the run's own: never through a link, never a file with a second name (Codex #315-2).
+try:
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
+except OSError as error:
+    print(f"[m4_run] refused: the log {os.path.basename(log)} cannot be opened safely ({type(error).__name__})")
+    sys.exit(125)
+info = os.fstat(fd)
+if not (info.st_mode & 0o170000 == 0o100000) or info.st_nlink != 1:
+    os.close(fd)
+    print(f"[m4_run] refused: the log {os.path.basename(log)} has a second name or is not a plain file")
+    sys.exit(125)
+with os.fdopen(fd, "ab") as f:
     p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=f,
                          stderr=subprocess.STDOUT, start_new_session=True, pass_fds=pass_fds)
     try:
@@ -645,11 +677,21 @@ host_corpus() {   # host_corpus <sha> <stamp>
     rc=$?
     secs=$(( $(date +%s) - t0 ))
     echo "corpus $CORPUS_LANE exit=$rc secs=$secs"
-    if [ -f "$cout/corpus-summary.txt" ]; then
-        cat "$cout/corpus-summary.txt" >>"$OUT/summary.txt"
-    else
-        echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
-    fi
+    # The helper's summary is read back only when the helper finished its lane (0 GREEN · 1 RED ·
+    # 3 AMBER · 4 NORUN), and only through the show door: never a link, one name only, inside this
+    # run's folder, lines that could carry a name withheld (Codex #315-3). A refusal (2), a timeout
+    # or a crash says so in fixed words; its reason stays in corpus.log on the M4.
+    case "$rc" in
+        0|1|3|4)
+            if [ -f "$cout/corpus-summary.txt" ]; then
+                python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout" >>"$OUT/summary.txt"
+            else
+                echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
+            fi ;;
+        2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" >>"$OUT/summary.txt" ;;
+        124) ;;
+        *) echo "corpus $CORPUS_LANE: RED the harness stopped (rc=$rc; see corpus.log on the M4)" >>"$OUT/summary.txt" ;;
+    esac
     case "$rc" in
         0) ;;
         3) [ "$VERDICT" = GREEN ] && VERDICT=AMBER
@@ -687,7 +729,9 @@ host_testbed() {   # host_testbed <sha> <stamp>
     CORPUS_LANE=""; COUT=""
     block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))")"
     vrc=$?
-    printf '%s\n' "$block" >"$OUT/testbed-block.txt"
+    # The block is built from the lanes' facts files: it reaches a caller only through the show door.
+    printf '%s\n' "$block" >"$OUT/testbed-block.raw"
+    python3 "$SCRIPT_DIR/testbed_host.py" show "$OUT/testbed-block.raw" --under "$OUT" >"$OUT/testbed-block.txt"
     { cat "$OUT/testbed-block.txt"; echo "— the lanes' own lines —"; cat "$OUT/summary.txt"; } >"$OUT/summary.txt.new" \
         && mv "$OUT/summary.txt.new" "$OUT/summary.txt"
     AMBER_WHY="$words"; WHY="$words"
@@ -702,7 +746,15 @@ host_testbed() {   # host_testbed <sha> <stamp>
 host_main() {   # __host <lane> <sha> <stamp>
     local lane="$1" sha="$2" stamp="$3"
     OUT="$H_ROOT/out/$stamp-$lane"
-    mkdir -p "$OUT"
+    # The run folder is NEW and this run's (Codex #315-2): ~/m4run and ~/m4run/out are real folders,
+    # and the run's own folder did not exist a moment ago — so nothing in it (run.log, summary.txt,
+    # a link named like a log) predates this run. Said on stderr (the agent's log): there is no
+    # run.log to say it in.
+    [[ "$stamp" =~ ^[0-9A-Za-z_]+$ ]] || die "__host wants a stamp of letters, digits and underscores" 2
+    [ -L "$H_ROOT" ] || [ -L "$H_ROOT/out" ] && die "refused: $H_ROOT or its out folder is a symlink" 4
+    mkdir -p "$H_ROOT/out" || die "cannot prepare $H_ROOT/out" 4
+    [ -L "$H_ROOT/out" ] && die "refused: $H_ROOT/out is a symlink" 4
+    mkdir "$OUT" 2>/dev/null || die "refused: the run folder $OUT is already there — a run folder is made new, never reused" 4
     exec >"$OUT/run.log" 2>&1
     # VIDEOSCAN_M4RUN_TEST_PATH: a test hook (tests/test_m4_run_suite_lane.py puts stand-ins for xcodebuild and swift first).
     export PATH="${VIDEOSCAN_M4RUN_TEST_PATH:+$VIDEOSCAN_M4RUN_TEST_PATH:}/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -710,6 +762,21 @@ host_main() {   # __host <lane> <sha> <stamp>
     BUSY=""
     take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || { echo "OUTCOME REFUSED $BUSY"; exit 3; }
     trap drop_lock EXIT
+    # The window, again, now that the lock is held (Codex #315-6): the caller's check may be minutes old.
+    if [ -n "$START_BY" ] && [ "$(date +%s)" -ge "$START_BY" ]; then
+        echo "OUTCOME REFUSED window: the run reached its lock after the next window opened (start by $START_BY, now $(date +%s)); pass --force to run anyway"
+        exit 5
+    fi
+    # The watcher's runs: a commit a run under out/ already ran to a verdict is not run again — checked
+    # HERE, under the lock, so a run by hand that finished a moment ago counts (Codex #315-5).
+    if [ "$UNLESS_RAN" = 1 ]; then
+        local ran
+        ran="$(python3 "$SCRIPT_DIR/testbed_host.py" ran "$H_ROOT" "$sha" "$OUT")"
+        if [ -n "$ran" ]; then
+            echo "OUTCOME REFUSED already-run $ran — sha=${sha:0:9} was run to a verdict under $H_ROOT/out; not run again"
+            exit 6
+        fi
+    fi
     ln -sfn "$OUT" "$H_ROOT/latest"
     # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
     # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
@@ -755,7 +822,7 @@ host_main() {   # __host <lane> <sha> <stamp>
 # ── Arguments ─────────────────────────────────────────────────────────────
 LANE="${1:-}"; [ $# -gt 0 ] && shift
 HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""; JSON=0
-CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""
+CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""; START_BY=""; UNLESS_RAN=0
 POS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -770,6 +837,8 @@ while [ $# -gt 0 ]; do
         --force) FORCE=1; shift ;;
         --wait) WAIT=1; shift ;;
         --json) JSON=1; shift ;;
+        --start-by) START_BY="${2:-}"; shift 2 || usage ;;
+        --unless-ran) UNLESS_RAN=1; shift ;;
         -h|--help) usage ;;
         --*) die "unknown option $1" 2 ;;
         *) POS+=("$1"); shift ;;
@@ -779,6 +848,7 @@ done
 [ -n "$ONLY" ] && ! [[ "$ONLY" =~ ^[A-Za-z0-9_,]+$ ]] && die "--only wants UI test class names (A,B)" 2
 [ -n "$CORPUS_DEADLINE" ] && ! [[ "$CORPUS_DEADLINE" =~ ^[0-9]+$ ]] && die "--deadline wants seconds" 2
 [ -n "$CORPUS_LIMIT" ] && ! [[ "$CORPUS_LIMIT" =~ ^[0-9]+$ ]] && die "--limit wants a number of files" 2
+[ -n "$START_BY" ] && ! [[ "$START_BY" =~ ^[0-9]+$ ]] && die "--start-by wants epoch seconds" 2
 # The corpus lane: the M4 only (never the Ultra, Rick's machine), and its options belong to it alone.
 corpus_args_ok() {
     [ "$H_MACHINE" = m4 ] || die "the corpus harness runs only on the M4 (--host $HOST refused)" 2

@@ -240,8 +240,11 @@ class Seal:
         self.writable(path).mkdir(parents=True, exist_ok=True)
         return path
 
-    def write_text(self, path: Path, text: str) -> None:
-        with open(self.writable(path), "w", encoding="utf-8") as f:
+    def write_text(self, path: Path, text: str, append: bool = False) -> None:
+        """Every file the harness keeps under ~/corpus/{state,work,reports}: the path must be
+        writable (`writable`), and the file is opened through `guarded_open` — never through a
+        link, never a file with a second name (Codex #315-1)."""
+        with os.fdopen(guarded_open(self.writable(path), append), "w", encoding="utf-8") as f:
             f.write(text)
 
     def write_json(self, path: Path, value) -> None:
@@ -252,6 +255,11 @@ class Seal:
         under ~/m4run/out — the run folder m4_run.sh made — or that run's own corpus-<lane>
         folder, and nowhere else (Codex #313 F3)."""
         out = Path(out)
+        # ~/m4run and ~/m4run/out are themselves: an alias would carry every "run folder" with it (Codex #315-2).
+        m4run = self.out_root.parent
+        if (os.path.islink(str(m4run)) or os.path.islink(str(self.out_root))
+                or os.path.realpath(str(self.out_root)) != os.path.join(os.path.realpath(str(self.home)), "m4run", "out")):
+            raise Refused("refused: ~/m4run or ~/m4run/out is a symlink or resolves somewhere else")
         root, real = os.path.realpath(str(self.out_root)), os.path.realpath(str(out))
         run_folder = real == os.path.join(root, out.name)
         # Inside a testbed run each corpus lane has its own folder in the run folder: <run>/corpus-<lane>.
@@ -270,21 +278,31 @@ class Seal:
         (Codex #311 F2, #313 F2/F3)."""
         if "/" in name or name in ("", ".", ".."):
             raise Refused("refused: an output file is named by a bare file name")
-        target = self.out_folder(out) / name
-        if os.path.islink(str(target)):
-            raise Refused("refused: a lane's output file would be written through a link")
-        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else 0), 0o644)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            os.close(fd)
-            raise Refused("refused: a lane's output file has a second name or is not a plain file")
-        if not append:
-            os.ftruncate(fd, 0)
-        return fd
+        return guarded_open(self.out_folder(out) / name, append)
 
     def out_write(self, out: Path, name: str, text: str, append: bool = False) -> None:
         with os.fdopen(self.out_open(out, name, append), "w", encoding="utf-8") as f:
             f.write(text)
+
+
+def guarded_open(path: Path, append: bool = False) -> int:
+    """THE way the harness opens a file to write: never through a symlink (O_NOFOLLOW), only a
+    regular file, and only one with ONE name — a hard link would share its bytes with a file
+    somewhere else (a pristine copy). Only then is it emptied (or appended to). Returns the fd."""
+    target = str(path)
+    if os.path.islink(target):
+        raise Refused("refused: a file the harness writes would be written through a link")
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else 0), 0o644)
+    except OSError as error:
+        raise Refused(f"refused: a file the harness writes could not be opened safely ({type(error).__name__})")
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(fd)
+        raise Refused("refused: a file the harness writes has a second name or is not a plain file")
+    if not append:
+        os.ftruncate(fd, 0)
+    return fd
 
 
 # ── Words that may leave the M4 ───────────────────────────────────────────
@@ -953,7 +971,8 @@ class Lane:
                 if ev.get("ev") == "hello" and not hello:
                     hello = {k: ev.get(k) for k in ("homeSealed", "records", "archiveDesignation", "testHost")}
                 if ev.get("ev") == "verbs":                  # the verbs driver's closing counts
-                    self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "strayTrashFiles", "records")
+                    self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "strayTrashFiles", "receiptsInRun",
+                                                       "receiptsOutsideTheRun", "records")
                                     if isinstance(ev.get(k), int) and not isinstance(ev.get(k), bool)}
             settled, refusal = settle(events, self.engines, results)
             if refusal:
@@ -1295,6 +1314,9 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
         lines.append(f"  the run's own Trash folder (under its work folder; never the Finder Trash): "
                      f"{trash.get('trashFiles', 'no count of')} files, the engines reported moving {trash.get('trashedByEngines', 'no count')}; "
                      f"files found in the app's own test-host Trash outside the run: {trash.get('strayTrashFiles', 'no count')}")
+        lines.append(f"  deletion receipts the engines wrote: {trash.get('receiptsInRun', 'no count of')} inside the run, "
+                     f"{trash.get('receiptsOutsideTheRun', 'no count of')} outside it (the system temporary folder on the M4: "
+                     "the engines take no folder for a receipt; recorded, not moved)")
     lines.append("  by role:" if lane == "verbs" else "  by stratum:")
     for name, row in sorted(report["by_stratum"].items()):
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))
@@ -1566,8 +1588,7 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
     pending = folder / f"{BASELINE}.{os.getpid()}"
     seal.write_json(pending, record)
     os.replace(str(pending), str(seal.writable(folder / BASELINE)))          # whole or not at all
-    with open(seal.writable(folder / BASELINE_LOG), "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, sort_keys=True) + "\n")
+    seal.write_text(folder / BASELINE_LOG, json.dumps(record, sort_keys=True) + "\n", append=True)
     return [f"corpus {lane}: the baseline is now run {newest.name} at {newest.parent.name[:9]} ({report['files']} files) — "
             f"accepted {record['accepted_at']} by {record['accepted_by']}"
             + (f"; it replaces {word(was)}" if was else "; the lane had no accepted baseline before")]

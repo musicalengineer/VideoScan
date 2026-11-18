@@ -83,6 +83,16 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   expected length: testbed 120 min, all 90, suite 75, deep 60, corpus 45, ui 30.
 - *`<root>/testbed.conf`* on the host (optional; `KEY=value`, never executed): `KEEP=10`, `SCHEDULED=1400` (HHMM, comma
   separated), `QUIET_MINUTES=90`.
+- *What a caller reads back* (2026-11-18, Codex #315): a run folder is made NEW by the run (an existing one is refused,
+  exit 4; `~/m4run` and `~/m4run/out` must not be symlinks); every log is opened without following a link and only
+  with one name; a corpus lane's summary is copied into the run's summary only when the helper finished its lane, and
+  `status` prints run files only through `testbed_host.py show` (no link, one name, lines that could carry a file name,
+  a corpus path or a digest withheld). The caller passes `--start-by` (when the next window opens); the host refuses a
+  run that reaches its lock after it. The watcher's runs pass `--unless-ran`: the host refuses (exit 6, `OUTCOME
+  REFUSED already-run <verdict>`) a commit a run under `out/` already took to a verdict, checked under the lock.
+- *Deletion receipts in the `verbs` lane:* Move to Trash and Delete Duplicates write their receipt where the engine
+  chooses — under a test host the system temporary folder on the M4, outside the run — and take no folder for it. The
+  lane records each receipt's place as a word and a count in the summary; it moves none and changes no engine.
 - *`status --json`*: the lock (`idle` / `running` and the holder's words) and, for the last run, the last suite run
   and the last testbed run: lane, commit, START and OUTCOME times, verdict word, summary lines, a testbed run's lanes,
   and the push watcher's verdict line.
