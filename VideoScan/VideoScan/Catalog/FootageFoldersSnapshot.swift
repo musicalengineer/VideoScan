@@ -10,8 +10,10 @@
 //
 // Two values move:
 //   index    the join (families, folders, summaries) — rebuilt on the
-//            catalog cadence (`refreshDossierCountsNow`) and when Rick's
-//            event decisions change (`EventsDecisionStore.revision`), and
+//            catalog cadence (`refreshDossierCountsNow`), when Rick's
+//            event decisions change (`EventsDecisionStore.revision`), when
+//            the machine eras land (the grey folders), and when a selected
+//            grey row's hold is released (MachineEstimateFolders.swift), and
 //            ONLY while the option is on and the Catalog pane is on screen
 //            (`VideoScanModel.setFootageFoldersWanted`) — off by default,
 //            the linear view pays nothing;
@@ -53,8 +55,6 @@ final class FootageFoldersSnapshot: ObservableObject {
         var sort: FootageFolders.Sort
         var open: Set<UUID>
         var scope: FootageFolders.Scope?
-        /// Show ▸ Folders Only: no loose rows at the top level.
-        var foldersOnly = false
     }
 
     private(set) var request: Request?
@@ -62,24 +62,55 @@ final class FootageFoldersSnapshot: ObservableObject {
     private var decisionsWatch: AnyCancellable?
     private var erasWatch: AnyCancellable?
 
-    /// Show ▸ Folders by Machine Estimate: the folders are the era job's
-    /// guesses instead of Rick's own (MachineEstimateFolders.swift).
-    /// Remembered per user; the model re-joins when it flips. Read as on
-    /// only with the folder view's own setting: a stored "on" beside a
-    /// folder view that is off must not turn Rick's folders into estimates
-    /// the next time he opens them.
-    @Published private(set) var estimated = MachineEstimateFolders.isOn() && CatalogFootageFoldersSetting.isOn()
+    // MARK: The held grey row (MachineEstimateFolders.swift, THE HELD ROW)
 
-    /// false = nothing changed.
-    func setEstimated(_ on: Bool) -> Bool {
-        guard on != estimated else { return false }
-        estimated = on
-        MachineEstimateFolders.set(on)
-        return true
+    /// Selected rows that sit in a grey folder → that folder. The join files
+    /// their content there whatever the era job says now, until the
+    /// selection moves off them. Empty almost always.
+    private(set) var machineHolds: [UUID: MachineEraResolver.EstimateFolder] = [:]
+    /// The held rows the last join would have moved — a release of one of
+    /// these is worth a re-join; any other release is free.
+    private(set) var divergedHolds: Set<UUID> = []
+    /// A selection larger than this takes no new holds (Select All over the
+    /// catalog would cost a hash probe per row on every click). Worst-case
+    /// memory: this many small entries.
+    nonisolated static let machineHoldLimit = 2_000
+
+    /// The selection changed: hold the grey folder of every selected row
+    /// that sits in one (a row already held keeps its hold), release the
+    /// rest. Returns true when a released row would now move — the caller
+    /// re-joins. O(selection), main actor, event handlers only.
+    @discardableResult
+    func holdMachinePlacement(selected: Set<UUID>) -> Bool {
+        let next = Self.holds(after: selected, current: machineHolds, index: index)
+        let released = Set(machineHolds.keys).subtracting(next.keys)
+        machineHolds = next
+        guard !released.isEmpty else { return false }
+        let moves = !released.isDisjoint(with: divergedHolds)
+        divergedHolds.subtract(released)
+        return moves
     }
 
-    /// Follow the machine eras while the estimate view may show them: a
-    /// journal pass that lands new eras re-files the rows.
+    /// Pure: the holds after the selection moves. A selected row keeps its
+    /// hold; a newly selected row in a grey folder takes one (its first grey
+    /// folder, which is its only one: a content has one era); Rick's folders,
+    /// folder rows and loose files are never held.
+    nonisolated static func holds(after selected: Set<UUID>, current: [UUID: MachineEraResolver.EstimateFolder],
+                                  index: FootageFolders.Index) -> [UUID: MachineEraResolver.EstimateFolder] {
+        var next: [UUID: MachineEraResolver.EstimateFolder] = [:]
+        let taking = selected.count <= machineHoldLimit
+        for id in selected {
+            if let kept = current[id] { next[id] = kept; continue }
+            guard taking, let folders = index.foldersOf[id],
+                  let grey = folders.first(where: MachineEstimateFolders.isEstimateFolder),
+                  let folder = MachineEstimateFolders.estimateFolder(fromID: grey) else { continue }
+            next[id] = folder
+        }
+        return next
+    }
+
+    /// Follow the machine eras while the folder view is on: a journal pass
+    /// that lands new eras re-files the grey rows.
     func watchEras(_ store: MachineEraStore, onChange: @escaping @MainActor () -> Void) {
         erasWatch = store.$eras.dropFirst()
             .receive(on: DispatchQueue.main)
@@ -88,8 +119,11 @@ final class FootageFoldersSnapshot: ObservableObject {
 
     init() {}
 
-    /// From the model's pass: the join. Unchanged → nothing moves.
-    func publish(index new: FootageFolders.Index) {
+    /// From the model's pass: the join, and which held rows it kept from
+    /// moving. Unchanged → nothing moves.
+    func publish(index new: FootageFolders.Index, divergedHolds diverged: Set<UUID> = []) {
+        // Only rows still held count (a hold released while the join ran is gone).
+        divergedHolds = diverged.intersection(machineHolds.keys)
         guard new != index else { return }
         indexPublishCount += 1
         index = new
@@ -97,21 +131,18 @@ final class FootageFoldersSnapshot: ObservableObject {
     }
 
     /// From the table: what it shows now. The same request twice is free.
-    func compose(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?,
-                 foldersOnly: Bool = false) {
-        let req = Request(visible: visible, sort: sort, open: open, scope: scope, foldersOnly: foldersOnly)
+    func compose(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?) {
+        let req = Request(visible: visible, sort: sort, open: open, scope: scope)
         guard req != request else { return }
         request = req
         recompose()
     }
 
     /// Synchronous compose for tests and the reveal path (no task hop).
-    func composeNow(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?,
-                    foldersOnly: Bool = false) {
-        request = Request(visible: visible, sort: sort, open: open, scope: scope, foldersOnly: foldersOnly)
+    func composeNow(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?) {
+        request = Request(visible: visible, sort: sort, open: open, scope: scope)
         composeTask?.cancel()
-        publish(display: FootageFolders.compose(index: index, visible: visible, sort: sort, open: open, scope: scope,
-                                                foldersOnly: foldersOnly))
+        publish(display: FootageFolders.compose(index: index, visible: visible, sort: sort, open: open, scope: scope))
     }
 
     /// Follow Rick's event decisions: a confirm / dismiss / merge changes
@@ -129,6 +160,8 @@ final class FootageFoldersSnapshot: ObservableObject {
         erasWatch = nil
         composeTask?.cancel()
         request = nil
+        machineHolds = [:]
+        divergedHolds = []
         publish(display: .empty)
     }
 
@@ -138,8 +171,7 @@ final class FootageFoldersSnapshot: ObservableObject {
         let idx = index
         composeTask = Task { [weak self] in
             let d = await Task.detached(priority: .userInitiated) {
-                FootageFolders.compose(index: idx, visible: req.visible, sort: req.sort, open: req.open, scope: req.scope,
-                                       foldersOnly: req.foldersOnly)
+                FootageFolders.compose(index: idx, visible: req.visible, sort: req.sort, open: req.open, scope: req.scope)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.publish(display: d)
@@ -183,8 +215,7 @@ extension VideoScanModel {
             self?.scheduleFootageFoldersRefresh()
         }
         footageFolders.watchEras(machineEras) { [weak self] in
-            guard let self, self.footageFolders.estimated else { return }
-            self.scheduleFootageFoldersRefresh()
+            self?.scheduleFootageFoldersRefresh()
         }
         if !EventsDecisionStore.shared.hasLoaded {
             // The load bumps the store's revision → the watch above refreshes.
@@ -199,35 +230,22 @@ extension VideoScanModel {
         guard footageFoldersWanted else { return }
         footageFoldersTask?.cancel()
         let rows = footageFolderRows()
-        // Rick's folders, or (Show ▸ Folders by Machine Estimate) the era
-        // job's guesses — one join either way; the index says which.
-        let estimated = footageFolders.estimated
-        let eras = estimated ? machineEras.eras : [:]
-        let own = estimated ? [] : FootageFolders.Event.events(in: EventsDecisionStore.shared.snapshot())
+        // The one folder view (2026-11-17): Rick's folders AND the machine's
+        // grey era guesses for every content he has not filed, in ONE join;
+        // a selected grey row keeps its folder (the holds) until the
+        // selection moves. Copies of the era map and the holds are CoW.
+        let own = FootageFolders.Event.events(in: EventsDecisionStore.shared.snapshot())
+        let eras = machineEras.eras
+        let held = footageFolders.machineHolds
         footageFoldersTask = Task { [weak self] in
-            let index = await Task.detached(priority: .utility) {
-                let events = estimated ? MachineEstimateFolders.events(rows: rows, eras: eras) : own
-                var index = FootageFolders.index(rows: rows, events: events)
-                index.estimated = estimated
-                return index
+            let (index, diverged) = await Task.detached(priority: .utility) {
+                let events = FootageFolders.oneViewEvents(rows: rows, own: own, eras: eras, held: held)
+                return (FootageFolders.index(rows: rows, events: events),
+                        FootageFolders.divergedHolds(rows: rows, own: own, eras: eras, held: held))
             }.value
             guard !Task.isCancelled, let self else { return }
-            self.footageFolders.publish(index: index)
+            self.footageFolders.publish(index: index, divergedHolds: diverged)
         }
-    }
-
-    /// Show ▸ Folders by Machine Estimate flipped: remember it and re-join.
-    func setFootageFoldersEstimated(_ on: Bool) {
-        guard footageFolders.setEstimated(on) else { return }
-        log("Catalog folders: " + (on ? "showing the machine's era estimates as folders (a view; nothing is filed or dated)"
-                                      : "showing your own folders again"))
-        scheduleFootageFoldersRefresh()
-    }
-
-    /// The folder view itself flipped: off takes the estimate view with it,
-    /// so turning folders back on shows Rick's own.
-    func footageFolderViewChanged(on: Bool) {
-        if !on { setFootageFoldersEstimated(false) }
     }
 
     /// The ONE O(records) projection — Sendable rows for the join.

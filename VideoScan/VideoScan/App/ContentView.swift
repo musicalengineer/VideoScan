@@ -455,15 +455,9 @@ struct CatalogView: View {
     // originals — were removed 2026-11-17: those rows are always hidden in
     // this list. Their stored values are deleted at launch by
     // CatalogShowFilterStore.retireHiddenRecordReveals.)
-    /// Show ▸ Events & Copies as Folders (2026-10-16). Off by default;
-    /// remembered per user through CatalogFootageFoldersSetting (read
-    /// strictly — a poisoned value reads as off), written on every flip
-    /// below, the way the view filters are.
-    @State private var showFootageFolders: Bool = CatalogFootageFoldersSetting.isOn()
-    /// Show ▸ Folders Only (2026-10-19): folders and their members only.
-    /// Remembered under its own key (CatalogFoldersOnlySetting, strict
-    /// read); implies the folder view both ways (CatalogFoldersOnlyRule).
-    @State private var showFoldersOnly: Bool = CatalogFoldersOnlyRule.launchFoldersOnly()
+    // Show ▸ Folders (the one folder view, 2026-11-17) is
+    // `showFilters.foldersOn`: owned, persisted and logged by the store.
+    // This view keeps no copy (the three folder modes' @State went with them).
     /// Strict-catalog policy: scan targets that have never been scanned and
     /// aren't currently doing anything are hidden from the Scan Volumes
     /// table by default. The user opts in with a small toggle near the table.
@@ -481,7 +475,7 @@ struct CatalogView: View {
         Set(selectedVolumeIDs.compactMap { target(for: $0)?.searchPath })
     }
     /// The same selection in the Volumes pane's own words, for the Showing
-    /// line's volume pill and the Folders Only empty note. O(selected ×
+    /// line's volume pill. O(selected ×
     /// targets) over ~15 targets; the label read is the cached
     /// `displayLabel` the pane itself uses — never a records pass.
     private var selectedVolumeLabels: [String] {
@@ -729,8 +723,6 @@ struct CatalogView: View {
             showFilters: showFilters,
             focusLabel: filterByIDs.isEmpty ? nil : focusLabel,
             showDisconnectedMedia: $showDisconnectedMedia,
-            showFootageFolders: $showFootageFolders,
-            showFoldersOnly: $showFoldersOnly,
             selectedVolumeLabels: selectedVolumeLabels,
             onClearVolumeSelection: {
                 selectedVolumeIDs = CatalogShowingSummary.volumeSelection(after: .clearVolumes, selectedVolumeIDs)
@@ -777,13 +769,11 @@ struct CatalogView: View {
             searchText: debouncedSearchText,
             searchHitCount: $searchHitCount,
             filterTargetPaths: filterTargetPaths,
-            selectedVolumeLabels: selectedVolumeLabels,
             personFilter: personFilter.selected,
             showPairsOnly: showPairsOnly,
             viewFilters: showFilters.active,
             showDisconnectedMedia: showDisconnectedMedia,
-            showFootageFolders: showFootageFolders,
-            showFoldersOnly: showFoldersOnly,
+            showFootageFolders: showFilters.foldersOn,
             filterByIDs: filterByIDs,
             focusMatchScore: focusMatchScore,
             focusLabel: focusLabel,
@@ -918,16 +908,6 @@ struct CatalogView: View {
                     debouncedSearchText = request
                     model.archivistSearchRequest = nil
                 }
-            }
-            .onChange(of: showFootageFolders) {
-                CatalogFootageFoldersSetting.set(showFootageFolders)
-                // The folder view off turns the estimate view off with it.
-                model.footageFolderViewChanged(on: showFootageFolders)
-                showFoldersOnly = CatalogFoldersOnlyRule.foldersOnly(afterFolders: showFootageFolders, foldersOnly: showFoldersOnly)
-            }
-            .onChange(of: showFoldersOnly) {
-                CatalogFoldersOnlySetting.set(showFoldersOnly)
-                showFootageFolders = CatalogFoldersOnlyRule.folders(afterFoldersOnly: showFoldersOnly, folders: showFootageFolders)
             }
             .onChange(of: volumeShowFilter) { volumeShowFilterDidChange() }
             // A Master Archive designated AFTER first run flips the default
@@ -1438,10 +1418,10 @@ struct CatalogView: View {
         focusMatchScore = nil
         namedFocusLabel = nil
         model.focusedMediaIDs = []
-        // Both callers reveal one of Rick's OWN folders: the estimate view
-        // does not hold it, so it steps aside (Codex #290).
-        model.setFootageFoldersEstimated(false)
-        showFootageFolders = true
+        // The one folder view holds Rick's own folders beside the machine's
+        // grey ones, so the folder to reveal is always there (Codex #290's
+        // "estimate view steps aside" has nothing left to step aside).
+        showFilters.setFolders(true, by: .folderReveal)
     }
 
     /// Triage ▸ Events → "Show in Catalog" on a folder: clear what would

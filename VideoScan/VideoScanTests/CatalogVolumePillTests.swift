@@ -3,14 +3,17 @@
 // (Rick 2026-10-24: one volume was selected without his noticing, Folders
 // Only showed 3 of 17 folders, and the line read "All kinds · Including
 // archived · Folders only · Connected drives" — nothing named the filter).
+// Since 2026-11-17 Folders Only is gone: the same case runs under the one
+// folder view (Show ▸ Folders), whose pill is "Folders". Removed with the
+// mode: emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy, emptyNoteGetsTheLabels.
 //
 // Five-dimension coverage (CLAUDE.md checklist):
 //   Logic      — no selection → no pill; one → its pane label first; two+ →
 //                "Selected volumes" first, names in the tooltip; the
 //                VoiceOver/log sentence carries it; the clear action empties
 //                the selection and nothing else does; long names shorten in
-//                the middle; the Folders Only empty note names the filter.
-//   Regression — Rick's case on synthetic rows: Folders Only over rows
+//                the middle.
+//   Regression — Rick's case on synthetic rows: the folder view over rows
 //                narrowed to one volume yields exactly that volume's
 //                folders, AND the summary for that state leads with the
 //                volume pill.
@@ -34,10 +37,10 @@ private typealias Summary = CatalogShowingSummary
 
 private func texts(_ s: Summary.State) -> [String] { Summary.pills(for: s).map(\.text) }
 
-/// Rick's exact view: no Show filter, a Master Archive (Including archived),
-/// Folders Only, connected drives.
+/// Rick's view, as it is since 2026-11-17: no Show filter, a Master Archive
+/// (Including archived), the one folder view, connected drives.
 private func ricksState(_ labels: [String]) -> Summary.State {
-    Summary.State(footageFolders: true, foldersOnly: true,
+    Summary.State(footageFolders: true,
                   hasMasterArchive: true, selectedVolumeLabels: labels)
 }
 
@@ -52,14 +55,14 @@ struct CatalogVolumePillLogicTests {
 
     @Test func noSelectionHasNoVolumePill() {
         let s = ricksState([])
-        #expect(texts(s) == ["Including archived", "Folders only", "Connected drives"])
+        #expect(texts(s) == ["Everything", "Including archived", "Folders", "Connected drives"])
         #expect(!Summary.pills(for: s).contains { $0.emphasis == .volume || $0.action == .clearVolumes })
         #expect(Summary.volumePill(labels: []) == nil)
     }
 
     @Test func oneVolumeIsTheFirstPillByItsPaneLabel() throws {
         let pills = Summary.pills(for: ricksState(["CrucialX9"]))
-        #expect(pills.map(\.text) == ["CrucialX9", "Including archived", "Folders only", "Connected drives"])
+        #expect(pills.map(\.text) == ["CrucialX9", "Everything", "Including archived", "Folders", "Connected drives"])
         let first = try #require(pills.first)
         #expect(first.emphasis == .volume, "accent-coloured, stands out from the others")
         #expect(first.action == .clearVolumes, "clicking it clears the selection")
@@ -78,16 +81,16 @@ struct CatalogVolumePillLogicTests {
 
     @Test func theSpokenSentenceCarriesTheVolumePill() {
         #expect(Summary.sentence(for: ricksState(["CrucialX9"]))
-                == "Showing CrucialX9, Including archived, Folders only, Connected drives")
-        #expect(Summary.sentence(for: ricksState(["A", "B"])).hasPrefix("Showing Selected volumes, Including archived"))
-        #expect(Summary.sentence(for: ricksState([])) == "Showing Including archived, Folders only, Connected drives")
+                == "Showing CrucialX9, Everything, Including archived, Folders, Connected drives")
+        #expect(Summary.sentence(for: ricksState(["A", "B"])).hasPrefix("Showing Selected volumes, Everything, Including archived"))
+        #expect(Summary.sentence(for: ricksState([])) == "Showing Everything, Including archived, Folders, Connected drives")
     }
 
     @Test func theBoxTextLeavesTheVolumeToItsOwnPill() {
         // The volume pill is drawn as its own accent button in front of the
         // box; the box's joined text must not say it a second time.
         #expect(Summary.boxPills(for: ricksState(["CrucialX9"])).map(\.text)
-                == ["Including archived", "Folders only", "Connected drives"])
+                == ["Everything", "Including archived", "Folders", "Connected drives"])
     }
 
     @Test func clearingViaThePillEmptiesTheSelection() {
@@ -106,18 +109,6 @@ struct CatalogVolumePillLogicTests {
         #expect(short.hasPrefix("RicksBackups") && short.hasSuffix("Copy") && short.contains("\u{2026}"))
     }
 
-    @Test func emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy() {
-        let one = FootageFolderWords.foldersOnlyEmpty(volumeLabels: ["CrucialX9"], foldersExist: true)
-        #expect(one.hasPrefix("No folders on CrucialX9 match"))
-        #expect(one.contains("whole catalog"))
-        let many = FootageFolderWords.foldersOnlyEmpty(volumeLabels: ["A", "B"], foldersExist: true)
-        #expect(many.hasPrefix("No folders on the selected volumes match"))
-        #expect(FootageFolderWords.foldersOnlyEmpty(volumeLabels: [], foldersExist: true) == FootageFolderWords.foldersOnlyEmpty,
-                "no selection: today's words")
-        #expect(FootageFolderWords.foldersOnlyEmpty(volumeLabels: ["CrucialX9"], foldersExist: false) == FootageFolderWords.foldersOnlyEmpty,
-                "no folders at all: the selection is not why")
-    }
-
     @Test func aBlankLabelNeverDrawsAnEmptyPill() throws {
         let pill = try #require(Summary.volumePill(labels: ["  "]))
         #expect(pill.text == "Selected volume")
@@ -127,7 +118,7 @@ struct CatalogVolumePillLogicTests {
 
 // MARK: - Regression: Rick's case (synthetic rows, no family data)
 
-@Suite("Showing line — Folders Only narrowed to one volume (Rick 2026-10-24)")
+@Suite("Showing line — the folder view narrowed to one volume (Rick 2026-10-24)")
 struct CatalogVolumePillRegressionTests {
 
     private struct Fixture {
@@ -164,7 +155,7 @@ struct CatalogVolumePillRegressionTests {
         f.folder("FolderD", volume: "LaCie", files: 2)
         f.folder("FolderE", volume: "RicksBackups", files: 2)
         f.folder("FolderF", volume: "LaCie", files: 4)
-        // Loose files on both volumes — Folders Only drops them either way.
+        // Loose files on both volumes — not folders, so never counted below.
         for v in ["CrucialX9", "LaCie"] {
             let rec = VideoRecord(); rec.fullPath = "/Volumes/\(v)/loose.mov"; f.records.append(rec)
             f.rows.append(FootageFolders.Row(id: rec.id, digest: nil, sizeBytes: 1, durationSeconds: 1, volume: v,
@@ -181,17 +172,17 @@ struct CatalogVolumePillRegressionTests {
         let f = fixture()
         // The same predicate computeFiltered uses for the Volumes-pane filter.
         let visible = f.records.filter { pfRecordOnSelectedVolume($0, prefixes: ["/Volumes/CrucialX9"]) }.map(\.id)
-        let narrowed = FootageFolders.build(rows: f.rows, events: f.events, visible: visible, foldersOnly: true)
+        let narrowed = FootageFolders.build(rows: f.rows, events: f.events, visible: visible)
         #expect(folderIDs(narrowed, f) == f.onX9, "exactly the three folders on CrucialX9")
 
-        let whole = FootageFolders.build(rows: f.rows, events: f.events, visible: f.records.map(\.id), foldersOnly: true)
+        let whole = FootageFolders.build(rows: f.rows, events: f.events, visible: f.records.map(\.id))
         #expect(folderIDs(whole, f).count == 6, "no selection: every folder")
 
         // The defect: the line did not say why three of six showed.
         let first = try #require(Summary.pills(for: ricksState(["CrucialX9"])).first)
         #expect(first.text == "CrucialX9" && first.action == .clearVolumes)
         #expect(Summary.sentence(for: ricksState(["CrucialX9"])).hasPrefix("Showing CrucialX9, "))
-        #expect(Summary.pills(for: ricksState([])).first?.text == "Including archived", "cleared: back to the whole catalog, no pill")
+        #expect(Summary.pills(for: ricksState([])).first?.text == "Everything", "cleared: back to the whole catalog, no pill")
     }
 }
 
@@ -212,10 +203,5 @@ struct CatalogVolumePillSensorTests {
         #expect(content.contains("CatalogShowingSummary.volumeSelection(after: .clearVolumes, selectedVolumeIDs)"))
         #expect(content.contains("VolumeReachability.displayLabel(forPath:"), "the Volumes pane's own label")
         #expect(content.contains("@State var selectedVolumeIDs: Set<UUID> = []"), "session-only: launch shows the whole catalog")
-    }
-
-    @Test func emptyNoteGetsTheLabels() throws {
-        let helpers = try code("CatalogHelpers.swift")
-        #expect(helpers.contains("case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels"))
     }
 }

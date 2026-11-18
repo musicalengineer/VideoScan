@@ -146,18 +146,14 @@ struct CatalogShowingSummaryTests {
     @Test("LOGIC: a table emptied by Show filters alone says so (it used to be a blank pane)")
     func emptyTableFromFiltersAloneIsNotBlank() {
         typealias Note = CatalogEmptyNote
-        #expect(Note.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false,
-                          personChosen: false, filtersActive: true) == .filtered)
-        #expect(Note.pick(rowsEmpty: false, searching: false, foldersOnlyFindsNothing: false,
-                          personChosen: false, filtersActive: true) == Note.none, "rows are listed — no note")
-        #expect(Note.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false) == Note.none,
+        #expect(Note.pick(rowsEmpty: true, searching: false, personChosen: false, filtersActive: true) == .filtered)
+        #expect(Note.pick(rowsEmpty: false, searching: false, personChosen: false, filtersActive: true) == Note.none, "rows are listed — no note")
+        #expect(Note.pick(rowsEmpty: true, searching: false) == Note.none,
                 "nothing narrows the table: an empty catalog draws no filter note")
-        // The search's own "No matches" and Folders Only's line still win; the person line follows the filters.
-        #expect(Note.pick(rowsEmpty: true, searching: true, foldersOnlyFindsNothing: false, filtersActive: true) == .noMatches)
-        #expect(Note.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: true, filtersActive: true) == .noFolders)
-        #expect(Note.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false,
-                          personChosen: true, filtersActive: true) == .filtered)
-        #expect(Note.pick(rowsEmpty: true, searching: false, foldersOnlyFindsNothing: false, personChosen: true) == .noPerson)
+        // The search's own "No matches" still wins; the person line follows the filters.
+        #expect(Note.pick(rowsEmpty: true, searching: true, filtersActive: true) == .noMatches)
+        #expect(Note.pick(rowsEmpty: true, searching: false, personChosen: true, filtersActive: true) == .filtered)
+        #expect(Note.pick(rowsEmpty: true, searching: false, personChosen: true) == .noPerson)
         // The words name the filters, in the menu's words, and the action has one title.
         #expect(CatalogShowingSummary.filteredEmptyNote(filters: [.needsDate])
                     == "No files match the Show filter that is on: Needs a Date.")

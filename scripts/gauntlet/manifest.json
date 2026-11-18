@@ -12503,8 +12503,6 @@
       "tests": [
         "aBlankLabelNeverDrawsAnEmptyPill",
         "clearingViaThePillEmptiesTheSelection",
-        "emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy",
-        "emptyNoteGetsTheLabels",
         "longNamesShortenInTheMiddleAndShortOnesStay",
         "noSelectionHasNoVolumePill",
         "oneVolumeIsTheFirstPillByItsPaneLabel",
@@ -17663,36 +17661,6 @@
         "rowIDsBecomeRecordsAndTheInspectorIsAHandler",
         "rowSelectionMapsBothWays",
         "versionFollowsEveryLeadingFolder"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FoldersOnlyLogicTests",
-        "FoldersOnlyIsolationTests",
-        "FoldersOnlySensorTests"
-      ],
-      "tests": [
-        "aClosedFolderIsItsOneRow",
-        "aLooseDerivativeIsNotClaimedSelectedUnderFoldersOnly",
-        "composeReadsTheMirrorAndAddsNoRefreshRows",
-        "emptyNoteShowsOnlyAtTheTopWithTheFolderView",
-        "filtersAndSearchStillApplyInsideFolders",
-        "foldersOnlyImpliesTheFolderViewBothWays",
-        "launchNeedsTheFolderViewToo",
-        "looseRowsAndLooseFamiliesAreDropped",
-        "nothingMatchingIsAnEmptyFlaggedDisplay",
-        "offIsTodaysDisplayExactly",
-        "onlyAPlistBooleanReadsAsOn",
-        "pillSaysFoldersOnlyInsteadOfAsFolders",
-        "rememberedAndImpliedInTheParent",
-        "scopesAreShownAsTheyAre",
-        "snapshotCarriesTheFlagThroughTheRequest",
-        "theSearchsNoMatchesWinsOverNoFolders",
-        "toggleSitsInTheFoldersSectionAndClearAllLeavesIt"
       ]
     },
     {
@@ -26174,7 +26142,7 @@
         "noTwoRowsOfOneFootage",
         "picksAreAllShownEvenPastTheCap",
         "theCatalogCountIsHonest",
-        "theCatalogLinkSetsThePickerAndTurnsFoldersOnlyOff",
+        "theCatalogLinkSetsThePickerAndNothingElse",
         "theFillStopsAtTheCapBestFirst",
         "theLongListIsGoneAndTheLinkGoesThroughTheSeam",
         "thePeoplePageScaleBudgetsGoThroughTheOneTimingRule",
@@ -36287,18 +36255,14 @@
         "aSampledHashNeverMatchesAndAnUppercaseDigestDoes",
         "aVersionWithNoEraFollowsTheRecordingItWasMadeFrom",
         "anEstimateFolderIDCanNeverBeOneOfRicks",
-        "everyFolderEditRefusesWhileTheFoldersAreEstimates",
+        "everyFolderEditRefusesOnAGreyFolder",
         "folderIDsAreStableAndAYearIsNotItsDecade",
         "hundredThousandRowsUnderBudget",
         "noEraNoLine",
         "noErasMeansNoFolders",
         "theEstimateViewWritesNothing",
-        "theIndexSaysItIsEstimatedOnlyWhenTold",
-        "theJoinTakesRicksFoldersOrTheEstimatesNeverBoth",
         "theLineShowsWhenAnEraIsHandedInAndSaysNotConfirmed",
         "theNewestEraDecides",
-        "theSettingIsOffUnlessStoredOn",
-        "theShowMenuHasTheToggleAndThePill",
         "theStoreAnswersOnlyForAContentWithAnEra"
       ]
     },
@@ -36666,6 +36630,42 @@
         "theSeedRunsOnce",
         "theSoundPairIsMutuallyExclusive",
         "theWritersAreDistinct"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneFolderViewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneFolderViewLogicTests",
+        "OneFolderViewTruthTests",
+        "OneFolderViewScaleTests",
+        "OneFolderViewIsolationTests",
+        "OneFolderViewSensorTests"
+      ],
+      "tests": [
+        "aDragOutOfAGreyFolderIsAnAdd",
+        "aHoldForAGoneRowIsDropped",
+        "aReleaseThatChangesNothingIsFree",
+        "aSelectedGreyRowDoesNotJump",
+        "anyOldSettingOnTurnsFoldersOn",
+        "besideDisconnectedMedia",
+        "blueThenGreyThenLoose",
+        "estimateFolderIDsRoundTrip",
+        "filtersApplyInsideFolders",
+        "flipsAreLogged",
+        "hundredThousandRowsWithBlueAndGreyFolders",
+        "newKeyWins",
+        "noSecondFolderControl",
+        "oldSettingsOffOrPoisoned",
+        "oneWord",
+        "onlyGreyIsHeld",
+        "onlyTheStoreOwnsTheSwitch",
+        "poisonedSwitch",
+        "ricksFoldersOutrankTheMachines",
+        "theBoxSaysFolders",
+        "theGlyphsExist",
+        "theHoldIsReleasedWithTheHeldRows"
       ]
     },
     {
@@ -39364,10 +39364,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -39484,7 +39480,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3856,
+      "expected_floor": 3878,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -40217,7 +40213,12 @@
         "VideoScanTests/ObservationsReadDoorTests",
         "VideoScanTests/ObservationsStoreBehaviourTests",
         "VideoScanTests/SigLIPInputTests",
-        "VideoScanTests/CatalogShowFilterStoreTests"
+        "VideoScanTests/CatalogShowFilterStoreTests",
+        "VideoScanTests/OneFolderViewLogicTests",
+        "VideoScanTests/OneFolderViewTruthTests",
+        "VideoScanTests/OneFolderViewScaleTests",
+        "VideoScanTests/OneFolderViewIsolationTests",
+        "VideoScanTests/OneFolderViewSensorTests"
       ]
     },
     {
@@ -40623,7 +40624,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 761,
+      "expected_floor": 759,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
