@@ -50,8 +50,19 @@ class FakeDisk:
 
     def __call__(self, path):
         self.calls += 1
-        used = self.other + th._measure(self.home, os.lstat(self.home).st_dev)[0]
-        return max(self.total - used, 0), self.total
+        return max(self.total - self.other - measure(self.home), 0), self.total
+
+
+def measure(path):
+    """Bytes on disk under `path`, each file once: a second name frees nothing (Codex #322 F7)."""
+    seen, used = set(), 0
+    for folder, dirs, names in os.walk(path):
+        for name in dirs + names:
+            info = os.lstat(os.path.join(folder, name))
+            if (info.st_dev, info.st_ino) not in seen:
+                seen.add((info.st_dev, info.st_ino))
+                used += info.st_blocks * 512
+    return used
 
 
 def full(home):
@@ -138,8 +149,11 @@ class CleanCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.s = Scene(self.tmp.name)
         self.fds = []
+        self.saved_home = os.environ.get('HOME')
+        os.environ['HOME'] = str(self.s.home)                 # the authority: <root> must be $HOME/m4run (Codex F3)
 
     def tearDown(self):
+        os.environ['HOME'] = self.saved_home
         for fd in self.fds:
             os.close(fd)
         for parent, dirs, files in os.walk(self.tmp.name):
@@ -186,7 +200,11 @@ class TidyTests(CleanCase):
         self.assertEqual((run / 'suite.log').read_text(), 'one\ntwo\n')
         record = (run / 'tidy.txt').read_text()
         (run / 'later.xcresult').mkdir()                      # anything that appears after the tidy is not its business
-        self.assertIsNone(th.tidy(th.Confine(str(self.s.root)), str(run)))
+        conf = th.Confine(str(self.s.root))
+        try:
+            self.assertIsNone(th.tidy(conf, run.name))
+        finally:
+            conf.close()
         self.assertTrue((run / 'later.xcresult').exists())
         self.assertEqual((run / 'tidy.txt').read_text(), record)
 
@@ -212,8 +230,8 @@ class FloorTests(CleanCase):
     def test_below_the_floor_unfinished_runs_go_oldest_first_and_only_until_it_is_met(self):
         unfinished = [self.s.run(f'u{i}', outcome=None, size=1_000_000) for i in range(4)]   # the bundle dominates a run
         run = self.current()
-        used = th._measure(str(self.s.home), os.lstat(str(self.s.home)).st_dev)[0]
-        per_run = th._measure(str(unfinished[0] / 'suite-app.xcresult'), os.lstat(str(self.s.home)).st_dev)[0]
+        used = measure(self.s.home)
+        per_run = measure(unfinished[0] / 'suite-app.xcresult')
         # The floor is reached once exactly two runs have given up their scratch.
         total = 2 * (used - int(1.5 * per_run))
         disk = FakeDisk(self.s.home, total, 0)
@@ -229,7 +247,7 @@ class FloorTests(CleanCase):
         self.s.cache(0, 200_000)
         self.s.cache(1, 200_000)
         run = self.current()
-        used = th._measure(str(self.s.home), os.lstat(str(self.s.home)).st_dev)[0]
+        used = measure(self.s.home)
         # Out of reach: other data fills the disk; removing the caches would not reach 50%.
         disk = FakeDisk(self.s.home, 10 * used, 9 * used)
         line = self.clean(run, 'start', disk)
@@ -264,20 +282,27 @@ class ConfinementTests(CleanCase):
         self.s.run('o1', outcome='GREEN')
         self.s.work('20261117_1_1-proof')
         (self.s.corpus / 'work' / 'not-a-run').mkdir()
-        self.s.cache(0, 1000)
-        self.s.cache(1, 1000)
+        self.s.cache(0, 1_000_000)
+        self.s.cache(1, 1_000_000)
+        nightly = self.s.home / 'Library/Caches/videoscan-nightly-dd'
+        nightly.mkdir()
+        (nightly / 'blob').write_bytes(b'n' * 1000)
         run = self.current()
-        self.clean(run, 'start', full(self.s.home))       # far under the floor: everything allowed goes
+        # Under the floor by 0.75 MB: the run and work scratch cannot reach it, the first cache does.
+        self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 1_500_000, 0))
         self.assertEqual(self.s.protected_snapshot(), before)
         self.assertTrue((self.s.corpus / 'work' / 'not-a-run').exists(), 'only <stamp>-<lane> work folders are run scratch')
+        self.assertFalse(self.s.caches[1].exists(), 'the floor reached the caches')
+        self.assertTrue((nightly / 'blob').exists(), "the scheduled run's cache is not this cleanup's")
         conf = th.Confine(str(self.s.root))
-        for rel in PROTECTED:
-            self.assertFalse(conf.allows(str(self.s.corpus / rel)), rel)
-        for rel in ('media', 'live', 'reports', 'state', ''):
-            self.assertFalse(conf.allows(str(self.s.corpus / rel)), rel or 'corpus')
-        self.assertFalse(conf.allows('/Volumes'))
-        self.assertFalse(conf.allows(str(self.s.home)))
-        self.assertFalse(conf.allows(str(self.s.home / 'Library/Caches/videoscan-nightly-dd')), "the scheduled run's cache")
+        try:
+            self.assertEqual(conf.caches, ['videoscan-m4run-dd'], 'the only caches it may name are its own two')
+            for rel in PROTECTED + ('media', 'live', 'reports', 'state'):
+                self.assertTrue(conf.guarded(os.path.join(conf.home, 'corpus', rel)), rel)
+            self.assertTrue(conf.guarded('/Volumes/x'))
+            self.assertFalse(conf.guarded(os.path.join(conf.work, '20261117_1_1-proof')))
+        finally:
+            conf.close()
 
     def test_a_symlink_out_of_the_root_is_never_followed(self):
         outside = pathlib.Path(self.tmp.name, 'outside')
@@ -347,20 +372,179 @@ class ConfinementTests(CleanCase):
         self.assertTrue(work.exists(), 'a work folder that cannot go whole is left and said')
         self.assertIn('could not be removed 1', line)
 
-    def test_a_tree_with_a_mount_in_it_is_refused(self):
-        old = self.s.run('o1', outcome='GREEN')
-        real = th._measure
+def mount_image(tmp, at):
+    """A real 1 MB disk image attached at `at` (Codex F1: a mount must be found, not told). None when hdiutil cannot."""
+    image = os.path.join(tmp, 'm.dmg')
+    made = subprocess.run(['hdiutil', 'create', '-size', '2m', '-fs', 'HFS+', '-volname', 'cleanuptest', '-quiet', image],
+                          capture_output=True, text=True, timeout=120)
+    if made.returncode != 0:
+        return None
+    attached = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-quiet', '-mountpoint', str(at), image],
+                              capture_output=True, text=True, timeout=120)
+    return str(at) if attached.returncode == 0 else None
 
-        def foreign(path, dev):
-            size, _ = real(path, dev)
-            return size, path.endswith('.xcresult')
-        th._measure = foreign
+
+class CodexFindingsTests(CleanCase):
+    """Codex #322 (M4 post-run cleanup), each finding as its reproduction."""
+
+    def test_f1_a_mount_at_a_deletion_target_is_found_and_never_entered(self):
+        old = self.s.run('o1', outcome='GREEN')
+        target = old / 'suite-app.xcresult'
+        shutil.rmtree(target)
+        target.mkdir()
+        mounted = mount_image(self.tmp.name, target)
+        if not mounted:
+            self.skipTest('hdiutil could not attach a disk image here')
         try:
+            (target / 'keep.mov').write_bytes(b'on another volume')
             run = self.current()
-            self.clean(run, 'start', full(self.s.home))
+            line = self.clean(run, 'start', full(self.s.home))
+            self.assertEqual((target / 'keep.mov').read_bytes(), b'on another volume', 'a mounted volume was emptied')
+            self.assertIn('could not be removed', line)
         finally:
-            th._measure = real
-        self.assertTrue((old / 'suite-app.xcresult' / 'Data' / 'blob').exists())
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
+
+    def swap_on(self, hook_name, trigger, run, aside, into):
+        """Wrap os.<hook_name>: the first call whose first argument ends with `trigger` first renames
+        the run folder aside and puts a symlink to `into` in its place — an ancestor swapped between check and act."""
+        real = getattr(os, hook_name)
+        state = {'done': False}
+
+        def hooked(*args, **kwargs):
+            if not state['done'] and str(args[0]).endswith(trigger):
+                state['done'] = True
+                os.rename(run, aside)
+                os.symlink(into, run)
+            return real(*args, **kwargs)
+        setattr(os, hook_name, hooked)
+        self.addCleanup(setattr, os, hook_name, real)
+
+    def test_f2_an_ancestor_swapped_after_the_check_never_redirects_an_unlink(self):
+        media = self.s.corpus / 'media'
+        (media / 'victim.mov').write_bytes(b'family')
+        old = self.s.run('o1', outcome='GREEN')
+        (old / 'victim.mov').write_bytes(b'scratch')
+        run = self.current()
+        self.swap_on('unlink', 'victim.mov', old, self.s.out / 'aside', media)
+        raised = self.clean_catching(run)
+        self.assertTrue((media / 'victim.mov').exists(), 'a protected file was unlinked through a swapped ancestor')
+        self.assertEqual((media / 'victim.mov').read_bytes(), b'family')
+        self.assertIsNone(raised)
+
+    def test_f2_an_ancestor_swapped_mid_tail_never_writes_into_the_protected_folder(self):
+        media = self.s.corpus / 'media'
+        (media / 'suite.log').write_bytes(b'precious log')
+        old = self.s.run('o1', outcome='GREEN')
+        run = self.current()
+        self.swap_on('open', '.tidy-new', old, self.s.out / 'aside', media)
+        raised = self.clean_catching(run)
+        self.assertEqual((media / 'suite.log').read_bytes(), b'precious log', 'a log tail was renamed over a protected file')
+        self.assertEqual(sorted(q.name for q in media.iterdir()), ['clip.mov', 'sub', 'suite.log'])
+        self.assertIsNone(raised)
+
+    def clean_catching(self, run):
+        try:
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        except Exception as error:                            # noqa: BLE001 — the protected file is checked first
+            return error
+        return None
+
+    def test_f3_a_root_other_than_home_m4run_has_no_authority(self):
+        fake = self.s.corpus / 'media'
+        (fake / 'out' / 'now-suite').mkdir(parents=True)
+        (fake / 'out' / 'now-suite' / 'precious.mov').write_bytes(b'family')
+        (fake / 'out' / 'now-suite' / 'run.log').write_text('START x\nOUTCOME GREEN y\n')
+        self.fds.append(hold(fake, f'suite sha=abc since now out={fake}/out/now-suite'))
+        with self.assertRaises(th.Refused):
+            th.clean(str(fake), str(fake / 'out' / 'now-suite'), 'end', disk=full(self.s.home))
+        self.assertTrue((fake / 'out' / 'now-suite' / 'precious.mov').exists())
+        alias = pathlib.Path(self.tmp.name, 'alias')
+        os.symlink(self.s.home, alias)
+        with self.assertRaises(th.Refused):
+            th.Confine(str(alias / 'm4run'))
+        with self.assertRaises(th.Refused):
+            th.Confine(str(REPO))
+        (self.s.home / 'ultrarun' / 'out').mkdir(parents=True)
+        with self.assertRaises(th.Refused):
+            th.Confine(str(self.s.home / 'ultrarun'))                    # the M4 only: the Ultra is Rick's machine
+
+    def test_f6_a_cleanup_past_its_budget_stops_and_still_says_one_line(self):
+        real_clean, real_budget = th.clean, th.CLEAN_BUDGET
+        th.clean = lambda *args, **kwargs: time.sleep(30)
+        th.CLEAN_BUDGET = 1
+        try:
+            t0 = time.monotonic()
+            import io
+            import contextlib
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = th.main(['clean', str(self.s.root), '--current', str(self.s.out / 'x-suite'), '--phase', 'end'])
+            self.assertLess(time.monotonic() - t0, 10)
+            self.assertEqual((rc, out.getvalue()), (1, 'disk: cleanup stopped at its 1 s budget\n'))
+        finally:
+            th.clean, th.CLEAN_BUDGET = real_clean, real_budget
+
+    def test_f4_a_protected_name_that_resolves_into_work_protects_its_destination(self):
+        old = self.s.work('20261117_9_9-verbs')
+        (old / 'family.mov').write_bytes(b'family')
+        shutil.rmtree(self.s.corpus / 'media')
+        os.symlink(old, self.s.corpus / 'media')
+        run = self.current()
+        self.clean(run, 'start', full(self.s.home))
+        self.assertEqual((old / 'family.mov').read_bytes(), b'family')
+
+    def test_f5_a_current_run_that_is_a_symlink_is_refused_before_any_write(self):
+        state = self.s.corpus / 'state'
+        (state / 'disk-low.txt').write_text('precious')
+        (state / 'disk-sample.stop').write_text('')
+        (state / 'run.log').write_text('START x\n')
+        current = self.s.out / 'now-suite'
+        os.symlink(state, current)
+        self.fds.append(hold(self.s.root, f'suite sha=abc since now out={current}'))
+        with self.assertRaises(th.Refused):
+            th.sample(str(self.s.root), str(current), disk=full(self.s.home), interval=0.01)
+        with self.assertRaises(th.Refused):
+            self.clean(current, 'start', full(self.s.home))
+        self.assertEqual((state / 'disk-low.txt').read_text(), 'precious')
+        self.assertFalse((state / 'disk-start.txt').exists())
+
+    def command(self, *args):
+        env = dict(os.environ, HOME=str(self.s.home), VIDEOSCAN_TESTBED_FAKE_DISK=f'{100 * GB}:0')
+        return subprocess.run([sys.executable, str(SCRIPTS / 'testbed_host.py'), *args], capture_output=True, text=True,
+                              env=env, timeout=30)
+
+    def test_f6_a_fifo_never_stalls_the_cleanup_or_the_sampler(self):
+        old = self.s.run('o1', outcome='GREEN')
+        os.mkfifo(old / 'stall.log')
+        run = self.current()
+        try:
+            done = self.command('clean', str(self.s.root), '--current', str(run), '--phase', 'start')
+        except subprocess.TimeoutExpired:
+            self.fail('the cleanup blocked on a FIFO')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        os.mkfifo(run / 'disk-low.txt')
+        (run / 'disk-sample.stop').write_text('')
+        try:
+            done = self.command('sample', str(self.s.root), str(run))
+        except subprocess.TimeoutExpired:
+            self.fail('the sampler blocked on a FIFO')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_f7_bytes_with_a_second_name_are_not_counted_as_reclaimable(self):
+        media = self.s.corpus / 'media' / 'big.mov'
+        media.write_bytes(b'm' * 4_000_000)
+        for cache in self.s.caches:
+            (cache / 'Build').mkdir(parents=True)
+            os.link(media, cache / 'Build' / 'linked.mov')
+        run = self.current()
+        free, total = FakeDisk(self.s.home, 0, 0)(str(self.s.root))
+        used = -free
+        # Counted per name the caches hold 8 MB and would reach the floor; reclaimable, they hold nothing.
+        disk = FakeDisk(self.s.home, 2 * used + 6_000_000, 0)
+        line = self.clean(run, 'start', disk)
+        self.assertTrue(all(c.exists() for c in self.s.caches), 'caches dropped for bytes another name keeps')
+        self.assertIn('build caches kept', line)
+        self.assertEqual(media.read_bytes()[:1], b'm')
 
 
 class LockTests(CleanCase):
