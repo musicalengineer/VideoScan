@@ -490,7 +490,8 @@ class CodexFindingsTests(CleanCase):
         shutil.rmtree(self.s.corpus / 'media')
         os.symlink(old, self.s.corpus / 'media')
         run = self.current()
-        self.clean(run, 'start', full(self.s.home))
+        with self.assertRaises(th.Refused):                     # an aliased protected name stops the cleanup whole (#324 S1)
+            self.clean(run, 'start', full(self.s.home))
         self.assertEqual((old / 'family.mov').read_bytes(), b'family')
 
     def test_f5_a_current_run_that_is_a_symlink_is_refused_before_any_write(self):
@@ -557,7 +558,8 @@ class CodexReReviewTests(CleanCase):
         shutil.rmtree(self.s.corpus / 'media')
         os.symlink(build, self.s.corpus / 'media')
         run = self.current()
-        self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 2_000_000, 0))
+        with self.assertRaises(th.Refused):
+            self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 2_000_000, 0))
         self.assertTrue((build / 'family.mov').exists(), 'a cache that holds the corpus media was removed')
 
     def test_r2_a_current_run_that_is_a_protected_destination_is_never_written(self):
@@ -653,6 +655,117 @@ class RunnerShellWriteTests(TestbedScene):
             self.fail('a FIFO at the stop marker held the run before its OUTCOME')
         log = (self.root / 'out' / f'{stamp}-testbed' / 'run.log').read_text()
         self.assertRegex(log, r'(?m)^OUTCOME ')
+
+
+class CodexSecondReReviewTests(CleanCase):
+    """Codex #324 (second re-review), each finding as its reproduction."""
+
+    def test_s1_a_protected_name_aliased_by_another_spelling_stops_the_cleanup(self):
+        old = self.s.run('o1', outcome='GREEN')
+        (old / 'family.mov').write_bytes(b'family')
+        shutil.rmtree(self.s.corpus / 'media')
+        os.symlink(self.s.out / 'O1-SUITE', self.s.corpus / 'media')            # the same folder, other case
+        run = self.current()
+        try:
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        except th.Refused:
+            pass
+        self.assertEqual((old / 'family.mov').read_bytes(), b'family')
+
+    def test_s2_the_summary_replacement_checks_where_the_folder_is_before_each_act(self):
+        run = self.current()
+        (run / 'testbed-block.txt').unlink()                    # a suite run: the summary path
+        (run / 'summary.txt').write_text('suite: GREEN\n')
+        (run / 'summary.txt.disk-new').write_text('planted')
+        adopted = self.s.corpus / 'media' / 'adopted'
+        real = th._read_at
+        state = {'done': False}
+
+        def hooked(dir_fd, name, limit):
+            data = real(dir_fd, name, limit)
+            if not state['done'] and name == 'summary.txt':
+                state['done'] = True
+                os.rename(run, adopted)
+            return data
+        th._read_at = hooked
+        self.addCleanup(setattr, th, '_read_at', real)
+        try:
+            th.record(str(self.s.root), str(run), 'disk: free 50% after cleanup')
+        except th.Refused:
+            pass
+        self.assertEqual((adopted / 'summary.txt.disk-new').read_text(), 'planted')
+        self.assertEqual((adopted / 'summary.txt').read_text(), 'suite: GREEN\n')
+
+    def test_s3_a_tree_that_cannot_be_scanned_whole_is_not_touched(self):
+        old = self.s.run('o1', outcome='GREEN')
+        sealed = old / 'suite-app.xcresult' / 'sealed'
+        sealed.mkdir()
+        (sealed / 'inner').write_text('x')
+        os.chmod(sealed, 0)
+        try:
+            run = self.current()
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        finally:
+            if sealed.exists():
+                os.chmod(sealed, 0o755)
+        self.assertTrue((old / 'suite-app.xcresult' / 'Data' / 'blob').exists(), 'a tree it could not see whole was partly deleted')
+
+    def test_s4_an_end_cleanup_without_the_lock_writes_nothing(self):
+        run = self.s.run('x', outcome='GREEN')
+        (run / 'summary.txt').write_text('suite: GREEN\n')
+        (run / 'summary.txt.disk-new').write_text('planted')
+        env = dict(os.environ, HOME=str(self.s.home), VIDEOSCAN_TESTBED_FAKE_DISK=f'{100 * GB}:0')
+        done = subprocess.run([sys.executable, str(SCRIPTS / 'testbed_host.py'), 'clean', str(self.s.root), '--current', str(run),
+                               '--phase', 'end'], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual((run / 'summary.txt.disk-new').read_text(), 'planted')
+        self.assertEqual((run / 'summary.txt').read_text(), 'suite: GREEN\n')
+        self.assertTrue((run / 'suite-app.xcresult').exists())
+
+    def test_s5_nothing_runs_past_the_deadline_and_stop_has_its_own(self):
+        import contextlib
+        import io
+        calls = []
+        saved = th.clean, th.record, th.stop_marker, th.CLEAN_BUDGET
+        th.clean = lambda *args, **kwargs: time.sleep(30)
+        th.record = lambda *args, **kwargs: calls.append('record') or True
+        th.stop_marker = lambda *args, **kwargs: time.sleep(30)
+        th.CLEAN_BUDGET = 1
+        try:
+            out = io.StringIO()
+            t0 = time.monotonic()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                th.main(['clean', str(self.s.root), '--current', str(self.s.out / 'x-suite'), '--phase', 'end'])
+            self.assertEqual(calls, [], 'the summary was written after the deadline had passed')
+            th.STOP_BUDGET = 1
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                th.main(['stop', str(self.s.root), str(self.s.out / 'x-suite')])
+            self.assertLess(time.monotonic() - t0, 10)
+        finally:
+            th.clean, th.record, th.stop_marker, th.CLEAN_BUDGET = saved
+            signal_reset()
+
+    def test_s6_a_cache_with_a_mount_in_it_counts_nothing_toward_the_floor(self):
+        self.s.cache(1, 4_000_000)
+        inner = self.s.caches[1] / 'mounted'
+        inner.mkdir()
+        mounted = mount_image(self.tmp.name, inner)
+        if not mounted:
+            self.skipTest('hdiutil could not attach a disk image here')
+        try:
+            self.s.cache(0, 2_000_000)
+            run = self.current()
+            line = self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 6_000_000, 0))
+            self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache dropped on a forecast that counted a refused cache')
+            self.assertIn('build caches kept', line)
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
+
+
+def signal_reset():
+    import signal
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
 
 
 class LockTests(CleanCase):

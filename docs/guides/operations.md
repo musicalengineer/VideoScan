@@ -87,7 +87,9 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   (a cold build costs 10-25 min). M4 only (`<root>` must be `$HOME/m4run`). Every folder is opened from `$HOME` down
   with `O_NOFOLLOW` on the home volume, and every unlink, rename and write is relative to those descriptors (Codex
   #322: a name swapped for a link after a check cannot redirect anything; a mount is never entered); the only folders
-  it holds are `~/m4run/out`, `~/corpus/work` (skipped if any protected corpus name is a link) and those two caches.
+  it holds are `~/m4run/out`, `~/corpus/work` and those two caches. A `~/corpus` that is not a folder of its own, or
+  a protected corpus name that is a link, stops the whole cleanup (the disk line says `cleanup refused`); a tree that
+  cannot be scanned whole, or holds a protected folder by inode, is not touched.
   Never the corpus media, documents, reports, state or `live/`; no lock flag is ever cleared (a locked file stays and
   is counted); only one-name, unlocked files count as reclaimable; before every unlink, rename or write the folder is
   asked where it is now (`F_GETPATH`) and must still be inside those roots; a tree with a mount anywhere in it is

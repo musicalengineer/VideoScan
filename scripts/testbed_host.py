@@ -250,6 +250,7 @@ CORPUS_MARKER = "THIS_IS_TEST_DATA.txt"
 CORPUS_PROTECTED = ("media", "live", "state", "reports", "corpus-sha-v1.txt", "corpus-manifest-v1.json",
                     "catalog-source-backup.sqlite", CORPUS_MARKER, "share.credentials", "_experiment", ".trash")
 CLEAN_BUDGET = 900                # seconds: a cleanup past it stops and says so; the run still reaches OUTCOME
+STOP_BUDGET = 30                  # seconds for the stop marker (Codex #324 S5: every helper call is bounded)
 O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 O_READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK      # NONBLOCK: a FIFO never stalls an open (Codex #322 F6)
 LOCKED = 0x2 | 0x4 | 0x20000 | 0x40000                    # UF/SF IMMUTABLE and APPEND: such a file stays, whatever we do
@@ -349,24 +350,34 @@ class Confine:
             raise
         self.out = os.path.join(self.home, "m4run", "out")
         corpus = os.path.join(self.home, "corpus")
-        # A protected name that resolves anywhere but itself is a reason to touch no corpus folder (F4);
-        # the resolved destinations are refused as targets too.
-        self.protected = ["/Volumes"]
-        for name in CORPUS_PROTECTED:
-            literal = os.path.join(corpus, name)
-            self.protected.append(literal)
-            if os.path.lexists(literal):
-                self.protected.append(os.path.realpath(literal))
+        self.protected = ["/Volumes"] + [os.path.join(corpus, name) for name in CORPUS_PROTECTED]
+        # The corpus as it is, never as a name resolves (Codex #324 S1): ~/corpus that is not a folder of
+        # its own, or a protected name in it that is a link, stops the WHOLE cleanup - there is then no
+        # alias to compare spellings against. The protected folders are also known by (device, inode), and
+        # a scan that meets one refuses its tree. Only lstat through descriptors: nothing is resolved, so a
+        # stalled share mount under ~/corpus/live is never waited on (S5).
+        self.protected_ids = set()
         self.work_fd = None
-        try:
+        corpus_info = _lstat_at(self.home_fd, "corpus")
+        if corpus_info is not None:
+            if not stat.S_ISDIR(corpus_info.st_mode):
+                self.close()
+                raise Refused("~/corpus is not a folder of its own")
             corpus_fd = self._keep(_open_dir("corpus", self.home_fd, self.dev))
+            for name in CORPUS_PROTECTED:
+                info = _lstat_at(corpus_fd, name)
+                if info is None:
+                    continue
+                if stat.S_ISLNK(info.st_mode):
+                    self.close()
+                    raise Refused("a protected corpus name is a link")
+                self.protected_ids.add((info.st_dev, info.st_ino))
             marker = _lstat_at(corpus_fd, CORPUS_MARKER)
-            aliased = any(info is not None and stat.S_ISLNK(info.st_mode)
-                          for info in (_lstat_at(corpus_fd, name) for name in CORPUS_PROTECTED))
-            if marker is not None and stat.S_ISREG(marker.st_mode) and not aliased:
-                self.work_fd = self._keep(_open_dir("work", corpus_fd, self.dev))
-        except Refused:
-            self.work_fd = None
+            if marker is not None and stat.S_ISREG(marker.st_mode):
+                try:
+                    self.work_fd = self._keep(_open_dir("work", corpus_fd, self.dev))
+                except Refused:
+                    self.work_fd = None
         self.work = os.path.join(corpus, "work")
         self.caches_dir = os.path.join(self.home, "Library", "Caches")
         self.caches_fd, self.caches = None, []
@@ -380,6 +391,10 @@ class Confine:
                     self.caches.append(name)                 # a cache that holds a protected destination is not one (Codex #323 R2)
         except Refused:
             self.caches_fd, self.caches = None, []
+        # The roots as the kernel names them (F_GETPATH), so a later where-is-it answer compares like with like.
+        self.out_where = _where(self.out_fd) or self.out
+        self.work_where = _where(self.work_fd) if self.work_fd is not None else ""
+        self.caches_where = _where(self.caches_fd) if self.caches_fd is not None else ""
 
     def _keep(self, fd: int) -> int:
         self.fds.append(fd)
@@ -404,23 +419,22 @@ class Confine:
         out of the roots after it was opened is left alone). A move that lands between this answer and
         the very next call is the one race left; it needs a second process renaming folders under
         ~/m4run while this run holds the lock and no lane runs."""
-        try:
-            where = fcntl.fcntl(dir_fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
-        except (OSError, AttributeError, ValueError):
+        where = _where(dir_fd)
+        if not where:
             return False
-        roots = [self.out] + ([self.work] if self.work_fd is not None else [])
-        caches = [os.path.join(self.caches_dir, name) for name in self.caches]
+        roots = [self.out_where] + ([self.work_where] if self.work_where else [])
+        caches = [os.path.join(self.caches_where, name) for name in self.caches] if self.caches_where else []
         # The three parents themselves are allowed: in them this code acts only on names it chose
         # (<stamp>-<lane> run and work folders, its own two caches).
-        parents = roots + ([self.caches_dir] if self.caches else [])
+        parents = roots + ([self.caches_where] if self.caches and self.caches_where else [])
         ok = (where in parents or any(where.startswith(r + "/") for r in roots)
               or any(where == c or where.startswith(c + "/") for c in caches))
         return ok and not self.guarded(where)
 
     def remove(self, dir_fd: int, name: str):
         """Remove the entry `name` of an open folder, the whole of it or none of it: a tree with a
-        mount anywhere in it is refused before anything goes (Codex #323 R4). Returns
-        (reclaimed bytes, removed whole)."""
+        mount anywhere in it is refused before anything goes (Codex #323 R4), and so is one that could
+        not be seen whole or holds a protected folder (#324 S3). Returns (reclaimed bytes, removed whole)."""
         if self.scan_at(dir_fd, name)[1]:
             return 0, False
         return self.remove_at(dir_fd, name)
@@ -465,28 +479,45 @@ class Confine:
         return freed, whole
 
     def scan_at(self, dir_fd: int, name: str):
-        """(what removing the entry would give back, whether a mount is in it). Given back: regular
-        files with one name and no lock flag, in folders with no lock flag (F7, Codex #323 R5)."""
+        """(what removing the entry would give back, BLOCKED). Blocked: a mount, a folder that could not
+        be opened or listed (the scan is not whole: #324 S3), or a protected folder by (device, inode).
+        Given back: regular files with one name and no lock flag, in folders with no lock flag (F7, #323
+        R5); a blocked tree gives back nothing (#324 S6)."""
         info = _lstat_at(dir_fd, name)
         if info is None:
             return 0, False
+        if (info.st_dev, info.st_ino) in self.protected_ids:
+            return 0, True
         if not stat.S_ISDIR(info.st_mode):
             return _reclaim(info), False
         try:
             fd = os.open(name, O_DIR, dir_fd=dir_fd)
         except OSError:
-            return 0, False
+            return 0, True
         try:
             if os.fstat(fd).st_dev != self.dev:
                 return 0, True
-            total, mount = 0, False
-            for entry in os.listdir(fd):
-                got, found = self.scan_at(fd, entry)
+            try:
+                entries = os.listdir(fd)
+            except OSError:
+                return 0, True
+            total, blocked = 0, False
+            for entry in entries:
+                got, stop = self.scan_at(fd, entry)
                 total += got
-                mount = mount or found
-            return (0 if getattr(info, "st_flags", 0) & LOCKED else total), mount
+                if stop:
+                    return 0, True
+            return (0 if getattr(info, "st_flags", 0) & LOCKED else total), blocked
         finally:
             os.close(fd)
+
+
+def _where(fd: int) -> str:
+    """Where an open folder is now, as the kernel names it (F_GETPATH), or ""."""
+    try:
+        return fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
+    except (OSError, AttributeError, ValueError, TypeError):
+        return ""
 
 
 def _reclaim(info) -> int:
@@ -755,7 +786,7 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
     removed += old_bytes + work_bytes
     caches_note = ""
     if free < target and conf.caches:
-        sizes = [conf.scan_at(conf.caches_fd, name)[0] for name in conf.caches]
+        sizes = [0 if blocked else size for size, blocked in (conf.scan_at(conf.caches_fd, name) for name in conf.caches)]
         if free + sum(sizes) >= target:
             cache_bytes = 0
             for name in conf.caches:
@@ -791,11 +822,15 @@ def _replace_at(conf: Confine, dir_fd: int, name: str, data: bytes) -> bool:
     """Replace a file of the run folder whole: a new file renamed over the name, both through the
     folder descriptor, only while the folder is inside the run root."""
     temporary = name + ".disk-new"
+    if not conf.inside(dir_fd):                              # before each act (Codex #324 S2)
+        return False
     try:
         os.unlink(temporary, dir_fd=dir_fd)
     except OSError:
         pass
     if not conf.inside(dir_fd) or not _write_at(dir_fd, temporary, data.decode("utf-8", "replace"), create=True):
+        return False
+    if not conf.inside(dir_fd):
         return False
     try:
         os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
@@ -821,6 +856,8 @@ def record(root: str, current: str, line: str) -> bool:
         return False
     conf.fds.append(cur_fd)
     try:
+        if not _holds_lock(root, os.path.abspath(current)):
+            return False                                     # only the run holding the lock writes its summary (#324 S4)
         if not _plain_or_absent(cur_fd, "summary.txt") or not _plain_or_absent(cur_fd, "testbed-block.txt"):
             return False
         summary = _read_at(cur_fd, "summary.txt", MAX_SHOW * 16)
@@ -1095,31 +1132,43 @@ def main(argv: list) -> int:
             raise OverBudget()
         signal.signal(signal.SIGALRM, stop)
         signal.alarm(CLEAN_BUDGET)                          # a stuck syscall is interrupted, the line still comes (F6)
+        late = False
         try:
             line, rc = clean(argv[1], argv[3], argv[5]), 0
         except OverBudget:
-            line, rc = "disk: cleanup stopped at its %d s budget" % CLEAN_BUDGET, 1
+            line, rc, late = "disk: cleanup stopped at its %d s budget" % CLEAN_BUDGET, 1, True
         except Refused as error:
             line, rc = "disk: cleanup refused (%s)" % error, 2
         except Exception as error:                         # noqa: BLE001 — the run must reach its OUTCOME
             line, rc = "disk: cleanup failed (%s)" % type(error).__name__, 1
         if argv[5] == "end":
-            try:
-                recorded = record(argv[1], argv[3], line)
-            except Exception:                              # noqa: BLE001 — said on stderr instead (the run log)
-                recorded = False
+            recorded = False
+            if not late:                                    # past the deadline nothing more touches the disk (#324 S5)
+                try:
+                    recorded = record(argv[1], argv[3], line)   # still under the same alarm
+                except BaseException:                       # noqa: BLE001 — OverBudget included; said on stderr instead
+                    recorded = False
             if not recorded:
                 print(line + " (not written into the summary)", file=sys.stderr)
         signal.alarm(0)
         print(line)
         return rc
     if len(argv) == 3 and argv[0] == "stop":
+        def late(signum, frame):
+            raise OverBudget()
+        signal.signal(signal.SIGALRM, late)
+        signal.alarm(STOP_BUDGET)
         try:
             stop_marker(argv[1], argv[2])
             return 0
         except Refused as error:
             print("stop refused: %s" % error, file=sys.stderr)
             return 2
+        except OverBudget:
+            print("stop: past its %d s budget" % STOP_BUDGET, file=sys.stderr)
+            return 1
+        finally:
+            signal.alarm(0)
     if len(argv) == 3 and argv[0] == "sample":
         try:
             sample(argv[1], argv[2])
