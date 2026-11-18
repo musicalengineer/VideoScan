@@ -34478,6 +34478,7 @@
         "test_nothing_a_caller_reads_back_names_a_corpus_file_or_path",
         "test_one_instrumented_build_and_every_test_host_profiled_inside_the_work_folder",
         "test_only_our_sources_are_read",
+        "test_profiles_are_moved_out_of_the_cache_fresh_ones_only_never_a_link",
         "test_run_coverage_ships_the_module_and_is_m4_only",
         "test_scale_100k_lines_inside_a_budget",
         "test_suite_corpus_union_and_both_differences",
