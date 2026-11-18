@@ -180,7 +180,7 @@ final class CorpusRun: @unchecked Sendable {
     static func hostname() -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         guard gethostname(&buffer, buffer.count - 1) == 0 else { return "" }
-        let name = buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        let name = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return (name.split(separator: ".").first.map(String.init) ?? "").lowercased()
     }
 

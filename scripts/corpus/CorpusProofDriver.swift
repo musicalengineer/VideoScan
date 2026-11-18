@@ -24,6 +24,37 @@ import VideoScanCore
 
 final class CorpusProofDriver: XCTestCase {
 
+    /// The CATEGORY of a "could not check" sentence, never the sentence: the first fixed
+    /// phrase of the engine's that it contains, and which file it is about. A sentence
+    /// with none of them is `other`.
+    nonisolated static func category(ofCouldNotCheck reason: String) -> [String] {
+        let phrases: [(String, String)] = [
+            ("was not read to the end", "not_read_to_the_end"),
+            ("could not be decoded to the end", "not_decoded_to_the_end"),
+            ("did not decode cleanly", "did_not_decode_cleanly"),
+            ("did not all arrive", "frames_did_not_all_arrive"),
+            ("ran out of time", "ran_out_of_time"),
+            ("packet by packet", "packets_unreadable"),
+            ("could not be lined up", "streams_not_lined_up"),
+            ("not on disk", "not_on_disk"),
+            ("symbolic link", "symbolic_link"),
+            ("the same file", "same_file"),
+            ("changed while", "file_changed"),
+            ("partly measured", "sound_partly_measured"),
+            ("not measured", "sound_not_measured"),
+            ("could not be measured", "sound_not_measured"),
+            ("gave no", "gave_nothing"),
+            ("channels, which", "channel_count"),
+            ("could not be read", "unreadable"),
+            ("not found", "tool_unavailable"),
+            ("stopped", "stopped")
+        ]
+        let category = phrases.first { reason.contains($0.0) }?.1 ?? "other"
+        let holder = reason.hasPrefix("the balanced copy") ? "balanced_copy"
+            : reason.hasPrefix("the original") ? "original" : nil
+        return [category] + (holder.map { [$0] } ?? [])
+    }
+
     @MainActor
     func testProofLane() async throws {
         let run: CorpusRun
@@ -80,8 +111,8 @@ final class CorpusProofDriver: XCTestCase {
                         return ("same_content", Array(Set(differs.map { $0.kind.rawValue })).sorted())
                     case .notProven(let why):
                         return ("not_proven", [CorpusWords.caseName(why)])
-                    case .couldNotCheck:
-                        return ("could_not_check", [])
+                    case .couldNotCheck(let reason):
+                        return ("could_not_check", CorpusProofDriver.category(ofCouldNotCheck: reason))
                     }
                 }
                 try? FileManager.default.removeItem(at: balanced)

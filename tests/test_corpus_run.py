@@ -261,6 +261,9 @@ class SealTests(unittest.TestCase):
             for leak in ('.message', 'localizedDescription', 'lastPathComponent', '.filename', '.headline', '.sentence',
                          'persistedNote', 'print(', 'NSLog', '"path"'):
                 self.assertNotIn(leak, code, f'{name}: {leak}')
+        proof = (SCRIPTS / 'corpus' / 'CorpusProofDriver.swift').read_text()
+        self.assertIn('CorpusProofDriver.category(ofCouldNotCheck: reason)', proof, 'a category, never the sentence')
+        self.assertNotIn('[reason]', proof)
         for lane, (klass, _, _, sources) in cr.LANES.items():
             self.assertIn(f'final class {klass}: XCTestCase', (SCRIPTS / 'corpus' / sources[-1]).read_text())
 
@@ -654,7 +657,7 @@ class ProofLaneTests(unittest.TestCase):
         self.assertEqual((calls[2]['pending'], calls[2]['lane']), (1, 'proof'))
         summary = (scene.out / 'corpus-summary.txt').read_text()
         self.assertIn(f'{sha_of(0)[:12]} dv/dvvideo/pcm_s16le: balance=balanced proof=same_content '
-                      'balance[leftOnly] proof[metadata,track]', summary)
+                      'balance[leftOnly] proof[metadata,track] (wall balance=0s proof=0s)', summary)
         self.assertNotIn(sha_of(0), summary, 'the prefix only')
         for name in SECRET_NAMES:
             self.assertNotIn(name, summary)

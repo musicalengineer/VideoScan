@@ -832,8 +832,9 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None) -> List[str
         for sha, record in sorted(per_file.items()):
             kinds = " ".join(f"{e}[{','.join(record.get(e + '_kinds') or [])}]" for e in engines if record.get(e + "_kinds"))
             peak = f" peak={record['peak_dbfs']:.1f}dBFS" if isinstance(record.get("peak_dbfs"), (int, float)) else ""
+            took = " ".join(f"{e}={record[e + '_s']:.0f}s" for e in engines if isinstance(record.get(e + "_s"), (int, float)))
             lines.append(f"    {sha_prefix(sha)} {record.get('container', 'unknown')}/{record.get('vcodec', 'unknown')}/"
-                         f"{record.get('acodec', 'unknown')}: {record['outcome']} {kinds}{peak}".rstrip())
+                         f"{record.get('acodec', 'unknown')}: {record['outcome']} {kinds}{peak}".rstrip() + (f" (wall {took})" if took else ""))
     return lines
 
 
