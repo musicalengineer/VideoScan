@@ -139,8 +139,8 @@
    "nloc": 62
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::ArchiveAngelJob.run": {
-   "ccn": 26,
-   "nloc": 148
+   "ccn": 24,
+   "nloc": 140
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.reconcileArchiveAngelBufferAtLaunch": {
    "ccn": 18,
