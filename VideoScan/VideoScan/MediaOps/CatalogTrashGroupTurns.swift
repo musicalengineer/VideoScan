@@ -313,14 +313,16 @@ final class CatalogTrashGroupTurns {
     // The advice names only routes that exist (GH #481). Show Removed ▸
     // Restore left the Show menu on 2026-11-17 and a removed row has no
     // catalog route back "until one is asked for" (DECISIONS), so the words
-    // state the row's marker and the one route there is for the FILE:
-    // Finder's Put Back (`clearRemoval` says the same).
+    // say where the FILE is (the move is the evidence) and the one route
+    // there is for it: Finder's Put Back (`clearRemoval` says the same).
+    // They never state the row's marker: another action's marker may have
+    // been kept during the move (Codex #481 F1).
 
     /// What the person can do after a pair moved while the catalog changed
     /// about it.
-    nonisolated static let lateLinkedAdvice = "a linked file keeps its pair protection; check it. The moved files are in the Trash and their rows are marked In the Trash; Finder's Put Back returns a file to where it was"
+    nonisolated static let lateLinkedAdvice = "a linked file keeps its pair protection; check it. The moved files are in the Trash; Finder's Put Back returns a file to where it was"
     /// What the person can do about a SPLIT pair.
-    nonisolated static let splitAdvice = "the moved half is in the Trash and its row is marked In the Trash; Finder's Put Back returns it to where it was, or move the rest again."
+    nonisolated static let splitAdvice = "Finder's Put Back returns the moved half to where it was, or move the rest again."
 
     /// Where a half that did not move is, as evidenced now: its current
     /// catalog path, "(relinked from …)" when that changed, and a plain

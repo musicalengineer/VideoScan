@@ -373,6 +373,8 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         #expect(a.removal?.state == .removedFromCatalog, "the concurrent marker is not overwritten")
         #expect(result.groupNeedsAttention, "\(result.groupNotes)")
         #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+        // Codex #481 F1: the advice never claims a marker the row does not carry.
+        #expect(!result.groupNotes.contains { $0.contains("marked In the Trash") }, "\(result.groupNotes)")
     }
 
     @Test("codex #202 F3: a member set aside or superseded during the move is reported", arguments: ["setAside", "superseded"])
