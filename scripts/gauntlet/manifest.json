@@ -34568,6 +34568,62 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_testbed_cleanup.py",
+      "stage": "regression",
+      "suites": [
+        "test_testbed_cleanup.py"
+      ],
+      "tests": [
+        "test_a_cleanup_that_fails_never_costs_the_run_its_outcome",
+        "test_a_hard_link_to_a_protected_file_loses_only_its_own_name",
+        "test_a_link_in_the_way_of_a_root_refuses_that_root",
+        "test_a_run_holding_the_lock_is_never_pruned_and_nobody_else_may_clean",
+        "test_a_summarized_run_keeps_its_summary_verdict_and_log_tails_and_nothing_else",
+        "test_a_symlink_out_of_the_root_is_never_followed",
+        "test_a_testbed_run_leaves_its_summary_and_a_disk_line_and_no_scratch",
+        "test_a_thousand_finished_runs_are_tidied_inside_the_budget",
+        "test_below_the_floor_unfinished_runs_go_oldest_first_and_only_until_it_is_met",
+        "test_f1_a_mount_at_a_deletion_target_is_found_and_never_entered",
+        "test_f2_an_ancestor_swapped_after_the_check_never_redirects_an_unlink",
+        "test_f2_an_ancestor_swapped_mid_tail_never_writes_into_the_protected_folder",
+        "test_f3_a_root_other_than_home_m4run_has_no_authority",
+        "test_f4_a_protected_name_that_resolves_into_work_protects_its_destination",
+        "test_f5_a_current_run_that_is_a_symlink_is_refused_before_any_write",
+        "test_f6_a_cleanup_past_its_budget_stops_and_still_says_one_line",
+        "test_f6_a_fifo_never_stalls_the_cleanup_or_the_sampler",
+        "test_f7_bytes_with_a_second_name_are_not_counted_as_reclaimable",
+        "test_finished_runs_and_dead_corpus_work_go_whatever_the_disk_says",
+        "test_no_lock_held_is_refused",
+        "test_r1_a_planted_fifo_at_the_stop_marker_never_holds_the_outcome",
+        "test_r1_a_planted_link_at_the_stop_marker_is_never_written_through",
+        "test_r2_a_cache_holding_a_protected_destination_is_never_removed",
+        "test_r2_a_current_run_that_is_a_protected_destination_is_never_written",
+        "test_r3_a_folder_moved_out_of_the_roots_before_its_entries_go_is_left_alone",
+        "test_r4_a_tree_with_a_mount_inside_is_refused_whole",
+        "test_r5_locked_bytes_are_not_counted_as_reclaimable",
+        "test_s1_a_protected_name_aliased_by_another_spelling_stops_the_cleanup",
+        "test_s2_the_summary_replacement_checks_where_the_folder_is_before_each_act",
+        "test_s3_a_tree_that_cannot_be_scanned_whole_is_not_touched",
+        "test_s4_an_end_cleanup_without_the_lock_writes_nothing",
+        "test_s5_nothing_runs_past_the_deadline_and_stop_has_its_own",
+        "test_s6_a_cache_with_a_mount_in_it_counts_nothing_toward_the_floor",
+        "test_t1_a_protected_name_it_cannot_inspect_refuses_rather_than_skips",
+        "test_t2_a_protected_folder_met_in_the_corpus_lane_descent_is_not_entered",
+        "test_t3_a_root_that_moves_while_it_is_opened_is_refused",
+        "test_t4_the_current_run_is_known_by_identity_not_by_spelling",
+        "test_t5_the_tail_write_checks_where_the_folder_is_first",
+        "test_the_build_caches_go_only_when_that_reaches_the_floor",
+        "test_the_command_line_refuses_with_exit_2_and_one_line",
+        "test_the_corpus_protected_set_is_never_touched",
+        "test_the_end_line_says_how_low_the_run_took_the_disk",
+        "test_the_lock_flag_is_never_cleared_on_a_file_with_a_second_name",
+        "test_the_sampler_keeps_the_lowest_free_figure_and_stops_on_its_stop_file",
+        "test_tidy_is_once_and_a_short_log_is_left_as_it_is"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_m4_run_testbed_lane.py",
       "stage": "regression",
       "suites": [
@@ -40884,6 +40940,10 @@
         },
         {
           "name": "tests/test_testbed_host.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_testbed_cleanup.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

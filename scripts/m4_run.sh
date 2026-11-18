@@ -91,6 +91,17 @@
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
+# The 50% floor (DECISIONS 2026-11-18, scripts/testbed_host.py clean): a run may use as much disk as it
+# needs; once its verdict and summary are written, its scratch goes (xcresult bundles, overlays, patched
+# test-run files; each log cut to its last 200 lines under its own name) and the summary gets one line:
+#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB
+# At the start, and again at the end, under the lock: finished runs not yet tidied are tidied and
+# ~/corpus/work/<stamp>-<lane> folders removed; below 50% free, unfinished runs go oldest first, then the
+# build caches below — only when that reaches the floor. M4 only. Deletion works through folder descriptors
+# opened from $HOME down without following links (~/m4run/out, ~/corpus/work, those two caches; never a mount, never
+# the corpus protected set), and refuses unless the lock names this run. A stuck cleanup stops at 900 s; the run
+# reaches its OUTCOME whatever the cleanup does.
+#
 # Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
 # suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
 # 6.9 GB together on the M4, 2026-11-17), xcresult bundles per run (~50–300 MB
@@ -781,6 +792,13 @@ host_main() {   # __host <lane> <sha> <stamp>
     # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
     # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
     [ -f "$SCRIPT_DIR/testbed_host.py" ] && python3 "$SCRIPT_DIR/testbed_host.py" prune "$H_ROOT" --current "$OUT" 2>&1
+    # The 50% floor (DECISIONS 2026-11-18), still under the lock: finished runs give up their scratch,
+    # dead corpus work goes, and below 50% free older unfinished runs (then the build caches, only when
+    # that reaches the floor). One "disk:" line here; the run itself may use as much disk as it needs.
+    # The M4 only: the ruling is about the testbed machine, and the helper refuses any root but $HOME/m4run.
+    local clean_tool=""
+    [ "$H_MACHINE" = m4 ] && [ -f "$SCRIPT_DIR/testbed_host.py" ] && clean_tool="$SCRIPT_DIR/testbed_host.py"
+    [ -n "$clean_tool" ] && python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase start 2>&1
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
     [ "$lane" = testbed ] && ln -sfn "$OUT" "$H_ROOT/latest-testbed"
     # The testbed worktree is mutated HERE, under the lock, never by the
@@ -805,6 +823,13 @@ host_main() {   # __host <lane> <sha> <stamp>
     VERDICT=GREEN
     AMBER_WHY=""
     WHY=""
+    # The lowest free figure while the lanes work (testbed_host.py sample). Started with fd 9 closed:
+    # it must never hold the testbed lock. It stops itself on the stop file or when this shell is gone.
+    local sampler=""
+    if [ -n "$clean_tool" ]; then
+        python3 "$clean_tool" sample "$H_ROOT" "$OUT" 9>&- &
+        sampler=$!
+    fi
     case "$lane" in
         deep)  host_deep ;;
         ui)    host_ui ;;
@@ -813,6 +838,21 @@ host_main() {   # __host <lane> <sha> <stamp>
         corpus) host_corpus "$sha" "$stamp" ;;
         testbed) host_testbed "$sha" "$stamp" ;;
     esac
+    # Summarized: the verdict is decided and summary.txt written. Now this run gives up its scratch,
+    # and the summary (and a testbed run block) gets the disk line: free now, the lowest, the start.
+    if [ -n "$sampler" ]; then
+        # It looks for the stop file every second; give it 30 and go on without it (never an unbounded wait, F6).
+        # The marker is made by the helper through the run folder descriptor: never through a planted link (Codex #323 R1).
+        python3 "$clean_tool" stop "$H_ROOT" "$OUT" 2>/dev/null
+        local waited=0
+        while kill -0 "$sampler" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 1; waited=$((waited + 1)); done
+        kill -0 "$sampler" 2>/dev/null || wait "$sampler" 2>/dev/null
+    fi
+    if [ -n "$clean_tool" ]; then
+        # The helper writes the disk line into summary.txt (a testbed run: also the end of its block) through
+        # the run folder descriptor (Codex #323 R1); if it cannot, it says the line on stderr, into run.log.
+        python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end >/dev/null
+    fi
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
     sed 's/^/  /' "$OUT/summary.txt"

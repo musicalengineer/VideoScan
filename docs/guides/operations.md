@@ -77,6 +77,25 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   each lane, every RED run and whatever `<root>/latest*` names stay, with their `bin/<stamp>` and agent plist. The
   corpus lanes do the same for `~/corpus/reports/<lane>/` (the newest 20, every RED run and the baseline stay) and
   remove work folders older than six hours that a dead run left.
+- *The 50% floor* (DECISIONS 2026-11-18; `testbed_host.py clean`). A run uses as much disk as it needs. Once its
+  verdict and summary are written, its scratch goes: xcresult bundles, overlays, patched test-run files; each log is
+  cut to its last 200 lines under its own name; `run.log`, `summary.txt`, the verdict files and `*.tests.tsv` stay
+  (a few KB; `tidy.txt` records it). The summary gets one line, e.g. `disk: free 52% after cleanup (lowest 38% during
+  the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB`. At the start and the end, under the
+  lock: finished runs not yet tidied are tidied and `~/corpus/work/<stamp>-<lane>` folders removed; below 50% free,
+  unfinished runs go oldest first, then `videoscan-<root>-dd-suite` and `-dd` — only when that reaches the floor
+  (a cold build costs 10-25 min). M4 only (`<root>` must be `$HOME/m4run`). Every folder is opened from `$HOME` down
+  with `O_NOFOLLOW` on the home volume, and every unlink, rename and write is relative to those descriptors (Codex
+  #322: a name swapped for a link after a check cannot redirect anything; a mount is never entered); the only folders
+  it holds are `~/m4run/out`, `~/corpus/work` and those two caches. A `~/corpus` that is not a folder of its own, or
+  a protected corpus name that is a link, stops the whole cleanup (the disk line says `cleanup refused`); a tree that
+  cannot be scanned whole, or holds a protected folder by inode, is not touched.
+  Never the corpus media, documents, reports, state or `live/`; no lock flag is ever cleared (a locked file stays and
+  is counted); only one-name, unlocked files count as reclaimable; before every unlink, rename or write the folder is
+  asked where it is now (`F_GETPATH`) and must still be inside those roots; a tree with a mount anywhere in it is
+  refused whole; the stop marker and the disk line are written by the helper through the run folder descriptor;
+  refused unless the lock names the run; 900 s budget. The scheduled jobs' caches (`videoscan-nightly-*`, `-analysis-dd`,
+  `~/Library/Caches/VideoScan/*`) and `~/Library/Logs/VideoScan` are theirs, not this cleanup's.
 - *The quiet window.* The M4's 14:00 scheduled run does **not** wait for the lock: `scripts/nightly_gauntlet.sh` runs
   its suite anyway and skips only its gauntlet, so a lane still running at 14:00 means two suites at once. A lane
   therefore refuses to START (exit 5; `--force` overrides) when the scheduled run begins within the lane's own
