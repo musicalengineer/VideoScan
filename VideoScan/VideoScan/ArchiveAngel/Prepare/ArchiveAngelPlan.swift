@@ -208,6 +208,12 @@ struct ArchiveAngelPlan: Codable, Sendable, Identifiable, Equatable {
         /// a 90-day rest (codex 2026-09-20 #7). Optional: older batches
         /// decode with nil = never noted.
         var uncheckedNotedAt: Date?
+        /// REPORT ONLY (2026-11-18): what the balanced-copy proof said about
+        /// the balanced copy this batch made for the row. Decides NOTHING —
+        /// readiness, Promote, the holds, the gates and every Trash offer
+        /// never read it (ArchiveAngelBalancedProofSensorTests). Written only
+        /// by ArchiveAngelJob's last stage. Additive: older plans decode nil.
+        var balancedCopyProof: BalancedProofNote?
 
         var companionsMade: [StepOutcome] {
             steps.filter { $0.state == .done && ($0.outputRelPath != nil || $0.existingPath != nil) }

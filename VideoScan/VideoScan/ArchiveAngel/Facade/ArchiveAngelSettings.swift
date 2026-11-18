@@ -13,6 +13,9 @@
 //                              ON; missing key → ON)
 //   archiveAngel.footageAutoEnabled  Keep footage groups current (§5;
 //                              default ON; missing key → ON)
+//   archiveAngel.proveBalancedCopies  Prove balanced copies after Prepare
+//                              (2026-11-18, REPORT ONLY; default ON; missing
+//                              key → ON). Off skips the proof's full reads.
 //
 // Before S2 the first lived in ArchiveAngelSweepSettings, the other two were
 // @AppStorage literals in the start sheet, and the catalog read the third
@@ -26,18 +29,22 @@ struct ArchiveAngelSettings: Equatable {
     static let makeLosslessKey = "archiveAngel.makeLossless"
     static let checksEnabledKey = "archiveAngel.checksEnabled"
     static let footageAutoEnabledKey = "archiveAngel.footageAutoEnabled"
+    static let proveBalancedCopiesKey = "archiveAngel.proveBalancedCopies"
     /// When "Keep footage groups current" last STARTED a run (QA 2026-09-25
     /// MAJOR-4: a run that changes no answer leaves every record's
     /// `scannedAt` where it was, so the records cannot say "current").
     static let footageLastAutoRunAtKey = "archiveAngel.footageLastAutoRunAt"
 
     static let defaultBatchCount = 25
+    /// The start sheet's words for `proveBalancedCopies`.
+    static let proveBalancedCopiesTitle = "Prove balanced copies after Prepare"
 
     var sweepEnabled: Bool = true
     var batchCount: Int = ArchiveAngelSettings.defaultBatchCount
     var makeLossless: Bool = false
     var checksEnabled: Bool = true
     var footageAutoEnabled: Bool = true
+    var proveBalancedCopies: Bool = true
 
     /// Missing keys → the defaults above; a value of the wrong type → the
     /// default too (the @AppStorage behaviour the sheet had).
@@ -48,6 +55,7 @@ struct ArchiveAngelSettings: Equatable {
         if let stored = defaults.object(forKey: makeLosslessKey) as? Bool { s.makeLossless = stored }
         if let stored = defaults.object(forKey: checksEnabledKey) as? Bool { s.checksEnabled = stored }
         if let stored = defaults.object(forKey: footageAutoEnabledKey) as? Bool { s.footageAutoEnabled = stored }
+        if let stored = defaults.object(forKey: proveBalancedCopiesKey) as? Bool { s.proveBalancedCopies = stored }
         return s
     }
 
@@ -59,6 +67,7 @@ struct ArchiveAngelSettings: Equatable {
     static func saveMakeLossless(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: makeLosslessKey) }
     static func saveChecksEnabled(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: checksEnabledKey) }
     static func saveFootageAutoEnabled(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: footageAutoEnabledKey) }
+    static func saveProveBalancedCopies(_ on: Bool, to defaults: UserDefaults) { defaults.set(on, forKey: proveBalancedCopiesKey) }
     /// The footage stamp is read and written only where it is safe: never
     /// in a test host still pointed at `.standard` (the app's own domain —
     /// Rick's real preferences). There it is nil / not written; the façade

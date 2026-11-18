@@ -6093,6 +6093,52 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelBalancedProofMediaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveAngelBalancedProofMediaTests"
+      ],
+      "tests": [
+        "realProofAfterRealPrepare"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelBalancedProofSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelBalancedProofSensorTests"
+      ],
+      "tests": [
+        "decidersNeverNameTheProof",
+        "onlyAllowedFilesNameTheProof",
+        "theNoteIsDeclaredAndWrittenNeverRead"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelBalancedProofTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelBalancedProofTests"
+      ],
+      "tests": [
+        "choosingRowsScales",
+        "codable",
+        "eachOutcomeIsOneLine",
+        "proofFailureNeverFailsTheRow",
+        "pureDecisionsIgnoreTheNote",
+        "realPrepareDecidesTheSameWhateverTheProofSays",
+        "settingDefaultsOn",
+        "skipMidProofStopsItAndReclaims",
+        "startAndOutcomeLinesAreTheEngines",
+        "stopMidProofKeepsTheRow",
+        "whichRowsAreProven",
+        "wordsAreBoundedAndOneLine"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelBenchmarkTests.swift",
@@ -39575,7 +39621,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3878,
+      "expected_floor": 3893,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -39700,6 +39746,8 @@
         "VideoScanTests/AppSupportSideStoreInventoryTests",
         "VideoScanTests/ArcFaceAlignmentTests",
         "VideoScanTests/ArchiveAngelAudioOutcomeTests",
+        "VideoScanTests/ArchiveAngelBalancedProofSensorTests",
+        "VideoScanTests/ArchiveAngelBalancedProofTests",
         "VideoScanTests/ArchiveAngelCatalogBadgeTests",
         "VideoScanTests/ArchiveAngelChecksLoopTests",
         "VideoScanTests/ArchiveAngelChecksPureTests",
@@ -40719,7 +40767,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 804,
+      "expected_floor": 805,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40802,6 +40850,7 @@
         "VideoScanTests/AnalyzeMenuNoReformatGateSensorTests",
         "VideoScanTests/AnalyzeRoutingTests",
         "VideoScanTests/AnalyzeUndecodableIsolationTests",
+        "VideoScanTests/ArchiveAngelBalancedProofMediaTests",
         "VideoScanTests/ArchiveStageArchivedLabelTests",
         "VideoScanTests/ArchiveTimelineCompletenessSensorTests",
         "VideoScanTests/AudioFingerprintAttemptTests",

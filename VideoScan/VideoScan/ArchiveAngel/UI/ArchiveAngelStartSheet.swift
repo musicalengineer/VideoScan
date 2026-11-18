@@ -30,6 +30,9 @@ struct ArchiveAngelStartSheet: View {
     private var makeLossless: Binding<Bool> {
         Binding(get: { angel.makeLossless }, set: { angel.setMakeLossless($0) })
     }
+    private var proveBalancedCopies: Binding<Bool> {
+        Binding(get: { angel.proveBalancedCopies }, set: { angel.setProveBalancedCopies($0) })
+    }
 
     /// Buffer hygiene (curation Phase 2, Rick 2026-09-19): what is already
     /// waiting in the buffer. When it is not empty a banner above Start
@@ -73,6 +76,15 @@ struct ArchiveAngelStartSheet: View {
             Toggle("Also make a lossless (FFV1) copy for at-risk formats", isOn: makeLossless)
                 .font(.system(size: 12))
             Text("AMPAS / Library of Congress practice keeps a lossless preservation copy of formats at risk (DV, MPEG-2, Sorenson…). It is slow and large, so it is off by default — a later pass can add them to files already in the archive.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 20)
+
+            Toggle(ArchiveAngelSettings.proveBalancedCopiesTitle, isOn: proveBalancedCopies)
+                .font(.system(size: 12))
+                .accessibilityIdentifier("archiveAngel.proveBalancedCopies")
+            Text("After every file is prepared, each balanced copy is read in full beside its original and the result is written to the log and shown in Review (about 2 minutes for a 6 GB tape). Report only: it changes nothing that is promoted or offered for the Trash.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
