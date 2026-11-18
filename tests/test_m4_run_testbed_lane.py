@@ -334,7 +334,7 @@ class ArgumentAndDryRunTests(unittest.TestCase):
         self.assertIn(f'm4_run: testbed on M4 at {sha[:9]}', out)
         self.assertIn(f'push -q ricksm4.local:dev/VideoScan {sha}:refs/m4run/{sha}', out)
         for name in ('nightly_local_tests.sh', 'corpus_run.py', 'catalog_db.py', 'CorpusDriverSupport.swift',
-                     'CorpusCheckDriver.swift', 'CorpusProofDriver.swift', 'testbed_lock.py', 'm4_run_summary.py'):
+                     'CorpusCheckDriver.swift', 'CorpusProofDriver.swift', 'CorpusVerbsDriver.swift', 'testbed_lock.py', 'm4_run_summary.py'):
             self.assertRegex(out, rf'install .*{name} -> ricksm4\.local:.*/m4run/bin/\d{{8}}_\d{{6}}_\d+/{name}')
         self.assertIn('under one hold of the lock: the suite lane, then corpus_run.py host check, then corpus_run.py host proof', out)
         for arg in ('__host', 'testbed', sha, '--host', 'm4'):
@@ -364,7 +364,7 @@ class CallerOnTheM4Tests(TestbedScene):
         for name in RUNNER_FILES:
             shutil.copy(SCRIPTS / name, self.repo / 'scripts' / name)
         for name in ('corpus_run.py', 'catalog_db.py', 'corpus/CorpusDriverSupport.swift', 'corpus/CorpusCheckDriver.swift',
-                     'corpus/CorpusProofDriver.swift'):
+                     'corpus/CorpusProofDriver.swift', 'corpus/CorpusVerbsDriver.swift'):
             (self.repo / 'scripts' / name).write_text(STUB_CORPUS)
         shutil.rmtree(self.work)                            # the host adds its testbed worktree from the repo
         self.sha = self.make_repo(self.repo)

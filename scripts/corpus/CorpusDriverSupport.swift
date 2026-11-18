@@ -19,9 +19,13 @@
 //   - the hostname is the M4's;
 //   - the real home (account database, not $HOME) holds corpus/THIS_IS_TEST_DATA.txt;
 //   - config, catalog, work and progress resolve under ~/corpus/{state,work};
-//   - $HOME and Application Support resolve under ~/corpus/state (the
-//     patched .xctestrun took effect), and this IS a test host;
-//   - the catalog names no Master Archive and every path is under ~/corpus/media.
+//   - $HOME and Application Support resolve under ~/corpus/state, or (the
+//     verbs lane) under the run's own work folder — the patched .xctestrun
+//     took effect — and this IS a test host;
+//   - the catalog names no Master Archive and every record is under
+//     ~/corpus/media, or (the verbs lane) under the run's folder of clones;
+//   - the verbs lane's clone, archive and scratch folders are under the run's
+//     work folder, which is under ~/corpus/work.
 //
 // Deadline: a file that overruns `deadlineSeconds` is recorded as `timeout`
 // and the test host EXITS ITSELF (`_exit`); the Python side relaunches for
@@ -44,6 +48,9 @@ struct CorpusConfig: Decodable, Sendable {
     struct Item: Decodable, Sendable {
         let sha: String
         let path: String
+        /// The verbs lane: what is done to this file, and its extra byte-identical clones.
+        let role: String?
+        let copies: [String]?
     }
     let lane: String
     let corpusRoot: String
@@ -54,6 +61,10 @@ struct CorpusConfig: Decodable, Sendable {
     let progress: String
     let deadlineSeconds: Double
     let pending: [Item]
+    /// The verbs lane only, each under `work`: the clones, the scratch archive root, scratch space.
+    let volRoot: String?
+    let archiveRoot: String?
+    let scratch: String?
 }
 
 struct CorpusRefusal: Error {
@@ -205,14 +216,21 @@ final class CorpusRun: @unchecked Sendable {
             return CorpusRefusal(word: word)
         }
         guard config.lane == lane else { throw refuse("config_is_for_another_lane") }
+        // `inRun`: inside THIS run's work folder (itself proven under ~/corpus/work above).
+        func inRun(_ path: String) -> Bool { isUnder(path, config.work) && resolved(path) != resolved(work) }
         guard resolved(config.corpusRoot) == resolved(corpus), isUnder(config.stateRoot, state),
-              isUnder(config.catalog, state), resolved(config.mediaRoot) == resolved(media) else {
+              isUnder(config.catalog, state) || inRun(config.catalog), resolved(config.mediaRoot) == resolved(media) else {
             throw refuse("state_root_outside_the_corpus")
         }
         guard TestEnvironment.isTestHost else { throw refuse("not_a_test_host") }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.path ?? "/"
-        guard isUnder(NSHomeDirectory(), state), isUnder(appSupport, state) else { throw refuse("home_not_sealed") }
-        guard config.pending.allSatisfy({ isUnder($0.path, media) }) else { throw refuse("a_file_is_outside_the_corpus") }
+        guard isUnder(NSHomeDirectory(), state) || inRun(NSHomeDirectory()),
+              isUnder(appSupport, state) || inRun(appSupport) else { throw refuse("home_not_sealed") }
+        guard config.pending.allSatisfy({ isUnder($0.path, media) || inRun($0.path) }),
+              config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy(inRun) }) else { throw refuse("a_file_is_outside_the_corpus") }
+        guard [config.volRoot, config.archiveRoot, config.scratch].allSatisfy({ $0 == nil || inRun($0 ?? "") }) else {
+            throw refuse("a_verbs_folder_is_outside_the_run")
+        }
         return CorpusRun(config: config, progress: progress)
     }
 
@@ -225,7 +243,7 @@ final class CorpusRun: @unchecked Sendable {
             progress.write(["ev": "refused", "why": "catalog_would_not_open"])
             throw CorpusRefusal(word: "catalog_would_not_open")
         case .success(let loaded):
-            let media = config.mediaRoot
+            let media = config.volRoot ?? config.mediaRoot       // the verbs lane's catalog names its clones
             guard loaded.masterArchiveJSON == nil else {
                 progress.write(["ev": "refused", "why": "catalog_names_a_master_archive"])
                 throw CorpusRefusal(word: "catalog_names_a_master_archive")

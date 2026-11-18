@@ -8,7 +8,7 @@
 #   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh testbed [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh status [--host m4|ultra]
-#   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
+#   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof|verbs [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
 #
 # What Rick says → what runs (from the phone, over Remote Control):
 #   "run the gauntlet UI tests on the M4"       scripts/m4_run.sh ui
@@ -340,7 +340,7 @@ start_run() {
     if [ "$LANE" = corpus ] || [ "$LANE" = testbed ]; then
         # The harness's host side and its driver sources, per run like the runner itself.
         local f
-        for f in corpus_run.py catalog_db.py corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift; do
+        for f in corpus_run.py catalog_db.py corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift corpus/CorpusVerbsDriver.swift; do
             copy_to_host "$SCRIPT_DIR/$f" "$bin/$(basename "$f")" || die "could not install $f on $H_NAME"
         done
     fi
@@ -745,7 +745,7 @@ done
 # The corpus lane: the M4 only (never the Ultra, Rick's machine), and its options belong to it alone.
 corpus_args_ok() {
     [ "$H_MACHINE" = m4 ] || die "the corpus harness runs only on the M4 (--host $HOST refused)" 2
-    case "$CORPUS_LANE" in prepare|check|proof) ;; *) die "--corpus-lane wants prepare|check|proof" 2 ;; esac
+    case "$CORPUS_LANE" in prepare|check|proof|verbs) ;; *) die "--corpus-lane wants prepare|check|proof|verbs" 2 ;; esac
     [ -z "$ONLY$PLAN_TIMEOUT" ] || die "--only/--plan-timeout do not apply to the corpus lane" 2
 }
 # The testbed lane holds the corpus lanes, so it is the M4's alone too; it takes no lane options (it runs everything).

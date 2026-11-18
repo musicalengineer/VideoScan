@@ -11,6 +11,7 @@ runs ON THE M4; `scripts/corpus_run.sh` launches it from the Ultra through
   host prepare   build the sealed state: ~/corpus/state/<the catalog file>
   host check     probe · Check Media (quick) · Verify Audio, every corpus file
   host proof     Balance Audio into work/, then the balanced-copy proof
+  host verbs     the verbs that move, trash and promote — on CLONES in work/
   status         the newest run of each lane, judged against the lane's baseline
   accept <lane>  bless the lane's newest run as its baseline (who, when, which run)
 
@@ -51,6 +52,20 @@ results are keyed by SHA-256 and stay under ~/corpus/reports on the M4. No
 filename, path, caption or transcript is ever printed: every word that
 reaches a report goes through `word()`, which cannot carry a path.
 
+THE VERBS LANE (`VerbsLane`; DECISIONS 2026-11-17: "verbs that move or trash may be
+exercised there because every file is a copy"). A small stratified sample of the
+corpus is CLONED (`cp -c`, APFS copy-on-write: no extra space) into
+work/<run>/vol/, a catalog is built over the clones by `prepare`'s own transform,
+and the app's real engines run against them in the test host with its HOME inside
+the run's work folder: Find Duplicates + Delete Duplicates on byte-identical
+clones, Move to Trash, Remove (purge) and Remove from Catalog (set aside) each
+followed by a real rescan, and Promote into a scratch archive under work/<run>/.
+Nothing under ~/corpus/media is ever a target: the lane proves it by a size+mtime
+sweep of every corpus file before and after (any difference is RED), and the
+in-app driver proves every surviving clone still matches its SHA-256. The Trash
+is the engines' own test-host folder under the run's TMPDIR — never the Finder
+Trash; the archive root is refused unless it is under ~/corpus/work.
+
 This file never signals a process. A file that overruns its deadline is cut
 by the driver exiting its own test host (CorpusDriverSupport.swift); the
 whole lane sits under m4_run.sh's existing lane watchdog.
@@ -58,7 +73,10 @@ whole lane sits under m4_run.sh's existing lane watchdog.
 Memory: the manifest (234 rows) and one JSON line per engine per file — KBs.
 Disk: the sealed catalog (~1 MB); the proof lane holds one balanced copy at
 a time under ~/corpus/work/<run>/ and the run's work folder is removed at
-the end. Python 3.9 (the M4's /usr/bin/python3) is the floor.
+the end. The verbs lane's clones share their blocks with the corpus (0 bytes
+until written; nothing writes them); its scratch archive holds real copies of
+the promoted files — at most VERBS_PROMOTE_BYTES (4 GB) — and the lane refuses
+to start with less than VERBS_FREE_FLOOR (20 GB) free. Python 3.9 (the M4's /usr/bin/python3) is the floor.
 """
 from __future__ import annotations
 
@@ -98,7 +116,16 @@ LANES = {
               ["CorpusDriverSupport.swift", "CorpusCheckDriver.swift"]),
     "proof": ("CorpusProofDriver", ["balance", "proof"], 3600,
               ["CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
+    "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
+              3600, ["CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
 }
+VERBS_SAMPLE = 20                                # files the verbs lane clones (--limit changes it)
+VERBS_ROLES = ("dup", "purge", "set_aside", "promote")     # dealt round-robin over the sample
+VERBS_COPIES = 2                                 # extra byte-identical clones of each `dup` file
+VERBS_MAX_FILE = 2 << 30                         # a sampled file is at most 2 GiB (every engine reads it whole, some twice)
+VERBS_PROMOTE_BYTES = 4 << 30                    # Promote makes real copies: at most this much in the scratch archive
+VERBS_FREE_FLOOR = 20 << 30                      # refuse to start with less free space than this
+LOSS_WORDS = ("LOST", "MISMATCH")                # a clone that is gone or no longer its SHA-256: RED
 HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes the harness itself assigns
 
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
@@ -302,8 +329,10 @@ def _columns(conn: sqlite3.Connection, schema: str, table: str) -> List[str]:
     return [row[1] for row in conn.execute(f"PRAGMA {schema}.table_info({table})")]
 
 
-def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path) -> Dict[str, int]:
-    """Create `dest` (new file, rollback journal) from `source` as described above."""
+def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, root: Optional[Path] = None) -> Dict[str, int]:
+    """Create `dest` (new file, rollback journal) from `source` as described above. `root` is
+    the folder the rows' paths are rewritten under: the corpus media, or (the verbs lane) a
+    run's folder of clones laid out the same way."""
     seal.writable(dest)
     for suffix in ("-wal", "-journal", "-shm"):
         if os.path.exists(str(source) + suffix):
@@ -352,7 +381,7 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path) ->
                      "(SELECT f.volume_uuid FROM src.files f JOIN chosen c ON c.file_id = f.id)")
         conn.execute("INSERT INTO main.content SELECT * FROM src.content WHERE digest IN (SELECT sha FROM chosen)")
 
-        prefix = str(seal.media)
+        prefix = str(root if root is not None else seal.media)
         columns = _columns(conn, "src", "files")
         for needed in ("id", "full_path", "path_fold", "directory", "volume_case_sensitive", "content_digest", "size_bytes"):
             if needed not in columns:
@@ -397,7 +426,7 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path) ->
         conn.close()
 
 
-def verify_catalog(seal: Seal, database: Path, entries: List[Entry]) -> Dict[str, int]:
+def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optional[Path] = None) -> Dict[str, int]:
     """Through the scripts' read-only door: every manifest file has a row, every row's file
     exists with the row's size, and the catalog names no Master Archive."""
     import catalog_db
@@ -420,7 +449,7 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry]) -> Dict[str
             continue
         if removal is not None:
             result["removed_rows"] += 1
-        if os.path.normpath(path) != os.path.normpath(str(entry.path)) or not _under(Path(path), seal.media):
+        if os.path.normpath(path) != os.path.normpath(str(entry.path)) or not _under(Path(path), root if root is not None else seal.media):
             result["outside_corpus"] += 1
             continue
         try:
@@ -643,6 +672,7 @@ class Lane:
         self.launches = 0
         self.build_seconds = 0.0
         self.overlay_installed = False
+        self.closing: Dict[str, int] = {}
 
     # -- the overlay: untracked driver sources in the testbed, for this run only
 
@@ -686,9 +716,10 @@ class Lane:
         seal.write_json(config, {
             "lane": self.lane, "corpusRoot": str(seal.corpus), "stateRoot": str(seal.state), "catalog": str(database),
             "mediaRoot": str(seal.media), "work": str(self.work), "progress": str(progress),
-            "deadlineSeconds": self.deadline, "pending": [{"sha": e.sha, "path": str(e.path)} for e in pending]})
+            "deadlineSeconds": self.deadline, "pending": [self.pending_item(e) for e in pending], **self.config_extra()})
         seal.write_text(progress, "")
-        sealed = {"HOME": str(seal.state / "home"), "CFFIXED_USER_HOME": str(seal.state / "home"),
+        home = self.home()
+        sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home),
                   "TMPDIR": str(self.work / "tmp") + "/", "VS_CORPUS_CONFIG": str(config)}
         patched = xctestrun.with_name(f"corpus-{self.stamp}-{self.launches}.xctestrun")    # beside it: __TESTROOT__ is relative
         patch_xctestrun(xctestrun, patched, sealed)
@@ -707,8 +738,35 @@ class Lane:
                 shutil.move(str(patched), str(self.out / patched.name))
         return read_events(progress)
 
+    # -- what a lane may change about a launch (VerbsLane does)
+
+    def record_extra(self, entry: Entry) -> dict:
+        return {}
+
+    def home(self) -> Path:
+        """The test host's HOME: the sealed state's, kept between runs."""
+        return self.seal.state / "home"
+
+    def pending_item(self, entry: Entry) -> dict:
+        return {"sha": entry.sha, "path": str(entry.path)}
+
+    def config_extra(self) -> dict:
+        return {}
+
+    def scope(self, entries: List[Entry]) -> List[Entry]:
+        if self.lane == "proof":
+            entries = [e for e in entries if e.stratum == PROOF_STRATUM]
+        return entries[: self.limit] if self.limit else entries
+
+    def stage(self, entries: List[Entry], database: Path) -> Tuple[List[Entry], Path]:
+        """Before the build: the files and the catalog the driver will be given."""
+        return entries, database
+
+    def after(self, results: Dict[str, dict], report: dict) -> None:
+        """After the launches, before the report is stored."""
+
     def run_files(self, entries: List[Entry], database: Path) -> Tuple[Dict[str, dict], Dict[str, object]]:
-        results = {e.sha: {"stratum": stratum_word(e.stratum), "size": e.size} for e in entries}
+        results = {e.sha: {"stratum": stratum_word(e.stratum), "size": e.size, **self.record_extra(e)} for e in entries}
         hello: Dict[str, object] = {}
         xctestrun = find_xctestrun(self.derived_data)
         self.seal.mkdir(self.work / "tmp")
@@ -720,6 +778,9 @@ class Lane:
             for ev in events:
                 if ev.get("ev") == "hello" and not hello:
                     hello = {k: ev.get(k) for k in ("homeSealed", "records", "archiveDesignation", "testHost")}
+                if ev.get("ev") == "verbs":                  # the verbs driver's closing counts
+                    self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "records")
+                                    if isinstance(ev.get(k), int) and not isinstance(ev.get(k), bool)}
             settled, refusal = settle(events, self.engines, results)
             if refusal:
                 raise Refused(f"refused by the driver: {refusal}")
@@ -738,7 +799,7 @@ class Lane:
         for record in results.values():
             fmt = "{} | {} | {}".format(record.get("container", "unknown"), record.get("vcodec", "unknown"),
                                         record.get("acodec", "unknown"))
-            for table, key in ((by_stratum, record["stratum"]), (by_format, fmt)):
+            for table, key in ((by_stratum, record.get("role") or record["stratum"]), (by_format, fmt)):
                 row = table.setdefault(key, {"files": 0, **{e: Counter() for e in engines}})
                 row["files"] += 1
                 for e in engines:
@@ -746,7 +807,7 @@ class Lane:
             for e in engines:
                 outcome = record.get(e, "not_run")
                 totals[e][outcome] += 1
-                if outcome in ("crash", "timeout") or outcome.startswith("error"):
+                if outcome in ("crash", "timeout") or outcome.startswith("error") or any(w in outcome for w in LOSS_WORDS):
                     failures[e + ":" + outcome] += 1
         return {"lane": self.lane, "sha": self.sha, "stamp": self.stamp, "host": self.seal.hostname,
                 "engine_present": engine_present, "files": len(results),
@@ -771,7 +832,7 @@ class Lane:
             outcomes[sha] = kept
         seal.write_json(self.report_dir / "outcomes.json", outcomes)
         seal.write_json(self.report_dir / "report.json", report)
-        text = render(report, per_file=outcomes if self.lane == "proof" else None, against=report.get("against"))
+        text = render(report, per_file=outcomes if self.lane in ("proof", "verbs") else None, against=report.get("against"))
         seal.write_text(self.report_dir / "report.txt", "\n".join(text) + "\n")
         (self.out / "corpus-summary.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
         (self.out / VERDICT_FILE).write_text(json.dumps(verdict_facts(report), indent=1, sort_keys=True) + "\n",
@@ -783,10 +844,7 @@ class Lane:
         t0 = time.time()
         entries = load_manifest(seal)
         database = sealed_state_ready(seal, entries)
-        if self.lane == "proof":
-            entries = [e for e in entries if e.stratum == PROOF_STRATUM]
-        if self.limit:
-            entries = entries[: self.limit]
+        entries = self.scope(entries)
         if not entries:
             raise Refused("refused: no corpus file is in this lane's scope")
         seal.mkdir(self.work)
@@ -802,11 +860,13 @@ class Lane:
                                   "(corpus-build.log on the host); no file was run"]
                     (self.out / "corpus-summary.txt").write_text(self.lines[0] + "\n", encoding="utf-8")
                     return EXIT_RED
+                entries, database = self.stage(entries, database)
                 results, hello = self.run_files(entries, database)
             finally:
                 if self.overlay_installed:                   # never a folder this run did not lay down
                     self.clear_overlay()
             report = self.report(results, hello, time.time() - t0)
+            self.after(results, report)
             report["against"] = against_baseline(seal, self.lane, results, self.engines)
             self.store(report, results)
             return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, report["against"]), EXIT_RED)
@@ -815,7 +875,161 @@ class Lane:
                 if name.startswith("progress-"):             # the raw event lines are part of the record
                     seal.mkdir(self.report_dir)
                     shutil.move(str(self.work / name), str(seal.writable(self.report_dir / name)))
-            shutil.rmtree(str(seal.writable(self.work)), ignore_errors=True)
+            self.remove_work()
+
+    def remove_work(self) -> None:
+        """The run's work folder goes, whole. Promote locks what it archives (the user
+        immutable flag): the lock is cleared first, on files under this run's work folder only."""
+        work = str(self.seal.writable(self.work))
+        if not os.path.isdir(work):
+            return
+        for folder, _, names in os.walk(work):
+            for name in names:
+                path = os.path.join(folder, name)
+                try:
+                    flags = os.lstat(path).st_flags
+                    if flags & 0x2 and _under(Path(folder), self.work):          # UF_IMMUTABLE
+                        os.lchflags(path, flags & ~0x2)
+                except OSError:
+                    continue
+        shutil.rmtree(work, ignore_errors=True)
+        if os.path.isdir(work):
+            note = "  the run's work folder could NOT be removed whole (it is still on the M4 under ~/corpus/work)"
+            self.lines.append(note)
+            try:
+                with open(self.out / "corpus-summary.txt", "a", encoding="utf-8") as f:
+                    f.write(note + "\n")
+            except OSError:
+                pass
+
+
+def media_sweep(seal: Seal, entries: List[Entry]) -> Dict[str, Tuple[int, int]]:
+    """Size and modification time of every corpus file, by SHA-256, plus the count of files
+    under ~/corpus/media (key `files`): what must be identical before and after a verbs run."""
+    seen: Dict[str, Tuple[int, int]] = {}
+    for e in entries:
+        try:
+            st = os.stat(str(e.path))
+            seen[e.sha] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            seen[e.sha] = (-1, -1)
+    seen["files"] = (sum(len(names) for _, _, names in os.walk(str(seal.media))), 0)
+    return seen
+
+
+def verbs_sample(entries: List[Entry], count: int) -> List[Tuple[Entry, str]]:
+    """The verbs lane's files, each with its role. Deterministic: strata in name order, the
+    smallest files of each first, one stratum at a time until `count`; roles dealt round-robin.
+    A `promote` file that would take the scratch archive past VERBS_PROMOTE_BYTES is a `purge`
+    file instead (Promote makes real copies; the other verbs do not)."""
+    by_stratum: Dict[str, List[Entry]] = defaultdict(list)
+    for e in entries:
+        if 0 < e.size <= VERBS_MAX_FILE:
+            by_stratum[e.stratum].append(e)
+    queues = [sorted(group, key=lambda e: (e.size, e.sha)) for _, group in sorted(by_stratum.items())]
+    picked: List[Entry] = []
+    while len(picked) < count and any(queues):
+        for queue in queues:
+            if queue and len(picked) < count:
+                picked.append(queue.pop(0))
+    sample, promoting = [], 0
+    for i, e in enumerate(picked):
+        role = VERBS_ROLES[i % len(VERBS_ROLES)]
+        if role == "promote":
+            if promoting + e.size > VERBS_PROMOTE_BYTES:
+                role = "purge"
+            else:
+                promoting += e.size
+        sample.append((e, role))
+    return sample
+
+
+class VerbsLane(Lane):
+    """Lane `verbs`: the destructive verbs, on clones (the module docstring). The build, the
+    launch, the events, the report and the baseline diff are `Lane`'s; this adds the clones,
+    the catalog over them, a HOME inside the run's work folder, and the media sweep."""
+
+    def __init__(self, *args, cp: str = "/bin/cp", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cp = cp
+        self.vol = self.work / "vol"
+        self.roles: Dict[str, str] = {}
+        self.copies: Dict[str, List[str]] = {}
+        self.before: Dict[str, Tuple[int, int]] = {}
+        self.all_entries: List[Entry] = []
+        self.free_before = 0
+
+    def home(self) -> Path:
+        return self.work / "home"                           # nothing this run's engines remember outlives the run
+
+    def scope(self, entries: List[Entry]) -> List[Entry]:
+        self.all_entries = entries
+        sample = verbs_sample(entries, self.limit or VERBS_SAMPLE)
+        self.roles = {e.sha: role for e, role in sample}
+        return [e for e, _ in sample]
+
+    def record_extra(self, entry: Entry) -> dict:
+        return {"role": self.roles[entry.sha]}
+
+    def pending_item(self, entry: Entry) -> dict:
+        return {"sha": entry.sha, "path": str(entry.path), "role": self.roles[entry.sha], "copies": self.copies.get(entry.sha, [])}
+
+    def config_extra(self) -> dict:
+        return {"volRoot": str(self.vol), "archiveRoot": str(self.work / "archive"), "scratch": str(self.work / "scratch")}
+
+    def clone(self, source: Path, dest: Path) -> None:
+        """`cp -c -p`: an APFS clone (copy-on-write; the times kept). The source is opened for
+        reading only; the destination is proven to be inside this run's work folder first."""
+        self.seal.mkdir(dest.parent)
+        self.seal.writable(dest)
+        if not _under(source, self.seal.media) or _under(dest, self.seal.media):
+            raise Refused("refused: a clone is made FROM ~/corpus/media INTO the run's work folder, never the other way")
+        if subprocess.call([self.cp, "-c", "-p", str(source), str(dest)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+            raise Refused("refused: a corpus file could not be cloned into the run's work folder")
+
+    def stage(self, entries: List[Entry], database: Path) -> Tuple[List[Entry], Path]:
+        seal = self.seal
+        database_name, latch_name = _catalog_names()
+        free = shutil.disk_usage(str(seal.corpus)).free
+        if free < VERBS_FREE_FLOOR:
+            raise Refused(f"refused: {free / 1e9:.0f} GB free on the M4 — the verbs lane wants {VERBS_FREE_FLOOR / 1e9:.0f} GB")
+        self.before = media_sweep(seal, self.all_entries)
+        self.free_before = free
+        clones = []
+        for e in entries:
+            clone = Entry(e.sha, e.original, e.size, e.stratum, self.vol / e.original.lstrip("/"))
+            self.clone(e.path, clone.path)
+            clones.append(clone)
+            if self.roles[e.sha] == "dup":
+                self.copies[e.sha] = []
+                for k in range(1, VERBS_COPIES + 1):
+                    copy = self.vol / "Copies" / f"copy{k}" / e.sha[:12] / e.path.name
+                    self.clone(e.path, copy)
+                    self.copies[e.sha].append(str(copy))
+        seed = self.work / "seed"
+        seal.mkdir(seed)
+        for name in ("home", "scratch", "archive"):
+            seal.mkdir(self.work / name)
+        build_catalog(seal, seal.corpus / SOURCE_BACKUP, clones, seed / database_name, root=self.vol)
+        seal.write_text(seed / latch_name, "{}\n")
+        verdict = verify_catalog(seal, seed / database_name, clones, root=self.vol)
+        if not verdict["ok"]:
+            raise Refused("refused: the catalog over the clones did not verify — " + ", ".join(
+                f"{k}={v}" for k, v in sorted(verdict.items()) if v and k not in ("rows", "manifest")))
+        return clones, seed / database_name
+
+    def after(self, results: Dict[str, dict], report: dict) -> None:
+        after = media_sweep(self.seal, self.all_entries)
+        changed = sum(1 for key in self.before if key != "files" and after.get(key) != self.before[key])
+        files_delta = after["files"][0] - self.before["files"][0]
+        report["media"] = {"swept": len(self.before) - 1, "changed": changed, "files_delta": files_delta}
+        report["roles"] = dict(Counter(self.roles.values()))
+        report["clones"] = len(self.roles) + sum(len(c) for c in self.copies.values())
+        report["free_delta_bytes"] = shutil.disk_usage(str(self.seal.corpus)).free - self.free_before
+        report["trash"] = self.closing
+        if changed or files_delta:
+            report["failures"]["media:MISMATCH"] = changed + abs(files_delta)       # RED: the pristine copies moved
 
 
 # ── Reading reports back: render, diff, status ────────────────────────────
@@ -826,7 +1040,8 @@ def _counts(counter: Dict[str, int]) -> str:
 
 def cut_count(report: dict) -> int:
     """Files on which an engine crashed or ran past the deadline (failure keys are `engine:outcome`)."""
-    return sum(n for key, n in (report.get("failures") or {}).items() if key.split(":", 1)[-1] in CUT_WORDS)
+    return sum(n for key, n in (report.get("failures") or {}).items()
+               if key.split(":", 1)[-1] in CUT_WORDS or any(w in key for w in LOSS_WORDS))
 
 
 def verdict_of(report: dict, against: Optional[dict]) -> str:
@@ -890,11 +1105,21 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
     lines = head_lines(report, against)
     if not report.get("engine_present", True):
         return lines
-    lines.append("  by stratum:")
+    if report.get("media"):
+        media = report["media"]
+        lines.append(f"  corpus media sweep (size + mtime of {media['swept']} files, before and after): {media['changed']} changed, "
+                     f"file count {media['files_delta']:+d}" + (" — RED: ~/corpus/media was touched" if media["changed"] or media["files_delta"] else " — untouched"))
+        lines.append(f"  clones: {report.get('clones')} (roles: {_counts(report.get('roles') or {})}); free space on the M4 "
+                     f"{report.get('free_delta_bytes', 0) / 1e9:+.2f} GB while the run's work folder was still there")
+        trash = report.get("trash") or {}
+        lines.append(f"  the engines' test-host Trash (under the run's work folder; never the Finder Trash): "
+                     f"{trash.get('trashFiles', 'no count of')} files, the engines reported moving {trash.get('trashedByEngines', 'no count')}")
+    lines.append("  by role:" if lane == "verbs" else "  by stratum:")
     for name, row in sorted(report["by_stratum"].items()):
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))
-    lines.append("  by container | video | audio:")
-    for name, row in sorted(report["by_format"].items(), key=lambda kv: (-kv[1]["files"], kv[0])):
+    if lane != "verbs":
+        lines.append("  by container | video | audio:")
+    for name, row in sorted(report["by_format"].items(), key=lambda kv: (-kv[1]["files"], kv[0])) if lane != "verbs" else []:
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))
     if per_file:
         lines.append("  per file (sha256 prefix):")
@@ -902,8 +1127,11 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
             kinds = " ".join(f"{e}[{','.join(record.get(e + '_kinds') or [])}]" for e in engines if record.get(e + "_kinds"))
             peak = f" peak={record['peak_dbfs']:.1f}dBFS" if isinstance(record.get("peak_dbfs"), (int, float)) else ""
             took = " ".join(f"{e}={record[e + '_s']:.0f}s" for e in engines if isinstance(record.get(e + "_s"), (int, float)))
-            lines.append(f"    {sha_prefix(sha)} {record.get('container', 'unknown')}/{record.get('vcodec', 'unknown')}/"
-                         f"{record.get('acodec', 'unknown')}: {record['outcome']} {kinds}{peak}".rstrip() + (f" (wall {took})" if took else ""))
+            what = (record.get("role") if lane == "verbs" else
+                    f"{record.get('container', 'unknown')}/{record.get('vcodec', 'unknown')}/{record.get('acodec', 'unknown')}")
+            shown = (" ".join(f"{e}={record[e]}" for e in engines if record.get(e, "not_run") != "not_run") or "nothing ran"
+                     if lane == "verbs" else record["outcome"])
+            lines.append(f"    {sha_prefix(sha)} {what}: {shown} {kinds}{peak}".rstrip() + (f" (wall {took})" if took else ""))
     return lines
 
 
@@ -1108,7 +1336,8 @@ def status(seal: Seal) -> List[str]:
 
 # ── Command line ──────────────────────────────────────────────────────────
 
-def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebuild: str = "xcodebuild") -> int:
+def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebuild: str = "xcodebuild",
+         cp: str = "/bin/cp") -> int:
     parser = argparse.ArgumentParser(prog="corpus_run.py", description="the real-data corpus harness (host side)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
@@ -1141,7 +1370,9 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
                 raise Refused("refused: --sha is a full commit id and --stamp is letters, digits and underscores")
             sys.path.insert(0, args.bin)
             lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
-                        Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild)
+                        Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild) if args.lane != "verbs" else \
+                VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
+                          Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild, cp=cp)
             code = lane.go()
             lines = lane.lines
     except Refused as refusal:

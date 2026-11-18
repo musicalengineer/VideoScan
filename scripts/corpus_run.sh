@@ -3,9 +3,9 @@
 # DECISIONS 2026-11-17 "The M4 holds a real-data test corpus").
 #
 #   scripts/corpus_run.sh prepare             [--wait] [--dry-run]
-#   scripts/corpus_run.sh run <check|proof>   [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
+#   scripts/corpus_run.sh run <check|proof|verbs> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
 #   scripts/corpus_run.sh status              [--dry-run]
-#   scripts/corpus_run.sh accept <check|proof> [--dry-run]
+#   scripts/corpus_run.sh accept <check|proof|verbs> [--dry-run]
 #
 # Launched from the Ultra; everything runs ON THE M4, through scripts/m4_run.sh
 # (lane `corpus`): the testbed lock, the per-run LaunchAgent in the GUI
@@ -16,6 +16,12 @@
 #   run check probe · Check Media (quick) · Verify Audio on every corpus file
 #   run proof Balance Audio into ~/corpus/work/<run>/, then the balanced-copy
 #             proof, on the one-sided-sound files (needs a --ref with the engine)
+#   run verbs the verbs that move, trash and promote, by the app's real engines, on
+#             CLONES of ~20 corpus files under ~/corpus/work/<run>/ (cp -c: no extra
+#             space): Find + Delete Duplicates, Move to Trash, Remove and Remove
+#             from Catalog each followed by a rescan, Promote into a scratch
+#             archive. Never the Finder Trash, never a real archive; ~/corpus/media
+#             is proven untouched by a size+mtime sweep before and after
 #   status    the testbed lock, then the newest run of each lane judged against
 #             the lane's baseline: counts, outcome words, and each changed file
 #             by SHA-256 prefix (old -> new)
@@ -50,7 +56,7 @@ case "$VERB" in
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane prepare --ref HEAD "$@" ;;
     run)
         LANE="${1:-}"; [ $# -gt 0 ] && shift
-        case "$LANE" in check|proof) ;; *) echo "corpus_run: run wants check|proof" >&2; exit 2 ;; esac
+        case "$LANE" in check|proof|verbs) ;; *) echo "corpus_run: run wants check|proof|verbs" >&2; exit 2 ;; esac
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane "$LANE" "$@" ;;
     status)
         if [ "${1:-}" = --dry-run ]; then
@@ -64,7 +70,7 @@ case "$VERB" in
         ssh -o BatchMode=yes -o ConnectTimeout=15 "$M4_SSH" "python3 - status" <"$SCRIPT_DIR/corpus_run.py" ;;
     accept)
         LANE="${1:-}"; [ $# -gt 0 ] && shift
-        case "$LANE" in check|proof) ;; *) echo "corpus_run: accept wants check|proof" >&2; exit 2 ;; esac
+        case "$LANE" in check|proof|verbs) ;; *) echo "corpus_run: accept wants check|proof|verbs" >&2; exit 2 ;; esac
         # Who: this account on this Mac, as one word (the helper scrubs it again).
         WHO="$(id -un 2>/dev/null)@$(hostname -s 2>/dev/null)"
         WHO="$(printf '%s' "$WHO" | tr -c 'A-Za-z0-9_.@-' '_')"

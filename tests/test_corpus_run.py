@@ -78,7 +78,15 @@ config = json.load(open(env["VS_CORPUS_CONFIG"]))
 target = run["TestConfigurations"][0]["TestTargets"][0]
 with open(plan["calls"], "a") as f:
     f.write(json.dumps({"driver_env": env, "pending": len(config["pending"]), "lane": config["lane"],
-                        "target": target["BlueprintName"], "target_keys": sorted(target)}) + "\n")
+                        "target": target["BlueprintName"], "target_keys": sorted(target), "config": config,
+                        "rows": [r[0] for r in __import__("sqlite3").connect("file:" + config["catalog"] + "?mode=ro", uri=True)
+                                 .execute("SELECT full_path FROM files ORDER BY full_path")],
+                        "clones_exist": all(os.path.isfile(p) for i in config["pending"] for p in [i["path"]] + (i.get("copies") or []))}) + "\n")
+if plan.get("vandal"):                                   # an engine that reaches the pristine corpus (it must turn the lane RED)
+    os.utime(plan["vandal"], (5, 5))
+if plan.get("lock"):                                     # what Promote does to what it archives
+    locked = os.path.join(config["archiveRoot"], "locked.bin")
+    open(locked, "w").write("x"); os.chflags(locked, 0x2)
 out = open(config["progress"], "a")
 def say(**ev):
     out.write(json.dumps(ev) + "\n"); out.flush()
@@ -102,7 +110,17 @@ for item in config["pending"]:
             say(ev="end", sha=item["sha"], cut=True); os._exit(86)
         say(ev="engine", sha=item["sha"], engine=engine, outcome=how.get(engine, "OK"), kinds=how.get(engine + "_kinds", []), s=0.5)
     say(ev="end", sha=item["sha"])
+if config["lane"] == "verbs":
+    say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0), records=len(config["pending"]))
 say(ev="done")
+'''
+
+# Stand-in for /bin/cp: records its arguments, then copies (the tests run where `cp -c` may not clone).
+FAKE_CP = r'''#!/usr/bin/env python3
+import json, os, shutil, sys
+with open(os.environ["FAKE_CP_CALLS"], "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
+shutil.copy2(sys.argv[-2], sys.argv[-1])
 '''
 
 
@@ -259,7 +277,7 @@ class SealTests(unittest.TestCase):
         self.assertNotIn('kill(', support)
 
     def test_the_drivers_never_write_an_engines_sentence_or_a_name(self):
-        for name in ('CorpusDriverSupport.swift', 'CorpusCheckDriver.swift', 'CorpusProofDriver.swift'):
+        for name in ('CorpusDriverSupport.swift', 'CorpusCheckDriver.swift', 'CorpusProofDriver.swift', 'CorpusVerbsDriver.swift'):
             code = '\n'.join(line for line in (SCRIPTS / 'corpus' / name).read_text().splitlines()
                              if not line.lstrip().startswith('//'))
             for leak in ('.message', 'localizedDescription', 'lastPathComponent', '.filename', '.headline', '.sentence',
@@ -436,20 +454,25 @@ class LaneScene(CorpusScene):
         self.fake.write_text(FAKE_XCODEBUILD)
         self.fake.chmod(0o755)
         self.plan_path, self.calls = base / 'plan.json', base / 'calls.jsonl'
+        self.fake_cp, self.cp_calls = base / 'fake-cp', base / 'cp-calls.jsonl'
+        self.fake_cp.write_text(FAKE_CP)
+        self.fake_cp.chmod(0o755)
         self.plan = dict(calls=str(self.calls), engines=['probe', 'check', 'audio'], files={})
         cr.prepare(self.seal)
 
     def run(self, lane='check', sha='a' * 40, stamp='20261117_120000_1', **extra):
         self.plan_path.write_text(json.dumps(self.plan))
         os.environ['FAKE_PLAN'] = str(self.plan_path)
+        os.environ['FAKE_CP_CALLS'] = str(self.cp_calls)
         argv = ['host', lane, '--sha', sha, '--stamp', stamp, '--out', str(self.out), '--worktree', str(self.worktree),
                 '--derived-data', str(self.dd), '--bin', str(SCRIPTS / 'corpus')]
         for key, value in extra.items():
             argv += ['--' + key, str(value)]
         try:
-            return cr.main(argv, seal=self.seal, xcodebuild=str(self.fake))
+            return cr.main(argv, seal=self.seal, xcodebuild=str(self.fake), cp=str(self.fake_cp))
         finally:
             os.environ.pop('FAKE_PLAN', None)
+            os.environ.pop('FAKE_CP_CALLS', None)
 
     def report_dir(self, lane='check', sha='a' * 40, stamp='20261117_120000_1'):
         return self.seal.reports / lane / sha / stamp
@@ -900,6 +923,216 @@ class BaselineTests(unittest.TestCase):
         self.assertRegex(p.stdout, r'^\+ ssh ricksm4\.local python3 - accept proof --by [A-Za-z0-9_.@-]+ < \S+/scripts/corpus_run\.py\n$')
 
 
+VERBS = ['group', 'trash_copy', 'dedupe', 'trash_last', 'purge', 'set_aside', 'promote', 'intact']
+
+
+class VerbsLaneTests(unittest.TestCase):
+    """C. The destructive verbs run on clones under the run's work folder; ~/corpus/media is proven untouched."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+        self.scene.plan['engines'] = VERBS
+        self.media = self.scene.corpus / 'media'
+        self.before = {p: (p.stat().st_size, p.stat().st_mtime_ns, p.read_bytes()) for p in self.media.rglob('*') if p.is_file()}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def driver_call(self):
+        return next(c for c in self.scene.recorded_calls() if 'driver_env' in c)
+
+    def test_the_sample_is_cloned_and_the_catalog_names_only_the_clones(self):
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_GREEN, self.summary())
+        work = self.scene.seal.work_root / '20261117_120000_1-verbs'
+        call = self.driver_call()
+        config = call['config']
+        self.assertEqual(config['lane'], 'verbs')
+        for key in ('volRoot', 'archiveRoot', 'scratch', 'catalog', 'progress'):
+            self.assertTrue(config[key].startswith(str(work) + '/'), key)
+        roles = sorted(item['role'] for item in config['pending'])
+        self.assertEqual(roles, ['dup', 'purge', 'set_aside'])
+        vol = config['volRoot']
+        for item in config['pending']:
+            self.assertTrue(item['path'].startswith(vol + '/Volumes/PrivateDrive/'), 'a clone keeps its place under the volume folder')
+            self.assertEqual(len(item['copies']), cr.VERBS_COPIES if item['role'] == 'dup' else 0)
+            for copy in item['copies']:
+                self.assertTrue(copy.startswith(vol + '/Copies/copy'))
+        self.assertEqual(call['rows'], sorted(item['path'] for item in config['pending']), 'the catalog names the clones and nothing else')
+        self.assertTrue(call['clones_exist'])
+        self.assertNotIn(str(self.media), json.dumps(config['pending']), 'no engine is handed a path under ~/corpus/media')
+        # The test host's HOME is inside the run: nothing an engine remembers outlives it.
+        self.assertEqual(call['driver_env']['HOME'], str(work / 'home'))
+        self.assertTrue(call['driver_env']['TMPDIR'].startswith(str(work) + '/'), "the engines' Trash is under TMPDIR")
+        self.assertIn('-only-testing:VideoScanTests/CorpusVerbsDriver', self.scene.recorded_calls()[1]['args'])
+
+    def test_every_clone_is_cp_c_from_media_into_the_work_folder(self):
+        self.scene.run('verbs')
+        calls = [json.loads(line) for line in self.scene.cp_calls.read_text().splitlines()]
+        self.assertEqual(len(calls), 3 + cr.VERBS_COPIES)
+        for args in calls:
+            self.assertEqual(args[:2], ['-c', '-p'], 'a clone (copy-on-write), times kept')
+            self.assertTrue(args[2].startswith(str(self.media) + '/'))
+            self.assertTrue(args[3].startswith(str(self.scene.seal.work_root) + '/'))
+
+    def test_media_is_untouched_the_work_folder_is_gone_and_the_report_is_counts(self):
+        self.scene.plan['files'] = {sha_of(0): dict(group='grouped', dedupe='trashed:1', trash_last='only_copy_warned:held',
+                                                    intact='in_trash_intact:2,intact:1'),
+                                    sha_of(1): dict(purge='purged,rescan:stayed_removed', intact='intact:1'),
+                                    sha_of(2): dict(set_aside='set_aside,rescan:came_back', intact='intact:1')}
+        self.scene.plan['trash_files'] = 2
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_GREEN, self.summary())
+        after = {p: (p.stat().st_size, p.stat().st_mtime_ns, p.read_bytes()) for p in self.media.rglob('*') if p.is_file()}
+        self.assertEqual(after, self.before)
+        self.assertEqual(list(self.scene.seal.work_root.iterdir()), [], 'the run left its clones behind')
+        text = self.summary()
+        self.assertIn('corpus verbs: GREEN 3 files', text)
+        self.assertIn('corpus media sweep (size + mtime of 3 files, before and after): 0 changed, file count +0 — untouched', text)
+        self.assertIn(f'clones: {3 + cr.VERBS_COPIES} (roles: dup 1, purge 1, set_aside 1)', text)
+        self.assertIn("the engines' test-host Trash (under the run's work folder; never the Finder Trash): 2 files, the engines reported moving 2", text)
+        self.assertIn('  by role:', text)
+        self.assertIn('    set_aside (1): ', text)
+        self.assertNotIn('by container', text)
+        report = json.loads((self.scene.report_dir('verbs') / 'report.json').read_text())
+        self.assertEqual(report['engines']['purge'], {'purged,rescan:stayed_removed': 1, 'OK': 2})
+        self.assertEqual(report['media'], dict(swept=3, changed=0, files_delta=0))
+        self.assertRegex(text, r'(?m)^    [0-9a-f]{12} (dup|purge|set_aside): group=')
+        self.assertIn('set_aside=set_aside,rescan:came_back', text)
+        leaves = self.scene.everything_that_leaves() + (self.scene.out / cr.VERDICT_FILE).read_text()
+        for name in SECRET_NAMES:
+            self.assertNotIn(name, leaves)
+        self.assertNotIn('/Volumes', leaves)
+        self.assertNotIn(str(self.scene.corpus), leaves)
+
+    def test_an_engine_that_touches_the_pristine_corpus_turns_the_lane_red(self):
+        victim = self.media / self.scene.files[1][1].lstrip('/')
+        self.scene.plan['vandal'] = str(victim)
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_RED)
+        text = self.summary()
+        self.assertIn('corpus verbs: RED 3 files', text)
+        self.assertIn('1 changed, file count +0 — RED: ~/corpus/media was touched', text)
+        self.assertEqual(json.loads((self.scene.out / cr.VERDICT_FILE).read_text())['verdict'], 'RED')
+        with self.assertRaises(cr.Refused):
+            cr.accept(self.scene.seal, 'verbs', 'x')
+
+    def test_a_file_added_under_media_is_seen_by_the_sweep(self):
+        entries = cr.load_manifest(self.scene.seal)
+        before = cr.media_sweep(self.scene.seal, entries)
+        (self.media / 'Volumes' / 'PrivateDrive' / 'stray.bin').write_bytes(b'x')
+        after = cr.media_sweep(self.scene.seal, entries)
+        self.assertEqual(after['files'][0] - before['files'][0], 1)
+        (self.media / self.scene.files[0][1].lstrip('/')).unlink()
+        self.assertEqual(cr.media_sweep(self.scene.seal, entries)[sha_of(0)], (-1, -1))
+
+    def test_a_lost_or_changed_clone_is_red(self):
+        for word, stamp in (('LOST:1,intact:2', '20261118_090000_2'), ('MISMATCH:1', '20261118_100000_3')):
+            self.scene.plan['files'] = {sha_of(0): dict(intact=word)}
+            self.assertEqual(self.scene.run('verbs', stamp=stamp), cr.EXIT_RED)
+            self.assertIn('corpus verbs: RED 3 files', self.summary())
+            self.assertIn(f'intact:{word} 1', self.summary())
+
+    def test_a_clone_is_only_ever_made_from_media_into_this_runs_work_folder(self):
+        seal = self.scene.seal
+        lane = cr.VerbsLane(seal, 'verbs', 'a' * 40, 's1', self.scene.out, self.scene.worktree, self.scene.dd,
+                            SCRIPTS / 'corpus', cp=str(self.scene.fake_cp))
+        os.environ['FAKE_CP_CALLS'] = str(self.scene.cp_calls)
+        try:
+            source = self.media / self.scene.files[0][1].lstrip('/')
+            seal.mkdir(lane.work)
+            os.symlink(self.media, lane.work / 'sneak')
+            for bad_source, bad_dest in ((source, self.media / 'Volumes' / 'PrivateDrive' / 'copy.mov'),
+                                         (source, self.scene.home / 'elsewhere.mov'),
+                                         (source, lane.work / 'sneak' / 'Volumes' / 'copy.mov'),
+                                         (source, self.scene.corpus / cr.SOURCE_BACKUP),
+                                         (self.scene.corpus / cr.SOURCE_BACKUP, lane.work / 'vol' / 'x'),
+                                         (lane.work / 'vol' / 'a', source)):
+                with self.subTest(dest=str(bad_dest)), self.assertRaises(cr.Refused):
+                    lane.clone(bad_source, bad_dest)
+            self.assertFalse(self.scene.cp_calls.exists(), 'a refused clone ran cp')
+            lane.clone(source, lane.work / 'vol' / 'ok.mov')
+            self.assertEqual((lane.work / 'vol' / 'ok.mov').read_bytes(), source.read_bytes())
+        finally:
+            os.environ.pop('FAKE_CP_CALLS', None)
+
+    def test_too_little_free_space_refuses_before_any_clone(self):
+        real = cr.shutil.disk_usage
+        cr.shutil.disk_usage = lambda path: type('U', (), dict(free=cr.VERBS_FREE_FLOOR - 1, total=1, used=1))()
+        try:
+            self.assertEqual(self.scene.run('verbs'), cr.EXIT_REFUSED)
+        finally:
+            cr.shutil.disk_usage = real
+        self.assertIn('GB free on the M4', self.summary())
+        self.assertFalse(self.scene.cp_calls.exists())
+        self.assertEqual(list(self.scene.seal.work_root.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'the user immutable flag is a macOS file flag')
+    def test_what_promote_locked_is_unlocked_inside_the_work_folder_and_removed(self):
+        self.scene.plan['lock'] = True
+        self.assertEqual(self.scene.run('verbs'), cr.EXIT_GREEN, self.summary())
+        self.assertEqual(list(self.scene.seal.work_root.iterdir()), [], 'a locked file kept the work folder alive')
+        self.assertNotIn('could NOT be removed', self.summary())
+
+    def test_the_sample_is_deterministic_stratified_and_sized_to_fit(self):
+        entries = [cr.Entry(sha_of(n), f'/Volumes/V/{n}', size, f'stratum {n % 7}', pathlib.Path(f'/x/{n}'))
+                   for n, size in enumerate([10 + n for n in range(60)])]
+        entries.append(cr.Entry(sha_of(900), '/Volumes/V/big', cr.VERBS_MAX_FILE + 1, 'stratum 0', pathlib.Path('/x/big')))
+        entries.append(cr.Entry(sha_of(901), '/Volumes/V/empty', 0, 'stratum 0', pathlib.Path('/x/empty')))
+        sample = cr.verbs_sample(entries, 20)
+        self.assertEqual(sample, cr.verbs_sample(list(reversed(entries)), 20), 'the same sample whatever the order given')
+        self.assertEqual(len(sample), 20)
+        self.assertEqual(len({e.stratum for e, _ in sample}), 7, 'every stratum is in it')
+        self.assertEqual({role: sum(1 for _, r in sample if r == role) for role in cr.VERBS_ROLES},
+                         dict(dup=5, purge=5, set_aside=5, promote=5))
+        self.assertNotIn(sha_of(900), [e.sha for e, _ in sample], 'a file over the size cap is never sampled')
+        self.assertNotIn(sha_of(901), [e.sha for e, _ in sample])
+        heavy = [cr.Entry(sha_of(n), f'/Volumes/V/{n}', cr.VERBS_MAX_FILE, 's', pathlib.Path(f'/x/{n}')) for n in range(20)]
+        promoted = sum(e.size for e, role in cr.verbs_sample(heavy, 20) if role == 'promote')
+        self.assertLessEqual(promoted, cr.VERBS_PROMOTE_BYTES, 'Promote makes real copies: capped')
+        self.assertGreater(promoted, 0)
+        big = [cr.Entry(sha_of(n), f'/Volumes/V/{n}', 100 + n, f's{n % 40}', pathlib.Path(f'/x/{n}')) for n in range(100_000)]
+        t0 = time.monotonic()
+        self.assertEqual(len(cr.verbs_sample(big, 20)), 20)
+        self.assertLess(time.monotonic() - t0, 5.0)
+
+    def test_the_verbs_driver_carries_its_own_seal_and_never_reaches_the_finder_trash(self):
+        driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+        code = '\n'.join(line for line in driver.splitlines() if not line.lstrip().startswith('//'))
+        for guard in ('CorpusRun.open(lane: "verbs")', 'CorpusRun.isUnder(MediaTrash.testHostTrash.path, config.work)',
+                      'CorpusRun.isUnder(NSTemporaryDirectory(), config.work)', 'TestEnvironment.isTestHost',
+                      'CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
+                      'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, config.work)',
+                      'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: .live', 'model.catalogTrashPlan(for: [row])',
+                      'model.purgeRecords(ids:', 'model.removeFromCatalog(recordIDs:', 'PromoteToArchiveJob(plan: plan, model: archiveModel)',
+                      'archiveModel.initializeMasterArchive(at: URL(fileURLWithPath: archive'):
+            self.assertIn(guard, code, guard)
+        self.assertLess(code.index('refuse("trash_not_in_the_run")'), code.index('trashSelectedRecords'), 'the Trash is proven before any verb')
+        self.assertLess(code.index('refuse("archive_root_outside_corpus_work")'), code.index('initializeMasterArchive'))
+        for never in ('trashItem(', 'removeItem', 'unlink(', 'FamilyArchive', '/Volumes', 'fileOperation:', 'mediaRoot', '.note', 'kill('):
+            self.assertNotIn(never, code, never)
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        for guard in ('func inRun(_ path: String) -> Bool { isUnder(path, config.work) && resolved(path) != resolved(work) }',
+                      'refuse("a_verbs_folder_is_outside_the_run")', 'isUnder(config.work, work)'):
+            self.assertIn(guard, support, guard)
+
+    def test_verbs_runs_through_the_same_front_door_and_baseline(self):
+        p = subprocess.run(['/bin/bash', str(SCRIPTS / 'corpus_run.sh'), 'run', 'verbs', '--ref', 'HEAD', '--dry-run'],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('<string>verbs</string>', p.stdout)
+        self.assertRegex(p.stdout, r'install .*CorpusVerbsDriver\.swift -> ricksm4\.local:')
+        self.assertEqual(subprocess.run(['/bin/bash', str(SCRIPTS / 'm4_run.sh'), 'corpus', '--corpus-lane', 'verbs', '--host', 'ultra',
+                                         '--dry-run'], capture_output=True, text=True, timeout=60).returncode, 2)
+        self.scene.plan['files'] = {sha_of(1): dict(purge='purged,rescan:stayed_removed')}
+        self.scene.run('verbs')
+        self.scene.plan['files'] = {sha_of(1): dict(purge='purged,rescan:came_back')}
+        self.assertEqual(self.scene.run('verbs', stamp='20261118_090000_2'), cr.EXIT_AMBER)
+        self.assertIn(f'    {sha_of(1)[:12]} purge: purged,rescan:stayed_removed -> purged,rescan:came_back', self.summary().splitlines())
+        self.assertIn('the baseline is now run 20261118_090000_2', cr.accept(self.scene.seal, 'verbs', 'x')[0])
+
+
 class ScaleTests(unittest.TestCase):
 
     def test_diff_and_report_over_100k_files_stay_inside_the_budget(self):
@@ -949,7 +1182,7 @@ class CallerTests(unittest.TestCase):
         self.assertIn('m4_run: corpus on M4', out)
         self.assertIn(f'push -q ricksm4.local:dev/VideoScan {sha}:refs/m4run/{sha}', out)
         for name in ('corpus_run.py', 'catalog_db.py', 'CorpusDriverSupport.swift', 'CorpusCheckDriver.swift',
-                     'CorpusProofDriver.swift', 'testbed_lock.py'):
+                     'CorpusProofDriver.swift', 'CorpusVerbsDriver.swift', 'testbed_lock.py'):
             self.assertRegex(out, rf'install .*{name} -> ricksm4\.local:.*/m4run/bin/\d{{8}}_\d{{6}}_\d+/{name}')
         for arg in ('__host', 'corpus', sha, '--corpus-lane', 'check', '--deadline', '120', '--limit', '5'):
             self.assertIn(f'<string>{arg}</string>', out)
