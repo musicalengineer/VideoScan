@@ -742,6 +742,16 @@ extension BalancedCopyProof {
         }
     }
 
+    /// An outcome with the facts it was decided on — as far as they were
+    /// gathered: nil when the files could not be opened; the headers alone
+    /// when the headers decided it; everything after both decode passes.
+    /// For a caller that reports numbers and may not show the sentence (the
+    /// corpus harness). The outcome is `measure`'s, exactly.
+    struct Measurement: Sendable {
+        var outcome: Outcome
+        var facts: Facts?
+    }
+
     /// Measure both files and decide. Never throws: every failure is an
     /// `Outcome` (`couldNotCheck` when nothing could be measured). The
     /// caller writes `startLine` before and `logLine` after, through the
@@ -756,18 +766,32 @@ extension BalancedCopyProof {
     #endif
     static func measure(original: String, balanced: String, tools: Tools = .located,
                         control: ProcessControl? = nil) async -> Outcome {
+        await measurement(original: original, balanced: balanced, tools: tools, control: control).outcome
+    }
+
+    /// `measure`, with the facts gathered on the way.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func measurement(original: String, balanced: String, tools: Tools = .located,
+                            control: ProcessControl? = nil) async -> Measurement {
+        var gathered: Facts?
         do {
-            return try await measured(original: original, balanced: balanced, tools: tools, control: control)
+            let outcome = try await measured(original: original, balanced: balanced, tools: tools, control: control,
+                                             gathered: &gathered)
+            return Measurement(outcome: outcome, facts: gathered)
         } catch let unchecked as Unchecked {
             proofLog.notice("proof could not check \((original as NSString).lastPathComponent, privacy: .public) ↔ \((balanced as NSString).lastPathComponent, privacy: .public): \(unchecked.reason, privacy: .public)")
-            return .couldNotCheck(unchecked.reason)
+            return Measurement(outcome: .couldNotCheck(unchecked.reason), facts: gathered)
         } catch {
-            return .couldNotCheck("the check was stopped")
+            return Measurement(outcome: .couldNotCheck("the check was stopped"), facts: gathered)
         }
     }
 
+    /// `gathered` is written each time the facts grow, so a step that
+    /// throws leaves what was measured before it.
     private static func measured(original: String, balanced: String, tools: Tools,
-                                 control: ProcessControl?) async throws -> Outcome {
+                                 control: ProcessControl?, gathered: inout Facts?) async throws -> Outcome {
         // Every tool below is handed the RESOLVED paths, never the given ones.
         let files = try located(original: original, balanced: balanced)
         guard FileManager.default.isExecutableFile(atPath: tools.ffmpeg),
@@ -788,11 +812,15 @@ extension BalancedCopyProof {
             originalClass: analysis.classification,
             originalMeasuredInFull: analysis.measuredSilent != nil,
             keptSoundIndex: analysis.programStreamIndex)
+        gathered = facts
         if let verdict = headerVerdict(facts) { return verdict }
         facts.original = try await packets(of: files.original, bytes: files.stamps[0].size, called: "the original",
                                            layout: facts.original, tools: tools, control: control)
         facts.balanced = try await packets(of: files.balanced, bytes: files.stamps[1].size, called: "the balanced copy",
                                            layout: facts.balanced, tools: tools, control: control)
+        gathered = facts
+        // `decode` fills the original's pass, then the copy's: a copy that cannot be decoded leaves the original's.
+        defer { gathered = facts }
         try await decode(&facts, files: files, analysis: analysis, tools: tools, control: control)
 
         // Both given paths must still resolve to the files that were opened

@@ -172,21 +172,38 @@ enum BalancedCopyProof {
         /// A picture stream whose size and pixel format ffprobe could read.
         var describesAPicture: Bool { (width ?? 0) > 0 && (height ?? 0) > 0 && !pixelFormat.isEmpty }
 
-        /// The first DISPLAY field `copy` states differently ("width 320 →
-        /// 304"). Extradata is not one: it is the decoder's, and the decoded
-        /// frames answer for it.
-        func displayDifference(from copy: PictureConfiguration) -> String? {
+        /// One DISPLAY field the two headers state differently ("" = unstated).
+        struct FieldDifference: Sendable, Equatable {
+            var name: String
+            var original: String
+            var copy: String
+        }
+
+        /// Every DISPLAY field `copy` states differently, in the order they
+        /// are checked. Extradata is not one: it is the decoder's, and the
+        /// decoded frames answer for it.
+        func displayDifferences(from copy: PictureConfiguration) -> [FieldDifference] {
             func text(_ n: Int?) -> String { n.map(String.init) ?? "" }
-            let fields: [(name: String, original: String, copy: String)] = [
-                ("width", text(width), text(copy.width)), ("height", text(height), text(copy.height)),
-                ("pixel format", pixelFormat, copy.pixelFormat),
-                ("sample aspect ratio", sampleAspect, copy.sampleAspect),
-                ("display aspect ratio", displayAspect, copy.displayAspect),
-                ("field order", fieldOrder, copy.fieldOrder), ("colour range", colorRange, copy.colorRange),
-                ("colour space", colorSpace, copy.colorSpace), ("colour transfer", colorTransfer, copy.colorTransfer),
-                ("colour primaries", colorPrimaries, copy.colorPrimaries), ("side data", sideData, copy.sideData)
+            let fields: [FieldDifference] = [
+                .init(name: "width", original: text(width), copy: text(copy.width)),
+                .init(name: "height", original: text(height), copy: text(copy.height)),
+                .init(name: "pixel format", original: pixelFormat, copy: copy.pixelFormat),
+                .init(name: "sample aspect ratio", original: sampleAspect, copy: copy.sampleAspect),
+                .init(name: "display aspect ratio", original: displayAspect, copy: copy.displayAspect),
+                .init(name: "field order", original: fieldOrder, copy: copy.fieldOrder),
+                .init(name: "colour range", original: colorRange, copy: copy.colorRange),
+                .init(name: "colour space", original: colorSpace, copy: copy.colorSpace),
+                .init(name: "colour transfer", original: colorTransfer, copy: copy.colorTransfer),
+                .init(name: "colour primaries", original: colorPrimaries, copy: copy.colorPrimaries),
+                .init(name: "side data", original: sideData, copy: copy.sideData)
             ]
-            guard let field = fields.first(where: { $0.original != $0.copy }) else { return nil }
+            return fields.filter { $0.original != $0.copy }
+        }
+
+        /// The first DISPLAY field `copy` states differently ("width 320 →
+        /// 304").
+        func displayDifference(from copy: PictureConfiguration) -> String? {
+            guard let field = displayDifferences(from: copy).first else { return nil }
             func shown(_ value: String) -> String {
                 value.isEmpty ? "none" : (value.count > 96 ? String(value.prefix(96)) + "…" : value)
             }

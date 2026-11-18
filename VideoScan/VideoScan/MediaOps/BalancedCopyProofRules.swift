@@ -254,48 +254,90 @@ extension BalancedCopyProof {
 
     // MARK: - The decode pass: was the read whole
 
+    /// Why one decode pass was not a whole read of its file. Every case
+    /// carries the numbers it was decided on, so a caller that may not show
+    /// the sentence (the corpus harness) can still say which rule fired.
+    /// (≈ a C++ `std::variant` of small structs; `sentence` is its visitor.)
+    enum ReadShortfall: Sendable, Equatable {
+        /// There is no decode pass for the file.
+        case noAccount
+        /// The packet pass or ffmpeg's log has no count for a decoded stream.
+        case packetsNotCounted(stream: Int)
+        /// ffmpeg read another number of packets than the packet pass listed.
+        case packetCount(stream: Int, read: Int, listed: Int)
+        case decodeErrors(stream: Int)
+        /// ffmpeg wrote another number of frames than were folded here.
+        case framesNotAllFolded(muxed: Int, folded: Int)
+        case noPictureFrames(stream: Int)
+        /// A picture's decoded length is not the length its header states.
+        case pictureLength(stream: Int, decodedSeconds: Double, statedSeconds: Double)
+        case noSoundSamples
+        /// The sound's decoded length is not the length its header states.
+        case soundLength(decodedSamples: Int64, statedSeconds: Double)
+
+        /// The plain sentence, about the file called `name`.
+        func sentence(called name: String) -> String {
+            switch self {
+            case .noAccount:
+                return "\(name)'s decode pass gave no account of what it read"
+            case .packetsNotCounted(let index):
+                return "\(name) was not read to the end (stream \(index): packets not counted)"
+            case .packetCount(let index, let read, let listed):
+                return "\(name) was not read to the end (stream \(index): \(read) of \(listed) packets)"
+            case .decodeErrors(let index):
+                return "\(name) did not decode cleanly (stream \(index))"
+            case .framesNotAllFolded(let muxed, let folded):
+                return "\(name)'s decoded frames did not all arrive (ffmpeg wrote \(muxed), \(folded) were read)"
+            case .noPictureFrames(let index):
+                return "\(name)'s picture stream \(index) gave no frames"
+            case .pictureLength(let index, let decoded, let stated):
+                return "\(name) was not read to the end (picture stream \(index): "
+                    + "\(BalancedCopyProof.length(decoded)) decoded, \(BalancedCopyProof.length(stated)) stated)"
+            case .noSoundSamples:
+                return "\(name)'s sound gave no samples"
+            case .soundLength(let samples, let stated):
+                return "\(name) was not read to the end (\(samples) sound samples decoded, "
+                    + "\(BalancedCopyProof.length(stated)) stated)"
+            }
+        }
+    }
+
     /// One decode pass must have read, of every stream it decoded, the
     /// packets the packet pass listed, with no decode error; ffmpeg must
     /// have muxed exactly the frames folded here; and each decoded stream's
     /// length must be the length its header states, where it states one
-    /// (header, WHAT PLAYS 5). A short read is never agreement.
-    static func readVerdict(_ file: FileLayout, read: ReadReport?, kept: SoundStream?, called name: String) -> Outcome? {
-        guard let read else { return .couldNotCheck("\(name)'s decode pass gave no account of what it read") }
+    /// (header, WHAT PLAYS 5). A short read is never agreement. nil = whole.
+    static func readShortfall(_ file: FileLayout, read: ReadReport?, kept: SoundStream?) -> ReadShortfall? {
+        guard let read else { return .noAccount }
         let decoded = file.pictures.map { ($0.index, $0.packets) } + file.sound.map { ($0.index, $0.packets) }
         for (index, expected) in decoded {
-            guard let expected, let got = read.streams[index] else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): packets not counted)")
-            }
-            guard got.packets == expected else {
-                return .couldNotCheck("\(name) was not read to the end (stream \(index): \(got.packets) of \(expected) packets)")
-            }
-            guard got.decodeErrors == 0 else {
-                return .couldNotCheck("\(name) did not decode cleanly (stream \(index))")
-            }
+            guard let expected, let got = read.streams[index] else { return .packetsNotCounted(stream: index) }
+            guard got.packets == expected else { return .packetCount(stream: index, read: got.packets, listed: expected) }
+            guard got.decodeErrors == 0 else { return .decodeErrors(stream: index) }
         }
         guard !read.folded.isEmpty, read.muxed == read.folded else {
-            return .couldNotCheck("\(name)'s decoded frames did not all arrive (ffmpeg wrote \(read.muxed.values.reduce(0, +)), "
-                + "\(read.folded.values.reduce(0, +)) were read)")
+            return .framesNotAllFolded(muxed: read.muxed.values.reduce(0, +), folded: read.folded.values.reduce(0, +))
         }
         for picture in file.pictures {
             guard let played = read.pictures[picture.index], played.frames > 0 else {
-                return .couldNotCheck("\(name)'s picture stream \(picture.index) gave no frames")
+                return .noPictureFrames(stream: picture.index)
             }
-            if let stated = picture.statedSeconds,
-               abs(played.endSeconds - played.firstSeconds - stated) > picture.timingSlackSeconds {
-                return .couldNotCheck("\(name) was not read to the end (picture stream \(picture.index): "
-                    + "\(length(played.endSeconds - played.firstSeconds)) decoded, \(length(stated)) stated)")
+            let decodedSeconds = played.endSeconds - played.firstSeconds
+            if let stated = picture.statedSeconds, abs(decodedSeconds - stated) > picture.timingSlackSeconds {
+                return .pictureLength(stream: picture.index, decodedSeconds: decodedSeconds, statedSeconds: stated)
             }
         }
-        guard let kept, let samples = read.soundSamples, samples > 0 else {
-            return .couldNotCheck("\(name)'s sound gave no samples")
-        }
+        guard let kept, let samples = read.soundSamples, samples > 0 else { return .noSoundSamples }
         if let stated = kept.statedSeconds,
            abs(Double(samples) / Double(kept.sampleRateHz) - stated) > kept.statedLengthSlackSeconds {
-            return .couldNotCheck("\(name) was not read to the end (\(samples) sound samples decoded, "
-                + "\(length(stated)) stated)")
+            return .soundLength(decodedSamples: samples, statedSeconds: stated)
         }
         return nil
+    }
+
+    /// `readShortfall` as an outcome: COULD NOT CHECK, in the file's name.
+    static func readVerdict(_ file: FileLayout, read: ReadReport?, kept: SoundStream?, called name: String) -> Outcome? {
+        readShortfall(file, read: read, kept: kept).map { .couldNotCheck($0.sentence(called: name)) }
     }
 
     // MARK: - The decode pass: what plays
