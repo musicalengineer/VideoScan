@@ -118,19 +118,19 @@ struct CatalogPersonFilterLogicTests {
 struct CatalogPersonPillTests {
 
     private func state(volumes: [String] = [], person: String? = nil, focus: String? = nil) -> Summary.State {
-        Summary.State(kindFacet: .everything, hasMasterArchive: true, focusLabel: focus,
+        Summary.State(hasMasterArchive: true, focusLabel: focus,
                       selectedVolumeLabels: volumes, selectedPersonName: person)
     }
 
     @Test func noPersonNoPill() {
         #expect(Summary.personPill(name: nil) == nil)
         #expect(!Summary.pills(for: state()).contains { $0.emphasis == .person || $0.action == .clearPerson })
-        #expect(Summary.pills(for: state()).map(\.text) == ["All kinds", "Including archived", "Connected drives"])
+        #expect(Summary.pills(for: state()).map(\.text) == ["Everything", "Including archived", "Connected drives"])
     }
 
     @Test func thePersonPillFollowsTheVolumePillThenTheBox() throws {
         let pills = Summary.pills(for: state(volumes: ["CrucialX9"], person: "Dana"))
-        #expect(pills.map(\.text) == ["CrucialX9", "Dana", "All kinds", "Including archived", "Connected drives"])
+        #expect(pills.map(\.text) == ["CrucialX9", "Dana", "Everything", "Including archived", "Connected drives"])
         let person = try #require(pills.first { $0.emphasis == .person })
         #expect(person.text == "Dana" && person.action == .clearPerson)
         #expect(Summary.pills(for: state(person: "Dana")).map(\.text).first == "Dana", "no volume: it leads")
@@ -139,7 +139,7 @@ struct CatalogPersonPillTests {
 
     @Test func theSpokenSentenceCarriesIt() {
         #expect(Summary.sentence(for: state(volumes: ["CrucialX9"], person: "Dana"))
-                == "Showing CrucialX9, Dana, All kinds, Including archived, Connected drives")
+                == "Showing CrucialX9, Dana, Everything, Including archived, Connected drives")
         #expect(Summary.personHelp(name: "Dana") == "Showing only videos of Dana — click to show everyone")
     }
 

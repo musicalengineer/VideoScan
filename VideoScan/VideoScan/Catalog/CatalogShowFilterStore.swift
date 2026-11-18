@@ -16,10 +16,19 @@
 // STABLE KEYS. The set is stored as the filters' `rawValue`s ("notYetArchived"),
 // never the menu's words, so a reworded menu cannot drop a setting. The old
 // value (`catalog.viewFilters`, the menu labels joined by "|") is migrated
-// once: the filters that remain are carried over, the ones the 2026-11-17 trim
+// once: the filters that remain are carried over, the ones the 2026-11-17 trims
 // removed and anything unknown are dropped, and the log says which.
 //
-// ONE RULE. Not Yet Archived and Has Master Copy cannot both be on (together
+// FIVE TICKS (DECISIONS 2026-11-17, "final shape for now"): Audio Only, Videos
+// Missing Sound, Not Yet Archived, Needs a Date, Hide Other Versions. No tick =
+// everything is listed. The media-kind section (Videos / Audio Only / All
+// Kinds) is gone: its stored value (`catalogKindFacet`) is migrated ONCE here —
+// Audio Only becomes the Audio Only tick, the other two become no tick — then
+// deleted, and the log says what happened. Unpaired Only, Has Master Copy and
+// the awaiting-confirmation filter are dropped from a stored set, named in the
+// log (that list now lives in the Media File Operations window).
+//
+// ONE RULE. Audio Only and Videos Missing Sound cannot both be on (together
 // they empty the table): turning one on turns the other off, in the same
 // change and the same log line.
 //
@@ -27,7 +36,7 @@
 // CatalogPersonFilterStore pattern, #337 — no new VideoScanModel state), so
 // the Steward on the Triage tab reaches it while the Catalog view is not alive.
 //
-// COST. A set of at most six small enums and two UserDefaults writes per
+// COST. A set of at most five small enums and two UserDefaults writes per
 // change; no records are read here. Worst-case memory: a few hundred bytes.
 //
 // (For Rick: an `ObservableObject` with `@Published private(set)` ≈ a C++
@@ -48,16 +57,25 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     // minimum"): Video+Audio Only, Rated Only, Has Family, In Workspace,
     // Untagged (junk candidate), Archive Candidates, No Place Yet. Confirmed
     // Date was inverted into Needs a Date. (.onlineOnly went 2026-07-20.)
-    case unpairedOnly
-    /// Repair-lifecycle worklist (GH #132 P3): repair copies waiting for
-    /// Rick's one-click "Sounds Good". Named for removal on 2026-11-17 but
-    /// KEPT until Rick rules: it is the only way to list that queue.
-    case awaitingConfirmation
+    // Removed 2026-11-17, "final shape for now": Unpaired Only (sort the
+    // Stream column), Has Master Copy (the Archive tab), and Repaired —
+    // Awaiting Confirmation (the Media File Operations window lists them).
+
+    /// Files with sound and no picture (music, an audio half). Took over from
+    /// the media-kind section's "Audio Only" (2026-11-17): the same rule,
+    /// `streamType == .audioOnly`.
+    case audioOnly
+    /// Videos whose sound is missing: no audio stream (unless the audio half
+    /// is paired), measured silent, or stored as damaged. The rule and the
+    /// standings that count are in VideoMissingSound.swift.
+    case videosMissingSound
     /// Master Archive (2026-08-15): live sources without a promoted copy.
     /// Backed by pfNotYetArchived (memoized reverse index — O(1) per record).
     case notYetArchived
-    /// Master Archive: sources whose master copy is proven.
-    case hasMasterCopy
+    /// Rows with no usable filing date (2026-11-17, the inverse of the old
+    /// Confirmed Date): the ones Promote would file under Undated/. Backed by
+    /// pfRecordNeedsDate — the Archive tab's "Needs a Date" rule.
+    case needsDate
     /// "Hide Other Versions" (Find Similar Footage, 2026-09-23; the menu said
     /// "One Per Footage" until 2026-11-17 — the case name and the stored key
     /// keep the old word, which is the point of a stable key): one file per
@@ -65,31 +83,43 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     /// ungrouped file, and one of any set of byte-identical files the footage
     /// run has not grouped yet (CatalogOneOfIdentical).
     case onePerFootage
-    /// Rows with no usable filing date (2026-11-17, the inverse of the old
-    /// Confirmed Date): the ones Promote would file under Undated/. Backed by
-    /// pfRecordNeedsDate — the Archive tab's "Needs a Date" rule.
-    case needsDate
 
     /// The words the Show menu AND the Showing box use — one vocabulary.
     var title: String {
         switch self {
-        case .unpairedOnly:         return "Unpaired Only"
-        case .awaitingConfirmation: return "Repaired — Awaiting Confirmation"
-        case .notYetArchived:       return "Not Yet Archived"
-        case .hasMasterCopy:        return "Has Master Copy"
-        case .onePerFootage:        return "Hide Other Versions"
-        case .needsDate:            return "Needs a Date"
+        case .audioOnly:          return "Audio Only"
+        case .videosMissingSound: return "Videos Missing Sound"
+        case .notYetArchived:     return "Not Yet Archived"
+        case .needsDate:          return "Needs a Date"
+        case .onePerFootage:      return "Hide Other Versions"
         }
     }
 
     var icon: String {
         switch self {
-        case .unpairedOnly:         return "exclamationmark.triangle"
-        case .awaitingConfirmation: return "checkmark.seal"
-        case .notYetArchived:       return "archivebox"
-        case .hasMasterCopy:        return "archivebox.fill"
-        case .onePerFootage:        return "square.stack.3d.up"
-        case .needsDate:            return "calendar.badge.exclamationmark"
+        case .audioOnly:          return "waveform"
+        case .videosMissingSound: return "speaker.slash"
+        case .notYetArchived:     return "archivebox"
+        case .needsDate:          return "calendar.badge.exclamationmark"
+        case .onePerFootage:      return "square.stack.3d.up"
+        }
+    }
+
+    /// The menu row's tooltip: what the tick lists, in one sentence.
+    var help: String {
+        switch self {
+        case .audioOnly:
+            return "Only files with sound and no picture (music, audio halves)."
+        case .videosMissingSound:
+            return "Only videos whose sound is missing: no sound track (unless its audio file is paired), silent, or damaged. "
+                + "Not left-only or right-only sound, not mono, not files whose sound was never checked, "
+                + "and not files you tagged “\(WorkflowTags.silentChecked)”."
+        case .notYetArchived:
+            return "Only files with no copy in the Master Archive yet."
+        case .needsDate:
+            return "Only files with no usable date — the ones Promote would file under Undated."
+        case .onePerFootage:
+            return "One file per group of the same footage, and one of any identical copies."
         }
     }
 
@@ -99,11 +129,10 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     /// in ONE place. (≈ a C++ table of function pointers keyed by the enum.)
     var recordPredicate: ((VideoRecord) -> Bool)? {
         switch self {
-        case .unpairedOnly:
-            return { ($0.streamType == .videoOnly || $0.streamType == .audioOnly) && $0.pairedWith == nil }
-        case .awaitingConfirmation: return pfAwaitingConfirmation
-        case .needsDate:            return pfRecordNeedsDate
-        case .notYetArchived, .hasMasterCopy, .onePerFootage:
+        case .audioOnly:          return { $0.streamType == .audioOnly }
+        case .videosMissingSound: return VideoMissingSound.matches
+        case .needsDate:          return pfRecordNeedsDate
+        case .notYetArchived, .onePerFootage:
             return nil
         }
     }
@@ -111,9 +140,9 @@ enum CatalogViewFilter: String, CaseIterable, Hashable, Sendable {
     /// The filter that cannot be on with this one (they empty the table).
     var excludes: CatalogViewFilter? {
         switch self {
-        case .notYetArchived: return .hasMasterCopy
-        case .hasMasterCopy:  return .notYetArchived
-        default:              return nil
+        case .audioOnly:          return .videosMissingSound
+        case .videosMissingSound: return .audioOnly
+        default:                  return nil
         }
     }
 
@@ -157,19 +186,28 @@ final class CatalogShowFilterStore: ObservableObject {
     /// Every line this store writes starts with this.
     nonisolated static let logPrefix = "Catalog Show filters: "
 
+    /// The media-kind section's setting (removed 2026-11-17). Read once at
+    /// launch, turned into a filter or nothing, then deleted.
+    nonisolated static let legacyKindFacetKey = "catalogKindFacet"
+
     /// Old menu label → the filter it still is.
     nonisolated static let legacyLabels: [String: CatalogViewFilter] = [
-        "Unpaired Only": .unpairedOnly,
-        "Repaired — Awaiting Confirmation": .awaitingConfirmation,
         "Not Yet Archived": .notYetArchived,
-        "Has Master Copy": .hasMasterCopy,
         "One Per Footage": .onePerFootage,
     ]
-    /// Old menu labels the 2026-11-17 trim removed. Confirmed Date is here on
+    /// Old menu labels the 2026-11-17 trims removed. Confirmed Date is here on
     /// purpose: Needs a Date is its opposite, so it is dropped, not carried.
     nonisolated static let removedLegacyLabels: Set<String> = [
         "Video+Audio Only", "Rated Only", "Has Family", "In Workspace", "Untagged (junk candidate)",
         "Archive Candidates", "No Place Yet", "Confirmed Date",
+        "Unpaired Only", "Has Master Copy", "Repaired — Awaiting Confirmation",
+    ]
+    /// Stable keys of filters that left the menu after the stable key was
+    /// introduced, with the words they had (for the log line).
+    nonisolated static let removedStableKeys: [String: String] = [
+        "unpairedOnly": "Unpaired Only",
+        "hasMasterCopy": "Has Master Copy",
+        "awaitingConfirmation": "Repaired — Awaiting Confirmation",
     ]
 
     private let defaults: UserDefaults
@@ -180,12 +218,14 @@ final class CatalogShowFilterStore: ObservableObject {
         self.defaults = defaults
         self.log = log
         let restored = Self.restore(from: defaults)
-        active = restored.filters
-        if restored.rewrite {
-            defaults.set(Self.encode(restored.filters), forKey: Self.key)
+        let kind = Self.migrateKindFacet(in: defaults, into: restored.filters)
+        active = kind.filters
+        if restored.rewrite || kind.line != nil {
+            defaults.set(Self.encode(kind.filters), forKey: Self.key)
             defaults.removeObject(forKey: Self.legacyKey)
         }
         log(Self.logPrefix + "restored at launch → " + Self.names(restored.filters) + restored.note)
+        if let line = kind.line { log(line) }
         if let line = Self.retireHiddenRecordReveals(in: defaults) { log(line) }
     }
 
@@ -209,11 +249,10 @@ final class CatalogShowFilterStore: ObservableObject {
 
     /// Once a Master Archive exists the catalog defaults to the to-do view
     /// (Rick 2026-08-22). Applied ONCE per install and logged; after that the
-    /// Show menu is the user's call. Has Master Copy on → left alone.
+    /// Show menu is the user's call.
     func seedDefaultIfUntouched(hasMasterArchive: Bool) {
         guard hasMasterArchive, !defaults.bool(forKey: Self.seededKey) else { return }
         defaults.set(true, forKey: Self.seededKey)
-        guard !active.contains(.hasMasterCopy) else { return }
         set(.notYetArchived, on: true, by: .seed)
     }
 
@@ -241,6 +280,36 @@ final class CatalogShowFilterStore: ObservableObject {
             + wasOn.joined(separator: ", ") + " was on and is now off — removed and set-aside rows are hidden again"
     }
 
+    /// The media-kind section's stored value, turned into the filter set ONCE
+    /// (DECISIONS 2026-11-17: no tick = everything): "audioOnly" → the Audio
+    /// Only tick on (Videos Missing Sound, which it excludes, off); "videoBearing"
+    /// and "everything" → no tick. The key is deleted whatever it held — a
+    /// number, garbage text — so this never runs twice. Returns the set to
+    /// use and the one line to log; (the same set, nil) when there was no
+    /// stored value. Never throws, never crashes.
+    nonisolated static func migrateKindFacet(in defaults: UserDefaults, into filters: Set<CatalogViewFilter>)
+        -> (filters: Set<CatalogViewFilter>, line: String?) {
+        guard let stored = defaults.object(forKey: legacyKindFacetKey) else { return (filters, nil) }
+        defaults.removeObject(forKey: legacyKindFacetKey)
+        let head = logPrefix + "the Show menu's media-kind section was removed; its setting was "
+        var next = filters
+        let said: String
+        switch stored as? String {
+        case "audioOnly":
+            next = applying(.audioOnly, on: true, to: filters)
+            said = "Audio Only and is now the Audio Only filter"
+        case "videoBearing":
+            said = "Videos and is now no filter — audio-only files are listed too (no filter ticked lists everything)"
+        case "everything":
+            said = "All Kinds and is now no filter (no filter ticked lists everything)"
+        case .some(let other):
+            said = "not one this build knows (\(String(other.prefix(60)))) and was dropped"
+        case nil:
+            said = "unreadable and was dropped"
+        }
+        return (next, head + said + " → now " + names(next))
+    }
+
     /// `set` after `filter` goes on or off — the exclusion applied.
     nonisolated static func applying(_ filter: CatalogViewFilter, on: Bool,
                                      to set: Set<CatalogViewFilter>) -> Set<CatalogViewFilter> {
@@ -254,10 +323,10 @@ final class CatalogShowFilterStore: ObservableObject {
         return next
     }
 
-    /// A set no surface could have produced (both archive filters, from an
-    /// old or hand-edited setting) made legal: Not Yet Archived wins.
+    /// A set no surface could have produced (Audio Only with Videos Missing
+    /// Sound, from a hand-edited setting) made legal: Audio Only wins.
     nonisolated static func legal(_ set: Set<CatalogViewFilter>) -> Set<CatalogViewFilter> {
-        set.contains(.notYetArchived) && set.contains(.hasMasterCopy) ? set.subtracting([.hasMasterCopy]) : set
+        set.contains(.audioOnly) && set.contains(.videosMissingSound) ? set.subtracting([.videosMissingSound]) : set
     }
 
     /// "Not Yet Archived, Needs a Date" in menu order; "none" for the empty set.
@@ -296,7 +365,7 @@ final class CatalogShowFilterStore: ObservableObject {
                 return Restored(filters: [], note: " (the stored setting was unreadable and was reset)", rewrite: true)
             }
             return decode(tokens: raw.components(separatedBy: separator), known: { CatalogViewFilter(rawValue: $0) },
-                          removed: [], origin: "")
+                          removed: removedStableKeys, origin: "")
         }
         guard let old = defaults.object(forKey: legacyKey) else {
             return Restored(filters: [], note: "", rewrite: false)
@@ -305,26 +374,29 @@ final class CatalogShowFilterStore: ObservableObject {
             return Restored(filters: [], note: " (the old setting was unreadable and was reset)", rewrite: true)
         }
         var restored = decode(tokens: raw.components(separatedBy: legacySeparator), known: { legacyLabels[$0] },
-                              removed: removedLegacyLabels, origin: " (migrated from the old setting")
+                              removed: Dictionary(uniqueKeysWithValues: removedLegacyLabels.map { ($0, $0) }),
+                              origin: " (migrated from the old setting")
         restored.rewrite = true
         return restored
     }
 
+    /// `removed`: a token that names a filter no longer in the menu → the
+    /// words the log uses for it.
     private nonisolated static func decode(tokens: [String], known: (String) -> CatalogViewFilter?,
-                                           removed: Set<String>, origin: String) -> Restored {
+                                           removed: [String: String], origin: String) -> Restored {
         var filters: Set<CatalogViewFilter> = []
         var gone: [String] = []
         var unknown: [String] = []
         for token in tokens.map({ $0.trimmingCharacters(in: .whitespaces) }) where !token.isEmpty {
             if let filter = known(token) { filters.insert(filter) }
-            else if removed.contains(token) { gone.append(token) }
+            else if let words = removed[token] { gone.append(words) }
             else { unknown.append(String(token.prefix(60))) }
         }
         let legalSet = legal(filters)
         var parts: [String] = []
         if !gone.isEmpty { parts.append("dropped, no longer in the menu: " + gone.joined(separator: ", ")) }
         if !unknown.isEmpty { parts.append("dropped, not known to this build: " + unknown.joined(separator: ", ")) }
-        if legalSet != filters { parts.append("dropped Has Master Copy: it cannot be on with Not Yet Archived") }
+        if legalSet != filters { parts.append("dropped Videos Missing Sound: it cannot be on with Audio Only") }
         let changed = !parts.isEmpty
         var note = origin
         if !parts.isEmpty { note += (origin.isEmpty ? " (" : "; ") + parts.joined(separator: "; ") }

@@ -222,15 +222,13 @@ struct CatalogSearchProfileBench {
     }
 
     /// CatalogToolbar.recomputeSearchHitCount(), verbatim shape.
-    /// (Mechanical API-compat edit 2026-07-19: GH #124 added a required
-    /// `kindFacet:` parameter to pfSearchBadgeBase after this yardstick
-    /// was committed; `.everything` is the exact pre-#124 base both the
-    /// diagnosis and the fix's before/after numbers measured. No change
-    /// to the measured work.)
+    /// (The `kindFacet:` parameter GH #124 added to pfSearchBadgeBase left
+    /// with the media-kind section, 2026-11-17: the base is again the one
+    /// the diagnosis measured. No change to the measured work.)
     static func badgeCount(_ records: [VideoRecord], _ index: CatalogSearchIndex, _ query: String) -> Int {
         index.count(
             records: pfSearchBadgeBase(records, showRemoved: false, showSetAside: false,
-                                       showSuperseded: false, kindFacet: .everything),
+                                       showSuperseded: false),
             query: query)
     }
 

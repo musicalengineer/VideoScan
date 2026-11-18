@@ -196,14 +196,12 @@ extension CatalogContent {
             .onReceive(tableState.folderPaintClock.$revision) { tableState.folderPaintRevision = $0 }
     }
 
-    /// Reveal toggles: disconnected media and the kind facet. (Removed /
-    /// set-aside / superseded reveals left the Show menu 2026-11-17.)
+    /// Reveal toggle: disconnected media. (Removed / set-aside / superseded
+    /// reveals and the media-kind section left the Show menu 2026-11-17.)
     private var tableWithFilterTriggers: some View {
         tableWithSearchTriggers
             // Reachable-only baseline opt-out (2026-07-20).
             .onChange(of: showDisconnectedMedia) { refreshRows() }
-            // Media-kind facet chip flip (GH #124).
-            .onChange(of: kindFacet) { refreshRows() }
     }
 
     /// First appearance, record count, and the search / scope inputs.

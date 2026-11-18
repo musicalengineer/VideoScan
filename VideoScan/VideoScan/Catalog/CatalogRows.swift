@@ -46,9 +46,8 @@ enum CatalogRows {
         }
         /// Is this path on a mounted volume (VolumeReachability)?
         var isReachable: (String) -> Bool = { _ in true }
-        /// VideoScanModel.pfNotYetArchived / pfHasMasterCopy / isPossiblyArchivedSampled.
+        /// VideoScanModel.pfNotYetArchived / isPossiblyArchivedSampled.
         var notYetArchived: (VideoRecord) -> Bool = { _ in true }
-        var hasMasterCopy: (VideoRecord) -> Bool = { _ in false }
         var possiblyArchivedSampled: (VideoRecord) -> Bool = { _ in false }
     }
 
@@ -64,7 +63,6 @@ enum CatalogRows {
         var showRemoved = false
         var showSetAside = false
         var showSuperseded = false
-        var kindFacet: CatalogKindFacet = .videoBearing
         var searchText = ""
         var person: CatalogPerson?
         /// The Volumes-pane selection's path prefixes; empty = every volume.
@@ -109,13 +107,13 @@ enum CatalogRows {
     // MARK: Steps
 
     /// Everything that is NOT a Show filter, in the table's order: purge →
-    /// set-aside → superseded → kind → search (the badge is counted here) →
-    /// person → volumes → pairs → connected drives.
+    /// set-aside → superseded → search (the badge is counted here) →
+    /// person → volumes → pairs → connected drives. (No media-kind step since
+    /// 2026-11-17: every kind is in scope; Audio Only is a Show filter.)
     private static func scope(_ records: [VideoRecord], _ state: State, _ result: inout Result) -> [VideoRecord] {
         var out = pfApplyPurgeFilter(records, showRemoved: state.showRemoved)
         out = pfApplySetAsideFilter(out, showSetAside: state.showSetAside)
         out = pfApplySupersededFilter(out, showSuperseded: state.showSuperseded)
-        out = pfApplyKindFacet(out, facet: state.kindFacet)
         if !state.searchText.isEmpty {
             // ONE scan per settled query (GH #123 PR B): the hits over this
             // base ARE the badge; the later steps narrow the survivors.
@@ -154,8 +152,9 @@ enum CatalogRows {
     }
 
     /// The Show ▸ filters (additive — each one narrows further): the pure
-    /// per-record ones from the enum's own table, then the archive pair, then
-    /// Hide Other Versions LAST so it picks among the rows the others left.
+    /// per-record ones from the enum's own table (Audio Only, Videos Missing
+    /// Sound, Needs a Date), then Not Yet Archived, then Hide Other Versions
+    /// LAST so it picks among the rows the others left.
     private static func applyShowFilters(_ rows: [VideoRecord], _ state: State, _ result: inout Result) -> [VideoRecord] {
         var out = rows
         for filter in CatalogViewFilter.ordered(state.filters) {
@@ -172,9 +171,6 @@ enum CatalogRows {
                 result.archivedSearchHitIDs = split.archived.map(\.id)
                 result.archivedSearchSampledHitCount = split.archived.filter(state.engines.possiblyArchivedSampled).count
             }
-        }
-        if state.filters.contains(.hasMasterCopy) {
-            out = out.filter(state.engines.hasMasterCopy)
         }
         if state.filters.contains(.onePerFootage) {
             // Hide Other Versions: one per footage group, then one of any

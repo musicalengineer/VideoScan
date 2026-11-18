@@ -9423,6 +9423,182 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofCoverageTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofCoverageTests"
+      ],
+      "tests": [
+        "attachmentIsCouldNotCheck",
+        "bigEndianOriginalLittleEndianCopy",
+        "droppedSubtitleIsNamed",
+        "longerCopyIsRefused",
+        "monoAndSurroundOriginals",
+        "reorderedPacketsAreRefused",
+        "reorderedPictureStreamsAreRefused",
+        "sameSizeReplacementMidRunIsCouldNotCheck",
+        "soundOnlyPairIsProven"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofDecisionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofDecisionTests"
+      ],
+      "tests": [
+        "chapterMarks",
+        "containerEncodingAndConfigurationDifferences",
+        "couldNotCheckTable",
+        "decodeArgsVector",
+        "differencesAreOrdered",
+        "engineSourceIsReadOnly",
+        "everyReasonHasASentence",
+        "hashCodecTable",
+        "headerVerdictNeedsNoReads",
+        "hiddenMediaIsNamedPerFile",
+        "hundredThousandDecisions",
+        "layoutParse",
+        "liveChannelTable",
+        "logLinesAreAlwaysOneLine",
+        "logLinesNameFilesVerdictEvidenceAndDifferences",
+        "namedDifferencesAreNeverProven",
+        "notProvenBalancedSoundShape",
+        "notProvenLossyOriginal",
+        "notProvenOriginalShape",
+        "notProvenPictureDiffers",
+        "notProvenPictureStreamSet",
+        "notProvenSoundDiffers",
+        "otherTracksAreNamedPerFile",
+        "poisonedFactsNeverProve",
+        "provenForRightOnlyAndMono",
+        "provenWhenEverythingHolds",
+        "spareSoundTrackRule",
+        "tagsAreNamedPerFile",
+        "trackFlags"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofHardeningTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofHardeningTests"
+      ],
+      "tests": [
+        "cancellationDuringTheClosingStampsIsCouldNotCheck",
+        "codexQuietSineIsUnderTheCeilingAndTheEvidenceSaysSo",
+        "croppedDecoderConfigurationIsRefused",
+        "editListTrimmedCopyIsRefused",
+        "hissJustOverTheCeilingIsRefused",
+        "lateSoundOriginalStillProves",
+        "parentFolderRetargetIsCouldNotCheck",
+        "quietPassageOnTheDiscardedChannelIsRefused",
+        "retimedPictureIsRefused",
+        "shiftedSoundIsRefused",
+        "silentShortReadIsCouldNotCheck",
+        "stderrOutputWithExitZeroIsCouldNotCheck",
+        "symlinkRetargetIsCouldNotCheck",
+        "wrongChannelLayoutInWAVIsRefused",
+        "wrongChannelLayoutIsRefused",
+        "zeroExitPartialReadNeverProvesAShortCopy"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofMediaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofMediaTests"
+      ],
+      "tests": [
+        "attenuatedSoundIsRefused",
+        "cancelledCheckIsCouldNotCheck",
+        "differingChannelsAreRefused",
+        "evidenceIsTrueAndTheProofIsReadOnly",
+        "extraOrMissingStream",
+        "fileChangedDuringTheCheckIsCouldNotCheck",
+        "losslessWrappersPlayTheSame",
+        "lossyOriginalIsNotProven",
+        "reencodedPictureIsRefused",
+        "rightOnlyIsProvenAgainstTheRightChannel",
+        "swappedFilesAreRefused",
+        "truncatedCopyIsRefused",
+        "twoSoundTracksOutsideDVAreNotProven",
+        "unmeasurableIsCouldNotCheck"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPacketTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPacketTests"
+      ],
+      "tests": [
+        "changedDisplayMatrixIsRefused",
+        "internalRetimeWithEqualTotalsIsRefused",
+        "repartitionedSubtitlePacketsAreRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofPresentationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofPresentationTests"
+      ],
+      "tests": [
+        "aCopyThatStartsLateAsAWholeIsRefused",
+        "aFrameThatNeedsConvertingIsCouldNotCheck",
+        "aPassThatCannotBeBelievedIsCouldNotCheck",
+        "aPictureScaledBackToItsFirstSizeIsRefused",
+        "aPictureThatChangesShapeMidStreamIsCouldNotCheck",
+        "aTrackSwitchedOffIsRefused",
+        "changedPaletteIsRefused",
+        "changedSubtitleConfigurationIsRefused",
+        "containerAndMetadataAreNamed",
+        "decoderConfigurationIsNamed",
+        "editListHidingPictureWithIdenticalPacketsIsRefused",
+        "equalLengthsOfDifferentHiddenMediaAreNamed",
+        "headerDurationThatLiesIsCouldNotCheck",
+        "interiorSoundRetimeIsRefused",
+        "losslessReencodeIsNamed",
+        "storedButNotPlayedMediaIsNamed",
+        "twoTrackDVWithASilentSpareTrack",
+        "twoTrackDVWithSoundOnTheSpareTrackIsRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BalancedCopyProofRuleTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BalancedCopyProofRuleTests"
+      ],
+      "tests": [
+        "channelLayoutTable",
+        "discardedChannelTable",
+        "displayTable",
+        "frameLedgerChannelFold",
+        "frameLedgerFaults",
+        "frameLedgerPictureFold",
+        "frameLedgerTimeline",
+        "ledgersAtScale",
+        "levelText",
+        "logAtScale",
+        "logRecordParse",
+        "packetLedgerFaults",
+        "packetLedgerFold",
+        "readReportFromACleanLog",
+        "readReportRefusals",
+        "readVerdictTable",
+        "singleLineAndQuoted"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BoundaryTests.swift",
@@ -11491,11 +11667,11 @@
         "CatalogShowingSummaryTests"
       ],
       "tests": [
-        "defaultWithoutMasterArchiveSaysVideosOnConnectedDrives",
+        "defaultWithoutMasterArchiveSaysEverythingOnConnectedDrives",
         "emptyTableFromFiltersAloneIsNotBlank",
         "focusModeReplacesEveryPill",
         "kitchenSinkReadsInFixedOrder",
-        "masterArchiveAddsTheArchivePillInTheSecondSlot",
+        "masterArchiveAddsTheArchivePillAfterEverything",
         "noLineHidesAFilter",
         "oneVocabulary",
         "splitKeepsOrderAndCountsBothSides",
@@ -23858,27 +24034,15 @@
       "path": "VideoScan/VideoScanTests/MediaKindFacetTests.swift",
       "stage": "unit",
       "suites": [
-        "KindFacetTruthTableTests",
-        "KindFacetPersistenceTests",
         "KindFacetSearchGrammarTests",
-        "DisplayCodecTests",
-        "KindFacetScaleTests"
+        "DisplayCodecTests"
       ],
       "tests": [
-        "absentKeyRestoresDefault",
-        "applyFacetFiltersRecords",
         "audioCodecFillsInForAudioOnly",
-        "badgeBaseHonorsFacet",
         "bothEmptyStaysEmpty",
         "codecFieldMatchesBothCodecFields",
-        "defaultFacetIsVideoBearing",
-        "facetFilter100kWithinBudget",
-        "fullTruthTable",
         "legacyStreamGrammarUnchanged",
         "mediaKindAliasTable",
-        "persistedTokensAreStable",
-        "poisonedValueFallsBackToDefault",
-        "roundTripEachCase",
         "typeTokenMatchesThroughCatalogMatcher",
         "typeTokenizes",
         "videoCodecWinsWhenPresent"
@@ -28457,12 +28621,15 @@
         "correlatorSkipsSupersededRecords",
         "duplicateDetectorIgnoresSupersededDuplicates",
         "exportsCarrySupersededRecords",
+        "poisonedWaitingRecords",
         "searchBadgeBaseMatchesComputeFilteredOrder",
         "supersededFilterBudgetAt100k",
         "supersededFilterHidesByDefaultAndRevealsOnToggle",
+        "theListDrainsThroughTheOneEngine",
+        "theWaitingListIsTheAwaitingRuleOverLiveRows",
         "threeHiddenStatesComposeIndependently",
         "unsupersedeClearsMarkerAndReturnsRecordToActive",
-        "viewFilterCaseExistsWithFriendlyLabel",
+        "waitingListAt100k",
         "worklistComposesWithTheHiddenStateFilters",
         "worklistDrainsAsRepairsAreConfirmed"
       ]
@@ -36422,14 +36589,18 @@
         "everySubsetRoundTrips",
         "everyWriterLogs",
         "garbageText",
+        "kindFacetMigrationKeepsTheSetLegal",
+        "migrationOfTheKindFacet",
         "migrationOfTheOldStoredValue",
+        "poisonedKindFacet",
         "poisonedStoredValues",
+        "removedStableTokensAreDroppedAndNamed",
         "retiredRevealsAreForcedOff",
         "setClearAndPersistenceRoundTrip",
         "stableKeyWinsAndUnknownTokensAreNamed",
-        "theArchivePairIsMutuallyExclusive",
+        "theFiveTicks",
         "theSeedRunsOnce",
-        "theTrimmedFilterList",
+        "theSoundPairIsMutuallyExclusive",
         "theWritersAreDistinct"
       ]
     },
@@ -36444,7 +36615,7 @@
       ],
       "tests": [
         "anUnselectedRowLeavesAtOnce",
-        "awaitingConfirmation",
+        "audioOnly",
         "computeFilteredIsAnAdapter",
         "filtersComposeWithTheBaseGates",
         "focusIgnoresEveryFilter",
@@ -36456,14 +36627,17 @@
         "needsDateFollowsTheEdit",
         "needsDateIsThePromoteRule",
         "noFilterListsEverything",
+        "notYetArchived",
         "onePerFootage",
         "pairsOnly",
         "poisonedHeldSet",
         "searchBadgeAndArchivedHits",
-        "theArchivePair",
         "theHeldRowStaysUntilTheSelectionMoves",
+        "theOwnersTagIsRespected",
         "theTableHoldsOnlyAfterAnEdit",
-        "unpairedOnly"
+        "videosMissingSoundFollowsTheOneEngine",
+        "videosMissingSoundOnRecordShapes",
+        "whichStandingsCount"
       ]
     },
     {
@@ -36475,13 +36649,17 @@
         "ShowFiltersAuditSensorTests"
       ],
       "tests": [
-        "contradictoryArchivePairIsNotHidden",
         "everyActiveFilterIsNamed",
+        "noFilterMeansEverything",
+        "noSecondKindControl",
         "noViewOwnsAFilterSet",
+        "onlyTheStoreNamesTheKindFacetKey",
         "onlyTheStoreTouchesThePersistedKeys",
         "showingBoxIsToldAboutFocusMode",
+        "theAwaitingListLivesInMediaFileOperations",
         "theEmptyNoteIsToldAboutFilters",
         "theHiddenRecordRevealsAreGone",
+        "theRemovedFiltersAreOfferedNowhere",
         "theShowingBoxDoesNotTruncateFilters",
         "theShowingBoxHasNoTapGesture",
         "theTableFollowsCatalogEdits"
@@ -39242,7 +39420,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3849,
+      "expected_floor": 3856,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -40377,7 +40555,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 648,
+      "expected_floor": 761,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -40587,6 +40765,13 @@
         "VideoScanTests/FrameIndexMediaMatrixTests",
         "VideoScanTests/FrameSearchLifecycleTests",
         "VideoScanTests/FrameSearchRegressionTests",
+        "VideoScanTests/BalancedCopyProofDecisionTests",
+        "VideoScanTests/BalancedCopyProofMediaTests",
+        "VideoScanTests/BalancedCopyProofHardeningTests",
+        "VideoScanTests/BalancedCopyProofRuleTests",
+        "VideoScanTests/BalancedCopyProofCoverageTests",
+        "VideoScanTests/BalancedCopyProofPacketTests",
+        "VideoScanTests/BalancedCopyProofPresentationTests",
         "VideoScanTests/CatalogRowsTests",
         "VideoScanTests/CatalogRowsScaleTests",
         "VideoScanTests/CatalogRowsSensorTests",
