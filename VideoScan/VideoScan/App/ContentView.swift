@@ -376,6 +376,10 @@ struct CatalogView: View {
     /// set-aside pre-filter, BEFORE volume/View-chip narrowing);
     /// 0 when the search is empty.
     @State private var searchHitCount: Int = 0
+    /// The Showing box's "1,247 of 18,903" (Rick 2026-11-18): written by
+    /// CatalogContent's filter pass beside `searchHitCount`, read by the
+    /// toolbar. nil until the table has computed its rows once.
+    @State private var catalogShownCount: CatalogShowingSummary.ShownCount?
     @State private var showDeleteDuplicatesConfirm = false
     // (The "Clear & Re-correlate All" confirmation moved to the Analyze
     // panel's Correlate row, 2026-10-02 — AnalyzePanelView.)
@@ -683,6 +687,7 @@ struct CatalogView: View {
             searchText: $searchText,
             debouncedSearchText: debouncedSearchText,
             searchHitCount: searchHitCount,
+            shownCount: catalogShownCount,
             sizeTotals: sizeTotals,
             showInspector: $showInspector,
             cacheCount: model.cacheCount,
@@ -768,6 +773,7 @@ struct CatalogView: View {
             sortOrder: $sortOrder,
             searchText: debouncedSearchText,
             searchHitCount: $searchHitCount,
+            shownCountSink: $catalogShownCount,
             filterTargetPaths: filterTargetPaths,
             personFilter: personFilter.selected,
             showPairsOnly: showPairsOnly,

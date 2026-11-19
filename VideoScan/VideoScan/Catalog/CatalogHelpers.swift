@@ -44,6 +44,13 @@ struct CatalogContent: View {
     /// `@Binding` here ≈ a C++ reference member — writes land in
     /// ContentView's @State storage, not in a local copy.
     @Binding var searchHitCount: Int
+    /// The Showing box's "1,247 of 18,903" (Rick 2026-11-18), published UP
+    /// beside the badge by the same `computeFiltered()` pass — the rows it
+    /// returns ARE the table's rows, so the count and the table change in
+    /// the same update. A plain Binding with a default (not `@Binding`, which
+    /// cannot have one) so views built without a toolbar need not pass it
+    /// (≈ a C++ out-pointer parameter defaulting to a sink).
+    var shownCountSink: Binding<CatalogShowingSummary.ShownCount?> = .constant(nil)
     /// Search hits the to-do view HID because they are already archived
     /// (2026-08-22). Written by computeFiltered (event-driven), read by
     /// `archivedHitsBanner`. Empty whenever no search is active or the
@@ -523,6 +530,8 @@ struct CatalogContent: View {
     func computeFiltered(holding held: Set<UUID> = []) -> [VideoRecord] {
         let result = CatalogRows.rows(records, rowsState(holding: held))
         searchHitCount = result.searchHitCount
+        let count = result.shownCount
+        if shownCountSink.wrappedValue != count { shownCountSink.wrappedValue = count }
         archivedSearchHitIDs = result.archivedSearchHitIDs
         archivedSearchSampledHitCount = result.archivedSearchSampledHitCount
         tableState.noLongerMatchingIDs = result.noLongerMatching

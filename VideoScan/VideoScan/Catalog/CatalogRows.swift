@@ -80,6 +80,14 @@ enum CatalogRows {
 
     struct Result {
         var rows: [VideoRecord] = []
+        /// The catalog's rows that are not removed (trashed) — the Showing
+        /// box's "of N". Counted in the purge step this pass runs anyway.
+        var catalogCount = 0
+        /// The Showing box's count: the rows listed, of the catalog — from
+        /// this one pass, so it is the table's row count in the same update.
+        var shownCount: CatalogShowingSummary.ShownCount {
+            CatalogShowingSummary.ShownCount(shown: rows.count, total: catalogCount)
+        }
         /// The toolbar's search badge: hits before the person, volume and
         /// Show filters (connected drives only unless disconnected media shows).
         var searchHitCount = 0
@@ -95,7 +103,9 @@ enum CatalogRows {
         // An explicit-IDs ask always wins, including over Show Removed: the
         // user asked for those specific records.
         if !state.focusIDs.isEmpty {
-            return Result(rows: records.filter { state.focusIDs.contains($0.id) })
+            var focused = Result(rows: records.filter { state.focusIDs.contains($0.id) })
+            focused.catalogCount = records.count { !$0.isPurged }
+            return focused
         }
         var result = Result()
         let scoped = scope(records, state, &result)
@@ -112,6 +122,9 @@ enum CatalogRows {
     /// 2026-11-17: every kind is in scope; Audio Only is a Show filter.)
     private static func scope(_ records: [VideoRecord], _ state: State, _ result: inout Result) -> [VideoRecord] {
         var out = pfApplyPurgeFilter(records, showRemoved: state.showRemoved)
+        // The box's "of N": the purge step's survivors ARE the not-removed
+        // rows — free. Only the (app-unused) reveal needs its own count.
+        result.catalogCount = state.showRemoved ? records.count { !$0.isPurged } : out.count
         out = pfApplySetAsideFilter(out, showSetAside: state.showSetAside)
         out = pfApplySupersededFilter(out, showSuperseded: state.showSuperseded)
         if !state.searchText.isEmpty {
