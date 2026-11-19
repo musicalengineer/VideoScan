@@ -246,6 +246,26 @@ exec > "$LOGFILE" 2>&1
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# >>> prune_nightly_logs (tests/test_nightly_log_retention.py runs exactly this text)
+# The scheduled run's own logs stay bounded (2026-11-18; DECISIONS 2026-11-18: scratch goes once a run is
+# summarized): the newest N nightly_test_<date>_<time>.log stay, older ones go (~48 MB each on the M4; 13
+# files, 620 MB had piled up since 11/10). Only that name, regular files directly in LOGDIR; a link is left
+# as it is; a LOGDIR that is a link is not touched. Worst case kept: N x ~50 MB.
+prune_nightly_logs() {
+    local keep="${1:-14}" f n=0
+    [ -d "$LOGDIR" ] && [ ! -L "$LOGDIR" ] || return 0
+    while IFS= read -r f; do
+        case "$(basename "$f")" in nightly_test_[0-9]*_[0-9]*.log) ;; *) continue ;; esac
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        n=$((n + 1))
+        [ "$n" -le "$keep" ] && continue
+        rm -f -- "$f"
+    done < <(ls -1t "$LOGDIR" 2>/dev/null | sed "s|^|$LOGDIR/|")
+}
+# <<< prune_nightly_logs
+NIGHTLY_LOGS_KEPT=14
+[ "$NIGHTLY_ON_DEMAND" = 1 ] || prune_nightly_logs "$NIGHTLY_LOGS_KEPT"
+
 nightly_timeout_reason() { printf '%s-timeout:%ss' "$1" "$2"; }
 
 # run_with_process_group_watchdog lives in scripts/lib/process_group_watchdog.sh

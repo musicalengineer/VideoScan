@@ -144,6 +144,7 @@ the tree). Everything a run writes beyond that is *scratch* and is removed by th
 | `videoscan-m4run-dd-coverage`, `-dd-coverage-core` | 5.6 + 1.3 GB | corpus coverage, opt-in, rare | scratch: `testbed_host.py clean` at every run start and end |
 | `VideoScan/sanitizer-dd/{address,thread}[-core]` | 14 GB | weekly sanitizer (Sat, Sun) | scratch: removed after the run's row (`--keep-dd` keeps it) |
 | `~/Library/Logs/VideoScan/coverage/app-<day>.xcresult` + logs | ~370 MB a night | coverage lane | scratch: bundles removed after the report; the newest 7 app and core logs kept |
+| `~/Library/Logs/VideoScan/nightly_test_<stamp>.log` | ~48 MB a night | scheduled suite | scratch beyond the newest 14 (removed at each scheduled run's start) |
 
 Warm total ≈ 43 GB (4% of the disk); the corpus run folders and work folders are §1's cleanup.
 
