@@ -159,6 +159,8 @@ def read_results(log: Path) -> dict:
         with open(log, "r", encoding="utf-8", errors="replace") as f:
             for raw in f:
                 raw = raw.rstrip("\n")
+                if any(w.lower() in raw.lower() for w in MACHINE_WORDS):
+                    machine = True                       # also inside a case's failure line
                 m = CASE_LINE.search(raw)
                 if m:
                     cases[m.group(1)] = m.group(2)
@@ -174,8 +176,6 @@ def read_results(log: Path) -> dict:
                     message = m.group(3).strip()
                     failures.append(f"{m.group(2)} line {m.group(1)}: " + (message if safe_text(message) else "(message withheld)"))
                     continue
-                if any(w.lower() in raw.lower() for w in MACHINE_WORDS):
-                    machine = True
     except OSError:
         pass
     return {"cases": cases, "lines": lines, "failures": failures, "machine": machine}
@@ -289,7 +289,7 @@ class UILane:
         try:
             with os.fdopen(h.guarded_open(seal.writable(raw_log), append=True), "ab") as f:
                 test_rc = subprocess.call(
-                    [self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination", "platform=macOS",
+                    [self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination", "platform=macOS,arch=arm64",
                      "-only-testing:VideoScanUITests/" + TEST_CLASS, "-collect-test-diagnostics", "never",
                      "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", str(TEST_ALLOWANCE),
                      "-resultBundlePath", str(self.work / "ui.xcresult")],
@@ -331,7 +331,7 @@ class UILane:
         body.append(f"monkey: seed {seed}, {self.steps} steps (replay: the same --ref, --limit <step+1>)")
         body += self.digest(results["lines"])
         body += ["failure: " + f for f in results["failures"][:20]]
-        if results["machine"] and not cases:
+        if results["machine"] and passed == 0:        # every case stopped at the automation gate (a locked console)
             return self.say("NORUN", ["UI automation could not start on the M4 (automation mode / Accessibility; "
                                       "a person at the M4 once — docs/guides/operations.md §1)"] + body, h.EXIT_NORUN)
         red = (not cases or failed or skipped or passed == 0 or not isolation_ok or crashes

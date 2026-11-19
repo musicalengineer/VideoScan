@@ -260,6 +260,13 @@ class UILaneTests(unittest.TestCase):
         self.assertEqual(self.scene.go()[0], cr.EXIT_NORUN)
         self.assertIn('UI automation could not start on the M4', self.scene.summary())
 
+    def test_cases_that_all_failed_at_the_automation_gate_are_norun_not_red(self):
+        self.scene.ui_plan.update(cases={c: 'failed' for c in CASES}, seam='', rc=65,
+                                  print=['/x/CorpusUITests.swift:300: error: -[VideoScanUITests.CorpusUITests test1_x] : '
+                                         'Failed to initialize for UI testing: Timed out while enabling automation mode.'])
+        self.assertEqual(self.scene.go()[0], cr.EXIT_NORUN)
+        self.assertIn('UI automation could not start on the M4', self.scene.summary())
+
     def test_a_failed_build_is_red_and_runs_nothing(self):
         self.scene.ui_plan['build_fails'] = True
         self.assertEqual(self.scene.go()[0], cr.EXIT_RED)
