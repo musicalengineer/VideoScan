@@ -34,6 +34,13 @@ asks the same, CorpusSeal.external). Nothing ever writes on it, mounted or not.
     refuses it, and it is never the implicit one).
   - a volume at the mount point that is not the adopted one, unmarked, or reached through a
     link: the lane is refused (exit 2) and runs nothing.
+  - proof never outlives its evidence (Codex #331 F2): the lane proves the volume again before
+    every launch, and the in-app driver before every engine on every file (CorpusSeal.mayOpen);
+    a file it came to after the volume went is `external_volume_not_proven` — NOT RUN, AMBER.
+  - every tree the harness removes (a run's work folder, a dead run's, an old stored run,
+    prepare's build folder) goes through `remove_tree`: never a tree with a mount anywhere in it
+    (left whole), and descriptor by descriptor, never into another device (Codex #331 F1: the
+    volume remounted inside a dead work folder is not emptied).
   - the verbs lane clones from the INTERNAL root only: `cp -c` makes an APFS clone only
     within one volume, and the clones live in ~/corpus/work on the SSD.
   - the proof lane takes v1's one-sided-sound stratum, then the files the newest whole check
@@ -185,6 +192,9 @@ VERBS_MAX_FILE = 2 << 30                         # a sampled file is at most 2 G
 VERBS_PROMOTE_BYTES = 4 << 30                    # Promote makes real copies: at most this much in the scratch archive
 VERBS_FREE_FLOOR = 20 << 30                      # refuse to start with less free space than this
 LOSS_WORDS = ("LOST", "MISMATCH")                # a clone that is gone or no longer its SHA-256: RED
+# A file on the external root that was not run because the volume was no longer proven when the run
+# came to it (the driver's word, CorpusSeal.mayOpen; or the lane's, between launches): NOT RUN, AMBER.
+EXTERNAL_GONE = "external_volume_not_proven"
 HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes the harness itself assigns
 
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
@@ -213,6 +223,13 @@ def short_hostname() -> str:
 def _under(path: Path, root: Path) -> bool:
     p, r = Path(os.path.realpath(str(path))), Path(os.path.realpath(str(root)))
     return p == r or r in p.parents
+
+
+def plain_absolute(path: str) -> bool:
+    """Absolute, not "/", and every component a plain name (no "", ".", ".."): the same rule as
+    CorpusSeal.isPlainAbsolute (Codex #331 F4: normpath keeps a leading "//")."""
+    parts = path.split("/")
+    return path.startswith("/") and len(parts) > 1 and all(part not in ("", ".", "..") for part in parts[1:])
 
 
 def diskutil_volume_uuid(mount: str) -> str:
@@ -290,16 +307,15 @@ class Seal:
         if not os.path.lexists(str(path)):
             return None
         bad = Refused(f"refused: ~/corpus/{VOLUME_PIN} is not the record `adopt-volume` writes (a link, or not one volume)")
-        if (os.path.islink(str(path)) or not path.is_file()
+        if (os.path.islink(str(path)) or not path.is_file() or os.lstat(str(path)).st_nlink != 1
                 or os.path.realpath(str(path)) != os.path.join(os.path.realpath(str(self.corpus)), VOLUME_PIN)):
-            raise bad
+            raise bad                                        # a second name could be a run's progress file (Codex #331 F3)
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
             mount, uuid = value["mount"], str(value["volume_uuid"]).upper()
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             raise bad
-        if (not isinstance(mount, str) or not mount.startswith("/") or os.path.normpath(mount) != mount
-                or mount == "/" or not _UUID.fullmatch(uuid)):
+        if not isinstance(mount, str) or not plain_absolute(mount) or not _UUID.fullmatch(uuid):
             raise bad
         return {"mount": mount, "volume_uuid": uuid}
 
@@ -864,7 +880,7 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
         os.replace(str(building / database_name), str(seal.writable(seal.state / database_name)))
         os.replace(str(building / latch_name), str(seal.writable(seal.state / latch_name)))
     finally:
-        shutil.rmtree(str(seal.writable(building)), ignore_errors=True)
+        remove_tree(seal, building)
     strata = Counter(e.stratum for e in entries)
     roots = {root: {"files": sum(1 for e in entries if e.root == root), "bytes": sum(e.size for e in entries if e.root == root)}
              for root in ROOTS}
@@ -1185,6 +1201,8 @@ class Lane:
         self.seal.mkdir(self.work / "tmp")
         while True:
             pending = [e for e in entries if not results[e.sha].get("settled")]
+            if pending:                                      # proven at go(); again after the build and at each relaunch
+                pending = self.reprove(pending, results)
             if not pending:
                 break
             events = self.launch(pending, database, xctestrun)
@@ -1202,6 +1220,18 @@ class Lane:
                 raise Refused("the driver started no file — see corpus-test.log on the host")
         return results, hello
 
+    def reprove(self, pending: List[Entry], results: Dict[str, dict]) -> List[Entry]:
+        """Before each launch, the external root is proven again (Codex #331 F2: no proof outlives
+        its evidence). Another volume there, or its marker gone: Refused. Unplugged: its pending
+        files are NOT RUN (EXTERNAL_GONE), the internal ones go on."""
+        self.seal._external = None
+        if self.seal.external().state == "ok":
+            return pending
+        for e in pending:
+            if e.root == "external":
+                results[e.sha].update({engine: EXTERNAL_GONE for engine in self.engines}, settled=True)
+        return [e for e in pending if e.root != "external"]
+
     # -- the report
 
     def report(self, results: Dict[str, dict], hello: Dict[str, object], wall: float, engine_present: bool = True) -> dict:
@@ -1210,6 +1240,7 @@ class Lane:
         by_stratum: Dict[str, dict] = {}
         by_format: Dict[str, dict] = {}
         failures = Counter()
+        gone = 0                                             # external files the run came to and could not prove
         for record in results.values():
             fmt = "{} | {} | {}".format(record.get("container", "unknown"), record.get("vcodec", "unknown"),
                                         record.get("acodec", "unknown"))
@@ -1225,12 +1256,14 @@ class Lane:
                     failures[e + ":" + outcome] += 1
             if record.get("unfinished"):
                 failures["end:crash"] += 1                   # RED: a file that began and never ended
+            if any(record.get(e) == EXTERNAL_GONE for e in engines):
+                gone += 1
         return {"lane": self.lane, "sha": self.sha, "stamp": self.stamp, "host": self.seal.hostname,
                 "engine_present": engine_present, "files": len(results),
                 "bytes": sum(r.get("size", 0) for r in results.values()),
                 "media_seconds": round(sum(r.get("duration", 0) or 0 for r in results.values()), 1),
                 "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "launches": self.launches,
-                "limit": self.limit, "not_run_external": self.not_run_external, "picked": self.picked,
+                "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
                 "deadline_s": self.deadline, "engines": {e: dict(c) for e, c in totals.items()},
                 "failures": dict(failures), "seal": hello,
                 "by_stratum": {k: {kk: (dict(vv) if isinstance(vv, Counter) else vv) for kk, vv in v.items()}
@@ -1309,13 +1342,12 @@ class Lane:
             self.remove_work()
 
     def remove_work(self) -> None:
-        """The run's work folder goes, whole. Promote locks what it archives (the user
-        immutable flag): the lock is cleared first, on files under this run's work folder only."""
+        """The run's work folder goes, whole, through `remove_tree` (Promote's locks cleared on this
+        run's own files; never a tree with a mount in it)."""
         work = str(self.seal.writable(self.work))
         if not os.path.isdir(work):
             return
-        _unlock_tree(work)
-        shutil.rmtree(work, ignore_errors=True)
+        remove_tree(self.seal, self.work)
         if os.path.isdir(work):
             note = "  the run's work folder could NOT be removed whole (it is still on the M4 under ~/corpus/work)"
             self.lines.append(note)
@@ -1335,11 +1367,12 @@ def transient_room(seal: Seal, need: int) -> None:
 
 def proof_files(seal: Seal, entries: List[Entry], cap: int = PROOF_CAP) -> Tuple[List[Entry], Dict[str, object]]:
     """The proof lane's files (see PROOF_CAP): v1's one-sided-sound stratum first, then what the
-    newest whole check run heard as one-sided, smallest first; at most `cap`. Returns them and
+    newest WHOLE check run (not limited, nothing NOT RUN: Codex #331 F5) heard as one-sided,
+    smallest first; at most `cap`. Returns them and
     where they came from (counts and the check run's name: words only)."""
     fixed = [e for e in entries if e.stratum == PROOF_STRATUM]
     heard, source = set(), "none"
-    runs = [run for run, report in usable_runs(seal, "check") if not report.get("limit")]
+    runs = [run for run, report in usable_runs(seal, "check") if not report.get("limit") and not report.get("not_run_external")]
     if runs:
         try:
             heard = {sha for sha, record in _outcomes(runs[-1]).items()
@@ -1752,19 +1785,98 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
 _RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES) + ["coverage"]))     # work/<stamp>-<lane>; corpus_coverage's own
 
 
-def _unlock_tree(folder: str) -> None:
-    """Clear the user immutable flag (what Promote sets on what it archives) under `folder` —
-    on regular files with ONE name only: a hard link could share its inode with a file outside
-    the run, and clearing the flag here would clear it there (Codex #311 F3)."""
-    for parent, _, names in os.walk(folder):
-        for name in names:
-            path = os.path.join(parent, name)
+UF_IMMUTABLE = 0x2                              # what Promote sets on what it archives
+O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _one_device(root: str) -> bool:
+    """True when every entry under `root` (links not followed) is on `root`'s own device and the
+    whole tree could be read: a tree with a mount anywhere in it — the external corpus volume,
+    wherever it is mounted — is not one."""
+    unreadable = []
+    try:
+        dev = os.lstat(root).st_dev
+    except OSError:
+        return False
+    for parent, dirs, names in os.walk(root, onerror=unreadable.append):
+        for name in dirs + names:
             try:
-                info = os.lstat(path)
-                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_flags & 0x2:     # UF_IMMUTABLE
-                    os.lchflags(path, info.st_flags & ~0x2)
-            except (OSError, AttributeError):
-                continue
+                if os.lstat(os.path.join(parent, name)).st_dev != dev:
+                    return False
+            except OSError:
+                return False
+    return not unreadable
+
+
+def _remove_at(dir_fd: int, name: str, path: str, dev: int) -> None:
+    """Remove `name` of the open folder `dir_fd` (whose path is `path`'s parent): a folder by
+    descending through descriptors, never following a link and never entering another device; a
+    file by unlinking that name. Promote's lock (UF_IMMUTABLE) is cleared first on a regular file
+    with ONE name on this device — a second name could be a pristine file's (Codex #311 F3). The
+    lock is cleared by path (Python has no fchflags) only after the path is proven to be the very
+    file the descriptor walk found (same device and inode); what can still slip between the two is
+    a rename, and it would only clear a flag — the unlink itself is by descriptor."""
+    try:
+        info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return
+    if info.st_dev != dev:
+        return                                               # another volume: never entered, never unlinked
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            fd = os.open(name, O_DIR, dir_fd=dir_fd)
+        except OSError:
+            return
+        try:
+            if os.fstat(fd).st_dev != dev:
+                return
+            for child in os.listdir(fd):
+                _remove_at(fd, child, os.path.join(path, child), dev)
+        finally:
+            os.close(fd)
+        try:
+            os.rmdir(name, dir_fd=dir_fd)
+        except OSError:
+            pass
+        return
+    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and getattr(info, "st_flags", 0) & UF_IMMUTABLE:
+        try:
+            again = os.lstat(path)
+            if (again.st_dev, again.st_ino) == (info.st_dev, info.st_ino):
+                os.lchflags(path, again.st_flags & ~UF_IMMUTABLE)
+        except (OSError, AttributeError):
+            return
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except OSError:
+        pass
+
+
+def remove_tree(seal: Seal, folder: Path) -> bool:
+    """THE way the harness removes a tree — a run's work folder, a dead run's, an old stored run,
+    prepare's build folder (Codex #331 F1: one engine, five callers). Only inside
+    ~/corpus/{state,work,reports} and nowhere pristine (`Seal.writable`); only a tree wholly on
+    its own device — one with a mount anywhere in it is left WHOLE (nothing of it is removed); then
+    through folder descriptors that never follow a link nor enter another device, so a volume
+    mounted there after the check is not entered either. (C++: openat/unlinkat on a dirfd.)
+    Returns True when the tree is gone."""
+    path = str(seal.writable(folder))
+    if not os.path.lexists(path):
+        return True
+    if os.path.islink(path) or not os.path.isdir(path) or not _one_device(path):
+        return False
+    dev = os.lstat(path).st_dev
+    try:
+        parent = os.open(os.path.dirname(path), O_DIR)
+    except OSError:
+        return False
+    try:
+        if os.fstat(parent).st_dev != dev:
+            return False
+        _remove_at(parent, os.path.basename(path), path, dev)
+    finally:
+        os.close(parent)
+    return not os.path.lexists(path)
 
 
 def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float] = None) -> List[str]:
@@ -1772,12 +1884,14 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
     Stored runs of the lane: the newest `keep`, every RED run and the BASELINE are kept; the
     rest go, and a commit folder left empty with them. Nothing is pruned while the accepted
     baseline cannot be read back — the stored runs are then the evidence. Work folders older
-    than STALE_WORK_SECONDS are what a run that died left behind: removed, unlocked first."""
+    than STALE_WORK_SECONDS are what a run that died left behind: removed (`remove_tree`: never a
+    tree with a mount in it)."""
     lines = []
     seal.check()                                             # nothing is removed unless the folders are themselves
     keep = KEEP_RUNS if keep is None else keep
     baseline, _, problem = baseline_of(seal, lane)
     runs = lane_runs(seal, lane)
+    kept_whole = 0
     if problem is None and len(runs) > keep:
         removed = 0
         for run in runs[:-keep]:
@@ -1789,7 +1903,9 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
                     continue
             except (OSError, ValueError, KeyError, TypeError):
                 continue                                     # unreadable: left for a person to look at
-            shutil.rmtree(str(seal.writable(run)), ignore_errors=True)
+            if not remove_tree(seal, run):
+                kept_whole += 1
+                continue
             removed += 1
             try:
                 run.parent.rmdir()                           # only when empty
@@ -1806,11 +1922,15 @@ def prune(seal: Seal, lane: str, keep: Optional[int] = None, now: Optional[float
                 continue                                     # not a run's folder (Codex #311 F7), or not old
         except OSError:
             continue
-        _unlock_tree(str(seal.writable(folder)))
-        shutil.rmtree(str(folder), ignore_errors=True)
-        stale += 1
+        if remove_tree(seal, folder):
+            stale += 1
+        else:
+            kept_whole += 1
     if stale:
         lines.append(f"  housekeeping: {stale} work folders left by runs that died were removed")
+    if kept_whole:
+        lines.append(f"  housekeeping: {kept_whole} old folders could not be removed whole (a mount, a link or a locked "
+                     "file with a second name inside) — left as they are on the M4")
     return lines
 
 

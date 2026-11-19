@@ -117,7 +117,8 @@ enum CorpusSeal {
         let corpus = realHome + "/corpus", pinPath = corpus + "/" + volumePin
         var info = stat()
         guard lstat(pinPath, &info) == 0 else { return .none }
-        guard info.st_mode & S_IFMT == S_IFREG, resolved(pinPath) == resolved(corpus) + "/" + volumePin,
+        // One name only: a second name could be a run's progress file, appended to (Codex #331 F3).
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1, resolved(pinPath) == resolved(corpus) + "/" + volumePin,
               let data = FileManager.default.contents(atPath: pinPath),
               let pin = try? JSONDecoder().decode(VolumePin.self, from: data),
               isPlainAbsolute(pin.mount), isVolumeUUID(pin.volume_uuid.uppercased()) else {
@@ -135,6 +136,25 @@ enum CorpusSeal {
         let media = mount + "/corpus/media"
         if lstat(media, &info) == 0, resolved(media) != media { return .refused("external_volume_through_a_link") }
         return .proven(mount: mount)
+    }
+
+    /// May the file at `path` be opened NOW (Codex #331 F2: the volume is proven again before every
+    /// engine, not once per run)? A file off the adopted volume: yes — `refusal` proved its place. On
+    /// it: only while that volume is proven at this moment, and only under its corpus/media. When the
+    /// volume (or its record) fails a check now, only ~/corpus/media and the run's clones may be opened.
+    static func mayOpen(_ path: String, realHome: String) -> Bool {
+        switch external(realHome: realHome) {
+        case .none: return true
+        case .absent(let mount): return !isUnder(path, mount)
+        case .proven(let mount): return !isUnder(path, mount) || isUnder(path, mount + "/corpus/media")
+        case .refused: return isUnder(path, realHome + "/corpus/media") || isUnder(path, realHome + "/corpus/work")
+        }
+    }
+
+    /// A regular file with ONE name (not a link, not a folder, no second name a pristine file could share).
+    static func isOneNameFile(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG && info.st_nlink == 1
     }
 
     /// Where the file system that holds `path` is mounted (statfs(2) f_mntonname), or nil.
@@ -224,6 +244,7 @@ enum CorpusSeal {
         return isUnder(config.work, work) && resolved(config.work) != resolved(work)
             && isUnder(config.progress, config.work) && resolved(config.progress) != resolved(config.work)
             && !isUnder(config.progress, corpus + "/media") && !isUnder(config.progress, corpus + "/live")
+            && isOneNameFile(config.progress)
     }
 
     /// nil when the seal holds; otherwise the refusal word (never a path).
@@ -238,6 +259,7 @@ enum CorpusSeal {
               isUnder(config.progress, config.work), resolved(config.progress) != resolved(config.work) else {
             return "work_outside_the_corpus"
         }
+        guard isOneNameFile(config.progress) else { return "progress_is_not_a_plain_file" }
         guard config.lane == input.lane else { return "config_is_for_another_lane" }
         // `inRun`: inside THIS run's work folder.
         func inRun(_ path: String) -> Bool { isUnder(path, config.work) && resolved(path) != resolved(work) }

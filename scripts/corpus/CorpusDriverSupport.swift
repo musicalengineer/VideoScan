@@ -78,10 +78,17 @@ final class CorpusProgress: @unchecked Sendable {
     private let lock = NSLock()
     private let handle: FileHandle
 
+    /// Opened without following a link, and only a regular file with ONE name: a second name could be
+    /// a corpus document's (Codex #331 F3: the pin, hard-linked as a progress file).
     init(path: String) throws {
-        guard let handle = FileHandle(forWritingAtPath: path) else { throw CorpusRefusal(word: "progress_not_writable") }
-        handle.seekToEndOfFile()
-        self.handle = handle
+        let fd = open(path, O_WRONLY | O_APPEND | O_NOFOLLOW)
+        guard fd >= 0 else { throw CorpusRefusal(word: "progress_not_writable") }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+            close(fd)
+            throw CorpusRefusal(word: "progress_not_writable")
+        }
+        handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 
     func write(_ event: [String: Any]) {
@@ -245,9 +252,16 @@ final class CorpusRun: @unchecked Sendable {
         progress.write(event)
     }
 
-    /// Runs one engine step under the deadline and records its outcome word.
+    /// Runs one engine step under the deadline and records its outcome word — or, for a file on the
+    /// external volume that is no longer proven, records `external_volume_not_proven` and runs nothing.
     func engine(_ item: CorpusConfig.Item, _ name: String,
                 _ body: () async throws -> (outcome: String, kinds: [String])) async {
+        // The external volume is proven again now: a file on it is never opened on a proof made earlier.
+        guard CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome()) else {
+            progress.write(["ev": "engine", "sha": item.sha, "engine": name, "outcome": "external_volume_not_proven",
+                            "kinds": [String](), "s": 0])
+            return
+        }
         deadline.entering(name)
         let started = Date()
         var outcome = "error:unknown", kinds: [String] = []
