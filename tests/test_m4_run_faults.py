@@ -257,6 +257,26 @@ class CodexFindings328Tests(TestbedScene):
         self.assertEqual(got, 'RED', 'a GREEN corpus lane with no facts has no number behind it')
 
 
+class CodexFindings329Tests(TestbedScene):
+    """Codex #329 (2026-11-18), RED first."""
+
+    def test_2_a_withheld_summary_behind_a_blank_line_is_red(self):
+        (self.fake / 'corpus-check.json').write_text(json.dumps(dict(exit=0, facts=facts('check'),
+                                                                     summary='\nclip.mov GREEN\n')))
+        p, log, summary, _ = self.host('w1', 'corpus', '--corpus-lane', 'check')
+        self.assertRegex(log, r'(?m)^OUTCOME RED ')
+
+    def test_3_a_suite_row_that_counted_zero_tests_is_never_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = pathlib.Path(tmp, 'row.json')
+            row.write_text(json.dumps(dict(passed=0, failed=0, skipped=0, core_passed=0, core_failed=0)))
+            lanes = pathlib.Path(tmp, 'lanes.tsv')
+            lanes.write_text(f'suite\tGREEN\t1\t{row}\n')
+            done = subprocess.run([sys.executable, str(SUMMARY), '--testbed', str(lanes), 'c' * 40, '9', '--expect', 'suite'],
+                                  capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 1, done.stdout)
+
+
 class HarnessTruthAuditTests(unittest.TestCase):
     """Item 5 (2026-11-18): can any lane print GREEN with zero tests, zero files or a missing log?
     Each answer is pinned here or in the file named:

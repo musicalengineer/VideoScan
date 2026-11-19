@@ -716,8 +716,9 @@ host_corpus() {   # host_corpus <sha> <stamp>
                 # withheld whole is no summary (Codex #328 F4).
                 local shown shown_rc
                 shown="$(python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout")"; shown_rc=$?
-                if [ "$shown_rc" = 0 ] && [ -n "$(printf '%s' "$shown" | tr -d '[:space:]')" ] \
-                        && printf '%s\n' "$shown" | grep -qv '^(\(withheld\|a line was withheld\)'; then
+                # At least one line that is neither blank nor a withholding notice (Codex #329 F2).
+                if [ "$shown_rc" = 0 ] && printf '%s\n' "$shown" | grep -v '^[[:space:]]*$' \
+                        | grep -qv '^(\(withheld\|a line was withheld\)'; then
                     printf '%s\n' "$shown" >>"$OUT/summary.txt"
                 else
                     echo "corpus $CORPUS_LANE: RED its summary could not be read back (empty or withheld; rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"

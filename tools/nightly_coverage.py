@@ -274,6 +274,8 @@ _SCRATCH = re.compile(r"(app|core)-\d{4}-\d\d-\d\d\.(log|xcresult)")
 def real_folders_below(home: Path, path: Path, under: str) -> bool:
     """True when `path` is inside home/`under` and every component from `home` down to it is a
     real folder, none a link (Codex #328 F1: a linked parent must not carry a deletion elsewhere)."""
+    if ".." in Path(path).parts:                               # abspath would drop `link/..`; the kernel would not (Codex #329 F1)
+        return False
     try:
         rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(home))
     except ValueError:

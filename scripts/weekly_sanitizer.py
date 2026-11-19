@@ -655,6 +655,8 @@ def drop_derived_data(dd_root: Path, names: List[str], home: Optional[Path] = No
     import shutil
     import stat
     base = Path(os.path.abspath(home or Path.home()))
+    if ".." in Path(dd_root).parts:                            # abspath would drop `link/..`; the kernel would not (Codex #329 F1)
+        return 0
     try:
         rel = Path(os.path.abspath(dd_root)).relative_to(base)
     except ValueError:

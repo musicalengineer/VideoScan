@@ -302,3 +302,14 @@ def test_codex_328_2_only_names_that_match_whole_are_scratch(tmp_path):
         (out / f"app-2026-11-0{d}.log").write_text("x")
     nc.tidy_outputs(out, keep_logs=1, home=home)
     assert odd.exists()
+
+
+def test_codex_329_1_a_dotdot_path_is_refused_before_it_is_normalised(tmp_path):
+    home, out = _home_with_logs(tmp_path)
+    corpus = tmp_path / "corpus"
+    (corpus / "anchor").mkdir(parents=True)
+    (corpus / "app-2026-11-18.xcresult").mkdir()
+    (corpus / "app-2026-11-18.xcresult" / "keep").write_text("keep")
+    os.symlink(corpus / "anchor", out / "link")
+    words = nc.tidy_outputs(out / "link" / "..", home=home)   # abspath would read it as `out`; the kernel reads ~/corpus
+    assert (corpus / "app-2026-11-18.xcresult" / "keep").exists() and "refused" in words

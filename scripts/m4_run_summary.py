@@ -410,8 +410,8 @@ def _has_number(name, facts):
     """A lane that says GREEN or AMBER carries its counts: the suite both lanes counts, a corpus lane its files."""
     if not isinstance(facts, dict):
         return False
-    if name == 'suite':
-        return suite_counts(facts) != 'no count' and suite_counts(facts, 'core_') != 'no count'
+    if name == 'suite':                                    # both lanes ran tests: a count of zero is no number (Codex #329 F3)
+        return all((_count(facts, p + 'passed') or 0) + (_count(facts, p + 'failed') or 0) > 0 for p in ('', 'core_'))
     return bool(_count(facts, 'files'))
 
 

@@ -970,3 +970,15 @@ def test_codex_328_1_a_linked_cache_root_or_parent_is_never_entered(tmp_path):
     assert ws.drop_derived_data(caches / "sanitizer-dd", ["address"], home=tmp_path) == 0
     assert (corpus / "sanitizer-dd" / "address" / "keep").exists()
     assert ws.drop_derived_data(tmp_path / "elsewhere", ["address"], home=tmp_path) == 0, "only under ~/Library/Caches"
+
+
+def test_codex_329_1_a_dotdot_root_is_refused_before_it_is_normalised(tmp_path):
+    root = tmp_path / "Library" / "Caches" / "VideoScan" / "sanitizer-dd"
+    root.mkdir(parents=True)
+    corpus = tmp_path / "corpus"
+    (corpus / "anchor").mkdir(parents=True)
+    (corpus / "address").mkdir()
+    (corpus / "address" / "keep").write_text("keep")
+    os.symlink(corpus / "anchor", root / "link")
+    assert ws.drop_derived_data(root / "link" / "..", ["address"], home=tmp_path) == 0
+    assert (corpus / "address" / "keep").exists()
