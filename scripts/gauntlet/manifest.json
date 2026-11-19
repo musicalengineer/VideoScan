@@ -35523,6 +35523,46 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_run_tests.py",
+      "stage": "unit",
+      "suites": [
+        "test_run_tests.py"
+      ],
+      "tests": [
+        "test_a_big_group_also_gets_its_median_file",
+        "test_a_display_name_that_says_skipped_or_failed_is_still_a_pass",
+        "test_a_failure_is_red",
+        "test_a_nonzero_exit_with_passes_is_red",
+        "test_a_zero_test_lane_is_red_even_with_exit_0",
+        "test_adds_then_moves_the_side_worktree_and_refuses_it_dirty",
+        "test_all_green_is_exit_0",
+        "test_app_tests_over_ssh_go_through_the_gui_domain",
+        "test_commands_use_debug_the_side_dd_and_only_testing",
+        "test_host_words_map_to_ssh_names_or_local",
+        "test_list_runs_without_a_build",
+        "test_mode_defaults_and_exclusive_flags",
+        "test_modules_map_from_the_source_folders",
+        "test_noise_lines_are_not_tests",
+        "test_not_run_is_never_green_and_nothing_run_is_red",
+        "test_only_skips_is_red",
+        "test_pytest_verbose_lines_and_summary_message_without_double_count",
+        "test_refuses_any_main_checkout",
+        "test_refuses_ricks_checkout_and_xcode_derived_data",
+        "test_refuses_the_checkout_itself",
+        "test_remote_command_pins_the_commit_and_never_passes_host_on",
+        "test_smoke_picks_the_smallest_file_per_module_and_stage_deterministically",
+        "test_stage_and_kind_flags_narrow",
+        "test_swift_testing_pass_known_issue_param_skip_and_fail",
+        "test_the_lock_refuses_a_second_holder",
+        "test_the_real_manifest_selects_a_deterministic_nonempty_smoke",
+        "test_the_shell_entry_is_a_thin_exec",
+        "test_xcodebuild_parallel_lines_count_once",
+        "test_xctest_pass_skip_and_fail_with_its_message"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_sensor_lane.py",
@@ -39767,6 +39807,10 @@
         {
           "name": "tests/test_search_benchmark_metrics.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_run_tests.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
           "name": "tests/test_sensor_lane.py",
