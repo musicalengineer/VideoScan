@@ -82,12 +82,14 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   cut to its last 200 lines under its own name; `run.log`, `summary.txt`, the verdict files and `*.tests.tsv` stay
   (a few KB; `tidy.txt` records it). The summary gets one line, e.g. `disk: free 52% after cleanup (lowest 38% during
   the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB`. At the start and the end, under the
-  lock: finished runs not yet tidied are tidied and `~/corpus/work/<stamp>-<lane>` folders removed; below 50% free,
+  lock: finished runs not yet tidied are tidied, `~/corpus/work/<stamp>-<lane>` folders removed, and the coverage
+  lane's two caches (`videoscan-m4run-dd-coverage` 5.6 GB, `-dd-coverage-core` 1.3 GB: an opt-in lane, a cold build
+  ~3 min, so scratch rather than warm) removed whatever the disk says; below 50% free,
   unfinished runs go oldest first, then `videoscan-<root>-dd-suite` and `-dd` — only when that reaches the floor
   (a cold build costs 10-25 min). M4 only (`<root>` must be `$HOME/m4run`). Every folder is opened from `$HOME` down
   with `O_NOFOLLOW` on the home volume, and every unlink, rename and write is relative to those descriptors (Codex
   #322: a name swapped for a link after a check cannot redirect anything; a mount is never entered); the only folders
-  it holds are `~/m4run/out`, `~/corpus/work` and those two caches. A `~/corpus` that is not a folder of its own, or
+  it holds are `~/m4run/out`, `~/corpus/work` and those four caches, each by its fixed name and only as a real folder. A `~/corpus` that is not a folder of its own, or
   a protected corpus name that is a link, stops the whole cleanup (the disk line says `cleanup refused`); a tree that
   cannot be scanned whole, or holds a protected folder by inode, is not touched.
   Never the corpus media, documents, reports, state or `live/`; no lock flag is ever cleared (a locked file stays and
@@ -205,6 +207,7 @@ reports counts.
 | `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio · the A/V pair link, on every file, at that commit |
 | `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on the one-sided-sound files; says so when the ref has no proof engine |
 | `scripts/corpus_run.sh run verbs [--ref <rev>]` | ~20 files, stratified and sized to fit, cloned (`cp -c`, no extra space) into `work/<run>/vol/`; a catalog over the clones; then the app's real engines: Update Catalog + Find Duplicates + Delete Duplicates on three byte-identical clones, Move to Trash on an extra copy and on the last copy, Remove and Remove from Catalog each followed by a rescan (does the row come back?), Promote into a scratch archive; every clone re-hashed afterwards |
+| `scripts/corpus_run.sh run coverage [--ref <rev>]` | opt-in, ~2 h: `check`, `proof` and `verbs` on ONE instrumented Debug build (`<DerivedData>-coverage`), the same build's unit suite (CI plan, drivers skipped) and Core's `swift test --enable-code-coverage` (`<DerivedData>-coverage-core`); LCOV per side, compared over our sources: suite / corpus / union line and function %, what only the corpus runs by area and lane, the functions the suite never enters ranked by size. Each lane still stores its own run. Raw profiles go with the run's work folder; the report stays in `reports/coverage/<commit>/<run>/` (`scripts/corpus_coverage.py`) |
 | `scripts/corpus_run.sh status` | the lock, then each lane's newest run judged against its baseline: counts, outcome-word transitions, each changed file by SHA-256 prefix |
 | `scripts/corpus_run.sh accept <check\|proof\|verbs>` | blesses the lane's newest run as its baseline; refused for a run that crashed or timed out, a `--limit` run, or a run with no engine |
 

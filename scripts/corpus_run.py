@@ -12,6 +12,8 @@ runs ON THE M4; `scripts/corpus_run.sh` launches it from the Ultra through
   host check     probe · Check Media (quick) · Verify Audio · the A/V pair link, every corpus file
   host proof     Balance Audio into work/, then the balanced-copy proof
   host verbs     the verbs that move, trash and promote — on CLONES in work/
+  host coverage  opt-in: the three lanes on an instrumented build beside the suite; which of
+                 our code only the corpus runs (scripts/corpus_coverage.py)
   status         the newest run of each lane, judged against the lane's baseline
   accept <lane>  bless the lane's newest run as its baseline (who, when, which run)
 
@@ -857,6 +859,9 @@ class Lane:
         self.overlay_installed = False
         self.closing: Dict[str, int] = {}
         self.housekeeping: List[str] = []
+        # The coverage run (corpus_coverage.py) sets this: the build is instrumented and every launch
+        # leaves its result bundle (with coverage) here, in the coverage run's own work folder. None: no coverage.
+        self.profiles: Optional[Path] = None
 
     # -- the overlay: untracked driver sources in the testbed, for this run only
 
@@ -891,9 +896,10 @@ class Lane:
 
     def build(self) -> int:
         t0 = time.time()
+        coverage = ["-enableCodeCoverage", "YES"] if self.profiles is not None else []
         rc = _run([self.xcodebuild, "build-for-testing", "-project", str(self.worktree / "VideoScan/VideoScan.xcodeproj"),
                    "-scheme", "VideoScan", "-configuration", "Debug", "-destination", "platform=macOS",
-                   "-derivedDataPath", str(self.derived_data), "CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"],
+                   "-derivedDataPath", str(self.derived_data), *coverage, "CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"],
                   self.seal, self.out, "corpus-build.log", dict(os.environ), self.worktree)
         self.build_seconds = time.time() - t0
         return rc
@@ -919,11 +925,18 @@ class Lane:
         env.update({k: v for k, v in sealed.items() if k != "VS_CORPUS_CONFIG"})
         for key in ("CLANG_MODULE_CACHE_PATH", "SWIFT_MODULECACHE_PATH", "SWIFTPM_MODULECACHE_OVERRIDE", "XDG_CACHE_HOME"):
             env[key] = str(seal.state / "caches")
+        # Coverage: xcodebuild collects it into the launch's result bundle (the test host is ended without
+        # its exit handlers, so a bare LLVM_PROFILE_FILE writes nothing, and with -xctestrun no raw profile
+        # is left on disk — both measured on the M4, 2026-11-18). The bundle goes in the coverage run's
+        # folder (`profiles`), which outlives this lane's work folder; corpus_coverage.py reads it with xccov.
+        coverage = (["-enableCodeCoverage", "YES",
+                     "-resultBundlePath", str(seal.writable(self.profiles / f"result-{self.launches}.xcresult"))]
+                    if self.profiles is not None else [])
         try:
             _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination",
                   "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
                   "-test-timeouts-enabled", "NO",            # one test method walks every file; the per-file deadline is the driver's
-                  f"-only-testing:VideoScanTests/{self.test_class}"],
+                  f"-only-testing:VideoScanTests/{self.test_class}", *coverage],
                  self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
@@ -1481,7 +1494,7 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
     return against
 
 
-_RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES)))     # work/<stamp>-<lane>
+_RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES) + ["coverage"]))     # work/<stamp>-<lane>; corpus_coverage's own
 
 
 def _unlock_tree(folder: str) -> None:
@@ -1653,7 +1666,7 @@ def status(seal: Seal) -> List[str]:
 # ── Command line ──────────────────────────────────────────────────────────
 
 def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebuild: str = "xcodebuild",
-         cp: str = "/bin/cp") -> int:
+         cp: str = "/bin/cp", xcrun: str = "xcrun", swift: str = "swift") -> int:
     parser = argparse.ArgumentParser(prog="corpus_run.py", description="the real-data corpus harness (host side)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
@@ -1661,7 +1674,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     accepting.add_argument("lane")
     accepting.add_argument("--by", default="unknown")
     host = sub.add_parser("host")
-    host.add_argument("lane", choices=["prepare"] + sorted(LANES))
+    host.add_argument("lane", choices=["prepare", "coverage"] + sorted(LANES))
     host.add_argument("--sha", required=True)
     host.add_argument("--stamp", required=True)
     host.add_argument("--out", required=True)
@@ -1685,6 +1698,14 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             if not re.fullmatch(r"[0-9a-f]{40}", args.sha) or not re.fullmatch(r"[0-9A-Za-z_]+", args.stamp):
                 raise Refused("refused: --sha is a full commit id and --stamp is letters, digits and underscores")
             sys.path.insert(0, args.bin)
+            if args.lane == "coverage":                      # the three lanes instrumented, beside the suite (corpus_coverage.py)
+                import corpus_coverage
+                run = corpus_coverage.CoverageRun(seal, args.sha, args.stamp, Path(args.out), Path(args.worktree),
+                                                  Path(args.derived_data), Path(args.bin), args.deadline, args.limit,
+                                                  xcodebuild, cp=cp, xcrun=xcrun, swift=swift)
+                code = run.go()
+                print("\n".join(run.lines))
+                return code
             lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
                         Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild) if args.lane != "verbs" else \
                 VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
