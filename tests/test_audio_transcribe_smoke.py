@@ -225,3 +225,69 @@ def test_the_smoke_uses_the_apps_arguments():
     for src in (worker, per_file):
         assert f'hfModel: String = "{MODEL}"' in src
         assert 'env["PYTHONUNBUFFERED"] = "1"' in src
+
+
+# ── The fixture's voice and its `say` (2026-11-18, overnight stress run) ──────────
+# macOS 27 lists voices as "Daniel (English (UK)) en_GB    # …"; the parser took the
+# text before the first double space as the name ("Daniel (English (UK)) en_GB"), never
+# found Daniel, and fell back to the system default voice — which, under the script-tests
+# lane, never answered: `say` waited in its run loop and the lane hit its 3,600 s budget
+# at 3%. Both are pinned here without a real `say`.
+
+import known_speech_fixture as ksf  # noqa: E402
+
+LISTING_27 = ("Albert              en_US    # Hello! My name is Albert.\n"
+              "Daniel (English (UK)) en_GB    # Hello! My name is Daniel.\n"
+              "Daniel (English (UK)) en_GB    # Hello! My name is Daniel.\n"
+              "Eddy (German (Germany)) de_DE    # Hallo! Ich heiße Eddy.\n")
+
+
+def test_the_voice_listing_of_macos_27_still_finds_daniel(monkeypatch):
+    monkeypatch.setattr(ksf.subprocess, "run",
+                        lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, stdout=LISTING_27, stderr=""))
+    assert ksf.available_voice() == "Daniel"
+    assert ksf.available_voice("Albert") == "Albert"
+    assert ksf.available_voice("Eddy") == "Eddy"
+    assert ksf.available_voice("Nobody") is None
+
+
+def test_a_say_that_never_answers_fails_in_seconds_not_an_hour(monkeypatch, tmp_path):
+    hang = tmp_path / "say"
+    hang.write_text("#!/bin/sh\nexec sleep 30\n")
+    hang.chmod(0o755)
+    monkeypatch.setattr(ksf, "SAY", str(hang))
+    monkeypatch.setattr(ksf, "SAY_TIMEOUT", 1)
+    monkeypatch.setattr(ksf, "_SPEECH", {})
+    import time
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="did not answer"):
+        ksf.make_known_speech(tmp_path / "x.mov")
+    assert time.monotonic() - t0 < 10
+
+
+def test_the_sentence_is_spoken_once_for_every_shape(monkeypatch, tmp_path):
+    calls = tmp_path / "calls"
+    fake = tmp_path / "say"
+    fake.write_text(f"#!/bin/sh\necho \"$@\" >> {calls}\nfor a; do last=$a; done\n"
+                    "case \"$1\" in -v) [ \"$2\" = '?' ] && { echo 'Daniel (English (UK)) en_GB    # Hello'; exit 0; } ;; esac\n"
+                    "while [ $# -gt 0 ]; do [ \"$1\" = -o ] && { cp /dev/null \"$2\"; printf 'AIFF' > \"$2\"; }; shift; done\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(ksf, "SAY", str(fake))
+    monkeypatch.setattr(ksf, "_SPEECH", {})
+    made = []
+    monkeypatch.setattr(ksf.subprocess, "run", _record_ffmpeg(ksf.subprocess.run, made))
+    for shape in ("mov-h264-aac", "mp4-h264-aac", "mkv-ffv1-pcm"):
+        ksf.make_known_speech(tmp_path / f"{shape}.out", shape)
+    spoken = [line for line in calls.read_text().splitlines() if "-o" in line.split()]
+    assert len(spoken) == 1, spoken
+    assert len(made) == 3
+
+
+def _record_ffmpeg(real, made):
+    def run(cmd, *a, **kw):
+        if Path(cmd[0]).name == "ffmpeg":
+            made.append(cmd)
+            assert Path(cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]).read_bytes() == b"AIFF"
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return real(cmd, *a, **kw)
+    return run

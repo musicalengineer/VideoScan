@@ -32906,11 +32906,14 @@
         "test_audio_transcribe_smoke.py"
       ],
       "tests": [
+        "test_a_say_that_never_answers_fails_in_seconds_not_an_hour",
         "test_known_speech_is_transcribed",
         "test_media_matrix_is_heard",
         "test_missing_model_refuses_online_and_never_dials_out",
         "test_missing_model_says_so",
-        "test_the_smoke_uses_the_apps_arguments"
+        "test_the_sentence_is_spoken_once_for_every_shape",
+        "test_the_smoke_uses_the_apps_arguments",
+        "test_the_voice_listing_of_macos_27_still_finds_daniel"
       ]
     },
     {
