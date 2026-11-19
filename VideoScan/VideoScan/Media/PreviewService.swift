@@ -33,8 +33,9 @@
 //   - The preview is no longer nil'd while a replacement generates — the
 //     old frame stays up until the new one is ready, so arrow-keying
 //     doesn't flash an empty preview.
-//   - The cache has a byte-cost limit (ThumbnailCachePolicy, 8 GB) and
-//     each setObject carries an estimated bitmap cost.
+//   - The cache has a byte-cost limit (ThumbnailCachePolicy: 25 % of RAM
+//     in [8, 32] GB, 2026-11-19) and each setObject carries an estimated
+//     bitmap cost.
 //
 // Preview disk cache (Phase B piece 1, 2026-07-26):
 //   - Lookup order is L1 NSCache → L2 PreviewDiskCache → generate,
@@ -51,6 +52,7 @@
 import Foundation
 import AppKit
 import Observation
+import os
 
 @Observable @MainActor
 final class PreviewService {
@@ -115,11 +117,13 @@ final class PreviewService {
     // MARK: - Caches
 
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click.
-    /// Byte-cost-limited (8 GB — see ThumbnailCachePolicy) so the volume-click
-    /// prewarm can fill it aggressively without unbounded growth; NSCache also
-    /// evicts under system memory pressure, and the .memoryPressureAutoPause
-    /// observer in the model's init clears it outright when scans hit the RAM floor.
-    @ObservationIgnored let thumbnailCache: NSCache<NSString, NSImage> = PreviewService.makeThumbnailCache()
+    /// Byte-cost-limited (25 % of RAM in [8, 32] GB — see ThumbnailCachePolicy)
+    /// so the volume-click prewarm can fill it aggressively without unbounded
+    /// growth; NSCache also evicts under system memory pressure, and the
+    /// .memoryPressureAutoPause observer in the model's init clears it
+    /// outright when scans hit the RAM floor. Self-metering (evictions,
+    /// approximate bytes) for the prewarm's OUTCOME line.
+    @ObservationIgnored let thumbnailCache: ThumbnailMemoryCache = PreviewService.makeThumbnailCache()
 
     /// Negative cache for preview generation (preview routing, 2026-07-26):
     /// files that failed to yield a frame, keyed by fullPath with their
@@ -210,12 +214,13 @@ final class PreviewService {
     /// Factory for the thumbnail cache — split out so the cost limit is set
     /// in exactly one place and unit tests can assert it without
     /// instantiating the whole model.
-    nonisolated static func makeThumbnailCache() -> NSCache<NSString, NSImage> {
-        let cache = NSCache<NSString, NSImage>()
+    nonisolated static func makeThumbnailCache() -> ThumbnailMemoryCache {
+        let cache = ThumbnailMemoryCache()
         cache.name = "Rick-Breen.VideoScan.thumbnailCache"
-        // Byte-cost ceiling (8 GB). Every setObject below passes an
-        // estimated bitmap cost, so NSCache can actually enforce this.
-        // NSCache also evicts on its own under system memory pressure.
+        // Byte-cost ceiling (25 % of RAM in [8, 32] GB — 24 GB on the
+        // 96 GB M5 Ultra). Every setObject below passes an estimated
+        // bitmap cost, so NSCache can actually enforce this. NSCache also
+        // evicts on its own under system memory pressure.
         cache.totalCostLimit = ThumbnailCachePolicy.costLimitBytes
         return cache
     }
@@ -489,6 +494,122 @@ final class PreviewService {
                         self.previewUnavailable = true
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - ThumbnailMemoryCache (self-metering L1, 2026-11-19)
+
+/// The L1 thumbnail cache: an NSCache that also keeps the numbers the
+/// prewarm's OUTCOME line reports — how many entries NSCache itself
+/// evicted (cost limit or memory pressure) since launch, and approximately
+/// how many bytes it holds. C++ analogy: a subclass overriding the virtual
+/// `setObject` and registering itself as its own eviction listener.
+///
+/// NSCache calls `willEvictObject` on EVERY removal — cost-limit eviction,
+/// memory-pressure purge, replacing a key, removeObject, removeAllObjects
+/// (measured 2026-11-19, ThumbnailMemoryCacheTests pins it). So the byte
+/// ledger is symmetric: + at set, − at every delegate call, both sides
+/// computed from the image's own pixel size (never the caller's `cost:`,
+/// so a 0-cost caller cannot drift it). Our own replacements and removals
+/// are told apart from NSCache's evictions by the identity of the outgoing
+/// object (held alive by the override across the super call, so the
+/// identity is unique) — the fast→best upgrade is not an eviction.
+///
+/// Memory: a handful of integers plus, transiently, the identities of the
+/// objects being replaced right now (≤ concurrent setters). Thread-safe:
+/// NSCache is, and the ledger sits behind one unfair lock that is never
+/// held while calling into NSCache (the delegate takes it inside NSCache's
+/// own call, so the order is always NSCache → ledger; no inversion).
+final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @unchecked Sendable {
+
+    /// A consistent read of the ledger.
+    struct Snapshot: Sendable, Equatable {
+        /// Entries held now (sets − delegate calls).
+        var entries = 0
+        /// Approximate bytes held now (4 bytes/pixel of each image).
+        var bytesHeld = 0
+        /// Entries NSCache dropped on its own (cost limit, memory
+        /// pressure) since launch — the number that says the limit is
+        /// too small for how Rick scrolls.
+        var evictions = 0
+        /// Entries WE dropped: key replaced, removeObject, removeAllObjects.
+        var removals = 0
+    }
+
+    private struct Ledger {
+        var snapshot = Snapshot()
+        /// Outgoing objects of an in-flight replace/remove (ours, not evictions).
+        var outgoing: Set<ObjectIdentifier> = []
+        /// removeAllObjects in progress: every delegate call is ours.
+        var purging = 0
+    }
+
+    private let ledger = OSAllocatedUnfairLock(initialState: Ledger())
+
+    override init() {
+        super.init()
+        delegate = self
+    }
+
+    var snapshot: Snapshot { ledger.withLock { $0.snapshot } }
+
+    /// True when `key` is cached now (evidence for the OUTCOME's N).
+    func contains(_ key: String) -> Bool { object(forKey: key as NSString) != nil }
+
+    /// How many of `keys` are cached now — the prewarm OUTCOME's N. One
+    /// lookup per key, O(keys), called once per pass off the main actor.
+    func cachedCount(of keys: [String]) -> Int {
+        keys.reduce(0) { $0 + (contains($1) ? 1 : 0) }
+    }
+
+    static func cost(of image: NSImage) -> Int {
+        ThumbnailCachePolicy.estimatedCost(pixelsWide: Int(image.size.width),
+                                           pixelsHigh: Int(image.size.height))
+    }
+
+    override func setObject(_ obj: NSImage, forKey key: NSString, cost g: Int) {
+        let old = object(forKey: key)          // kept alive across super
+        if let old { ledger.withLock { _ = $0.outgoing.insert(ObjectIdentifier(old)) } }
+        super.setObject(obj, forKey: key, cost: g)
+        let added = Self.cost(of: obj)
+        ledger.withLock {
+            if let old { $0.outgoing.remove(ObjectIdentifier(old)) }
+            $0.snapshot.entries += 1
+            $0.snapshot.bytesHeld += added
+        }
+        withExtendedLifetime(old) {}
+    }
+
+    override func removeObject(forKey key: NSString) {
+        let old = object(forKey: key)
+        if let old { ledger.withLock { _ = $0.outgoing.insert(ObjectIdentifier(old)) } }
+        super.removeObject(forKey: key)
+        if let old { ledger.withLock { _ = $0.outgoing.remove(ObjectIdentifier(old)) } }
+        withExtendedLifetime(old) {}
+    }
+
+    override func removeAllObjects() {
+        ledger.withLock { $0.purging += 1 }
+        super.removeAllObjects()
+        ledger.withLock { $0.purging -= 1 }
+    }
+
+    // NSCacheDelegate — called on whatever thread NSCache is running on.
+    func cache(_ cache: NSCache<AnyObject, AnyObject>, willEvictObject obj: Any) {
+        let image = obj as? NSImage
+        let gone = image.map(Self.cost(of:)) ?? 0
+        let id = image.map(ObjectIdentifier.init)
+        ledger.withLock {
+            $0.snapshot.entries = max(0, $0.snapshot.entries - 1)
+            $0.snapshot.bytesHeld = max(0, $0.snapshot.bytesHeld - gone)
+            if let id, $0.outgoing.remove(id) != nil {
+                $0.snapshot.removals += 1
+            } else if $0.purging > 0 {
+                $0.snapshot.removals += 1
+            } else {
+                $0.snapshot.evictions += 1
             }
         }
     }
