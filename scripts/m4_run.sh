@@ -6,9 +6,13 @@
 #   scripts/m4_run.sh deep   [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh all    [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
 #   scripts/m4_run.sh suite  [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]
-#   scripts/m4_run.sh testbed [--ref <rev>] [--wait] [--dry-run]
+#   scripts/m4_run.sh testbed [--ref <rev>] [--smoke] [--wait] [--dry-run]
 #   scripts/m4_run.sh status [--host m4|ultra] [--json]
-#   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof|verbs|coverage [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--dry-run]
+#   scripts/m4_run.sh corpus --corpus-lane prepare|check|proof|verbs|coverage [--ref <rev>] [--deadline <s>] [--limit <n>] [--smoke] [--wait] [--dry-run]
+#   --smoke (DECISIONS 2026-11-19, target <= 15 min on the M4): the testbed's every lane on a small stratified
+#         subset — the sensor lane (scripts/run_sensors.sh) in place of the full suite, then corpus check, proof
+#         and verbs each with corpus_run.py --smoke. Labelled SMOKE in every summary line and the block; its
+#         verdict means "the harness, the host and the code run end to end"; never a baseline.
 #
 # What Rick says → what runs (from the phone, over Remote Control):
 #   "run the gauntlet UI tests on the M4"       scripts/m4_run.sh ui
@@ -95,12 +99,12 @@
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
-# The 50% floor (DECISIONS 2026-11-18, scripts/testbed_host.py clean): a run may use as much disk as it
+# The floor, 15% free = 85% used at rest (DECISIONS 2026-11-18, 2026-11-19; scripts/testbed_host.py clean): a run may use as much disk as it
 # needs; once its verdict and summary are written, its scratch goes (xcresult bundles, overlays, patched
 # test-run files; each log cut to its last 200 lines under its own name) and the summary gets one line:
-#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB
+#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 15%) — removed 0.41 GB: this run 0.41 GB
 # At the start, and again at the end, under the lock: finished runs not yet tidied are tidied and
-# ~/corpus/work/<stamp>-<lane> folders removed; below 50% free, unfinished runs go oldest first, then the
+# ~/corpus/work/<stamp>-<lane> folders removed; below 15% free, unfinished runs go oldest first, then the
 # build caches below — only when that reaches the floor. M4 only. Deletion works through folder descriptors
 # opened from $HOME down without following links (~/m4run/out, ~/corpus/work, those two caches; never a mount, never
 # the corpus protected set), and refuses unless the lock names this run. A stuck cleanup stops at 900 s; the run
@@ -149,6 +153,7 @@ SUITE_BUDGET=22500
 CORPUS_BUDGET=21600          # corpus lane: a build, then every corpus file under its own per-file deadline
 WAIT_BUDGET=23400            # past every single lane's budget, so --wait outlives the run it waits for
 TESTBED_WAIT_BUDGET=$((SUITE_BUDGET + 2 * CORPUS_BUDGET + 900))   # testbed = suite + two corpus lanes, back to back
+SENSORS_BUDGET=1800          # the smoke testbed's suite: the sensor lane (~70 s warm, a cold Debug build ~10 min)
 WAIT_POLL="${VIDEOSCAN_M4RUN_WAIT_POLL:-30}"     # seconds between --wait polls (tests shorten it)
 
 usage() {
@@ -384,7 +389,11 @@ start_run() {
     [ "$DRY" = 1 ] && echo "+ (the host checks out $sha into $H_WT under the testbed lock, refusing a dirty tree)"
     [ "$DRY" = 1 ] && [ "$LANE" = corpus ] && \
         echo "+ (the host runs corpus_run.py host $CORPUS_LANE: refused unless the hostname is the M4's and the state root is under ~/corpus/state)"
-    [ "$DRY" = 1 ] && [ "$LANE" = testbed ] && \
+    [ "$DRY" = 1 ] && [ "$LANE" = corpus ] && [ "$SMOKE" = 1 ] && \
+        echo "+ (SMOKE: corpus_run.py host $CORPUS_LANE --smoke — a stratified subset; never a baseline)"
+    [ "$DRY" = 1 ] && [ "$LANE" = testbed ] && [ "$SMOKE" = 1 ] && \
+        echo "+ (the host runs, under one hold of the lock, SMOKE: the sensor lane, then corpus_run.py host check, proof and verbs, each --smoke — one summary block, one OUTCOME; target 15 min)"
+    [ "$DRY" = 1 ] && [ "$LANE" = testbed ] && [ "$SMOKE" = 0 ] && \
         echo "+ (the host runs, under one hold of the lock: the suite lane, then corpus_run.py host check, then corpus_run.py host proof — each refused unless the hostname is the M4's; one summary block, one OUTCOME)"
 
     copy_to_host "$SELF" "$bin/m4_run.sh" || die "could not install the runner on $H_NAME"
@@ -420,6 +429,7 @@ start_run() {
     [ -n "$CORPUS_LIMIT" ] && args+=(--limit "$CORPUS_LIMIT")
     [ -n "$START_BY" ] && args+=(--start-by "$START_BY")
     [ "$UNLESS_RAN" = 1 ] && args+=(--unless-ran)
+    [ "$SMOKE" = 1 ] && args+=(--smoke)
     local plist
     plist="$(plist_xml "$label" "${args[@]}")"
     # A per-run label: bootstrapping never boots out a live run's agent. Agents
@@ -671,6 +681,31 @@ host_suite() {
     fi
 }
 
+# The smoke testbed's suite (DECISIONS 2026-11-19): the sensor lane of the commit under test — its
+# own test plan, reused, not a second subset — into the corpus lanes' Debug DerivedData. Its one line
+# ("sensor lane GREEN (N tests)") is the lane's facts; anything else is RED, a ref without it NORUN.
+host_sensors() {
+    local t0 rc secs line
+    t0=$(date +%s)
+    if [ ! -f "$H_WT/scripts/run_sensors.sh" ]; then
+        echo "sensors: NORUN this ref has no scripts/run_sensors.sh" >>"$OUT/summary.txt"
+        printf '{}\n' >"$OUT/sensors-row.json"; VERDICT=NORUN; WHY="sensors: no sensor lane in this ref"; return
+    fi
+    run_bounded "$SENSORS_BUDGET" "$OUT/sensors.log" "$H_WT" /bin/bash "$H_WT/scripts/run_sensors.sh" --derived-data "$H_DD"
+    rc=$?
+    secs=$(( $(date +%s) - t0 ))
+    echo "sensors exit=$rc secs=$secs"
+    line="$(grep -E '^sensor lane (GREEN|RED)' "$OUT/sensors.log" 2>/dev/null | tail -1)"
+    python3 -c 'import json,sys; print(json.dumps({"line": sys.argv[1], "rc": int(sys.argv[2])}))' "$line" "$rc" >"$OUT/sensors-row.json"
+    echo "sensors (SMOKE: the sensor lane in place of the full suite): ${line:-no result line} (rc=$rc, ${secs}s)" >>"$OUT/summary.txt"
+    # GREEN only with a positive count of tests run (Codex #336 F8: a bare GREEN or zero tests proves nothing).
+    case "$rc:$line" in
+        0:"sensor lane GREEN ("[1-9]*" tests)") ;;
+        124:*) echo "sensors: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
+        *) VERDICT=RED ;;
+    esac
+}
+
 # The real-data corpus harness (DECISIONS 2026-11-17). Everything it does is in
 # scripts/corpus_run.py (installed beside this script); it runs under the lane
 # watchdog with the lock's fd passed on, and writes its own counts-only
@@ -684,6 +719,7 @@ host_corpus() {   # host_corpus <sha> <stamp>
     local t0 rc secs extra=() cout="${COUT:-$OUT}"
     [ -n "$CORPUS_DEADLINE" ] && extra+=(--deadline "$CORPUS_DEADLINE")
     [ -n "$CORPUS_LIMIT" ] && extra+=(--limit "$CORPUS_LIMIT")
+    [ "$SMOKE" = 1 ] && extra+=(--smoke)
     mkdir -p "$cout"
     t0=$(date +%s)
     run_bounded "$CORPUS_BUDGET" "$cout/corpus.log" "$H_WT" \
@@ -735,14 +771,19 @@ host_testbed() {   # host_testbed <sha> <stamp>
         printf '%s\t%s\t%s\t%s\n' "$name" "$VERDICT" "$(( $(date +%s) - lane_t0 ))" "$facts" >>"$OUT/lanes.tsv"
         words="${words:+$words · }$name $VERDICT"
     }
-    testbed_lane "suite" "$OUT/suite-row.json" host_suite
-    local corpus_lane
-    for corpus_lane in check proof; do
+    local corpus_lane corpus_lanes="check proof" smoke_flag=()
+    if [ "$SMOKE" = 1 ]; then
+        testbed_lane "sensors" "$OUT/sensors-row.json" host_sensors
+        corpus_lanes="check proof verbs"; smoke_flag=(--smoke)
+    else
+        testbed_lane "suite" "$OUT/suite-row.json" host_suite
+    fi
+    for corpus_lane in $corpus_lanes; do
         CORPUS_LANE="$corpus_lane"; COUT="$OUT/corpus-$corpus_lane"
         testbed_lane "corpus $corpus_lane" "$COUT/corpus-verdict.json" host_corpus "$sha" "$stamp"
     done
     CORPUS_LANE=""; COUT=""
-    block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))")"
+    block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))" ${smoke_flag[@]+"${smoke_flag[@]}"})"
     vrc=$?
     # The block is built from the lanes' facts files: it reaches a caller only through the show door.
     printf '%s\n' "$block" >"$OUT/testbed-block.raw"
@@ -796,8 +837,8 @@ host_main() {   # __host <lane> <sha> <stamp>
     # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
     # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
     [ -f "$SCRIPT_DIR/testbed_host.py" ] && python3 "$SCRIPT_DIR/testbed_host.py" prune "$H_ROOT" --current "$OUT" 2>&1
-    # The 50% floor (DECISIONS 2026-11-18), still under the lock: finished runs give up their scratch,
-    # dead corpus work goes, and below 50% free older unfinished runs (then the build caches, only when
+    # The 15% floor (85% used at rest; DECISIONS 2026-11-18, 2026-11-19), still under the lock: finished runs give up their scratch,
+    # dead corpus work goes, and below 15% free older unfinished runs (then the build caches, only when
     # that reaches the floor). One "disk:" line here; the run itself may use as much disk as it needs.
     # The M4 only: the ruling is about the testbed machine, and the helper refuses any root but $HOME/m4run.
     local clean_tool=""
@@ -858,6 +899,8 @@ host_main() {   # __host <lane> <sha> <stamp>
         python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end >/dev/null
     fi
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
+    # A SMOKE run says so on its OUTCOME line too (Codex #336 F7).
+    [ "$SMOKE" = 1 ] && WHY="SMOKE (a stratified subset: the harness, the host and the code run end to end; never a baseline)${WHY:+ · $WHY}"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
     sed 's/^/  /' "$OUT/summary.txt"
     case "$VERDICT" in GREEN|AMBER) return 0 ;; *) return 1 ;; esac
@@ -866,7 +909,7 @@ host_main() {   # __host <lane> <sha> <stamp>
 # ── Arguments ─────────────────────────────────────────────────────────────
 LANE="${1:-}"; [ $# -gt 0 ] && shift
 HOST=m4; REF=main; DRY=0; FORCE=0; WAIT=0; ONLY=""; PLAN_TIMEOUT=""; JSON=0
-CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""; START_BY=""; UNLESS_RAN=0
+CORPUS_LANE=""; CORPUS_DEADLINE=""; CORPUS_LIMIT=""; COUT=""; START_BY=""; UNLESS_RAN=0; SMOKE=0
 POS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -883,6 +926,7 @@ while [ $# -gt 0 ]; do
         --json) JSON=1; shift ;;
         --start-by) START_BY="${2:-}"; shift 2 || usage ;;
         --unless-ran) UNLESS_RAN=1; shift ;;
+        --smoke) SMOKE=1; shift ;;
         -h|--help) usage ;;
         --*) die "unknown option $1" 2 ;;
         *) POS+=("$1"); shift ;;
@@ -907,6 +951,12 @@ testbed_args_ok() {
 }
 [ "$LANE" = corpus ] || [ "${POS[0]:-}" = corpus ] || [ -z "$CORPUS_LANE$CORPUS_DEADLINE$CORPUS_LIMIT" ] \
     || die "--corpus-lane/--deadline/--limit apply to the corpus lane" 2
+case "$SMOKE:$LANE:${POS[0]:-}" in
+    0:*|1:testbed:*|1:__host:testbed) ;;
+    1:corpus:*|1:__host:corpus)
+        case "$CORPUS_LANE" in check|proof|verbs) ;; *) die "--smoke applies to corpus check, proof and verbs" 2 ;; esac ;;
+    *) die "--smoke applies to the testbed lane and to corpus check, proof and verbs" 2 ;;
+esac
 host_config "$HOST"
 [ "$JSON" = 1 ] && [ "$LANE" != status ] && die "--json applies to status" 2
 

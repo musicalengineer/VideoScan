@@ -1,18 +1,21 @@
-"""scripts/testbed_host.py clean / sample — the M4 kept at least 50% free (DECISIONS 2026-11-18).
+"""scripts/testbed_host.py clean / sample — the M4 at rest under 85% used (DECISIONS 2026-11-18, 2026-11-19).
 
 Rick: "after a testrun has been summarized, delete the temp data and cleanup, so we can keep
-that 50% free, but when you are running the testbed, feel free to chew up disk space".
+that 50% free, but when you are running the testbed, feel free to chew up disk space"; then
+(2026-11-19, the corpus grew onto the SSD) "watch that you don't exceed 85-90% disk full ... it
+is OK to get to 95% full if you know you're gonna delete a bunch of intermediate files afterwards".
 
   tidy        once a run is summarized, its scratch goes (xcresult bundles, overlays, patched
               test-run files, unused publish paths); its summary, verdict files, run.log and a
               200-line tail of each other log stay, under their own names.
   the floor   before a run starts and after it ends, under the lock: finished runs are tidied
-              and dead corpus work folders removed whatever the disk says; below 50% free,
+              and dead corpus work folders removed whatever the disk says; below 15% free,
               unfinished runs are tidied oldest first until the floor is met, and the lane
               build caches go only when that reaches the floor.
   confinement deletion is confined by resolved real path to ~/m4run, ~/corpus/work and the
               two m4run caches; never the corpus protected set, never through a link, never a
-              tree with a mount in it, never under a run that holds the lock.
+              tree with a mount in it (the corpus's external volume included), never under a run
+              that holds the lock.
   the line    "disk: free N% ..." in the summary: the start, the lowest during the run, the end.
 
 Everything runs in a temporary HOME with a fake disk (VIDEOSCAN_TESTBED_FAKE_DISK or a callable);
@@ -38,7 +41,9 @@ from test_m4_run_testbed_lane import STUB_CORPUS, TestbedScene  # noqa: E402
 GB = 10 ** 9
 PROTECTED = ('corpus-sha-v1.txt', 'corpus-manifest-v1.json', 'catalog-source-backup.sqlite', 'THIS_IS_TEST_DATA.txt',
              'share.credentials', 'media/clip.mov', 'media/sub/tape.dv', 'reports/check/baseline.json',
-             'reports/check/abc/s1/outcomes.json', 'state/catalog.sqlite', 'live/LaCieWorkspace/share.mov')
+             'reports/check/abc/s1/outcomes.json', 'state/catalog.sqlite', 'live/LaCieWorkspace/share.mov',
+             # v2 (2026-11-19): the two-root manifest, the internal list, its source backup, the adopted volume's record
+             'corpus-manifest-v2.json', 'corpus-sha-v2-internal.txt', 'catalog-source-backup-v2.sqlite', 'external-volume.json')
 
 
 class FakeDisk:
@@ -69,8 +74,14 @@ def measure(path):
 
 
 def full(home):
-    """A full disk: nothing free, the floor 50 GB away."""
+    """A full disk: nothing free, the floor 15 GB away."""
     return FakeDisk(home, 100 * GB, 100 * GB)
+
+
+def short_of_the_floor(home, by):
+    """A 100 GB disk whose free space is `by` bytes under the floor, as measured now."""
+    total = 100 * GB
+    return FakeDisk(home, total, total - measure(home) - (int(total * th.FLOOR) - by))
 
 
 class Scene:
@@ -228,21 +239,20 @@ class FloorTests(CleanCase):
         self.assertFalse(dead.exists())
         self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache is kept above the floor')
         self.assertTrue((run / 'suite-app.xcresult').exists(), 'the run in progress is never tidied at its start')
-        self.assertRegex(line, r'^disk: free 100% at the start \(floor 50%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(3\), corpus work [\d.]+ GB \(1\)$')
+        self.assertRegex(line, r'^disk: free 100% at the start \(floor 15%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(3\), corpus work [\d.]+ GB \(1\)$')
 
     def test_below_the_floor_unfinished_runs_go_oldest_first_and_only_until_it_is_met(self):
         unfinished = [self.s.run(f'u{i}', outcome=None, size=1_000_000) for i in range(4)]   # the bundle dominates a run
         run = self.current()
-        used = measure(self.s.home)
         per_run = measure(unfinished[0] / 'suite-app.xcresult')
         # The floor is reached once exactly two runs have given up their scratch.
-        total = 2 * (used - int(1.5 * per_run))
-        disk = FakeDisk(self.s.home, total, 0)
-        self.assertLess(disk(str(self.s.root))[0], total // 2)
+        disk = short_of_the_floor(self.s.home, int(1.5 * per_run))
+        target = int(disk.total * th.FLOOR)
+        self.assertLess(disk(str(self.s.root))[0], target)
         self.clean(run, 'start', disk)
         gone = [not (u / 'suite-app.xcresult').exists() for u in unfinished]
         self.assertEqual(gone, [True, True, False, False], 'oldest first, and no further than the floor needs')
-        self.assertGreaterEqual(disk(str(self.s.root))[0], total // 2)
+        self.assertGreaterEqual(disk(str(self.s.root))[0], target)
         for u in unfinished:
             self.assertTrue((u / 'run.log').exists())
 
@@ -251,14 +261,14 @@ class FloorTests(CleanCase):
         self.s.cache(1, 200_000)
         run = self.current()
         used = measure(self.s.home)
-        # Out of reach: other data fills the disk; removing the caches would not reach 50%.
-        disk = FakeDisk(self.s.home, 10 * used, 9 * used)
+        # Out of reach: other data fills the disk; removing the caches would not reach the floor.
+        disk = short_of_the_floor(self.s.home, 10 * used)
         line = self.clean(run, 'start', disk)
         self.assertTrue(all(c.exists() for c in self.s.caches), 'caches dropped for nothing')
         self.assertRegex(line, r'UNDER by [\d.]+ GB')
         self.assertIn('build caches kept', line)
         # Within reach: the caches go, and the line says so.
-        disk = FakeDisk(self.s.home, 2 * used - 250_000, 0)
+        disk = short_of_the_floor(self.s.home, 125_000)
         line = self.clean(run, 'start', disk)
         self.assertFalse(self.s.caches[1].exists(), 'the suite cache goes first')
         self.assertTrue(self.s.caches[0].exists(), 'and no further than the floor needs')
@@ -272,10 +282,19 @@ class FloorTests(CleanCase):
         (run / 'disk-low.txt').write_text(f'{30 * GB} {100 * GB}\n')      # what the sampler saw mid-run
         (run / 'run.log').write_text((run / 'run.log').read_text() + 'OUTCOME GREEN x\n')
         line = self.clean(run, 'end', disk)
-        self.assertRegex(line, r'^disk: free 60% after cleanup \(lowest 30% during the run, 60% at the start; floor 50%\) — removed')
-        disk = FakeDisk(self.s.home, 100 * GB, 70 * GB)
+        self.assertRegex(line, r'^disk: free 60% after cleanup \(lowest 30% during the run, 60% at the start; floor 15%\) — removed')
+        disk = FakeDisk(self.s.home, 100 * GB, 90 * GB)
         line = self.clean(run, 'end', disk)
-        self.assertIn('floor 50%, UNDER by 20.0 GB', line)
+        self.assertIn('floor 15%, UNDER by 5.0 GB', line)
+
+    def test_the_floor_is_the_resting_ceiling_of_85_percent_used(self):
+        # DECISIONS 2026-11-19: the corpus rests on the SSD too; at rest the M4 stays under 85% used.
+        self.assertEqual(th.FLOOR, 0.15)
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 84 * GB))
+        self.assertNotIn('UNDER', line)
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 86 * GB))
+        self.assertIn('UNDER by 1.0 GB', line)
 
 
 class CoverageCacheTests(CleanCase):
@@ -344,7 +363,7 @@ class ConfinementTests(CleanCase):
         (nightly / 'blob').write_bytes(b'n' * 1000)
         run = self.current()
         # Under the floor by 0.75 MB: the run and work scratch cannot reach it, the first cache does.
-        self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 1_500_000, 0))
+        self.clean(run, 'start', short_of_the_floor(self.s.home, 750_000))
         self.assertEqual(self.s.protected_snapshot(), before)
         self.assertTrue((self.s.corpus / 'work' / 'not-a-run').exists(), 'only <stamp>-<lane> work folders are run scratch')
         self.assertFalse(self.s.caches[1].exists(), 'the floor reached the caches')
@@ -593,10 +612,8 @@ class CodexFindingsTests(CleanCase):
             (cache / 'Build').mkdir(parents=True)
             os.link(media, cache / 'Build' / 'linked.mov')
         run = self.current()
-        free, total = FakeDisk(self.s.home, 0, 0)(str(self.s.root))
-        used = -free
         # Counted per name the caches hold 8 MB and would reach the floor; reclaimable, they hold nothing.
-        disk = FakeDisk(self.s.home, 2 * used + 6_000_000, 0)
+        disk = short_of_the_floor(self.s.home, 3_000_000)
         line = self.clean(run, 'start', disk)
         self.assertTrue(all(c.exists() for c in self.s.caches), 'caches dropped for bytes another name keeps')
         self.assertIn('build caches kept', line)
@@ -664,12 +681,41 @@ class CodexReReviewTests(CleanCase):
         finally:
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
 
+    def test_the_corpus_external_volume_is_never_reached_from_a_dead_work_folder(self):
+        # DECISIONS 2026-11-19: v2 corpus copies rest on an external volume. A dead run's work folder that
+        # links to it, or has it mounted inside, must lose nothing on it.
+        volume = pathlib.Path(self.tmp.name, 'x10')
+        volume.mkdir()
+        mounted = mount_image(self.tmp.name, volume)
+        if not mounted:
+            self.skipTest('hdiutil could not attach a disk image here')
+        try:
+            (volume / 'corpus' / 'media').mkdir(parents=True)
+            (volume / 'corpus' / 'media' / 'clip.mov').write_bytes(b'a corpus copy')
+            linked = self.s.work('20261119_1_1-check')
+            os.symlink(volume / 'corpus' / 'media', linked / 'to-x10')
+            inside = self.s.work('20261119_1_2-proof')
+            (inside / 'mnt').mkdir()
+            second = pathlib.Path(self.tmp.name, 'second')
+            second.mkdir()
+            again = mount_image(str(second), inside / 'mnt')
+            run = self.current()
+            line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+            self.assertEqual((volume / 'corpus' / 'media' / 'clip.mov').read_bytes(), b'a corpus copy')
+            self.assertFalse(linked.exists(), 'the link went as itself, with its folder')
+            if again:
+                self.assertTrue((inside / 'vol' / 'clone.mov').exists(), 'a work folder with a mount inside is refused whole')
+                self.assertIn('could not be removed 1', line)
+                subprocess.run(['hdiutil', 'detach', '-force', '-quiet', again], capture_output=True, timeout=120)
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
+
     def test_r5_locked_bytes_are_not_counted_as_reclaimable(self):
         self.s.cache(1, 4_000_000)
         os.chflags(self.s.caches[1] / 'Build' / 'blob', 0x2)       # UF_IMMUTABLE: it stays whatever we do
         self.s.cache(0, 2_000_000)
         run = self.current()
-        line = self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 6_000_000, 0))
+        line = self.clean(run, 'start', short_of_the_floor(self.s.home, 3_000_000))     # 6 MB counted, 2 MB reclaimable
         self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache was dropped on a forecast counting locked bytes')
         self.assertIn('build caches kept', line)
 
@@ -810,7 +856,7 @@ class CodexSecondReReviewTests(CleanCase):
         try:
             self.s.cache(0, 2_000_000)
             run = self.current()
-            line = self.clean(run, 'start', FakeDisk(self.s.home, 2 * measure(self.s.home) - 6_000_000, 0))
+            line = self.clean(run, 'start', short_of_the_floor(self.s.home, 3_000_000))
             self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache dropped on a forecast that counted a refused cache')
             self.assertIn('build caches kept', line)
         finally:
@@ -990,11 +1036,11 @@ class RunnerCleanupTests(TestbedScene):
         (old / 'run.log').write_text('START x\nOUTCOME GREEN y\n')
         p, log, summary, out = self.host('c1')
         self.assertEqual(p.returncode, 0, log)
-        self.assertRegex(log, r'(?m)^disk: free 90% at the start \(floor 50%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(1\)$')
+        self.assertRegex(log, r'(?m)^disk: free 90% at the start \(floor 15%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(1\)$')
         self.assertLess(log.index('disk: free 90% at the start'), log.index('START '))
         block = (out / 'testbed-block.txt').read_text().splitlines()
         last = block[-1]
-        self.assertRegex(last, r'^disk: free 90% after cleanup \(lowest 90% during the run, 90% at the start; floor 50%\) — removed')
+        self.assertRegex(last, r'^disk: free 90% after cleanup \(lowest 90% during the run, 90% at the start; floor 15%\) — removed')
         lines = summary.splitlines()
         self.assertEqual(lines[:len(block)], block, 'the summary opens with the block, its disk line last')
         self.assertEqual(lines[len(block)], "— the lanes' own lines —")

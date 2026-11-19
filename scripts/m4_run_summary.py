@@ -406,8 +406,13 @@ def corpus_lane_lines(facts):
     return counts, more
 
 
-def testbed_block(rows, sha, seconds):
-    """(verdict, [lines]) for the lanes of one testbed run: [(name, verdict, seconds, facts path)]."""
+SENSOR_LINE = re.compile(r'sensor lane (GREEN|RED) \(\d+ tests\)')
+SENSOR_GREEN = re.compile(r'sensor lane GREEN \([1-9]\d* tests\)')
+
+
+def testbed_block(rows, sha, seconds, smoke=False):
+    """(verdict, [lines]) for the lanes of one testbed run: [(name, verdict, seconds, facts path)].
+    `smoke`: the SMOKE testbed (a stratified subset; the sensor lane for the suite) — said in the head."""
     worst = GREEN if rows else RED
     lines = []
     for name, verdict, secs, facts_path in rows:
@@ -416,7 +421,13 @@ def testbed_block(rows, sha, seconds):
             verdict = RED                                  # a word this file does not know is never a pass
         if TESTBED_RANK[verdict] > TESTBED_RANK[worst]:
             worst = verdict
-        if name == 'suite':
+        if name == 'sensors':
+            line = str((facts or {}).get('line') or '')
+            counts, more = (line if SENSOR_LINE.fullmatch(line) else 'no result line (see the lane\'s own lines)'), []
+            if verdict == GREEN and not SENSOR_GREEN.fullmatch(line):
+                verdict = RED                              # a GREEN with no positive count proves nothing (Codex #336 F8)
+                worst = RED
+        elif name == 'suite':
             row = facts or {}
             why = str(row.get('reason') or '')
             counts, more = f"app {suite_counts(row)}; core {suite_counts(row, 'core_')}", []
@@ -428,9 +439,13 @@ def testbed_block(rows, sha, seconds):
             counts, more = corpus_lane_lines(facts)
         lines.append(f"  {name:<13} {verdict:<5} {secs:>6}s  {counts}")
         lines += [TESTBED_INDENT + line for line in more]
-    head = f"testbed: {worst} at {str(sha)[:9]} — {len(rows)} lane{'s' if len(rows) != 1 else ''}, wall {seconds}s"
+    head = (f"testbed{' SMOKE' if smoke else ''}: {worst} at {str(sha)[:9]} — {len(rows)} lane{'s' if len(rows) != 1 else ''}, "
+            f"wall {seconds}s")
     if not rows:
         head += ' — no lane ran'
+    if smoke:
+        head += (' — SMOKE: each lane on a stratified subset; the verdict means the harness, the host and the code '
+                 'run end to end (never a baseline)')
     return worst, [head] + lines
 
 
@@ -439,6 +454,7 @@ def testbed_main(argv):
     ap.add_argument('lanes')
     ap.add_argument('sha')
     ap.add_argument('seconds', type=int)
+    ap.add_argument('--smoke', action='store_true')
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -452,7 +468,7 @@ def testbed_main(argv):
                     rows.append((parts[0], parts[1], parts[2] if parts[2].isdigit() else '?', parts[3]))
     except OSError:
         rows = []
-    verdict, lines = testbed_block(rows, a.sha, a.seconds)
+    verdict, lines = testbed_block(rows, a.sha, a.seconds, smoke=a.smoke)
     print('\n'.join(lines))
     return {GREEN: 0, AMBER: 3, NORUN: 4, RED: 1}[verdict]
 
