@@ -94,14 +94,14 @@ final class CorpusProofDriver: XCTestCase {
                 let named = run.config.work + "/" + stem + (ext.isEmpty ? "" : "." + ext)
                 let planned = BalanceAudioFix.balancedOutputURL(forSourcePath: named,
                                                                 containerFormat: analysis.shape.containerFormat)
-                guard CorpusRun.isUnder(planned.path, run.config.work) else { return ("refused_by_harness", [classWord]) }
+                guard CorpusRun.inRun(planned.path, run.config.work) else { return ("refused_by_harness", [classWord]) }
                 let model = VideoScanModel()
                 model.records = [record]
                 let job = BalanceAudioJob(record: record, analysis: analysis, model: model, plannedOutput: planned)
                 job.start()
                 await job.task?.value
                 if case .finished = job.state, let published = job.publishedURL,
-                   CorpusRun.isUnder(published.path, run.config.work) {
+                   CorpusRun.inRun(published.path, run.config.work) {
                     balanced = published
                     return ("balanced", [classWord])
                 }
@@ -124,7 +124,9 @@ final class CorpusProofDriver: XCTestCase {
                         return ("could_not_check", CorpusProofDriver.category(ofCouldNotCheck: reason) + evidence)
                     }
                 }
-                try? FileManager.default.removeItem(at: balanced)
+                if CorpusRun.inRun(balanced.path, run.config.work) {     // never a removal on another volume
+                    try? FileManager.default.removeItem(at: balanced)
+                }
             }
             run.end(item)
         }

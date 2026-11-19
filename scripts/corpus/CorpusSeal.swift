@@ -154,24 +154,34 @@ enum CorpusSeal {
         return external(realHome: realHome) == .proven(mount: mount, uuid: uuid)
     }
 
+    /// The run's own folders (work, progress, and the verbs lane's clones, archive and scratch) are
+    /// still on the home volume NOW: asked before every engine (Codex #334 F2: a volume mounted over
+    /// the run folder after open).
+    static func runFoldersOnHome(_ config: CorpusConfig, realHome: String) -> Bool {
+        ([config.work, config.progress] + [config.volRoot, config.archiveRoot, config.scratch].compactMap { $0 })
+            .allSatisfy { onHomeVolume($0, realHome: realHome) }
+    }
+
     /// The device of the real home folder: the one volume the harness writes on.
     static func homeDevice(realHome: String) -> dev_t? {
         var info = stat()
         return lstat(realHome, &info) == 0 ? info.st_dev : nil
     }
 
-    /// True when what `path` resolves to, and every existing folder above it up to the real home, is
-    /// on the home volume: a volume mounted anywhere on the way makes it false (Codex #333 F1/F2).
+    /// True when what `path` resolves to is on the home volume: its deepest existing part (the file,
+    /// or the folder it would be made in) is on the home folder's device. Everything below a mount
+    /// point is on the mounted volume, so a volume mounted anywhere on the way makes it false
+    /// (Codex #333 F1/F2). Python's `Seal.on_home_volume` is the same rule.
     static func onHomeVolume(_ path: String, realHome: String) -> Bool {
         guard let device = homeDevice(realHome: realHome) else { return false }
-        let home = resolved(realHome)
         var here = resolved(path)
         var info = stat()
-        while true {
-            if lstat(here, &info) == 0, info.st_dev != device { return false }
-            if here == home || here == "/" || here.isEmpty { return true }
-            here = (here as NSString).deletingLastPathComponent
+        while lstat(here, &info) != 0 {
+            let up = (here as NSString).deletingLastPathComponent
+            if up == here || up.isEmpty { return false }
+            here = up
         }
+        return info.st_dev == device
     }
 
     /// A regular file with ONE name (not a link, not a folder, no second name a pristine file could share).
@@ -239,8 +249,10 @@ enum CorpusSeal {
         let corpus = realHome + "/corpus"
         let state = corpus + "/state", work = corpus + "/work", media = corpus + "/media"
         guard FileManager.default.fileExists(atPath: corpus + "/THIS_IS_TEST_DATA.txt") else { return "no_test_data_marker" }
-        // The three folders are themselves: an alias (work -> media, state -> anywhere) is refused.
+        // ~/corpus itself is itself, on the home volume (Codex #334 F4), and so are its three folders:
+        // an alias (work -> media, state -> anywhere) is refused.
         let corpusReal = resolved(corpus)
+        guard corpusReal == resolved(realHome) + "/corpus", onHomeVolume(corpus, realHome: realHome) else { return "a_corpus_folder_is_an_alias" }
         for (folder, name) in [(state, "state"), (work, "work"), (media, "media")] where resolved(folder) != corpusReal + "/" + name {
             return "a_corpus_folder_is_an_alias"
         }
@@ -306,7 +318,9 @@ enum CorpusSeal {
         // An internal copy (or a clone) is on the home volume: a volume mounted inside ~/corpus/media is not the corpus.
         func onHome(_ path: String) -> Bool { (isUnder(path, media) || inRun(path)) && onHomeVolume(path, realHome: input.realHome) }
         guard config.pending.allSatisfy({ onHome($0.path) || onExternal($0.path) }),
-              config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy(inRun) }) else { return "a_file_is_outside_the_corpus" }
+              config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy { inRun($0) && onHomeVolume($0, realHome: input.realHome) } }) else {
+            return "a_file_is_outside_the_corpus"                       // a copy on a volume mounted in the run (Codex #334 F1)
+        }
         let verbsFolders = [config.volRoot, config.archiveRoot, config.scratch].compactMap { $0 }
         guard verbsFolders.allSatisfy(inRun) else { return "a_verbs_folder_is_outside_the_run" }
         // Nothing this process may write resolves into the pristine copies or the read-only mount.

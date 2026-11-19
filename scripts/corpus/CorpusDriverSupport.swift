@@ -175,6 +175,12 @@ final class CorpusRun: @unchecked Sendable {
 
     static func isUnder(_ path: String, _ root: String) -> Bool { CorpusSeal.isUnder(path, root) }
 
+    /// A path of the run's own: inside `root` (a folder of this run) AND on the home volume — the
+    /// one check every driver write, move and removal asks (Codex #334 F1/F2).
+    static func inRun(_ path: String, _ root: String) -> Bool {
+        CorpusSeal.isUnder(path, root) && CorpusSeal.onHomeVolume(path, realHome: realHome())
+    }
+
     static func hostname() -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         guard gethostname(&buffer, buffer.count - 1) == 0 else { return "" }
@@ -259,8 +265,10 @@ final class CorpusRun: @unchecked Sendable {
     /// external volume that is no longer proven, records `external_volume_not_proven` and runs nothing.
     func engine(_ item: CorpusConfig.Item, _ name: String,
                 _ body: () async throws -> (outcome: String, kinds: [String])) async {
-        // The external volume is proven again now: a file on it is never opened on a proof made earlier.
-        guard CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome(), atOpen: external) else {
+        // The run's own folders are still on the home volume, and the external volume is proven again
+        // now: nothing is written on another volume, and a file on it is never opened on an old proof.
+        guard CorpusSeal.runFoldersOnHome(config, realHome: CorpusRun.realHome()),
+              CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome(), atOpen: external) else {
             progress.write(["ev": "engine", "sha": item.sha, "engine": name, "outcome": "external_volume_not_proven",
                             "kinds": [String](), "s": 0])
             return

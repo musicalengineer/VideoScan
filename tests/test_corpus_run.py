@@ -1210,13 +1210,13 @@ class VerbsLaneTests(unittest.TestCase):
         driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
         code = '\n'.join(line for line in driver.splitlines() if not line.lstrip().startswith('//'))
         for guard in ('CorpusRun.open(lane: "verbs")', 'TestEnvironment.isTestHost',
-                      'guard mkdir(trash, 0o755) == 0, CorpusRun.isUnder(trash, config.work), VerbsStage.isEmptyFolder(trash)',
+                      'guard mkdir(trash, 0o755) == 0, CorpusRun.inRun(trash, config.work), VerbsStage.isEmptyFolder(trash)',
                       'hooks.trashItem = { url in try VerbsTrash.move(url, into: trash, work: work) }',
                       'fileOperation: { url in _ = try VerbsTrash.move(url, into: trash, work: work) }',
-                      'guard CorpusRun.isUnder(url.path, work), CorpusRun.isUnder(trash, work), VerbsStage.isRealFolder(trash)',
+                      'guard CorpusRun.inRun(url.path, work), CorpusRun.inRun(trash, work), VerbsStage.isRealFolder(trash)',
                       'VerbsStage.digests(in: MediaTrash.testHostTrash.path).files', '"strayTrashFiles": stray',
-                      'CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
-                      'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.isUnder(root, run.config.work)',
+                      'CorpusRun.inRun(archive, CorpusRun.realHome() + "/corpus/work")', 'refuse("archive_root_outside_corpus_work")',
+                      'refuse("trash_not_in_the_run")', 'refuse("a_verbs_file_is_not_a_clone")', 'CorpusRun.inRun(root, run.config.work)',
                       'DeleteDuplicatesJob(model: model, volumePath: vol, hooks: hooks, planRoot: planRoot)', 'model.catalogTrashPlan(for: [row])', 'model.trashSelectedRecords([row], confirmed: confirmed,',
                       'model.purgeRecords(ids:', 'model.removeFromCatalog(recordIDs:', 'PromoteToArchiveJob(plan: plan, model: model)',
                       'model.initializeMasterArchive(at: URL(fileURLWithPath: archive'):
@@ -1385,7 +1385,8 @@ for c in cases {
             task.waitUntilExit()
         }
     }
-    print("\(word ?? "ok")|\(reads)|\(proven)|\(atOpen.word)|\(CorpusSeal.mayOpen(first, realHome: c.realHome, atOpen: atOpen))")
+    let folders = loaded.config.map { CorpusSeal.runFoldersOnHome($0, realHome: c.realHome) } ?? false
+    print("\(word ?? "ok")|\(reads)|\(proven)|\(atOpen.word)|\(CorpusSeal.mayOpen(first, realHome: c.realHome, atOpen: atOpen))|\(folders)")
 }
 """
 
@@ -1891,8 +1892,8 @@ class CodexClosingTests(unittest.TestCase):
         self.assertEqual(self.scene.recorded_calls(), [])
         driver = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
         for guard in ('VerbsStage.isEmptyFolder(scratch), VerbsStage.isEmptyFolder(archive)', 'refuse("a_verbs_folder_is_not_empty")',
-                      'guard mkdir(path, 0o755) == 0, CorpusRun.isUnder(path, scratch), CorpusRun.isUnder(path, run.config.work)',
-                      'guard mkdir(plans, 0o755) == 0, CorpusRun.isUnder(plans, run.config.work)'):
+                      'guard mkdir(path, 0o755) == 0, CorpusRun.inRun(path, scratch), CorpusRun.inRun(path, run.config.work)',
+                      'guard mkdir(plans, 0o755) == 0, CorpusRun.inRun(plans, run.config.work)'):
             self.assertIn(guard, driver, guard)
         self.assertLess(driver.index('refuse("a_verbs_folder_is_not_empty")'), driver.index('stage.makeModel("verbs")'))
 
@@ -2900,7 +2901,7 @@ class SwiftExternalSealTests(TwoRootTestCase):
         done = subprocess.run([str(self.binary), str(cases)], capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr)
         fact = done.stdout.split()[0].split('|')
-        self.may_open, self.proven = fact[4], fact[2]
+        self.may_open, self.proven, self.folders_home = fact[4], fact[2], fact[5]
         return fact[0], fact[3]
 
     def test_f2_the_volume_is_proven_again_at_each_file_not_once_per_run(self):
@@ -3042,6 +3043,79 @@ class SwiftExternalSealTests(TwoRootTestCase):
                           support[support.index('final class CorpusProgress'):support.index('final class CorpusDeadline')])
         finally:
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(run)], capture_output=True, timeout=120)
+
+    def test_r4_f1_an_extra_copy_on_a_volume_mounted_in_the_run_is_refused(self):
+        # Codex #334 F1: a verbs copy at <run>/vol/Copies/copy2 that is a mount; the primary file on the home volume.
+        self.scene.grow(prepare=False)
+        other = Volume(self.tmp.name, name='copies')
+        run = self.scene.seal.work_root / 'run1-verbs'
+        for folder in ('vol/Copies/copy2', 'home', 'archive', 'scratch'):
+            (run / folder).mkdir(parents=True, exist_ok=True)
+        (run / 'vol' / 'a.mov').write_text('x')
+        (run / 'progress.jsonl').write_text('')
+        try:
+            other.detach()
+            copy2 = run / 'vol' / 'Copies' / 'copy2'
+            done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(copy2), other.image],
+                                  capture_output=True, text=True, timeout=120)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            (copy2 / 'a.mov').write_text('x')
+            state = self.scene.seal.state
+            config = dict(lane='verbs', corpusRoot=str(self.scene.corpus), stateRoot=str(state), catalog=str(state / DB),
+                          mediaRoot=str(self.scene.corpus / 'media'), work=str(run), progress=str(run / 'progress.jsonl'),
+                          deadlineSeconds=60, pending=[dict(sha='a' * 64, path=str(run / 'vol' / 'a.mov'), role='dup', copies=[str(copy2 / 'a.mov')])],
+                          volRoot=str(run / 'vol'), archiveRoot=str(run / 'archive'), scratch=str(run / 'scratch'))
+            (run / 'config.json').write_text(json.dumps(config))
+            cases = pathlib.Path(self.tmp.name, 'cases.json')
+            cases.write_text(json.dumps([dict(hostname='RicksM4.local', realHome=str(self.scene.home), configPath=str(run / 'config.json'),
+                                              lane='verbs', home=str(run / 'home'), appSupport=str(run / 'home' / 'Library' / 'Application Support'),
+                                              isTestHost=True, afterOpen=None)]))
+            done = subprocess.run([str(self.binary), str(cases)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.stdout.split()[0].split('|')[0], 'a_file_is_outside_the_corpus')
+            self.assertEqual((copy2 / 'a.mov').read_text(), 'x')
+            verbs = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+            trash = verbs[verbs.index('enum VerbsTrash'):verbs.index('final class CorpusVerbsDriver')]
+            self.assertIn('CorpusRun.inRun(url.path, work)', trash)
+            self.assertNotIn('CorpusRun.isUnder(', verbs, 'a run-folder check without the home-volume test')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(run / 'vol' / 'Copies' / 'copy2')], capture_output=True, timeout=120)
+
+    def test_r4_f2_a_volume_mounted_over_the_run_folder_after_open_stops_every_engine(self):
+        # Codex #334 F2: the run's work folder replaced by a mount between engines: no engine runs, no write lands there.
+        self.scene.grow(prepare=False)
+        internal_file = self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')
+        other = Volume(self.tmp.name, name='over-run')
+        run = self.scene.seal.work_root / 'run1-check'
+        try:
+            other.detach()
+            self.assertEqual(self.ask(internal_file), ('ok', 'ok'))
+            self.assertEqual(self.folders_home, 'true')
+            self.ask(internal_file, after_open=[['exec', '/usr/bin/hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint',
+                                                 str(run), other.image]])
+            self.assertTrue(os.path.ismount(str(run)))
+            self.assertEqual(self.folders_home, 'false', "the run's folder on another volume was still its own")
+            support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+            body = support[support.index('    func engine('):]
+            self.assertLess(body.index('CorpusSeal.runFoldersOnHome(config, realHome: CorpusRun.realHome())'), body.index('try await body()'))
+            proof = (SCRIPTS / 'corpus' / 'CorpusProofDriver.swift').read_text()
+            self.assertNotIn('CorpusRun.isUnder(', proof)
+            removal = proof[:proof.index('try? FileManager.default.removeItem(at: balanced)')]
+            self.assertIn('if CorpusRun.inRun(balanced.path, run.config.work) {', removal[-200:])
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(run)], capture_output=True, timeout=120)
+
+    def test_r4_f4_a_corpus_folder_that_is_a_link_is_refused_by_the_in_app_gate(self):
+        self.scene.grow(prepare=False)
+        internal_file = self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')
+        real = pathlib.Path(self.tmp.name, 'corpus-real')
+        os.replace(self.scene.corpus, real)
+        os.symlink(real, self.scene.corpus)
+        try:
+            answer, _ = self.ask(internal_file)
+            self.assertEqual(answer, 'a_corpus_folder_is_an_alias')
+        finally:
+            os.unlink(self.scene.corpus)
+            os.replace(real, self.scene.corpus)
 
     def test_f3_a_progress_file_that_is_a_second_name_of_the_pin_is_refused_and_the_pin_unchanged(self):
         self.scene.grow(prepare=False)
@@ -3439,6 +3513,67 @@ class CodexRound333Tests(RemountCase):
         with self.assertRaises(cr.Refused) as refused:
             lane.reprove([e for e in entries], results)
         self.assertIn('changed during the run', str(refused.exception))
+
+
+
+class CodexRound334Tests(RemountCase):
+    """Codex #334 (closing pass 3; fix, 4 findings): the Python halves."""
+
+    def lane(self, stamp='20261119_180000_9'):
+        return cr.Lane(self.scene.seal, 'check', 'a' * 40, stamp, self.scene.out, self.scene.worktree, self.scene.dd, SCRIPTS / 'corpus')
+
+    def test_r4_f3_the_overlay_is_never_laid_on_a_volume_mounted_in_the_testbed(self):
+        self.scene.grow()
+        tests_folder = self.scene.worktree / 'VideoScan' / 'VideoScanTests'
+        self.volume.detach()
+        done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(tests_folder), self.volume.image],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        try:
+            before = sorted(p.name for p in tests_folder.iterdir())
+            with self.assertRaises(cr.Refused):
+                self.lane().install_overlay()
+            self.assertEqual(sorted(p.name for p in tests_folder.iterdir()), before, 'the overlay landed on another volume')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(tests_folder)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r4_f3_the_patched_test_run_file_is_never_written_on_a_volume_mounted_under_derived_data(self):
+        self.scene.grow()
+        products = self.scene.dd / 'Build' / 'Products'
+        products.mkdir(parents=True, exist_ok=True)
+        self.volume.detach()
+        done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(products), self.volume.image],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        try:
+            xctestrun = products / 'VideoScan_VideoScan-CI_macosx.xctestrun'
+            with open(xctestrun, 'wb') as f:
+                plistlib.dump({"TestConfigurations": [{"TestTargets": [{"BlueprintName": "VideoScanTests", "TestBundlePath": "x"}]}]}, f)
+            lane = self.lane()
+            self.scene.seal.mkdir(lane.work)
+            before = sorted(p.name for p in products.iterdir())
+            with self.assertRaises(cr.Refused):
+                lane.launch(cr.load_manifest(self.scene.seal)[:1], self.scene.seal.state / DB, xctestrun)
+            self.assertEqual(sorted(p.name for p in products.iterdir()), before, 'a patched file was written on another volume')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(products)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r4_f4_a_corpus_that_is_a_link_is_refused_before_anything_and_no_pin_is_made(self):
+        self.scene.grow(adopt=False, prepare=False)
+        real = pathlib.Path(self.tmp.name, 'corpus-real')
+        os.replace(self.scene.corpus, real)
+        os.symlink(real, self.scene.corpus)
+        try:
+            with self.assertRaises(cr.Refused):
+                self.scene.seal.check()
+            with self.assertRaises(cr.Refused):
+                cr.adopt_volume(self.scene.seal, str(self.volume.mount), 'x')
+            self.assertFalse(os.path.lexists(real / cr.VOLUME_PIN))
+        finally:
+            os.unlink(self.scene.corpus)
+            os.replace(real, self.scene.corpus)
 
 
 if __name__ == '__main__':

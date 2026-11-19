@@ -84,7 +84,7 @@ final class VerbsStage {
     /// One word for a receipt the engine reports, and the count it belongs to.
     func receiptWord(_ url: URL?) -> String {
         guard let url else { return "no_receipt" }
-        if CorpusRun.isUnder(url.path, run.config.work) {
+        if CorpusRun.inRun(url.path, run.config.work) {
             receiptsInRun += 1
             return "receipt_in_run"
         }
@@ -125,7 +125,7 @@ final class VerbsStage {
         var folders: [URL] = []
         for kind in ["catalog-", "ledger-"] {
             let path = scratch + "/" + kind + name
-            guard mkdir(path, 0o755) == 0, CorpusRun.isUnder(path, scratch), CorpusRun.isUnder(path, run.config.work) else { return nil }
+            guard mkdir(path, 0o755) == 0, CorpusRun.inRun(path, scratch), CorpusRun.inRun(path, run.config.work) else { return nil }
             folders.append(URL(fileURLWithPath: path, isDirectory: true))
         }
         let model = VideoScanModel()
@@ -171,7 +171,7 @@ enum VerbsTrash {
     /// Moves `url` into `trash` under a new name (no clobber) and returns where it went. Refuses
     /// a file that is not inside the run, and a trash folder that is not.
     static func move(_ url: URL, into trash: String, work: String) throws -> URL {
-        guard CorpusRun.isUnder(url.path, work), CorpusRun.isUnder(trash, work), VerbsStage.isRealFolder(trash) else {
+        guard CorpusRun.inRun(url.path, work), CorpusRun.inRun(trash, work), VerbsStage.isRealFolder(trash) else {
             throw CorpusRefusal(word: "trash_step_outside_the_run")
         }
         let name = UUID().uuidString + (url.pathExtension.isEmpty ? "" : "." + url.pathExtension)
@@ -198,8 +198,8 @@ final class CorpusVerbsDriver: XCTestCase {
         let config = run.config
         let workRoot = CorpusRun.realHome() + "/corpus/work"
         guard let vol = config.volRoot, let archive = config.archiveRoot, let scratch = config.scratch,
-              CorpusRun.isUnder(config.work, workRoot) else { return refuse("verbs_folders_missing") }
-        guard config.pending.allSatisfy({ item in ([item.path] + (item.copies ?? [])).allSatisfy { CorpusRun.isUnder($0, vol) } }) else {
+              CorpusRun.inRun(config.work, workRoot) else { return refuse("verbs_folders_missing") }
+        guard config.pending.allSatisfy({ item in ([item.path] + (item.copies ?? [])).allSatisfy { CorpusRun.inRun($0, vol) } }) else {
             return refuse("a_verbs_file_is_not_a_clone")
         }
         // THE TRASH. Under a test host the app's one Trash call moves a file into a folder in the
@@ -211,10 +211,10 @@ final class CorpusVerbsDriver: XCTestCase {
         // if a step were ever missed, the file could reach that temporary folder, not a Trash.
         guard TestEnvironment.isTestHost else { return refuse("not_a_test_host") }
         let trash = config.work + "/trash"
-        guard mkdir(trash, 0o755) == 0, CorpusRun.isUnder(trash, config.work), VerbsStage.isEmptyFolder(trash) else {
+        guard mkdir(trash, 0o755) == 0, CorpusRun.inRun(trash, config.work), VerbsStage.isEmptyFolder(trash) else {
             return refuse("trash_not_in_the_run")
         }
-        guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, config.work) else {
+        guard CorpusRun.inRun(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.inRun(archive, config.work) else {
             return refuse("archive_root_outside_corpus_work")
         }
         // The scratch and archive folders are EMPTY real folders made for this run: nothing in
@@ -307,7 +307,7 @@ extension VerbsStage {
     func dedupe(_ model: VideoScanModel) async {
         entering("dedupe")
         let plans = scratch + "/plans"
-        guard mkdir(plans, 0o755) == 0, CorpusRun.isUnder(plans, run.config.work) else {
+        guard mkdir(plans, 0o755) == 0, CorpusRun.inRun(plans, run.config.work) else {
             for item in items("dup") { say(item, "dedupe", "refused_by_harness") }
             return
         }
@@ -377,7 +377,7 @@ extension VerbsStage {
         entering("promote")
         let promoting = items("promote")
         // Checked again here, by the real home, immediately before the archive is made.
-        guard CorpusRun.isUnder(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.isUnder(archive, run.config.work) else {
+        guard CorpusRun.inRun(archive, CorpusRun.realHome() + "/corpus/work"), CorpusRun.inRun(archive, run.config.work) else {
             for item in promoting { say(item, "promote", "refused_by_harness") }
             return
         }
@@ -388,7 +388,7 @@ extension VerbsStage {
             for item in promoting { say(item, "promote", "error:" + CorpusWords.caseName(error)) }
             return
         }
-        guard CorpusRun.isUnder(root, run.config.work) else {
+        guard CorpusRun.inRun(root, run.config.work) else {
             for item in promoting { say(item, "promote", "refused_by_harness") }
             return
         }
@@ -421,7 +421,7 @@ extension VerbsStage {
         var kinds: [String] = outcome.notLocked == nil ? [] : ["not_locked"]
         if outcome.kind == .promoted || outcome.kind == .adopted {
             let landed = URL(fileURLWithPath: root).appendingPathComponent(outcome.detail)
-            let digest = CorpusRun.isUnder(landed.path, root) ? (try? CatalogStore.sha256HexStreaming(fileURL: landed)) : nil
+            let digest = CorpusRun.inRun(landed.path, root) ? (try? CatalogStore.sha256HexStreaming(fileURL: landed)) : nil
             if digest == sha { kinds.append("archive_copy_matches") } else { word += "_MISMATCH" }
         }
         return (word, kinds)
@@ -470,7 +470,7 @@ extension VerbsStage {
     /// scratch archive only, so the run's work folder can be removed. Never on a file that
     /// has a second name (Codex #311 F3).
     nonisolated static func unlock(under root: String, inside work: String) {
-        guard CorpusRun.isUnder(root, work), let walker = FileManager.default.enumerator(atPath: root) else { return }
+        guard CorpusRun.inRun(root, work), let walker = FileManager.default.enumerator(atPath: root) else { return }
         for case let relative as String in walker {
             let path = root + "/" + relative
             var info = stat()

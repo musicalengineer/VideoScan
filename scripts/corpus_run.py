@@ -303,6 +303,9 @@ class Seal:
         # ~/corpus and its own folders are on the home volume: a volume mounted over one of them (the
         # adopted one included) would make its files "writable" or "removable" (Codex #332 F2).
         home_dev = self.home_device()
+        if (os.path.islink(str(self.corpus))
+                or os.path.realpath(str(self.corpus)) != os.path.join(os.path.realpath(str(self.home)), "corpus")):
+            raise Refused("refused: ~/corpus is a link or resolves somewhere else — it must be itself")   # Codex #334 F4
         for folder in [self.corpus] + [self.corpus / name for name in ("state", "work", "reports", "media")]:
             if os.path.lexists(str(folder)) and os.lstat(str(folder)).st_dev != home_dev:
                 raise Refused("refused: a corpus folder is on another volume (something is mounted over it)")
@@ -314,17 +317,18 @@ class Seal:
         return os.lstat(str(self.home)).st_dev
 
     def on_home_volume(self, path: Path) -> bool:
-        """True when what `path` resolves to, and every existing folder above it up to the home
-        folder, is on the home volume: a volume mounted anywhere on the way (inside reports/, over
-        a run folder, at an out folder) makes it False (Codex #333 F1)."""
-        dev, home = self.home_device(), os.path.realpath(str(self.home))
+        """True when what `path` resolves to is on the home volume: its deepest existing part (the
+        file, or the folder it would be made in) is on the home folder's device. Everything below a
+        mount point is on the mounted volume, so a volume mounted anywhere on the way (inside
+        reports/, over a run folder, at an out folder, in the testbed) makes it False (Codex #333 F1,
+        #334 F3). CorpusSeal.onHomeVolume is the same rule."""
         here = os.path.realpath(str(path))
-        while True:
-            if os.path.lexists(here) and os.lstat(here).st_dev != dev:
+        while not os.path.lexists(here):
+            up = os.path.dirname(here)
+            if up == here:
                 return False
-            if here == home or os.path.dirname(here) == here:
-                return True
-            here = os.path.dirname(here)
+            here = up
+        return os.lstat(here).st_dev == self.home_device()
 
     def pin(self) -> Optional[dict]:
         """The adopted external volume, {mount, volume_uuid}, or None when none was adopted. Refused
@@ -1141,7 +1145,8 @@ class Lane:
         # above it) a symlink would send the driver sources somewhere else (Codex #311 F2).
         parent = (self.worktree / OVERLAY_DIR).parent
         expected = os.path.join(os.path.realpath(str(self.worktree)), os.path.dirname(OVERLAY_DIR))
-        if os.path.realpath(str(parent)) != expected or self.seal.pristine(parent) or _under(self.worktree, self.seal.corpus):
+        if (os.path.realpath(str(parent)) != expected or self.seal.pristine(parent) or _under(self.worktree, self.seal.corpus)
+                or not self.seal.on_home_volume(parent)):        # never on a volume mounted in the testbed (Codex #334 F3)
             raise Refused("refused: the testbed's test folder is not a folder of the testbed (a symlink in this ref?)")
         self.clear_overlay()
         overlay = self.worktree / OVERLAY_DIR
@@ -1179,7 +1184,8 @@ class Lane:
         sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home),
                   "TMPDIR": str(self.work / "tmp") + "/", "VS_CORPUS_CONFIG": str(config)}
         patched = xctestrun.with_name(f"corpus-{self.stamp}-{self.launches}.xctestrun")    # beside it: __TESTROOT__ is relative
-        if os.path.lexists(str(patched)) or seal.pristine(patched) or _under(patched, seal.corpus):
+        if (os.path.lexists(str(patched)) or seal.pristine(patched) or _under(patched, seal.corpus)
+                or not seal.on_home_volume(patched.parent)):     # never on a volume mounted under DerivedData (Codex #334 F3)
             raise Refused("refused: the patched test-run file would land somewhere it must not")
         patch_xctestrun(xctestrun, patched, sealed)
         env = dict(os.environ)
