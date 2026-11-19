@@ -335,6 +335,25 @@ def test_the_corpus_call_keeps_ref_and_its_commit_together():
     assert "--limit" not in rt.corpus_cmd(Path("/r"), "abc123", None)
 
 
+def test_the_corpus_lane_counts_this_runs_files_and_stops_before_older_runs():
+    # recorded from the M4 run 2026-11-19 18:47 (counts and outcome words only)
+    lines = [
+        "m4_run: corpus on M4 at 431753b90 (431753b90fd02ab00866f5701faaf6cbe5fa20dd)",
+        "m4_run: started — output /Users/x/m4run/out/20261119_184700_64053-corpus (run.log, summary.txt)",
+        "  some build line we never show",
+        "M4: idle",
+        "OUTCOME GREEN 2026-11-19 18:49:27 lane=corpus sha=431753b90",
+        "  corpus check: GREEN 10 files (3.3 GB, 0.3 h of media) at 431753b90 — wall 141s (build 127s), 1 launch(es)",
+        "OUTCOME GREEN 2026-11-19 00:23:15 lane=suite sha=431753b90",
+        "  corpus proof  AMBER   1369s  8 files — balance: balanced 8 · proof: not_proven 5, same_content 3",
+    ]
+    c = rt.CorpusLines()
+    shown = [x for x in (c.feed(l) for l in lines) if x is not None]
+    assert c.files == 10
+    assert shown[-1].startswith("corpus check: GREEN 10 files")
+    assert not any("lane=suite" in x or "corpus proof" in x or "build line" in x for x in shown)
+
+
 def test_the_caller_reads_the_hosts_own_total():
     text = ("[\x1b[32m==========\x1b[0m] noise\n\r[ 5/9 ] "
             "\x1b[31m[==========]\x1b[0m RED · lanes: GREEN 3 · RED 1 · 2320 tests · 17m14s\n"

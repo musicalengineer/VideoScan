@@ -875,21 +875,40 @@ def remote_counts(text: str) -> Tuple[int, int, List[str]]:
     return int(last.group(2)), len(names), names
 
 
+class CorpusLines:
+    """Which of corpus_run.sh's lines to show: its own summary words only (never a path or a corpus file
+    name), and only up to THIS run's "corpus check: <VERDICT> N files" line — m4_run's status block after
+    it lists older runs' lanes (11-19: "8 files" of an old testbed run was read as this run's count)."""
+    LINE = re.compile(r"^\s*corpus check: (GREEN|AMBER|RED)\b.*?\b(\d+) files\b")
+
+    def __init__(self) -> None:
+        self.files = 0
+        self.done = False
+
+    def feed(self, raw: str) -> Optional[str]:
+        s = raw.strip()
+        if self.done or not CORPUS_SUMMARY.match(s):
+            return None
+        m = self.LINE.match(s)
+        if m:
+            self.files = int(m.group(2))
+            self.done = True
+        return s
+
+
 def run_corpus(out: Out, script_repo: Path, sha: str, run_dir: Path, verbose: bool, limit: Optional[int]) -> LaneResult:
     lane = LaneResult("corpus")
     cmd = corpus_cmd(script_repo, sha, limit)
     out.line("RUN", f"corpus check on the M4{f' (--limit {limit})' if limit else ''} — the harness's own summary lines only")
     r = Runner(out, run_dir, dict(os.environ))
-    files = {"n": 0}
+    picker = CorpusLines()
 
     def show(raw: str) -> None:
-        s = raw.rstrip()
-        m = re.search(r"\b(\d+) files\b", s)
-        if m and re.match(r"^\s*corpus \w+", s):
-            files["n"] = int(m.group(1))
-        if CORPUS_SUMMARY.match(s):                     # never a path or a corpus file name
-            out.plain(" " * 13 + s.strip())
+        s = picker.feed(raw)
+        if s is not None:
+            out.plain(" " * 13 + s)
     rc, el = r.stream(cmd, "corpus.log", LANE_BUDGET["corpus"], on_line=show)
+    files = {"n": picker.files}
     lane.seconds, lane.rc = el, rc
     if rc in (3, 5):
         lane.reason = "the M4 is busy (testbed lock) or in its window" if rc == 3 else "the M4's nightly/quiet window"

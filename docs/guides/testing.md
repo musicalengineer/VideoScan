@@ -448,7 +448,7 @@ A thin front door over the runners above. It only selects and displays, so there
     scripts/run_tests.sh --full              # everything: nightly_local_tests.sh --on-demand + run_python_tests.sh
 
 - **What the smoke runs.** It reads `scripts/gauntlet/manifest.json` at the commit and takes, for each module and stage,
-  the test file with the fewest tests, plus the median one when the group has four or more files. That is about 2,100
+  the test file with the fewest tests, plus (app and Core) the median one when the group has four or more files. That is about 2,000
   tests across app (Debug), Core (`swift test`) and Python, in the unit, regression and integration stages. Performance
   and stress are left out unless you add `--perf` or `--stress`, because Core's 100k-row scale tests alone take minutes. UI tests are not included: they need the GUI session (#408).
   The hallie stage is not included either: it belongs to the hallie eval. Narrow the run with `--unit --regression --integration --perf --stress --python --corpus`.

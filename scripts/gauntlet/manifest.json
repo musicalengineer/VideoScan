@@ -35558,6 +35558,7 @@
         "test_swift_testing_pass_known_issue_param_skip_and_fail",
         "test_the_caller_reads_the_hosts_own_total",
         "test_the_corpus_call_keeps_ref_and_its_commit_together",
+        "test_the_corpus_lane_counts_this_runs_files_and_stops_before_older_runs",
         "test_the_lock_refuses_a_second_holder",
         "test_the_real_manifest_selects_a_deterministic_nonempty_smoke",
         "test_the_shell_entry_is_a_thin_exec",
