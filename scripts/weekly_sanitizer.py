@@ -646,6 +646,29 @@ def run_target(cmd: List[str], log_path: Path, env: dict, deadline: float) -> tu
     return proc.returncode, timed_out
 
 
+def drop_derived_data(dd_root: Path, names: List[str]) -> int:
+    """A weekly run's own DerivedData, once its row is written (DECISIONS 2026-11-18: a run's
+    scratch goes after its summary). Only the named folders directly in `dd_root`, each a real
+    folder: a link is left as it is (never followed), a name with a slash or "." is never one of
+    ours. Returns the bytes given back. Worst case kept between runs: nothing."""
+    import shutil
+    freed = 0
+    for name in names:
+        if not name or "/" in name or name.startswith("."):
+            continue
+        path = dd_root / name
+        if path.is_symlink() or not path.is_dir():
+            continue
+        for folder, _, files in os.walk(path):
+            for f in files:
+                try:
+                    freed += os.lstat(os.path.join(folder, f)).st_blocks * 512
+                except OSError:
+                    pass
+        shutil.rmtree(path, ignore_errors=True)
+    return freed
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sanitizer", choices=sorted(FLAGS), required=True)
@@ -664,6 +687,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--suppressions-dir", type=Path, default=SUPP_DIR,
                     help="folder holding tsan.supp / ubsan.supp (known findings, each with an issue)")
     ap.add_argument("--source", default="weekly", help="who ran it (weekly | analysis-lane); recorded in the row")
+    ap.add_argument("--keep-dd", action="store_true",
+                    help="keep a weekly run's DerivedData afterwards (by default it is scratch and removed)")
     args = ap.parse_args(argv)
     kind = args.sanitizer
     targets = ["app", "core"] if args.target == "all" else [args.target]
@@ -742,9 +767,15 @@ def main(argv: list[str] | None = None) -> int:
     if any(t.get("status") == "not-run" for t in per_target.values()) and row["status"] == "ok":
         row["status"] = "timeout"
     write_row(kind, row, logdir)
+    dropped = ""
+    if args.source == "weekly" and not args.keep_dd:
+        # A weekly run's DerivedData is scratch (14 GB idle six days of seven on the M4, 2026-11-18): it
+        # goes once the row is written; the next run builds cold. The analysis lane keeps its warm cache.
+        freed = drop_derived_data(args.dd_root, [f"{kind}{suffix}", f"{kind}{suffix}-core"])
+        dropped = f"; its DerivedData removed ({freed / 1e9:.1f} GB)"
     print(f"sanitizer {kind}: {row['status']} — {merged['tests']} tests ({'+'.join(targets)}, {args.configuration}, "
           f"{args.subset}), {len(merged['unique_findings'])} unique finding(s), "
-          f"{len(row['suppressed'])} known suppressed; log {row['log']}")
+          f"{len(row['suppressed'])} known suppressed; log {row['log']}{dropped}")
     return 0
 
 

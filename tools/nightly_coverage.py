@@ -29,6 +29,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -264,6 +265,37 @@ def verdict(app_rc: int, core_rc: int, core: dict) -> tuple[str, str]:
     return ("RED", "; ".join(why)) if why else ("ok", "")
 
 
+_SCRATCH = re.compile(r"^(app|core)-\d{4}-\d\d-\d\d\.(log|xcresult)$")
+
+
+def tidy_outputs(out: Path, keep_logs: int = 7) -> str:
+    """This lane's own scratch, once the report is written (DECISIONS 2026-11-18): every
+    app-<day>.xcresult goes (its numbers are in coverage-<day>.json), and only the newest
+    `keep_logs` app-/core- logs stay (~50 MB each). Only those names, directly in `out`; a link
+    is removed as itself, never followed (shutil.rmtree never descends one). The reports
+    (coverage-<day>.json/.md, latest.json) are kept. Worst case kept: 7 x 50 MB of logs."""
+    bundles = logs = 0
+    names = sorted(n for n in os.listdir(out) if _SCRATCH.match(n))
+    for kind in ("app", "core"):
+        kept = [n for n in names if n.startswith(kind + "-") and n.endswith(".log")][-keep_logs:]
+        for name in names:
+            path = out / name
+            if not name.startswith(kind + "-") or name in kept:
+                continue
+            try:
+                if path.is_symlink() or not path.is_dir():
+                    path.unlink()
+                else:
+                    shutil.rmtree(path)
+            except OSError:
+                continue
+            if name.endswith(".xcresult"):
+                bundles += 1
+            else:
+                logs += 1
+    return f"tidied: result bundles {bundles}, logs {logs} (kept the newest {keep_logs} of each kind)"
+
+
 def write_report(folders: dict, meta: dict) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     day = meta["date"]
@@ -371,6 +403,10 @@ def main() -> int:
     folders = aggregate(files)
     write_report(folders, meta)
     publish_metrics()
+    try:
+        log(tidy_outputs(OUT))                  # this lane's scratch, now that its report is written
+    except OSError as exc:
+        log(f"tidy failed: {exc}")
     total_e = sum(d["executable"] for d in folders.values())
     total_c = sum(d["covered"] for d in folders.values())
     word, why = verdict(app_rc, core_rc, core_counts(OUT / f"core-{day}.log"))

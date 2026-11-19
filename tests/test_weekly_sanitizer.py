@@ -922,3 +922,31 @@ def test_xcodebuilds_list_ends_at_its_blank_line_and_is_bounded():
     assert ws.parse_log(grouped)["failed_tests"] == ["S.a()", "S.b(row:)"]
     # An empty list falls back to the ✘ lines rather than naming nothing.
     assert ws.parse_log("✘ Test fooBar() failed after 0.1 seconds.\nFailing tests:\n\n")["failed_tests"] == ["fooBar"]
+
+
+# ── Its own scratch (worker A, 2026-11-18). The weekly runs left ~/Library/Caches/VideoScan/sanitizer-dd
+# at 14 GB (address 7.6 + thread 6.4) for the six days between runs, to save one cold build a week.
+# A weekly run's DerivedData is scratch: removed once its row is written; the nightly analysis lane
+# (--source analysis-lane, its own --dd-root) keeps its warm cache.
+
+def test_a_weekly_runs_derived_data_goes_after_its_row_and_nothing_else(tmp_path):
+    root = tmp_path / "sanitizer-dd"
+    for name in ("address", "address-core", "thread", "address-release"):
+        (root / name / "Build").mkdir(parents=True)
+        (root / name / "Build" / "blob").write_bytes(b"d" * 4096)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("keep")
+    os.symlink(outside, root / "thread-core")
+    freed = ws.drop_derived_data(root, ["address", "address-core", "thread-core", "../outside", "absent"])
+    assert not (root / "address").exists() and not (root / "address-core").exists()
+    assert (root / "thread" / "Build" / "blob").exists() and (root / "address-release").exists(), "only the run's own"
+    assert (outside / "keep").read_text() == "keep" and (root / "thread-core").is_symlink(), "a link is never followed"
+    assert freed >= 2 * 4096
+
+
+def test_sensor_main_drops_only_a_weekly_runs_cache_after_writing_its_row():
+    text = (ROOT / "scripts" / "weekly_sanitizer.py").read_text()
+    last_row = text.rindex("    write_row(kind, row, logdir)\n")
+    assert text.index("drop_derived_data(args.dd_root,") > last_row, "the cache goes only after the row is written"
+    assert 'args.source == "weekly" and not args.keep_dd' in text

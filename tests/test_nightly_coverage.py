@@ -1,6 +1,7 @@
 """Sensors for tools/nightly_coverage.py (GH #239) — folder aggregation only, no xcodebuild."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -209,3 +210,46 @@ def test_sensor_main_writes_the_verdict_word_and_exits_non_zero_on_red():
     assert "word, why = verdict(app_rc, core_rc, core_counts(" in text
     assert 'log(f"OUTCOME ok:' not in text, "the OUTCOME word comes from verdict(), never a constant ok"
     assert "return 0 if word == \"ok\" else 1" in text
+
+
+# ── Its own scratch (worker A, 2026-11-18; DECISIONS 2026-11-18: once a run is summarized its scratch
+# goes). The M4 kept every night's app-<day>.xcresult (~320 MB) and app log (~50 MB) under
+# ~/Library/Logs/VideoScan/coverage: 2.9 GB on 11/18, growing ~370 MB a night.
+
+def _night(out, day, xcresult=True):
+    (out / f"app-{day}.log").write_text("app\n")
+    (out / f"core-{day}.log").write_text("core\n")
+    if xcresult:
+        (out / f"app-{day}.xcresult" / "Data").mkdir(parents=True)
+        (out / f"app-{day}.xcresult" / "Data" / "blob").write_bytes(b"x" * 1000)
+    (out / f"coverage-{day}.json").write_text("{}")
+    (out / f"coverage-{day}.md").write_text("# c\n")
+
+
+def test_tidy_drops_every_result_bundle_and_keeps_a_week_of_logs(tmp_path):
+    out = tmp_path / "coverage"
+    out.mkdir()
+    days = [f"2026-11-{d:02d}" for d in range(1, 13)]
+    for day in days:
+        _night(out, day)
+    (out / "latest.json").write_text("{}")
+    outside = tmp_path / "outside"
+    (outside / "Data").mkdir(parents=True)
+    (outside / "Data" / "keep").write_text("keep")
+    os.symlink(outside, out / "app-2026-10-01.xcresult")
+    words = nc.tidy_outputs(out, keep_logs=7)
+    left = sorted(p.name for p in out.iterdir())
+    assert not [n for n in left if n.endswith(".xcresult")], left
+    assert [n for n in left if n.startswith("app-") and n.endswith(".log")] == [f"app-{d}.log" for d in days[-7:]]
+    assert [n for n in left if n.startswith("core-")] == [f"core-{d}.log" for d in days[-7:]]
+    assert all((out / f"coverage-{d}.json").exists() and (out / f"coverage-{d}.md").exists() for d in days)
+    assert (out / "latest.json").exists()
+    assert (outside / "Data" / "keep").read_text() == "keep", "a link was followed"
+    assert not (out / "app-2026-10-01.xcresult").is_symlink(), "the link goes as itself"
+    assert "result bundles 13" in words and "logs 10" in words
+
+
+def test_sensor_main_tidies_after_the_report_is_written():
+    text = (ROOT / "tools" / "nightly_coverage.py").read_text()
+    report, tidy = text.index("    write_report(folders, meta)\n    publish_metrics()"), text.index("tidy_outputs(OUT")
+    assert tidy > report, "the scratch goes only once the report is written"

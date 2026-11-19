@@ -118,6 +118,35 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   and the last testbed run: lane, commit, START and OUTCOME times, verdict word, summary lines, a testbed run's lanes,
   and the push watcher's verdict line.
 
+**When the harness itself fails** (fault injection, 2026-11-18; `tests/test_m4_run_faults.py` names where each is pinned).
+Every case ends in RED, a refusal or a clean resume, never a GREEN or a held lock: the agent shell dies mid-lane
+(the kernel lock frees itself; `status` says ENDED WITHOUT AN OUTCOME; the watcher retries once); ssh drops under
+`--wait` (a short drop is waited out; 15 min without reaching the host ends the wait with "lost contact", exit as
+could-not-run, and the run goes on there); a stale lock cannot exist (flock dies with its holders); a corpus lane that
+exits 0 or 3 without its summary is RED; a testbed run whose lanes file lacks a lane or has a torn row is RED; a torn
+suite row is RED; a run whose measured worst case would take the disk past 90% used is refused before START
+(`OUTCOME REFUSED disk: …`, exit 4; peaks in `testbed_host.py` PEAK_GB: suite 12 GB, testbed 20, corpus 10, coverage
+16, ui 8, deep 20, all 28); no lane reads the TB5 share (`~/corpus/live`), and the cleanup only lstats its name under
+the 900 s alarm; a `--ref` that does not build is RED in every lane.
+
+**What the M4 keeps between runs: warm caches and scratch** (2026-11-18, measured on the M4; the ruling: a run's
+scratch goes once it is summarized, the resting target is 50% free). A cache is *warm* when its lane runs at least
+daily and a cold build costs 10–25 min; it is one DerivedData tree that does not grow per run (its size is bounded by
+the tree). Everything a run writes beyond that is *scratch* and is removed by the lane after its summary.
+
+| Folder (`~/Library/Caches/…`) | Size | Lane, schedule | Kind |
+|---|---|---|---|
+| `videoscan-nightly-dd`, `videoscan-nightly-core-build` | 6.6 + 1.4 GB | scheduled suite, 14:00 daily | warm |
+| `videoscan-m4run-dd`, `videoscan-m4run-dd-suite` | 5.2 + 7.0 GB | on-demand lanes, the push watcher | warm; dropped below the 50% floor by `testbed_host.py clean` |
+| `videoscan-analysis-dd` (memsafe, ratchet, their -core) | 11 GB | analysis lane, 04:30 daily | warm |
+| `VideoScan/coverage-dd` | 6.9 GB | coverage lane, 04:00 daily | warm |
+| `VideoScan/adv-review` | 4.5 GB | adversarial review, 00:30 daily | warm |
+| `videoscan-m4run-dd-coverage`, `-dd-coverage-core` | 5.6 + 1.3 GB | corpus coverage, opt-in, rare | scratch: `testbed_host.py clean` at every run start and end |
+| `VideoScan/sanitizer-dd/{address,thread}[-core]` | 14 GB | weekly sanitizer (Sat, Sun) | scratch: removed after the run's row (`--keep-dd` keeps it) |
+| `~/Library/Logs/VideoScan/coverage/app-<day>.xcresult` + logs | ~370 MB a night | coverage lane | scratch: bundles removed after the report; the newest 7 app and core logs kept |
+
+Warm total ≈ 43 GB (4% of the disk); the corpus run folders and work folders are §1's cleanup.
+
 **The push trigger** (`scripts/m4_watch.py`; DECISIONS 2026-11-17: the suite runs on every push to `main`). *Built and
 tested 2026-11-18; NOT installed on the M4 — installing a standing agent there is Rick's to do or to allow (the table
 below is the whole of it).* One tick
