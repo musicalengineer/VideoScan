@@ -700,6 +700,20 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/WaitUntilStarvationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "WaitUntilStarvationTests"
+      ],
+      "tests": [
+        "permanentStarvationHitsTheCeiling",
+        "realClockSmoke",
+        "starvedPollerStillSucceeds",
+        "stuckJobFailsOnTime"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JournalApplicationTests.swift",
       "stage": "unit",
       "suites": [
@@ -39953,7 +39967,7 @@
       ],
       "expected_floor": 3893,
       "name": "unit",
-      "package_expected_floor": 904,
+      "package_expected_floor": 908,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40058,7 +40072,8 @@
         "VideoScanCoreTests.ProvenanceResolverDoorTests",
         "VideoScanCoreTests.ProvenanceResolverGroupingTests",
         "VideoScanCoreTests.ProvenanceResolverReviewTests",
-        "VideoScanCoreTests.ProvenanceResolverReviewFixTests"
+        "VideoScanCoreTests.ProvenanceResolverReviewFixTests",
+        "VideoScanCoreTests.WaitUntilStarvationTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

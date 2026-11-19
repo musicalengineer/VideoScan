@@ -110,13 +110,39 @@ enum BackgroundFixtures {
         return c
     }
 
-    /// Polls until `condition` holds or `timeout` passes.
+    /// Polls until `condition` holds or the poller has been RUNNING for `timeout`.
+    ///
+    /// Only time this poller was actually scheduled is charged: a gap between two polls longer
+    /// than `stallGrace` (asked to sleep 10 ms, woken seconds later) means the whole cooperative
+    /// pool was busy elsewhere, and is charged at `stallGrace`. Measured 2026-11-18 on the M4:
+    /// under `swift test --enable-code-coverage` (Debug, instrumented, 16 cores) the scale suites
+    /// held every pool thread for ~50 s at the start of the run, and 16 Background tests failed
+    /// "after 50–68 s" on a 5 s wait whose job needed three 5 ms units — the machine's wait,
+    /// not the code's. A job that never finishes still fails: a poller that is scheduled
+    /// promptly is charged in full (5 s), and `ceiling` (20 × timeout of wall clock) ends any wait.
+    /// (C++: a watchdog that counts ticks it actually got, with a wall-clock backstop.)
     static func waitUntil(_ timeout: Duration = .seconds(5), _ condition: @Sendable () async -> Bool) async -> Bool {
         let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
+        let start = clock.now
+        return await waitUntil(timeout, now: { clock.now - start },
+                               sleep: { try? await Task.sleep(for: $0) }, condition)
+    }
+
+    static let stallGrace: Duration = .milliseconds(100)
+    static let pollInterval: Duration = .milliseconds(10)
+
+    /// The rule above with its clock and sleep injected (`now`: time since the wait began).
+    static func waitUntil(_ timeout: Duration, now: @Sendable () -> Duration, sleep: @Sendable (Duration) async -> Void,
+                          _ condition: @Sendable () async -> Bool) async -> Bool {
+        let ceiling = timeout * 20
+        var charged: Duration = .zero
+        var last = now()
+        while charged < timeout && last < ceiling {
             if await condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
+            await sleep(pollInterval)
+            let at = now()
+            charged += min(at - last, stallGrace)
+            last = at
         }
         return await condition()
     }
