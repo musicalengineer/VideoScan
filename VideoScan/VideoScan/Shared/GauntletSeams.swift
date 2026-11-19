@@ -55,6 +55,11 @@ enum GauntletSeams {
 
     static let familyTreeDirectoryKey = "gauntletFamilyTreeDir"
 
+    /// `-gauntletCorpusCatalog <path>` — the corpus UI lane only: the M4
+    /// corpus's sealed catalog.sqlite, shown read-only. Honoured only when
+    /// GauntletCorpusCatalog's seal holds (GauntletCorpusCatalog.swift).
+    static var corpusCatalogPath: String? { seamString(GauntletCorpusCatalog.seamKey) }
+
     /// Pure form of `familyTreeDirectory`, for the unit test. A relative
     /// path is refused rather than resolved against whatever the app's
     /// working directory happens to be.

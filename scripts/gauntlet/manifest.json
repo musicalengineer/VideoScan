@@ -37171,6 +37171,76 @@
         "theShowingBoxHasNoTapGesture",
         "theTableFollowsCatalogEdits"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/GauntletCorpusCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GauntletCorpusSealTests"
+      ],
+      "tests": [
+        "catalogIsTheSealedOne",
+        "holds",
+        "homeSealed",
+        "hostAndTestHost",
+        "installOnlyInTheTestHostBranch",
+        "latch",
+        "marker",
+        "records",
+        "scale",
+        "statusFileOnlyInsideTheRun",
+        "volumeRoots"
+      ]
+    },
+    {
+      "blocked_reason": "phase 2",
+      "kind": "ui",
+      "path": "VideoScan/VideoScanUITests/Gauntlet/CorpusUITests.swift",
+      "stage": "ui",
+      "suites": [
+        "CorpusUITests"
+      ],
+      "tests": [
+        "test1_showingCountFollowsFiltersSearchAndSelection",
+        "test2_mainTabsOpenAndReturnWithoutAHang",
+        "test3_seededMonkey"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_corpus_ui_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_corpus_ui_lane.py"
+      ],
+      "tests": [
+        "test_a_clean_run_is_green_isolated_and_leaves_no_work_folder",
+        "test_a_crash_report_is_red",
+        "test_a_dead_ui_run_leaves_a_work_folder_the_housekeeping_knows",
+        "test_a_failed_build_is_red_and_runs_nothing",
+        "test_a_failed_case_is_red_and_a_message_that_could_name_a_file_is_withheld",
+        "test_a_machine_that_cannot_start_ui_automation_is_norun",
+        "test_a_ref_without_the_plan_is_norun",
+        "test_a_running_videoscan_is_norun_and_nothing_is_built_or_stopped",
+        "test_a_seam_refusal_is_red_and_a_status_line_that_is_not_words_is_dropped",
+        "test_a_touched_corpus_file_is_red",
+        "test_a_touched_live_catalog_file_is_red_and_named_by_its_app_file_name",
+        "test_a_touched_sealed_catalog_is_red",
+        "test_corpus_run_dispatches_host_ui_to_the_lane",
+        "test_corpus_run_sh_run_ui_ships_the_lane_module",
+        "test_corpus_ui_lines_that_are_not_words_and_numbers_are_dropped",
+        "test_limit_sets_the_monkey_steps",
+        "test_running_videoscan_counts_any_build",
+        "test_safe_text",
+        "test_seed_is_the_commit_prefix",
+        "test_the_seal_refuses_another_mac_before_anything_runs",
+        "test_the_ui_lane_is_m4_only",
+        "test_unified_log_errors_are_counted_by_subsystem_and_category_only",
+        "test_zero_cases_or_a_skipped_case_is_red"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -39921,6 +39991,10 @@
         {
           "name": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/GauntletCorpusCatalogTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 3896,
@@ -41083,6 +41157,10 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyAudioVerdictTruthMediaTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_corpus_ui_lane.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         }
       ],
       "expected_floor": 831,
@@ -42099,6 +42177,10 @@
         },
         {
           "name": "VideoScan/VideoScanUITests/Gauntlet/CatalogKeyboardUITests.swift",
+          "reason": "phase 2"
+        },
+        {
+          "name": "VideoScan/VideoScanUITests/Gauntlet/CorpusUITests.swift",
           "reason": "phase 2"
         },
         {

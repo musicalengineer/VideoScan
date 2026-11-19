@@ -1344,6 +1344,7 @@ struct CatalogContent: View {
                     .font(.system(size: 24, weight: .bold))
                     .foregroundColor(.primary)
                     .monospacedDigit()
+                    .accessibilityIdentifier("catalog.preview.selectionCount")
             }
             previewVolumeLine(rec, reachable: reachable)
             VStack(alignment: .leading, spacing: 2) {

@@ -29,6 +29,8 @@ extension VideoScanModel {
             installGauntletScanTargetIfRequested()
             // Catalog keyboard harness: synthetic volumes + test_* files.
             installGauntletFixtureCatalogIfRequested()
+            // Corpus UI lane (M4 only, sealed): the corpus catalog, read-only.
+            GauntletCorpusCatalog.installIfRequested(into: self)
             return
         }
         let report = ScanTargetPersistence.restoreReporting(

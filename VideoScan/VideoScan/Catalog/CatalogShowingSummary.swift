@@ -440,6 +440,9 @@ struct CatalogShowingBox: View {
         .help(CatalogShowingSummary.help(for: state))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(CatalogShowingSummary.sentence(for: state))
+        // The count exactly as drawn ("1,247 of 18,903" / "18,903"; "" before
+        // the first filter pass) — what the corpus UI lane reads back.
+        .accessibilityValue(count ?? "")
         .accessibilityIdentifier("catalog.showingBox")
     }
 }

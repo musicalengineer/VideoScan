@@ -3,7 +3,7 @@
 # DECISIONS 2026-11-17 "The M4 holds a real-data test corpus").
 #
 #   scripts/corpus_run.sh prepare             [--wait] [--dry-run]
-#   scripts/corpus_run.sh run <check|proof|verbs> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
+#   scripts/corpus_run.sh run <check|proof|verbs|ui> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
 #   scripts/corpus_run.sh status              [--dry-run]
 #   scripts/corpus_run.sh accept <check|proof|verbs> [--dry-run]
 #
@@ -22,6 +22,12 @@
 #             from Catalog each followed by a rescan, Promote into a scratch
 #             archive. Never the Finder Trash, never a real archive; ~/corpus/media
 #             is proven untouched by a size+mtime sweep before and after
+#   run ui    the REAL app under XCUITest, in the M4's GUI session, showing the corpus's
+#             sealed catalog read-only (scripts/corpus_ui_lane.py): the Showing box count
+#             against the table through Show filters, a search and Select All; every main
+#             tab; a seeded monkey (--limit = its steps). Accessibility values only, no
+#             screenshot kept; the live catalog, the sealed catalog and the media are proven
+#             unchanged. Refused while a VideoScan app runs on the M4
 #   status    the testbed lock, then the newest run of each lane judged against
 #             the lane's baseline: counts, outcome words, and each changed file
 #             by SHA-256 prefix (old -> new)
@@ -56,7 +62,7 @@ case "$VERB" in
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane prepare --ref HEAD "$@" ;;
     run)
         LANE="${1:-}"; [ $# -gt 0 ] && shift
-        case "$LANE" in check|proof|verbs) ;; *) echo "corpus_run: run wants check|proof|verbs" >&2; exit 2 ;; esac
+        case "$LANE" in check|proof|verbs|ui) ;; *) echo "corpus_run: run wants check|proof|verbs|ui" >&2; exit 2 ;; esac
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane "$LANE" "$@" ;;
     status)
         if [ "${1:-}" = --dry-run ]; then

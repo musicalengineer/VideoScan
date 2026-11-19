@@ -33,6 +33,11 @@ class GauntletTestCase: XCTestCase {
     /// The app under test, kept for the failure screenshot.
     private(set) var app: XCUIApplication?
 
+    /// Attach a screenshot when a test fails. The corpus lane (real family
+    /// media on screen) overrides this to false: it asserts through
+    /// accessibility values only and keeps no pixels.
+    var screenshotOnFailure: Bool { true }
+
     /// Per-test sandbox root (fixtures + fake home). Cleaned in tearDown.
     private(set) var sandboxRoot: URL!
 
@@ -63,7 +68,8 @@ class GauntletTestCase: XCTestCase {
         // override: that override is nonisolated by inheritance and XCUI
         // is main-actor (Swift 6); `continueAfterFailure` is false, so the
         // first failure is the last thing the app did and is still on screen.
-        if let app, (testRun?.totalFailureCount ?? 0) > 0 {
+        // A lane against real family media turns this off (no pixels kept).
+        if let app, screenshotOnFailure, (testRun?.totalFailureCount ?? 0) > 0 {
             let attachment = XCTAttachment(screenshot: app.screenshot())
             attachment.name = "gauntlet-failure-\(name)"
             attachment.lifetime = .keepAlways
@@ -84,8 +90,11 @@ class GauntletTestCase: XCTestCase {
     /// Launch the app fully isolated. `seams` become transient
     /// `-key value` argument-domain defaults (see GauntletSeams.swift) —
     /// read-only overrides that never persist anywhere.
+    /// `environment` is laid over the isolated defaults below (the corpus
+    /// lane moves HOME and TMPDIR into its run folder under ~/corpus/work).
     @discardableResult
-    func launchGauntletApp(seams: [String: String] = [:]) -> XCUIApplication {
+    func launchGauntletApp(seams: [String: String] = [:],
+                           environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         var args = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         for (key, value) in seams.sorted(by: { $0.key < $1.key }) {
@@ -100,7 +109,7 @@ class GauntletTestCase: XCTestCase {
             // writes like selectedTab).
             "HOME": fakeHome.path,
             "CFFIXED_USER_HOME": fakeHome.path
-        ]
+        ].merging(environment) { _, override in override }
         app.launch()
         self.app = app
         return app

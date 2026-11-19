@@ -1,0 +1,43 @@
+{
+  "configurations": [
+    {
+      "id": "3C1F7A52-6E0B-4B8D-9F27-1D5A0C9E4B63",
+      "name": "Corpus UI",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": false,
+    "environmentVariableEntries": [
+      {
+        "key": "VS_GAUNTLET",
+        "value": "1"
+      }
+    ],
+    "preferredScreenCaptureFormat": "screenshots",
+    "systemAttachmentLifetime": "keepNever",
+    "targetForVariableExpansion": {
+      "containerPath": "container:VideoScan.xcodeproj",
+      "identifier": "0DC193272F676647006295E7",
+      "name": "VideoScan"
+    },
+    "testExecutionOrdering": "alphabetical",
+    "testTimeoutsEnabled": true,
+    "uiTestingScreenshotsLifetime": "keepNever",
+    "userAttachmentLifetime": "keepNever"
+  },
+  "testTargets": [
+    {
+      "parallelizable": false,
+      "selectedTests": [
+        "CorpusUITests"
+      ],
+      "target": {
+        "containerPath": "container:VideoScan.xcodeproj",
+        "identifier": "0DC1933E2F676648006295E7",
+        "name": "VideoScanUITests"
+      }
+    }
+  ],
+  "version": 1
+}

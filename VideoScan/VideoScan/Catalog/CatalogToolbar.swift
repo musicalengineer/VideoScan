@@ -408,6 +408,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             .vsGlassButtonStyle()
             .fixedSize()
             .help("Choose which files are shown — filters and folders. No filter ticked lists everything.")
+            .accessibilityIdentifier("catalog.showMenu")
 
             // "Not Yet Archived · Connected drives" — a
             // highlighted box beside the Show menu saying in plain words

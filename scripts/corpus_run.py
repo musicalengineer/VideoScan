@@ -1481,7 +1481,8 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
     return against
 
 
-_RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES)))     # work/<stamp>-<lane>
+UI_LANE = "ui"                                   # the corpus UI lane: scripts/corpus_ui_lane.py (no per-file engines)
+_RUN_WORK = re.compile(r"[0-9A-Za-z_]+-(?:%s)" % "|".join(sorted(LANES) + [UI_LANE]))     # work/<stamp>-<lane>
 
 
 def _unlock_tree(folder: str) -> None:
@@ -1661,7 +1662,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     accepting.add_argument("lane")
     accepting.add_argument("--by", default="unknown")
     host = sub.add_parser("host")
-    host.add_argument("lane", choices=["prepare"] + sorted(LANES))
+    host.add_argument("lane", choices=["prepare"] + sorted(LANES) + [UI_LANE])
     host.add_argument("--sha", required=True)
     host.add_argument("--stamp", required=True)
     host.add_argument("--out", required=True)
@@ -1685,6 +1686,13 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             if not re.fullmatch(r"[0-9a-f]{40}", args.sha) or not re.fullmatch(r"[0-9A-Za-z_]+", args.stamp):
                 raise Refused("refused: --sha is a full commit id and --stamp is letters, digits and underscores")
             sys.path.insert(0, args.bin)
+            if args.lane == UI_LANE:                         # the app under XCUITest: its own module, this one's seal
+                import corpus_ui_lane
+                ui = corpus_ui_lane.UILane(sys.modules[__name__], seal, args.sha, args.stamp, Path(args.out),
+                                           Path(args.worktree), Path(args.derived_data), args.limit, xcodebuild)
+                code = ui.go()
+                print("\n".join(ui.lines))
+                return code
             lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
                         Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild) if args.lane != "verbs" else \
                 VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
