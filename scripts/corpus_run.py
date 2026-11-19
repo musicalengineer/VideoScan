@@ -297,8 +297,18 @@ class Seal:
             if os.path.islink(str(folder)) or (os.path.lexists(str(folder))
                                                and os.path.realpath(str(folder)) != os.path.join(corpus_real, name)):
                 raise Refused(f"refused: ~/corpus/{name} is a symlink or resolves somewhere else — the corpus folders must be themselves")
+        # ~/corpus and its own folders are on the home volume: a volume mounted over one of them (the
+        # adopted one included) would make its files "writable" or "removable" (Codex #332 F2).
+        home_dev = self.home_device()
+        for folder in [self.corpus] + [self.corpus / name for name in ("state", "work", "reports", "media")]:
+            if os.path.lexists(str(folder)) and os.lstat(str(folder)).st_dev != home_dev:
+                raise Refused("refused: a corpus folder is on another volume (something is mounted over it)")
         self.pin()                                           # an adopted volume's record that is not one stops everything
         return self
+
+    def home_device(self) -> int:
+        """The device of the home folder (the account database's): the one volume the harness writes and removes on."""
+        return os.lstat(str(self.home)).st_dev
 
     def pin(self) -> Optional[dict]:
         """The adopted external volume, {mount, volume_uuid}, or None when none was adopted. Refused
@@ -1093,7 +1103,10 @@ class Lane:
         overlay = self.worktree / OVERLAY_DIR
         if overlay.exists():
             kept = self.out / f"overlay-{int(time.time() * 1000)}"
-            shutil.move(str(overlay), str(kept))             # moved out, never deleted in place
+            try:                                             # moved out, never deleted in place — and only renamed:
+                os.rename(str(overlay), str(kept))           # a folder is never copied across a volume (Codex #332 F1)
+            except OSError:
+                raise Refused("refused: the testbed's overlay folder could not be moved aside (another volume, or not a folder)")
 
     def install_overlay(self) -> None:
         tracked = subprocess.run(["git", "-C", str(self.worktree), "ls-files", "--", OVERLAY_DIR],
@@ -1164,7 +1177,7 @@ class Lane:
                  self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
-                shutil.move(str(patched), str(self.out / patched.name))
+                move_file(self.seal, patched, self.out / patched.name)
         return read_events(progress)
 
     # -- what a lane may change about a launch (VerbsLane does)
@@ -1335,11 +1348,18 @@ class Lane:
             self.store(report, results)
             return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, report["against"]), EXIT_RED)
         finally:
-            for name in sorted(os.listdir(str(self.work))) if self.work.is_dir() else []:
-                if name.startswith("progress-"):             # the raw event lines are part of the record
-                    seal.mkdir(self.report_dir)
-                    shutil.move(str(self.work / name), str(seal.writable(self.report_dir / name)))
+            self.collect_progress()
             self.remove_work()
+
+    def collect_progress(self) -> None:
+        """The raw event lines are part of the record: each progress file goes with the run's report,
+        by `move_file` — a rename of a one-name regular file on the home volume, never a folder and
+        never a copy (Codex #332 F1: shutil.move copies a tree across volumes and deletes the source)."""
+        seal = self.seal
+        for name in sorted(os.listdir(str(self.work))) if self.work.is_dir() else []:
+            if name.startswith("progress-"):
+                seal.mkdir(self.report_dir)
+                move_file(seal, self.work / name, seal.writable(self.report_dir / name))
 
     def remove_work(self) -> None:
         """The run's work folder goes, whole, through `remove_tree` (Promote's locks cleared on this
@@ -1852,6 +1872,23 @@ def _remove_at(dir_fd: int, name: str, path: str, dev: int) -> None:
         pass
 
 
+def move_file(seal: Seal, source: Path, dest: Path) -> bool:
+    """Move one of the harness's own files: a regular file with ONE name on the home volume, by
+    rename only (a rename never copies and never crosses a volume). Anything else stays where it is.
+    Returns True when moved."""
+    try:
+        info = os.lstat(str(source))
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_dev != seal.home_device():
+        return False
+    try:
+        os.rename(str(source), str(dest))
+    except OSError:
+        return False
+    return True
+
+
 def remove_tree(seal: Seal, folder: Path) -> bool:
     """THE way the harness removes a tree — a run's work folder, a dead run's, an old stored run,
     prepare's build folder (Codex #331 F1: one engine, five callers). Only inside
@@ -1863,9 +1900,9 @@ def remove_tree(seal: Seal, folder: Path) -> bool:
     path = str(seal.writable(folder))
     if not os.path.lexists(path):
         return True
-    if os.path.islink(path) or not os.path.isdir(path) or not _one_device(path):
+    dev = seal.home_device()                                 # anchored to the home volume, not to the target (Codex #332 F2)
+    if os.path.islink(path) or not os.path.isdir(path) or os.lstat(path).st_dev != dev or not _one_device(path):
         return False
-    dev = os.lstat(path).st_dev
     try:
         parent = os.open(os.path.dirname(path), O_DIR)
     except OSError:

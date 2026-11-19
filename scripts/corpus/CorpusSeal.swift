@@ -138,17 +138,15 @@ enum CorpusSeal {
         return .proven(mount: mount)
     }
 
-    /// May the file at `path` be opened NOW (Codex #331 F2: the volume is proven again before every
-    /// engine, not once per run)? A file off the adopted volume: yes — `refusal` proved its place. On
-    /// it: only while that volume is proven at this moment, and only under its corpus/media. When the
-    /// volume (or its record) fails a check now, only ~/corpus/media and the run's clones may be opened.
-    static func mayOpen(_ path: String, realHome: String) -> Bool {
-        switch external(realHome: realHome) {
-        case .none: return true
-        case .absent(let mount): return !isUnder(path, mount)
-        case .proven(let mount): return !isUnder(path, mount) || isUnder(path, mount + "/corpus/media")
-        case .refused: return isUnder(path, realHome + "/corpus/media") || isUnder(path, realHome + "/corpus/work")
-        }
+    /// May the file at `path` be opened NOW (Codex #331 F2, #332 F3)? An allowlist, not a denylist:
+    /// a file under ~/corpus/media or ~/corpus/work (the internal copies, the run's clones), yes —
+    /// `refusal` proved their place; a file under the corpus/media of the volume that was PROVEN when
+    /// the run opened (`atOpen`), only while that same volume is proven again now (its record still
+    /// there, marked, the same UUID, at the same mount); anything else, never.
+    static func mayOpen(_ path: String, realHome: String, atOpen: CorpusExternal) -> Bool {
+        if isUnder(path, realHome + "/corpus/media") || isUnder(path, realHome + "/corpus/work") { return true }
+        guard case .proven(let mount) = atOpen, isUnder(path, mount + "/corpus/media") else { return false }
+        return external(realHome: realHome) == .proven(mount: mount)
     }
 
     /// A regular file with ONE name (not a link, not a folder, no second name a pristine file could share).

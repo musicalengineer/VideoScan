@@ -153,7 +153,8 @@ final class CorpusRun: @unchecked Sendable {
     let config: CorpusConfig
     let progress: CorpusProgress
     let deadline: CorpusDeadline
-    /// The external root as the seal found it when the run opened.
+    /// The external root as the seal found it when the run opened: `mayOpen` lets a file on it through
+    /// only while this same volume is proven again.
     let external: CorpusExternal
 
     private init(config: CorpusConfig, progress: CorpusProgress, external: CorpusExternal) {
@@ -257,7 +258,7 @@ final class CorpusRun: @unchecked Sendable {
     func engine(_ item: CorpusConfig.Item, _ name: String,
                 _ body: () async throws -> (outcome: String, kinds: [String])) async {
         // The external volume is proven again now: a file on it is never opened on a proof made earlier.
-        guard CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome()) else {
+        guard CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome(), atOpen: external) else {
             progress.write(["ev": "engine", "sha": item.sha, "engine": name, "outcome": "external_volume_not_proven",
                             "kinds": [String](), "s": 0])
             return
