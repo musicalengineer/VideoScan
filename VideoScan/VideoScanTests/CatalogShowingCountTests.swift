@@ -127,6 +127,31 @@ struct CatalogShowingCountTruthTests {
         #expect(CatalogShowingSummary.countText(CatalogRows.rows(all, search).shownCount, locale: enUS) == "0 of 6")
     }
 
+    /// Regression (coordinator 2026-11-18): set-aside and superseded rows are
+    /// hidden whatever Rick chooses, yet they were in the total — so a list
+    /// with NOTHING narrowing read "N of M", as if a filter hid files.
+    @Test("TRUTH: no user narrowing + set-aside + superseded rows ⇒ the bare form; only a user choice makes “of”")
+    func alwaysHiddenRowsAreNotInTheTotal() {
+        let a = rec("a.mov"), b = rec("b.mov", volume: "U")
+        let setAside = rec("still.jpg"); setAside.setAsideReason = "still image"
+        let superseded = rec("broken.mov"); superseded.supersededByID = a.id
+        let gone = rec("gone.mov"); gone.purgedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let all = [a, b, setAside, superseded, gone]
+        var s = CatalogRows.State()
+        s.showDisconnectedMedia = true
+        let open = CatalogRows.rows(all, s).shownCount
+        #expect(open == Count(shown: 2, total: 2))
+        #expect(CatalogShowingSummary.countText(open, locale: enUS) == "2", "nothing narrows: no “of”")
+        // Hiding disconnected drives IS a user choice (Show menu, named "Connected drives"):
+        // the disconnected row stays in the total.
+        s.showDisconnectedMedia = false
+        s.engines.isReachable = { !$0.hasPrefix("/Volumes/U") }
+        #expect(CatalogShowingSummary.countText(CatalogRows.rows(all, s).shownCount, locale: enUS) == "1 of 2")
+        // A focus set reads against the same total.
+        s.focusIDs = [a.id]
+        #expect(CatalogRows.rows(all, s).shownCount.total == 2)
+    }
+
     @Test("ISOLATION: removed rows never count — even when every row is removed, or the catalog is empty")
     func removedNeverCounts() {
         var s = CatalogRows.State()
