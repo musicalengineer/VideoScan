@@ -407,6 +407,7 @@ def corpus_lane_lines(facts):
 
 
 SENSOR_LINE = re.compile(r'sensor lane (GREEN|RED) \(\d+ tests\)')
+SENSOR_GREEN = re.compile(r'sensor lane GREEN \([1-9]\d* tests\)')
 
 
 def testbed_block(rows, sha, seconds, smoke=False):
@@ -423,6 +424,9 @@ def testbed_block(rows, sha, seconds, smoke=False):
         if name == 'sensors':
             line = str((facts or {}).get('line') or '')
             counts, more = (line if SENSOR_LINE.fullmatch(line) else 'no result line (see the lane\'s own lines)'), []
+            if verdict == GREEN and not SENSOR_GREEN.fullmatch(line):
+                verdict = RED                              # a GREEN with no positive count proves nothing (Codex #336 F8)
+                worst = RED
         elif name == 'suite':
             row = facts or {}
             why = str(row.get('reason') or '')

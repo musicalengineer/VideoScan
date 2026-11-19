@@ -439,6 +439,18 @@ class SmokeTestbedTests(TestbedScene):
         self.assertTrue(any(c.startswith('run_sensors.sh --derived-data ') for c in calls), calls)
         self.assertFalse(any(' test-without-building ' in c for c in calls), 'the full suite ran in a smoke testbed')
         self.assertIn('sensors (SMOKE: the sensor lane in place of the full suite): sensor lane GREEN (836 tests)', summary)
+        self.assertRegex(log, r'(?m)^OUTCOME GREEN \S+ \S+ lane=testbed sha=' + self.sha[:9] + ' — SMOKE', 'Codex #336 F7')
+
+    def test_a_sensor_line_without_a_positive_count_is_never_green(self):
+        # Codex #336 F8: exit 0 with "sensor lane GREEN" or "(0 tests)" proves nothing.
+        for text in ('sensor lane GREEN', 'sensor lane GREEN (0 tests)'):
+            with self.subTest(text=text):
+                (self.work / 'scripts' / 'run_sensors.sh').write_text(f'#!/bin/bash\necho "{text}"\n')
+                git = ['/usr/bin/git', '-C', str(self.work)]
+                subprocess.run(git + ['commit', '-q', '-am', text], check=True, env=self.git_env)
+                self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=self.git_env, capture_output=True, text=True).stdout.strip()
+                p, log, summary, _ = self.host('s' + str(len(text)), 'testbed', '--smoke')
+                self.assertRegex(summary.splitlines()[1], r'^  sensors +RED ', summary)
 
     def test_a_red_sensor_lane_is_a_red_smoke_testbed(self):
         (self.work / 'scripts' / 'run_sensors.sh').write_text('#!/bin/bash\necho "sensor lane RED (3 failed)"\nexit 1\n')
@@ -482,6 +494,10 @@ class SmokeArgumentTests(unittest.TestCase):
                                               smoke=True)
             self.assertEqual(verdict, 'RED')
             self.assertIn('sensor lane GREEN (836 tests)', lines[1])
+            zero = pathlib.Path(tmp, 'zero.json')
+            zero.write_text(json.dumps(dict(line='sensor lane GREEN (0 tests)')))
+            verdict, lines = ms.testbed_block([('sensors', 'GREEN', '70', str(zero))], 'a' * 40, 80, smoke=True)
+            self.assertEqual(verdict, 'RED', 'a GREEN with zero tests proves nothing (Codex #336 F8)')
             self.assertNotIn('Grandma', '\n'.join(lines))
             self.assertTrue(lines[0].startswith('testbed SMOKE: RED'))
 

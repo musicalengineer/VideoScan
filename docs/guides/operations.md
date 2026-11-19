@@ -262,7 +262,8 @@ corpus's own SHA-256 lists (verified with `shasum -c` when the copy was made) an
 
 **The manifest is a wish list** (DECISIONS 2026-11-19: "run the testbed even with some of the media missing … each
 time it would have more files"). `prepare` ingests what has arrived: each new file whose size is the manifest's is
-read once and its SHA-256 checked, into `~/corpus/state/corpus-ledger.json` (root, size, mtime); it is cheap when
+read once and its SHA-256 checked, into `~/corpus/state/corpus-ledger.json` (root, size, mtime, inode; each file is
+checked again right before a lane's launch); it is cheap when
 nothing is new and rebuilds the sealed catalog only when the proven set changed. Every summary says, per root,
 `present N · missing M` and any of: **mismatched** (bytes are not the manifest's), **vanished** (proven, now gone),
 **changed** (proven, size or mtime moved; the next `prepare` reads it again) — those three are AMBER and named by

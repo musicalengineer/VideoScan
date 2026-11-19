@@ -200,7 +200,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             current = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
             grown, picked = grow(catalog_rows(Path(args.catalog)), current)
             write_selection(picked, Path(args.out))
-            (Path(args.out) / "corpus-manifest-v2.json").write_text(json.dumps(grown, indent=0) + "\n")
+            # Whole or not at all: --manifest and --out may name the same file (Codex #336 F1).
+            final = Path(args.out) / "corpus-manifest-v2.json"
+            pending = final.with_name(f".{final.name}.{os.getpid()}")
+            pending.write_text(json.dumps(grown, indent=0) + "\n")
+            os.replace(str(pending), str(final))
             for root in ("external", "internal"):
                 print(f"corpus grow: {root} +{len(picked[root])} files, {sum(p[2] for p in picked[root]) / 1e9:.1f} GB")
             print(f"corpus grow: manifest {len(current)} -> {len(grown)} files (none removed)")

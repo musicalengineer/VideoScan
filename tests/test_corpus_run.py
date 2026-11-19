@@ -62,11 +62,15 @@ with open(plan["calls"], "a") as f:
 if args[0] == "build-for-testing":
     if plan.get("build_fails"):
         sys.exit(65)
+    if plan.get("build_touch"):                          # a file of the corpus changes while the build runs (Codex #336 F2)
+        path, data = plan["build_touch"]
+        open(path, "w").write(data)
     dd = args[args.index("-derivedDataPath") + 1]
     os.makedirs(dd + "/Build/Products", exist_ok=True)
     with open(dd + "/Build/Products/VideoScan_VideoScan-CI_macosx.xctestrun", "wb") as f:
         plistlib.dump({"TestConfigurations": [{"TestTargets": [
-            {"BlueprintName": "VideoScanTests", "TestBundlePath": "__TESTHOST__/VideoScanTests.xctest",
+            {"BlueprintName": "VideoScanTests", "TestHostPath": "__TESTROOT__/Debug/VideoScan.app",
+             "TestBundlePath": "__TESTHOST__/Contents/PlugIns/VideoScanTests.xctest",
              "EnvironmentVariables": {"KEPT": "1", "OS_ACTIVITY_DT_MODE": "YES"}, "SkipTestIdentifiers": ["Some/test"]}]}]}, f)
     # A newer plan file with no unit-test target (as the UI plans' are): it names VideoScanTests only in passing.
     with open(dd + "/Build/Products/VideoScan_VideoScan-UI_macosx.xctestrun", "wb") as f:
@@ -1014,7 +1018,7 @@ class BaselineTests(unittest.TestCase):
         first = self.scene.seal.reports / 'check' / ('a' * 40) / '20261117_120000_1'
         first.mkdir(parents=True)
         (first / 'outcomes.json').write_text(json.dumps(old))
-        (first / 'report.json').write_text(json.dumps(dict(lane='check', sha='a' * 40, failures={}, engine_present=True)))
+        (first / 'report.json').write_text(json.dumps(dict(lane='check', sha='a' * 40, failures={}, engine_present=True, files=500)))
         against = cr.against_baseline(self.scene.seal, 'check', new, engines)
         self.assertEqual((against['changed'], len(against['listed']), against['listed_more'], len(against['changes'])),
                          (500, cr.LISTED, 500 - cr.LISTED, 500))
@@ -3558,9 +3562,8 @@ class CodexRound333Tests(RemountCase):
             verdict = cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, held,
                                         checked=[e.sha for e in held if e.root == 'internal'])
             self.assertEqual((verdict['ok'], verdict['outside_corpus']), (0, 1))
-            with self.assertRaises(cr.Refused):
-                cr.sealed_state_ready(self.scene.seal, entries, cr.current_states(
-                    self.scene.seal, entries, [e.sha for e in entries if e.root == 'external']))
+            states = cr.current_states(self.scene.seal, entries, [e.sha for e in entries if e.root == 'external'])
+            self.assertEqual(states[sha_of(0)], 'changed', 'another volume\'s file is another inode: never present, never run')
         finally:
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(folder)], capture_output=True, timeout=120)
             self.volume.attach()
@@ -3941,6 +3944,110 @@ class OneBuildTests(unittest.TestCase):
         self.lane_run('check', '20261119_100000_2')
         self.assertEqual(len(self.builds()), 2)
         self.assertTrue(mark.is_symlink() or json.loads(mark.read_text()) is not None)
+
+
+
+class CodexRound336Tests(unittest.TestCase):
+    """Codex #336 (fix, 8 findings) on 79cae6ca0..dd23fc494: the corpus_run halves, each as its reproduction."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name, with_proof_engine=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def media(self, n):
+        return self.scene.corpus / 'media' / self.scene.files[n][1].lstrip('/')
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def pending(self):
+        return [i['sha'] for i in [c for c in self.scene.recorded_calls() if 'config' in c][-1]['config']['pending']]
+
+    def test_f2_a_file_changed_while_the_lane_built_is_excluded_and_reported_changed(self):
+        size = self.scene.files[1][2]
+        self.scene.plan['build_touch'] = [str(self.media(1)), 'q' * size]
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        self.assertNotIn(sha_of(1), self.pending())
+        self.assertIn(f'  changed (AMBER): {sha_of(1)[:12]}', self.summary())
+
+    def test_f3_a_same_size_same_mtime_replacement_is_a_new_file_and_is_hashed_again(self):
+        path = self.media(0)
+        before = os.stat(path)
+        fresh = path.with_name('replacement.tmp')
+        fresh.write_bytes(b'r' * before.st_size)
+        os.utime(fresh, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(fresh, path)                                         # rsync's temp-then-rename: a new inode
+        entries = cr.load_manifest(self.scene.seal)
+        self.assertEqual(cr.current_states(self.scene.seal, entries)[sha_of(0)], 'changed')
+        _, lines = cr.prepare(self.scene.seal)
+        self.assertIn(f'  mismatched (AMBER): {sha_of(0)[:12]}', lines)
+
+    def test_f4_reuse_checks_the_build_the_lane_will_launch_not_another(self):
+        self.scene.plan['engines'] = ['probe', 'check', 'audio', 'pair']
+        self.scene.run('check', stamp='20261119_100000_1')
+        products = self.scene.dd / 'Build' / 'Products'
+        foreign = products / 'Release' / 'VideoScan.app' / 'Contents' / 'PlugIns' / 'VideoScanTests.xctest' / 'Contents' / 'MacOS'
+        foreign.mkdir(parents=True)
+        (foreign / 'VideoScanTests').write_text('a foreign Release build')
+        with open(products / 'VideoScan_Foreign_macosx.xctestrun', 'wb') as f:
+            plistlib.dump({"TestConfigurations": [{"TestTargets": [{"BlueprintName": "VideoScanTests", "TestHostPath": "__TESTROOT__/Release/VideoScan.app",
+                                                                    "TestBundlePath": "__TESTHOST__/Contents/PlugIns/VideoScanTests.xctest"}]}]}, f)
+        self.scene.run('check', stamp='20261119_100000_2')
+        builds = [c for c in self.scene.recorded_calls() if c.get('args', [''])[0] == 'build-for-testing']
+        self.assertEqual(len(builds), 2, 'a build the mark does not describe was launched')
+
+    def test_f5_a_source_backup_replaced_during_prepare_never_passes_as_the_one_built_from(self):
+        cr.prepare(self.scene.seal)
+        before = (self.scene.seal.state / DB).read_bytes()
+        os.unlink(self.media(2))                                       # the set changes: prepare rebuilds
+        real = cr.build_catalog
+
+        def swap(seal, source, entries, dest):
+            counts = real(seal, source, entries, dest)
+            os.utime(source, (1, 1))                                    # a new backup put in place meanwhile
+            return counts
+        cr.build_catalog = swap
+        try:
+            with self.assertRaises(cr.Refused) as refused:
+                cr.prepare(self.scene.seal)
+        finally:
+            cr.build_catalog = real
+        self.assertIn('changed during prepare', str(refused.exception))
+        self.assertEqual((self.scene.seal.state / DB).read_bytes(), before)
+        _, lines = cr.prepare(self.scene.seal)
+        self.assertIn('the sealed catalog rebuilt', lines[0])
+
+    def test_f6_nothing_present_yet_is_a_report_not_a_refusal(self):
+        ledger = cr.Ledger.load(self.scene.seal)
+        for n in range(3):
+            os.unlink(self.media(n))
+            ledger.files.pop(sha_of(n))
+        ledger.save()
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        self.assertIn('corpus check: GREEN 0 files', self.summary())
+        self.assertIn('  files: internal present 0 · missing 3', self.summary())
+
+    def test_f6_the_sole_file_vanished_is_amber_and_named(self):
+        ledger = cr.Ledger.load(self.scene.seal)
+        for n in (1, 2):
+            os.unlink(self.media(n))
+            ledger.files.pop(sha_of(n))
+        ledger.save()
+        cr.prepare(self.scene.seal)
+        os.unlink(self.media(0))
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        self.assertIn(f'  vanished (AMBER): {sha_of(0)[:12]}', self.summary())
+
+    def test_f7_a_smoke_run_says_smoke_on_every_verdict_path(self):
+        self.scene.plan['build_fails'] = True
+        self.assertEqual(self.scene.run('check', smoke=''), cr.EXIT_RED)
+        self.assertTrue(self.summary().startswith('corpus check SMOKE: RED'), self.summary())
+        lines = cr.head_lines(dict(lane='proof', sha='a' * 40, engine_present=False, smoke=True, engines={}), None)
+        self.assertTrue(lines[0].startswith('corpus proof SMOKE: NOT RUN'), lines[0])
 
 
 if __name__ == '__main__':

@@ -645,8 +645,10 @@ def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External
 # ── ingest: what is PRESENT is earned once (DECISIONS 2026-11-19, the wish list) ──
 #
 # The manifest is the wish list. A file is PRESENT when `prepare` has read it whole and its SHA-256
-# is the manifest's: the ledger (~/corpus/state/corpus-ledger.json) then records its root, size and
-# mtime, and later runs trust size + mtime against it (a stat per file, no hashing). Per file:
+# is the manifest's: the ledger (~/corpus/state/corpus-ledger.json) then records its root, size, mtime
+# and inode, and later runs trust those against it (a stat per file, no hashing; a same-size file renamed
+# into place is a new inode and is hashed again). A lane checks each file again right before each launch
+# (the build takes minutes): one that moved since is dropped from the run and counted. Per file:
 #   missing     not in the ledger: not copied yet, still copying, or not the manifest's size (a file
 #               whose size differs is never hashed: rsync renames a copy into place only when whole)
 #   mismatched  hashed, and its bytes are not the manifest's SHA-256 — never run (AMBER)
@@ -684,7 +686,7 @@ class Ledger:
             ok = (value.get("version") == 1 and isinstance(files, dict) and all(
                 re.fullmatch(r"[0-9a-f]{64}", sha) and isinstance(r, dict) and r.get("root") in ROOTS
                 and r.get("status") in ("ok", "mismatched")
-                and all(isinstance(r.get(k), int) and not isinstance(r.get(k), bool) for k in ("size", "mtime_ns"))
+                and all(isinstance(r.get(k), int) and not isinstance(r.get(k), bool) for k in ("size", "mtime_ns", "ino"))
                 for sha, r in files.items()))
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             raise bad
@@ -699,9 +701,9 @@ class Ledger:
         os.replace(str(pending), str(self.seal.writable(self.path)))
 
 
-def sha256_file(path: Path, size: int) -> Optional[Tuple[str, int, int]]:
-    """(SHA-256, size, mtime_ns) of the regular file at `path` if it is `size` bytes and does not
-    change while it is read; None otherwise. Opened without following a link; read only."""
+def sha256_file(path: Path, size: int) -> Optional[Tuple[str, int, int, int]]:
+    """(SHA-256, size, mtime_ns, inode) of the regular file at `path` if it is `size` bytes and does
+    not change while it is read; None otherwise. Opened without following a link; read only."""
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
@@ -719,11 +721,17 @@ def sha256_file(path: Path, size: int) -> Optional[Tuple[str, int, int]]:
         after = os.fstat(fd)
         if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
             return None                                      # still being written: not ingested this time
-        return digest.hexdigest(), after.st_size, after.st_mtime_ns
+        return digest.hexdigest(), after.st_size, after.st_mtime_ns, after.st_ino
     except OSError:
         return None
     finally:
         os.close(fd)
+
+
+def same_file(record: dict, info) -> bool:
+    """The file the ledger proved: the same size, mtime AND inode — a same-size replacement renamed
+    into place with the old mtime is a new inode, so it is hashed again (Codex #336 F3)."""
+    return (record["size"], record["mtime_ns"], record.get("ino")) == (info.st_size, info.st_mtime_ns, info.st_ino)
 
 
 def _stat(entry: Entry):
@@ -745,18 +753,18 @@ def ingest(seal: Seal, entries: List[Entry], ledger: Ledger, unavailable: Iterab
         info, record = _stat(e), ledger.files.get(e.sha)
         if info is None or info.st_size != e.size:
             continue                                         # missing, vanished, or not whole: never hashed
-        if record and (record["size"], record["mtime_ns"]) == (info.st_size, info.st_mtime_ns):
+        if record and same_file(record, info):
             continue                                         # proven before, unchanged
         got = hasher(e.path, e.size)
         if got is None:
             counts["unsettled"] += 1
             continue
-        digest, size, mtime_ns = got
+        digest, size, mtime_ns, ino = got
         status = "ok" if digest == e.sha else "mismatched"
         counts["rehashed" if record else "hashed"] += 1
         counts[status] += 1
         counts["bytes"] += size
-        ledger.files[e.sha] = {"root": e.root, "size": size, "mtime_ns": mtime_ns, "status": status}
+        ledger.files[e.sha] = {"root": e.root, "size": size, "mtime_ns": mtime_ns, "ino": ino, "status": status}
         if time.time() - last > LEDGER_CHECKPOINT_S:
             ledger.save()
             last = time.time()
@@ -780,7 +788,7 @@ def classify(entries: List[Entry], ledger: Ledger, unavailable: Iterable[str] = 
             states[e.sha] = "missing"
         elif info is None:
             states[e.sha] = "vanished"
-        elif (info.st_size, info.st_mtime_ns) != (record["size"], record["mtime_ns"]):
+        elif not same_file(record, info):
             states[e.sha] = "changed"
         elif record["status"] != "ok":
             states[e.sha] = "mismatched"
@@ -1137,8 +1145,11 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
         if building.exists():
             raise Refused("refused: a build folder with this pid is already there")
         seal.mkdir(building)
+        stamp = source_stamp(seal)
         try:
             counts = build_catalog(seal, source_backup(seal), build, building / database_name)
+            if source_stamp(seal) != stamp:                  # a new backup put in place while this one was read (Codex #336 F5)
+                raise Refused("refused: the catalog source backup changed during prepare — run prepare again")
             seal.write_text(building / latch_name, "{}\n")   # the read doors want the latch beside the file
             verdict = verify_catalog(seal, building / database_name, build, checked=present)
             if not verdict["ok"]:
@@ -1152,7 +1163,7 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
     record = {"transform_version": TRANSFORM_VERSION, "prepared_at": time.strftime("%Y-%m-%d %H:%M:%S"),
               "manifest": manifest_name(seal),
               "manifest_sha256": hashlib.sha256((seal.corpus / manifest_name(seal)).read_bytes()).hexdigest(),
-              "source_stamp": source_stamp(seal),
+              "source_stamp": previous.get("source_stamp") if unchanged else stamp,
               "files": len(entries), "bytes": sum(e.size for e in entries), "built_over": built_over,
               "inventory": counts_by_root, "problems": named, "ingested": ingested,
               "strata": dict(Counter(e.stratum for e in entries)), "counts": counts, "verify": verdict,
@@ -1374,6 +1385,8 @@ class Lane:
         self.not_run_external = 0                            # files on an external volume that is not mounted
         self.proven_uuid: Optional[str] = None               # the external volume proven at the start (its UUID)
         self.inventory: Dict[str, Dict[str, int]] = {}       # per root, files by state (present, missing, ...)
+        self.ledger: Optional["Ledger"] = None
+        self.originals: Dict[str, Entry] = {}
         self.problems: Dict[str, List[str]] = {}             # mismatched / vanished / changed, by SHA-256 prefix
         self.picked: Dict[str, object] = {}                  # the proof lane: where its files came from
         # The coverage run (corpus_coverage.py) sets this: the build is instrumented and every launch
@@ -1420,15 +1433,43 @@ class Lane:
             return None
         return {"sha": self.sha, "config": "Debug", "coverage": self.profiles is not None, "drivers": digest}
 
-    def test_binary(self) -> Optional[Path]:
-        found = sorted((self.derived_data / "Build" / "Products").glob(
-            "*/*.app/Contents/PlugIns/VideoScanTests.xctest/Contents/MacOS/VideoScanTests"))
-        return found[0] if found and not found[0].is_symlink() else None
+    def selected_build(self) -> Optional[Tuple[Path, Path]]:
+        """(the .xctestrun a launch will use — find_xctestrun's choice — and the VideoScanTests binary IT
+        names), so the mark describes exactly what runs (Codex #336 F4); None when it cannot be read."""
+        try:
+            xctestrun = find_xctestrun(self.derived_data)
+            with open(xctestrun, "rb") as f:
+                plan = plistlib.load(f)
+        except (Refused, OSError, ValueError, plistlib.InvalidFileException):
+            return None
+        root = str(xctestrun.parent)
+
+        def targets(value):
+            if isinstance(value, list):
+                for v in value:
+                    yield from targets(v)
+            elif isinstance(value, dict):
+                if value.get("BlueprintName") == "VideoScanTests" and "TestBundlePath" in value:
+                    yield value
+                for v in value.values():
+                    yield from targets(v)
+        target = next(targets(plan), None)
+        if target is None:
+            return None
+        host = str(target.get("TestHostPath", "")).replace("__TESTROOT__", root)
+        bundle = str(target["TestBundlePath"]).replace("__TESTHOST__", host).replace("__TESTROOT__", root)
+        binary = Path(bundle) / "Contents" / "MacOS" / "VideoScanTests"
+        return (xctestrun, binary) if binary.is_file() and not binary.is_symlink() else None
 
     def binary_digest(self) -> Optional[str]:
-        binary = self.test_binary()
-        got = sha256_file(binary, os.path.getsize(str(binary))) if binary else None
-        return got[0] if got else None
+        """The SHA-256 of the selected .xctestrun and of the binary it names, as one word."""
+        selected = self.selected_build()
+        if selected is None:
+            return None
+        xctestrun, binary = selected
+        plan = sha256_file(xctestrun, os.path.getsize(str(xctestrun)))
+        built = sha256_file(binary, os.path.getsize(str(binary)))
+        return f"{xctestrun.name}:{plan[0]}:{built[0]}" if plan and built else None
 
     def build_reusable(self) -> bool:
         """True when the DerivedData folder holds this commit's build with these drivers, untouched since."""
@@ -1568,10 +1609,33 @@ class Lane:
                 raise Refused("the driver started no file — see corpus-test.log on the host")
         return results, hello
 
+    def restat(self, pending: List[Entry], results: Dict[str, dict]) -> List[Entry]:
+        """Each pending file is still the one the ledger proved (size, mtime, inode), right before the
+        launch — the build takes minutes (Codex #336 F2). One that is not is dropped from the run and
+        counted changed or vanished, named."""
+        if self.ledger is None:
+            return pending
+        kept = []
+        for e in pending:
+            source = self.originals.get(e.sha, e)               # the verbs lane runs clones: its source is checked
+            record, info = self.ledger.files.get(e.sha), (None if source.root == "external" and not
+                                                          self.seal.external().state == "ok" else _stat(source))
+            if record is None or info is None or not same_file(record, info):
+                state = "vanished" if info is None else "changed"
+                results[e.sha] = {"dropped": state, "settled": True}
+                counts = self.inventory.setdefault(e.root, {})
+                counts["present"] = counts.get("present", 1) - 1
+                counts[state] = counts.get(state, 0) + 1
+                self.problems.setdefault(state, []).append(sha_prefix(e.sha))
+                continue
+            kept.append(e)
+        return kept
+
     def reprove(self, pending: List[Entry], results: Dict[str, dict]) -> List[Entry]:
         """Before each launch, the external root is proven again (Codex #331 F2: no proof outlives
         its evidence). Another volume there, or its marker gone: Refused. Unplugged: its pending
         files are NOT RUN (EXTERNAL_GONE), the internal ones go on."""
+        pending = self.restat(pending, results)
         self.seal._external = None
         now = self.seal.external()
         if now.state == "ok" and self.proven_uuid and now.uuid != self.proven_uuid:
@@ -1653,13 +1717,19 @@ class Lane:
         unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
         self.not_run_external = len(unavailable)
         # The wish list: only the files proven present run; the rest are counted (DECISIONS 2026-11-19).
+        self.ledger = Ledger.load(seal)
         states = current_states(seal, entries, unavailable)
         database, _ = sealed_state_ready(seal, entries, states)
         self.database = database
         self.inventory, self.problems = inventory(entries, states)
         entries = self.scope([e for e in entries if states[e.sha] == "present"])
-        if not entries:
-            raise Refused("refused: no corpus file is in this lane's scope")
+        self.originals = {e.sha: e for e in entries}
+        if not entries:                                      # nothing arrived yet: said, not refused (Codex #336 F6)
+            seal.out_folder(self.out)
+            report = self.report({}, {}, time.time() - t0)
+            report["against"] = None
+            self.store(report, {})
+            return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, None), EXIT_RED)
         if self.lane == "proof":                             # one balanced copy at a time, about its source's size
             transient_room(seal, max(e.size for e in entries))
         seal.out_folder(self.out)
@@ -1681,7 +1751,7 @@ class Lane:
                 if not self.build_reused:
                     self.install_overlay()
                 if not self.build_reused and self.build() != 0:
-                    self.lines = [f"corpus {self.lane}: RED the driver did not build against {self.sha[:9]} "
+                    self.lines = [f"corpus {self.lane}{' SMOKE' if self.smoke else ''}: RED the driver did not build against {self.sha[:9]} "
                                   "(corpus-build.log on the host); no file was run"]
                     seal.out_write(self.out, "corpus-summary.txt", self.lines[0] + "\n")
                     return EXIT_RED
@@ -1689,6 +1759,7 @@ class Lane:
                     self.mark_build()
                 entries, database = self.stage(entries, database)
                 results, hello = self.run_files(entries, database)
+                results = {sha: r for sha, r in results.items() if not r.get("dropped")}     # changed before its launch
             finally:
                 if self.overlay_installed:                   # never a folder this run did not lay down
                     self.clear_overlay()
@@ -1972,7 +2043,7 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     lane = report["lane"]
     engines = [e for e in LANES[lane][1] if e in report["engines"]]         # the lane's own order, not the JSON's
     if not report.get("engine_present", True):
-        return [f"corpus {lane}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
+        return [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
                 "(MediaOps/BalancedCopyProof*.swift); run it with a --ref that contains it"]
     failed = sum(report["failures"].values())
     lines = [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
@@ -2164,7 +2235,7 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
                      "accepted_by": who_word(record.get("accepted_by"))}, None
     for run, report in usable_runs(seal, lane):
         if (run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external")
-                and not report.get("problem_count") and not report.get("smoke")):
+                and not report.get("problem_count") and not report.get("smoke") and report.get("files")):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
     return None, {}, None
 

@@ -695,11 +695,12 @@ host_sensors() {
     rc=$?
     secs=$(( $(date +%s) - t0 ))
     echo "sensors exit=$rc secs=$secs"
-    line="$(grep -E '^sensor lane (GREEN|RED)( \([0-9]+ tests\))?' "$OUT/sensors.log" 2>/dev/null | tail -1)"
+    line="$(grep -E '^sensor lane (GREEN|RED)' "$OUT/sensors.log" 2>/dev/null | tail -1)"
     python3 -c 'import json,sys; print(json.dumps({"line": sys.argv[1], "rc": int(sys.argv[2])}))' "$line" "$rc" >"$OUT/sensors-row.json"
     echo "sensors (SMOKE: the sensor lane in place of the full suite): ${line:-no result line} (rc=$rc, ${secs}s)" >>"$OUT/summary.txt"
+    # GREEN only with a positive count of tests run (Codex #336 F8: a bare GREEN or zero tests proves nothing).
     case "$rc:$line" in
-        0:"sensor lane GREEN"*) ;;
+        0:"sensor lane GREEN ("[1-9]*" tests)") ;;
         124:*) echo "sensors: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
         *) VERDICT=RED ;;
     esac
@@ -898,6 +899,8 @@ host_main() {   # __host <lane> <sha> <stamp>
         python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase end >/dev/null
     fi
     [ "$VERDICT" = AMBER ] && WHY="$AMBER_WHY"
+    # A SMOKE run says so on its OUTCOME line too (Codex #336 F7).
+    [ "$SMOKE" = 1 ] && WHY="SMOKE (a stratified subset: the harness, the host and the code run end to end; never a baseline)${WHY:+ · $WHY}"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
     sed 's/^/  /' "$OUT/summary.txt"
     case "$VERDICT" in GREEN|AMBER) return 0 ;; *) return 1 ;; esac

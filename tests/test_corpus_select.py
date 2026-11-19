@@ -251,5 +251,40 @@ class GrowTests(unittest.TestCase):
         self.assertEqual((out / 'v2_external.sha').read_text(), '', 'not readable here: nothing new to copy')
 
 
+
+class GrowWriteTests(unittest.TestCase):
+
+    def test_f1_a_grow_that_fails_while_writing_leaves_the_manifest_as_it_was(self):
+        # Codex #336 F1: --manifest and --out may name the same file; a failed write must not cost its rows.
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Scene(tmp)
+            s.add('/Volumes/A/old.mov', 1, 100)
+            path = s.db.close()
+            for side in ('-wal', '-shm'):
+                if os.path.exists(str(path) + side):
+                    os.unlink(str(path) + side)
+            out = pathlib.Path(tmp, 'out')
+            out.mkdir()
+            manifest = out / 'corpus-manifest-v2.json'
+            original = json.dumps([dict(sha256=sha(5), path='/Volumes/A/kept.mov', size=1, why='x', root='internal')])
+            manifest.write_text(original)
+            real = pathlib.Path.write_text
+
+            def failing(self, *args, **kwargs):
+                if self == manifest:
+                    real(self, '')                                        # opened and truncated, then the disk is full
+                    raise OSError(28, 'No space left on device')
+                return real(self, *args, **kwargs)
+            pathlib.Path.write_text = failing
+            try:
+                code = cs.main(['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)])
+            except OSError:
+                code = 1
+            finally:
+                pathlib.Path.write_text = real
+            self.assertEqual(json.loads(manifest.read_text()), json.loads(original), 'the manifest lost rows')
+            self.assertEqual(code, 0, 'the write goes to a new file, renamed into place: the failing truncation never happens')
+
+
 if __name__ == '__main__':
     unittest.main()
