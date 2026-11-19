@@ -168,10 +168,187 @@ struct ThumbnailPrecacheTests {
         #expect(ThumbnailCachePolicy.estimatedCost(pixelsWide: 0, pixelsHigh: 0) == 4)
     }
 
-    @Test("Cache cost limit constant is 8 GB and wired into the cache factory")
+    @Test("Cache cost limit is derived from this Mac's RAM and wired into the cache factory")
     func cacheLimitWired() {
-        #expect(ThumbnailCachePolicy.costLimitBytes == 8 * 1024 * 1024 * 1024)
+        #expect(ThumbnailCachePolicy.costLimitBytes
+                == ThumbnailCachePolicy.costLimit(physicalMemory: ProcessInfo.processInfo.physicalMemory))
         let cache = VideoScanModel.makeThumbnailCache()
         #expect(cache.totalCostLimit == ThumbnailCachePolicy.costLimitBytes)
+    }
+
+    // MARK: - Cost limit sized from RAM (fix/thumbnail-cache-size, 2026-11-19)
+    //
+    // The fixed 8 GB limit was sized for a 13.5K-row catalog; the live
+    // catalog is 18,903 rows, ~9.1 GiB of 480x270 thumbnails, so NSCache
+    // evicted and scrolling re-ripped thumbnails from the video files.
+
+    private static let gib: UInt64 = 1024 * 1024 * 1024
+    private static let liveCatalogRows = 18_903
+    private static let fullThumbCost = ThumbnailCachePolicy.estimatedCost(pixelsWide: 480, pixelsHigh: 270)
+
+    @Test("The live 18,903-row catalog's thumbnails fit under the limit on the 96 GB M5 Ultra")
+    func liveCatalogFitsOn96GB() {
+        let limit = ThumbnailCachePolicy.costLimit(physicalMemory: 96 * Self.gib)
+        let catalogBytes = Self.liveCatalogRows * Self.fullThumbCost
+        #expect(catalogBytes < limit,
+                "18,903 x 480x270 thumbnails = \(catalogBytes) bytes, limit \(limit)")
+        #expect(limit == 24 * Int(Self.gib))   // 25 % of 96 GB
+    }
+
+    @Test("64 GB machine: 25 % of RAM = 16 GB, still holds the live catalog")
+    func sixtyFourGB() {
+        let limit = ThumbnailCachePolicy.costLimit(physicalMemory: 64 * Self.gib)
+        #expect(limit == 16 * Int(Self.gib))
+        #expect(Self.liveCatalogRows * Self.fullThumbCost < limit)
+    }
+
+    @Test("Floor: a 16 GB (or smaller) machine keeps the old 8 GB limit")
+    func floorIsEightGB() {
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: 16 * Self.gib) == 8 * Int(Self.gib))
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: 8 * Self.gib) == 8 * Int(Self.gib))
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: 0) == 8 * Int(Self.gib))
+    }
+
+    @Test("Cap: 128 GB and larger machines stop at 32 GB")
+    func capIsThirtyTwoGB() {
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: 128 * Self.gib) == 32 * Int(Self.gib))
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: 512 * Self.gib) == 32 * Int(Self.gib))
+        #expect(ThumbnailCachePolicy.costLimit(physicalMemory: UInt64.max) == 32 * Int(Self.gib))
+    }
+
+    // MARK: - Self-metering cache (ThumbnailMemoryCache)
+
+    private static func image(_ w: Int = 4, _ h: Int = 4) -> NSImage {
+        let cg = PreviewTestImages.solid(red: 0.2, green: 0.4, blue: 0.6, width: w, height: h)
+        return NSImage(cgImage: cg, size: NSSize(width: w, height: h))
+    }
+
+    @Test("Logic: NSCache's own cost-limit evictions are counted; bytes and entries match what is held")
+    func meterCountsCostLimitEvictions() {
+        let cache = ThumbnailMemoryCache()
+        let one = ThumbnailMemoryCache.cost(of: Self.image())      // 64 bytes
+        cache.totalCostLimit = one * 5
+        for i in 0..<20 {
+            cache.setObject(Self.image(), forKey: "k\(i)" as NSString, cost: one)
+        }
+        let snap = cache.snapshot
+        let present = (0..<20).filter { cache.contains("k\($0)") }.count
+        #expect(snap.evictions > 0, "a 5-entry limit holding 20 must evict")
+        #expect(snap.removals == 0)
+        #expect(snap.entries == present)
+        #expect(snap.bytesHeld == present * one)
+        #expect(snap.entries + snap.evictions == 20)
+    }
+
+    @Test("Logic: replacing a key, removeObject and removeAllObjects are removals, not evictions")
+    func ourRemovalsAreNotEvictions() {
+        let cache = ThumbnailMemoryCache()
+        let one = ThumbnailMemoryCache.cost(of: Self.image())
+        cache.setObject(Self.image(), forKey: "a", cost: one)
+        cache.setObject(Self.image(), forKey: "a", cost: one)      // fast→best upgrade shape
+        #expect(cache.snapshot == .init(entries: 1, bytesHeld: one, evictions: 0, removals: 1))
+        cache.removeObject(forKey: "a")
+        #expect(cache.snapshot == .init(entries: 0, bytesHeld: 0, evictions: 0, removals: 2))
+        for i in 0..<3 { cache.setObject(Self.image(), forKey: "b\(i)" as NSString, cost: one) }
+        cache.removeAllObjects()
+        #expect(cache.snapshot == .init(entries: 0, bytesHeld: 0, evictions: 0, removals: 5))
+    }
+
+    @Test("Isolation: a 0-cost caller, the two-argument setObject and a missing-key remove cannot drift the ledger")
+    func ledgerCannotDrift() {
+        let cache = ThumbnailMemoryCache()
+        let big = ThumbnailMemoryCache.cost(of: Self.image(480, 270))
+        cache.setObject(Self.image(480, 270), forKey: "zero", cost: 0)
+        #expect(cache.snapshot.bytesHeld == big, "bytes come from the image, not the caller's cost")
+        cache.setObject(Self.image(480, 270), forKey: "twoArg")
+        #expect(cache.snapshot.entries == 2)
+        #expect(cache.snapshot.bytesHeld == 2 * big)
+        cache.removeObject(forKey: "never-stored")
+        cache.removeAllObjects()
+        cache.removeAllObjects()
+        #expect(cache.snapshot == .init(entries: 0, bytesHeld: 0, evictions: 0, removals: 2))
+    }
+
+    @Test("The model's preview cache is the metering cache and storePrecachedThumbnail feeds it")
+    @MainActor
+    func modelCacheMeters() {
+        let model = VideoScanModel()
+        let cache = model.previewService.thumbnailCache
+        #expect(cache.delegate === cache)
+        model.storePrecachedThumbnail(PreviewTestImages.solid(red: 1, green: 0, blue: 0), forPath: "/v/a.mov")
+        #expect(cache.snapshot.entries == 1)
+        #expect(cache.snapshot.bytesHeld == Self.fullThumbCost)
+        model.invalidateThumbnailCacheEntry(forPath: "/v/a.mov")
+        #expect(cache.snapshot == .init(entries: 0, bytesHeld: 0, evictions: 0, removals: 1))
+    }
+
+    // MARK: - OUTCOME line
+
+    @Test("OUTCOME line carries N of M, the pass counts, bytes held of the limit, and evictions")
+    func outcomeLineFormat() {
+        let line = ThumbnailCachePolicy.outcomeLine(
+            how: "complete", label: "VHS Rescue",
+            cachedNow: 18_000, rowsNeeding: 18_903, stored: 18_100, failed: 803, seconds: 412.34,
+            cache: .init(entries: 18_000, bytesHeld: 9_331_200_000, evictions: 100, removals: 7),
+            limitBytes: 24 * Int(Self.gib))
+        #expect(line == "Thumbnail prewarm OUTCOME (complete) — VHS Rescue: 18000 of 18903 rows needing a thumbnail now cached"
+                + " (18100 stored this pass, 803 skipped/failed) · cache ~8.7 GB of 24.0 GB limit, 18000 entries"
+                + " · NSCache evictions since launch 100 (our removals 7) · 412.3s")
+    }
+
+    @Test("Truth: a finished pass writes ONE OUTCOME line whose N is what the cache holds, not what the pass stored")
+    @MainActor
+    func passWritesOneOutcomeLineFromEvidence() async throws {
+        let model = VideoScanModel()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ThumbOutcome-\(UUID().uuidString)", isDirectory: true)
+        // Files that do not exist: every generation fails fast, stores nothing.
+        let paths = (0..<3).map { dir.appendingPathComponent("clip\($0).mov").path }
+        // One row is already in L1 from an earlier pass — the evidence probe
+        // must count it although this pass stores nothing.
+        model.storePrecachedThumbnail(PreviewTestImages.solid(red: 0, green: 1, blue: 0), forPath: paths[0])
+        let sink = InMemoryLogSink()
+        let label = "outcome-\(UUID().uuidString)"
+        model.thumbnailPrecacher.start(volumeLabel: label,
+                                       candidates: paths.map { makeRecord(path: $0) },
+                                       concurrency: 2, model: model, log: sink)
+        let deadline = Date().addingTimeInterval(30)
+        while model.thumbnailPrecacher.isRunning, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(!model.thumbnailPrecacher.isRunning)
+        let outcomes = sink.lines.filter { $0.contains("Thumbnail prewarm OUTCOME") && $0.contains(label) }
+        #expect(outcomes.count == 1)
+        #expect(outcomes.first?.contains("(complete) — \(label): 1 of 3 rows needing a thumbnail now cached (0 stored this pass, 3 skipped/failed)") == true,
+                "\(outcomes)")
+    }
+
+    // MARK: - Scale
+
+    @Test("Scale: 100k entries metered and probed for the OUTCOME within budget")
+    func scale100kEntries() {
+        let cache = ThumbnailMemoryCache()
+        let img = Self.image(1, 1)                     // one shared 4-byte image: meters the ledger, not CG
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for i in 0..<100_000 { cache.setObject(img, forKey: "/v/\(i).mov" as NSString, cost: 4) }
+            let present = (0..<100_000).reduce(0) { $0 + (cache.contains("/v/\($1).mov") ? 1 : 0) }
+            #expect(present == cache.snapshot.entries)
+        }
+        #expect(cache.snapshot.entries == 100_000)
+        #expect(cache.snapshot.bytesHeld == 400_000)
+        #expect(elapsed < .seconds(5), "100k sets + probes took \(elapsed)")
+    }
+
+    // MARK: - Sensor
+
+    @Test("Sensor: the limit is derived from RAM (no fixed constant) and the pass OUTCOME goes to the log sink")
+    func sizingAndOutcomeSensor() throws {
+        let code = SourceTree.strippingComments(try SourceTree.appCode(named: "ThumbnailPrecache.swift"))
+        #expect(code.contains("static let costLimitBytes: Int = costLimit(physicalMemory: ProcessInfo.processInfo.physicalMemory)"))
+        #expect(code.contains("log.write(ThumbnailCachePolicy.outcomeLine("))
+        let service = SourceTree.strippingComments(try SourceTree.appCode(named: "PreviewService.swift"))
+        #expect(service.contains("cache.totalCostLimit = ThumbnailCachePolicy.costLimitBytes"))
+        #expect(service.contains("let thumbnailCache: ThumbnailMemoryCache"))
     }
 }

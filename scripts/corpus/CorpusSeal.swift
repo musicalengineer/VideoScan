@@ -8,7 +8,9 @@
 //
 // `CorpusSeal.refusal` answers: may THIS process, on THIS Mac, with THIS
 // config, touch anything? nil = yes; otherwise the refusal word. It reads the
-// filesystem only to resolve symlinks and to look for the marker file.
+// filesystem only to resolve symlinks, to look for the marker files, and — for
+// the external root — to read ~/corpus/external-volume.json and ask the kernel
+// what is mounted at the adopted mount point and its volume UUID.
 //
 // The box (docs/guides/operations.md §1a), as checked here:
 //   - (the GATE, decided before the config file is read at all) this Mac is
@@ -22,8 +24,18 @@
 //     folders, $HOME and Application Support resolve inside ~/corpus/state or
 //     inside the run's work folder — and NOTHING writable resolves inside
 //     ~/corpus/media or ~/corpus/live;
-//   - every file to run is under ~/corpus/media (check, proof) or is a clone
+//   - every file to run is under ~/corpus/media, or under the EXTERNAL root's
+//     corpus/media while that root is proven (check, proof), or is a clone
 //     inside the run's work folder (verbs);
+//   - the external root (DECISIONS 2026-11-19; scripts/corpus_run.py
+//     `Seal.external`, the same rules, pinned side by side by the tests): the
+//     volume adopted once by `corpus_run.sh adopt-volume` (its mount point and
+//     volume UUID in ~/corpus/external-volume.json, a plain file of the corpus).
+//     Proven when that path is itself (no link), something is mounted exactly
+//     there, it carries THIS_IS_TEST_DATA.txt and its volume UUID is the pinned
+//     one; ABSENT when nothing is mounted there (its files are simply not given
+//     to a driver); a volume there that fails a check is refused. Nothing
+//     writable may resolve anywhere on the adopted mount, mounted or not;
 //   - this is a test host.
 // (For Rick: a caseless `enum` with static functions ≈ a C++ namespace of free functions.)
 
@@ -64,8 +76,147 @@ struct CorpusSealInput {
     var isTestHost: Bool
 }
 
+/// The external root as the seal finds it (Python: `External` / `Seal.external`).
+enum CorpusExternal: Equatable, Sendable {
+    case none                                       // no volume adopted
+    case absent(mount: String)                      // adopted; nothing is mounted at its mount point
+    case proven(mount: String, uuid: String)        // mounted there, marked, the adopted volume UUID (held: Codex #333 F4)
+    case refused(String)                            // the refusal word
+
+    /// The adopted mount point, mounted or not (what nothing may write into).
+    var mount: String? {
+        switch self {
+        case .absent(let mount), .proven(let mount, _): return mount
+        case .none, .refused: return nil
+        }
+    }
+
+    var word: String {
+        switch self {
+        case .none: return "none"
+        case .absent: return "absent"
+        case .proven: return "ok"
+        case .refused(let word): return word
+        }
+    }
+}
+
 enum CorpusSeal {
     static let allowedHosts: Set<String> = ["ricksm4"]
+    static let volumePin = "external-volume.json"
+
+    private struct VolumePin: Decodable {
+        let mount: String
+        // swiftlint:disable:next identifier_name
+        let volume_uuid: String
+    }
+
+    /// The adopted external volume, proven (see the header). Same order of questions as Python's
+    /// `Seal.pin` + `Seal.external`.
+    static func external(realHome: String) -> CorpusExternal {
+        let corpus = realHome + "/corpus", pinPath = corpus + "/" + volumePin
+        var info = stat()
+        guard lstat(pinPath, &info) == 0 else { return .none }
+        // One name only: a second name could be a run's progress file, appended to (Codex #331 F3).
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1, resolved(pinPath) == resolved(corpus) + "/" + volumePin,
+              let data = FileManager.default.contents(atPath: pinPath),
+              let pin = try? JSONDecoder().decode(VolumePin.self, from: data),
+              isPlainAbsolute(pin.mount), isVolumeUUID(pin.volume_uuid.uppercased()) else {
+            return .refused("external_volume_pin_unreadable")
+        }
+        let mount = pin.mount
+        guard lstat(mount, &info) == 0 else { return .absent(mount: mount) }
+        guard resolved(mount) == mount else { return .refused("external_volume_through_a_link") }
+        guard mountedOn(mount) == mount else { return .absent(mount: mount) }
+        guard lstat(mount + "/THIS_IS_TEST_DATA.txt", &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+            return .refused("external_volume_has_no_marker")
+        }
+        let uuid = (try? URL(fileURLWithPath: mount).resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
+        guard uuid?.uppercased() == pin.volume_uuid.uppercased() else { return .refused("external_volume_is_not_the_adopted_one") }
+        let media = mount + "/corpus/media"
+        if lstat(media, &info) == 0, resolved(media) != media { return .refused("external_volume_through_a_link") }
+        return .proven(mount: mount, uuid: pin.volume_uuid.uppercased())
+    }
+
+    /// May the file at `path` be opened NOW (Codex #331 F2, #332 F3, #333 F3/F4)? An allowlist:
+    /// a file under ~/corpus/media or ~/corpus/work (the internal copies, the run's clones) that is
+    /// itself on the home volume, while those two folders are still themselves — `refusal` proved
+    /// their place; a file under the corpus/media of the volume PROVEN when the run opened
+    /// (`atOpen`), only while that same volume — same mount, same UUID — is proven again now;
+    /// anything else, never.
+    static func mayOpen(_ path: String, realHome: String, atOpen: CorpusExternal) -> Bool {
+        // Judged first by where the item was GIVEN: a path spelled under an adopted mount (proven at open, or adopted
+        // now) is an external item whatever it resolves to now — unplugged, a link left under the mount point could
+        // lead it into ~/corpus/media (Codex #335 F4).
+        let now = external(realHome: realHome)
+        for mount in [atOpen.mount, now.mount].compactMap({ $0 }) where path == mount || path.hasPrefix(mount + "/") {
+            guard case .proven(let proven, let uuid) = atOpen, proven == mount, isUnder(path, mount + "/corpus/media") else { return false }
+            return now == .proven(mount: mount, uuid: uuid)
+        }
+        let corpus = realHome + "/corpus", corpusReal = resolved(corpus)
+        let foldersHold = ["media", "work"].allSatisfy { resolved(corpus + "/" + $0) == corpusReal + "/" + $0 }
+        if foldersHold, isUnder(path, corpus + "/media") || isUnder(path, corpus + "/work"), onHomeVolume(path, realHome: realHome) {
+            return true
+        }
+        return false                                   // neither an internal copy nor an item given on the adopted mount
+    }
+
+    /// The run's own folders (work, progress, and the verbs lane's clones, archive and scratch) are
+    /// still on the home volume NOW: asked before every engine (Codex #334 F2: a volume mounted over
+    /// the run folder after open).
+    static func runFoldersOnHome(_ config: CorpusConfig, realHome: String) -> Bool {
+        ([config.work, config.progress] + [config.volRoot, config.archiveRoot, config.scratch].compactMap { $0 })
+            .allSatisfy { onHomeVolume($0, realHome: realHome) }
+    }
+
+    /// The device of the real home folder: the one volume the harness writes on.
+    static func homeDevice(realHome: String) -> dev_t? {
+        var info = stat()
+        return lstat(realHome, &info) == 0 ? info.st_dev : nil
+    }
+
+    /// True when what `path` resolves to is on the home volume: its deepest existing part (the file,
+    /// or the folder it would be made in) is on the home folder's device. Everything below a mount
+    /// point is on the mounted volume, so a volume mounted anywhere on the way makes it false
+    /// (Codex #333 F1/F2). Python's `Seal.on_home_volume` is the same rule.
+    static func onHomeVolume(_ path: String, realHome: String) -> Bool {
+        guard let device = homeDevice(realHome: realHome) else { return false }
+        var here = resolved(path)
+        var info = stat()
+        while lstat(here, &info) != 0 {
+            let up = (here as NSString).deletingLastPathComponent
+            if up == here || up.isEmpty { return false }
+            here = up
+        }
+        return info.st_dev == device
+    }
+
+    /// A regular file with ONE name (not a link, not a folder, no second name a pristine file could share).
+    static func isOneNameFile(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG && info.st_nlink == 1
+    }
+
+    /// Where the file system that holds `path` is mounted (statfs(2) f_mntonname), or nil.
+    static func mountedOn(_ path: String) -> String? {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return nil }
+        return withUnsafeBytes(of: &fs.f_mntonname) { raw in
+            raw.bindMemory(to: CChar.self).baseAddress.map { String(cString: $0) }
+        }
+    }
+
+    /// Absolute, not "/", and every component a plain name (no "", ".", ".."): Python's normpath(p) == p.
+    static func isPlainAbsolute(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        return path.hasPrefix("/") && parts.count > 1 && parts.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    static func isVolumeUUID(_ text: String) -> Bool {
+        let hex = Set("0123456789ABCDEF")
+        let groups = text.split(separator: "-", omittingEmptySubsequences: false)
+        return groups.map(\.count) == [8, 4, 4, 4, 12] && groups.allSatisfy { $0.allSatisfy(hex.contains) }
+    }
 
     /// The path with every symlink followed (realpath(3)). A path that does not exist yet is
     /// resolved through its deepest existing folder, the rest appended as written; a path that
@@ -105,8 +256,10 @@ enum CorpusSeal {
         let corpus = realHome + "/corpus"
         let state = corpus + "/state", work = corpus + "/work", media = corpus + "/media"
         guard FileManager.default.fileExists(atPath: corpus + "/THIS_IS_TEST_DATA.txt") else { return "no_test_data_marker" }
-        // The three folders are themselves: an alias (work -> media, state -> anywhere) is refused.
+        // ~/corpus itself is itself, on the home volume (Codex #334 F4), and so are its three folders:
+        // an alias (work -> media, state -> anywhere) is refused.
         let corpusReal = resolved(corpus)
+        guard corpusReal == resolved(realHome) + "/corpus", onHomeVolume(corpus, realHome: realHome) else { return "a_corpus_folder_is_an_alias" }
         for (folder, name) in [(state, "state"), (work, "work"), (media, "media")] where resolved(folder) != corpusReal + "/" + name {
             return "a_corpus_folder_is_an_alias"
         }
@@ -133,6 +286,7 @@ enum CorpusSeal {
         return isUnder(config.work, work) && resolved(config.work) != resolved(work)
             && isUnder(config.progress, config.work) && resolved(config.progress) != resolved(config.work)
             && !isUnder(config.progress, corpus + "/media") && !isUnder(config.progress, corpus + "/live")
+            && isOneNameFile(config.progress) && onHomeVolume(config.progress, realHome: realHome)
     }
 
     /// nil when the seal holds; otherwise the refusal word (never a path).
@@ -147,10 +301,20 @@ enum CorpusSeal {
               isUnder(config.progress, config.work), resolved(config.progress) != resolved(config.work) else {
             return "work_outside_the_corpus"
         }
+        guard isOneNameFile(config.progress) else { return "progress_is_not_a_plain_file" }
         guard config.lane == input.lane else { return "config_is_for_another_lane" }
         // `inRun`: inside THIS run's work folder.
         func inRun(_ path: String) -> Bool { isUnder(path, config.work) && resolved(path) != resolved(work) }
-        func pristine(_ path: String) -> Bool { isUnder(path, media) || isUnder(path, live) }
+        let external = external(realHome: input.realHome)
+        if case .refused(let word) = external { return word }
+        // The adopted volume, whole, mounted or not, is as pristine as ~/corpus/media.
+        func pristine(_ path: String) -> Bool {
+            isUnder(path, media) || isUnder(path, live) || (external.mount.map { isUnder(path, $0) } ?? false)
+        }
+        func onExternal(_ path: String) -> Bool {
+            if case .proven(let mount, _) = external { return isUnder(path, mount + "/corpus/media") }
+            return false
+        }
         guard resolved(config.corpusRoot) == corpusReal, isUnder(config.stateRoot, state),
               isUnder(config.catalog, state) || inRun(config.catalog), resolved(config.mediaRoot) == resolved(media) else {
             return "state_root_outside_the_corpus"
@@ -158,14 +322,19 @@ enum CorpusSeal {
         guard input.isTestHost else { return "not_a_test_host" }
         guard isUnder(input.homeDirectory, state) || inRun(input.homeDirectory),
               isUnder(input.applicationSupport, state) || inRun(input.applicationSupport) else { return "home_not_sealed" }
-        guard config.pending.allSatisfy({ isUnder($0.path, media) || inRun($0.path) }),
-              config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy(inRun) }) else { return "a_file_is_outside_the_corpus" }
+        // An internal copy (or a clone) is on the home volume: a volume mounted inside ~/corpus/media is not the corpus.
+        func onHome(_ path: String) -> Bool { (isUnder(path, media) || inRun(path)) && onHomeVolume(path, realHome: input.realHome) }
+        guard config.pending.allSatisfy({ onHome($0.path) || onExternal($0.path) }),
+              config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy { inRun($0) && onHomeVolume($0, realHome: input.realHome) } }) else {
+            return "a_file_is_outside_the_corpus"                       // a copy on a volume mounted in the run (Codex #334 F1)
+        }
         let verbsFolders = [config.volRoot, config.archiveRoot, config.scratch].compactMap { $0 }
         guard verbsFolders.allSatisfy(inRun) else { return "a_verbs_folder_is_outside_the_run" }
         // Nothing this process may write resolves into the pristine copies or the read-only mount.
         let writable = [config.work, config.progress, input.homeDirectory, input.applicationSupport, config.stateRoot] + verbsFolders
             + (inRun(config.catalog) ? [config.catalog] : [])
         guard !writable.contains(where: pristine) else { return "a_writable_path_is_inside_the_pristine_corpus" }
+        guard writable.allSatisfy({ onHomeVolume($0, realHome: input.realHome) }) else { return "a_writable_path_is_on_another_volume" }
         return nil
     }
 }

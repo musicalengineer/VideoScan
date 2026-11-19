@@ -3,9 +3,10 @@
 # DECISIONS 2026-11-17 "The M4 holds a real-data test corpus").
 #
 #   scripts/corpus_run.sh prepare             [--wait] [--dry-run]
-#   scripts/corpus_run.sh run <check|proof|verbs|coverage> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
+#   scripts/corpus_run.sh run <check|proof|verbs|coverage> [--ref <rev>] [--deadline <s>] [--limit <n>] [--smoke] [--wait] [--force] [--dry-run]
 #   scripts/corpus_run.sh status              [--dry-run]
 #   scripts/corpus_run.sh accept <check|proof|verbs> [--dry-run]
+#   scripts/corpus_run.sh adopt-volume /Volumes/<name> [--dry-run]
 #
 # Launched from the Ultra; everything runs ON THE M4, through scripts/m4_run.sh
 # (lane `corpus`): the testbed lock, the per-run LaunchAgent in the GUI
@@ -26,6 +27,9 @@
 #             build's unit suite and Core's suite beside them; reports which of OUR code
 #             only the real corpus runs (scripts/corpus_coverage.py). Counts, areas, our
 #             files' and functions' names; the report stays under ~/corpus/reports/coverage
+#   --smoke   check, proof or verbs on a small stratified subset (one file per stratum and codec mix,
+#             2 proof files, every verb once): proves the harness, the host and the code run end
+#             to end; labelled SMOKE; never a baseline. The whole testbed: m4_run.sh testbed --smoke
 #   status    the testbed lock, then the newest run of each lane judged against
 #             the lane's baseline: counts, outcome words, and each changed file
 #             by SHA-256 prefix (old -> new)
@@ -33,6 +37,13 @@
 #             commit, who and when). A lane's verdict is its diff against the
 #             baseline: AMBER when a file's outcome word moved, RED when a file
 #             crashed an engine or timed out. Refused for a RED or partial run.
+#   adopt-volume  once, by a person: makes the volume mounted at /Volumes/<name> on the
+#             M4 the corpus's EXTERNAL root (v2: ~6,100 files on the Crucial X10). Its
+#             volume UUID is pinned in ~/corpus/external-volume.json; from then on the
+#             external files run only while THAT volume is mounted there (marked
+#             THIS_IS_TEST_DATA.txt, not through a link). Unplugged: a lane runs the
+#             internal files and says how many it did NOT RUN (AMBER). Refused when a
+#             volume is already adopted (move that file into ~/corpus/.trash first).
 #
 # The corpus is copies of real family media: it never leaves the M4, and this
 # script prints nothing but counts, outcome words and codec names. The harness
@@ -49,7 +60,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 M4_SSH="ricksm4.local"
 
 usage() {
-    sed -n '4,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '4,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -84,6 +95,19 @@ case "$VERB" in
         fi
         [ $# -eq 0 ] || usage
         ssh -o BatchMode=yes -o ConnectTimeout=15 "$M4_SSH" "python3 - accept $LANE --by $WHO" <"$SCRIPT_DIR/corpus_run.py" ;;
+    adopt-volume)
+        MOUNT="${1:-}"; [ $# -gt 0 ] && shift
+        # One plain volume name directly in /Volumes: it goes into an ssh command line.
+        [[ "$MOUNT" =~ ^/Volumes/[A-Za-z0-9_.-]+$ ]] && [[ "$MOUNT" != */. ]] && [[ "$MOUNT" != */.. ]] \
+            || { echo "corpus_run: adopt-volume wants /Volumes/<name> (letters, digits, _ . -)" >&2; exit 2; }
+        WHO="$(id -un 2>/dev/null)@$(hostname -s 2>/dev/null)"
+        WHO="$(printf '%s' "$WHO" | tr -c 'A-Za-z0-9_.@-' '_')"
+        if [ "${1:-}" = --dry-run ]; then
+            echo "+ ssh $M4_SSH python3 - adopt-volume $MOUNT --by $WHO < $SCRIPT_DIR/corpus_run.py"
+            exit 0
+        fi
+        [ $# -eq 0 ] || usage
+        ssh -o BatchMode=yes -o ConnectTimeout=15 "$M4_SSH" "python3 - adopt-volume $MOUNT --by $WHO" <"$SCRIPT_DIR/corpus_run.py" ;;
     ""|-h|--help) usage ;;
-    *) echo "corpus_run: unknown verb '$VERB' (prepare|run|status|accept)" >&2; exit 2 ;;
+    *) echo "corpus_run: unknown verb '$VERB' (prepare|run|status|accept|adopt-volume)" >&2; exit 2 ;;
 esac

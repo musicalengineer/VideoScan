@@ -9,7 +9,9 @@
 //           for the quick tier (quickChecks + fullRowsNotRun,
 //           applyingSoundPresence with the record's context, card) → the
 //           report card's verdict word, and the rows that are not OK
-//   audio   VerifyAudioProbe.diagnose        → verdict word + finding kinds
+//   audio   VerifyAudioProbe.diagnose        → verdict word + finding kinds (a channel
+//           imbalance says its side, `channelImbalance:leftOnly`: the proof lane
+//           picks its one-sided files from these)
 //   pair    the record's A/V pair link as the catalog loaded it (carried by
 //           `prepare` since transform 2): `unpaired`, `paired_partner_in_corpus`
 //           or `paired_partner_absent`, and whether the app counts the row as
@@ -80,7 +82,10 @@ final class CorpusCheckDriver: XCTestCase {
             }
             await run.engine(item, "audio") {
                 let diagnosis = try await VerifyAudioProbe.diagnose(path: item.path)
-                let kinds = diagnosis.findings.map { CorpusWords.caseName($0) }
+                let kinds = diagnosis.findings.map { finding -> String in
+                    if case .channelImbalance(let side) = finding { return "channelImbalance:" + CorpusWords.caseName(side) }
+                    return CorpusWords.caseName(finding)
+                }
                 switch diagnosis.verdict {
                 case .ok: return (diagnosis.isHealthy ? "healthy" : "ok_with_findings", kinds)
                 case .damaged: return ("damaged", kinds)

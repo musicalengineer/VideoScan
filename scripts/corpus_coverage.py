@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import time
 from collections import defaultdict
@@ -573,6 +572,6 @@ class CoverageRun:
         DECISIONS 2026-11-18)."""
         work = str(self.seal.writable(self.work))
         if os.path.isdir(work):
-            shutil.rmtree(work, ignore_errors=True)
+            cr.remove_tree(self.seal, self.work)             # never a tree with a mount in it (Codex #331 F1)
         if os.path.isdir(work):
             self.lines.append("  the run's work folder could NOT be removed whole (it is still on the M4 under ~/corpus/work)")
