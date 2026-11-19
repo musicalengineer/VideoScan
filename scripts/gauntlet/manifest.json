@@ -34610,6 +34610,7 @@
       ],
       "tests": [
         "test_a_cleanup_that_fails_never_costs_the_run_its_outcome",
+        "test_a_coverage_cache_that_is_a_link_is_never_followed",
         "test_a_hard_link_to_a_protected_file_loses_only_its_own_name",
         "test_a_link_in_the_way_of_a_root_refuses_that_root",
         "test_a_run_holding_the_lock_is_never_pruned_and_nobody_else_may_clean",
@@ -34629,6 +34630,7 @@
         "test_f7_bytes_with_a_second_name_are_not_counted_as_reclaimable",
         "test_finished_runs_and_dead_corpus_work_go_whatever_the_disk_says",
         "test_no_lock_held_is_refused",
+        "test_only_the_two_known_coverage_names_are_scratch",
         "test_r1_a_planted_fifo_at_the_stop_marker_never_holds_the_outcome",
         "test_r1_a_planted_link_at_the_stop_marker_is_never_written_through",
         "test_r2_a_cache_holding_a_protected_destination_is_never_removed",
@@ -34650,6 +34652,7 @@
         "test_the_build_caches_go_only_when_that_reaches_the_floor",
         "test_the_command_line_refuses_with_exit_2_and_one_line",
         "test_the_corpus_protected_set_is_never_touched",
+        "test_the_coverage_caches_go_at_every_cleanup_whatever_the_disk_says",
         "test_the_end_line_says_how_low_the_run_took_the_disk",
         "test_the_lock_flag_is_never_cleared_on_a_file_with_a_second_name",
         "test_the_sampler_keeps_the_lowest_free_figure_and_stops_on_its_stop_file",
