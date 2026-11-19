@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-18T13:34:55Z",
- "sha": "b50abb49",
+ "ts": "2026-11-19T14:01:44Z",
+ "sha": "431753b9",
  "formula_version": 1,
  "files_scored": 880,
  "rows": [
@@ -10,11 +10,11 @@
    "offenders": 4,
    "worst_ccn": 20,
    "new_or_worse": 3,
-   "lines": 1821,
+   "lines": 1827,
    "could_be_private": 3,
    "widened_for_split": 20,
-   "churn_7d": 5,
-   "score": 71.2
+   "churn_7d": 6,
+   "score": 78.4
   },
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -61,6 +61,17 @@
    "score": 28.1
   },
   {
+   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
+   "offenders": 1,
+   "worst_ccn": 11,
+   "new_or_worse": 1,
+   "lines": 1961,
+   "could_be_private": 4,
+   "widened_for_split": 1,
+   "churn_7d": 4,
+   "score": 27.1
+  },
+  {
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
    "offenders": 3,
    "worst_ccn": 23,
@@ -81,28 +92,6 @@
    "widened_for_split": 4,
    "churn_7d": 0,
    "score": 25.0
-  },
-  {
-   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
-   "offenders": 1,
-   "worst_ccn": 11,
-   "new_or_worse": 1,
-   "lines": 1952,
-   "could_be_private": 4,
-   "widened_for_split": 1,
-   "churn_7d": 3,
-   "score": 24.0
-  },
-  {
-   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift",
-   "offenders": 2,
-   "worst_ccn": 26,
-   "new_or_worse": 0,
-   "lines": 1283,
-   "could_be_private": 7,
-   "widened_for_split": 0,
-   "churn_7d": 4,
-   "score": 21.8
   },
   {
    "file": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift",
@@ -136,6 +125,17 @@
    "widened_for_split": 2,
    "churn_7d": 0,
    "score": 21.3
+  },
+  {
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift",
+   "offenders": 2,
+   "worst_ccn": 24,
+   "new_or_worse": 0,
+   "lines": 1283,
+   "could_be_private": 7,
+   "widened_for_split": 0,
+   "churn_7d": 4,
+   "score": 21.1
   },
   {
    "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",

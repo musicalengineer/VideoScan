@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-18T13:34:49Z",
- "sha": "b50abb49",
+ "ts": "2026-11-19T14:01:37Z",
+ "sha": "431753b9",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -354,7 +354,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/ContentView.swift": {
-   "lines": 1821,
+   "lines": 1827,
    "decls": 43,
    "could_be_private": [
     "CatalogView.volumeShowFilterDidChange",
@@ -2072,8 +2072,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift": {
-   "lines": 1952,
-   "decls": 75,
+   "lines": 1961,
+   "decls": 76,
    "could_be_private": [
     "CatalogContent.MusicTriagePayload",
     "duplicateDisplayLabel",
@@ -2242,8 +2242,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogRows.swift": {
-   "lines": 318,
-   "decls": 31,
+   "lines": 343,
+   "decls": 33,
    "could_be_private": [
     "CatalogRows.Engines",
     "CatalogEditClock.noteEdit"
@@ -2281,8 +2281,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogShowFilterStore.swift": {
-   "lines": 496,
-   "decls": 40,
+   "lines": 526,
+   "decls": 42,
    "could_be_private": [
     "CatalogShowFilterStore.retiredFolderKeys",
     "CatalogShowFilterStore.seededKey",
@@ -2290,13 +2290,14 @@
     "CatalogShowFilterStore.legacyLabels",
     "CatalogShowFilterStore.foldersLine",
     "CatalogShowFilterStore.restoreFolders",
+    "CatalogShowFilterStore.legalized",
     "CatalogShowFilterStore.changeLine"
    ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift": {
-   "lines": 514,
-   "decls": 53,
+   "lines": 572,
+   "decls": 62,
    "could_be_private": [
     "CatalogShowingSummary.Pill.Emphasis",
     "CatalogShowingSummary.unnamedVolume",
@@ -2428,8 +2429,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogToolbar.swift": {
-   "lines": 744,
-   "decls": 47,
+   "lines": 750,
+   "decls": 48,
    "could_be_private": [
     "CatalogToolbar.searchLeftInset",
     "CatalogToolbar.archivistGap"
@@ -3286,6 +3287,12 @@
   "VideoScan/VideoScan/Catalog/VideoScanModel+WorkflowTags.swift": {
    "lines": 119,
    "decls": 6,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/Catalog/VideoWithSound.swift": {
+   "lines": 35,
+   "decls": 1,
    "could_be_private": [],
    "widened_for_split": []
   },

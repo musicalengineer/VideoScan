@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-18T13:34:49Z",
- "sha": "b50abb49",
+ "ts": "2026-11-19T14:01:37Z",
+ "sha": "431753b9",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -1548,6 +1548,13 @@
    "file": "VideoScan/VideoScan/Catalog/CatalogShowFilterStore.swift",
    "name": "CatalogShowFilterStore.legacySeparator",
    "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogShowFilterStore.swift::CatalogShowFilterStore.legalized",
+   "file": "VideoScan/VideoScan/Catalog/CatalogShowFilterStore.swift",
+   "name": "CatalogShowFilterStore.legalized",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {

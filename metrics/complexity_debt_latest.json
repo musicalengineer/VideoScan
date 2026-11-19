@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-18T13:34:23Z",
- "sha": "b50abb49",
+ "ts": "2026-11-19T14:01:07Z",
+ "sha": "431753b9",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -88,7 +88,7 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "CatalogView.catalogToolbarBase",
    "ccn": 5,
-   "nloc": 82,
+   "nloc": 83,
    "lang": "swift"
   },
   {
@@ -206,7 +206,7 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "CatalogView.catalogContent",
    "ccn": 4,
-   "nloc": 85,
+   "nloc": 86,
    "lang": "swift",
    "base_ccn": 3,
    "base_nloc": 81
