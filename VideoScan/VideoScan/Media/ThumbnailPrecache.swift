@@ -38,12 +38,13 @@
 // Memory contract (Rick's M4 Max, "use RAM aggressively but leave ~4 GB
 // headroom"): thumbnails are capped at 480x270 (~0.5 MB of bitmap each),
 // generated ONE frame per file — never batch-loaded. The shared NSCache
-// carries a byte-cost limit (ThumbnailCachePolicy.costLimitBytes, 8 GB)
-// and NSCache additionally evicts under system memory pressure. The
+// carries a byte-cost limit (ThumbnailCachePolicy.costLimitBytes: 25 % of
+// RAM in [8, 32] GB — 24 GB on the 96 GB M5 Ultra) and NSCache
+// additionally evicts under system memory pressure. The
 // prewarm loop also checks free RAM before dispatching each file and
 // stops early below the 4 GB headroom floor. Worst-case footprint:
-// 8 GB of cached thumbnails + (concurrency × one decoder working set —
-// AVAssetImageGenerator or a single-frame ffmpeg child) transient.
+// costLimitBytes of cached thumbnails + (concurrency × one decoder working
+// set — AVAssetImageGenerator or a single-frame ffmpeg child) transient.
 
 import Foundation
 import AppKit
@@ -59,12 +60,36 @@ private let precacheLog = Logger(subsystem: "Rick-Breen.VideoScan",
 // MARK: - Cache policy (pure)
 
 enum ThumbnailCachePolicy {
-    /// Byte-cost ceiling for the model's thumbnailCache. 8 GB default —
-    /// Rick wants the 128 GB M4 Max RAM used aggressively; NSCache evicts
-    /// LRU-ish past this and also responds to system memory pressure.
-    /// At ~0.5 MB per 480x270 thumbnail this comfortably covers the whole
-    /// 13.5K-record catalog with room to grow.
-    static let costLimitBytes: Int = 8 * 1024 * 1024 * 1024
+    /// Byte-cost ceiling for the model's thumbnailCache, sized once at
+    /// launch from this Mac's RAM (see `costLimit(physicalMemory:)`).
+    /// NSCache evicts LRU-ish past this and also under system memory
+    /// pressure; the model clears it outright at the scan RAM floor.
+    static let costLimitBytes: Int = costLimit(physicalMemory: ProcessInfo.processInfo.physicalMemory)
+
+    static let costLimitFloorBytes: Int = 8 * 1024 * 1024 * 1024
+    static let costLimitCapBytes: Int = 32 * 1024 * 1024 * 1024
+
+    /// 25 % of physical RAM, clamped to [8 GB, 32 GB] (Rick, 2026-11-19:
+    /// "I am often scrolling all over that thing… given our 96GB… make it
+    /// run faster than a speeding bullet").
+    ///
+    /// Why these numbers, at ~518 KB per 480x270 thumbnail:
+    ///   - 25 %: the catalog is one of several RAM users (scan workers,
+    ///     ffmpeg children, MLX for faces/Hallie). A quarter leaves three
+    ///     quarters to them, and NSCache still yields under pressure.
+    ///   - 96 GB M5 Ultra → 24 GB ≈ 49K thumbnails: 2.6x the live 18,903-row
+    ///     catalog. 64 GB → 16 GB ≈ 33K: still the whole catalog.
+    ///   - Floor 8 GB = the previous fixed limit, so a small Mac never gets
+    ///     LESS than it had (≈16K thumbnails).
+    ///   - Cap 32 GB ≈ 66K thumbnails, 3.5x the catalog: past that more RAM
+    ///     buys no scrolling, and the cap bounds the worst case.
+    /// Worst-case resident: this limit + the precache's transient decoders;
+    /// the precache also stops at `precacheHeadroomBytes` free.
+    static func costLimit(physicalMemory: UInt64) -> Int {
+        let quarter = physicalMemory / 4
+        let capped = min(quarter, UInt64(costLimitCapBytes))
+        return max(Int(capped), costLimitFloorBytes)
+    }
 
     /// Free-RAM floor below which the precache loop stops dispatching new
     /// work. Matches the project-wide "leave ~4 GB headroom for OS/CLI"
@@ -76,6 +101,27 @@ enum ThumbnailCachePolicy {
     /// above means what it says.
     static func estimatedCost(pixelsWide: Int, pixelsHigh: Int) -> Int {
         max(1, pixelsWide) * max(1, pixelsHigh) * 4
+    }
+
+    /// The ONE line a prewarm pass writes to the app log when it finishes,
+    /// is cancelled, or stops for memory. `cachedNow` is evidence — the
+    /// pass's rows probed in the cache at that moment — so evictions during
+    /// the pass show up as cachedNow < stored. Pure, for tests.
+    static func outcomeLine(how: String,
+                            label: String,
+                            cachedNow: Int,
+                            rowsNeeding: Int,
+                            stored: Int,
+                            failed: Int,
+                            seconds: Double,
+                            cache: ThumbnailMemoryCache.Snapshot,
+                            limitBytes: Int) -> String {
+        let gb = { (b: Int) in String(format: "%.1f GB", Double(b) / 1_073_741_824) }
+        return "Thumbnail prewarm OUTCOME (\(how)) — \(label): \(cachedNow) of \(rowsNeeding) rows needing a thumbnail now cached"
+            + " (\(stored) stored this pass, \(failed) skipped/failed)"
+            + " · cache ~\(gb(cache.bytesHeld)) of \(gb(limitBytes)) limit, \(cache.entries) entries"
+            + " · NSCache evictions since launch \(cache.evictions) (our removals \(cache.removals))"
+            + " · " + String(format: "%.1fs", seconds)
     }
 }
 
@@ -187,13 +233,17 @@ final class ThumbnailPrecacher {
     /// Start prewarming thumbnails for `candidates` (already filtered +
     /// ordered by ThumbnailPrecachePlanner). Cancels any previous run.
     ///
+    /// `log` is the app's one sink, captured at start so the pass's
+    /// OUTCOME lands where it began (tests inject an in-memory sink).
+    ///
     /// The heavy work runs in a detached utility-priority task; the main
     /// actor is only touched once per generated thumbnail (the NSCache
     /// write, same hop the interactive path already does).
     func start(volumeLabel: String,
                candidates: [VideoRecord],
                concurrency: Int,
-               model: VideoScanModel) {
+               model: VideoScanModel,
+               log: any LogSink = appLog) {
         cancel(reason: "superseded by new prewarm request")
         guard !candidates.isEmpty else { return }
 
@@ -208,6 +258,7 @@ final class ThumbnailPrecacher {
         // for them.
         let failureStore = model.thumbnailFailureStore
         let diskCache = model.previewDiskCache
+        let memoryCache = model.previewService.thumbnailCache   // Sendable (lock-guarded ledger)
         let bound = max(1, concurrency)
         let label = volumeLabel
         let runID = UUID()
@@ -344,6 +395,16 @@ final class ThumbnailPrecacher {
             } else {
                 precacheLog.info("Prewarm complete — \(label, privacy: .public): \(generated)/\(items.count) cached, \(failed) skipped/failed (\(String(format: "%.1f", secs))s)")
             }
+
+            let how = Task.isCancelled ? "cancelled"
+                : stoppedForMemory ? "stopped: low memory headroom" : "complete"
+            // OUTCOME through the one log sink; N is probed (evidence),
+            // once per pass row, off main — never per thumbnail.
+            log.write(ThumbnailCachePolicy.outcomeLine(
+                how: how, label: label,
+                cachedNow: memoryCache.cachedCount(of: items.map { $0.path }), rowsNeeding: items.count,
+                stored: generated, failed: failed, seconds: secs,
+                cache: memoryCache.snapshot, limitBytes: memoryCache.totalCostLimit))
 
             // Clear `task` so isRunning reads false after a natural finish —
             // but only if a newer start() hasn't superseded this run.
