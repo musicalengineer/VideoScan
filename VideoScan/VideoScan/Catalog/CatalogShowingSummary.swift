@@ -94,8 +94,10 @@ enum CatalogShowingSummary {
     // second scan and never a stale figure.
 
     /// `shown` = the rows the files table lists now (every narrowing, held
-    /// rows included). `total` = the catalog's rows that are not removed
-    /// (trashed) — the base the table's first step starts from.
+    /// rows included). `total` = the rows it would list with every user
+    /// narrowing off: not removed, not set aside, not superseded (hidden
+    /// whatever Rick chooses). Disconnected media counts — hiding it is a
+    /// Show-menu choice the box names ("Connected drives").
     struct ShownCount: Equatable {
         var shown: Int
         var total: Int

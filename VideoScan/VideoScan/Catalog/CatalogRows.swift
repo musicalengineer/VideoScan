@@ -80,8 +80,12 @@ enum CatalogRows {
 
     struct Result {
         var rows: [VideoRecord] = []
-        /// The catalog's rows that are not removed (trashed) — the Showing
-        /// box's "of N". Counted in the purge step this pass runs anyway.
+        /// The Showing box's "of N": the rows the table lists with every USER
+        /// narrowing off — not removed, not set aside, not superseded (the rows
+        /// hidden whatever Rick chooses). So nothing narrowing ⇒ shown == total
+        /// ⇒ the bare "18,903" (2026-11-18: counting the always-hidden rows
+        /// read "N of M" as if a filter hid files). Disconnected media is a
+        /// Show-menu choice ("Connected drives"), so it stays IN the total.
         var catalogCount = 0
         /// The Showing box's count: the rows listed, of the catalog — from
         /// this one pass, so it is the table's row count in the same update.
@@ -104,7 +108,7 @@ enum CatalogRows {
         // user asked for those specific records.
         if !state.focusIDs.isEmpty {
             var focused = Result(rows: records.filter { state.focusIDs.contains($0.id) })
-            focused.catalogCount = records.count { !$0.isPurged }
+            focused.catalogCount = records.count(where: isListable)
             return focused
         }
         var result = Result()
@@ -116,17 +120,25 @@ enum CatalogRows {
 
     // MARK: Steps
 
+    /// Listed unless a USER narrowing hides it: the always-hidden states
+    /// (removed, set aside, superseded) — the same three the scope's first
+    /// steps drop. The Showing box's total counts these.
+    private static func isListable(_ r: VideoRecord) -> Bool {
+        !r.isPurged && !r.isSetAside && !r.isSuperseded
+    }
+
     /// Everything that is NOT a Show filter, in the table's order: purge →
     /// set-aside → superseded → search (the badge is counted here) →
     /// person → volumes → pairs → connected drives. (No media-kind step since
     /// 2026-11-17: every kind is in scope; Audio Only is a Show filter.)
     private static func scope(_ records: [VideoRecord], _ state: State, _ result: inout Result) -> [VideoRecord] {
         var out = pfApplyPurgeFilter(records, showRemoved: state.showRemoved)
-        // The box's "of N": the purge step's survivors ARE the not-removed
-        // rows — free. Only the (app-unused) reveal needs its own count.
-        result.catalogCount = state.showRemoved ? records.count { !$0.isPurged } : out.count
         out = pfApplySetAsideFilter(out, showSetAside: state.showSetAside)
         out = pfApplySupersededFilter(out, showSuperseded: state.showSuperseded)
+        // The box's "of N": these three steps' survivors ARE the listable rows
+        // — free. Only an (app-unused) reveal needs its own count.
+        let revealing = state.showRemoved || state.showSetAside || state.showSuperseded
+        result.catalogCount = revealing ? records.count(where: isListable) : out.count
         if !state.searchText.isEmpty {
             // ONE scan per settled query (GH #123 PR B): the hits over this
             // base ARE the badge; the later steps narrow the survivors.
