@@ -1161,6 +1161,9 @@ class Lane:
     # -- build and launches
 
     def build(self) -> int:
+        # The builder writes into DerivedData and the testbed: both on the home volume, or nothing is built (Codex #335 F1).
+        if not all(self.seal.on_home_volume(p) for p in (self.derived_data / "Build" / "Products", self.derived_data, self.worktree)):
+            raise Refused("refused: DerivedData or the testbed is on another volume (something is mounted there)")
         t0 = time.time()
         coverage = ["-enableCodeCoverage", "YES"] if self.profiles is not None else []
         rc = _run([self.xcodebuild, "build-for-testing", "-project", str(self.worktree / "VideoScan/VideoScan.xcodeproj"),
@@ -1523,7 +1526,7 @@ class VerbsLane(Lane):
         reading only; the destination is proven to be inside this run's work folder first."""
         self.seal.mkdir(dest.parent)
         self.seal.writable(dest)
-        if not _under(source, self.seal.media) or _under(dest, self.seal.media):
+        if not _under(source, self.seal.media) or _under(dest, self.seal.media) or not self.seal.on_home_volume(source):
             raise Refused("refused: a clone is made FROM ~/corpus/media INTO the run's work folder, never the other way")
         if subprocess.call([self.cp, "-c", "-p", str(source), str(dest)], stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:

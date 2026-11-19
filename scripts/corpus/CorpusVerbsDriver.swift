@@ -123,6 +123,8 @@ final class VerbsStage {
     /// new, and proven to be inside the run before the model is given it. nil = refused.
     func makeModel(_ name: String) -> VideoScanModel? {
         var folders: [URL] = []
+        // The scratch folder is proven to be the run's own (and on the home volume) BEFORE anything is made in it (Codex #335 F3).
+        guard CorpusRun.inRun(scratch, run.config.work) else { return nil }
         for kind in ["catalog-", "ledger-"] {
             let path = scratch + "/" + kind + name
             guard mkdir(path, 0o755) == 0, CorpusRun.inRun(path, scratch), CorpusRun.inRun(path, run.config.work) else { return nil }
@@ -307,7 +309,7 @@ extension VerbsStage {
     func dedupe(_ model: VideoScanModel) async {
         entering("dedupe")
         let plans = scratch + "/plans"
-        guard mkdir(plans, 0o755) == 0, CorpusRun.inRun(plans, run.config.work) else {
+        guard CorpusRun.inRun(scratch, run.config.work), mkdir(plans, 0o755) == 0, CorpusRun.inRun(plans, run.config.work) else {
             for item in items("dup") { say(item, "dedupe", "refused_by_harness") }
             return
         }
@@ -470,13 +472,19 @@ extension VerbsStage {
     /// scratch archive only, so the run's work folder can be removed. Never on a file that
     /// has a second name (Codex #311 F3).
     nonisolated static func unlock(under root: String, inside work: String) {
-        guard CorpusRun.inRun(root, work), let walker = FileManager.default.enumerator(atPath: root) else { return }
+        guard CorpusRun.inRun(root, work), let home = CorpusSeal.homeDevice(realHome: CorpusRun.realHome()),
+              let walker = FileManager.default.enumerator(atPath: root) else { return }
         for case let relative as String in walker {
             let path = root + "/" + relative
             var info = stat()
+            guard lstat(path, &info) == 0 else { continue }
+            // Never across a volume: a folder on another device is not entered, nothing on it is unlocked (Codex #335 F2).
+            guard info.st_dev == home else {
+                if info.st_mode & S_IFMT == S_IFDIR { walker.skipDescendants() }
+                continue
+            }
             // A regular file with ONE name: a hard link could share its inode with a file outside the run.
-            if lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
-               info.st_flags & UInt32(UF_IMMUTABLE) != 0 {
+            if info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1, info.st_flags & UInt32(UF_IMMUTABLE) != 0 {
                 _ = lchflags(path, info.st_flags & ~UInt32(UF_IMMUTABLE))
             }
         }

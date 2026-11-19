@@ -145,13 +145,20 @@ enum CorpusSeal {
     /// (`atOpen`), only while that same volume — same mount, same UUID — is proven again now;
     /// anything else, never.
     static func mayOpen(_ path: String, realHome: String, atOpen: CorpusExternal) -> Bool {
+        // Judged first by where the item was GIVEN: a path spelled under an adopted mount (proven at open, or adopted
+        // now) is an external item whatever it resolves to now — unplugged, a link left under the mount point could
+        // lead it into ~/corpus/media (Codex #335 F4).
+        let now = external(realHome: realHome)
+        for mount in [atOpen.mount, now.mount].compactMap({ $0 }) where path == mount || path.hasPrefix(mount + "/") {
+            guard case .proven(let proven, let uuid) = atOpen, proven == mount, isUnder(path, mount + "/corpus/media") else { return false }
+            return now == .proven(mount: mount, uuid: uuid)
+        }
         let corpus = realHome + "/corpus", corpusReal = resolved(corpus)
         let foldersHold = ["media", "work"].allSatisfy { resolved(corpus + "/" + $0) == corpusReal + "/" + $0 }
         if foldersHold, isUnder(path, corpus + "/media") || isUnder(path, corpus + "/work"), onHomeVolume(path, realHome: realHome) {
             return true
         }
-        guard case .proven(let mount, let uuid) = atOpen, isUnder(path, mount + "/corpus/media") else { return false }
-        return external(realHome: realHome) == .proven(mount: mount, uuid: uuid)
+        return false                                   // neither an internal copy nor an item given on the adopted mount
     }
 
     /// The run's own folders (work, progress, and the verbs lane's clones, archive and scratch) are
