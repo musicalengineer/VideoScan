@@ -93,6 +93,9 @@ struct AppSupportSideStoreInventoryTests {
         // Not under Application Support/VideoScan
         ".attestation_journal.jsonl": .notAppSupport, ".promote_journal.jsonl": .notAppSupport,
         ".promote_decisions.jsonl": .notAppSupport, ".videoscan-backup.json": .notAppSupport,
+        // The M4 test corpus (GauntletCorpusCatalog.swift): its marker, and the corpus UI lane's
+        // one status line, written only inside a run folder under ~/corpus/work.
+        "THIS_IS_TEST_DATA.txt": .notAppSupport, "corpus-ui-seam.txt": .notAppSupport,
         "Archive_Inventory_Manifest.csv": .notAppSupport, "README_Naming_and_Layout.txt": .notAppSupport,
         ".framemd5-MISMATCH.log": .notAppSupport,             // beside a transcode output
         "2026-10-09_214502_junk.csv": .notAppSupport,         // Logs/VideoScan/deletions (doc example)
