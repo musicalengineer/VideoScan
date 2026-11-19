@@ -683,6 +683,7 @@ struct MediaFileOperationRow: View {
                     }
                     .font(.system(size: 11))
                     .vsGlassButtonStyle()
+                    .accessibilityIdentifier("mfo.row.pause")
                 }
                 // One verb, one meaning (Rick 2026-08-07: hunted for
                 // "Stop" and found only Pause — the button said "Cancel"
@@ -704,6 +705,7 @@ struct MediaFileOperationRow: View {
                 // Stop are glass controls; the row itself stays solid.
                 .vsGlassButtonStyle()
                 .disabled(job.state == .cancelling)
+                .accessibilityIdentifier("mfo.row.stop")
                 .confirmationDialog("Stop deleting duplicates?",
                                     isPresented: $confirmStopDeleteDuplicates, titleVisibility: .visible) {
                     Button("Stop, keep the rest for later") { job.cancel() }

@@ -185,6 +185,75 @@ final class CorpusUITests: GauntletTestCase {
         report("monkey_done", actions.merging(["steps": steps]) { $1 })
     }
 
+    // MARK: - 4. A Verify job (the old Check Media): Pause, Resume, Stop
+
+    /// Verify reads the media and writes its verdicts into the catalog — the
+    /// store is inert under a test host, and the media is proven untouched by
+    /// the lane's sweep. Each control must answer inside the step budget.
+    @MainActor
+    func test4_verifyJobPausesResumesAndStops() throws {
+        let app = launchCorpusApp()
+        let base = try waitForLoadedCount(app)
+        report("loaded", ["total": base.total])
+        try step("select_all") {
+            try clickRow(app, 0)
+            app.typeKey("a", modifierFlags: .command)
+        }
+        try step("verify_menu") {
+            let row = rowsQuery(filesTable(app)).element(boundBy: 0)
+            let text = row.staticTexts.firstMatch
+            (text.exists ? text : row).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+            let verify = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH 'Verify'")).firstMatch
+            guard verify.waitForExistence(timeout: 5) else {
+                app.typeKey(.escape, modifierFlags: [])
+                throw StepFailure("the row menu has no Verify item")
+            }
+            verify.click()
+        }
+        try step("full_check") {
+            let full = app.buttons["checkMedia.full"].firstMatch
+            guard full.waitForExistence(timeout: Self.stepBudget) else { throw StepFailure("the Verify sheet did not open") }
+            full.click()
+        }
+        let pause = app.buttons["mfo.row.pause"].firstMatch
+        let stop = app.buttons["mfo.row.stop"].firstMatch
+        try step("job_running") {
+            guard stop.waitForExistence(timeout: Self.stepBudget) else { throw StepFailure("no running Verify job with a Stop button") }
+        }
+        if pause.exists {
+            try step("pause") {
+                pause.click()
+                guard waitForLabel(pause, "Resume") else { throw StepFailure("Pause did not turn into Resume") }
+            }
+            try step("resume") {
+                pause.click()
+                guard waitForLabel(pause, "Pause") else { throw StepFailure("Resume did not turn back into Pause") }
+            }
+        } else {
+            report("pause_not_offered", ["jobs": 1])
+        }
+        try step("stop") {
+            stop.click()
+            let deadline = Date().addingTimeInterval(Self.stepBudget)
+            while stop.exists && Date() < deadline { Thread.sleep(forTimeInterval: 0.3) }
+            guard !stop.exists else { throw StepFailure("the job still offers Stop after Stop") }
+        }
+        XCTAssertEqual(app.state, .runningForeground, "The app is not running after stopping the Verify job.")
+        app.buttons["tab.Catalog"].click()
+        let after = try waitForLoadedCount(app)
+        XCTAssertEqual(after.total, base.total, "Verify changed the catalog total.")
+    }
+
+    @MainActor
+    private func waitForLabel(_ element: XCUIElement, _ want: String) -> Bool {
+        let deadline = Date().addingTimeInterval(Self.stepBudget)
+        while Date() < deadline {
+            if element.exists, element.label == want || (element.title == want) { return true }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        return false
+    }
+
     // MARK: - Monkey actions (safe ones only: nothing that writes, moves or asks a model)
 
     private enum MonkeyAction: String, CaseIterable {

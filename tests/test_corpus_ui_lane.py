@@ -73,7 +73,8 @@ for case, outcome in plan.get("cases", {}).items():
 sys.exit(plan.get("rc", 0))
 '''
 
-CASES = ['test1_showingCountFollowsFiltersSearchAndSelection', 'test2_mainTabsOpenAndReturnWithoutAHang', 'test3_seededMonkey']
+CASES = ['test1_showingCountFollowsFiltersSearchAndSelection', 'test2_mainTabsOpenAndReturnWithoutAHang', 'test3_seededMonkey',
+         'test4_verifyJobPausesResumesAndStops']
 
 
 class UIScene(LaneScene):
@@ -138,7 +139,7 @@ class UILaneTests(unittest.TestCase):
         code, lane = self.scene.go()
         self.assertEqual(code, cr.EXIT_GREEN, self.scene.summary())
         text = self.scene.summary()
-        self.assertTrue(text.startswith('corpus ui: GREEN at bbbbbbbbb — 3 cases: 3 passed, 0 failed, 0 skipped'), text)
+        self.assertTrue(text.startswith('corpus ui: GREEN at bbbbbbbbb — 4 cases: 4 passed, 0 failed, 0 skipped'), text)
         self.assertIn('seam: loaded records=3 volumes=1', text)
         self.assertIn('isolation: live App Support catalog files 4 unchanged · sealed catalog unchanged · corpus media 3 unchanged', text)
         self.assertIn('crash reports from VideoScan since the start: 0', text)

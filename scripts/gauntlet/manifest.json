@@ -37205,7 +37205,8 @@
       "tests": [
         "test1_showingCountFollowsFiltersSearchAndSelection",
         "test2_mainTabsOpenAndReturnWithoutAHang",
-        "test3_seededMonkey"
+        "test3_seededMonkey",
+        "test4_verifyJobPausesResumesAndStops"
       ]
     },
     {
