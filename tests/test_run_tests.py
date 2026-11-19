@@ -206,6 +206,15 @@ def test_a_big_group_also_gets_its_median_file():
     assert len(picks) == 2 and picks[0].tests == 1 and picks[1].tests > 1
 
 
+def test_a_python_group_takes_only_its_smallest_file():
+    files, man = tree_and_manifest()
+    for i in range(4):
+        man["assignments"].append({"kind": "python", "stage": "unit", "path": f"tests/test_gauntlet_n{i}.py",
+                                   "suites": [f"test_gauntlet_n{i}.py"], "tests": ["t"] * (10 + i)})
+    picks = [p for p in rt.select(man, files, rt.STAGES, {"python"}) if p.module == "py/gauntlet"]
+    assert [p.path for p in picks] == ["tests/test_gauntlet_publish.py"]
+
+
 def test_stage_and_kind_flags_narrow():
     files, man = tree_and_manifest()
     a = rt.parse_args(["--regression"])
@@ -315,6 +324,24 @@ def test_app_tests_over_ssh_go_through_the_gui_domain():
     assert "<string>a &amp;&amp; b &lt; c</string>" in pl            # XML-escaped, never raw
     assert "PATH" in pl and "SECRET" not in pl                         # a short env allow-list
     assert "<key>Label</key><string>com.videoscan.runtests.1.2</string>" in pl
+
+
+def test_the_corpus_call_keeps_ref_and_its_commit_together():
+    # M4 smoke 2026-11-19: "--limit 10" was spliced between --ref and the commit → "m4_run: unexpected argument 10"
+    c = rt.corpus_cmd(Path("/r"), "abc123", 10)
+    assert c[c.index("--ref") + 1] == "abc123"
+    assert c[c.index("--limit") + 1] == "10"
+    assert c[-1] == "--wait" and c[2:4] == ["run", "check"]
+    assert "--limit" not in rt.corpus_cmd(Path("/r"), "abc123", None)
+
+
+def test_the_caller_reads_the_hosts_own_total():
+    text = ("[\x1b[32m==========\x1b[0m] noise\n\r[ 5/9 ] "
+            "\x1b[31m[==========]\x1b[0m RED · lanes: GREEN 3 · RED 1 · 2320 tests · 17m14s\n"
+            "\x1b[31m[  FAILED  ]\x1b[0m CatalogTests.testX\n[  FAILED  ] app: exit 65\nlogs: /x\n")
+    n, nf, names = rt.remote_counts(text)
+    assert (n, nf) == (2320, 2) and names[0] == "CatalogTests.testX"
+    assert rt.remote_counts("ssh: connect to host ricksm4.local port 22: Operation timed out\n") == (0, 0, [])
 
 
 def test_commands_use_debug_the_side_dd_and_only_testing():

@@ -261,7 +261,11 @@ def select(manifest: dict, files: Sequence[str], stages: Sequence[str], kinds: s
     picks: List[Pick] = []
     for (k, mod, stage) in sorted(groups):
         cands = sorted(groups[(k, mod, stage)], key=lambda e: (len(e["tests"]), e["path"]))
-        chosen = cands if full else ([cands[0]] + ([cands[len(cands) // 2]] if len(cands) >= 4 else []))
+        # Swift groups also take their median-sized file (≥ 4 files): a substantial suite, not just the
+        # smallest. Python groups are already one per word (~70 files), and a median there cost 6.5 of
+        # the lane's 10 minutes on 11-19 (test_nightly_shell_selftests.py): smallest only.
+        median = k in ("app", "core") and len(cands) >= 4
+        chosen = cands if full else ([cands[0]] + ([cands[len(cands) // 2]] if median else []))
         for e in chosen:
             picks.append(Pick(k, mod, stage, e["path"], tuple(sorted(e.get("suites") or [])), len(e["tests"])))
     return picks
@@ -852,11 +856,28 @@ def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional
 CORPUS_SUMMARY = re.compile(r"^\s*(corpus \w+|OUTCOME|m4_run: |M4: )")
 
 
+def corpus_cmd(script_repo: Path, sha: str, limit: Optional[int]) -> List[str]:
+    return (["/bin/bash", str(script_repo / "scripts" / "corpus_run.sh"), "run", "check", "--ref", sha]
+            + (["--limit", str(limit)] if limit else []) + ["--wait"])
+
+
+REMOTE_TOTAL = re.compile(r"\[==========\] (GREEN|RED) · [^\n]*?· (\d+) tests · ")
+
+
+def remote_counts(text: str) -> Tuple[int, int, List[str]]:
+    """(tests, failed, failed names) from the remote run's own final block (its last ==== line)."""
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text).replace("\r", "\n")   # \r ends the live counter
+    ms = list(REMOTE_TOTAL.finditer(clean))
+    if not ms:
+        return 0, 0, []
+    last = ms[-1]
+    names = re.findall(r"^\[  FAILED  \] (.+)$", clean[last.end():], re.M)
+    return int(last.group(2)), len(names), names
+
+
 def run_corpus(out: Out, script_repo: Path, sha: str, run_dir: Path, verbose: bool, limit: Optional[int]) -> LaneResult:
     lane = LaneResult("corpus")
-    cmd = ["/bin/bash", str(script_repo / "scripts" / "corpus_run.sh"), "run", "check", "--ref", sha, "--wait"]
-    if limit:
-        cmd[5:5] = ["--limit", str(limit)]
+    cmd = corpus_cmd(script_repo, sha, limit)
     out.line("RUN", f"corpus check on the M4{f' (--limit {limit})' if limit else ''} — the harness's own summary lines only")
     r = Runner(out, run_dir, dict(os.environ))
     files = {"n": 0}
@@ -981,7 +1002,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"run_tests: cannot reach {target} over ssh (exit {p.returncode}). If the key is refused: "
                   f"ssh-copy-id {target}", file=sys.stderr)
             return 1
-        rc = subprocess.run(run).returncode
+        # Stream the host's bytes as they come (the live [ n/N ] counter has no newline), keeping
+        # the tail to read the host's own total. Memory: the last 256 KB.
+        proc = subprocess.Popen(run, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        tail = b""
+        assert proc.stdout is not None
+        try:
+            while True:
+                chunk = os.read(proc.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                tail = (tail + chunk)[-262144:]
+            rc = proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()                 # ssh: the host side gets a hangup and stops its own children
+            proc.wait()
+            return 1
         if not (corpus_ok and "corpus" in a.kinds):
             return rc
         # The corpus lane, from this Mac (corpus_run.sh is launched from the Ultra), after the
@@ -993,9 +1031,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           a.verbose, 10 if a.mode == "smoke" else None)
         if not lane.ran:
             out.line("NOT RUN", f"corpus: {lane.reason}", "NOT RUN")
-        code = summary(out, [LaneResult("M4 run", ran=True, passed=1 if rc == 0 else 0, failed=0 if rc == 0 else 1,
-                                        rc=rc, reason=f"M4 run exit {rc}"), lane], time.monotonic() - t0, run_dir)
-        return 3 if rc == 3 else code
+        if rc == 3:
+            return 3
+        n, nf, names = remote_counts(tail.decode("utf-8", "replace"))
+        host_lane = LaneResult(f"{HOST_NAMES[a.host]} smoke", ran=True, passed=max(n - nf, 0), failed=nf, rc=rc,
+                               reason=f"exit {rc}", failures=[Event("FAILED", x) for x in names])
+        return summary(out, [host_lane, lane], time.monotonic() - t0, run_dir)
 
     # ── on this Mac ──
     if a.dry_run:
