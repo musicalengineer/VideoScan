@@ -219,6 +219,44 @@ class DiskForecastTests(TestbedScene):
         self.assertTrue(th.forecast('suite', '', (0, 0)).startswith('REFUSE '), 'a disk it cannot measure is refused')
 
 
+class CodexFindings328Tests(TestbedScene):
+    """Codex #328 (2026-11-18), RED first."""
+
+    def test_3_a_disk_that_cannot_be_read_refuses_the_run(self):
+        self.env['VIDEOSCAN_TESTBED_FAKE_DISK'] = 'unreadable'
+        self.env['VIDEOSCAN_TESTBED_DISK_FAIL'] = '1'
+        p, log, _, _ = self.host('u1')
+        self.assertEqual(p.returncode, 4, log)
+        self.assertRegex(log, r'(?m)^OUTCOME REFUSED disk: ')
+        self.assertNotIn('START ', log)
+
+    def test_4_an_empty_or_withheld_corpus_summary_is_red(self):
+        self.corpus('check', exit_code=0, summary='')
+        (self.fake / 'corpus-check.json').write_text(json.dumps(dict(exit=0, facts=facts('check'), summary='\n')))
+        p, log, summary, _ = self.host('e1', 'corpus', '--corpus-lane', 'check')
+        self.assertRegex(log, r'(?m)^OUTCOME RED ')
+        self.assertIn('corpus check: RED its summary could not be read back', summary)
+        (self.fake / 'corpus-check.json').write_text(json.dumps(dict(exit=0, facts=facts('check'),
+                                                                     summary='clip.mov GREEN\n')))
+        p, log, summary, _ = self.host('e2', 'corpus', '--corpus-lane', 'check')
+        self.assertRegex(log, r'(?m)^OUTCOME RED ', 'a summary withheld whole is no summary')
+
+    def test_5_a_row_with_no_facts_or_no_count_is_never_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = pathlib.Path(tmp, 'row.json')
+            row.write_text(json.dumps(dict(passed=1, failed=0, skipped=0, core_passed=1, core_failed=0)))
+            check = pathlib.Path(tmp, 'check.json')
+            check.write_text(json.dumps(facts('check')))
+            lanes = pathlib.Path(tmp, 'lanes.tsv')
+            lanes.write_text(f'suite\tGREEN\t9\t{row}\ncorpus check\tGREEN\t9\t{check}\ncorpus proof\tGREEN\t1\t\n')
+            done = subprocess.run([sys.executable, str(SUMMARY), '--testbed', str(lanes), 'c' * 40, '9',
+                                   '--expect', 'suite,corpus check,corpus proof'], capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 1, done.stdout)
+            self.assertRegex(done.stdout, r'(?m)^  corpus proof  RED ')
+        got, _ = ms.testbed_block([('corpus check', 'GREEN', '5', '/nonexistent.json')], 'a' * 40, 9)
+        self.assertEqual(got, 'RED', 'a GREEN corpus lane with no facts has no number behind it')
+
+
 class HarnessTruthAuditTests(unittest.TestCase):
     """Item 5 (2026-11-18): can any lane print GREEN with zero tests, zero files or a missing log?
     Each answer is pinned here or in the file named:

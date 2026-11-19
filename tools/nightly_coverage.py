@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -267,17 +268,40 @@ def verdict(app_rc: int, core_rc: int, core: dict, app_files: "int | None" = Non
     return ("RED", "; ".join(why)) if why else ("ok", "")
 
 
-_SCRATCH = re.compile(r"^(app|core)-\d{4}-\d\d-\d\d\.(log|xcresult)$")
+_SCRATCH = re.compile(r"(app|core)-\d{4}-\d\d-\d\d\.(log|xcresult)")
 
 
-def tidy_outputs(out: Path, keep_logs: int = 7) -> str:
+def real_folders_below(home: Path, path: Path, under: str) -> bool:
+    """True when `path` is inside home/`under` and every component from `home` down to it is a
+    real folder, none a link (Codex #328 F1: a linked parent must not carry a deletion elsewhere)."""
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(home))
+    except ValueError:
+        return False
+    if rel.parts[:len(Path(under).parts)] != Path(under).parts:
+        return False
+    at = Path(os.path.abspath(home))
+    for part in rel.parts:
+        at = at / part
+        try:
+            if not stat.S_ISDIR(os.lstat(at).st_mode):        # a link is S_ISLNK, never S_ISDIR under lstat
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def tidy_outputs(out: Path, keep_logs: int = 7, home: "Path | None" = None) -> str:
     """This lane's own scratch, once the report is written (DECISIONS 2026-11-18): every
     app-<day>.xcresult goes (its numbers are in coverage-<day>.json), and only the newest
-    `keep_logs` app-/core- logs stay (~50 MB each). Only those names, directly in `out`; a link
-    is removed as itself, never followed (shutil.rmtree never descends one). The reports
+    `keep_logs` app-/core- logs stay (~50 MB each). Only names that match whole, directly in
+    `out`, and only when `out` is ~/Library/Logs/... reached through real folders (no link on the
+    way); an entry that is a link goes as itself, never followed. The reports
     (coverage-<day>.json/.md, latest.json) are kept. Worst case kept: 7 x 50 MB of logs."""
+    if not real_folders_below(home or Path.home(), out, "Library/Logs"):
+        return "tidy refused: the coverage folder is not reached through real folders under ~/Library/Logs"
     bundles = logs = 0
-    names = sorted(n for n in os.listdir(out) if _SCRATCH.match(n))
+    names = sorted(n for n in os.listdir(out) if _SCRATCH.fullmatch(n))
     for kind in ("app", "core"):
         kept = [n for n in names if n.startswith(kind + "-") and n.endswith(".log")][-keep_logs:]
         for name in names:

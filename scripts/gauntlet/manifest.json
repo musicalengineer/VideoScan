@@ -34668,6 +34668,9 @@
         "test_m4_run_faults.py"
       ],
       "tests": [
+        "test_3_a_disk_that_cannot_be_read_refuses_the_run",
+        "test_4_an_empty_or_withheld_corpus_summary_is_red",
+        "test_5_a_row_with_no_facts_or_no_count_is_never_green",
         "test_a_corpus_lane_that_exits_0_without_a_summary_is_red",
         "test_a_lanes_file_missing_a_lane_is_red",
         "test_a_link_that_comes_back_still_reports_the_runs_verdict",
@@ -34846,6 +34849,8 @@
         "test_a_failed_core_suite_is_red_even_when_coverage_was_measured",
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
         "test_an_app_run_that_measured_nothing_is_red",
+        "test_codex_328_1_a_linked_folder_on_the_way_is_refused_whole",
+        "test_codex_328_2_only_names_that_match_whole_are_scratch",
         "test_core_codecov_json_keeps_only_core_sources",
         "test_core_counts_read_both_runners_and_name_the_failed_tests",
         "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",
@@ -36033,6 +36038,7 @@
         "test_alert_shouts_findings_with_the_list",
         "test_an_unexplained_suppression_is_refused",
         "test_catalog_subset_comes_from_the_gauntlet_manifest",
+        "test_codex_328_1_a_linked_cache_root_or_parent_is_never_entered",
         "test_commands_carry_the_sanitizer_the_configuration_and_the_subset",
         "test_each_frame_is_ours_in_tests_ours_in_product_or_not_ours",
         "test_env_hands_the_files_to_the_runtime_and_the_hosted_test_process",

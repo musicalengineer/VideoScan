@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -227,8 +228,8 @@ def _night(out, day, xcresult=True):
 
 
 def test_tidy_drops_every_result_bundle_and_keeps_a_week_of_logs(tmp_path):
-    out = tmp_path / "coverage"
-    out.mkdir()
+    out = tmp_path / "Library" / "Logs" / "VideoScan" / "coverage"
+    out.mkdir(parents=True)
     days = [f"2026-11-{d:02d}" for d in range(1, 13)]
     for day in days:
         _night(out, day)
@@ -237,7 +238,7 @@ def test_tidy_drops_every_result_bundle_and_keeps_a_week_of_logs(tmp_path):
     (outside / "Data").mkdir(parents=True)
     (outside / "Data" / "keep").write_text("keep")
     os.symlink(outside, out / "app-2026-10-01.xcresult")
-    words = nc.tidy_outputs(out, keep_logs=7)
+    words = nc.tidy_outputs(out, keep_logs=7, home=tmp_path)
     left = sorted(p.name for p in out.iterdir())
     assert not [n for n in left if n.endswith(".xcresult")], left
     assert [n for n in left if n.startswith("app-") and n.endswith(".log")] == [f"app-{d}.log" for d in days[-7:]]
@@ -264,3 +265,40 @@ def test_an_app_run_that_measured_nothing_is_red():
     assert nc.verdict(app_rc=0, core_rc=0, core=core, app_files=412) == ("ok", "")
     text = (ROOT / "tools" / "nightly_coverage.py").read_text()
     assert "app_files=app_count" in text
+
+
+# Codex #328 (2026-11-18), RED first.
+
+def _home_with_logs(tmp_path):
+    out = tmp_path / "home" / "Library" / "Logs" / "VideoScan" / "coverage"
+    out.mkdir(parents=True)
+    return tmp_path / "home", out
+
+
+def test_codex_328_1_a_linked_folder_on_the_way_is_refused_whole(tmp_path):
+    home, out = _home_with_logs(tmp_path)
+    corpus = tmp_path / "corpus"
+    (corpus / "app-2026-11-18.xcresult").mkdir(parents=True)
+    (corpus / "app-2026-11-18.xcresult" / "keep").write_text("keep")
+    shutil.rmtree(out)
+    os.symlink(corpus, out)                                    # the folder itself is a link
+    words = nc.tidy_outputs(out, home=home)
+    assert (corpus / "app-2026-11-18.xcresult" / "keep").exists() and "refused" in words
+    os.unlink(out)
+    logs = home / "Library" / "Logs" / "VideoScan"
+    shutil.rmtree(logs)
+    os.symlink(corpus.parent, logs)                            # a parent is a link
+    (corpus.parent / "coverage").mkdir(exist_ok=True)
+    (corpus.parent / "coverage" / "app-2026-11-17.xcresult").mkdir()
+    words = nc.tidy_outputs(logs / "coverage", home=home)
+    assert (corpus.parent / "coverage" / "app-2026-11-17.xcresult").exists() and "refused" in words
+
+
+def test_codex_328_2_only_names_that_match_whole_are_scratch(tmp_path):
+    home, out = _home_with_logs(tmp_path)
+    odd = out / "app-2026-11-18.log\n"
+    odd.write_text("not ours")
+    for d in range(1, 10):
+        (out / f"app-2026-11-0{d}.log").write_text("x")
+    nc.tidy_outputs(out, keep_logs=1, home=home)
+    assert odd.exists()

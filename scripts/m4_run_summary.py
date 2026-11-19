@@ -406,14 +406,25 @@ def corpus_lane_lines(facts):
     return counts, more
 
 
+def _has_number(name, facts):
+    """A lane that says GREEN or AMBER carries its counts: the suite both lanes counts, a corpus lane its files."""
+    if not isinstance(facts, dict):
+        return False
+    if name == 'suite':
+        return suite_counts(facts) != 'no count' and suite_counts(facts, 'core_') != 'no count'
+    return bool(_count(facts, 'files'))
+
+
 def testbed_block(rows, sha, seconds):
     """(verdict, [lines]) for the lanes of one testbed run: [(name, verdict, seconds, facts path)]."""
     worst = GREEN if rows else RED
     lines = []
     for name, verdict, secs, facts_path in rows:
-        facts = _load(facts_path)
+        facts = _load(facts_path) if facts_path else None
         if verdict not in TESTBED_RANK:
             verdict = RED                                  # a word this file does not know is never a pass
+        if verdict in (GREEN, AMBER) and not _has_number(name, facts):
+            verdict = RED                                  # a pass with no number behind it is not one (Codex #328 F5)
         if TESTBED_RANK[verdict] > TESTBED_RANK[worst]:
             worst = verdict
         if name == 'suite':

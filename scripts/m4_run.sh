@@ -712,7 +712,17 @@ host_corpus() {   # host_corpus <sha> <stamp>
     case "$rc" in
         0|1|3|4)
             if [ -f "$cout/corpus-summary.txt" ]; then
-                python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout" >>"$OUT/summary.txt"
+                # Read back through the show door; an empty summary, a refusal of the door or a summary
+                # withheld whole is no summary (Codex #328 F4).
+                local shown shown_rc
+                shown="$(python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout")"; shown_rc=$?
+                if [ "$shown_rc" = 0 ] && [ -n "$(printf '%s' "$shown" | tr -d '[:space:]')" ] \
+                        && printf '%s\n' "$shown" | grep -qv '^(\(withheld\|a line was withheld\)'; then
+                    printf '%s\n' "$shown" >>"$OUT/summary.txt"
+                else
+                    echo "corpus $CORPUS_LANE: RED its summary could not be read back (empty or withheld; rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
+                    rc=1
+                fi
             else
                 # A lane that reported nothing is RED whatever its exit said (a lane with no number is red).
                 echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
@@ -824,9 +834,11 @@ host_main() {   # __host <lane> <sha> <stamp>
     if [ -n "$clean_tool" ]; then
         local forecast
         forecast="$(python3 "$clean_tool" forecast "$H_ROOT" "$lane" "$CORPUS_LANE" 2>&1)"
+        # Only a forecast that says OK lets the run go on: a refusal, an error or no answer refuses (Codex #328 F3).
         case "$forecast" in
+            "OK disk:"*) echo "$forecast" ;;
             REFUSE*) echo "OUTCOME REFUSED ${forecast#REFUSE }; nothing was started"; exit 4 ;;
-            *) echo "$forecast" ;;
+            *) echo "OUTCOME REFUSED disk: the forecast gave no answer (${forecast:0:80}); nothing was started"; exit 4 ;;
         esac
     fi
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"

@@ -710,6 +710,8 @@ def disk_space(path: str):
     """(free bytes, total bytes) of the volume holding `path`: what df calls Available and Size.
     Test hook: VIDEOSCAN_TESTBED_FAKE_DISK=<total>:<other> makes free = total - other - the bytes
     under the folder above <root> (a fake HOME; each file once), so deleting there frees space."""
+    if os.environ.get("VIDEOSCAN_TESTBED_DISK_FAIL") == "1":   # test hook: a volume that cannot be read
+        raise OSError("the disk could not be read (test hook)")
     fake = re.fullmatch(r"(\d+):(\d+)", os.environ.get("VIDEOSCAN_TESTBED_FAKE_DISK", ""))
     if fake:
         home = os.path.dirname(os.path.abspath(path))
@@ -1272,7 +1274,11 @@ def main(argv: list) -> int:
             print("sample refused: %s" % error, file=sys.stderr)
             return 2
     if len(argv) in (3, 4) and argv[0] == "forecast":
-        print(forecast(argv[2], argv[3] if len(argv) == 4 else "", disk_space(argv[1])))
+        try:
+            line = forecast(argv[2], argv[3] if len(argv) == 4 else "", disk_space(argv[1]))
+        except Exception as error:                         # noqa: BLE001 - a disk it cannot read is refused (Codex #328 F3)
+            line = "REFUSE disk: the disk could not be read (%s)" % type(error).__name__
+        print(line)
         return 0
     if len(argv) == 3 and argv[0] == "status-json":
         print(status_json(argv[1], argv[2]))

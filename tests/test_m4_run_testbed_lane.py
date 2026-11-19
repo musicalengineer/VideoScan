@@ -205,13 +205,15 @@ class HostTestbedLaneTests(TestbedScene):
         self.assertTrue((out / 'corpus-check' / 'corpus-summary.txt').exists())
 
     def test_a_poisoned_facts_file_does_not_stop_the_block_or_pass(self):
+        # Codex #328 F5 (2026-11-18): a lane that says GREEN or AMBER with no readable count behind it is RED
+        # (was: GREEN / AMBER with "no facts file" — a pass with no number).
         self.corpus('check', lane_facts='{not json')
         self.corpus('proof', exit_code=3, verdict='AMBER', lane_facts=dict(verdict='AMBER', files='many', engines='x', against=7))
         p, log, summary, _ = self.host('p1')
-        self.assertEqual(p.returncode, 0, log)
-        self.assertTrue(summary.startswith('testbed: AMBER at '), summary)
-        self.assertRegex(summary, r"(?m)^  corpus check  GREEN +\d+s  no facts file")
-        self.assertRegex(summary, r"(?m)^  corpus proof  AMBER +\d+s  no count of files — $")
+        self.assertEqual(p.returncode, 1, log)
+        self.assertTrue(summary.startswith('testbed: RED at '), summary)
+        self.assertRegex(summary, r"(?m)^  corpus check  RED +\d+s  no facts file")
+        self.assertRegex(summary, r"(?m)^  corpus proof  RED +\d+s  no count of files — $")
 
     def test_a_held_lock_refuses_before_touching_anything(self):
         lock = self.root / 'lock'
@@ -288,8 +290,10 @@ class BlockTests(unittest.TestCase):
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             lanes = pathlib.Path(tmp, 'lanes.tsv')
+            good = pathlib.Path(tmp, 'check.json')
+            good.write_text(json.dumps(facts('check')))
             for verdict, want in (('GREEN', 0), ('AMBER', 3), ('NORUN', 4), ('RED', 1)):
-                lanes.write_text(f'corpus check\t{verdict}\t7\t{tmp}/none.json\n')
+                lanes.write_text(f'corpus check\t{verdict}\t7\t{good}\n')
                 done = subprocess.run([sys.executable, str(SCRIPTS / 'm4_run_summary.py'), '--testbed', str(lanes), 'c' * 40, '9'],
                                       capture_output=True, text=True, timeout=60)
                 self.assertEqual(done.returncode, want, done.stdout)

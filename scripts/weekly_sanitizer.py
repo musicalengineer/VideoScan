@@ -646,12 +646,29 @@ def run_target(cmd: List[str], log_path: Path, env: dict, deadline: float) -> tu
     return proc.returncode, timed_out
 
 
-def drop_derived_data(dd_root: Path, names: List[str]) -> int:
+def drop_derived_data(dd_root: Path, names: List[str], home: Optional[Path] = None) -> int:
     """A weekly run's own DerivedData, once its row is written (DECISIONS 2026-11-18: a run's
-    scratch goes after its summary). Only the named folders directly in `dd_root`, each a real
-    folder: a link is left as it is (never followed), a name with a slash or "." is never one of
-    ours. Returns the bytes given back. Worst case kept between runs: nothing."""
+    scratch goes after its summary). Only when `dd_root` is under ~/Library/Caches and reached
+    through real folders, none a link (Codex #328 F1); then only the named folders directly in
+    it, each a real folder: a link is left as it is (never followed), a name with a slash or "."
+    is never one of ours. Returns the bytes given back. Worst case kept between runs: nothing."""
     import shutil
+    import stat
+    base = Path(os.path.abspath(home or Path.home()))
+    try:
+        rel = Path(os.path.abspath(dd_root)).relative_to(base)
+    except ValueError:
+        return 0
+    if rel.parts[:2] != ("Library", "Caches"):
+        return 0
+    at = base
+    for part in rel.parts:
+        at = at / part
+        try:
+            if not stat.S_ISDIR(os.lstat(at).st_mode):
+                return 0
+        except OSError:
+            return 0
     freed = 0
     for name in names:
         if not name or "/" in name or name.startswith("."):

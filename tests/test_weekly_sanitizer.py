@@ -930,7 +930,7 @@ def test_xcodebuilds_list_ends_at_its_blank_line_and_is_bounded():
 # (--source analysis-lane, its own --dd-root) keeps its warm cache.
 
 def test_a_weekly_runs_derived_data_goes_after_its_row_and_nothing_else(tmp_path):
-    root = tmp_path / "sanitizer-dd"
+    root = tmp_path / "Library" / "Caches" / "VideoScan" / "sanitizer-dd"
     for name in ("address", "address-core", "thread", "address-release"):
         (root / name / "Build").mkdir(parents=True)
         (root / name / "Build" / "blob").write_bytes(b"d" * 4096)
@@ -938,7 +938,7 @@ def test_a_weekly_runs_derived_data_goes_after_its_row_and_nothing_else(tmp_path
     outside.mkdir()
     (outside / "keep").write_text("keep")
     os.symlink(outside, root / "thread-core")
-    freed = ws.drop_derived_data(root, ["address", "address-core", "thread-core", "../outside", "absent"])
+    freed = ws.drop_derived_data(root, ["address", "address-core", "thread-core", "../outside", "absent"], home=tmp_path)
     assert not (root / "address").exists() and not (root / "address-core").exists()
     assert (root / "thread" / "Build" / "blob").exists() and (root / "address-release").exists(), "only the run's own"
     assert (outside / "keep").read_text() == "keep" and (root / "thread-core").is_symlink(), "a link is never followed"
@@ -950,3 +950,23 @@ def test_sensor_main_drops_only_a_weekly_runs_cache_after_writing_its_row():
     last_row = text.rindex("    write_row(kind, row, logdir)\n")
     assert text.index("drop_derived_data(args.dd_root,") > last_row, "the cache goes only after the row is written"
     assert 'args.source == "weekly" and not args.keep_dd' in text
+
+
+def test_codex_328_1_a_linked_cache_root_or_parent_is_never_entered(tmp_path):
+    corpus = tmp_path / "corpus"
+    (corpus / "address").mkdir(parents=True)
+    (corpus / "address" / "keep").write_text("keep")
+    caches = tmp_path / "Library" / "Caches" / "VideoScan"
+    caches.mkdir(parents=True)
+    os.symlink(corpus, caches / "sanitizer-dd")               # the root is a link
+    assert ws.drop_derived_data(caches / "sanitizer-dd", ["address"], home=tmp_path) == 0
+    assert (corpus / "address" / "keep").exists()
+    os.unlink(caches / "sanitizer-dd")
+    import shutil
+    shutil.rmtree(caches)
+    (corpus / "sanitizer-dd" / "address").mkdir(parents=True)
+    (corpus / "sanitizer-dd" / "address" / "keep").write_text("keep")
+    os.symlink(corpus, caches)                                 # a parent is a link
+    assert ws.drop_derived_data(caches / "sanitizer-dd", ["address"], home=tmp_path) == 0
+    assert (corpus / "sanitizer-dd" / "address" / "keep").exists()
+    assert ws.drop_derived_data(tmp_path / "elsewhere", ["address"], home=tmp_path) == 0, "only under ~/Library/Caches"
