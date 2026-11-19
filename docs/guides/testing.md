@@ -420,6 +420,7 @@ name it in the report. The laptops (M5 Pro, M1) take overflow and are off the ni
 
 | What | Where | How to start it |
 |---|---|---|
+| **Run the tests yourself and watch** (smoke: a few suites per module and stage) | any Mac, or `--host m4\|ultra\|m5pro\|m1` | `scripts/run_tests.sh [--verbose]` — see "Run the tests yourself" below |
 | Sensor lane (pre-merge for app code; ~600 tests, ~70 s) | any Mac, your own DerivedData | `scripts/run_sensors.sh --derived-data <abs dd>`; it must print `sensor lane GREEN (N tests)` |
 | Catalog suites (catalog work) | any Mac | `scripts/run_catalog_tests.sh` |
 | Core | any Mac | `swift test --package-path <abs>/VideoScan/VideoScanCore` |
@@ -434,6 +435,33 @@ name it in the report. The laptops (M5 Pro, M1) take overflow and are off the ni
 | Nightly (app, Core, Hallie replay, analysis lane) | both Studios at 02:00 on the rota | launchd, installed by `scripts/install_nightly.sh`; the rota is `scripts/nightly_rota.json`; timing budgets are strict only there (`VIDEOSCAN_TIMING_STRICT=1`, DECISIONS 2026-10-31) |
 | Nightly UI smoke on the M4 | ruled 2026-10-28, not yet nightly | five stale flows first (#408; BACKLOG "Nightly UI smoke on the M4") |
 | Nightly adversarial review | built | `tools/adversarial_nightly.py` reads the invariants in `docs/practices/invariants.md` (`tools/invariants.py` parses them; `tests/test_invariants_coverage.py` pins 8 areas); its reviews are in `docs/reviews/codex.md` |
+
+### Run the tests yourself (`scripts/run_tests.sh`, 2026-11-19)
+
+A thin front door over the runners above. It only selects and displays, so there is nothing to maintain per feature.
+`scripts/run_tests.py`'s docstring is the reference.
+
+    scripts/run_tests.sh                     # smoke, on this Mac, at this checkout's HEAD commit
+    scripts/run_tests.sh --verbose           # one coloured line per test, googletest-style
+    scripts/run_tests.sh --host m4 -v        # the same on the M4, streamed live over ssh (+ corpus check --limit 10 from the Ultra)
+    scripts/run_tests.sh --list              # what the smoke runs, by module and stage
+    scripts/run_tests.sh --full              # everything: nightly_local_tests.sh --on-demand + run_python_tests.sh
+
+- **What the smoke runs.** It reads `scripts/gauntlet/manifest.json` at the commit and takes, for each module and stage,
+  the test file with the fewest tests, plus (app and Core) the median one when the group has four or more files. That is about 2,000
+  tests across app (Debug), Core (`swift test`) and Python, in the unit, regression and integration stages. Performance
+  and stress are left out unless you add `--perf` or `--stress`, because Core's 100k-row scale tests alone take minutes. UI tests are not included: they need the GUI session (#408).
+  The hallie stage is not included either: it belongs to the hallie eval. Narrow the run with `--unit --regression --integration --perf --stress --python --corpus`.
+- **Where it builds.** Always in the side worktree `~/dev/VideoScan-wt/run-all`, detached at the commit, with DerivedData
+  `~/Library/Caches/videoscan-runall-dd`. It never builds in your checkout or in Xcode's DerivedData. Uncommitted changes
+  are not tested, and the plan line says so. A ref given with `--host` must be on origin.
+- **Before it starts** it prints the plan in one line and waits 5 s, so Ctrl-C can cancel (`--yes` skips the wait).
+  On the M4 it takes the testbed lock and exits 3 if a run already holds it. It also refuses the 01:30–06:00 nightly window (`--force` overrides).
+- **Verdict.** The run exits 0 only when every lane that ran is green. A failure, a lane that ran zero tests, or a run
+  where nothing ran is RED (exit 1). A lane that could not run says NOT RUN and why, and is never counted as green.
+  The raw logs go to `~/Library/Caches/videoscan-runall/runs/<stamp>/` (the newest 20 are kept), and the path is printed at the end.
+- **Laptops.** To use `--host m5pro|m1` from the Ultra, the laptop must accept the Ultra's key (`ssh-copy-id ricksm5.local`).
+  Running `scripts/run_tests.sh` directly on the laptop always works.
 
 **Gotchas that still bite** (each proven on the fleet; detail in the archived notes above):
 - **UI automation needs an unlocked, awake GUI session.** XCUITest's `testmanagerd` cannot enable automation mode on a
