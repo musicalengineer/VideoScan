@@ -38,9 +38,9 @@ names. Result bundles, xccov views and LCOV live in ~/corpus/work/<stamp>-covera
 it at the end; the report stays under ~/corpus/reports/coverage/<commit>/<stamp>/ on the M4.
 
 Worst-case resources: the instrumented DerivedData (5.6 GB) and Core scratch (1.3 GB), measured
-2026-11-18, kept between runs (one of each; SwiftPM leaves its raw profiles there, a few MB per
-run). testbed_host.py clean does NOT know these two caches: below the 50% floor they are not
-reclaimed (a follow-up); a cold instrumented build took 191 s on the M4. Per run, in the
+2026-11-18. They are scratch, not warm caches: testbed_host.py clean removes both at the start and
+the end of every run on the M4 (SCRATCH_CACHES; the lane is opt-in and rare, and a cold
+instrumented build took 191 s), so each coverage run builds cold. Per run, in the
 work folder and removed at the end: four or more result bundles (~0.1-0.5 GB each), their xccov
 views (report ~15 MB, archive ~45 MB each; measured 2026-11-18) and Core's LCOV. Memory: one
 archive view parsed at a time (~45 MB of JSON, under 1 GB in Python) plus the sets of covered

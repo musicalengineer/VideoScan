@@ -278,6 +278,58 @@ class FloorTests(CleanCase):
         self.assertIn('floor 50%, UNDER by 20.0 GB', line)
 
 
+class CoverageCacheTests(CleanCase):
+    """The opt-in coverage lane's two caches (scripts/corpus_coverage.py: <dd>-coverage 5.6 GB and
+    <dd>-coverage-core 1.3 GB, measured 2026-11-18) are scratch, not warm caches: the lane is run
+    by hand, rarely, and a cold instrumented build costs ~3 min. Every cleanup removes them."""
+
+    def coverage_caches(self, size=50_000):
+        made = []
+        for name in ('videoscan-m4run-dd-coverage', 'videoscan-m4run-dd-coverage-core'):
+            path = self.s.home / 'Library/Caches' / name
+            (path / 'Build').mkdir(parents=True)
+            (path / 'Build' / 'blob').write_bytes(b'v' * size)
+            made.append(path)
+        return made
+
+    def test_the_coverage_caches_go_at_every_cleanup_whatever_the_disk_says(self):
+        caches = self.coverage_caches()
+        self.s.cache(0, 5000)
+        self.s.cache(1, 5000)
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))     # 100% free: far above the floor
+        for cache in caches:
+            self.assertFalse(cache.exists(), f'{cache.name} was left behind')
+        self.assertTrue(all(c.exists() for c in self.s.caches), 'the warm lane caches stay above the floor')
+        self.assertRegex(line, r'coverage caches [\d.]+ GB \(2\)')
+
+    def test_a_coverage_cache_that_is_a_link_is_never_followed(self):
+        outside = pathlib.Path(self.tmp.name, 'outside-cov')
+        (outside / 'Build').mkdir(parents=True)
+        (outside / 'Build' / 'keep').write_text('keep')
+        (self.s.home / 'Library/Caches').mkdir(parents=True, exist_ok=True)
+        link = self.s.home / 'Library/Caches/videoscan-m4run-dd-coverage'
+        os.symlink(outside, link)
+        corpus_alias = self.s.home / 'Library/Caches/videoscan-m4run-dd-coverage-core'
+        os.symlink(self.s.corpus / 'media', corpus_alias)
+        before = self.s.protected_snapshot()
+        run = self.current()
+        self.clean(run, 'end', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertEqual((outside / 'Build' / 'keep').read_text(), 'keep')
+        self.assertTrue(link.is_symlink() and corpus_alias.is_symlink(), 'a link is left as it is')
+        self.assertEqual(self.s.protected_snapshot(), before)
+
+    def test_only_the_two_known_coverage_names_are_scratch(self):
+        for name in ('videoscan-m4run-dd-coverage-old', 'videoscan-nightly-dd-coverage', 'VideoScan'):
+            path = self.s.home / 'Library/Caches' / name
+            path.mkdir(parents=True)
+            (path / 'blob').write_bytes(b'k' * 100)
+        run = self.current()
+        self.clean(run, 'start', full(self.s.home))
+        for name in ('videoscan-m4run-dd-coverage-old', 'videoscan-nightly-dd-coverage', 'VideoScan'):
+            self.assertTrue((self.s.home / 'Library/Caches' / name / 'blob').exists(), name)
+
+
 class ConfinementTests(CleanCase):
 
     def test_the_corpus_protected_set_is_never_touched(self):

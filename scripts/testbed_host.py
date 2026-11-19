@@ -225,7 +225,8 @@ def prune(root: str, current: str = "", keep: int = 0) -> str:
 #   <root>/bin/<stamp>              ~0.2 MB each        corpus work/<stamp>-<lane>: removed by
 #   videoscan-m4run-dd              5.5 GB (ui + corpus lanes, Debug)       the lane itself;
 #   videoscan-m4run-dd-suite        7.3 GB (suite lane: Release app + Core) verbs clones are
-#                                                                           APFS clones (0 B)
+#   videoscan-m4run-dd-coverage     5.6 GB  } the opt-in coverage lane:     APFS clones (0 B)
+#   videoscan-m4run-dd-coverage-core 1.3 GB } removed at every cleanup
 # A run may use as much disk as it needs. Once it is summarized its scratch goes; kept: run.log,
 # summary.txt, the verdict files and a 200-line tail of each other log, under its own name, so a
 # summary that names a log still names a file (KB per run). No run folder is kept whole: a whole
@@ -246,6 +247,12 @@ KEEP_FILES = frozenset({"run.log", "summary.txt", "testbed-block.txt", "lanes.ts
                         "corpus-verdict.json", "disk-start.txt", "disk-low.txt", "tidy.txt"})
 KEEP_SUFFIXES = (".tests.tsv",)
 CORPUS_MARKER = "THIS_IS_TEST_DATA.txt"
+# ~/Library/Caches/videoscan-m4run<suffix>. WARM: the lanes run often and a cold build costs 10-25 min, so
+# they go only when that reaches the floor. SCRATCH: the opt-in coverage lane (scripts/corpus_coverage.py:
+# 5.6 GB instrumented DerivedData + 1.3 GB Core scratch, measured 2026-11-18; a cold build ~3 min) is
+# run by hand and rarely, so its caches go at every cleanup, whatever the disk says.
+WARM_CACHES = ("-dd-suite", "-dd")
+SCRATCH_CACHES = ("-dd-coverage", "-dd-coverage-core")
 # Never a target, whatever a path resolved through: the corpus sources, its documents, its stored
 # reports and accepted baselines, its sealed state, the read-only share mount.
 CORPUS_PROTECTED = ("media", "live", "state", "reports", "corpus-sha-v1.txt", "corpus-manifest-v1.json",
@@ -330,7 +337,8 @@ def _read_at(dir_fd: int, name: str, limit: int) -> bytes:
 class Confine:
     """The folders cleanup may delete in, each opened from the home folder down (see above):
     ~/m4run/out (the run folders), ~/corpus/work (a marked corpus whose protected names are all
-    themselves), and ~/Library/Caches/videoscan-m4run-dd and -dd-suite. <root> must be exactly
+    themselves), and ~/Library/Caches/videoscan-m4run-dd, -dd-suite, -dd-coverage and
+    -dd-coverage-core (by those fixed names, each a real folder). <root> must be exactly
     $HOME/m4run: the same home every path of m4_run.sh comes from, and the M4 only (Codex #322 F3)."""
 
     def __init__(self, root: str, home: str = ""):
@@ -385,17 +393,18 @@ class Confine:
                     self.work_fd = None
         self.work = os.path.join(corpus, "work")
         self.caches_dir = os.path.join(self.home, "Library", "Caches")
-        self.caches_fd, self.caches = None, []
+        self.caches_fd, self.caches, self.scratch = None, [], []
         try:
             library = self._keep(_open_dir("Library", self.home_fd, self.dev))
             self.caches_fd = self._keep(_open_dir("Caches", library, self.dev))
-            for suffix in ("-dd-suite", "-dd"):
+            for suffix in WARM_CACHES + SCRATCH_CACHES:
                 name = "videoscan-m4run" + suffix
                 info = _lstat_at(self.caches_fd, name)
                 if info is not None and stat.S_ISDIR(info.st_mode) and not self.guarded(os.path.join(self.caches_dir, name)):
-                    self.caches.append(name)                 # a cache that holds a protected destination is not one (Codex #323 R2)
+                    # a cache that holds a protected destination is not one (Codex #323 R2); a link is not a folder here
+                    (self.caches if suffix in WARM_CACHES else self.scratch).append(name)
         except Refused:
-            self.caches_fd, self.caches = None, []
+            self.caches_fd, self.caches, self.scratch = None, [], []
         # The roots as the kernel names them (F_GETPATH), so a later where-is-it answer compares like with like;
         # each must still be where it was authorized: a fresh open from home finds the same folder, and the
         # kernel name is that path (Codex #325 T3: a root moved while it was being opened is refused).
@@ -460,10 +469,11 @@ class Confine:
         if not where:
             return False
         roots = [self.out_where] + ([self.work_where] if self.work_where else [])
-        caches = [os.path.join(self.caches_where, name) for name in self.caches] if self.caches_where else []
+        named = self.caches + self.scratch
+        caches = [os.path.join(self.caches_where, name) for name in named] if self.caches_where else []
         # The three parents themselves are allowed: in them this code acts only on names it chose
-        # (<stamp>-<lane> run and work folders, its own two caches).
-        parents = roots + ([self.caches_where] if self.caches and self.caches_where else [])
+        # (<stamp>-<lane> run and work folders, its own caches by their fixed names).
+        parents = roots + ([self.caches_where] if named and self.caches_where else [])
         ok = (where in parents or any(where.startswith(r + "/") for r in roots)
               or any(where == c or where.startswith(c + "/") for c in caches))
         return ok and not self.guarded(where)
@@ -749,7 +759,8 @@ def clean(root: str, current: str, phase: str, disk=disk_space) -> str:
     """Under the lock, at a run start (phase "start") or once it is summarized ("end"). In order:
       1. end only: this run is tidied;
       2. every OTHER finished run (its run.log has an OUTCOME) not yet tidied is tidied;
-      3. every ~/corpus/work/<stamp>-<lane> folder goes (no corpus lane runs outside the lock);
+      3. every ~/corpus/work/<stamp>-<lane> folder goes (no corpus lane runs outside the lock),
+         and the two caches of the coverage lane (SCRATCH_CACHES);
       4. below the floor (FLOOR of the volume free): unfinished runs other than this one, oldest
          first, are tidied until the floor is met;
       5. still below it: the two build caches go, but only when what they would give back reaches
@@ -810,6 +821,14 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
                 work_folders += 1
             else:
                 refused += 1
+    scratch_bytes = scratch_caches = 0
+    for name in conf.scratch:                                # the coverage lane caches: scratch, whatever the disk says
+        got, whole = conf.remove(conf.caches_fd, name)
+        scratch_bytes += got
+        if whole:
+            scratch_caches += 1
+        else:
+            refused += 1
     free, total = disk(root)
     target = int(total * FLOOR)
     for name in unfinished:                                  # oldest first
@@ -825,7 +844,9 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
         parts.append("older runs %.2f GB (%d)" % (old_bytes / 1e9, old_runs))
     if work_folders:
         parts.append("corpus work %.2f GB (%d)" % (work_bytes / 1e9, work_folders))
-    removed += old_bytes + work_bytes
+    if scratch_caches:
+        parts.append("coverage caches %.2f GB (%d)" % (scratch_bytes / 1e9, scratch_caches))
+    removed += old_bytes + work_bytes + scratch_bytes
     caches_note = ""
     if free < target and conf.caches:
         sizes = [0 if blocked else size for size, blocked in (conf.scan_at(conf.caches_fd, name) for name in conf.caches)]

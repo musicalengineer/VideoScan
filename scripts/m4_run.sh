@@ -44,7 +44,8 @@
 #         It refuses any host but the M4 and any state root outside ~/corpus/state.
 #         --corpus-lane coverage (opt-in, ~2 h): check, proof and verbs on an instrumented
 #         build beside the same build's suite and Core's suite; what of our code only the
-#         corpus runs (scripts/corpus_coverage.py; caches <DerivedData>-coverage{,-core}).
+#         corpus runs (scripts/corpus_coverage.py; caches <DerivedData>-coverage{,-core}, which
+#         testbed_host.py clean removes at every run start and end: scratch, not warm).
 #   testbed  everything, one verdict (M4 only): the suite lane, then corpus `check`, then corpus
 #         `proof`, under ONE hold of the lock, at one commit. The lanes are the ones above (host_suite,
 #         host_corpus — no second implementation); each still runs when an earlier one is RED. The

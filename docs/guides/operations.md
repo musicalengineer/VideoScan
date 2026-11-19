@@ -82,12 +82,14 @@ corpus lane's files are in `<out>/corpus-<lane>/`. `verbs` (§1a) is not part of
   cut to its last 200 lines under its own name; `run.log`, `summary.txt`, the verdict files and `*.tests.tsv` stay
   (a few KB; `tidy.txt` records it). The summary gets one line, e.g. `disk: free 52% after cleanup (lowest 38% during
   the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB`. At the start and the end, under the
-  lock: finished runs not yet tidied are tidied and `~/corpus/work/<stamp>-<lane>` folders removed; below 50% free,
+  lock: finished runs not yet tidied are tidied, `~/corpus/work/<stamp>-<lane>` folders removed, and the coverage
+  lane's two caches (`videoscan-m4run-dd-coverage` 5.6 GB, `-dd-coverage-core` 1.3 GB: an opt-in lane, a cold build
+  ~3 min, so scratch rather than warm) removed whatever the disk says; below 50% free,
   unfinished runs go oldest first, then `videoscan-<root>-dd-suite` and `-dd` — only when that reaches the floor
   (a cold build costs 10-25 min). M4 only (`<root>` must be `$HOME/m4run`). Every folder is opened from `$HOME` down
   with `O_NOFOLLOW` on the home volume, and every unlink, rename and write is relative to those descriptors (Codex
   #322: a name swapped for a link after a check cannot redirect anything; a mount is never entered); the only folders
-  it holds are `~/m4run/out`, `~/corpus/work` and those two caches. A `~/corpus` that is not a folder of its own, or
+  it holds are `~/m4run/out`, `~/corpus/work` and those four caches, each by its fixed name and only as a real folder. A `~/corpus` that is not a folder of its own, or
   a protected corpus name that is a link, stops the whole cleanup (the disk line says `cleanup refused`); a tree that
   cannot be scanned whole, or holds a protected folder by inode, is not touched.
   Never the corpus media, documents, reports, state or `live/`; no lock flag is ever cleared (a locked file stays and
