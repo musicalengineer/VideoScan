@@ -28,6 +28,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -215,6 +216,54 @@ def core_files(codecov_json: Path) -> list[tuple[str, int, int]]:
     return out
 
 
+_ST_RUN = re.compile(r"^[✔✘] Test run with (\d+) tests? ")
+_ST_FAILED = re.compile(r"^✘ Test (.+?) failed after ")
+_XC_RUN = re.compile(r"^Executed (\d+) tests?, with (\d+) failures?")
+
+
+def core_counts(log_path: Path) -> dict:
+    """What Core's `swift test` log says: tests run (Swift Testing + XCTest), failed tests, and
+    the first failed names. A missing log is zero tests (a lane with no number is RED).
+    Reads the log a line at a time (the M4's is ~7,500 lines)."""
+    tests = failed = 0
+    names: list[str] = []
+    xctest = (0, 0)                                  # XCTest prints a total per suite; the LAST is "All tests"
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = _ST_RUN.match(line)
+                if m:
+                    tests += int(m.group(1))
+                    continue
+                m = _ST_FAILED.match(line)
+                if m:
+                    failed += 1
+                    if len(names) < 10:
+                        names.append(m.group(1).strip('"'))
+                    continue
+                m = _XC_RUN.match(line)
+                if m:
+                    xctest = (int(m.group(1)), int(m.group(2)))
+    except OSError:
+        pass
+    return {"tests": tests + xctest[0], "failed": failed + xctest[1], "failed_names": names}
+
+
+def verdict(app_rc: int, core_rc: int, core: dict) -> tuple[str, str]:
+    """("ok", "") only when the app tests and Core's tests both exited 0 and Core reported a
+    count; else ("RED", why). Coverage is measured and published either way; the OUTCOME word
+    is about the tests underneath it (from 2026-10-02 the lane said "ok" over a failed Core)."""
+    why = []
+    if app_rc != 0:
+        why.append(f"app tests exit {app_rc}")
+    if core_rc != 0:
+        names = ", ".join(core.get("failed_names") or [])
+        why.append(f"core tests exit {core_rc}" + (f", {core['failed']} failed: {names}" if core.get("failed") else ""))
+    if not core.get("tests"):
+        why.append("no Core test count in its log")
+    return ("RED", "; ".join(why)) if why else ("ok", "")
+
+
 def write_report(folders: dict, meta: dict) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     day = meta["date"]
@@ -324,9 +373,10 @@ def main() -> int:
     publish_metrics()
     total_e = sum(d["executable"] for d in folders.values())
     total_c = sum(d["covered"] for d in folders.values())
-    log(f"OUTCOME ok: {len(folders)} folders, {total_c}/{total_e} lines "
+    word, why = verdict(app_rc, core_rc, core_counts(OUT / f"core-{day}.log"))
+    log(f"OUTCOME {word}{' — ' + why if why else ''}: {len(folders)} folders, {total_c}/{total_e} lines "
         f"({round(100 * total_c / total_e, 1) if total_e else 0}%) → {OUT / f'coverage-{day}.md'}")
-    return 0
+    return 0 if word == "ok" else 1
 
 
 if __name__ == "__main__":

@@ -160,3 +160,52 @@ def test_sensor_a_night_without_core_coverage_says_missing_in_capitals():
     text = (ROOT / "tools" / "nightly_coverage.py").read_text()
     assert "export_core_coverage(DD / \"core-build\", since=core_started)" in text
     assert "core coverage MISSING" in text and 'meta["core_coverage"] = "missing"' in text
+
+
+# ── The lane's verdict (worker A, 2026-11-18). RED first: from 2026-10-02 the M4's 04:00 lane
+# logged "core tests finished: exit 1" and then "OUTCOME ok: 23 folders …" on almost every
+# night — a Core suite with 20 failed tests read as a good night. Coverage is still measured
+# and published; the OUTCOME word says whether the tests under it passed.
+
+_ST_FAILED = """\
+✘ Test hundredThousandPeopleWalkAndCheckOffMain() failed after 50.601 seconds with 1 issue.
+✘ Test "pause holds the job" failed after 61.587 seconds with 2 issues.
+✔ Test sketchEstimatesAreWithinTolerance() passed after 0.2 seconds.
+✘ Test run with 2365 tests in 339 suites failed after 432.384 seconds with 70 issues (including 27 known issues).
+Executed 5 tests, with 0 failures (0 unexpected) in 1.0 (1.0) seconds
+Executed 222 tests, with 0 failures (0 unexpected) in 12.0 (12.1) seconds
+"""
+_ST_PASSED = """\
+✔ Test run with 2365 tests in 339 suites passed after 300.0 seconds with 27 known issues.
+Executed 222 tests, with 0 failures (0 unexpected) in 12.0 (12.1) seconds
+"""
+
+
+def test_core_counts_read_both_runners_and_name_the_failed_tests(tmp_path):
+    log = tmp_path / "core.log"
+    log.write_text(_ST_FAILED)
+    counts = nc.core_counts(log)
+    assert counts["tests"] == 2365 + 222 and counts["failed"] == 2
+    assert counts["failed_names"][0] == "hundredThousandPeopleWalkAndCheckOffMain()"
+    log.write_text(_ST_PASSED)
+    assert nc.core_counts(log) == {"tests": 2587, "failed": 0, "failed_names": []}
+    assert nc.core_counts(tmp_path / "absent.log") == {"tests": 0, "failed": 0, "failed_names": []}
+
+
+def test_a_failed_core_suite_is_red_even_when_coverage_was_measured():
+    word, why = nc.verdict(app_rc=0, core_rc=1, core={"tests": 2587, "failed": 2, "failed_names": ["a()", "b"]})
+    assert word == "RED" and "core tests exit 1" in why and "2 failed" in why and "a()" in why
+    assert nc.verdict(app_rc=65, core_rc=0, core={"tests": 2587, "failed": 0, "failed_names": []})[0] == "RED"
+    assert nc.verdict(app_rc=0, core_rc=0, core={"tests": 2587, "failed": 0, "failed_names": []}) == ("ok", "")
+
+
+def test_a_core_suite_with_no_number_is_red():
+    word, why = nc.verdict(app_rc=0, core_rc=0, core={"tests": 0, "failed": 0, "failed_names": []})
+    assert word == "RED" and "no Core test count" in why
+
+
+def test_sensor_main_writes_the_verdict_word_and_exits_non_zero_on_red():
+    text = (ROOT / "tools" / "nightly_coverage.py").read_text()
+    assert "word, why = verdict(app_rc, core_rc, core_counts(" in text
+    assert 'log(f"OUTCOME ok:' not in text, "the OUTCOME word comes from verdict(), never a constant ok"
+    assert "return 0 if word == \"ok\" else 1" in text
