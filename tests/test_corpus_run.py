@@ -110,10 +110,11 @@ for item in config["pending"]:
         if how.get("timeout") == engine:
             say(ev="engine", sha=item["sha"], engine=engine, outcome="timeout", s=1.0)
             say(ev="end", sha=item["sha"], cut=True); os._exit(86)
-        say(ev="engine", sha=item["sha"], engine=engine, outcome=how.get(engine, "OK"), kinds=how.get(engine + "_kinds", []), s=0.5)
+        say(ev="engine", sha=item["sha"], engine=engine, outcome=how.get(engine, "OK"), kinds=how.get(engine + "_kinds", []), s=0.5,
+            cpu=0.1, ccpu=0.3)
     if how.get("crash") == "end":                        # every engine answered; the host dies before `end`
         os._exit(139)
-    say(ev="end", sha=item["sha"])
+    say(ev="end", sha=item["sha"], peak_mb=how.get("peak_mb", 40.0), maxrss_mb=60.0, cmaxrss_mb=30.0)
 if config["lane"] == "verbs":
     say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0),
         strayTrashFiles=plan.get("stray", 0), receiptsInRun=plan.get("receipts", [0, 0])[0],
@@ -314,7 +315,7 @@ class SealTests(unittest.TestCase):
 
     def test_the_drivers_never_write_an_engines_sentence_or_a_name(self):
         for name in ('CorpusSeal.swift', 'CorpusDriverSupport.swift', 'CorpusCheckDriver.swift', 'CorpusProofDriver.swift',
-                     'CorpusVerbsDriver.swift'):
+                     'CorpusVerbsDriver.swift', 'CorpusSweepDriver.swift'):
             code = '\n'.join(line for line in (SCRIPTS / 'corpus' / name).read_text().splitlines()
                              if not line.lstrip().startswith('//'))
             for leak in ('.message', 'localizedDescription', 'lastPathComponent', '.filename', '.headline', '.sentence',
@@ -737,6 +738,138 @@ class LaneTests(unittest.TestCase):
         self.assertEqual(self.scene.run(sha='../../etc'), cr.EXIT_REFUSED)
         self.assertEqual(self.scene.run(stamp='../x'), cr.EXIT_REFUSED)
         self.assertFalse(self.scene.seal.reports.exists())
+
+
+class SweepScene(LaneScene):
+    """The lane scene plus ~/corpus/live/PrivateDrive: the files of the source backup's PrivateDrive rows,
+    as the read-only share would show them. `mounts` stands for what is mounted read-only there."""
+
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        self.mounts = ['PrivateDrive']
+        self.live = self.corpus / 'live'
+        for n, original, size, _ in self.files:
+            path = self.live / original[len('/Volumes/'):]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'y' * size)
+
+    def run(self, lane='sweep', sha='a' * 40, stamp='20261117_120000_1', **extra):
+        self.plan_path.write_text(json.dumps(self.plan))
+        os.environ['FAKE_PLAN'] = str(self.plan_path)
+        argv = ['host', lane, '--sha', sha, '--stamp', stamp, '--out', str(self.out), '--worktree', str(self.worktree),
+                '--derived-data', str(self.dd), '--bin', str(SCRIPTS / 'corpus')]
+        for key, value in extra.items():
+            argv += ['--' + key, str(value)]
+        try:
+            return cr.main(argv, seal=self.seal, xcodebuild=str(self.fake), sweep_mounts=self.mounts)
+        finally:
+            os.environ.pop('FAKE_PLAN', None)
+
+    def report(self, stamp='20261117_120000_1'):
+        return json.loads((self.report_dir('sweep', stamp=stamp) / 'report.json').read_text())
+
+
+class SweepLaneTests(unittest.TestCase):
+    """The sweep lane (2026-11-18): the check lane's engines over the wider collection, read in place on the
+    read-only share under ~/corpus/live; slices that resume; the read-only proof; what each file cost."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = SweepScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_sweep_reads_the_live_mount_in_place_and_reports_what_each_file_cost(self):
+        self.scene.plan['engines'] = ['probe', 'check', 'audio', 'pair']
+        self.scene.plan['files'] = {sha_of(2): dict(container='dv', vcodec='dvvideo', acodec='pcm_s16le', peak_mb=99.0)}
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        driver = [c for c in self.scene.recorded_calls() if 'config' in c][0]
+        live = str(self.scene.live)
+        self.assertEqual(driver['lane'], 'sweep')
+        self.assertEqual(driver['config']['sourceRoot'], live)
+        self.assertEqual(driver['config']['mediaRoot'], str(self.scene.seal.media), 'the seal still names the corpus media')
+        self.assertTrue(all(i['path'].startswith(live + '/PrivateDrive/') for i in driver['config']['pending']))
+        self.assertEqual(driver['rows'], sorted(live + o[len('/Volumes'):] for _, o, _, _ in self.scene.files),
+                         "the run's catalog: the backup's PrivateDrive rows, at the live mount — not OtherDrive, not removed rows")
+        self.assertTrue(driver['config']['catalog'].startswith(str(self.scene.seal.work_root) + '/'))
+        self.assertIn('-only-testing:VideoScanTests/CorpusSweepDriver', [c for c in self.scene.recorded_calls() if 'args' in c][1]['args'])
+        report = self.scene.report()
+        self.assertEqual(report['source'], dict(mounts=1, listed=3, kinds=1, swept_before=0, missing=0, size_differs=0, chosen=3,
+                                                checked_after=3, changed=0))
+        perf = report['perf']
+        self.assertEqual(perf['engines']['check'], dict(files=3, wall_s=1.5, cpu_s=0.3, child_cpu_s=0.9, max_s=0.5))
+        self.assertEqual(perf['peak_footprint_mb'], 99.0)
+        self.assertEqual(perf['by_format']['dv | dvvideo | pcm_s16le']['files'], 1)
+        self.assertEqual(len(perf['slowest']), 12)
+        outcomes = json.loads((self.scene.report_dir('sweep') / 'outcomes.json').read_text())
+        self.assertEqual(outcomes[sha_of(2)]['audio_ccpu'], 0.3)
+        self.assertEqual(outcomes[sha_of(2)]['peak_mb'], 99.0)
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertIn('corpus sweep: GREEN 3 files', summary)
+        self.assertIn('size and mtime after the run: 0 changed — untouched', summary)
+        self.assertIn('ffprobe/ffmpeg CPU', summary)
+        text = self.scene.everything_that_leaves()
+        for name in SECRET_NAMES:
+            self.assertNotIn(name, text, name)
+        self.assertNotIn('/Volumes', text)
+        self.assertNotIn(str(self.scene.corpus), text)
+        self.assertEqual(list(self.scene.seal.work_root.iterdir()), [], 'the run left working files')
+
+    def test_slices_take_the_next_files_this_commit_has_not_swept(self):
+        self.assertEqual(self.scene.run(limit=2), cr.EXIT_GREEN)
+        self.assertEqual(self.scene.run(limit=2, stamp='20261117_120500_1'), cr.EXIT_GREEN)
+        first = set(json.loads((self.scene.report_dir('sweep') / 'outcomes.json').read_text()))
+        second = set(json.loads((self.scene.report_dir('sweep', stamp='20261117_120500_1') / 'outcomes.json').read_text()))
+        self.assertEqual((len(first), len(second), first & second), (2, 1, set()))
+        self.assertEqual(self.scene.report('20261117_120500_1')['source']['swept_before'], 2)
+        self.assertEqual(self.scene.run(limit=2, stamp='20261117_121000_1'), cr.EXIT_REFUSED, 'nothing left to sweep')
+        self.assertEqual(self.scene.run(stamp='20261117_121500_1'), cr.EXIT_GREEN, 'without --limit: every file again')
+        self.assertEqual(self.scene.run(limit=2, sha='b' * 40, stamp='20261117_122000_1'), cr.EXIT_GREEN, 'another commit starts over')
+        with self.assertRaises(cr.Refused):
+            cr.accept(self.scene.seal, 'sweep', 'me')        # the newest run is a slice: never a baseline
+
+    def test_the_order_is_round_robin_over_kinds_rarest_first(self):
+        def e(n):
+            return cr.Entry(sha_of(n), '/Volumes/V/%d' % n, 1, 's', pathlib.Path('/x'))
+        entries = [e(n) for n in range(7)]
+        kind = {sha_of(n): ('common',) for n in range(4)}
+        kind.update({sha_of(n): ('middle',) for n in (4, 5)})
+        kind[sha_of(6)] = ('rare',)
+        ordered = [x.sha for x in cr.sweep_order(entries, kind)]
+        common = sorted(sha_of(n) for n in range(4))
+        middle = sorted(sha_of(n) for n in (4, 5))
+        self.assertEqual(ordered, [sha_of(6), middle[0], common[0], middle[1], common[1], common[2], common[3]])
+        big = [e(n) for n in range(100_000)]
+        t0 = time.monotonic()
+        self.assertEqual(len(cr.sweep_order(big, {x.sha: (n % 300,) for n, x in enumerate(big)})), 100_000)
+        self.assertLess(time.monotonic() - t0, 5.0)
+
+    def test_a_file_missing_or_resized_on_the_mount_is_counted_and_not_run(self):
+        os.unlink(self.scene.live / self.scene.files[0][1][len('/Volumes/'):])
+        (self.scene.live / self.scene.files[1][1][len('/Volumes/'):]).write_bytes(b'z')
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        report = self.scene.report()
+        self.assertEqual((report['files'], report['source']['missing'], report['source']['size_differs']), (1, 1, 1))
+
+    def test_a_file_that_changes_on_the_mount_during_the_run_is_red(self):
+        self.scene.plan['vandal'] = str(self.scene.live / self.scene.files[2][1][len('/Volumes/'):])
+        self.assertEqual(self.scene.run(), cr.EXIT_RED)
+        self.assertEqual(self.scene.report()['failures'], {'source:MISMATCH': 1})
+        self.assertIn('1 changed — RED', (self.scene.out / 'corpus-summary.txt').read_text())
+
+    def test_without_a_read_only_mount_nothing_is_built_or_run(self):
+        self.scene.mounts = []
+        self.assertEqual(self.scene.run(), cr.EXIT_REFUSED)
+        self.assertIn('no read-only mount', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertEqual(self.scene.recorded_calls(), [])
+        self.assertEqual(cr.source_mounts(self.scene.seal), [], 'a plain folder under live is not a mount')
+
+    def test_the_path_rewrite_refuses_a_path_that_does_not_start_with_what_it_strips(self):
+        entries = [cr.Entry(sha_of(0), '/Elsewhere/a.mov', 1, 's', self.scene.live / 'a.mov')]
+        with self.assertRaises(cr.Refused):
+            cr.build_catalog(self.scene.seal, self.scene.source, entries, self.scene.seal.work_root / 'x.sqlite',
+                             root=self.scene.live, strip='/Volumes')
 
 
 class ProofLaneTests(unittest.TestCase):
@@ -1452,6 +1585,25 @@ class SwiftSealTests(unittest.TestCase):
                            dict(config=dict(check, pending=[dict(sha='a' * 64, path=str(self.home / 'elsewhere.mov'))]), lane='check',
                                 home=state_home, appSupport=state_home + '/Library/Application Support'))
         self.assertEqual(answers, ['ok', 'home_not_sealed', 'home_not_sealed', 'a_file_is_outside_the_corpus'])
+
+    def test_only_the_sweep_lane_reads_in_place_and_only_under_the_live_mount(self):
+        (self.corpus / 'live' / 'Share' / 'Volumes').mkdir(parents=True)
+        (self.corpus / 'live' / 'Share' / 'a.mov').write_text('x')
+        state_home = str(self.corpus / 'state' / 'home')
+        live = str(self.corpus / 'live')
+        sweep = self.config(lane='sweep', pending=[dict(sha='a' * 64, path=live + '/Share/a.mov')], volRoot=None, archiveRoot=None,
+                            scratch=None, sourceRoot=live)
+        homes = dict(home=state_home, appSupport=state_home + '/Library/Application Support')
+        answers = self.ask(dict(config=sweep, lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=live + '/Share'), lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=str(self.corpus / 'media')), lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=str(self.home)), lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=None), lane='sweep', **homes),
+                           dict(config=dict(sweep, lane='check'), lane='check', **homes),
+                           dict(config=dict(sweep, pending=[dict(sha='a' * 64, path=str(self.home / 'x.mov'))]), lane='sweep', **homes),
+                           dict(config=sweep, lane='sweep', home=live + '/Share', appSupport=live + '/Share/Library'))
+        self.assertEqual(answers, ['ok', 'ok'] + ['a_source_is_outside_the_live_mount'] * 4
+                         + ['a_file_is_outside_the_corpus', 'home_not_sealed'])
 
     def test_no_marker_is_refused(self):
         (self.corpus / cr.MARKER).unlink()

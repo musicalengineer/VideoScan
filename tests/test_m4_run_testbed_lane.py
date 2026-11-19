@@ -369,7 +369,7 @@ class CallerOnTheM4Tests(TestbedScene):
         for name in RUNNER_FILES:
             shutil.copy(SCRIPTS / name, self.repo / 'scripts' / name)
         for name in ('corpus_run.py', 'catalog_db.py', 'corpus/CorpusSeal.swift', 'corpus/CorpusDriverSupport.swift', 'corpus/CorpusCheckDriver.swift',
-                     'corpus/CorpusProofDriver.swift', 'corpus/CorpusVerbsDriver.swift'):
+                     'corpus/CorpusProofDriver.swift', 'corpus/CorpusVerbsDriver.swift', 'corpus/CorpusSweepDriver.swift'):
             (self.repo / 'scripts' / name).write_text(STUB_CORPUS)
         shutil.rmtree(self.work)                            # the host adds its testbed worktree from the repo
         self.sha = self.make_repo(self.repo)

@@ -36,7 +36,16 @@
 // Privacy: only enum case names, codec/container names and numbers are
 // written. Never a filename, a path, an engine's sentence or stderr.
 //
-// Memory: the 234 loaded records and one small JSON line at a time.
+// Cost (2026-11-18, the sweep lane): each engine event carries the CPU this
+// process (`cpu`) and its reaped children — ffprobe/ffmpeg — (`ccpu`) spent
+// in it, from getrusage deltas; each file's `end` carries the peak physical
+// footprint sampled once a second while it ran (`peak_mb`) and the process's
+// and children's high-water RSS so far. Wall minus both CPUs is waiting: I/O
+// (a network mount) or a child blocked on it. One file runs at a time, so
+// the deltas are that file's (background work in the host adds noise only).
+//
+// Memory: the loaded records (234 for the corpus; ~5.5k for a sweep of the
+// live mount: a few MB) and one small JSON line at a time.
 // (For Rick: `final class … @unchecked Sendable` with an NSLock ≈ a C++
 // class whose members are guarded by a std::mutex — the compiler is told
 // "I lock it myself".)
@@ -97,6 +106,7 @@ final class CorpusProgress: @unchecked Sendable {
 final class CorpusDeadline: @unchecked Sendable {
     private let lock = NSLock()
     private var current: (sha: String, engine: String, due: Date, started: Date)?
+    private var peakFootprint: UInt64 = 0
     private let progress: CorpusProgress
     private let timer: DispatchSourceTimer
 
@@ -109,9 +119,20 @@ final class CorpusDeadline: @unchecked Sendable {
     }
 
     func arm(sha: String, seconds: Double) {
+        let now = CorpusCost.memoryInUse()
         lock.lock()
         current = (sha, "", Date().addingTimeInterval(seconds), Date())
+        peakFootprint = now
         lock.unlock()
+    }
+
+    /// The highest footprint seen since `arm` (sampled each tick and now).
+    func peak() -> UInt64 {
+        let now = CorpusCost.memoryInUse()
+        lock.lock()
+        defer { lock.unlock() }
+        peakFootprint = max(peakFootprint, now)
+        return peakFootprint
     }
 
     func entering(_ engine: String) {
@@ -127,8 +148,10 @@ final class CorpusDeadline: @unchecked Sendable {
     }
 
     private func tick() {
+        let footprint = CorpusCost.memoryInUse()
         lock.lock()
         let now = current
+        if now != nil { peakFootprint = max(peakFootprint, footprint) }
         lock.unlock()
         guard let now, Date() > now.due else { return }
         if !now.engine.isEmpty {
@@ -205,7 +228,8 @@ final class CorpusRun: @unchecked Sendable {
             progress.write(["ev": "refused", "why": "catalog_would_not_open"])
             throw CorpusRefusal(word: "catalog_would_not_open")
         case .success(let loaded):
-            let media = config.volRoot ?? config.mediaRoot       // the verbs lane's catalog names its clones
+            // The verbs lane's catalog names its clones; the sweep lane's names files on the read-only live mount.
+            let media = config.volRoot ?? config.sourceRoot ?? config.mediaRoot
             guard loaded.masterArchiveJSON == nil else {
                 progress.write(["ev": "refused", "why": "catalog_names_a_master_archive"])
                 throw CorpusRefusal(word: "catalog_names_a_master_archive")
@@ -227,8 +251,11 @@ final class CorpusRun: @unchecked Sendable {
     }
 
     func end(_ item: CorpusConfig.Item) {
+        let peak = deadline.peak()
         deadline.disarm()
-        progress.write(["ev": "end", "sha": item.sha])
+        let usage = CorpusCost.now()
+        progress.write(["ev": "end", "sha": item.sha, "peak_mb": Double(peak) / 1_048_576,
+                        "maxrss_mb": usage.maxRSS, "cmaxrss_mb": usage.childMaxRSS])
     }
 
     func facts(_ item: CorpusConfig.Item, _ values: [String: Any]) {
@@ -242,18 +269,54 @@ final class CorpusRun: @unchecked Sendable {
     func engine(_ item: CorpusConfig.Item, _ name: String,
                 _ body: () async throws -> (outcome: String, kinds: [String])) async {
         deadline.entering(name)
-        let started = Date()
+        let started = Date(), before = CorpusCost.now()
         var outcome = "error:unknown", kinds: [String] = []
         do {
             (outcome, kinds) = try await body()
         } catch {
             outcome = "error:" + CorpusWords.caseName(error)
         }
+        let after = CorpusCost.now()
         progress.write(["ev": "engine", "sha": item.sha, "engine": name, "outcome": CorpusWords.word(outcome),
-                        "kinds": kinds.map(CorpusWords.word), "s": Date().timeIntervalSince(started)])
+                        "kinds": kinds.map(CorpusWords.word), "s": Date().timeIntervalSince(started),
+                        "cpu": after.cpu - before.cpu, "ccpu": after.childCPU - before.childCPU])
     }
 
     func done() {
         progress.write(["ev": "done"])
+    }
+}
+
+/// What a file cost: CPU seconds (user + system) of this process and of its reaped children
+/// (getrusage RUSAGE_SELF / RUSAGE_CHILDREN — the ffprobe/ffmpeg the engines start), the
+/// high-water RSS of each in MB, and the current physical footprint (task_info, what
+/// Activity Monitor shows as Memory). Numbers only.
+enum CorpusCost {
+    struct Usage {
+        let cpu: Double, childCPU: Double, maxRSS: Double, childMaxRSS: Double
+    }
+
+    static func now() -> Usage {
+        var mine = rusage(), children = rusage()
+        getrusage(RUSAGE_SELF, &mine)
+        getrusage(RUSAGE_CHILDREN, &children)
+        func seconds(_ u: rusage) -> Double {
+            Double(u.ru_utime.tv_sec) + Double(u.ru_utime.tv_usec) / 1e6
+                + Double(u.ru_stime.tv_sec) + Double(u.ru_stime.tv_usec) / 1e6
+        }
+        // macOS reports ru_maxrss in bytes (Linux: KB).
+        return Usage(cpu: seconds(mine), childCPU: seconds(children),
+                     maxRSS: Double(mine.ru_maxrss) / 1_048_576, childMaxRSS: Double(children.ru_maxrss) / 1_048_576)
+    }
+
+    static func memoryInUse() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? info.phys_footprint : 0
     }
 }

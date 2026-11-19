@@ -22,8 +22,10 @@
 //     folders, $HOME and Application Support resolve inside ~/corpus/state or
 //     inside the run's work folder — and NOTHING writable resolves inside
 //     ~/corpus/media or ~/corpus/live;
-//   - every file to run is under ~/corpus/media (check, proof) or is a clone
-//     inside the run's work folder (verbs);
+//   - every file to run is under ~/corpus/media (check, proof), is a clone
+//     inside the run's work folder (verbs), or (the sweep lane only) is under
+//     its `sourceRoot`: ~/corpus/live or a folder in it — the read-only mounts
+//     of the wider collection, read in place and never written;
 //   - this is a test host.
 // (For Rick: a caseless `enum` with static functions ≈ a C++ namespace of free functions.)
 
@@ -50,6 +52,8 @@ struct CorpusConfig: Decodable, Sendable {
     let volRoot: String?
     let archiveRoot: String?
     let scratch: String?
+    /// The sweep lane only: the read-only mount under ~/corpus/live its files are read from in place.
+    let sourceRoot: String?
 }
 
 /// Everything the seal decides from. The driver fills it from the process; the tests fill it by hand.
@@ -158,7 +162,19 @@ enum CorpusSeal {
         guard input.isTestHost else { return "not_a_test_host" }
         guard isUnder(input.homeDirectory, state) || inRun(input.homeDirectory),
               isUnder(input.applicationSupport, state) || inRun(input.applicationSupport) else { return "home_not_sealed" }
-        guard config.pending.allSatisfy({ isUnder($0.path, media) || inRun($0.path) }),
+        // The sweep lane reads the wider collection in place: its source is ~/corpus/live or a folder in it
+        // (nothing else), and no other lane may name one. Nothing writable may resolve there (below).
+        if let source = config.sourceRoot {
+            guard config.lane == "sweep", isUnder(source, live) else {
+                return "a_source_is_outside_the_live_mount"
+            }
+        } else if config.lane == "sweep" {
+            return "a_source_is_outside_the_live_mount"
+        }
+        func readable(_ path: String) -> Bool {
+            isUnder(path, media) || inRun(path) || (config.sourceRoot.map { isUnder(path, $0) } ?? false)
+        }
+        guard config.pending.allSatisfy({ readable($0.path) }),
               config.pending.allSatisfy({ ($0.copies ?? []).allSatisfy(inRun) }) else { return "a_file_is_outside_the_corpus" }
         let verbsFolders = [config.volRoot, config.archiveRoot, config.scratch].compactMap { $0 }
         guard verbsFolders.allSatisfy(inRun) else { return "a_verbs_folder_is_outside_the_run" }

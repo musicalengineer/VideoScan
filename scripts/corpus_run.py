@@ -131,7 +131,11 @@ LANES = {
               ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
     "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
               3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
+    # The check lane's engines, over the wider collection read in place on the read-only live mount (SweepLane).
+    "sweep": ("CorpusSweepDriver", ["probe", "check", "audio", "pair"], 900,
+              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift", "CorpusSweepDriver.swift"]),
 }
+SWEEP_SLOWEST = 12                               # the slowest files a sweep report lists (sha prefix, format, engine, seconds)
 VERBS_SAMPLE = 20                                # files the verbs lane clones (--limit changes it)
 VERBS_ROLES = ("dup", "purge", "set_aside", "promote")     # dealt round-robin over the sample
 VERBS_COPIES = 2                                 # extra byte-identical clones of each `dup` file
@@ -439,10 +443,15 @@ def _columns(conn: sqlite3.Connection, schema: str, table: str) -> List[str]:
     return [row[1] for row in conn.execute(f"PRAGMA {schema}.table_info({table})")]
 
 
-def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, root: Optional[Path] = None) -> Dict[str, int]:
+def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, root: Optional[Path] = None,
+                  strip: str = "") -> Dict[str, int]:
     """Create `dest` (new file, rollback journal) from `source` as described above. `root` is
     the folder the rows' paths are rewritten under: the corpus media, or (the verbs lane) a
-    run's folder of clones laid out the same way."""
+    run's folder of clones laid out the same way. `strip` (the sweep lane: "/Volumes") is taken
+    off the front of every original path first, so `/Volumes/<name>/…` lands at `<root>/<name>/…`
+    — the live mount is ~/corpus/live/<name>."""
+    if strip and (not strip.startswith("/") or strip.endswith("/") or any(not e.original.startswith(strip + "/") for e in entries)):
+        raise Refused("refused: the part to strip is not the start of every original path")
     seal.writable(dest)
     for suffix in ("-wal", "-journal", "-shm"):
         if os.path.exists(str(source) + suffix):
@@ -498,12 +507,13 @@ def build_catalog(seal: Seal, source: Path, entries: List[Entry], dest: Path, ro
                 raise Refused(f"refused: the backup's files table has no {needed} column — the schema moved; update the transform")
         select = []
         for column in columns:
+            cut = len(strip) + 1                             # substr() counts from 1: the text after `strip`
             if column == "full_path":
-                select.append("? || f.full_path")
+                select.append(f"? || substr(f.full_path, {cut})")
             elif column == "directory":
-                select.append("CASE WHEN f.directory IS NULL THEN NULL ELSE ? || f.directory END")
+                select.append(f"CASE WHEN f.directory IS NULL THEN NULL ELSE ? || substr(f.directory, {cut}) END")
             elif column == "path_fold":
-                select.append("CASE WHEN f.volume_case_sensitive = 0 THEN lower(?) ELSE ? END || f.path_fold")
+                select.append(f"CASE WHEN f.volume_case_sensitive = 0 THEN lower(?) ELSE ? END || substr(f.path_fold, {cut})")
             elif column in AUDIT_COLUMNS:
                 select.append("NULL")
             else:
@@ -724,6 +734,7 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
     the driver's refusal word if it refused)."""
     began, ended, refusal = [], set(), None
     per = defaultdict(dict)
+    costs: Dict[str, dict] = {}
     for ev in events:
         kind, sha = ev.get("ev"), ev.get("sha")
         if kind == "refused":
@@ -732,6 +743,8 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
             began.append(sha)
         elif kind == "end" and sha:
             ended.add(sha)
+            costs[sha] = {k: round(float(ev[k]), 1) for k in ("peak_mb", "maxrss_mb", "cmaxrss_mb")
+                          if isinstance(ev.get(k), (int, float)) and not isinstance(ev.get(k), bool)}
         elif kind == "facts" and sha:
             per[sha].setdefault("facts", {}).update(ev)      # a driver may report facts in more than one step
         elif kind == "engine" and sha:
@@ -754,8 +767,9 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
             if ev is not None:
                 record[engine] = word(ev.get("outcome"))
                 record[engine + "_kinds"] = sorted({word(k) for k in ev.get("kinds") or []})
-                if isinstance(ev.get("s"), (int, float)):
-                    record[engine + "_s"] = round(float(ev["s"]), 2)
+                for key in ("s", "cpu", "ccpu"):            # wall, this process's CPU, its children's CPU
+                    if isinstance(ev.get(key), (int, float)) and not isinstance(ev.get(key), bool):
+                        record[engine + "_" + key] = round(float(ev[key]), 2)
                 cut = cut or record[engine] == "timeout"
             elif cut:
                 record[engine] = "not_run"
@@ -763,6 +777,7 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
                 record[engine] = "not_run"
             else:
                 record[engine], cut = "crash", True
+        record.update(costs.get(sha, {}))
         if sha not in ended and not cut:
             record["unfinished"] = True                      # the host died after its last answer and before `end` (Codex #311 F6)
         record["settled"] = True
@@ -935,6 +950,11 @@ class Lane:
     def record_extra(self, entry: Entry) -> dict:
         return {}
 
+    def inputs(self) -> Tuple[List[Entry], Path]:
+        """The files and the catalog the lane starts from: the manifest and the sealed catalog."""
+        entries = load_manifest(self.seal)
+        return entries, sealed_state_ready(self.seal, entries)
+
     def home(self) -> Path:
         """The test host's HOME: the sealed state's, kept between runs."""
         return self.seal.state / "home"
@@ -1037,8 +1057,7 @@ class Lane:
     def go(self) -> int:
         seal = self.seal.check()
         t0 = time.time()
-        entries = load_manifest(seal)
-        database = sealed_state_ready(seal, entries)
+        entries, database = self.inputs()
         entries = self.scope(entries)
         if not entries:
             raise Refused("refused: no corpus file is in this lane's scope")
@@ -1231,6 +1250,246 @@ class VerbsLane(Lane):
             report["failures"]["media:MISMATCH"] = changed + abs(files_delta)       # RED: the pristine copies moved
 
 
+def sweep_stratum(stream_type, size) -> str:
+    """A sweep file's stratum, from the catalog backup's row: its stream kind and a size band."""
+    size = int(size or 0)
+    band = next((name for limit, name in ((1 << 20, "under_1MB"), (100 << 20, "under_100MB"), (1 << 30, "under_1GB"),
+                                          (16 << 30, "under_16GB")) if size < limit), "16GB_and_over")
+    return f"{stream_type or 'unknown'} {band}"
+
+
+def sweep_order(entries: List[Entry], kind: Dict[str, tuple]) -> List[Entry]:
+    """The order a sweep takes its files in, so every slice is a stratified sample: round-robin over
+    the KINDS of file the catalog records (stream kind and size band × container × video × audio
+    codec), the rarest kind first in each round, each kind's files by SHA-256 (no order of names or
+    dates). The first slice meets every kind once; later slices add depth — which is what the
+    diminishing-returns curve measures."""
+    groups: Dict[tuple, List[Entry]] = defaultdict(list)
+    for e in sorted(entries, key=lambda e: e.sha):
+        groups[kind[e.sha]].append(e)
+    queues = [groups[k] for k in sorted(groups, key=lambda k: (len(groups[k]), k))]
+    ordered: List[Entry] = []
+    depth = 0
+    while len(ordered) < len(entries):
+        for queue in queues:
+            if depth < len(queue):
+                ordered.append(queue[depth])
+        depth += 1
+    return ordered
+
+
+def source_mounts(seal: Seal) -> List[str]:
+    """The names under ~/corpus/live that are READ-ONLY MOUNTS (the wider collection, shared from the
+    Ultra): a folder that is not a mount point, is a symlink, or is mounted writable is not one."""
+    live = seal.corpus / "live"
+    if os.path.islink(str(live)) or not live.is_dir():
+        return []
+    names = []
+    for child in sorted(live.iterdir()):
+        try:
+            if (not child.is_symlink() and os.path.ismount(str(child))
+                    and os.statvfs(str(child)).f_flag & os.ST_RDONLY):
+                names.append(child.name)
+        except OSError:
+            continue
+    return names
+
+
+def source_sweep(entries: Iterable[Entry]) -> Dict[str, Tuple[int, int]]:
+    """Size and modification time of every swept file, by SHA-256 (before and after: a read-only
+    mount cannot change them; the sweep proves it rather than assume it)."""
+    seen: Dict[str, Tuple[int, int]] = {}
+    for e in entries:
+        try:
+            st = os.stat(str(e.path))
+            seen[e.sha] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            seen[e.sha] = (-1, -1)
+    return seen
+
+
+class SweepLane(Lane):
+    """Lane `sweep`: the check lane's engines over the WIDER collection, read in place on the
+    read-only mount(s) under ~/corpus/live (the Ultra's media shared over Thunderbolt). Nothing is
+    copied. The files are the catalog backup's live rows on those mounts (one per content), each
+    present at its row's size; a catalog over them is built for the run in its work folder by
+    prepare's own transform (paths rewritten from /Volumes/<name>/… to ~/corpus/live/<name>/…).
+    `--limit N` takes the next N files this commit has not swept yet, so a long sweep is run in
+    slices (each a partial run: never a baseline). Every swept file's size and mtime are compared
+    before and after (a difference is RED). The report adds what each file cost (wall, our CPU,
+    ffprobe/ffmpeg CPU, peak footprint) by format, and the slowest files by SHA-256 prefix.
+    Memory: the backup's matching rows (~6k on the LaCie mount: a few MB)."""
+
+    def __init__(self, *args, mounts: Optional[List[str]] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mounts = mounts                                 # tests: the names that stand for read-only mounts
+        self.source: Dict[str, int] = {}
+        self.before: Dict[str, Tuple[int, int]] = {}
+        self._swept: List[Entry] = []
+
+    def live(self) -> Path:
+        return self.seal.corpus / "live"
+
+    def inputs(self) -> Tuple[List[Entry], Path]:
+        seal = self.seal
+        names = list(self.mounts) if self.mounts is not None else source_mounts(seal)
+        if not names:
+            raise Refused("refused: there is no read-only mount under ~/corpus/live to sweep")
+        backup = seal.corpus / SOURCE_BACKUP
+        if not backup.is_file() or os.path.islink(str(backup)):
+            raise Refused(f"refused: ~/corpus/{SOURCE_BACKUP} is missing")
+        conn = sqlite3.connect("file:" + urllib.parse.quote(str(backup.resolve())) + "?immutable=1", uri=True)
+        try:
+            rows = conn.execute("SELECT content_digest, full_path, size_bytes, stream_type, container, video_codec, audio_codec FROM files "
+                                "WHERE removal_state IS NULL AND content_digest IS NOT NULL ORDER BY content_digest, full_path").fetchall()
+        except sqlite3.Error:
+            raise Refused("refused: the catalog backup has no readable files table")
+        finally:
+            conn.close()
+        entries, seen, kind = [], set(), {}
+        for sha, original, size, stream_type, container, vcodec, acodec in rows:
+            parts = str(original).split("/")
+            if (len(parts) < 4 or parts[1] != "Volumes" or parts[2] not in names or ".." in parts
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(sha)) or sha in seen):
+                continue
+            seen.add(sha)
+            entries.append(Entry(sha, original, int(size or 0), sweep_stratum(stream_type, size),
+                                 self.live() / original[len("/Volumes/"):]))
+            kind[sha] = (sweep_stratum(stream_type, size), container or "", vcodec or "", acodec or "")
+        self.source = {"mounts": len(names), "listed": len(entries), "kinds": len(set(kind.values()))}
+        if not entries:
+            raise Refused("refused: the catalog backup lists no live file on the mounts under ~/corpus/live")
+        return sweep_order(entries, kind), self.seal.state / "unused"    # the run's catalog is built in `stage`
+
+    def scope(self, entries: List[Entry]) -> List[Entry]:
+        done = set()
+        if self.limit:                                       # a slice: the files this commit has not swept yet
+            for run in lane_runs(self.seal, self.lane):
+                if run.parent.name == self.sha:
+                    try:
+                        done |= set(_outcomes(run))
+                    except (OSError, ValueError):
+                        continue
+        chosen, missing, differs = [], 0, 0
+        for e in entries:
+            if e.sha in done:
+                continue
+            if self.limit and len(chosen) >= self.limit:
+                break
+            try:
+                if os.stat(str(e.path)).st_size != e.size:
+                    differs += 1
+                    continue
+            except OSError:
+                missing += 1
+                continue
+            chosen.append(e)
+        self.source.update({"swept_before": len(done), "missing": missing, "size_differs": differs, "chosen": len(chosen)})
+        return chosen
+
+    def config_extra(self) -> dict:
+        return {"sourceRoot": str(self.live())}
+
+    def stage(self, entries: List[Entry], database: Path) -> Tuple[List[Entry], Path]:
+        seal = self.seal
+        database_name, latch_name = _catalog_names()
+        seal.mkdir(self.home())
+        self.before = source_sweep(entries)
+        seed = self.work / "seed"
+        seal.mkdir(seed)
+        build_catalog(seal, seal.corpus / SOURCE_BACKUP, entries, seed / database_name, root=self.live(), strip="/Volumes")
+        seal.write_text(seed / latch_name, "{}\n")
+        verdict = verify_catalog(seal, seed / database_name, entries, root=self.live())
+        if not verdict["ok"]:
+            raise Refused("refused: the catalog over the live mount did not verify — " + ", ".join(
+                f"{k}={v}" for k, v in sorted(verdict.items()) if v and k not in ("rows", "manifest")))
+        return entries, seed / database_name
+
+    def after(self, results: Dict[str, dict], report: dict) -> None:
+        after = source_sweep(e for e in self.entries_swept())
+        changed = sum(1 for sha, was in self.before.items() if after.get(sha) != was)
+        report["source"] = {**self.source, "checked_after": len(self.before), "changed": changed}
+        if changed:
+            report["failures"]["source:MISMATCH"] = changed    # RED: a file on the read-only mount moved under the run
+        report["perf"] = sweep_cost(results, self.engines)
+
+    def entries_swept(self) -> List[Entry]:
+        return self._swept
+
+    def run_files(self, entries: List[Entry], database: Path):
+        self._swept = entries
+        return super().run_files(entries, database)
+
+
+def sweep_cost(results: Dict[str, dict], engines: List[str]) -> dict:
+    """What the files cost, as numbers: per engine the summed wall, our CPU and the children's
+    (ffprobe/ffmpeg) CPU; per container|video|audio the files, bytes, wall and MB/s; the peak
+    footprint; the slowest files by SHA-256 prefix. Wall minus both CPUs is time spent waiting."""
+    per_engine = {e: {"files": 0, "wall_s": 0.0, "cpu_s": 0.0, "child_cpu_s": 0.0, "max_s": 0.0} for e in engines}
+    by_format: Dict[str, dict] = {}
+    slow = []
+    peak = child_rss = 0.0
+    for sha, r in results.items():
+        fmt = "{} | {} | {}".format(r.get("container", "unknown"), r.get("vcodec", "unknown"), r.get("acodec", "unknown"))
+        wall = 0.0
+        for e in engines:
+            s = r.get(e + "_s")
+            if not isinstance(s, (int, float)):
+                continue
+            row = per_engine[e]
+            row["files"] += 1
+            row["wall_s"] += s
+            row["cpu_s"] += r.get(e + "_cpu") or 0.0
+            row["child_cpu_s"] += r.get(e + "_ccpu") or 0.0
+            row["max_s"] = max(row["max_s"], s)
+            wall += s
+            slow.append((s, sha, fmt, e, r.get("size", 0)))
+        f = by_format.setdefault(fmt, {"files": 0, "bytes": 0, "wall_s": 0.0, "child_cpu_s": 0.0, "cpu_s": 0.0})
+        f["files"] += 1
+        f["bytes"] += r.get("size", 0) or 0
+        f["wall_s"] += wall
+        f["cpu_s"] += sum(r.get(e + "_cpu") or 0.0 for e in engines)
+        f["child_cpu_s"] += sum(r.get(e + "_ccpu") or 0.0 for e in engines)
+        peak = max(peak, r.get("peak_mb") or 0.0)
+        child_rss = max(child_rss, r.get("cmaxrss_mb") or 0.0)
+    for f in by_format.values():
+        f["mb_per_s"] = round(f["bytes"] / 1e6 / f["wall_s"], 1) if f["wall_s"] > 0 else None
+        for k in ("wall_s", "cpu_s", "child_cpu_s"):
+            f[k] = round(f[k], 1)
+    for row in per_engine.values():
+        for k in ("wall_s", "cpu_s", "child_cpu_s", "max_s"):
+            row[k] = round(row[k], 1)
+    slow.sort(key=lambda t: (-t[0], t[1], t[3]))
+    return {"engines": per_engine, "by_format": by_format, "peak_footprint_mb": round(peak, 1),
+            "child_max_rss_mb": round(child_rss, 1),
+            "slowest": [[sha_prefix(sha), fmt, e, round(s, 1), round((size or 0) / 1e9, 2)]
+                        for s, sha, fmt, e, size in slow[:SWEEP_SLOWEST]]}
+
+
+def sweep_lines(report: dict) -> List[str]:
+    """The sweep's own lines: where its files came from, the read-only proof, and the cost."""
+    source, perf = report.get("source") or {}, report.get("perf") or {}
+    lines = [f"  source: {source.get('listed', 0)} live files ({source.get('kinds', 0)} kinds) on {source.get('mounts', 0)} read-only mount(s); "
+             f"this run {source.get('chosen', 0)} (already swept at this commit {source.get('swept_before', 0)}, "
+             f"missing {source.get('missing', 0)}, size differs {source.get('size_differs', 0)}); size and mtime after the run: "
+             f"{source.get('changed', 0)} changed" + (" — RED" if source.get("changed") else " — untouched")]
+    if perf:
+        lines.append(f"  cost: peak footprint {perf.get('peak_footprint_mb', 0):.0f} MB; largest ffprobe/ffmpeg RSS "
+                     f"{perf.get('child_max_rss_mb', 0):.0f} MB")
+        for e, row in (perf.get("engines") or {}).items():
+            lines.append(f"    {e}: wall {row['wall_s']:.0f}s (max {row['max_s']:.0f}s) · our CPU {row['cpu_s']:.0f}s · "
+                         f"ffprobe/ffmpeg CPU {row['child_cpu_s']:.0f}s · {row['files']} files")
+        formats = sorted((perf.get("by_format") or {}).items(), key=lambda kv: -kv[1]["wall_s"])
+        lines.append("  slowest formats (wall, MB/s):")
+        for fmt, row in formats[:10]:
+            lines.append(f"    {fmt} ({row['files']}): {row['wall_s']:.0f}s, {row['bytes'] / 1e9:.1f} GB, "
+                         f"{row['mb_per_s'] if row['mb_per_s'] is not None else '-'} MB/s, our CPU {row['cpu_s']:.0f}s, children {row['child_cpu_s']:.0f}s")
+        lines.append("  slowest files (sha256 prefix, format, engine, seconds, GB):")
+        for prefix, fmt, e, s, gb in perf.get("slowest") or []:
+            lines.append(f"    {prefix} {fmt} {e} {s}s {gb} GB")
+    return lines
+
+
 # ── Reading reports back: render, diff, status ────────────────────────────
 
 def _counts(counter: Dict[str, int]) -> str:
@@ -1317,6 +1576,8 @@ def render(report: dict, per_file: Optional[Dict[str, dict]] = None, against: Op
         lines.append(f"  deletion receipts the engines wrote: {trash.get('receiptsInRun', 'no count of')} inside the run, "
                      f"{trash.get('receiptsOutsideTheRun', 'no count of')} outside it (the system temporary folder on the M4: "
                      "the engines take no folder for a receipt; recorded, not moved)")
+    if lane == "sweep":
+        lines += sweep_lines(report)
     lines.append("  by role:" if lane == "verbs" else "  by stratum:")
     for name, row in sorted(report["by_stratum"].items()):
         lines.append(f"    {name} ({row['files']}): " + " · ".join(f"{e}: {_counts(row[e])}" for e in engines))
@@ -1653,7 +1914,7 @@ def status(seal: Seal) -> List[str]:
 # ── Command line ──────────────────────────────────────────────────────────
 
 def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebuild: str = "xcodebuild",
-         cp: str = "/bin/cp") -> int:
+         cp: str = "/bin/cp", sweep_mounts=None) -> int:
     parser = argparse.ArgumentParser(prog="corpus_run.py", description="the real-data corpus harness (host side)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
@@ -1685,10 +1946,10 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             if not re.fullmatch(r"[0-9a-f]{40}", args.sha) or not re.fullmatch(r"[0-9A-Za-z_]+", args.stamp):
                 raise Refused("refused: --sha is a full commit id and --stamp is letters, digits and underscores")
             sys.path.insert(0, args.bin)
-            lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
-                        Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild) if args.lane != "verbs" else \
-                VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
-                          Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild, cp=cp)
+            common = (seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
+                      Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild)
+            lane = (VerbsLane(*common, cp=cp) if args.lane == "verbs" else
+                    SweepLane(*common, mounts=sweep_mounts) if args.lane == "sweep" else Lane(*common))
             code = lane.go()
             lines = lane.lines
     except Refused as refusal:

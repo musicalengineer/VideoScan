@@ -16,7 +16,8 @@
 //           a pair half (CatalogPairGroups.isHalf) and names a sound partner
 //           for it (the sound-presence rule's own input) — no file is read
 // The record comes from the sealed corpus catalog; a file the catalog has no
-// record for is `no_record`.
+// record for is `no_record`. `walk(lane:)` is shared with the sweep lane
+// (CorpusSweepDriver.swift), which reads the wider collection in place.
 
 import Foundation
 import XCTest
@@ -26,9 +27,15 @@ import VideoScanCore
 final class CorpusCheckDriver: XCTestCase {
 
     func testCheckLane() async throws {
+        try await CorpusCheckDriver.walk(lane: "check")
+    }
+
+    /// The check lane's engines over the run's pending files. Also the sweep lane's
+    /// (CorpusSweepDriver): the same engines, over files read in place on the live mount.
+    static func walk(lane: String) async throws {
         let run: CorpusRun
         do {
-            run = try CorpusRun.open(lane: "check")
+            run = try CorpusRun.open(lane: lane)
         } catch let refusal as CorpusRefusal {
             return XCTFail("corpus harness refused: \(refusal.word)")
         }
