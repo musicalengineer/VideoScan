@@ -18223,6 +18223,37 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RealWorldShapeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RealWorldUnopenableTests",
+        "RealWorldProbeJSONTests",
+        "RealWorldFrameRateTests",
+        "RealWorldTruncatedHeaderTests",
+        "RealWorldWalkerTests"
+      ],
+      "tests": [
+        "bareVideoStream",
+        "closeEnoughAgrees",
+        "contentComplaints",
+        "elementaryStreamNoAverage",
+        "emptyReport",
+        "endOfFile",
+        "fallbackWording",
+        "headerDisagreesWithAverage",
+        "ioIsNotBlamed",
+        "noRateAnywhere",
+        "notMedia",
+        "nullsAndJunk",
+        "severalSoundTracks",
+        "systemFoldersSkipped",
+        "timestampsWithoutEvidence",
+        "truncatedMP4"
+      ]
+    },
+    {
       "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
@@ -34360,7 +34391,9 @@
         "test_a_driver_that_does_not_build_is_red_and_runs_nothing",
         "test_a_driver_that_refuses_or_never_starts_is_red_not_a_loop",
         "test_a_file_added_under_media_is_seen_by_the_sweep",
+        "test_a_file_missing_or_resized_on_the_mount_is_counted_and_not_run",
         "test_a_file_past_its_deadline_is_recorded_and_the_rest_still_run",
+        "test_a_file_that_changes_on_the_mount_during_the_run_is_red",
         "test_a_helper_that_dies_without_a_summary_is_red_and_says_so",
         "test_a_known_error_word_unchanged_is_green_and_a_change_of_kinds_alone_is_only_noted",
         "test_a_lane_refuses_a_sealed_catalog_built_by_an_older_transform",
@@ -34379,6 +34412,7 @@
         "test_a_refused_prepare_leaves_the_last_good_catalog_in_place",
         "test_a_stale_overlay_from_a_dead_run_is_moved_aside_first",
         "test_a_state_root_outside_corpus_state_is_refused",
+        "test_a_sweep_reads_the_live_mount_in_place_and_reports_what_each_file_cost",
         "test_a_word_cannot_carry_a_path_a_filename_or_a_sentence",
         "test_a_work_folder_a_dead_run_left_is_removed_and_a_live_one_is_not",
         "test_accept_blesses_the_newest_run_and_records_who_when_and_which",
@@ -34414,11 +34448,13 @@
         "test_nothing_a_caller_reads_back_names_a_file_or_a_path",
         "test_nothing_is_pruned_while_the_baseline_cannot_be_read_back",
         "test_nothing_is_read_before_the_gate_holds",
+        "test_only_the_sweep_lane_reads_in_place_and_only_under_the_live_mount",
         "test_pair_links_are_carried_as_the_apps_own_row_knowledge_rows",
         "test_prepare_and_status_dry_runs",
         "test_prepare_twice_gives_the_same_catalog",
         "test_run_check_ships_the_harness_and_never_runs_on_the_ultra",
         "test_settle_ignores_a_cut_line_and_unknown_files",
+        "test_slices_take_the_next_files_this_commit_has_not_swept",
         "test_status_before_and_after_the_first_run",
         "test_status_is_refused_off_the_m4",
         "test_status_shows_what_changed_as_counts_and_transitions_only",
@@ -34435,6 +34471,8 @@
         "test_the_in_app_driver_carries_the_same_seal",
         "test_the_m4_with_its_marker_and_default_state_root_passes",
         "test_the_newest_runs_the_baseline_and_every_red_run_stay",
+        "test_the_order_is_round_robin_over_kinds_rarest_first",
+        "test_the_path_rewrite_refuses_a_path_that_does_not_start_with_what_it_strips",
         "test_the_progress_file_is_this_runs_own",
         "test_the_result_is_a_sealed_snapshot_with_nothing_beside_it",
         "test_the_runs_folders_must_be_inside_the_run_by_real_containment",
@@ -34454,6 +34492,7 @@
         "test_verify_sees_a_file_that_went_missing_or_changed_size_after_prepare",
         "test_what_promote_locked_is_unlocked_inside_the_work_folder_and_removed",
         "test_with_the_engine_it_runs_the_one_sided_files_and_lists_them_by_sha_prefix",
+        "test_without_a_read_only_mount_nothing_is_built_or_run",
         "test_writes_stay_inside_state_work_and_reports"
       ]
     },
@@ -38156,6 +38195,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogTrashPairGroupLiveCatalogTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RealWorldShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
