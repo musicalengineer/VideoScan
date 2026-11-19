@@ -34662,6 +34662,28 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_m4_run_faults.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_run_faults.py"
+      ],
+      "tests": [
+        "test_a_corpus_lane_that_exits_0_without_a_summary_is_red",
+        "test_a_lanes_file_missing_a_lane_is_red",
+        "test_a_link_that_comes_back_still_reports_the_runs_verdict",
+        "test_a_link_that_stays_down_ends_the_wait_with_could_not_run_never_green",
+        "test_a_ref_whose_corpus_driver_does_not_build_is_a_red_testbed",
+        "test_a_run_inside_the_ceiling_starts",
+        "test_a_run_that_would_cross_90_percent_is_refused_before_start",
+        "test_a_torn_suite_row_is_red_at_every_cut",
+        "test_an_amber_corpus_lane_without_a_summary_is_red_too",
+        "test_the_forecast_by_lane",
+        "test_the_testbed_lane_asks_for_its_three_lanes"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_m4_run_testbed_lane.py",
       "stage": "regression",
       "suites": [
@@ -34817,13 +34839,19 @@
         "test_nightly_coverage.py"
       ],
       "tests": [
+        "test_a_core_suite_with_no_number_is_red",
+        "test_a_failed_core_suite_is_red_even_when_coverage_was_measured",
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
         "test_core_codecov_json_keeps_only_core_sources",
+        "test_core_counts_read_both_runners_and_name_the_failed_tests",
         "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",
         "test_folders_split_logic_from_views_and_core_from_app",
         "test_no_profile_no_binary_or_a_failed_tool_is_no_coverage_never_a_guess",
         "test_profiles_from_before_todays_run_are_not_todays_coverage",
         "test_sensor_a_night_without_core_coverage_says_missing_in_capitals",
+        "test_sensor_main_tidies_after_the_report_is_written",
+        "test_sensor_main_writes_the_verdict_word_and_exits_non_zero_on_red",
+        "test_tidy_drops_every_result_bundle_and_keeps_a_week_of_logs",
         "test_yesterdays_swiftpm_export_is_not_todays_coverage",
         "test_zero_coverage_logic_files_are_flagged_but_small_ones_are_not"
       ]
@@ -35994,6 +36022,7 @@
         "test_a_run_with_only_test_code_findings_is_grey_and_its_halted_host_is_explained",
         "test_a_test_only_report_right_before_the_restart_explains_it_whatever_the_sanitizer",
         "test_a_test_only_report_the_host_ran_on_from_does_not_explain_a_later_crash",
+        "test_a_weekly_runs_derived_data_goes_after_its_row_and_nothing_else",
         "test_alert_flags_failures_and_skips",
         "test_alert_is_quiet_when_green_or_stale",
         "test_alert_main_reads_latest_files",
@@ -36019,6 +36048,7 @@
         "test_published_rows_older_than_the_window_or_green_are_quiet",
         "test_published_rows_reach_a_mac_without_the_local_files",
         "test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget",
+        "test_sensor_main_drops_only_a_weekly_runs_cache_after_writing_its_row",
         "test_status_precedence_without_findings",
         "test_the_1114_failing_tests_are_named_from_xcodebuilds_own_list",
         "test_the_1114_report_one_frame_down_is_the_known_463_and_the_run_is_not_red",
@@ -40986,6 +41016,10 @@
         },
         {
           "name": "tests/test_testbed_cleanup.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_m4_run_faults.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

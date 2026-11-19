@@ -426,6 +426,8 @@ def testbed_block(rows, sha, seconds):
                 counts = 'no result row (see the lane\'s own lines)'
         else:
             counts, more = corpus_lane_lines(facts)
+        if not facts_path:                                 # added by testbed_main --expect: the lane wrote no row
+            counts, more = 'no row: the lane never reported', []
         lines.append(f"  {name:<13} {verdict:<5} {secs:>6}s  {counts}")
         lines += [TESTBED_INDENT + line for line in more]
     head = f"testbed: {worst} at {str(sha)[:9]} — {len(rows)} lane{'s' if len(rows) != 1 else ''}, wall {seconds}s"
@@ -439,6 +441,7 @@ def testbed_main(argv):
     ap.add_argument('lanes')
     ap.add_argument('sha')
     ap.add_argument('seconds', type=int)
+    ap.add_argument('--expect', default='', help='comma-separated lane names; each one without a row is RED')
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -452,6 +455,12 @@ def testbed_main(argv):
                     rows.append((parts[0], parts[1], parts[2] if parts[2].isdigit() else '?', parts[3]))
     except OSError:
         rows = []
+    # A lane the run should have had and that wrote no whole row (its shell died between lanes, the row
+    # was torn) is RED with a row of its own: a missing lane never makes the rest look complete.
+    have = {row[0] for row in rows}
+    for name in [n for n in a.expect.split(',') if n]:
+        if name not in have:
+            rows.append((name, RED, '?', ''))
     verdict, lines = testbed_block(rows, a.sha, a.seconds)
     print('\n'.join(lines))
     return {GREEN: 0, AMBER: 3, NORUN: 4, RED: 1}[verdict]

@@ -104,7 +104,8 @@
 # build caches below — only when that reaches the floor. M4 only. Deletion works through folder descriptors
 # opened from $HOME down without following links (~/m4run/out, ~/corpus/work, those two caches; never a mount, never
 # the corpus protected set), and refuses unless the lock names this run. A stuck cleanup stops at 900 s; the run
-# reaches its OUTCOME whatever the cleanup does.
+# reaches its OUTCOME whatever the cleanup does. After the start cleanup, a run whose measured worst case would
+# take the disk past 90% used is refused before START (`OUTCOME REFUSED disk: …`, exit 4; testbed_host.py forecast).
 #
 # Worst-case resources: one Debug DerivedData per host (~15 GB), plus for the
 # suite lane one Release DerivedData and one Core scratch (<DerivedData>-suite,
@@ -118,6 +119,8 @@
 #       3 busy · 4 testbed worktree not usable (or a run folder that already exists) · 5 nightly window or the
 #       quiet window before a scheduled run (also when the run reaches its lock after the window opened) ·
 #       6 (--unless-ran, the push watcher's) that commit was already run to a verdict.
+#       --wait that cannot reach the host for 15 min running (ssh fails every poll) stops waiting and says
+#       "lost contact"; the run goes on there by itself (exit as "could not run": 1, or 2 for suite/testbed).
 #       suite --wait: 0 GREEN · 1 RED · 2 could not run (the host refused it, the machine preflight
 #       stopped it, its shell was stopped before an OUTCOME, or the wait gave up); a run that never
 #       started still exits 3 / 4 / 5 as above. testbed --wait: the same three — 0 only when no
@@ -150,6 +153,7 @@ CORPUS_BUDGET=21600          # corpus lane: a build, then every corpus file unde
 WAIT_BUDGET=23400            # past every single lane's budget, so --wait outlives the run it waits for
 TESTBED_WAIT_BUDGET=$((SUITE_BUDGET + 2 * CORPUS_BUDGET + 900))   # testbed = suite + two corpus lanes, back to back
 WAIT_POLL="${VIDEOSCAN_M4RUN_WAIT_POLL:-30}"     # seconds between --wait polls (tests shorten it)
+UNREACHABLE_BUDGET="${VIDEOSCAN_M4RUN_UNREACHABLE_SECONDS:-900}"   # --wait: this long without reaching the host ends the wait
 
 usage() {
     sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'
@@ -445,12 +449,21 @@ SH
 }
 
 wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
-    local out="$1" waited=0 line norun=1 free=0 budget="$WAIT_BUDGET"
+    local out="$1" waited=0 line norun=1 free=0 budget="$WAIT_BUDGET" lost=0
     [ "$LANE" = suite ] && norun=2       # suite: could-not-run is told apart from RED
     [ "$LANE" = testbed ] && { norun=2; budget="$TESTBED_WAIT_BUDGET"; }
     while [ "$waited" -lt "$budget" ]; do
         sleep "$WAIT_POLL"; waited=$((waited + WAIT_POLL))
-        line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
+        # The host cannot be reached (ssh exit 255: the link dropped, the M4 asleep or gone). The run
+        # goes on there by itself (a LaunchAgent, not this ssh); a short drop is waited out, a long
+        # one ends the wait honestly instead of polling out a 6.5 h budget (2026-11-18 fault injection).
+        if ! line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"; then
+            lost=$((lost + WAIT_POLL))
+            [ "$lost" -ge "$UNREACHABLE_BUDGET" ] && \
+                die "lost contact with $H_NAME for ${lost}s (every poll failed); the run may still be going there — scripts/m4_run.sh status --host $HOST" "$norun"
+            continue
+        fi
+        lost=0
         if [ -n "$line" ]; then
             on_host "$(status_snippet)"
             # AMBER is not a failure for a --wait caller (exit 0); the line says AMBER.
@@ -701,7 +714,9 @@ host_corpus() {   # host_corpus <sha> <stamp>
             if [ -f "$cout/corpus-summary.txt" ]; then
                 python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout" >>"$OUT/summary.txt"
             else
+                # A lane that reported nothing is RED whatever its exit said (a lane with no number is red).
                 echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
+                rc=1
             fi ;;
         2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" >>"$OUT/summary.txt" ;;
         124) ;;
@@ -742,7 +757,8 @@ host_testbed() {   # host_testbed <sha> <stamp>
         testbed_lane "corpus $corpus_lane" "$COUT/corpus-verdict.json" host_corpus "$sha" "$stamp"
     done
     CORPUS_LANE=""; COUT=""
-    block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))")"
+    # --expect: a lane with no row (the shell died between lanes, a torn row) is RED, never left out.
+    block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))" --expect 'suite,corpus check,corpus proof')"
     vrc=$?
     # The block is built from the lanes' facts files: it reaches a caller only through the show door.
     printf '%s\n' "$block" >"$OUT/testbed-block.raw"
@@ -803,6 +819,16 @@ host_main() {   # __host <lane> <sha> <stamp>
     local clean_tool=""
     [ "$H_MACHINE" = m4 ] && [ -f "$SCRIPT_DIR/testbed_host.py" ] && clean_tool="$SCRIPT_DIR/testbed_host.py"
     [ -n "$clean_tool" ] && python3 "$clean_tool" clean "$H_ROOT" --current "$OUT" --phase start 2>&1
+    # The 90% ceiling (DECISIONS 2026-11-18): after the cleanup, a run whose measured worst case would take
+    # the disk past it is refused here, before START — nothing checked out, built or run.
+    if [ -n "$clean_tool" ]; then
+        local forecast
+        forecast="$(python3 "$clean_tool" forecast "$H_ROOT" "$lane" "$CORPUS_LANE" 2>&1)"
+        case "$forecast" in
+            REFUSE*) echo "OUTCOME REFUSED ${forecast#REFUSE }; nothing was started"; exit 4 ;;
+            *) echo "$forecast" ;;
+        esac
+    fi
     [ "$lane" = suite ] && ln -sfn "$OUT" "$H_ROOT/latest-suite"
     [ "$lane" = testbed ] && ln -sfn "$OUT" "$H_ROOT/latest-testbed"
     # The testbed worktree is mutated HERE, under the lock, never by the

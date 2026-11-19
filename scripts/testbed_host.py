@@ -10,6 +10,11 @@
     testbed_host.py clean <root> --current <run dir> --phase start|end
     testbed_host.py sample <root> <run dir>
     testbed_host.py stop <root> <run dir>
+    testbed_host.py forecast <root> <lane> [<corpus lane>]
+
+forecast prints "OK disk: ..." or "REFUSE disk: ..." (a run of that lane, at its measured worst
+case, would take the volume past 90% used: DECISIONS 2026-11-18). m4_run.sh asks it under the
+lock, after the start cleanup, and refuses the run before START on REFUSE.
 
 clean and sample (DECISIONS 2026-11-18, the M4 kept at least 50% free): see the section
 "clean" below. clean runs at a run start and once its summary is written, under the lock it
@@ -723,6 +728,29 @@ def disk_space(path: str):
     return st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
 
 
+# ── forecast: a run that would take the disk past ~90% used is refused before it starts ──
+# DECISIONS 2026-11-18: "up to something sensible like 90% even ... we just dont want it to ... fail due to
+# disk full". Worst-case GB a run adds while it works, cold caches included. Measured on the M4 from
+# disk-start.txt against disk-low.txt: a warm suite run 3.5 GB, a cold coverage run 14.5 GB (2026-11-18);
+# the others are built from their parts: a cold suite cache 7.3 GB, a cold lane cache 5.5 GB, a run
+# folder 0.45 GB, a gauntlet run (estimated). An unknown lane takes the largest.
+CEILING = 0.90
+PEAK_GB = {"suite": 12, "testbed": 20, "corpus": 10, "corpus:coverage": 16, "ui": 8, "deep": 20, "all": 28}
+
+
+def forecast(lane: str, corpus_lane: str, space) -> str:
+    """"OK disk: ..." or "REFUSE disk: ..." for a run of `lane` given (free, total) bytes now."""
+    free, total = space
+    if total <= 0:
+        return "REFUSE disk: the size of the volume could not be read"
+    peak = PEAK_GB.get("corpus:" + corpus_lane, PEAK_GB.get(lane, max(PEAK_GB.values())))
+    used = total - free
+    after = used + peak * 1e9
+    words = "%s used now; a %s run needs up to %d GB, which would take it to %s (ceiling %d%%)" % (
+        _pct(used, total), (lane + " " + corpus_lane).strip(), peak, _pct(after, total), CEILING * 100)
+    return ("REFUSE disk: " if after > CEILING * total else "OK disk: ") + words
+
+
 def _holds_lock(root: str, current: str) -> bool:
     """True when the testbed lock is held (the kernel says so) and its holder named `current` as its run folder."""
     busy, holder = lock_state(root)
@@ -1243,6 +1271,9 @@ def main(argv: list) -> int:
         except Refused as error:
             print("sample refused: %s" % error, file=sys.stderr)
             return 2
+    if len(argv) in (3, 4) and argv[0] == "forecast":
+        print(forecast(argv[2], argv[3] if len(argv) == 4 else "", disk_space(argv[1])))
+        return 0
     if len(argv) == 3 and argv[0] == "status-json":
         print(status_json(argv[1], argv[2]))
         return 0
