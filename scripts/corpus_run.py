@@ -1308,68 +1308,253 @@ def source_sweep(entries: Iterable[Entry]) -> Dict[str, Tuple[int, int]]:
     return seen
 
 
+def sweep_entries(seal: Seal, names: List[str]) -> Tuple[List[Entry], Dict[str, tuple]]:
+    """The catalog backup's live rows on the mounts `names` (one per content, by SHA-256), each
+    pointing at its place on the live mount, and each file's kind for `sweep_order`."""
+    live = seal.corpus / "live"
+    backup = seal.corpus / SOURCE_BACKUP
+    if not backup.is_file() or os.path.islink(str(backup)):
+        raise Refused(f"refused: ~/corpus/{SOURCE_BACKUP} is missing")
+    conn = sqlite3.connect("file:" + urllib.parse.quote(str(backup.resolve())) + "?immutable=1", uri=True)
+    try:
+        rows = conn.execute("SELECT content_digest, full_path, size_bytes, stream_type, container, video_codec, audio_codec FROM files "
+                            "WHERE removal_state IS NULL AND content_digest IS NOT NULL ORDER BY content_digest, full_path").fetchall()
+    except sqlite3.Error:
+        raise Refused("refused: the catalog backup has no readable files table")
+    finally:
+        conn.close()
+    entries, seen, kind = [], set(), {}
+    for sha, original, size, stream_type, container, vcodec, acodec in rows:
+        parts = str(original).split("/")
+        if (len(parts) < 4 or parts[1] != "Volumes" or parts[2] not in names or ".." in parts
+                or not re.fullmatch(r"[0-9a-f]{64}", str(sha)) or sha in seen):
+            continue
+        seen.add(sha)
+        entries.append(Entry(sha, original, int(size or 0), sweep_stratum(stream_type, size), live / original[len("/Volumes/"):]))
+        kind[sha] = (sweep_stratum(stream_type, size), container or "", vcodec or "", acodec or "")
+    return entries, kind
+
+
+def swept_at(seal: Seal, sha: str) -> set:
+    """The contents a sweep at commit `sha` has already run."""
+    done = set()
+    for run in lane_runs(seal, "sweep"):
+        if run.parent.name == sha:
+            try:
+                done |= set(_outcomes(run))
+            except (OSError, ValueError):
+                continue
+    return done
+
+
+# ── The sweep's stage: transient local copies (2026-11-18) ─────────────────
+#
+# The app's test host is ad-hoc signed, so macOS asks again, on the M4's screen, whether
+# it may read a NETWORK volume each time the build changes (TCC kTCCServiceSystemPolicy-
+# NetworkVolumes: "failed to match existing code requirement"); until someone answers,
+# every ffprobe it starts is parked inside open() and the engines run into their own
+# deadlines (seen on the first sweep: 150 s per file, all of it waiting). An ssh session
+# on the M4 reads the share freely. So `stage` — run over ssh from the Ultra, under the
+# testbed lock — copies the next slice into ~/corpus/work/sweep-stage/<commit>/ (laid out
+# /Volumes/<name>/… like the share), each copy hashed while it is written and kept only if
+# its SHA-256 is the catalog's; the sweep lane then runs on the copies and REMOVES the
+# stage when it ends. The share is only read. Disk: at most `budget` bytes (default
+# STAGE_BUDGET) and never below STAGE_FREE_FLOOR of the disk free; the copies live for
+# one slice (DECISIONS 2026-11-18: a run may chew disk, its scratch goes after the summary).
+# Memory: one 8 MB buffer.
+
+STAGE_DIR = "sweep-stage"                        # ~/corpus/work/sweep-stage/<commit>/ — not a run's folder name
+STAGE_MANIFEST = "stage.json"
+STAGE_BUDGET = 150 << 30
+STAGE_FREE_FLOOR = 0.10                          # keep at least this share of the disk free (90% used at most)
+STAGE_CHUNK = 8 << 20
+
+
+class testbed_lock:
+    """The testbed lock (scripts/testbed_lock.py: a kernel flock on ~/m4run/lock/flock) held for the
+    stage's copies, which run over ssh, outside m4_run.sh. Busy is a refusal; the lock is released
+    when the copy ends (or the process dies). The info file is the busy message only."""
+
+    def __init__(self, seal: Seal, info: str):
+        self.folder, self.info, self.fd = seal.home / "m4run" / "lock", info, -1
+
+    def __enter__(self):
+        if os.path.islink(str(self.folder)) or not self.folder.is_dir():
+            raise Refused("refused: ~/m4run/lock is not the testbed lock folder")
+        self.fd = os.open(str(self.folder / "flock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            import fcntl
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(self.fd)
+            try:
+                holder = (self.folder / "info").read_text(encoding="utf-8", errors="replace").strip().split(" ", 1)[-1]
+            except OSError:
+                holder = "(no info)"
+            raise Refused(f"refused: the testbed is busy: {word(holder.split(' ')[0])} — stage again when it is free")
+        try:
+            with os.fdopen(guarded_open(self.folder / "info"), "w") as f:
+                f.write(f"{os.getpid()} {self.info} since {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        except (OSError, Refused):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        os.close(self.fd)                                    # the flock goes with the descriptor
+        return False
+
+
+def stage_root(seal: Seal, sha: str) -> Path:
+    return seal.work_root / STAGE_DIR / sha
+
+
+def copy_hashed(source: Path, dest: Path, seal: Seal) -> Tuple[str, float]:
+    """Copy `source` (read only) to `dest` (a new file inside the stage, opened through the seal's
+    guarded door) hashing what is written; the modification time is kept. (SHA-256, seconds)."""
+    seal.mkdir(dest.parent)
+    digest = hashlib.sha256()
+    t0 = time.time()
+    with open(str(source), "rb", buffering=0) as src, os.fdopen(guarded_open(seal.writable(dest)), "wb") as out:
+        while True:
+            chunk = src.read(STAGE_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+            out.write(chunk)
+    st = os.stat(str(source))
+    os.utime(str(dest), ns=(st.st_atime_ns, st.st_mtime_ns))
+    return digest.hexdigest(), time.time() - t0
+
+
+def stage_sweep(seal: Seal, sha: str, limit: int, max_file: int, budget: int = STAGE_BUDGET,
+                mounts: Optional[List[str]] = None, disk=shutil.disk_usage) -> List[str]:
+    """Copy the next `limit` files a sweep at `sha` has not run (the sweep's own order; files over
+    `max_file` bytes are deferred) into the stage. Refused while a stage for `sha` is already there."""
+    seal.check()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise Refused("refused: --sha is a full commit id")
+    names = list(mounts) if mounts is not None else source_mounts(seal)
+    if not names:
+        raise Refused("refused: there is no read-only mount under ~/corpus/live to stage from")
+    root = stage_root(seal, sha)
+    if os.path.lexists(str(root)):
+        raise Refused("refused: a stage for this commit is already there — sweep it (or remove it) first")
+    entries, kind = sweep_entries(seal, names)
+    done = swept_at(seal, sha)
+    seal.mkdir(root)
+    staged, counts = [], Counter()
+    used, copy_s = 0, 0.0
+    total = disk(str(seal.corpus)).total
+    for e in sweep_order(entries, kind):
+        if len(staged) >= limit:
+            break
+        if e.sha in done:
+            counts["swept_before"] += 1
+            continue
+        if e.size > max_file:
+            counts["deferred_large"] += 1
+            continue
+        if used + e.size > budget or disk(str(seal.corpus)).free - e.size < STAGE_FREE_FLOOR * total:
+            counts["deferred_no_room"] += 1
+            continue
+        try:
+            if os.stat(str(e.path)).st_size != e.size:
+                counts["size_differs"] += 1
+                continue
+        except OSError:
+            counts["missing"] += 1
+            continue
+        dest = root / e.original.lstrip("/")
+        try:
+            got, took = copy_hashed(e.path, dest, seal)
+        except OSError:
+            counts["unreadable"] += 1
+            if os.path.lexists(str(dest)):
+                os.unlink(str(seal.writable(dest)))
+            continue
+        if got != e.sha:
+            counts["digest_mismatch"] += 1               # the bytes on the share are not the catalog's content
+            os.unlink(str(seal.writable(dest)))
+            continue
+        used += e.size
+        copy_s += took
+        staged.append({"sha": e.sha, "original": e.original, "size": e.size, "stratum": e.stratum, "copy_s": round(took, 2)})
+    record = {"sha": sha, "staged": staged, "counts": dict(counts), "bytes": used, "copy_s": round(copy_s, 1),
+              "listed": len(entries), "kinds": len(set(kind.values())), "mounts": len(names),
+              "staged_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    seal.write_json(root / STAGE_MANIFEST, record)
+    rate = f"{used / 1e6 / copy_s:.0f} MB/s" if copy_s > 0 else "-"
+    return [f"corpus stage: {len(staged)} files ({used / 1e9:.1f} GB) copied from the read-only share in {copy_s:.0f}s ({rate}), "
+            f"each SHA-256 checked against the catalog; " + (_counts(dict(counts)) if counts else "nothing skipped")]
+
+
 class SweepLane(Lane):
-    """Lane `sweep`: the check lane's engines over the WIDER collection, read in place on the
-    read-only mount(s) under ~/corpus/live (the Ultra's media shared over Thunderbolt). Nothing is
-    copied. The files are the catalog backup's live rows on those mounts (one per content), each
-    present at its row's size; a catalog over them is built for the run in its work folder by
-    prepare's own transform (paths rewritten from /Volumes/<name>/… to ~/corpus/live/<name>/…).
-    `--limit N` takes the next N files this commit has not swept yet, so a long sweep is run in
-    slices (each a partial run: never a baseline). Every swept file's size and mtime are compared
-    before and after (a difference is RED). The report adds what each file cost (wall, our CPU,
-    ffprobe/ffmpeg CPU, peak footprint) by format, and the slowest files by SHA-256 prefix.
-    Memory: the backup's matching rows (~6k on the LaCie mount: a few MB)."""
+    """Lane `sweep`: the check lane's engines over the WIDER collection: the catalog backup's live
+    rows on the read-only mount(s) under ~/corpus/live (the Ultra's media shared over Thunderbolt),
+    one per content. Two ways to reach the files: IN PLACE on the mount, or — when `stage` has put
+    this commit's next slice into ~/corpus/work/sweep-stage/<commit>/ — the staged copies (the
+    test host cannot open a network volume until macOS is told it may; see the stage's notes). A
+    catalog over the files is built for the run in its work folder by prepare's own transform.
+    In place, `--limit N` takes the next N files this commit has not swept (a slice: never a
+    baseline). Every swept file's size and mtime on the share are compared before and after (a
+    difference is RED); a stage is removed when the run ends. The report adds what each file cost
+    (wall, our CPU, ffprobe/ffmpeg CPU, peak footprint) by format, and the slowest files by SHA-256
+    prefix. Memory: the backup's matching rows (~6k on the LaCie mount: a few MB)."""
 
     def __init__(self, *args, mounts: Optional[List[str]] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.mounts = mounts                                 # tests: the names that stand for read-only mounts
-        self.source: Dict[str, int] = {}
+        self.source: Dict[str, object] = {}
         self.before: Dict[str, Tuple[int, int]] = {}
         self._swept: List[Entry] = []
+        self.originals: Dict[str, Path] = {}                 # sha -> the file on the share (staged runs read a copy)
+        self.staged: Optional[dict] = None
 
     def live(self) -> Path:
         return self.seal.corpus / "live"
 
+    def files_root(self) -> Path:
+        return stage_root(self.seal, self.sha) if self.staged is not None else self.live()
+
     def inputs(self) -> Tuple[List[Entry], Path]:
         seal = self.seal
+        root = stage_root(seal, self.sha)
+        if os.path.lexists(str(root)):
+            try:
+                self.staged = json.loads(seal.contained(root / STAGE_MANIFEST, root).read_text(encoding="utf-8"))
+                staged = self.staged["staged"]
+            except (OSError, ValueError, KeyError, TypeError, Refused):
+                raise Refused("refused: the stage for this commit cannot be read back — remove it and stage again")
+            entries = []
+            for row in staged:
+                original = str(row["original"])
+                if not re.fullmatch(r"[0-9a-f]{64}", str(row["sha"])) or not original.startswith("/Volumes/") or ".." in original.split("/"):
+                    raise Refused("refused: a stage row is not a sha256 plus an original /Volumes path")
+                e = Entry(row["sha"], original, int(row["size"]), str(row.get("stratum", "unknown")), root / original.lstrip("/"))
+                self.originals[e.sha] = self.live() / original[len("/Volumes/"):]
+                entries.append(e)
+            self.source = {"staged": len(entries), "listed": self.staged.get("listed", 0), "kinds": self.staged.get("kinds", 0),
+                           "mounts": self.staged.get("mounts", 0), "stage_counts": self.staged.get("counts", {}),
+                           "copy_s": self.staged.get("copy_s", 0), "stage_bytes": self.staged.get("bytes", 0)}
+            if not entries:
+                raise Refused("refused: the stage for this commit holds no file")
+            return entries, seal.state / "unused"
         names = list(self.mounts) if self.mounts is not None else source_mounts(seal)
         if not names:
             raise Refused("refused: there is no read-only mount under ~/corpus/live to sweep")
-        backup = seal.corpus / SOURCE_BACKUP
-        if not backup.is_file() or os.path.islink(str(backup)):
-            raise Refused(f"refused: ~/corpus/{SOURCE_BACKUP} is missing")
-        conn = sqlite3.connect("file:" + urllib.parse.quote(str(backup.resolve())) + "?immutable=1", uri=True)
-        try:
-            rows = conn.execute("SELECT content_digest, full_path, size_bytes, stream_type, container, video_codec, audio_codec FROM files "
-                                "WHERE removal_state IS NULL AND content_digest IS NOT NULL ORDER BY content_digest, full_path").fetchall()
-        except sqlite3.Error:
-            raise Refused("refused: the catalog backup has no readable files table")
-        finally:
-            conn.close()
-        entries, seen, kind = [], set(), {}
-        for sha, original, size, stream_type, container, vcodec, acodec in rows:
-            parts = str(original).split("/")
-            if (len(parts) < 4 or parts[1] != "Volumes" or parts[2] not in names or ".." in parts
-                    or not re.fullmatch(r"[0-9a-f]{64}", str(sha)) or sha in seen):
-                continue
-            seen.add(sha)
-            entries.append(Entry(sha, original, int(size or 0), sweep_stratum(stream_type, size),
-                                 self.live() / original[len("/Volumes/"):]))
-            kind[sha] = (sweep_stratum(stream_type, size), container or "", vcodec or "", acodec or "")
+        entries, kind = sweep_entries(seal, names)
         self.source = {"mounts": len(names), "listed": len(entries), "kinds": len(set(kind.values()))}
         if not entries:
             raise Refused("refused: the catalog backup lists no live file on the mounts under ~/corpus/live")
-        return sweep_order(entries, kind), self.seal.state / "unused"    # the run's catalog is built in `stage`
+        for e in entries:
+            self.originals[e.sha] = e.path
+        return sweep_order(entries, kind), seal.state / "unused"     # the run's catalog is built in `stage`
 
     def scope(self, entries: List[Entry]) -> List[Entry]:
-        done = set()
-        if self.limit:                                       # a slice: the files this commit has not swept yet
-            for run in lane_runs(self.seal, self.lane):
-                if run.parent.name == self.sha:
-                    try:
-                        done |= set(_outcomes(run))
-                    except (OSError, ValueError):
-                        continue
+        if self.staged is not None:                          # the stage chose the slice and checked every copy
+            self.source.update({"chosen": len(entries)})
+            return entries
+        done = swept_at(self.seal, self.sha) if self.limit else set()
         chosen, missing, differs = [], 0, 0
         for e in entries:
             if e.sha in done:
@@ -1388,37 +1573,47 @@ class SweepLane(Lane):
         return chosen
 
     def config_extra(self) -> dict:
-        return {"sourceRoot": str(self.live())}
+        return {"sourceRoot": str(self.files_root())}
 
     def stage(self, entries: List[Entry], database: Path) -> Tuple[List[Entry], Path]:
         seal = self.seal
         database_name, latch_name = _catalog_names()
         seal.mkdir(self.home())
-        self.before = source_sweep(entries)
+        self.before = source_sweep(Entry(e.sha, e.original, e.size, e.stratum, self.originals[e.sha]) for e in entries)
         seed = self.work / "seed"
         seal.mkdir(seed)
-        build_catalog(seal, seal.corpus / SOURCE_BACKUP, entries, seed / database_name, root=self.live(), strip="/Volumes")
+        root = self.files_root()
+        strip = "" if self.staged is not None else "/Volumes"
+        build_catalog(seal, seal.corpus / SOURCE_BACKUP, entries, seed / database_name, root=root, strip=strip)
         seal.write_text(seed / latch_name, "{}\n")
-        verdict = verify_catalog(seal, seed / database_name, entries, root=self.live())
+        verdict = verify_catalog(seal, seed / database_name, entries, root=root)
         if not verdict["ok"]:
-            raise Refused("refused: the catalog over the live mount did not verify — " + ", ".join(
+            raise Refused("refused: the catalog over the sweep's files did not verify — " + ", ".join(
                 f"{k}={v}" for k, v in sorted(verdict.items()) if v and k not in ("rows", "manifest")))
         return entries, seed / database_name
 
     def after(self, results: Dict[str, dict], report: dict) -> None:
-        after = source_sweep(e for e in self.entries_swept())
+        swept = [Entry(e.sha, e.original, e.size, e.stratum, self.originals[e.sha]) for e in self._swept]
+        after = source_sweep(swept)
         changed = sum(1 for sha, was in self.before.items() if after.get(sha) != was)
         report["source"] = {**self.source, "checked_after": len(self.before), "changed": changed}
         if changed:
             report["failures"]["source:MISMATCH"] = changed    # RED: a file on the read-only mount moved under the run
         report["perf"] = sweep_cost(results, self.engines)
 
-    def entries_swept(self) -> List[Entry]:
-        return self._swept
-
     def run_files(self, entries: List[Entry], database: Path):
         self._swept = entries
         return super().run_files(entries, database)
+
+    def remove_work(self) -> None:
+        super().remove_work()
+        root = stage_root(self.seal, self.sha)
+        if self.staged is not None and os.path.isdir(str(root)) and not os.path.islink(str(root)):
+            shutil.rmtree(str(self.seal.writable(root)), ignore_errors=True)     # the copies were this slice's scratch
+            try:
+                (self.seal.work_root / STAGE_DIR).rmdir()     # only when no other commit's stage is there
+            except OSError:
+                pass
 
 
 def sweep_cost(results: Dict[str, dict], engines: List[str]) -> dict:
@@ -1469,9 +1664,13 @@ def sweep_cost(results: Dict[str, dict], engines: List[str]) -> dict:
 def sweep_lines(report: dict) -> List[str]:
     """The sweep's own lines: where its files came from, the read-only proof, and the cost."""
     source, perf = report.get("source") or {}, report.get("perf") or {}
+    where = (f"staged copies ({source.get('stage_bytes', 0) / 1e9:.1f} GB copied in {source.get('copy_s', 0):.0f}s; stage: "
+             f"{_counts(source.get('stage_counts') or {}) if source.get('stage_counts') else 'nothing skipped'}; the stage is removed)"
+             if "staged" in source else
+             f"read in place (already swept at this commit {source.get('swept_before', 0)}, missing {source.get('missing', 0)}, "
+             f"size differs {source.get('size_differs', 0)})")
     lines = [f"  source: {source.get('listed', 0)} live files ({source.get('kinds', 0)} kinds) on {source.get('mounts', 0)} read-only mount(s); "
-             f"this run {source.get('chosen', 0)} (already swept at this commit {source.get('swept_before', 0)}, "
-             f"missing {source.get('missing', 0)}, size differs {source.get('size_differs', 0)}); size and mtime after the run: "
+             f"this run {source.get('chosen', 0)}, {where}; size and mtime on the share after the run: "
              f"{source.get('changed', 0)} changed" + (" — RED" if source.get("changed") else " — untouched")]
     if perf:
         lines.append(f"  cost: peak footprint {perf.get('peak_footprint_mb', 0):.0f} MB; largest ffprobe/ffmpeg RSS "
@@ -1921,6 +2120,12 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     accepting = sub.add_parser("accept")
     accepting.add_argument("lane")
     accepting.add_argument("--by", default="unknown")
+    staging = sub.add_parser("stage")
+    staging.add_argument("lane", choices=["sweep"])
+    staging.add_argument("--sha", required=True)
+    staging.add_argument("--limit", type=int, required=True)
+    staging.add_argument("--max-gb", type=float, default=8.0)
+    staging.add_argument("--budget-gb", type=float, default=STAGE_BUDGET / (1 << 30))
     host = sub.add_parser("host")
     host.add_argument("lane", choices=["prepare"] + sorted(LANES))
     host.add_argument("--sha", required=True)
@@ -1939,6 +2144,11 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             lines, code = status(seal), EXIT_GREEN
         elif args.command == "accept":
             lines, code = accept(seal, args.lane, args.by), EXIT_GREEN
+        elif args.command == "stage":
+            with testbed_lock(seal, f"sweep-stage sha={args.sha[:9]}"):
+                lines = stage_sweep(seal, args.sha, args.limit, int(args.max_gb * (1 << 30)), int(args.budget_gb * (1 << 30)),
+                                    mounts=sweep_mounts)
+            code = EXIT_GREEN
         elif args.lane == "prepare":
             sys.path.insert(0, args.bin)
             code, lines = prepare(seal, Path(args.out))

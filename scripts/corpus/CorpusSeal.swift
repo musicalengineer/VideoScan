@@ -25,7 +25,8 @@
 //   - every file to run is under ~/corpus/media (check, proof), is a clone
 //     inside the run's work folder (verbs), or (the sweep lane only) is under
 //     its `sourceRoot`: ~/corpus/live or a folder in it — the read-only mounts
-//     of the wider collection, read in place and never written;
+//     of the wider collection, read in place — or a slice's staged copies under
+//     ~/corpus/work/sweep-stage/<commit>; never written;
 //   - this is a test host.
 // (For Rick: a caseless `enum` with static functions ≈ a C++ namespace of free functions.)
 
@@ -162,10 +163,13 @@ enum CorpusSeal {
         guard input.isTestHost else { return "not_a_test_host" }
         guard isUnder(input.homeDirectory, state) || inRun(input.homeDirectory),
               isUnder(input.applicationSupport, state) || inRun(input.applicationSupport) else { return "home_not_sealed" }
-        // The sweep lane reads the wider collection in place: its source is ~/corpus/live or a folder in it
-        // (nothing else), and no other lane may name one. Nothing writable may resolve there (below).
+        // The sweep lane reads the wider collection: in place under ~/corpus/live, or the staged copies
+        // of a slice under ~/corpus/work/sweep-stage/<commit> (the share copied by an ssh session, which
+        // macOS lets read a network volume; the test host is asked again at every build). Nothing
+        // else, and no other lane may name a source. Nothing writable may resolve there (below).
+        let stage = work + "/sweep-stage"
         if let source = config.sourceRoot {
-            guard config.lane == "sweep", isUnder(source, live) else {
+            guard config.lane == "sweep", isUnder(source, live) || (isUnder(source, stage) && resolved(source) != resolved(stage)) else {
                 return "a_source_is_outside_the_live_mount"
             }
         } else if config.lane == "sweep" {
@@ -182,6 +186,10 @@ enum CorpusSeal {
         let writable = [config.work, config.progress, input.homeDirectory, input.applicationSupport, config.stateRoot] + verbsFolders
             + (inRun(config.catalog) ? [config.catalog] : [])
         guard !writable.contains(where: pristine) else { return "a_writable_path_is_inside_the_pristine_corpus" }
+        // A staged source is read, never written: nothing writable may resolve inside it either.
+        if let source = config.sourceRoot, writable.contains(where: { isUnder($0, source) }) {
+            return "a_writable_path_is_inside_the_sweep_source"
+        }
         return nil
     }
 }

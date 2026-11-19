@@ -67,8 +67,10 @@ final class CorpusCheckDriver: XCTestCase {
                                      "audio_streams": facts.audioStreams.count,
                                      "bytes": facts.sizeBytes ?? 0])
                     return ("probed", [])
-                case .failure:
-                    return ("unopenable", [])
+                case .failure(let skip):
+                    // The probe's own timeout is the drive's silence, not the file's fault (the sweep met it
+                    // on a network volume the test host was not yet allowed to open): its own word.
+                    return (skip.reason == "the drive did not answer in time" ? "drive_timeout" : "unopenable", [])
                 }
             }
             await run.engine(item, "check") {

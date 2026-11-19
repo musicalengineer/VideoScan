@@ -4,6 +4,7 @@
 #
 #   scripts/corpus_run.sh prepare             [--wait] [--dry-run]
 #   scripts/corpus_run.sh run <check|proof|verbs|sweep> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
+#   scripts/corpus_run.sh stage sweep --ref <rev> --limit <n> [--max-gb <g>] [--budget-gb <g>] [--dry-run]
 #   scripts/corpus_run.sh status              [--dry-run]
 #   scripts/corpus_run.sh accept <check|proof|verbs|sweep> [--dry-run]
 #
@@ -26,6 +27,13 @@
 #             from Catalog each followed by a rescan, Promote into a scratch
 #             archive. Never the Finder Trash, never a real archive; ~/corpus/media
 #             is proven untouched by a size+mtime sweep before and after
+#   stage sweep  over ssh, under the testbed lock: copies the next <n> files a sweep at <rev>
+#             has not run from the read-only share into ~/corpus/work/sweep-stage/<commit>/,
+#             each checked against the catalog's SHA-256 (files over --max-gb, default 8,
+#             wait; at most --budget-gb, default 150, and never below 10% of the disk free).
+#             The next `run sweep --ref <rev>` sweeps those copies and removes them. Why: the
+#             ad-hoc-signed test host is asked by macOS, on the M4's screen, before it may open
+#             a network volume (again at every build); an ssh session may.
 #   status    the testbed lock, then the newest run of each lane judged against
 #             the lane's baseline: counts, outcome words, and each changed file
 #             by SHA-256 prefix (old -> new)
@@ -49,7 +57,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 M4_SSH="ricksm4.local"
 
 usage() {
-    sed -n '4,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '4,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -62,6 +70,31 @@ case "$VERB" in
         LANE="${1:-}"; [ $# -gt 0 ] && shift
         case "$LANE" in check|proof|verbs|sweep) ;; *) echo "corpus_run: run wants check|proof|verbs|sweep" >&2; exit 2 ;; esac
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane "$LANE" "$@" ;;
+    stage)
+        LANE="${1:-}"; [ $# -gt 0 ] && shift
+        [ "$LANE" = sweep ] || { echo "corpus_run: stage wants sweep" >&2; exit 2; }
+        REF=""; LIMIT=""; MAXGB=""; BUDGET=""; DRY=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --ref) REF="${2:-}"; shift 2 || usage ;;
+                --limit) LIMIT="${2:-}"; shift 2 || usage ;;
+                --max-gb) MAXGB="${2:-}"; shift 2 || usage ;;
+                --budget-gb) BUDGET="${2:-}"; shift 2 || usage ;;
+                --dry-run) DRY=1; shift ;;
+                *) usage ;;
+            esac
+        done
+        [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "corpus_run: stage wants --limit <n files>" >&2; exit 2; }
+        [ -z "$MAXGB" ] || [[ "$MAXGB" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "corpus_run: --max-gb wants a number" >&2; exit 2; }
+        [ -z "$BUDGET" ] || [[ "$BUDGET" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "corpus_run: --budget-gb wants a number" >&2; exit 2; }
+        SHA="$(git -C "$SCRIPT_DIR/.." rev-parse --verify "${REF:-HEAD}^{commit}" 2>/dev/null)" \
+            || { echo "corpus_run: --ref does not name a commit" >&2; exit 2; }
+        ARGS="stage sweep --sha $SHA --limit $LIMIT${MAXGB:+ --max-gb $MAXGB}${BUDGET:+ --budget-gb $BUDGET}"
+        if [ "$DRY" = 1 ]; then
+            echo "+ ssh $M4_SSH python3 - $ARGS < $SCRIPT_DIR/corpus_run.py"
+            exit 0
+        fi
+        ssh -o BatchMode=yes -o ConnectTimeout=15 "$M4_SSH" "python3 - $ARGS" <"$SCRIPT_DIR/corpus_run.py" ;;
     status)
         if [ "${1:-}" = --dry-run ]; then
             /bin/bash "$SCRIPT_DIR/m4_run.sh" status --host m4 --dry-run
@@ -85,5 +118,5 @@ case "$VERB" in
         [ $# -eq 0 ] || usage
         ssh -o BatchMode=yes -o ConnectTimeout=15 "$M4_SSH" "python3 - accept $LANE --by $WHO" <"$SCRIPT_DIR/corpus_run.py" ;;
     ""|-h|--help) usage ;;
-    *) echo "corpus_run: unknown verb '$VERB' (prepare|run|status|accept)" >&2; exit 2 ;;
+    *) echo "corpus_run: unknown verb '$VERB' (prepare|run|stage|status|accept)" >&2; exit 2 ;;
 esac

@@ -807,7 +807,7 @@ class SweepLaneTests(unittest.TestCase):
         self.assertEqual(outcomes[sha_of(2)]['peak_mb'], 99.0)
         summary = (self.scene.out / 'corpus-summary.txt').read_text()
         self.assertIn('corpus sweep: GREEN 3 files', summary)
-        self.assertIn('size and mtime after the run: 0 changed — untouched', summary)
+        self.assertIn('size and mtime on the share after the run: 0 changed — untouched', summary)
         self.assertIn('ffprobe/ffmpeg CPU', summary)
         text = self.scene.everything_that_leaves()
         for name in SECRET_NAMES:
@@ -870,6 +870,101 @@ class SweepLaneTests(unittest.TestCase):
         with self.assertRaises(cr.Refused):
             cr.build_catalog(self.scene.seal, self.scene.source, entries, self.scene.seal.work_root / 'x.sqlite',
                              root=self.scene.live, strip='/Volumes')
+
+
+class StagedSweepScene(SweepScene):
+    """A sweep scene whose share files hold the very bytes the catalog's digests name (`content-<n>`),
+    so a staged copy can be checked against the catalog; plus the testbed lock folder."""
+
+    # n = 3, 4, 5: contents the base scene's extra rows (another copy of 0, a removed 9) do not also name.
+    FILES = [(n + 3, o, len(f'content-{n + 3}'), w) for n, o, _, w in CorpusScene.FILES]
+
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        for n, original, size, _ in self.files:
+            (self.live / original[len('/Volumes/'):]).write_bytes(f'content-{n}'.encode())
+        (self.home / 'm4run' / 'lock').mkdir(parents=True)
+
+    def stage(self, sha='a' * 40, limit=10, **extra):
+        argv = ['stage', 'sweep', '--sha', sha, '--limit', str(limit)]
+        for key, value in extra.items():
+            argv += ['--' + key.replace('_', '-'), str(value)]
+        return cr.main(argv, seal=self.seal, sweep_mounts=self.mounts)
+
+    def share_state(self):
+        return {o: (os.stat(self.live / o[len('/Volumes/'):]).st_size, os.stat(self.live / o[len('/Volumes/'):]).st_mtime_ns)
+                for _, o, _, _ in self.files}
+
+
+class StagedSweepTests(unittest.TestCase):
+    """The sweep's stage (2026-11-18): the test host cannot open a network volume until macOS is told
+    it may (asked again at every ad-hoc build), so a slice is copied by an ssh session into the work
+    folder, each copy checked against the catalog's SHA-256, swept, and removed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = StagedSweepScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_stage_is_swept_from_its_copies_and_removed(self):
+        share = self.scene.share_state()
+        self.assertEqual(self.scene.stage(limit=2), cr.EXIT_GREEN)
+        root = cr.stage_root(self.scene.seal, 'a' * 40)
+        manifest = json.loads((root / cr.STAGE_MANIFEST).read_text())
+        self.assertEqual(len(manifest['staged']), 2)
+        for row in manifest['staged']:
+            copy = root / row['original'].lstrip('/')
+            original = self.scene.live / row['original'][len('/Volumes/'):]
+            self.assertEqual(copy.read_bytes(), original.read_bytes())
+            self.assertEqual(os.stat(copy).st_mtime_ns, os.stat(original).st_mtime_ns, 'the copy keeps its time')
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        driver = [c for c in self.scene.recorded_calls() if 'config' in c][0]
+        self.assertEqual(driver['config']['sourceRoot'], str(root))
+        self.assertTrue(all(i['path'].startswith(str(root) + '/Volumes/PrivateDrive/') for i in driver['config']['pending']))
+        self.assertEqual(sorted(driver['rows']), sorted(str(root) + r['original'] for r in manifest['staged']))
+        report = self.scene.report()
+        self.assertEqual((report['files'], report['source']['staged'], report['source']['changed']), (2, 2, 0))
+        self.assertIn('staged copies', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertFalse(root.exists(), 'the stage is removed when the slice ends')
+        self.assertFalse((self.scene.seal.work_root / cr.STAGE_DIR).exists())
+        self.assertEqual(self.scene.share_state(), share, 'the share is only read')
+        self.assertEqual(self.scene.stage(limit=5), cr.EXIT_GREEN, 'the next stage takes what this commit has not swept')
+        self.assertEqual(len(json.loads((root / cr.STAGE_MANIFEST).read_text())['staged']), 1)
+
+    def test_a_copy_whose_bytes_are_not_the_catalogs_content_is_not_staged(self):
+        victim = self.scene.live / self.scene.files[1][1][len('/Volumes/'):]
+        victim.write_bytes(b'X' * victim.stat().st_size)          # same size, other bytes
+        self.assertEqual(self.scene.stage(), cr.EXIT_GREEN)
+        manifest = json.loads((cr.stage_root(self.scene.seal, 'a' * 40) / cr.STAGE_MANIFEST).read_text())
+        self.assertEqual((len(manifest['staged']), manifest['counts']), (2, {'digest_mismatch': 1}))
+        staged_files = [p for p in cr.stage_root(self.scene.seal, 'a' * 40).rglob('*') if p.is_file() and p.name != cr.STAGE_MANIFEST]
+        self.assertEqual(len(staged_files), 2, 'the mismatched copy is not left behind')
+
+    def test_large_files_wait_and_the_budget_and_disk_floor_hold(self):
+        self.assertEqual(self.scene.stage(max_gb=0.000000005), cr.EXIT_GREEN)       # 5 bytes: every file is larger
+        manifest = json.loads((cr.stage_root(self.scene.seal, 'a' * 40) / cr.STAGE_MANIFEST).read_text())
+        self.assertEqual((manifest['staged'], manifest['counts']), ([], {'deferred_large': 3}))
+        Usage = __import__('collections').namedtuple('Usage', 'total used free')
+        lines = cr.stage_sweep(self.scene.seal, 'b' * 40, 10, 1 << 30, mounts=self.scene.mounts,
+                               disk=lambda _: Usage(1000, 905, 95))       # under 10% free: nothing is copied
+        self.assertIn('deferred_no_room 3', lines[0])
+        lines = cr.stage_sweep(self.scene.seal, 'c' * 40, 10, 1 << 30, budget=12, mounts=self.scene.mounts)
+        self.assertIn('1 files', lines[0])                               # 9 bytes fit in 12, the second would not
+
+    def test_a_second_stage_for_the_same_commit_and_a_busy_testbed_are_refused(self):
+        self.assertEqual(self.scene.stage(limit=1), cr.EXIT_GREEN)
+        self.assertEqual(self.scene.stage(limit=1), cr.EXIT_REFUSED)
+        import fcntl
+        fd = os.open(str(self.scene.home / 'm4run' / 'lock' / 'flock'), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            self.assertEqual(self.scene.stage(sha='b' * 40), cr.EXIT_REFUSED)
+            self.assertFalse(cr.stage_root(self.scene.seal, 'b' * 40).exists(), 'nothing is copied while the testbed is busy')
+        finally:
+            os.close(fd)
+        self.assertEqual(self.scene.stage(sha='b' * 40), cr.EXIT_GREEN)
 
 
 class ProofLaneTests(unittest.TestCase):
@@ -1605,6 +1700,28 @@ class SwiftSealTests(unittest.TestCase):
         self.assertEqual(answers, ['ok', 'ok'] + ['a_source_is_outside_the_live_mount'] * 4
                          + ['a_file_is_outside_the_corpus', 'home_not_sealed'])
 
+    def test_a_staged_sweep_source_is_a_commit_folder_in_the_stage_and_never_writable(self):
+        stage = self.corpus / 'work' / 'sweep-stage'
+        (stage / ('a' * 40) / 'Volumes' / 'V').mkdir(parents=True)
+        (stage / ('a' * 40) / 'Volumes' / 'V' / 'a.mov').write_text('x')
+        state_home = str(self.corpus / 'state' / 'home')
+        root = str(stage / ('a' * 40))
+        sweep = self.config(lane='sweep', pending=[dict(sha='a' * 64, path=root + '/Volumes/V/a.mov')], volRoot=None,
+                            archiveRoot=None, scratch=None, sourceRoot=root)
+        homes = dict(home=state_home, appSupport=state_home + '/Library/Application Support')
+        answers = self.ask(dict(config=sweep, lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=str(stage)), lane='sweep', **homes),
+                           dict(config=dict(sweep, sourceRoot=str(self.corpus / 'work')), lane='sweep', **homes),
+                           dict(config=sweep, lane='sweep', home=root + '/home', appSupport=root + '/home/Library'))
+        self.assertEqual(answers, ['ok', 'a_source_is_outside_the_live_mount', 'a_source_is_outside_the_live_mount',
+                                   'home_not_sealed'])
+        inside = self.config(lane='sweep', pending=[dict(sha='a' * 64, path=root + '/Volumes/V/a.mov')], volRoot=None, archiveRoot=None,
+                             scratch=None, sourceRoot=root, work=root + '/run', progress=root + '/run/p.jsonl')
+        (stage / ('a' * 40) / 'run').mkdir()
+        (stage / ('a' * 40) / 'run' / 'p.jsonl').write_text('')
+        self.assertEqual(self.ask(dict(config=inside, lane='sweep', config_at=stage / ('a' * 40) / 'run' / 'c.json', **homes)),
+                         ['a_writable_path_is_inside_the_sweep_source'])
+
     def test_no_marker_is_refused(self):
         (self.corpus / cr.MARKER).unlink()
         self.assertEqual(self.ask(dict(config=self.config())), ['no_test_data_marker'])
@@ -2136,6 +2253,16 @@ class CallerTests(unittest.TestCase):
 
     def run_sh(self, script, *args):
         return subprocess.run(['/bin/bash', str(SCRIPTS / script), *args], capture_output=True, text=True, timeout=60)
+
+    def test_stage_sweep_runs_over_ssh_with_the_full_commit_and_checks_its_numbers(self):
+        sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        p = self.run_sh('corpus_run.sh', 'stage', 'sweep', '--ref', 'HEAD', '--limit', '5', '--max-gb', '2.5', '--dry-run')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f'ssh ricksm4.local python3 - stage sweep --sha {sha} --limit 5 --max-gb 2.5 <', p.stdout)
+        for bad in (['--limit', 'x'], ['--limit', '5', '--max-gb', '1;rm'], []):
+            p = self.run_sh('corpus_run.sh', 'stage', 'sweep', '--ref', 'HEAD', *bad, '--dry-run')
+            self.assertEqual(p.returncode, 2, bad)
+        self.assertEqual(self.run_sh('corpus_run.sh', 'stage', 'check', '--limit', '5', '--dry-run').returncode, 2)
 
     def test_run_check_ships_the_harness_and_never_runs_on_the_ultra(self):
         sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
