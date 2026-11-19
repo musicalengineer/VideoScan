@@ -1356,7 +1356,7 @@ class PairEngineTests(unittest.TestCase):
 SEAL_MAIN = r"""
 import Foundation
 struct Case: Decodable { let hostname, realHome, configPath, lane, home, appSupport: String; let isTestHost: Bool
-                     let moveAside, removeAfterOpen, pinAfterOpen: String? }
+                     let afterOpen: [[String]]? }
 let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
 for c in cases {
     var reads = 0
@@ -1371,16 +1371,19 @@ for c in cases {
     let proven = loaded.config.map { CorpusSeal.progressIsProven($0, realHome: c.realHome) } ?? false
     let first = loaded.config?.pending.first?.path ?? "/"
     let atOpen = CorpusSeal.external(realHome: c.realHome)
-    let pinPath = c.realHome + "/corpus/" + CorpusSeal.volumePin
-    if let aside = c.moveAside {             // the pin goes away after the run opened (Codex #332 F3)
-        try FileManager.default.moveItem(atPath: pinPath, toPath: aside)
-    }
-    if let gone = c.removeAfterOpen {        // the marker goes after the run opened (Codex #331 F2)
-        try FileManager.default.removeItem(atPath: gone)
-    }
-    if let text = c.pinAfterOpen {           // another volume UUID after the run opened (Codex #331 F2)
-        try FileManager.default.removeItem(atPath: pinPath)
-        try Data(text.utf8).write(to: URL(fileURLWithPath: pinPath))
+    for op in c.afterOpen ?? [] {            // the world changes between the open and the next engine (Codex #331-#333)
+        switch op[0] {
+        case "move": try FileManager.default.moveItem(atPath: op[1], toPath: op[2])
+        case "remove": try FileManager.default.removeItem(atPath: op[1])
+        case "symlink": try FileManager.default.createSymbolicLink(atPath: op[2], withDestinationPath: op[1])
+        case "write": try Data(op[2].utf8).write(to: URL(fileURLWithPath: op[1]))
+        default:
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: op[1])
+            task.arguments = Array(op.dropFirst(2))
+            try task.run()
+            task.waitUntilExit()
+        }
     }
     print("\(word ?? "ok")|\(reads)|\(proven)|\(atOpen.word)|\(CorpusSeal.mayOpen(first, realHome: c.realHome, atOpen: atOpen))")
 }
@@ -2877,26 +2880,27 @@ class SwiftExternalSealTests(TwoRootTestCase):
             state = next(k for k in self.PYTHON_TO_SWIFT if k in str(refused))
         return self.PYTHON_TO_SWIFT[state]
 
-    def ask(self, pending, move_aside=None, remove_after_open=None, pin_after_open=None):
+    def ask(self, pending, after_open=None, lane='check', config_lane='check', run=None):
         """The Swift seal over a check-lane config whose one file is `pending`: (refusal word, external word)."""
-        run = self.scene.seal.work_root / 'run1-check'
+        run = run or self.scene.seal.work_root / 'run1-check'
         run.mkdir(parents=True, exist_ok=True)
-        (run / 'progress.jsonl').write_text('')
+        if not (run / 'progress.jsonl').exists():
+            (run / 'progress.jsonl').write_text('')
         state = self.scene.seal.state
         (state / 'home').mkdir(parents=True, exist_ok=True)
-        config = dict(lane='check', corpusRoot=str(self.scene.corpus), stateRoot=str(state), catalog=str(state / DB),
+        config = dict(lane=config_lane, corpusRoot=str(self.scene.corpus), stateRoot=str(state), catalog=str(state / DB),
                       mediaRoot=str(self.scene.corpus / 'media'), work=str(run), progress=str(run / 'progress.jsonl'),
                       deadlineSeconds=60, pending=[dict(sha='a' * 64, path=str(pending))])
         (run / 'config.json').write_text(json.dumps(config))
         home = str(state / 'home')
         cases = pathlib.Path(self.tmp.name, 'cases.json')
         cases.write_text(json.dumps([dict(hostname='RicksM4.local', realHome=str(self.scene.home), configPath=str(run / 'config.json'),
-                                          lane='check', home=home, appSupport=home + '/Library/Application Support', isTestHost=True,
-                                          moveAside=move_aside, removeAfterOpen=remove_after_open, pinAfterOpen=pin_after_open)]))
-        done = subprocess.run([str(self.binary), str(cases)], capture_output=True, text=True, timeout=60)
+                                          lane=lane, home=home, appSupport=home + '/Library/Application Support', isTestHost=True,
+                                          afterOpen=after_open)]))
+        done = subprocess.run([str(self.binary), str(cases)], capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr)
         fact = done.stdout.split()[0].split('|')
-        self.may_open = fact[4]
+        self.may_open, self.proven = fact[4], fact[2]
         return fact[0], fact[3]
 
     def test_f2_the_volume_is_proven_again_at_each_file_not_once_per_run(self):
@@ -2907,15 +2911,17 @@ class SwiftExternalSealTests(TwoRootTestCase):
         marker = self.volume.mount / cr.MARKER
         self.assertEqual(self.ask(external_file), ('ok', 'ok'))
         self.assertEqual(self.may_open, 'true')
-        self.assertEqual(self.ask(external_file, remove_after_open=str(marker)), ('ok', 'ok'), 'proven at open')
+        self.assertEqual(self.ask(external_file, after_open=[['remove', str(marker)]]), ('ok', 'ok'), 'proven at open')
         self.assertEqual(self.may_open, 'false', 'an external file was allowed after the marker went')
         marker.write_text('test data\n')
-        self.ask(internal_file, remove_after_open=str(marker))
+        self.ask(internal_file, after_open=[['remove', str(marker)]])
         self.assertEqual(self.may_open, 'true', 'an internal file does not depend on the external volume')
         marker.write_text('test data\n')
         other = json.dumps(dict(json.loads((self.scene.corpus / cr.VOLUME_PIN).read_text()),
                                 volume_uuid='00000000-0000-0000-0000-000000000000'))
-        self.assertEqual(self.ask(external_file, pin_after_open=other), ('ok', 'ok'), 'proven at open')
+        pin_path = str(self.scene.corpus / cr.VOLUME_PIN)
+        self.assertEqual(self.ask(external_file, after_open=[['remove', pin_path], ['write', pin_path, other]]), ('ok', 'ok'),
+                         'proven at open')
         self.assertEqual(self.may_open, 'false', 'an external file was allowed once the volume was not the adopted one')
 
     def test_r2_f3_a_pin_that_disappears_after_the_run_opened_never_lets_an_external_file_through(self):
@@ -2924,16 +2930,118 @@ class SwiftExternalSealTests(TwoRootTestCase):
         external_file = self.scene.ext_path(self.scene.V2_EXTERNAL[0][1])
         internal_file = self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')
         aside = pathlib.Path(self.tmp.name, 'pin-aside.json')
-        self.ask(external_file, move_aside=str(aside))
+        pin_path = str(self.scene.corpus / cr.VOLUME_PIN)
+        self.ask(external_file, after_open=[['move', pin_path, str(aside)]])
         self.assertEqual(self.may_open, 'false', 'an external file was opened after its proof went away')
         os.replace(aside, self.scene.corpus / cr.VOLUME_PIN)
-        self.ask(internal_file, move_aside=str(aside))
+        self.ask(internal_file, after_open=[['move', pin_path, str(aside)]])
         self.assertEqual(self.may_open, 'true', 'an internal file does not depend on the external volume')
         os.replace(aside, self.scene.corpus / cr.VOLUME_PIN)
         self.ask(pathlib.Path('/Volumes/SomethingElse/x.mov'))
         self.assertEqual(self.may_open, 'false', 'a path the run was never given a root for is never opened')
         support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
         self.assertIn('CorpusSeal.mayOpen(item.path, realHome: CorpusRun.realHome(), atOpen: external)', support)
+
+    def test_r3_f3_an_internal_root_aliased_to_the_volume_after_open_is_not_internal(self):
+        # Codex #333 F3: ~/corpus/media replaced by a link to <M>/corpus/media and the marker moved aside.
+        self.scene.grow(prepare=False)
+        external_file = self.scene.ext_path(self.scene.V2_EXTERNAL[0][1])
+        media = str(self.scene.corpus / 'media')
+        aside = str(pathlib.Path(self.tmp.name, 'media-aside'))
+        marker = str(self.volume.mount / cr.MARKER)
+        try:
+            self.assertEqual(self.ask(external_file, after_open=[['move', media, aside], ['symlink', str(self.volume.mount / 'corpus' / 'media'), media],
+                                                                 ['move', marker, marker + '.aside']]), ('ok', 'ok'))
+            self.assertEqual(self.may_open, 'false', 'an external file passed as internal through an aliased root')
+        finally:
+            if os.path.islink(media):
+                os.unlink(media)
+            if os.path.exists(aside):
+                os.replace(aside, media)
+            if os.path.exists(marker + '.aside'):
+                os.replace(marker + '.aside', marker)
+
+    def test_r3_f3_an_internal_root_aliased_elsewhere_on_the_home_volume_after_open_is_not_internal(self):
+        self.scene.grow(prepare=False)
+        internal_file = self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')
+        media = str(self.scene.corpus / 'media')
+        aside = str(pathlib.Path(self.tmp.name, 'media-aside'))
+        elsewhere = pathlib.Path(self.tmp.name, 'not-the-corpus')
+        (elsewhere / internal_file.relative_to(self.scene.corpus / 'media')).parent.mkdir(parents=True)
+        (elsewhere / internal_file.relative_to(self.scene.corpus / 'media')).write_bytes(b'not a corpus copy')
+        try:
+            self.assertEqual(self.ask(internal_file, after_open=[['move', media, aside], ['symlink', str(elsewhere), media]]), ('ok', 'ok'))
+            self.assertEqual(self.may_open, 'false', 'a file outside the corpus passed as internal through an aliased root')
+        finally:
+            if os.path.islink(media):
+                os.unlink(media)
+            if os.path.exists(aside):
+                os.replace(aside, media)
+
+    def test_r3_f3_a_volume_mounted_inside_corpus_media_is_not_internal(self):
+        # The folders are themselves, but a volume is mounted INSIDE ~/corpus/media: its files are not internal copies.
+        self.scene.grow(prepare=False)
+        inside = self.scene.corpus / 'media' / 'Volumes' / 'Mounted'
+        inside.mkdir(parents=True)
+        on_it = inside / self.scene.ext_path(self.scene.V2_EXTERNAL[0][1]).relative_to(self.volume.mount)
+        try:
+            self.ask(on_it, after_open=[['exec', '/usr/bin/hdiutil', 'detach', '-force', '-quiet', str(self.volume.mount)],
+                                        ['exec', '/usr/bin/hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(inside),
+                                         self.volume.image]])
+            self.assertTrue(on_it.is_file(), 'the volume is mounted inside ~/corpus/media now')
+            self.assertEqual(self.may_open, 'false', 'a file on another volume passed as an internal copy')
+            answer, _ = self.ask(on_it)
+            self.assertEqual(answer, 'a_file_is_outside_the_corpus', 'refused at open too')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(inside)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r3_f4_another_volume_adopted_at_the_same_mount_after_open_is_not_the_one_proven(self):
+        # Codex #333 F4: proven on volume A at M; after open, A goes, B (marked, same paths) is mounted at M and adopted.
+        self.scene.grow(prepare=False)
+        external_file = self.scene.ext_path(self.scene.V2_EXTERNAL[0][1])
+        other = Volume(self.tmp.name, name='B')
+        try:
+            (other.mount / cr.MARKER).write_text('test data\n')
+            twin = other.mount / external_file.relative_to(self.volume.mount)
+            twin.parent.mkdir(parents=True)
+            twin.write_bytes(b'z')
+            b_uuid = other.uuid()
+            other.detach()
+            pin_path = str(self.scene.corpus / cr.VOLUME_PIN)
+            pin_b = json.dumps(dict(mount=str(self.volume.mount), volume_uuid=b_uuid))
+            self.assertEqual(self.ask(external_file, after_open=[
+                ['exec', '/usr/bin/hdiutil', 'detach', '-force', '-quiet', str(self.volume.mount)],
+                ['exec', '/usr/bin/hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(self.volume.mount), other.image],
+                ['remove', pin_path], ['write', pin_path, pin_b]]), ('ok', 'ok'), 'proven on A at open')
+            self.assertEqual(cr.diskutil_volume_uuid(str(self.volume.mount)), b_uuid, 'B is mounted at M now')
+            self.assertEqual(self.may_open, 'false', 'a file on B passed on the proof made for A')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(self.volume.mount)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r3_f2_a_run_folder_on_another_volume_is_never_written_even_to_refuse(self):
+        # Codex #333 F2: a volume mounted at ~/corpus/work/R holding the config and a one-name progress file.
+        self.scene.grow(prepare=False)
+        other = Volume(self.tmp.name, name='R-vol')
+        run = self.scene.seal.work_root / 'R-check'
+        try:
+            other.detach()
+            run.mkdir(parents=True)
+            done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(run), other.image],
+                                  capture_output=True, text=True, timeout=120)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            internal_file = self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')
+            answer, _ = self.ask(internal_file, run=run, lane='check', config_lane='proof')
+            self.assertNotEqual(answer, 'ok')
+            self.assertEqual(self.proven, 'false', 'a refusal may be written to a progress file on another volume')
+            answer, _ = self.ask(internal_file, run=run)
+            self.assertEqual(answer, 'a_writable_path_is_on_another_volume')
+            support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+            self.assertIn('info.st_dev == CorpusSeal.homeDevice(realHome: CorpusRun.realHome())',
+                          support[support.index('final class CorpusProgress'):support.index('final class CorpusDeadline')])
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(run)], capture_output=True, timeout=120)
 
     def test_f3_a_progress_file_that_is_a_second_name_of_the_pin_is_refused_and_the_pin_unchanged(self):
         self.scene.grow(prepare=False)
@@ -3223,7 +3331,11 @@ class CodexRound332Tests(RemountCase):
                 self.scene.seal.check()
             with self.assertRaises(cr.Refused):
                 cr.prune(self.scene.seal, 'check')
-            self.assertFalse(cr.remove_tree(self.scene.seal, old), 'a tree off the home volume was removed')
+            try:
+                removed = cr.remove_tree(self.scene.seal, old)
+            except cr.Refused:
+                removed = False                                             # the write door refuses it first (Codex #333 F1)
+            self.assertFalse(removed, 'a tree off the home volume was removed')
             self.assertEqual(sentinel.read_bytes(), b'a corpus copy')
             self.assertTrue(os.lstat(sentinel).st_flags & 0x2, 'a lock on the other volume was cleared')
         finally:
@@ -3238,6 +3350,95 @@ class CodexRound332Tests(RemountCase):
     def test_r2_the_harness_moves_no_folder_and_copies_nothing_across_a_volume(self):
         text = (SCRIPTS / 'corpus_run.py').read_text()
         self.assertNotIn('shutil.move(', text, 'shutil.move copies a tree across volumes and deletes the source')
+
+
+
+class CodexRound333Tests(RemountCase):
+    """Codex #333 (closing pass 2; block, 4 findings): the Python halves, each as its reproduction."""
+
+    def test_r3_f1_accept_never_writes_onto_a_volume_mounted_inside_reports(self):
+        self.scene.grow()
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        reports = self.scene.seal.reports / 'check'
+        mount = self.volume.mount
+        shutil.copytree(reports, mount / 'check-copy', symlinks=True)
+        (mount / 'check-copy' / cr.BASELINE).write_text('sentinel\n')
+        os.replace(reports, self.scene.seal.reports / 'check-home')
+        reports.mkdir()
+        self.volume.detach()
+        done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(reports), self.volume.image],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        inner = reports / 'check-copy'
+        try:
+            for child in list(inner.iterdir()):                             # the stored run where accept looks for it
+                os.rename(child, reports / child.name)
+            before = sorted(p.name for p in reports.iterdir())
+            with self.assertRaises(cr.Refused):
+                cr.accept(self.scene.seal, 'check', 'x')
+            self.assertEqual((reports / cr.BASELINE).read_text(), 'sentinel\n', 'the baseline on the other volume was replaced')
+            self.assertEqual(sorted(p.name for p in reports.iterdir()), before, 'accept left a file on the other volume')
+            with self.assertRaises(cr.Refused):
+                self.scene.seal.writable(reports / 'x')
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(reports)], capture_output=True, timeout=120)
+            reports.rmdir()
+            os.replace(self.scene.seal.reports / 'check-home', reports)
+            self.volume.attach()
+
+    def test_r3_f1_the_lanes_out_folder_must_be_on_the_home_volume_too(self):
+        self.scene.grow()
+        self.volume.detach()
+        out = self.scene.out
+        done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(out), self.volume.image],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        try:
+            with self.assertRaises(cr.Refused):
+                self.scene.seal.out_folder(out)
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(out)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r3_f3_an_internal_copy_on_a_volume_mounted_inside_media_does_not_verify(self):
+        # The internal copies' folder with a volume mounted over it, holding same-sized files: not the corpus.
+        self.scene.grow()
+        folder = self.scene.corpus / 'media' / 'Volumes' / 'PrivateDrive' / 'Grandma'
+        stand_in = self.volume.mount / 'stand-in'
+        shutil.copytree(folder, stand_in)
+        self.volume.detach()
+        done = subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noverify', '-quiet', '-mountpoint', str(folder), self.volume.image],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        try:
+            for child in (folder / 'stand-in').iterdir():
+                os.rename(child, folder / child.name)
+            self.scene.seal._external = None
+            entries = cr.load_manifest(self.scene.seal)
+            verdict = cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, entries,
+                                        unavailable=[e.sha for e in entries if e.root == 'external'])
+            self.assertEqual((verdict['ok'], verdict['outside_corpus']), (0, 1))
+            with self.assertRaises(cr.Refused):
+                cr.sealed_state_ready(self.scene.seal, entries, [e.sha for e in entries if e.root == 'external'])
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(folder)], capture_output=True, timeout=120)
+            self.volume.attach()
+
+    def test_r3_f4_the_lane_holds_the_volume_it_proved_not_one_adopted_later_at_the_same_mount(self):
+        self.scene.grow()
+        lane = cr.Lane(self.scene.seal, 'check', 'a' * 40, '20261119_170000_9', self.scene.out, self.scene.worktree,
+                       self.scene.dd, SCRIPTS / 'corpus')
+        entries = cr.load_manifest(self.scene.seal)
+        lane.proven_uuid = self.scene.seal.external().uuid
+        self.assertRegex(lane.proven_uuid or '', cr._UUID)
+        pin = self.scene.corpus / cr.VOLUME_PIN
+        b_uuid = '22222222-3333-4444-5555-666666666666'
+        pin.write_text(json.dumps(dict(json.loads(pin.read_text()), volume_uuid=b_uuid)))
+        self.scene.seal.volume_uuid = lambda mount: b_uuid                  # B mounted at the same path and adopted
+        results = {e.sha: {} for e in entries}
+        with self.assertRaises(cr.Refused) as refused:
+            lane.reprove([e for e in entries], results)
+        self.assertIn('changed during the run', str(refused.exception))
 
 
 if __name__ == '__main__':

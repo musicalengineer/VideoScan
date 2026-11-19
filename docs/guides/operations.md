@@ -208,8 +208,10 @@ and reports counts.
   **Unplugged**: `prepare` is refused; a lane runs the internal files and says *"external volume NOT MOUNTED: N files
   on it NOT RUN"* — **AMBER** (no engine failed and no copy is at risk, but those files proved nothing), and such a
   run is never a baseline. **Another volume there**, unmarked, or through a link: the lane is refused and runs nothing.
-  The proof is made again before every launch and, in the test host, before every engine on every file; a removal
-  (`remove_tree`, the one way the harness deletes a tree) never touches a tree with a mount anywhere in it.
+  The proof (that volume, by UUID) is made again before every launch and, in the test host, before every engine on every
+  file. Everything the harness writes, moves or removes is on the **home volume** — checked at every folder on the way, so
+  a volume mounted inside or over a corpus folder is refused — and an internal copy must itself be on the home volume.
+  Moves are renames only; a removal (`remove_tree`, the one way the harness deletes a tree) never enters another volume.
 - The seal is checked twice: `Seal` in `scripts/corpus_run.py`, and `scripts/corpus/CorpusSeal.swift` inside the test
   host (one pure function, pinned by behaviour: `tests/test_corpus_run.py` compiles it and asks it about real folders,
   and about a real disk image as the external volume, case by case beside the Python seal).

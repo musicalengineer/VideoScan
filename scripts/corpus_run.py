@@ -37,10 +37,13 @@ asks the same, CorpusSeal.external). Nothing ever writes on it, mounted or not.
   - proof never outlives its evidence (Codex #331 F2): the lane proves the volume again before
     every launch, and the in-app driver before every engine on every file (CorpusSeal.mayOpen);
     a file it came to after the volume went is `external_volume_not_proven` — NOT RUN, AMBER.
-  - every tree the harness removes (a run's work folder, a dead run's, an old stored run,
-    prepare's build folder) goes through `remove_tree`: never a tree with a mount anywhere in it
-    (left whole), and descriptor by descriptor, never into another device (Codex #331 F1: the
-    volume remounted inside a dead work folder is not emptied).
+  - the HOME VOLUME is the only one written (Codex #331-#333): `Seal.writable` and `out_folder`
+    refuse a path any of whose folders is on another volume; `Seal.check` refuses ~/corpus or its
+    own folders on another volume; an internal copy must be on the home volume (`verify_catalog`);
+    files are moved by rename only (`move_file`), never copied-then-deleted; every tree is removed
+    by `remove_tree` — never one with a mount anywhere in it, descriptor by descriptor, never into
+    another device. The run holds the UUID it proved and refuses another volume adopted at the
+    same mount during the run.
   - the verbs lane clones from the INTERNAL root only: `cp -c` makes an APFS clone only
     within one volume, and the clones live in ~/corpus/work on the SSD.
   - the proof lane takes v1's one-sided-sound stratum, then the files the newest whole check
@@ -249,8 +252,8 @@ class External:
     the adopted volume UUID). A volume mounted there that is not the adopted one never gets here:
     `Seal.external` refuses it."""
 
-    def __init__(self, state: str, mount: Optional[Path] = None):
-        self.state, self.mount = state, mount
+    def __init__(self, state: str, mount: Optional[Path] = None, uuid: Optional[str] = None):
+        self.state, self.mount, self.uuid = state, mount, uuid      # uuid: the volume proven ("ok" only)
 
     @property
     def media(self) -> Optional[Path]:
@@ -310,6 +313,19 @@ class Seal:
         """The device of the home folder (the account database's): the one volume the harness writes and removes on."""
         return os.lstat(str(self.home)).st_dev
 
+    def on_home_volume(self, path: Path) -> bool:
+        """True when what `path` resolves to, and every existing folder above it up to the home
+        folder, is on the home volume: a volume mounted anywhere on the way (inside reports/, over
+        a run folder, at an out folder) makes it False (Codex #333 F1)."""
+        dev, home = self.home_device(), os.path.realpath(str(self.home))
+        here = os.path.realpath(str(path))
+        while True:
+            if os.path.lexists(here) and os.lstat(here).st_dev != dev:
+                return False
+            if here == home or os.path.dirname(here) == here:
+                return True
+            here = os.path.dirname(here)
+
     def pin(self) -> Optional[dict]:
         """The adopted external volume, {mount, volume_uuid}, or None when none was adopted. Refused
         when ~/corpus/external-volume.json is there and is not a plain file of the corpus holding one."""
@@ -368,7 +384,7 @@ class Seal:
         media = os.path.join(mount, "corpus", "media")
         if os.path.lexists(media) and os.path.realpath(media) != media:
             raise Refused("refused: the external corpus volume is reached through a link")
-        self._external = External("ok", Path(mount))
+        self._external = External("ok", Path(mount), pin["volume_uuid"])
         return self._external
 
     def pristine(self, path: Path) -> bool:
@@ -401,6 +417,8 @@ class Seal:
             raise Refused("refused: a write was aimed at the pristine corpus (the corpus sources are read-only)")
         if not any(_under(path, root) for root in (self.state, self.work_root, self.reports)):
             raise Refused("refused: a write was aimed outside ~/corpus/{state,work,reports} (the corpus sources are read-only)")
+        if not self.on_home_volume(path):
+            raise Refused("refused: a write was aimed at another volume (something is mounted on the way)")
         return path
 
     def mkdir(self, path: Path) -> Path:
@@ -433,7 +451,7 @@ class Seal:
         lane_folder = (out.name in {"corpus-" + lane for lane in LANES} and not os.path.islink(str(out.parent))
                        and real == os.path.join(root, out.parent.name, out.name))
         if (os.path.islink(str(out)) or not os.path.isdir(str(out)) or not (run_folder or lane_folder)
-                or self.pristine(out) or _under(out, self.corpus)):
+                or self.pristine(out) or _under(out, self.corpus) or not self.on_home_volume(out)):
             raise Refused("refused: the lane's output folder is not a run folder under ~/m4run/out")
         return out
 
@@ -824,6 +842,7 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optio
               "archive_designation": 0 if not designation or designation[0] is None else 1}
     wanted = {e.sha: e for e in entries}
     skip = set(unavailable)
+    home_dev = seal.home_device()
     result["without_row"] = sum(1 for sha in wanted if sha not in by_sha)
     for sha, path, size, removal in rows:
         entry = wanted.get(sha)
@@ -842,7 +861,11 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optio
             result["not_checked"] += 1
             continue
         try:
-            if os.stat(path).st_size != size or size != entry.size:
+            info = os.stat(path)
+            if entry.root == "internal" and info.st_dev != home_dev:
+                result["outside_corpus"] += 1                # an internal copy is on the home volume, not on one mounted inside media
+                continue
+            if info.st_size != size or size != entry.size:
                 result["size_differs"] += 1
         except OSError:
             result["file_missing"] += 1
@@ -1092,6 +1115,7 @@ class Lane:
         self.closing: Dict[str, int] = {}
         self.housekeeping: List[str] = []
         self.not_run_external = 0                            # files on an external volume that is not mounted
+        self.proven_uuid: Optional[str] = None               # the external volume proven at the start (its UUID)
         self.picked: Dict[str, object] = {}                  # the proof lane: where its files came from
         # The coverage run (corpus_coverage.py) sets this: the build is instrumented and every launch
         # leaves its result bundle (with coverage) here, in the coverage run's own work folder. None: no coverage.
@@ -1238,7 +1262,10 @@ class Lane:
         its evidence). Another volume there, or its marker gone: Refused. Unplugged: its pending
         files are NOT RUN (EXTERNAL_GONE), the internal ones go on."""
         self.seal._external = None
-        if self.seal.external().state == "ok":
+        now = self.seal.external()
+        if now.state == "ok" and self.proven_uuid and now.uuid != self.proven_uuid:
+            raise Refused("refused: the external volume changed during the run (another volume adopted at its mount)")
+        if now.state == "ok" and now.uuid == self.proven_uuid:
             return pending
         for e in pending:
             if e.root == "external":
@@ -1308,6 +1335,7 @@ class Lane:
         # The external root: run when proven; NOT RUN (and said, with the count) when it is not mounted;
         # refused (exit 2, nothing run) when something else is mounted there.
         external = seal.external()
+        self.proven_uuid = external.uuid
         unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
         self.not_run_external = len(unavailable)
         database = sealed_state_ready(seal, entries, unavailable)

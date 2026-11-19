@@ -84,7 +84,9 @@ final class CorpusProgress: @unchecked Sendable {
         let fd = open(path, O_WRONLY | O_APPEND | O_NOFOLLOW)
         guard fd >= 0 else { throw CorpusRefusal(word: "progress_not_writable") }
         var info = stat()
-        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+        // ... and on the home volume: a run folder with a volume mounted over it is never written (Codex #333 F2).
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
+              info.st_dev == CorpusSeal.homeDevice(realHome: CorpusRun.realHome()) else {
             close(fd)
             throw CorpusRefusal(word: "progress_not_writable")
         }
