@@ -1427,9 +1427,10 @@ def copy_hashed(source: Path, dest: Path, seal: Seal) -> Tuple[str, float]:
 
 
 def stage_sweep(seal: Seal, sha: str, limit: int, max_file: int, budget: int = STAGE_BUDGET,
-                mounts: Optional[List[str]] = None, disk=shutil.disk_usage) -> List[str]:
+                mounts: Optional[List[str]] = None, disk=shutil.disk_usage, min_file: int = 0) -> List[str]:
     """Copy the next `limit` files a sweep at `sha` has not run (the sweep's own order; files over
-    `max_file` bytes are deferred) into the stage. Refused while a stage for `sha` is already there."""
+    `max_file` bytes, or under `min_file` — a slice of the largest files — are left for another
+    slice) into the stage. Refused while a stage for `sha` is already there."""
     seal.check()
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise Refused("refused: --sha is a full commit id")
@@ -1453,6 +1454,9 @@ def stage_sweep(seal: Seal, sha: str, limit: int, max_file: int, budget: int = S
             continue
         if e.size > max_file:
             counts["deferred_large"] += 1
+            continue
+        if e.size < min_file:
+            counts["deferred_small"] += 1
             continue
         if used + e.size > budget or disk(str(seal.corpus)).free - e.size < STAGE_FREE_FLOOR * total:
             counts["deferred_no_room"] += 1
@@ -2126,6 +2130,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     staging.add_argument("--limit", type=int, required=True)
     staging.add_argument("--max-gb", type=float, default=8.0)
     staging.add_argument("--budget-gb", type=float, default=STAGE_BUDGET / (1 << 30))
+    staging.add_argument("--min-gb", type=float, default=0.0)
     host = sub.add_parser("host")
     host.add_argument("lane", choices=["prepare"] + sorted(LANES))
     host.add_argument("--sha", required=True)
@@ -2147,7 +2152,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
         elif args.command == "stage":
             with testbed_lock(seal, f"sweep-stage sha={args.sha[:9]}"):
                 lines = stage_sweep(seal, args.sha, args.limit, int(args.max_gb * (1 << 30)), int(args.budget_gb * (1 << 30)),
-                                    mounts=sweep_mounts)
+                                    mounts=sweep_mounts, min_file=int(args.min_gb * (1 << 30)))
             code = EXIT_GREEN
         elif args.lane == "prepare":
             sys.path.insert(0, args.bin)

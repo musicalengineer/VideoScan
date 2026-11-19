@@ -952,6 +952,9 @@ class StagedSweepTests(unittest.TestCase):
         self.assertIn('deferred_no_room 3', lines[0])
         lines = cr.stage_sweep(self.scene.seal, 'c' * 40, 10, 1 << 30, budget=12, mounts=self.scene.mounts)
         self.assertIn('1 files', lines[0])                               # 9 bytes fit in 12, the second would not
+        lines = cr.stage_sweep(self.scene.seal, 'd' * 40, 10, 1 << 30, mounts=self.scene.mounts, min_file=10)
+        self.assertIn('0 files', lines[0])
+        self.assertIn('deferred_small 3', lines[0])                      # a slice of the largest files skips the rest
 
     def test_a_second_stage_for_the_same_commit_and_a_busy_testbed_are_refused(self):
         self.assertEqual(self.scene.stage(limit=1), cr.EXIT_GREEN)
@@ -2256,9 +2259,9 @@ class CallerTests(unittest.TestCase):
 
     def test_stage_sweep_runs_over_ssh_with_the_full_commit_and_checks_its_numbers(self):
         sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-        p = self.run_sh('corpus_run.sh', 'stage', 'sweep', '--ref', 'HEAD', '--limit', '5', '--max-gb', '2.5', '--dry-run')
+        p = self.run_sh('corpus_run.sh', 'stage', 'sweep', '--ref', 'HEAD', '--limit', '5', '--max-gb', '2.5', '--min-gb', '1', '--dry-run')
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn(f'ssh ricksm4.local python3 - stage sweep --sha {sha} --limit 5 --max-gb 2.5 <', p.stdout)
+        self.assertIn(f'ssh ricksm4.local python3 - stage sweep --sha {sha} --limit 5 --max-gb 2.5 --min-gb 1 <', p.stdout)
         for bad in (['--limit', 'x'], ['--limit', '5', '--max-gb', '1;rm'], []):
             p = self.run_sh('corpus_run.sh', 'stage', 'sweep', '--ref', 'HEAD', *bad, '--dry-run')
             self.assertEqual(p.returncode, 2, bad)
