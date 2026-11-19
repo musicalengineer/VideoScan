@@ -275,6 +275,11 @@ class CodexFindings329Tests(TestbedScene):
             done = subprocess.run([sys.executable, str(SUMMARY), '--testbed', str(lanes), 'c' * 40, '9', '--expect', 'suite'],
                                   capture_output=True, text=True, timeout=60)
             self.assertEqual(done.returncode, 1, done.stdout)
+            # Codex #330 (P3): counters that are absent are not zero, and not a pass either.
+            row.write_text(json.dumps(dict(passed=1, core_passed=1)))
+            done = subprocess.run([sys.executable, str(SUMMARY), '--testbed', str(lanes), 'c' * 40, '9', '--expect', 'suite'],
+                                  capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 1, done.stdout)
 
 
 class HarnessTruthAuditTests(unittest.TestCase):
