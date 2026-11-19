@@ -219,5 +219,49 @@ class DiskForecastTests(TestbedScene):
         self.assertTrue(th.forecast('suite', '', (0, 0)).startswith('REFUSE '), 'a disk it cannot measure is refused')
 
 
+class HarnessTruthAuditTests(unittest.TestCase):
+    """Item 5 (2026-11-18): can any lane print GREEN with zero tests, zero files or a missing log?
+    Each answer is pinned here or in the file named:
+      suite lane      zero app or Core tests, no row — test_m4_run_suite_lane test_zero_app_tests_is_red,
+                      test_a_core_lane_with_no_number_is_red, test_a_runner_that_leaves_no_row_is_red
+      ui lane         HERE: a missing plan log is RED (zero tests); test_m4_run test_zero_tests_is_red
+      deep lane       no GAUNTLET line — test_m4_run_deep_lane test_no_gauntlet_line_is_red_never_green
+      corpus lanes    zero files: corpus_run.py refuses ("no corpus file is in this lane scope", "the driver
+                      started no file"); no summary: HERE (PartialResultsTests)
+      testbed lane    no lanes / a missing lane: HERE and test_no_lane_or_an_unknown_verdict_word_is_red
+      scheduled suite zero-tests-ran — scripts/test_nightly_failure_modes.sh
+      coverage lane   no Core count, no app coverage — test_nightly_coverage
+      sanitizer       HERE: an empty log is no-tests-ran, never ok
+      push watcher    HERE: a torn OUTCOME word is never settled as a verdict"""
+
+    def test_a_ui_plan_with_no_log_is_red(self):
+        done = subprocess.run([sys.executable, str(SUMMARY), 'VideoScan-UI', '/nonexistent/plan.log', '0', '5'],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn('RED', done.stdout)
+
+    def test_a_sanitizer_run_with_an_empty_or_countless_log_is_never_ok(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('ws', SCRIPTS / 'weekly_sanitizer.py')
+        ws = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ws)
+        for text in ('', '** TEST SUCCEEDED **\n'):
+            self.assertEqual(ws.status_for(ws.parse_log(text, []), False), 'no-tests-ran', repr(text))
+
+    def test_the_watcher_never_settles_a_torn_outcome_word_as_a_verdict(self):
+        sys.path.insert(0, str(REPO / 'tests'))
+        from test_m4_watch import Scene
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = Scene(tmp)
+            try:
+                scene.tick()
+                scene.finish(1, verdict='GRE')
+                scene.tick()
+                self.assertNotIn('GREEN', scene.text('verdict.txt'))
+                self.assertNotIn('GRE ', scene.text('verdict.txt'))
+            finally:
+                os.environ.pop('WATCH_FAKE', None)
+
+
 if __name__ == '__main__':
     unittest.main()

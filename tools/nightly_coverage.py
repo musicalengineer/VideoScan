@@ -250,7 +250,7 @@ def core_counts(log_path: Path) -> dict:
     return {"tests": tests + xctest[0], "failed": failed + xctest[1], "failed_names": names}
 
 
-def verdict(app_rc: int, core_rc: int, core: dict) -> tuple[str, str]:
+def verdict(app_rc: int, core_rc: int, core: dict, app_files: "int | None" = None) -> tuple[str, str]:
     """("ok", "") only when the app tests and Core's tests both exited 0 and Core reported a
     count; else ("RED", why). Coverage is measured and published either way; the OUTCOME word
     is about the tests underneath it (from 2026-10-02 the lane said "ok" over a failed Core)."""
@@ -262,6 +262,8 @@ def verdict(app_rc: int, core_rc: int, core: dict) -> tuple[str, str]:
         why.append(f"core tests exit {core_rc}" + (f", {core['failed']} failed: {names}" if core.get("failed") else ""))
     if not core.get("tests"):
         why.append("no Core test count in its log")
+    if app_files == 0:
+        why.append("no app coverage was read from the result bundle")
     return ("RED", "; ".join(why)) if why else ("ok", "")
 
 
@@ -375,9 +377,11 @@ def main() -> int:
     log(f"core tests finished: {meta['core_status']}")
 
     files: list[tuple[str, int, int]] = []
+    app_count = 0
     try:
         if xcresult.exists():
             files += app_files(xcresult)
+            app_count = len(files)
     except Exception as exc:  # noqa: BLE001 — report, don't die
         log(f"app coverage unreadable: {exc}")
     cov_path = subprocess.run(["swift", "test", "--package-path", str(CORE), "--show-codecov-path",
@@ -409,7 +413,7 @@ def main() -> int:
         log(f"tidy failed: {exc}")
     total_e = sum(d["executable"] for d in folders.values())
     total_c = sum(d["covered"] for d in folders.values())
-    word, why = verdict(app_rc, core_rc, core_counts(OUT / f"core-{day}.log"))
+    word, why = verdict(app_rc, core_rc, core_counts(OUT / f"core-{day}.log"), app_files=app_count)
     log(f"OUTCOME {word}{' — ' + why if why else ''}: {len(folders)} folders, {total_c}/{total_e} lines "
         f"({round(100 * total_c / total_e, 1) if total_e else 0}%) → {OUT / f'coverage-{day}.md'}")
     return 0 if word == "ok" else 1

@@ -34675,10 +34675,13 @@
         "test_a_ref_whose_corpus_driver_does_not_build_is_a_red_testbed",
         "test_a_run_inside_the_ceiling_starts",
         "test_a_run_that_would_cross_90_percent_is_refused_before_start",
+        "test_a_sanitizer_run_with_an_empty_or_countless_log_is_never_ok",
         "test_a_torn_suite_row_is_red_at_every_cut",
+        "test_a_ui_plan_with_no_log_is_red",
         "test_an_amber_corpus_lane_without_a_summary_is_red_too",
         "test_the_forecast_by_lane",
-        "test_the_testbed_lane_asks_for_its_three_lanes"
+        "test_the_testbed_lane_asks_for_its_three_lanes",
+        "test_the_watcher_never_settles_a_torn_outcome_word_as_a_verdict"
       ]
     },
     {
@@ -34842,6 +34845,7 @@
         "test_a_core_suite_with_no_number_is_red",
         "test_a_failed_core_suite_is_red_even_when_coverage_was_measured",
         "test_a_file_declaring_a_swiftui_view_counts_as_a_view",
+        "test_an_app_run_that_measured_nothing_is_red",
         "test_core_codecov_json_keeps_only_core_sources",
         "test_core_counts_read_both_runners_and_name_the_failed_tests",
         "test_core_coverage_is_built_from_raw_profiles_when_swiftpm_exported_none",

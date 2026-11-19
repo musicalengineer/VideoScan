@@ -253,3 +253,14 @@ def test_sensor_main_tidies_after_the_report_is_written():
     text = (ROOT / "tools" / "nightly_coverage.py").read_text()
     report, tidy = text.index("    write_report(folders, meta)\n    publish_metrics()"), text.index("tidy_outputs(OUT")
     assert tidy > report, "the scratch goes only once the report is written"
+
+
+def test_an_app_run_that_measured_nothing_is_red():
+    """Audit 2026-11-18: an app run that exited 0 but whose result bundle gave no file (xccov could not
+    read it, the bundle is missing) published a night with only Core in it and said "ok"."""
+    core = {"tests": 2587, "failed": 0, "failed_names": []}
+    word, why = nc.verdict(app_rc=0, core_rc=0, core=core, app_files=0)
+    assert word == "RED" and "no app coverage" in why
+    assert nc.verdict(app_rc=0, core_rc=0, core=core, app_files=412) == ("ok", "")
+    text = (ROOT / "tools" / "nightly_coverage.py").read_text()
+    assert "app_files=app_count" in text
