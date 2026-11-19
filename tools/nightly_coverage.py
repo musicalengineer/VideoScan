@@ -16,6 +16,12 @@ Output (one sink, START/OUTCOME lines):
     metrics/coverage.jsonl on the `metrics` branch           via tools/publish_metrics.py
                                                               (folder names + numbers only)
 
+The OUTCOME word (2026-11-18): "ok" only when the app tests and Core's tests both
+exited 0, Core's log carries a test count and the app result bundle gave coverage;
+else "RED — <why>" (failed test names included) and exit 1. Coverage is measured and
+published either way. Once the report is written the lane's scratch goes: every
+app-<day>.xcresult, and all but the newest 7 app and core logs (tidy_outputs).
+
 Policy (Rick 2026-10-01): measure every folder; floors/ratchet only for
 VideoScanCore, data-risk folders and Hallie answers; SwiftUI views are reported,
 never gated. This script MEASURES; gating comes later via the findings tool.
