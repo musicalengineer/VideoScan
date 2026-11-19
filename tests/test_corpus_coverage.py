@@ -345,7 +345,7 @@ class CoverageRunTests(unittest.TestCase):
         self.scene.run_coverage()
         calls = self.scene.recorded_calls()
         builds = [c['args'] for c in calls if c.get('args', [''])[0] == 'build-for-testing']
-        self.assertEqual(len(builds), 3, 'each lane builds (incrementally) into the same DerivedData')
+        self.assertEqual(len(builds), 1, 'ONE instrumented build; the other lanes reuse it (corpus_run.BUILD_MARK)')
         for args in builds:
             self.assertIn('-enableCodeCoverage', args)
             self.assertEqual(args[args.index('-derivedDataPath') + 1], str(self.scene.dd) + '-coverage',

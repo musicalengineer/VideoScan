@@ -3,7 +3,7 @@
 # DECISIONS 2026-11-17 "The M4 holds a real-data test corpus").
 #
 #   scripts/corpus_run.sh prepare             [--wait] [--dry-run]
-#   scripts/corpus_run.sh run <check|proof|verbs|coverage> [--ref <rev>] [--deadline <s>] [--limit <n>] [--wait] [--force] [--dry-run]
+#   scripts/corpus_run.sh run <check|proof|verbs|coverage> [--ref <rev>] [--deadline <s>] [--limit <n>] [--smoke] [--wait] [--force] [--dry-run]
 #   scripts/corpus_run.sh status              [--dry-run]
 #   scripts/corpus_run.sh accept <check|proof|verbs> [--dry-run]
 #   scripts/corpus_run.sh adopt-volume /Volumes/<name> [--dry-run]
@@ -27,6 +27,9 @@
 #             build's unit suite and Core's suite beside them; reports which of OUR code
 #             only the real corpus runs (scripts/corpus_coverage.py). Counts, areas, our
 #             files' and functions' names; the report stays under ~/corpus/reports/coverage
+#   --smoke   check, proof or verbs on a small stratified subset (one file per stratum and codec mix,
+#             2 proof files, every verb once): proves the harness, the host and the code run end
+#             to end; labelled SMOKE; never a baseline. The whole testbed: m4_run.sh testbed --smoke
 #   status    the testbed lock, then the newest run of each lane judged against
 #             the lane's baseline: counts, outcome words, and each changed file
 #             by SHA-256 prefix (old -> new)

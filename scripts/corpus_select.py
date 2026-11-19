@@ -7,6 +7,7 @@ that was never kept; this is the v2 choice, kept, so it can be run again and arg
 
     corpus_select.py select --catalog <catalog .backup> --exclude <corpus-manifest-v1.json> --out <folder>
     corpus_select.py manifest --v1 <corpus-manifest-v1.json> --selection <selection.json> --out <corpus-manifest-v2.json>
+    corpus_select.py grow --catalog <newer catalog .backup> --manifest <corpus-manifest-v2.json> --out <folder>
 
 select — THE RULES (each one is a test in tests/test_corpus_select.py):
   1. from the catalog's live rows (removal_state IS NULL), every distinct content_digest
@@ -27,6 +28,13 @@ select — THE RULES (each one is a test in tests/test_corpus_select.py):
 manifest — v1's rows (root internal) followed by the selection's rows, each
   {"sha256", "path" (the original), "size", "why" (its stratum), "root" (internal|external)}:
   the `corpus-manifest-v2.json` scripts/corpus_run.py reads. A digest twice is refused.
+
+grow — the corpus grows (DECISIONS 2026-11-19, the manifest is a wish list): the same rules over a
+  newer catalog .backup, with every digest already in the manifest excluded, the internal budget
+  reduced by the large files already chosen and their (container, video, audio) strata counted
+  as covered. Writes into <folder>: corpus-manifest-v2.json — the current rows UNCHANGED (nothing
+  is ever removed, whatever the newer catalog says) followed by the new ones — and the selection,
+  SHA-256 lists and rsync lists of the NEW files only. Grown twice over the same backup: nothing new.
 
 PRIVACY. What this prints is counts and bytes only. Its outputs hold real paths: they are
 written to the folder named, which must not be in the repository (refused), and are
@@ -82,8 +90,10 @@ def catalog_rows(catalog: Path) -> List[Row]:
 
 
 def select(rows: Iterable[Row], excluded: Iterable[str],
-           can_read: Callable[[str], bool] = readable) -> Dict[str, List[Pick]]:
-    """The rules above, as a pure function of the rows (`can_read` is the one question asked of the disk)."""
+           can_read: Callable[[str], bool] = readable, budget: int = INTERNAL_BUDGET,
+           covered: Iterable[Tuple[str, str, str]] = ()) -> Dict[str, List[Pick]]:
+    """The rules above, as a pure function of the rows (`can_read` is the one question asked of the
+    disk). `budget` and `covered` (strata already in the corpus) are `grow`'s."""
     skip = {d.lower() for d in excluded}
     by_digest: Dict[str, List[Row]] = defaultdict(list)
     for row in rows:
@@ -99,16 +109,19 @@ def select(rows: Iterable[Row], excluded: Iterable[str],
     external = sorted(((d, row[2], int(row[3])) for d, (row, _) in chosen.items() if int(row[3]) < SPLIT_BYTES),
                       key=lambda p: p[0])
     strata: Dict[Tuple[str, str, str], Tuple[int, int, Row]] = {}
+    done = set(covered)
     for digest, (row, first) in chosen.items():
         if int(row[3]) < SPLIT_BYTES:
             continue
         key = (row[4] or "", row[5] or "", row[6] or "")
+        if key in done:
+            continue
         if key not in strata or (int(row[3]), first) < strata[key][:2]:
             strata[key] = (int(row[3]), first, row)
     internal: List[Pick] = []
     total = 0
     for size, _, row in sorted(strata.values(), key=lambda s: s[:2]):
-        if total + size > INTERNAL_BUDGET:
+        if total + size > budget:
             break
         total += size
         internal.append((row[1], row[2], size))
@@ -149,6 +162,23 @@ def manifest(v1_rows: List[dict], selection: Dict[str, List[list]]) -> List[dict
     return rows
 
 
+def stratum(row: Row) -> Tuple[str, str, str]:
+    return (row[4] or "", row[5] or "", row[6] or "")
+
+
+def grow(rows: List[Row], current: List[dict], can_read: Callable[[str], bool] = readable) -> Tuple[List[dict], Dict[str, List[Pick]]]:
+    """(the grown manifest: `current` unchanged + the new rows, the new files' selection)."""
+    have = {str(r["sha256"]).lower() for r in current}
+    large = {str(r["sha256"]).lower() for r in current if r.get("why") == WHY_INTERNAL}
+    covered = {stratum(row) for row in rows if row[1].lower() in large}
+    spent = sum(int(r["size"]) for r in current if r.get("why") == WHY_INTERNAL)
+    picked = select(rows, have, can_read, budget=max(0, INTERNAL_BUDGET - spent), covered=covered)
+    added = manifest([], picked)
+    if any(r["sha256"] in have for r in added):
+        raise Refused("refused: a new row names content already in the manifest")
+    return [dict(r) for r in current] + added, picked
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="corpus_select.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -160,9 +190,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     merge.add_argument("--v1", required=True)
     merge.add_argument("--selection", required=True)
     merge.add_argument("--out", required=True)
+    growing = sub.add_parser("grow")
+    growing.add_argument("--catalog", required=True)
+    growing.add_argument("--manifest", required=True)
+    growing.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "select":
+        if args.command == "grow":
+            current = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+            grown, picked = grow(catalog_rows(Path(args.catalog)), current)
+            write_selection(picked, Path(args.out))
+            (Path(args.out) / "corpus-manifest-v2.json").write_text(json.dumps(grown, indent=0) + "\n")
+            for root in ("external", "internal"):
+                print(f"corpus grow: {root} +{len(picked[root])} files, {sum(p[2] for p in picked[root]) / 1e9:.1f} GB")
+            print(f"corpus grow: manifest {len(current)} -> {len(grown)} files (none removed)")
+        elif args.command == "select":
             excluded = [row["sha256"] for row in json.loads(Path(args.exclude).read_text(encoding="utf-8"))]
             picked = select(catalog_rows(Path(args.catalog)), excluded)
             write_selection(picked, Path(args.out))

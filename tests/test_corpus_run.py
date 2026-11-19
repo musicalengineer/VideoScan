@@ -73,6 +73,11 @@ if args[0] == "build-for-testing":
         plistlib.dump({"TestPlan": {"Note": "VideoScanTests"}, "TestConfigurations": [{"TestTargets": [
             {"BlueprintName": "VideoScanUITests", "TestBundlePath": "__TESTHOST__/VideoScanUITests.xctest"}]}]}, f)
     os.utime(dd + "/Build/Products/VideoScan_VideoScan-CI_macosx.xctestrun", (1, 1))
+    binary = dd + "/Build/Products/Debug/VideoScan.app/Contents/PlugIns/VideoScanTests.xctest/Contents/MacOS"
+    os.makedirs(binary, exist_ok=True)
+    overlay = os.path.join(os.getcwd(), "VideoScan/VideoScanTests/CorpusHarnessOverlay")
+    with open(binary + "/VideoScanTests", "w") as f:     # the test binary: what was compiled into it
+        f.write("built " + ",".join(sorted(os.listdir(overlay))) if os.path.isdir(overlay) else "built without drivers")
     sys.exit(0)
 run = plistlib.load(open(args[args.index("-xctestrun") + 1], "rb"))
 env = run["TestConfigurations"][0]["TestTargets"][0]["EnvironmentVariables"]
@@ -152,13 +157,29 @@ class CorpusScene:
         self.corpus.mkdir(parents=True)
         (self.corpus / cr.MARKER).write_text('test data\n')
         self.seal = cr.Seal(self.home, hostname)
+        self.registered = {}
+        self.seal.hasher = self.fake_hash
         self.files = list(self.FILES)
         self.write_documents()
         for n, original, size, _ in self.files:
-            path = self.corpus / 'media' / original.lstrip('/')
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'x' * size)
+            self.put(self.corpus / 'media' / original.lstrip('/'), b'x' * size, sha_of(n))
         self.build_source()
+
+    def put(self, path, data, sha):
+        """Write a fake media file that STANDS FOR the content `sha` (its bytes, as written, hash to it)."""
+        path = pathlib.Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self.registered[os.path.realpath(path)] = (hashlib.sha256(data).hexdigest(), sha)
+
+    def fake_hash(self, path, size):
+        """The real read (size, stability, no link), then: the bytes the scene wrote stand for their manifest
+        SHA-256; any other bytes are what they are (a tampered file is mismatched)."""
+        got = cr.sha256_file(path, size)
+        if got is None:
+            return None
+        real, written = got[0], self.registered.get(os.path.realpath(path))
+        return ((written[1] if written and written[0] == real else real),) + got[1:]
 
     def write_documents(self):
         (self.corpus / cr.MANIFEST).write_text(json.dumps(
@@ -429,12 +450,12 @@ class PrepareTests(unittest.TestCase):
     def test_a_lane_refuses_a_sealed_catalog_built_by_an_older_transform(self):
         cr.prepare(self.scene.seal)
         entries = cr.load_manifest(self.scene.seal)
-        cr.sealed_state_ready(self.scene.seal, entries)
+        cr.sealed_state_ready(self.scene.seal, entries, cr.current_states(self.scene.seal, entries))
         record = self.scene.seal.state / 'prepare.json'
         for poison in (json.dumps(dict(json.loads(record.read_text()), transform_version=1)), '{not json', '[]'):
             record.write_text(poison)
             with self.assertRaises(cr.Refused) as refused:
-                cr.sealed_state_ready(self.scene.seal, entries)
+                cr.sealed_state_ready(self.scene.seal, entries, cr.current_states(self.scene.seal, entries))
             self.assertIn('run `scripts/corpus_run.sh prepare`', str(refused.exception))
 
     def test_the_source_backup_is_never_written(self):
@@ -463,7 +484,7 @@ class PrepareTests(unittest.TestCase):
         header = (self.scene.seal.state / DB).read_bytes()[:100]
         self.assertEqual((header[18], header[19]), (1, 1), 'rollback journal, not WAL: the sealed-snapshot door needs it')
         self.assertEqual(sorted(p.name for p in self.scene.seal.state.iterdir()),
-                         sorted([DB, LATCH, 'prepare.json', 'home', 'caches']))
+                         sorted([DB, LATCH, 'prepare.json', 'home', 'caches', cr.LEDGER]))
         prepared = json.loads((self.scene.seal.state / 'prepare.json').read_text())
         self.assertEqual((prepared['files'], prepared['verify']['rows'], prepared['verify']['ok']), (3, 3, 1))
         self.assertEqual(prepared['counts']['triggers'], prepared['counts']['source_triggers'])
@@ -485,16 +506,19 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual([p.name for p in state.iterdir() if p.name.startswith('building-')] if state.exists() else [], [],
                          'a refused prepare left its build folder')
 
-    def test_a_missing_or_resized_corpus_file_is_refused_with_counts_only(self):
+    def test_a_missing_or_resized_corpus_file_is_missing_never_a_refusal(self):
+        # DECISIONS 2026-11-19, the wish list: a file not there yet, or not whole yet, is `missing`.
         (self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')).unlink()
         (self.scene.corpus / 'media' / self.scene.files[1][1].lstrip('/')).write_bytes(b'short')
-        self.refused('1 corpus files are missing and 1 are not the manifest')
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('GREEN 1 rows for 3 manifest files', lines[0])
+        self.assertIn('  files: internal present 1 · missing 2', lines)
 
     def test_a_manifest_entry_without_its_one_live_row_is_refused(self):
         self.scene.files.append((40, '/Volumes/PrivateDrive/Grandma/not in the backup.mov', 9, 'raw DV'))
         self.scene.write_documents()
-        path = self.scene.corpus / 'media' / self.scene.files[-1][1].lstrip('/')
-        path.write_bytes(b'x' * 9)
+        self.scene.put(self.scene.corpus / 'media' / self.scene.files[-1][1].lstrip('/'), b'x' * 9, sha_of(40))
         self.refused('1 manifest entries do not have exactly one live row')
 
     def test_the_two_corpus_documents_must_agree(self):
@@ -508,20 +532,20 @@ class PrepareTests(unittest.TestCase):
     def test_a_refused_prepare_leaves_the_last_good_catalog_in_place(self):
         cr.prepare(self.scene.seal)
         before = (self.scene.seal.state / DB).read_bytes()
-        (self.scene.corpus / 'media' / self.scene.files[2][1].lstrip('/')).unlink()
-        self.refused('1 corpus files are missing')
+        (self.scene.corpus / 'media' / self.scene.files[2][1].lstrip('/')).unlink()   # the set changes: a rebuild is due
+        pathlib.Path(str(self.scene.source) + '-wal').write_bytes(b'')                    # and the backup is not a finished one
+        self.refused('not a finished backup')
         self.assertEqual((self.scene.seal.state / DB).read_bytes(), before)
 
-    def test_verify_sees_a_file_that_went_missing_or_changed_size_after_prepare(self):
+    def test_a_file_that_went_away_or_changed_after_ingest_is_vanished_or_changed(self):
         cr.prepare(self.scene.seal)
         entries = cr.load_manifest(self.scene.seal)
         self.assertEqual(cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, entries)['ok'], 1)
         (self.scene.corpus / 'media' / self.scene.files[0][1].lstrip('/')).write_bytes(b'changed')
         (self.scene.corpus / 'media' / self.scene.files[1][1].lstrip('/')).unlink()
-        verdict = cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, entries)
-        self.assertEqual((verdict['ok'], verdict['size_differs'], verdict['file_missing']), (0, 1, 1))
-        with self.assertRaises(cr.Refused):
-            cr.sealed_state_ready(self.scene.seal, entries)
+        states = cr.current_states(self.scene.seal, entries)
+        self.assertEqual(sorted(states.values()), ['changed', 'present', 'vanished'])
+        cr.sealed_state_ready(self.scene.seal, entries, states)            # the catalog still stands: only the present file runs
 
 
 class LaneScene(CorpusScene):
@@ -558,7 +582,7 @@ class LaneScene(CorpusScene):
         argv = ['host', lane, '--sha', sha, '--stamp', stamp, '--out', str(self.out), '--worktree', str(self.worktree),
                 '--derived-data', str(self.dd), '--bin', str(SCRIPTS / 'corpus')]
         for key, value in extra.items():
-            argv += ['--' + key, str(value)]
+            argv += ['--' + key] + ([str(value)] if value != '' else [])
         try:
             return cr.main(argv, seal=self.seal, xcodebuild=str(self.fake), cp=str(self.fake_cp))
         finally:
@@ -1717,7 +1741,7 @@ class CodexRoundTests(unittest.TestCase):
         catalog_db.connect = lambda path, *a, **k: opened.append(str(path)) or real(path, *a, **k)
         try:
             with self.assertRaises(cr.Refused) as refused:
-                cr.sealed_state_ready(self.scene.seal, cr.load_manifest(self.scene.seal))
+                cr.sealed_state_ready(self.scene.seal, cr.load_manifest(self.scene.seal), cr.current_states(self.scene.seal, cr.load_manifest(self.scene.seal)))
             self.assertEqual(self.scene.run(), cr.EXIT_REFUSED)
         finally:
             catalog_db.connect = real
@@ -1848,6 +1872,9 @@ class CodexClosingTests(unittest.TestCase):
                 if target.exists():
                     target.unlink()
                 os.link(self.victim, target)                                # the same inode as the pristine file
+                mark = self.scene.dd / cr.BUILD_MARK
+                if mark.exists():
+                    mark.unlink()                                           # a build happens, so its log is opened
                 self.assertIn(self.scene.run(stamp='20261118_090000_2'), (cr.EXIT_REFUSED, cr.EXIT_RED))
                 self.assertEqual(self.victim.read_bytes(), self.pristine, 'a corpus file was emptied through its second name')
                 target.unlink()
@@ -1926,7 +1953,7 @@ class CodexClosingTests(unittest.TestCase):
         shutil.move(str(prepared), str(kept))
         os.symlink(kept, prepared)
         with self.assertRaises(cr.Refused):
-            cr.sealed_state_ready(self.scene.seal, cr.load_manifest(self.scene.seal))
+            cr.sealed_state_ready(self.scene.seal, cr.load_manifest(self.scene.seal), cr.current_states(self.scene.seal, cr.load_manifest(self.scene.seal)))
         self.assertIn('not prepared', cr.status(self.scene.seal)[0])
 
     def test_8_status_prints_a_stored_report_as_words_and_numbers_only(self):
@@ -2481,17 +2508,13 @@ class TwoRootScene(LaneScene):
         (self.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows))
         (self.corpus / cr.SHA_LIST_V2_INTERNAL).write_text(''.join(f"{sha_of(n)}  {o.lstrip('/')}\n" for n, o, s, w in self.V2_INTERNAL))
         for n, o, s, w in self.V2_INTERNAL:
-            path = self.corpus / 'media' / o.lstrip('/')
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'y' * s)
+            self.put(self.corpus / 'media' / o.lstrip('/'), b'y' * s, sha_of(n))
         mount = self.volume.mount
         (mount / cr.MARKER).write_text('test data\n')
         (mount / 'corpus').mkdir(exist_ok=True)
         (mount / 'corpus' / cr.SHA_LIST_V2_EXTERNAL).write_text(''.join(f"{sha_of(n)}  {o.lstrip('/')}\n" for n, o, s, w in self.V2_EXTERNAL))
         for n, o, s, w in self.V2_EXTERNAL:
-            path = self.ext_path(o)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'z' * s)
+            self.put(self.ext_path(o), b'z' * s, sha_of(n))
         (mount / 'corpus' / 'media').mkdir(parents=True, exist_ok=True)
         if adopt:
             cr.adopt_volume(self.seal, str(mount), 'tester@test')
@@ -2548,18 +2571,24 @@ class TwoRootPrepareTests(TwoRootTestCase):
         for n, original, _, _ in self.scene.V2_EXTERNAL:
             self.assertEqual(rows[sha_of(n)], str(self.volume.mount / 'corpus' / 'media') + original)
         prepared = json.loads((self.scene.seal.state / 'prepare.json').read_text())
-        self.assertEqual((prepared['manifest'], prepared['roots']['internal']['files'], prepared['roots']['external']['files']),
+        self.assertEqual((prepared['manifest'], prepared['inventory']['internal']['present'], prepared['inventory']['external']['present']),
                          (cr.MANIFEST_V2, 4, 2))
         entries = cr.load_manifest(self.scene.seal)
         self.assertEqual(sorted(e.root for e in entries), ['external'] * 2 + ['internal'] * 4)
 
-    def test_prepare_wants_every_file_so_it_refuses_while_the_volume_is_away(self):
+    def test_prepare_runs_with_the_volume_away_and_takes_its_files_when_it_is_back(self):
         self.scene.grow(prepare=False)
         self.volume.detach()
         self.scene.seal._external = None
-        with self.assertRaises(cr.Refused) as refused:
-            cr.prepare(self.scene.seal)
-        self.assertIn('the external volume is not mounted (2 files are on it)', str(refused.exception))
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('GREEN 4 rows for 6 manifest files', lines[0])
+        self.assertIn('  external volume NOT MOUNTED: its 2 files were not looked at', lines)
+        self.volume.attach()
+        self.scene.seal._external = None
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertIn('GREEN 6 rows for 6 manifest files', lines[0])
+        self.assertIn('  files: internal present 4 · missing 0 | external present 2 · missing 0', lines)
 
     def test_the_lists_must_agree_with_the_manifest_on_both_roots(self):
         self.scene.grow(prepare=False)
@@ -3525,11 +3554,13 @@ class CodexRound333Tests(RemountCase):
                 os.rename(child, folder / child.name)
             self.scene.seal._external = None
             entries = cr.load_manifest(self.scene.seal)
-            verdict = cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, entries,
-                                        unavailable=[e.sha for e in entries if e.root == 'external'])
+            held = [e for e in entries if e.sha in set(cr.prepared_record(self.scene.seal)['built_over'])]
+            verdict = cr.verify_catalog(self.scene.seal, self.scene.seal.state / DB, held,
+                                        checked=[e.sha for e in held if e.root == 'internal'])
             self.assertEqual((verdict['ok'], verdict['outside_corpus']), (0, 1))
             with self.assertRaises(cr.Refused):
-                cr.sealed_state_ready(self.scene.seal, entries, [e.sha for e in entries if e.root == 'external'])
+                cr.sealed_state_ready(self.scene.seal, entries, cr.current_states(
+                    self.scene.seal, entries, [e.sha for e in entries if e.root == 'external']))
         finally:
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(folder)], capture_output=True, timeout=120)
             self.volume.attach()
@@ -3662,6 +3693,254 @@ class CodexRound335Tests(RemountCase):
             os.environ.pop('FAKE_CP_CALLS', None)
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(folder)], capture_output=True, timeout=120)
             self.volume.attach()
+
+
+
+class WishListTests(unittest.TestCase):
+    """DECISIONS 2026-11-19: the manifest is the wish list; each run uses what has arrived and been proven."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)                 # prepared over all three files
+        self.hashed = []
+        real = self.scene.seal.hasher
+        self.scene.seal.hasher = lambda path, size: (self.hashed.append(str(path)), real(path, size))[1]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def media(self, n):
+        return self.scene.corpus / 'media' / self.scene.files[n][1].lstrip('/')
+
+    def never_arrived(self, n):
+        """File n not copied yet: no file, and no ledger record (it was never proven)."""
+        os.unlink(self.media(n))
+        ledger = cr.Ledger.load(self.scene.seal)
+        ledger.files.pop(sha_of(n), None)
+        ledger.save()
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def fresh(self, stamp='20261119_120000_1'):
+        self.scene.out = self.scene.home / 'm4run' / 'out' / f'{stamp}-corpus'
+        self.scene.out.mkdir(parents=True, exist_ok=True)
+
+    def test_ingest_is_once_cheap_when_nothing_is_new_and_only_new_files_are_hashed(self):
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual((code, self.hashed), (cr.EXIT_GREEN, []), 'a second prepare read a file again')
+        self.assertIn('nothing new, the sealed catalog is as it was', lines[0])
+        self.never_arrived(2)
+        cr.prepare(self.scene.seal)
+        self.scene.put(self.media(2), b'x' * self.scene.files[2][2], sha_of(2))     # the copy arrives
+        _, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(self.hashed, [str(self.media(2))])
+        self.assertIn('the sealed catalog rebuilt', lines[0])
+        self.assertIn('  files: internal present 3 · missing 0', lines)
+
+    def test_a_partial_copy_is_never_hashed_and_reads_missing(self):
+        self.never_arrived(1)
+        cr.prepare(self.scene.seal)
+        self.media(1).write_bytes(b'x' * 10)                                         # a copy cut short
+        _, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(self.hashed, [])
+        self.assertIn('  files: internal present 2 · missing 1', lines)
+
+    def test_bytes_that_are_not_the_manifests_are_mismatched_named_never_run_and_amber(self):
+        self.never_arrived(0)
+        cr.prepare(self.scene.seal)
+        self.media(0).write_bytes(b'q' * self.scene.files[0][2])                    # the right size, the wrong bytes
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_AMBER)
+        self.assertIn(f'  mismatched (AMBER): {sha_of(0)[:12]}', lines)
+        self.fresh()
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        config = [c for c in self.scene.recorded_calls() if 'config' in c][-1]['config']
+        self.assertNotIn(sha_of(0), [i['sha'] for i in config['pending']])
+        self.assertIn(f'  mismatched (AMBER): {sha_of(0)[:12]}', self.summary())
+        self.assertNotIn('Grandma', self.summary())
+
+    def test_vanished_and_changed_are_amber_and_named_and_prepare_proves_a_touched_file_again(self):
+        self.fresh()
+        os.unlink(self.media(1))
+        os.utime(self.media(2), (1, 1))                                              # same bytes, new mtime
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        self.assertIn(f'  vanished (AMBER): {sha_of(1)[:12]}', self.summary())
+        self.assertIn(f'  changed (AMBER): {sha_of(2)[:12]}', self.summary())
+        self.assertIn('  files: internal present 1 · missing 0 · vanished 1 · changed 1', self.summary())
+        _, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(self.hashed, [str(self.media(2))])
+        self.assertIn('  files: internal present 2 · missing 0 · vanished 1', lines)
+
+    def test_missing_never_moves_the_verdict_a_run_with_missing_may_be_accepted_and_new_files_are_counted(self):
+        self.never_arrived(2)
+        cr.prepare(self.scene.seal)
+        self.fresh('20261119_120000_1')
+        self.assertEqual(self.scene.run('check', stamp='20261119_120000_1'), cr.EXIT_GREEN, self.summary())
+        self.assertIn('  files: internal present 2 · missing 1', self.summary())
+        cr.accept(self.scene.seal, 'check', 'x')                                    # the baseline is per file
+        self.scene.put(self.media(2), b'x' * self.scene.files[2][2], sha_of(2))
+        cr.prepare(self.scene.seal)
+        self.fresh('20261119_130000_2')
+        self.assertEqual(self.scene.run('check', stamp='20261119_130000_2'), cr.EXIT_GREEN, self.summary())
+        self.assertIn('0 of 2 files changed (new in this run 1, not in this run 0)', self.summary())
+
+    def test_a_ledger_that_cannot_be_read_back_stops_prepare_and_lanes(self):
+        (self.scene.seal.state / cr.LEDGER).write_text('{"version": 1, "files": {"nope": {}}}')
+        with self.assertRaises(cr.Refused) as refused:
+            cr.prepare(self.scene.seal)
+        self.assertIn('cannot be read back', str(refused.exception))
+        self.fresh()
+        self.assertEqual(self.scene.run('check'), cr.EXIT_REFUSED)
+
+    def test_a_file_ingested_after_the_last_prepare_waits_for_the_next(self):
+        entries = cr.load_manifest(self.scene.seal)
+        ledger = cr.Ledger.load(self.scene.seal)
+        states = cr.classify(entries, ledger, built_over=[e.sha for e in entries if e.sha != sha_of(1)])
+        self.assertEqual(states[sha_of(1)], 'missing')
+
+
+class WishListScaleTests(unittest.TestCase):
+
+    def test_classifying_100k_files_against_the_ledger_stays_inside_the_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = pathlib.Path(tmp)
+            entries = [cr.Entry(sha_of(i), f'/Volumes/D/f{i}.mov', 10, 'v2', folder / f'f{i}.mov') for i in range(100_000)]
+            seal = cr.Seal(folder / 'home', 'ricksm4')
+            ledger = cr.Ledger(seal, {sha_of(i): dict(root='internal', size=10, mtime_ns=1, status='ok') for i in range(0, 100_000, 2)})
+            t0 = time.time()
+            states = cr.classify(entries, ledger, built_over=list(ledger.files))
+            took = time.time() - t0
+            self.assertEqual(Counter_of(states.values()), {'missing': 50_000, 'vanished': 50_000})
+            self.assertLess(took, 10.0, f'{took:.1f}s')
+
+
+def Counter_of(values):
+    out = {}
+    for v in values:
+        out[v] = out.get(v, 0) + 1
+    return out
+
+
+
+class SmokeLaneTests(unittest.TestCase):
+    """DECISIONS 2026-11-19: `run <lane> --smoke` — a small stratified subset; SMOKE; never a baseline."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name, with_proof_engine=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def pending(self):
+        return [c for c in self.scene.recorded_calls() if 'config' in c][-1]['config']['pending']
+
+    def test_the_subset_is_one_file_per_stratum_and_codec_mix_dealt_round_robin_and_deterministic(self):
+        def e(n, stratum, size):
+            return cr.Entry(sha_of(n), f'/Volumes/D/{n}.mov', size, stratum, pathlib.Path(f'/x/{n}.mov'))
+        entries = [e(1, 'a', 30), e(2, 'a', 10), e(3, 'a', 20), e(4, 'b', 5), e(5, 'b', 50), e(6, 'c', 7)]
+        codecs = {sha_of(1): ('mov', 'h264', 'aac'), sha_of(2): ('mov', 'h264', 'aac'), sha_of(3): ('mxf', 'dnxhd', ''),
+                  sha_of(4): ('avi', 'dv', 'pcm'), sha_of(5): ('avi', 'dv', 'pcm'), sha_of(6): ('mkv', 'ffv1', 'pcm')}
+        picked = cr.smoke_sample(entries, codecs)
+        self.assertEqual(sorted(x.sha for x in picked), sorted([sha_of(2), sha_of(3), sha_of(4), sha_of(6)]))
+        self.assertEqual([x.sha for x in cr.smoke_sample(entries, codecs, cap=3)], sorted([sha_of(2), sha_of(4), sha_of(6)]),
+                         'round-robin: every stratum before a second mix of one')
+        self.assertEqual(cr.smoke_sample(list(reversed(entries)), codecs), picked)
+
+    def test_a_smoke_run_is_labelled_never_accepted_and_never_the_implicit_baseline(self):
+        self.assertEqual(self.scene.run('check', stamp='20261119_100000_1', smoke=''), cr.EXIT_GREEN, self.summary())
+        self.assertTrue(self.summary().startswith('corpus check SMOKE: GREEN'))
+        self.assertIn(cr.SMOKE_NOTE, self.summary())
+        facts = json.loads((self.scene.out / cr.VERDICT_FILE).read_text())
+        self.assertTrue(facts['smoke'])
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'x')
+        self.assertIn('SMOKE', str(refused.exception))
+        self.assertEqual(self.scene.run('check', stamp='20261119_110000_2'), cr.EXIT_GREEN)
+        self.assertIn('baseline: this run', self.summary(), 'a smoke run became the implicit baseline')
+
+    def test_proof_takes_two_and_verbs_one_file_per_role(self):
+        self.scene.plan['engines'] = ['balance', 'proof']
+        self.scene.run('proof', stamp='20261119_100000_1', smoke='')
+        self.assertLessEqual(len(self.pending()), cr.SMOKE_PROOF)
+        self.scene.plan['engines'] = VERBS
+        self.assertEqual(self.scene.run('verbs', stamp='20261119_100000_2', smoke=''), cr.EXIT_GREEN, self.summary())
+        self.assertEqual(sorted(i['role'] for i in self.pending()), ['dup', 'purge', 'set_aside'],
+                         'every role the three-file corpus can fill, once')
+
+    def test_a_smoke_run_works_with_files_missing(self):
+        os.unlink(self.scene.corpus / 'media' / self.scene.files[2][1].lstrip('/'))
+        ledger = cr.Ledger.load(self.scene.seal)
+        ledger.files.pop(sha_of(2))
+        ledger.save()
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check', smoke=''), cr.EXIT_GREEN, self.summary())
+        self.assertIn('  files: internal present 2 · missing 1', self.summary())
+        self.assertEqual(len(self.pending()), 2)
+
+    def test_smoke_is_refused_for_coverage(self):
+        self.assertEqual(self.scene.run('coverage', smoke=''), cr.EXIT_REFUSED)
+
+
+
+class OneBuildTests(unittest.TestCase):
+    """Charter §7 / Rick 2026-11-19: one build per commit — the gauntlet's build-for-testing once, then
+    test-without-building per lane, each lane with its own patched copy of the .xctestrun."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name, with_proof_engine=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def builds(self):
+        return [c for c in self.scene.recorded_calls() if c.get('args', [''])[0] == 'build-for-testing']
+
+    def lane_run(self, lane, stamp, **extra):
+        self.scene.plan['engines'] = {'check': ['probe', 'check', 'audio', 'pair'], 'proof': ['balance', 'proof'], 'verbs': VERBS}[lane]
+        return self.scene.run(lane, stamp=stamp, **extra)
+
+    def test_check_proof_and_verbs_at_one_commit_build_once_and_each_runs_its_own_test_run_file(self):
+        for lane, stamp in (('check', '20261119_100000_1'), ('proof', '20261119_100000_2'), ('verbs', '20261119_100000_3')):
+            self.assertIn(self.lane_run(lane, stamp), (cr.EXIT_GREEN, cr.EXIT_AMBER))
+        self.assertEqual(len(self.builds()), 1, 'the same commit was built more than once')
+        tests = [c for c in self.scene.recorded_calls() if c.get('args', [''])[0] == 'test-without-building']
+        self.assertEqual([next(a for a in c['args'] if a.startswith('-only-testing:')) for c in tests],
+                         ['-only-testing:VideoScanTests/CorpusCheckDriver', '-only-testing:VideoScanTests/CorpusProofDriver',
+                          '-only-testing:VideoScanTests/CorpusVerbsDriver'])
+        patched = [c['args'][c['args'].index('-xctestrun') + 1] for c in tests]
+        self.assertEqual(len(set(patched)), 3, 'each lane patches its own copy')
+        self.assertIn('the build reused: same commit, same drivers', (self.scene.out / 'corpus-summary.txt').read_text())
+        binary = next((self.scene.dd / 'Build' / 'Products').rglob('VideoScanTests.xctest/Contents/MacOS/VideoScanTests'))
+        self.assertEqual(binary.read_text(), 'built ' + ','.join(sorted(cr.ALL_DRIVERS)), 'one build holds the driver of every lane')
+
+    def test_another_commit_another_build_into_the_folder_or_changed_drivers_build_again(self):
+        self.lane_run('check', '20261119_100000_1')
+        self.lane_run('check', '20261119_100000_2', sha='b' * 40)
+        self.assertEqual(len(self.builds()), 2, 'another commit')
+        binary = next((self.scene.dd / 'Build' / 'Products').rglob('VideoScanTests.xctest/Contents/MacOS/VideoScanTests'))
+        binary.write_text('built without drivers')                         # the ui lane (or the sensor lane) built here since
+        self.lane_run('check', '20261119_100000_3', sha='b' * 40)
+        self.assertEqual(len(self.builds()), 3, 'a build into the same folder since')
+        self.lane_run('check', '20261119_100000_4', sha='b' * 40)
+        self.assertEqual(len(self.builds()), 3, 'and then reused')
+
+    def test_a_mark_that_is_a_link_or_is_poisoned_is_never_trusted(self):
+        self.lane_run('check', '20261119_100000_1')
+        mark = self.scene.dd / cr.BUILD_MARK
+        record = mark.read_text()
+        elsewhere = pathlib.Path(self.tmp.name, 'mark.json')
+        elsewhere.write_text(record)
+        mark.unlink()
+        os.symlink(elsewhere, mark)
+        self.lane_run('check', '20261119_100000_2')
+        self.assertEqual(len(self.builds()), 2)
+        self.assertTrue(mark.is_symlink() or json.loads(mark.read_text()) is not None)
 
 
 if __name__ == '__main__':

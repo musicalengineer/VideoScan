@@ -205,7 +205,7 @@ and reports counts.
 - **The external root** is accepted only while the adopted volume is mounted at its path, that path is not reached
   through a link, the volume carries the marker, and its volume UUID is the one in `~/corpus/external-volume.json`.
   Nothing writes on it, mounted or not (the seal, and `testbed_host.py clean` never enters a mount or `/Volumes`).
-  **Unplugged**: `prepare` is refused; a lane runs the internal files and says *"external volume NOT MOUNTED: N files
+  **Unplugged**: `prepare` ingests what it can reach; a lane runs the internal files and says *"external volume NOT MOUNTED: N files
   on it NOT RUN"* — **AMBER** (no engine failed and no copy is at risk, but those files proved nothing), and such a
   run is never a baseline. **Another volume there**, unmarked, or through a link: the lane is refused and runs nothing.
   The proof (that volume, by UUID) is made again before every launch and, in the test host, before every engine on every
@@ -228,6 +228,7 @@ and reports counts.
 | `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on v1's one-sided-sound files plus those the newest whole check run heard one-sided (left or right only), smallest first, 40 at most; refused if the largest balanced copy would take the SSD past 95% used; says so when the ref has no proof engine |
 | `scripts/corpus_run.sh run verbs [--ref <rev>]` | ~20 files of the **internal** root (APFS clones are made within one volume), stratified and sized to fit, cloned (`cp -c`, no extra space) into `work/<run>/vol/`; a catalog over the clones; then the app's real engines: Update Catalog + Find Duplicates + Delete Duplicates on three byte-identical clones, Move to Trash on an extra copy and on the last copy, Remove and Remove from Catalog each followed by a rescan (does the row come back?), Promote into a scratch archive; every clone re-hashed afterwards; the media sweep covers both roots |
 | `scripts/corpus_run.sh run coverage [--ref <rev>]` | opt-in, ~2 h: `check`, `proof` and `verbs` on ONE instrumented Debug build (`<DerivedData>-coverage`), the same build's unit suite (CI plan, drivers skipped) and Core's `swift test --enable-code-coverage` (`<DerivedData>-coverage-core`); LCOV per side, compared over our sources: suite / corpus / union line and function %, what only the corpus runs by area and lane, the functions the suite never enters ranked by size. Each lane still stores its own run. Raw profiles go with the run's work folder; the report stays in `reports/coverage/<commit>/<run>/` (`scripts/corpus_coverage.py`) |
+| `scripts/m4_run.sh testbed --smoke` · `scripts/corpus_run.sh run <check\|proof\|verbs> --smoke` | SMOKE (DECISIONS 2026-11-19, target ≤ 15 min with builds): the sensor lane instead of the full suite, then check on one present file per stratum and codec mix (at most 60), proof on two, verbs with every verb once. Says SMOKE in every line and the block; the verdict means the harness, the host and the code run end to end; never a baseline, never what proof picks its files from; works with files missing |
 | `scripts/corpus_run.sh status` | the lock, then each lane's newest run judged against its baseline: counts, outcome-word transitions, each changed file by SHA-256 prefix |
 | `scripts/corpus_run.sh accept <check\|proof\|verbs>` | blesses the lane's newest run as its baseline; refused for a run that crashed or timed out, a `--limit` run, or a run with no engine |
 
@@ -238,7 +239,7 @@ a file crashed an engine or ran past its deadline (whatever the baseline holds),
 corpus media was touched, or the accepted baseline cannot be read back. **GREEN**: nothing moved. An engine's own
 `error:…` word is an outcome like any other. After looking at an AMBER run and agreeing with it: `accept`.
 
-Options: `--wait`, `--dry-run`, `--deadline <seconds per file>`, `--limit <n files>`. It runs through
+**One build per commit** (Charter §7): the overlay holds every lane's driver; the first corpus lane at a commit runs `build-for-testing` and leaves `corpus-build.json` in its DerivedData (commit, config, coverage, the drivers' and the built test binary's SHA-256); every later lane at that commit runs `test-without-building` on its own patched copy of the `.xctestrun` (the gauntlet's Runner pattern) and says "the build reused". Another build into that folder (the ui lane, the smoke testbed's sensor lane) changes the binary and the next lane builds again. The full suite builds Release into its own folder without the drivers, so a testbed run makes two builds. Options: `--wait`, `--dry-run`, `--deadline <seconds per file>`, `--limit <n files>`. `--smoke`. It runs through
 `scripts/m4_run.sh corpus` — the same lock, per-run LaunchAgent and `--ref` checkout as the other lanes — so it waits
 its turn behind a suite or gauntlet run. The engines run in the app's unit-test host (the shared catalog store, sync
 and the background service are inert there) with its home redirected into `~/corpus/state/home`; the driver sources
@@ -259,12 +260,24 @@ transform, run `prepare` once; a lane refuses a sealed catalog built by another 
 corpus's own SHA-256 lists (verified with `shasum -c` when the copy was made) and checks sizes; it does not re-hash
 1.95 TB per run.
 
+**The manifest is a wish list** (DECISIONS 2026-11-19: "run the testbed even with some of the media missing … each
+time it would have more files"). `prepare` ingests what has arrived: each new file whose size is the manifest's is
+read once and its SHA-256 checked, into `~/corpus/state/corpus-ledger.json` (root, size, mtime); it is cheap when
+nothing is new and rebuilds the sealed catalog only when the proven set changed. Every summary says, per root,
+`present N · missing M` and any of: **mismatched** (bytes are not the manifest's), **vanished** (proven, now gone),
+**changed** (proven, size or mtime moved; the next `prepare` reads it again) — those three are AMBER and named by
+SHA-256 prefix; missing never moves a verdict. A lane runs only present files. The baseline diff compares the files
+both runs had; new ones are counted. `accept` takes a run with missing files, not a `--limit` run or one with the
+external volume away.
+
 **Growing the corpus** (how v2 was made; again the same way): on the Ultra, `scripts/corpus_select.py select` over a
 fresh catalog `.backup` with `--exclude` the current manifest writes the selection, the two SHA-256 lists and the
 rsync file lists into a scratch folder (never the repo: they hold real paths); `rsync -a --files-from` to each root
 (never `--delete`), then `shasum -a 256 -c` on the M4 from each root's `media/`; `corpus_select.py manifest` writes
 `corpus-manifest-v2.json`; copy it, the lists and the backup (as `catalog-source-backup-v2.sqlite`) into `~/corpus`;
-`adopt-volume` once; `prepare`. Disk (DECISIONS 2026-11-19): the SSD rests under 85% used (`testbed_host.py clean`'s
+`adopt-volume` once; `prepare` — and again whenever more has arrived. Later growth: `corpus_select.py grow --catalog
+<newer .backup> --manifest <current manifest> --out <scratch>` appends the new digests (nothing is ever removed) and
+writes the copy lists of the new files only; copy them, put the grown manifest and the newer backup in place, `prepare`. Disk (DECISIONS 2026-11-19): the SSD rests under 85% used (`testbed_host.py clean`'s
 floor, 15% free) and a run may take it to 95% if its scratch goes after the summary.
 
 ## 2. Storage layout

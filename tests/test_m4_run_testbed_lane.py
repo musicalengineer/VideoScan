@@ -404,5 +404,87 @@ class CallerOnTheM4Tests(TestbedScene):
         self.assertIn('OUTCOME NORUN', p.stdout)
 
 
+
+STUB_SENSORS = '#!/bin/bash\necho "run_sensors.sh $*" >>"$SUITE_FAKE/calls"\necho "sensor lane: 751 app + 26 core sensors (Debug)"\necho "sensor lane GREEN (836 tests)"\n'
+
+
+class SmokeTestbedTests(TestbedScene):
+    """DECISIONS 2026-11-19: `testbed --smoke` — every lane on a stratified subset, the sensor lane for the suite,
+    labelled SMOKE, its verdict meaning the harness, the host and the code run end to end."""
+
+    def setUp(self):
+        super().setUp()
+        (self.work / 'scripts').mkdir(exist_ok=True)
+        (self.work / 'scripts' / 'run_sensors.sh').write_text(STUB_SENSORS)
+        git = ['/usr/bin/git', '-C', str(self.work)]
+        subprocess.run(git + ['add', '-A'], check=True, env=self.git_env)
+        subprocess.run(git + ['commit', '-q', '-m', 'sensors'], check=True, env=self.git_env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=self.git_env, capture_output=True, text=True).stdout.strip()
+        self.corpus('verbs', lane_facts=dict(lane='verbs', verdict='GREEN', sha='abcdef012', files=3, bytes=1, wall_s=1.0,
+                                             engines={'group': {'grouped': 3}}, engine_order=['group'], failures={}, against=None))
+
+    def test_the_smoke_testbed_runs_the_sensor_lane_and_every_corpus_lane_smoke_and_says_so(self):
+        p, log, summary, out = self.host('s1', 'testbed', '--smoke')
+        self.assertEqual(p.returncode, 0, log + summary)
+        lines = summary.splitlines()
+        self.assertRegex(lines[0], r'^testbed SMOKE: GREEN at ' + self.sha[:9] + r' — 4 lanes, wall \d+s — SMOKE: each lane on a '
+                         r'stratified subset; the verdict means the harness, the host and the code run end to end \(never a baseline\)$')
+        self.assertRegex(lines[1], r'^  sensors +GREEN +\d+s  sensor lane GREEN \(836 tests\)$')
+        for lane in ('check', 'proof', 'verbs'):
+            self.assertTrue(any(line.startswith(f'  corpus {lane} ') for line in lines), lane)
+        calls = self.calls()
+        corpus = [c for c in calls if c.startswith('corpus_run.py ')]
+        self.assertEqual([c.split()[2] for c in corpus], ['check', 'proof', 'verbs'])
+        self.assertTrue(all(' --smoke' in c for c in corpus), corpus)
+        self.assertTrue(any(c.startswith('run_sensors.sh --derived-data ') for c in calls), calls)
+        self.assertFalse(any(' test-without-building ' in c for c in calls), 'the full suite ran in a smoke testbed')
+        self.assertIn('sensors (SMOKE: the sensor lane in place of the full suite): sensor lane GREEN (836 tests)', summary)
+
+    def test_a_red_sensor_lane_is_a_red_smoke_testbed(self):
+        (self.work / 'scripts' / 'run_sensors.sh').write_text('#!/bin/bash\necho "sensor lane RED (3 failed)"\nexit 1\n')
+        git = ['/usr/bin/git', '-C', str(self.work)]
+        subprocess.run(git + ['commit', '-q', '-am', 'red'], check=True, env=self.git_env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=self.git_env, capture_output=True, text=True).stdout.strip()
+        p, log, summary, _ = self.host('s2', 'testbed', '--smoke')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertRegex(summary.splitlines()[0], r'^testbed SMOKE: RED ')
+        self.assertRegex(summary.splitlines()[1], r"^  sensors +RED +\d+s  no result line \(see the lane's own lines\)$")
+
+
+class SmokeArgumentTests(unittest.TestCase):
+
+    def run_sh(self, *args, env=None):
+        return subprocess.run(['/bin/bash', str(SCRIPTS / 'm4_run.sh'), *args], capture_output=True, text=True, env=env, timeout=120)
+
+    def test_smoke_is_for_the_testbed_and_corpus_check_proof_verbs_only(self):
+        for args in (['ui', '--smoke', '--dry-run'], ['suite', '--smoke', '--dry-run'],
+                     ['corpus', '--corpus-lane', 'prepare', '--smoke', '--dry-run'],
+                     ['corpus', '--corpus-lane', 'coverage', '--smoke', '--dry-run']):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_sh(*args).returncode, 2)
+
+    def test_the_dry_run_plans_say_smoke(self):
+        with tempfile.TemporaryDirectory() as home:
+            p = self.run_sh('testbed', '--ref', 'HEAD', '--smoke', '--dry-run', env=dict(os.environ, HOME=home))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn('SMOKE: the sensor lane, then corpus_run.py host check, proof and verbs, each --smoke', p.stdout)
+            self.assertIn('<string>--smoke</string>', p.stdout)
+            p = self.run_sh('corpus', '--corpus-lane', 'verbs', '--ref', 'HEAD', '--smoke', '--dry-run', env=dict(os.environ, HOME=home))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn('SMOKE: corpus_run.py host verbs --smoke', p.stdout)
+
+    def test_the_block_names_the_sensor_line_only_when_it_is_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good, bad = pathlib.Path(tmp, 'good.json'), pathlib.Path(tmp, 'bad.json')
+            good.write_text(json.dumps(dict(line='sensor lane GREEN (836 tests)')))
+            bad.write_text(json.dumps(dict(line='/Volumes/Private/Grandma.mov')))
+            verdict, lines = ms.testbed_block([('sensors', 'GREEN', '70', str(good)), ('sensors', 'RED', '9', str(bad))], 'a' * 40, 80,
+                                              smoke=True)
+            self.assertEqual(verdict, 'RED')
+            self.assertIn('sensor lane GREEN (836 tests)', lines[1])
+            self.assertNotIn('Grandma', '\n'.join(lines))
+            self.assertTrue(lines[0].startswith('testbed SMOKE: RED'))
+
+
 if __name__ == '__main__':
     unittest.main()

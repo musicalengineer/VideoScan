@@ -18,6 +18,17 @@ runs ON THE M4; `scripts/corpus_run.sh` launches it from the Ultra through
   accept <lane>  bless the lane's newest run as its baseline (who, when, which run)
   adopt-volume <mount>   once, by a person: the external root's volume (below)
 
+THE WISH LIST (DECISIONS 2026-11-19). The manifest names what the corpus SHOULD hold; a run uses
+what has arrived. `prepare` ingests each newly arrived file once (SHA-256 against the manifest, into
+~/corpus/state/corpus-ledger.json) and builds the sealed catalog over the files proven so far; a
+lane runs the PRESENT files and counts the rest per root (`present N · missing M`). Missing never
+moves a verdict or blocks prepare or a lane; mismatched / vanished / changed are AMBER, named. The
+baseline diff compares files present in both runs; a file new since the baseline is counted, not
+AMBER. `accept` takes a run with missing files (the baseline is per file: a missing file simply has
+no row and is compared once it is there) but not a --limit run or one with the external volume
+away (a slice or a fault, not the corpus as it stands); a run with problems is never the implicit
+first baseline. The ingest section below has the states.
+
 TWO ROOTS (v2, DECISIONS 2026-11-19). The corpus rests on the M4's SSD and on an external
 volume (the Crucial X10, ~6,100 files under 8 GB). corpus-manifest-v2.json, when present, IS
 the manifest: v1's 234 rows and v2's, each with its `root`. An INTERNAL file's copy is
@@ -27,7 +38,7 @@ where <mount> and the volume UUID come from ~/corpus/external-volume.json, writt
 is accepted only while that path is itself (no link), a volume is mounted exactly there, it
 carries THIS_IS_TEST_DATA.txt and its UUID is the pinned one (`Seal.external`; the in-app seal
 asks the same, CorpusSeal.external). Nothing ever writes on it, mounted or not.
-  - prepare needs every file: refused while the volume is away.
+  - prepare ingests what it can reach: with the volume away its files are simply not looked at.
   - a lane with the volume away runs the internal files and says how many external files it
     did NOT RUN: AMBER — not RED, because no engine failed and no copy is at risk, and not
     GREEN, because those files proved nothing; such a run is never a baseline (accept
@@ -57,7 +68,8 @@ or — until one is accepted — the lane's first whole clean run.
   RED    a file crashed an engine or ran past its deadline (never acceptable,
          whatever the baseline holds), or the accepted baseline cannot be read back;
   AMBER  some file's outcome word differs from the baseline — each is listed by
-         SHA-256 prefix with `engine: old -> new`;
+         SHA-256 prefix with `engine: old -> new`; or a file is mismatched, vanished or
+         changed (named by SHA-256 prefix; "ingest" below), or the external volume is away;
   GREEN  nothing moved. An engine's own "error:…" word is an outcome like any
          other: known in the baseline, it is not news.
 
@@ -178,6 +190,14 @@ PROOF_STRATUM = "one-sided sound"
 PROOF_CAP = 40
 ONE_SIDED_KINDS = frozenset({"channelImbalance:leftOnly", "channelImbalance:rightOnly"})
 TRANSIENT_CEILING = 0.95                         # DECISIONS 2026-11-19: a run may take the M4 to 95% used, never past it
+# SMOKE (DECISIONS 2026-11-19: "a subset to verify the design of it ... and it runs in 15 mins and we see the
+# harness works"): each lane on a small STRATIFIED subset of the present files, chosen deterministically —
+# check: the smallest file of each (stratum, container, video, audio) mix, strata dealt round-robin, at most
+# SMOKE_CHECK; proof: the SMOKE_PROOF smallest of its usual files; verbs: one file per role (every verb once).
+# The verdict then means "the harness, the host and the code run end to end"; a smoke run is never a baseline.
+SMOKE_CHECK = 60
+SMOKE_PROOF = 2
+SMOKE_NOTE = "SMOKE: a stratified subset — the verdict means the harness, the host and the code run end to end; never a baseline"
 
 # lane -> (XCTest class, its engines in order, default per-file deadline in seconds, driver sources)
 LANES = {
@@ -188,6 +208,19 @@ LANES = {
     "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
               3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
 }
+# ONE BUILD (Charter §7; Rick: "obviously you don't want to recompile if you don't have to"), the gauntlet's
+# pattern (scripts/gauntlet/Runner.swift: one build-for-testing, then test-without-building per stage): the
+# overlay always holds EVERY lane's driver, so one build serves check, proof and verbs. After a build the
+# lane leaves BUILD_MARK in the DerivedData folder — the commit, the config, the coverage flag, the
+# SHA-256 of the driver sources and of the built VideoScanTests binary — and a later lane reuses the
+# build (test-without-building on its own patched copy of the .xctestrun) while all of them still hold.
+# Another build into that folder (the ui lane, the smoke testbed's sensor lane) changes the binary, so
+# the next corpus lane builds again. The full suite lane is NOT this build: it builds Release into its
+# own folder (nightly_local_tests.sh) and must never compile the untracked driver sources; the smoke
+# testbed's sensor lane builds Debug without the overlay; so a testbed run makes two builds, not four.
+ALL_DRIVERS = ("CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift", "CorpusProofDriver.swift",
+               "CorpusVerbsDriver.swift")
+BUILD_MARK = "corpus-build.json"
 VERBS_SAMPLE = 20                                # files the verbs lane clones (--limit changes it)
 VERBS_ROLES = ("dup", "purge", "set_aside", "promote")     # dealt round-robin over the sample
 VERBS_COPIES = 2                                 # extra byte-identical clones of each `dup` file
@@ -275,6 +308,7 @@ class Seal:
         self.out_root = self.home / "m4run" / "out"          # where m4_run.sh puts a run's folder
         self.volumes = Path(VOLUMES)                         # adopt-volume's folder of mounts (tests: a temporary one)
         self.volume_uuid = diskutil_volume_uuid              # a seam: the tests ask diskutil about a real disk image too
+        self.hasher = sha256_file                            # a seam: the tests' fake media stand for their manifest SHA-256
         self._external: Optional[External] = None
 
     @classmethod
@@ -586,33 +620,194 @@ def sha_lists(seal: Seal, external: External) -> List[Tuple[Path, Path]]:
 
 
 def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External] = None) -> int:
-    """The second documents name the same contents at the same places as the manifest, for every
-    entry whose root is there to read (`entries`)."""
-    listed = {}
+    """The second documents (sha256 + relative path) never contradict the manifest: a listed
+    content must be a manifest entry, at the manifest's place. A list may be shorter than the
+    manifest (the manifest is the wish list; a copy list names what was sent so far)."""
+    wanted = {e.sha: os.path.normpath(str(e.path)) for e in entries}
+    wrong = 0
     for document, base in sha_lists(seal, external or External("none")):
         if os.path.islink(str(document)):
             raise Refused("refused: a corpus SHA-256 list is a link")
         try:
             text = document.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue                                         # nothing sent to that root yet
         except OSError:
-            raise Refused("refused: a corpus SHA-256 list is missing or unreadable")
+            raise Refused("refused: a corpus SHA-256 list is unreadable")
         for line in text.splitlines():
             if line.strip():
                 sha, rel = line.split(None, 1)
-                listed[sha.lower()] = os.path.normpath(str(base / rel.strip().lstrip("*")))
-    wrong = sum(1 for e in entries if listed.get(e.sha) != os.path.normpath(str(e.path)))
-    return wrong + abs(len(listed) - len(entries))
+                if wanted.get(sha.lower()) != os.path.normpath(str(base / rel.strip().lstrip("*"))):
+                    wrong += 1
+    return wrong
 
 
-def missing_or_wrong_size(entries: Iterable[Entry]) -> Tuple[int, int]:
-    missing = wrong = 0
-    for e in entries:
+# ── ingest: what is PRESENT is earned once (DECISIONS 2026-11-19, the wish list) ──
+#
+# The manifest is the wish list. A file is PRESENT when `prepare` has read it whole and its SHA-256
+# is the manifest's: the ledger (~/corpus/state/corpus-ledger.json) then records its root, size and
+# mtime, and later runs trust size + mtime against it (a stat per file, no hashing). Per file:
+#   missing     not in the ledger: not copied yet, still copying, or not the manifest's size (a file
+#               whose size differs is never hashed: rsync renames a copy into place only when whole)
+#   mismatched  hashed, and its bytes are not the manifest's SHA-256 — never run (AMBER)
+#   vanished    ingested, and gone now (AMBER)
+#   changed     ingested, and its size or mtime moved (AMBER; `prepare` hashes it again)
+#   not_run     on the external volume while it is not mounted (the whole root; AMBER as before)
+#   present     ingested, unchanged, and in the sealed catalog — the only files a lane runs
+# Missing never moves a verdict and never blocks prepare or a lane.
+# Memory: the ledger is one dict of ~6,400 small records (~1 MB as JSON); hashing streams 8 MiB at a time.
+
+LEDGER = "corpus-ledger.json"
+HASH_CHUNK = 8 << 20
+LEDGER_CHECKPOINT_S = 60                         # an interrupted ingest keeps what it hashed up to a minute ago
+STATES = ("present", "missing", "mismatched", "vanished", "changed", "not_run")
+PROBLEM_STATES = ("mismatched", "vanished", "changed")
+
+
+class Ledger:
+    """What `ingest` proved, by SHA-256: {sha: {root, size, mtime_ns, status: ok|mismatched}}."""
+
+    def __init__(self, seal: Seal, files: Optional[Dict[str, dict]] = None):
+        self.seal, self.files = seal, files or {}
+        self.path = seal.state / LEDGER
+
+    @classmethod
+    def load(cls, seal: Seal) -> "Ledger":
+        path = seal.state / LEDGER
+        if not os.path.lexists(str(path)):
+            return cls(seal)
+        bad = Refused(f"refused: ~/corpus/state/{LEDGER} cannot be read back — move it into ~/corpus/.trash and run "
+                      "`scripts/corpus_run.sh prepare` (every file is hashed again)")
         try:
-            if os.stat(str(e.path)).st_size != e.size:
-                wrong += 1
-        except OSError:
-            missing += 1
-    return missing, wrong
+            value = json.loads(seal.contained(path, seal.state).read_text(encoding="utf-8"))
+            files = value["files"]
+            ok = (value.get("version") == 1 and isinstance(files, dict) and all(
+                re.fullmatch(r"[0-9a-f]{64}", sha) and isinstance(r, dict) and r.get("root") in ROOTS
+                and r.get("status") in ("ok", "mismatched")
+                and all(isinstance(r.get(k), int) and not isinstance(r.get(k), bool) for k in ("size", "mtime_ns"))
+                for sha, r in files.items()))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise bad
+        if not ok:
+            raise bad
+        return cls(seal, files)
+
+    def save(self) -> None:
+        """Whole or not at all: a new file beside it, renamed over it."""
+        pending = self.seal.state / f"{LEDGER}.{os.getpid()}"
+        self.seal.write_text(pending, json.dumps({"version": 1, "files": self.files}, sort_keys=True) + "\n")
+        os.replace(str(pending), str(self.seal.writable(self.path)))
+
+
+def sha256_file(path: Path, size: int) -> Optional[Tuple[str, int, int]]:
+    """(SHA-256, size, mtime_ns) of the regular file at `path` if it is `size` bytes and does not
+    change while it is read; None otherwise. Opened without following a link; read only."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size:
+            return None
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, HASH_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(fd)
+        if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            return None                                      # still being written: not ingested this time
+        return digest.hexdigest(), after.st_size, after.st_mtime_ns
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _stat(entry: Entry):
+    try:
+        info = os.lstat(str(entry.path))
+    except OSError:
+        return None
+    return info if stat.S_ISREG(info.st_mode) else None
+
+
+def ingest(seal: Seal, entries: List[Entry], ledger: Ledger, unavailable: Iterable[str] = (),
+           hasher=sha256_file) -> Dict[str, int]:
+    """Hash each file that arrived (or changed) since the last ingest, if it is the manifest's size.
+    Idempotent: a file the ledger already holds at the same size and mtime is not read again."""
+    skip, counts, last = set(unavailable), Counter(), time.time()
+    for e in entries:
+        if e.sha in skip:
+            continue
+        info, record = _stat(e), ledger.files.get(e.sha)
+        if info is None or info.st_size != e.size:
+            continue                                         # missing, vanished, or not whole: never hashed
+        if record and (record["size"], record["mtime_ns"]) == (info.st_size, info.st_mtime_ns):
+            continue                                         # proven before, unchanged
+        got = hasher(e.path, e.size)
+        if got is None:
+            counts["unsettled"] += 1
+            continue
+        digest, size, mtime_ns = got
+        status = "ok" if digest == e.sha else "mismatched"
+        counts["rehashed" if record else "hashed"] += 1
+        counts[status] += 1
+        counts["bytes"] += size
+        ledger.files[e.sha] = {"root": e.root, "size": size, "mtime_ns": mtime_ns, "status": status}
+        if time.time() - last > LEDGER_CHECKPOINT_S:
+            ledger.save()
+            last = time.time()
+    ledger.save()
+    return dict(counts)
+
+
+def classify(entries: List[Entry], ledger: Ledger, unavailable: Iterable[str] = (),
+             built_over: Optional[Iterable[str]] = None) -> Dict[str, str]:
+    """Each file's state now (see above), by a stat against the ledger — no hashing. `built_over`:
+    the files the sealed catalog holds; an ingested file it does not hold yet reads `missing`."""
+    skip = set(unavailable)
+    built = set(built_over) if built_over is not None else None
+    states = {}
+    for e in entries:
+        record = ledger.files.get(e.sha)
+        info = None if e.sha in skip else _stat(e)
+        if e.sha in skip:
+            states[e.sha] = "not_run"
+        elif record is None:
+            states[e.sha] = "missing"
+        elif info is None:
+            states[e.sha] = "vanished"
+        elif (info.st_size, info.st_mtime_ns) != (record["size"], record["mtime_ns"]):
+            states[e.sha] = "changed"
+        elif record["status"] != "ok":
+            states[e.sha] = "mismatched"
+        elif built is not None and e.sha not in built:
+            states[e.sha] = "missing"                        # proven after the last prepare: waits for the next
+        else:
+            states[e.sha] = "present"
+    return states
+
+
+def inventory(entries: List[Entry], states: Dict[str, str]) -> Tuple[Dict[str, Dict[str, int]], Dict[str, List[str]]]:
+    """Counts per root and state, and the problem files named by SHA-256 prefix (at most LISTED each)."""
+    counts: Dict[str, Dict[str, int]] = {root: {} for root in ROOTS}
+    named: Dict[str, List[str]] = {}
+    for e in entries:
+        state = states[e.sha]
+        counts[e.root][state] = counts[e.root].get(state, 0) + 1
+        if state in PROBLEM_STATES:
+            named.setdefault(state, []).append(sha_prefix(e.sha))
+    return {r: c for r, c in counts.items() if c}, {k: sorted(v)[:LISTED] for k, v in named.items()}
+
+
+def inventory_line(counts: Dict[str, Dict[str, int]]) -> str:
+    """`internal present 250 · missing 5 | external present 6,000 · missing 96`: the order of STATES, zeros left out."""
+    return " | ".join(f"{root} " + " · ".join(f"{state} {n:,}" for state in STATES for n in [c.get(state, 0)]
+                                               if n or state in ("present", "missing"))
+                      for root, c in counts.items())
 
 
 # ── prepare: the sealed catalog ───────────────────────────────────────────
@@ -824,12 +1019,12 @@ def carry_pair_links(conn: sqlite3.Connection) -> Dict[str, int]:
 
 
 def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optional[Path] = None,
-                   unavailable: Iterable[str] = ()) -> Dict[str, int]:
-    """Through the scripts' read-only door: every manifest file has a row at its copy's place,
-    every row's file exists with the row's size, and the catalog names no Master Archive. `root`
-    (the verbs lane): every row under that folder of clones; otherwise each under its own root's
-    media folder. `unavailable`: the files on an external volume that is not mounted — their rows
-    are counted (`not_checked`), their files are not looked for."""
+                   checked: Optional[Iterable[str]] = None) -> Dict[str, int]:
+    """Through the scripts' read-only door: the catalog holds exactly `entries` (the files it was
+    built over), each row at its copy's place, and names no Master Archive. `root` (the verbs lane):
+    every row under that folder of clones; otherwise each under its own root's media folder.
+    `checked`: the files whose copy is looked at now (the present ones; None = all) — the other
+    rows are counted (`not_checked`)."""
     import catalog_db
     seal.contained(database, Path(database).parent)          # the file itself, never a link to another catalog
     if not (_under(database, seal.state) or _under(database, seal.work_root)):
@@ -845,7 +1040,7 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optio
               "file_missing": 0, "size_differs": 0, "outside_corpus": 0, "removed_rows": 0, "not_checked": 0,
               "archive_designation": 0 if not designation or designation[0] is None else 1}
     wanted = {e.sha: e for e in entries}
-    skip = set(unavailable)
+    look = None if checked is None else set(checked)
     home_dev = seal.home_device()
     result["without_row"] = sum(1 for sha in wanted if sha not in by_sha)
     for sha, path, size, removal in rows:
@@ -861,7 +1056,7 @@ def verify_catalog(seal: Seal, database: Path, entries: List[Entry], root: Optio
         if root is None and entry.folder not in (str(seal.media), str(Path(seal.pinned_mount() or "/unresolvable") / "corpus" / "media")):
             result["outside_corpus"] += 1                    # the sealed catalog names a copy in one of the two roots, nowhere else
             continue
-        if sha in skip:
+        if look is not None and sha not in look:
             result["not_checked"] += 1
             continue
         try:
@@ -884,82 +1079,137 @@ def source_backup(seal: Seal) -> Path:
     return seal.corpus / (SOURCE_BACKUP_V2 if manifest_name(seal) == MANIFEST_V2 else SOURCE_BACKUP)
 
 
+def source_stamp(seal: Seal) -> List[int]:
+    """The source backup's size and mtime: a new backup in its place rebuilds the catalog."""
+    info = os.stat(str(source_backup(seal)))
+    return [info.st_size, info.st_mtime_ns]
+
+
+def prepared_record(seal: Seal) -> Optional[dict]:
+    """~/corpus/state/prepare.json, or None when it cannot be read back as one."""
+    try:
+        value = json.loads(seal.contained(seal.state / "prepare.json", seal.state).read_text(encoding="utf-8"))
+    except (OSError, ValueError, Refused):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
-    """Build the sealed catalog over EVERY corpus file: refused while the external volume is not there."""
+    """Ingest what arrived, then build the sealed catalog over the files proven so far. Nothing
+    missing blocks it — not a file still copying, not an unplugged external volume.
+
+    The catalog is REBUILT, whole, whenever the proven set differs from the one it was built over,
+    and left alone when it does not ("nothing new"). Not appended to, by choice: it is a derived,
+    sealed snapshot built from an immutable backup in seconds; one build path gives the same
+    catalog for the same set whatever order the files arrived in, and the new file replaces the
+    old one only once it verifies (never a half-updated catalog)."""
     seal.check()
     database_name, latch_name = _catalog_names()
     entries = load_manifest(seal)
-    lines = []
     external = seal.external()
-    on_external = sum(1 for e in entries if e.root == "external")
-    if on_external and external.state != "ok":
-        raise Refused(f"refused: prepare wants every corpus file and the external volume is not mounted ({on_external} files are on it)")
+    unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
     disagree = check_sha_list(seal, entries, external)
     if disagree:
         raise Refused(f"refused: {manifest_name(seal)} and the SHA-256 lists disagree on {disagree} entries")
-    missing, wrong = missing_or_wrong_size(entries)
-    if missing or wrong:
-        raise Refused(f"refused: {missing} corpus files are missing and {wrong} are not the manifest's size")
+    if not source_backup(seal).is_file():
+        raise Refused("refused: the catalog source backup is missing")
     seal.mkdir(seal.state)
     for name in ("home", "caches"):
         seal.mkdir(seal.state / name)
-    building = seal.state / f"building-{os.getpid()}"
-    if building.exists():
-        raise Refused("refused: a build folder with this pid is already there")
-    seal.mkdir(building)
-    try:
-        counts = build_catalog(seal, source_backup(seal), entries, building / database_name)
-        seal.write_text(building / latch_name, "{}\n")       # the read doors want the latch beside the file
-        verdict = verify_catalog(seal, building / database_name, entries)
-        if not verdict["ok"]:
-            raise Refused("refused: the built catalog did not verify — " + ", ".join(
-                f"{k}={v}" for k, v in sorted(verdict.items()) if v and k not in ("rows", "manifest")))
-        os.replace(str(building / database_name), str(seal.writable(seal.state / database_name)))
-        os.replace(str(building / latch_name), str(seal.writable(seal.state / latch_name)))
-    finally:
-        remove_tree(seal, building)
-    strata = Counter(e.stratum for e in entries)
-    roots = {root: {"files": sum(1 for e in entries if e.root == root), "bytes": sum(e.size for e in entries if e.root == root)}
-             for root in ROOTS}
+    ledger = Ledger.load(seal)
+    ingested = ingest(seal, entries, ledger, unavailable, hasher=seal.hasher)
+    states = classify(entries, ledger, unavailable)
+    # Built over every proven file that is there or merely unplugged (an unplugged drive does not shrink it).
+    build = [e for e in entries if states[e.sha] == "present"
+             or (states[e.sha] == "not_run" and (ledger.files.get(e.sha) or {}).get("status") == "ok")]
+    built_over = sorted(e.sha for e in build)
+    previous = prepared_record(seal) or {}
+    database = seal.state / database_name
+    present = [e.sha for e in build if states[e.sha] == "present"]
+    unchanged = (previous.get("built_over") == built_over and previous.get("transform_version") == TRANSFORM_VERSION
+                 and previous.get("source_stamp") == source_stamp(seal)
+                 and database.is_file() and (seal.state / latch_name).is_file()
+                 and verify_catalog(seal, database, build, checked=present)["ok"])
+    if unchanged:
+        counts, verdict = previous.get("counts") or {}, verify_catalog(seal, database, build, checked=present)
+    else:
+        building = seal.state / f"building-{os.getpid()}"
+        if building.exists():
+            raise Refused("refused: a build folder with this pid is already there")
+        seal.mkdir(building)
+        try:
+            counts = build_catalog(seal, source_backup(seal), build, building / database_name)
+            seal.write_text(building / latch_name, "{}\n")   # the read doors want the latch beside the file
+            verdict = verify_catalog(seal, building / database_name, build, checked=present)
+            if not verdict["ok"]:
+                raise Refused("refused: the built catalog did not verify — " + ", ".join(
+                    f"{k}={v}" for k, v in sorted(verdict.items()) if v and k not in ("rows", "manifest", "not_checked")))
+            os.replace(str(building / database_name), str(seal.writable(database)))
+            os.replace(str(building / latch_name), str(seal.writable(seal.state / latch_name)))
+        finally:
+            remove_tree(seal, building)
+    counts_by_root, named = inventory(entries, states)
     record = {"transform_version": TRANSFORM_VERSION, "prepared_at": time.strftime("%Y-%m-%d %H:%M:%S"),
               "manifest": manifest_name(seal),
               "manifest_sha256": hashlib.sha256((seal.corpus / manifest_name(seal)).read_bytes()).hexdigest(),
-              "files": len(entries), "bytes": sum(e.size for e in entries), "strata": dict(strata), "roots": roots,
-              "counts": counts, "verify": verdict}
+              "source_stamp": source_stamp(seal),
+              "files": len(entries), "bytes": sum(e.size for e in entries), "built_over": built_over,
+              "inventory": counts_by_root, "problems": named, "ingested": ingested,
+              "strata": dict(Counter(e.stratum for e in entries)), "counts": counts, "verify": verdict,
+              "rebuilt": not unchanged}
     seal.write_json(seal.state / "prepare.json", record)
-    lines.append(f"corpus prepare: GREEN {verdict['rows']} rows for {len(entries)} manifest files "
-                 f"({record['bytes'] / 1e9:.1f} GB), every file present at its row's size")
-    lines.append("  roots: " + ", ".join(f"{root} {r['files']} files ({r['bytes'] / 1e9:.1f} GB)" for root, r in roots.items()))
-    lines.append(f"  carried: files={counts['files']} content={counts['content']} volumes={counts['volumes']} "
-                 f"user_dates={counts['user_dates']} workflow_tags={counts['workflow_tags']} "
-                 f"migrations={counts['grdb_migrations']}; schema v{counts['schema_version']}, "
-                 f"{counts['triggers']} of {counts['source_triggers']} triggers in place; "
-                 f"source backup rows={counts['source_files']} (not opened for writing)")
-    lines.append(f"  pair links carried: {counts['pair_links']} ({counts['pair_links_from_import']} from the import, "
-                 f"{counts['pair_links_from_app']} the app's own) — {counts['pair_groups_whole']} pairs with two or more halves "
-                 f"in the corpus, {counts['pair_halves_alone']} halves whose partner is not in the corpus")
+    problems = sum(n for c in counts_by_root.values() for state, n in c.items() if state in PROBLEM_STATES)
+    word_ = "AMBER" if problems else "GREEN"
+    lines = [f"corpus prepare: {word_} {verdict['rows']} rows for {len(entries)} manifest files — "
+             + ("nothing new, the sealed catalog is as it was" if unchanged else "the sealed catalog rebuilt over the files proven so far"),
+             "  files: " + inventory_line(counts_by_root),
+             f"  ingested this time: {ingested.get('hashed', 0)} new and {ingested.get('rehashed', 0)} changed files hashed "
+             f"({ingested.get('bytes', 0) / 1e9:.1f} GB): {ingested.get('ok', 0)} match their SHA-256, "
+             f"{ingested.get('mismatched', 0)} do not; {ingested.get('unsettled', 0)} changed while being read (next time)"]
+    lines += [f"  {state} (AMBER): " + " ".join(named[state]) for state in PROBLEM_STATES if named.get(state)]
+    if unavailable:
+        lines.append(f"  external volume NOT MOUNTED: its {len(unavailable)} files were not looked at")
+    if counts:
+        lines.append(f"  carried: files={counts.get('files')} content={counts.get('content')} volumes={counts.get('volumes')} "
+                     f"user_dates={counts.get('user_dates')} workflow_tags={counts.get('workflow_tags')} "
+                     f"migrations={counts.get('grdb_migrations')}; schema v{counts.get('schema_version')}, "
+                     f"{counts.get('triggers')} of {counts.get('source_triggers')} triggers in place; "
+                     f"source backup rows={counts.get('source_files')} (not opened for writing)")
+        lines.append(f"  pair links carried: {counts.get('pair_links')} ({counts.get('pair_links_from_import')} from the import, "
+                     f"{counts.get('pair_links_from_app')} the app's own) — {counts.get('pair_groups_whole')} pairs with two or more halves "
+                     f"in the corpus, {counts.get('pair_halves_alone')} halves whose partner is not in the corpus")
     lines.append("  not carried: other copies and removed rows, the import evidence, captions/transcripts/notes/people, the Master Archive designation")
     if out is not None:
         seal.out_write(Path(out), "corpus-summary.txt", "\n".join(lines) + "\n")
-    return EXIT_GREEN, lines
+    return (EXIT_AMBER if problems else EXIT_GREEN), lines
 
 
-def sealed_state_ready(seal: Seal, entries: List[Entry], unavailable: Iterable[str] = ()) -> Path:
+def current_states(seal: Seal, entries: List[Entry], unavailable: Iterable[str] = ()) -> Dict[str, str]:
+    """Each file's state now, against the ledger and the set the sealed catalog was built over."""
+    built = (prepared_record(seal) or {}).get("built_over")
+    return classify(entries, Ledger.load(seal), unavailable, built if isinstance(built, list) else [])
+
+
+def sealed_state_ready(seal: Seal, entries: List[Entry], states: Dict[str, str]) -> Tuple[Path, set]:
+    """The sealed catalog, proven to hold exactly the files the last prepare built it over, each
+    PRESENT one at its place; returns it and that set. Refused (run prepare) otherwise."""
     database_name, latch_name = _catalog_names()
     database = seal.state / database_name
     if not database.is_file() or not (seal.state / latch_name).is_file():
         raise Refused("refused: the sealed catalog is not built — run `scripts/corpus_run.sh prepare` first")
-    verdict = verify_catalog(seal, database, entries, unavailable=unavailable)
-    if not verdict["ok"]:
+    record = prepared_record(seal) or {}
+    if record.get("transform_version") != TRANSFORM_VERSION:
+        raise Refused(f"refused: the sealed catalog was built by transform {word(str(record.get('transform_version')))}, "
+                      f"this harness wants {TRANSFORM_VERSION} — run `scripts/corpus_run.sh prepare`")
+    built = record.get("built_over")
+    if not isinstance(built, list) or not all(isinstance(x, str) for x in built):
+        raise Refused("refused: the sealed catalog does not say what it was built over — run `scripts/corpus_run.sh prepare`")
+    built_over = set(built)
+    held = [e for e in entries if e.sha in built_over]
+    present = [e.sha for e in held if states.get(e.sha) == "present"]
+    if len(held) != len(built_over) or not verify_catalog(seal, database, held, checked=present)["ok"]:
         raise Refused("refused: the sealed catalog no longer matches the corpus — run `scripts/corpus_run.sh prepare`")
-    try:
-        built_by = json.loads(seal.contained(seal.state / "prepare.json", seal.state).read_text(encoding="utf-8")).get("transform_version")
-    except (OSError, ValueError, AttributeError, Refused):
-        built_by = None
-    if built_by != TRANSFORM_VERSION:
-        raise Refused(f"refused: the sealed catalog was built by transform {word(str(built_by))}, this harness wants "
-                      f"{TRANSFORM_VERSION} — run `scripts/corpus_run.sh prepare`")
-    return database
+    return database, built_over
 
 
 # ── Running a lane ────────────────────────────────────────────────────────
@@ -1104,8 +1354,10 @@ class Lane:
 
     def __init__(self, seal: Seal, lane: str, sha: str, stamp: str, out: Path, worktree: Path, derived_data: Path,
                  bin_dir: Path, deadline: Optional[int] = None, limit: Optional[int] = None,
-                 xcodebuild: str = "xcodebuild"):
+                 xcodebuild: str = "xcodebuild", smoke: bool = False):
         self.seal, self.lane, self.sha, self.stamp = seal, lane, sha, stamp
+        self.smoke = smoke
+        self.database: Optional[Path] = None
         self.out, self.worktree, self.derived_data, self.bin_dir = Path(out), Path(worktree), Path(derived_data), Path(bin_dir)
         self.test_class, self.engines, default_deadline, self.sources = LANES[lane]
         self.deadline = int(deadline or default_deadline)
@@ -1115,11 +1367,14 @@ class Lane:
         self.lines: List[str] = []
         self.launches = 0
         self.build_seconds = 0.0
+        self.build_reused = False
         self.overlay_installed = False
         self.closing: Dict[str, int] = {}
         self.housekeeping: List[str] = []
         self.not_run_external = 0                            # files on an external volume that is not mounted
         self.proven_uuid: Optional[str] = None               # the external volume proven at the start (its UUID)
+        self.inventory: Dict[str, Dict[str, int]] = {}       # per root, files by state (present, missing, ...)
+        self.problems: Dict[str, List[str]] = {}             # mismatched / vanished / changed, by SHA-256 prefix
         self.picked: Dict[str, object] = {}                  # the proof lane: where its files came from
         # The coverage run (corpus_coverage.py) sets this: the build is instrumented and every launch
         # leaves its result bundle (with coverage) here, in the coverage run's own work folder. None: no coverage.
@@ -1152,8 +1407,51 @@ class Lane:
         overlay = self.worktree / OVERLAY_DIR
         overlay.mkdir(parents=True)
         self.overlay_installed = True
-        for name in self.sources:
+        for name in ALL_DRIVERS:                             # every lane's driver: one build serves them all
             shutil.copyfile(str(self.bin_dir / name), str(overlay / name))
+
+    # -- one build per commit (see ALL_DRIVERS)
+
+    def build_identity(self) -> Optional[dict]:
+        """What the build in the DerivedData folder must be for this lane to reuse it, less the binary."""
+        try:
+            digest = hashlib.sha256(b"".join((self.bin_dir / name).read_bytes() for name in ALL_DRIVERS)).hexdigest()
+        except OSError:
+            return None
+        return {"sha": self.sha, "config": "Debug", "coverage": self.profiles is not None, "drivers": digest}
+
+    def test_binary(self) -> Optional[Path]:
+        found = sorted((self.derived_data / "Build" / "Products").glob(
+            "*/*.app/Contents/PlugIns/VideoScanTests.xctest/Contents/MacOS/VideoScanTests"))
+        return found[0] if found and not found[0].is_symlink() else None
+
+    def binary_digest(self) -> Optional[str]:
+        binary = self.test_binary()
+        got = sha256_file(binary, os.path.getsize(str(binary))) if binary else None
+        return got[0] if got else None
+
+    def build_reusable(self) -> bool:
+        """True when the DerivedData folder holds this commit's build with these drivers, untouched since."""
+        mark = self.derived_data / BUILD_MARK
+        try:
+            if mark.is_symlink() or not self.seal.on_home_volume(mark):
+                return False
+            recorded = json.loads(mark.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        identity = self.build_identity()
+        return (isinstance(recorded, dict) and identity is not None
+                and all(recorded.get(k) == v for k, v in identity.items())
+                and recorded.get("binary") is not None and recorded.get("binary") == self.binary_digest())
+
+    def mark_build(self) -> None:
+        identity = self.build_identity()
+        digest = self.binary_digest()
+        if identity is None or digest is None or not self.seal.on_home_volume(self.derived_data):
+            return                                           # no mark: the next lane simply builds
+        fd = guarded_open(self.derived_data / BUILD_MARK)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(dict(identity, binary=digest), sort_keys=True) + "\n")
 
     def engine_present(self) -> bool:
         return self.lane != "proof" or any(self.worktree.glob(PROOF_ENGINE_GLOB))
@@ -1231,6 +1529,10 @@ class Lane:
     def scope(self, entries: List[Entry]) -> List[Entry]:
         if self.lane == "proof":
             entries, self.picked = proof_files(self.seal, entries)
+            if self.smoke:
+                entries = sorted(entries, key=lambda e: (e.size, e.sha))[:SMOKE_PROOF]
+        elif self.smoke:
+            entries = smoke_sample(entries, mixes(self.database) if self.database else {})
         return entries[: self.limit] if self.limit else entries
 
     def stage(self, entries: List[Entry], database: Path) -> Tuple[List[Entry], Path]:
@@ -1311,8 +1613,11 @@ class Lane:
                 "engine_present": engine_present, "files": len(results),
                 "bytes": sum(r.get("size", 0) for r in results.values()),
                 "media_seconds": round(sum(r.get("duration", 0) or 0 for r in results.values()), 1),
-                "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "launches": self.launches,
+                "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "build_reused": self.build_reused,
+                "launches": self.launches,
                 "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
+                "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
+                "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
                 "deadline_s": self.deadline, "engines": {e: dict(c) for e, c in totals.items()},
                 "failures": dict(failures), "seal": hello,
                 "by_stratum": {k: {kk: (dict(vv) if isinstance(vv, Counter) else vv) for kk, vv in v.items()}
@@ -1347,8 +1652,12 @@ class Lane:
         self.proven_uuid = external.uuid
         unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
         self.not_run_external = len(unavailable)
-        database = sealed_state_ready(seal, entries, unavailable)
-        entries = self.scope([e for e in entries if e.sha not in unavailable])
+        # The wish list: only the files proven present run; the rest are counted (DECISIONS 2026-11-19).
+        states = current_states(seal, entries, unavailable)
+        database, _ = sealed_state_ready(seal, entries, states)
+        self.database = database
+        self.inventory, self.problems = inventory(entries, states)
+        entries = self.scope([e for e in entries if states[e.sha] == "present"])
         if not entries:
             raise Refused("refused: no corpus file is in this lane's scope")
         if self.lane == "proof":                             # one balanced copy at a time, about its source's size
@@ -1368,12 +1677,16 @@ class Lane:
                 self.store(report, {})
                 return EXIT_NORUN
             try:
-                self.install_overlay()
-                if self.build() != 0:
+                self.build_reused = self.build_reusable()
+                if not self.build_reused:
+                    self.install_overlay()
+                if not self.build_reused and self.build() != 0:
                     self.lines = [f"corpus {self.lane}: RED the driver did not build against {self.sha[:9]} "
                                   "(corpus-build.log on the host); no file was run"]
                     seal.out_write(self.out, "corpus-summary.txt", self.lines[0] + "\n")
                     return EXIT_RED
+                if not self.build_reused:
+                    self.mark_build()
                 entries, database = self.stage(entries, database)
                 results, hello = self.run_files(entries, database)
             finally:
@@ -1414,6 +1727,32 @@ class Lane:
                 pass
 
 
+def mixes(database: Path) -> Dict[str, Tuple[str, str, str]]:
+    """Each sealed row's (container, video, audio) as the catalog has them, by SHA-256 (read-only door)."""
+    import catalog_db
+    conn = catalog_db.connect(database)
+    try:
+        return {sha: (c or "", v or "", a or "") for sha, c, v, a in
+                conn.execute("SELECT content_digest, container, video_codec, audio_codec FROM files")}
+    finally:
+        conn.close()
+
+
+def smoke_sample(entries: List[Entry], codecs: Dict[str, Tuple[str, str, str]], cap: int = SMOKE_CHECK) -> List[Entry]:
+    """The smallest file of each (stratum, container, video, audio) mix; strata dealt round-robin
+    (each stratum's mixes smallest first) until `cap`. Deterministic: the same corpus, the same files."""
+    by_stratum: Dict[str, Dict[Tuple[str, str, str], Entry]] = defaultdict(dict)
+    for e in sorted(entries, key=lambda e: (e.size, e.sha)):
+        by_stratum[e.stratum].setdefault(codecs.get(e.sha, ("", "", "")), e)
+    queues = [sorted(mix.values(), key=lambda e: (e.size, e.sha)) for _, mix in sorted(by_stratum.items())]
+    picked: List[Entry] = []
+    while len(picked) < cap and any(queues):
+        for queue in queues:
+            if queue and len(picked) < cap:
+                picked.append(queue.pop(0))
+    return sorted(picked, key=lambda e: e.sha)
+
+
 def transient_room(seal: Seal, need: int) -> None:
     """Refused unless `need` more bytes on the M4's disk leave it under TRANSIENT_CEILING used."""
     usage = shutil.disk_usage(str(seal.corpus))
@@ -1429,7 +1768,8 @@ def proof_files(seal: Seal, entries: List[Entry], cap: int = PROOF_CAP) -> Tuple
     where they came from (counts and the check run's name: words only)."""
     fixed = [e for e in entries if e.stratum == PROOF_STRATUM]
     heard, source = set(), "none"
-    runs = [run for run, report in usable_runs(seal, "check") if not report.get("limit") and not report.get("not_run_external")]
+    runs = [run for run, report in usable_runs(seal, "check")
+            if not report.get("limit") and not report.get("not_run_external") and not report.get("smoke")]
     if runs:
         try:
             heard = {sha for sha, record in _outcomes(runs[-1]).items()
@@ -1508,7 +1848,8 @@ class VerbsLane(Lane):
     def scope(self, entries: List[Entry]) -> List[Entry]:
         self.all_entries = entries
         # Clones (cp -c) are made within ONE APFS volume: only the internal root's files are sampled.
-        sample = verbs_sample([e for e in entries if e.root == "internal"], self.limit or VERBS_SAMPLE)
+        count = self.limit or (len(VERBS_ROLES) if self.smoke else VERBS_SAMPLE)    # smoke: every verb once
+        sample = verbs_sample([e for e in entries if e.root == "internal"], count)
         self.roles = {e.sha: role for e, role in sample}
         return [e for e, _ in sample]
 
@@ -1598,7 +1939,9 @@ def verdict_of(report: dict, against: Optional[dict]) -> str:
         return "RED"
     # Files NOT RUN because the external volume is not mounted: AMBER, never GREEN (the run proves
     # nothing about them) and never RED (no engine failed and no copy is at risk; the count is said).
-    return "AMBER" if (against or {}).get("changed") or report.get("not_run_external") else "GREEN"
+    # Files mismatched, vanished or changed: AMBER, named. Files MISSING (not yet copied) never move it.
+    return "AMBER" if ((against or {}).get("changed") or report.get("not_run_external")
+                       or report.get("problem_count")) else "GREEN"
 
 
 def against_lines(against: Optional[dict]) -> List[str]:
@@ -1632,9 +1975,10 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
         return [f"corpus {lane}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
                 "(MediaOps/BalancedCopyProof*.swift); run it with a --ref that contains it"]
     failed = sum(report["failures"].values())
-    lines = [f"corpus {lane}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
+    lines = [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
              f"{report['media_seconds'] / 3600:.1f} h of media) at {report['sha'][:9]} — wall {report['wall_s']:.0f}s "
-             f"(build {report['build_s']:.0f}s), {report['launches']} launch(es), per-file deadline {report['deadline_s']}s"
+             + ("(the build reused: same commit, same drivers)" if report.get("build_reused") else f"(build {report['build_s']:.0f}s)")
+             + f", {report['launches']} launch(es), per-file deadline {report['deadline_s']}s"
              + (f", limited to {report['limit']} files" if report.get("limit") else "")]
     for e in engines:
         lines.append(f"  {e}: {_counts(report['engines'][e])}")
@@ -1644,6 +1988,13 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     seal = report.get("seal") or {}
     lines.append(f"  seal: home sealed={seal.get('homeSealed')} test host={seal.get('testHost')} "
                  f"archive designation={seal.get('archiveDesignation')} catalog records={seal.get('records')}")
+    if report.get("smoke"):
+        lines.append("  " + SMOKE_NOTE)
+    if report.get("inventory"):
+        lines.append("  files: " + inventory_line(report["inventory"]))
+    for state in PROBLEM_STATES:
+        if (report.get("problems") or {}).get(state):
+            lines.append(f"  {state} (AMBER): " + " ".join(report["problems"][state]))
     if report.get("not_run_external"):
         lines.append(f"  external volume NOT MOUNTED: {report['not_run_external']} files on it NOT RUN — AMBER; "
                      "mount it and run again (a run without them is never a baseline)")
@@ -1706,6 +2057,13 @@ def verdict_facts(report: dict) -> dict:
         facts["notes"].append(f"{cut_count(report)} files crashed an engine or ran past the deadline: RED")
     if report.get("not_run_external"):
         facts["notes"].append(f"{report['not_run_external']} files NOT RUN: the external volume is not mounted")
+    if report.get("smoke"):
+        facts["smoke"] = True
+        facts["notes"].insert(0, SMOKE_NOTE)
+    if report.get("inventory"):
+        facts["notes"].append("files: " + inventory_line(report["inventory"]))
+    if report.get("problem_count"):
+        facts["notes"].append(f"{report['problem_count']} files mismatched, vanished or changed (named in the summary): AMBER")
     if against and against.get("problem"):
         facts["notes"].append("baseline: " + against["problem"])
     elif against:
@@ -1805,7 +2163,8 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
         return run, {"what": "its accepted baseline", "accepted_at": word(str(record.get("accepted_at", "")).replace(" ", "_")),
                      "accepted_by": who_word(record.get("accepted_by"))}, None
     for run, report in usable_runs(seal, lane):
-        if run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external"):
+        if (run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external")
+                and not report.get("problem_count") and not report.get("smoke")):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
     return None, {}, None
 
@@ -2039,6 +2398,8 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
         raise Refused(f"refused: the newest {lane} run has {cut_count(report)} files that crashed or timed out — a RED run is never the baseline")
     if report.get("limit"):
         raise Refused(f"refused: the newest {lane} run was limited to {report['limit']} files — a partial run is never the baseline")
+    if report.get("smoke"):
+        raise Refused(f"refused: the newest {lane} run was a SMOKE run (a subset that proves the harness runs) — never the baseline")
     if report.get("not_run_external"):
         raise Refused(f"refused: the newest {lane} run did not run {report['not_run_external']} files (the external volume "
                       "was not mounted) — a partial run is never the baseline")
@@ -2121,6 +2482,16 @@ def clean_report(report) -> dict:
             "build_s": number(report.get("build_s")), "launches": int(number(report.get("launches"))),
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
+            "problem_count": int(number(report.get("problem_count"))),
+            "smoke": report.get("smoke") is True,
+            "build_reused": report.get("build_reused") is True,
+            "inventory": {root: {state: int(number(n)) for state, n in counts.items() if state in STATES}
+                          for root, counts in (report.get("inventory") or {}).items()
+                          if root in ROOTS and isinstance(counts, dict)} if isinstance(report.get("inventory"), dict) else {},
+            "problems": {state: [sha_prefix(x) if re.fullmatch(r"[0-9a-f]{12}", str(x)) is None else str(x)
+                                 for x in names if isinstance(x, str)][:LISTED]
+                         for state, names in (report.get("problems") or {}).items()
+                         if state in PROBLEM_STATES and isinstance(names, list)} if isinstance(report.get("problems"), dict) else {},
             "engines": {e: counter(engines.get(e)) for e in LANES[lane][1] if e in engines},
             "failures": counter(report.get("failures")),
             "seal": {k: (seal_facts.get(k) if isinstance(seal_facts.get(k), (bool, int)) else None)
@@ -2133,7 +2504,10 @@ def status(seal: Seal) -> List[str]:
     try:
         prepared = json.loads(seal.contained(seal.state / "prepare.json", seal.state).read_text(encoding="utf-8"))
         lines.append(f"corpus: prepared {word(str(prepared['prepared_at']).replace(' ', '_'))} — {int(prepared['verify']['rows'])} rows, "
-                     f"{int(prepared['files'])} files, {float(prepared['bytes']) / 1e9:.1f} GB")
+                     f"{int(prepared['files'])} files in the manifest, {float(prepared['bytes']) / 1e9:.1f} GB")
+        shown = clean_report({"lane": "check", "sha": "0" * 40, "inventory": prepared.get("inventory")})["inventory"]
+        if shown:
+            lines.append("  files at that prepare: " + inventory_line(shown))
     except (OSError, ValueError, KeyError, TypeError, Refused):
         lines.append("corpus: not prepared — run `scripts/corpus_run.sh prepare`")
     try:
@@ -2185,6 +2559,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     host.add_argument("--bin", required=True)
     host.add_argument("--deadline", type=int)
     host.add_argument("--limit", type=int)
+    host.add_argument("--smoke", action="store_true")
     args = parser.parse_args(argv)
     lines: List[str] = []
     try:
@@ -2202,6 +2577,8 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             if not re.fullmatch(r"[0-9a-f]{40}", args.sha) or not re.fullmatch(r"[0-9A-Za-z_]+", args.stamp):
                 raise Refused("refused: --sha is a full commit id and --stamp is letters, digits and underscores")
             sys.path.insert(0, args.bin)
+            if args.smoke and args.lane not in ("check", "proof", "verbs"):
+                raise Refused("refused: --smoke is for check, proof and verbs")
             if args.lane == "coverage":                      # the three lanes instrumented, beside the suite (corpus_coverage.py)
                 import corpus_coverage
                 run = corpus_coverage.CoverageRun(seal, args.sha, args.stamp, Path(args.out), Path(args.worktree),
@@ -2211,9 +2588,11 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
                 print("\n".join(run.lines))
                 return code
             lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
-                        Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild) if args.lane != "verbs" else \
+                        Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild,
+                        smoke=args.smoke) if args.lane != "verbs" else \
                 VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
-                          Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild, cp=cp)
+                          Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild, cp=cp,
+                          smoke=args.smoke)
             code = lane.go()
             lines = lane.lines
     except Refused as refusal:

@@ -203,5 +203,53 @@ class ScaleTests(unittest.TestCase):
         self.assertLessEqual(sum(p[2] for p in picked['internal']), cs.INTERNAL_BUDGET)
 
 
+
+class GrowTests(unittest.TestCase):
+    """DECISIONS 2026-11-19: the manifest is a wish list that grows; nothing ingested is ever removed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.s = Scene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_new_digests_are_appended_and_nothing_is_ever_removed(self):
+        self.s.add('/Volumes/A/old.mov', 1, 100)
+        self.s.add('/Volumes/A/new.mov', 2, 200)
+        current = [dict(sha256=sha(1), path='/Volumes/A/old.mov', size=100, why=cs.WHY_EXTERNAL, root='external'),
+                   dict(sha256=sha(9), path='/Volumes/Gone/x.mov', size=5, why='one-sided sound', root='internal')]  # gone from the newer catalog
+        rows = self.s.rows()
+        grown, picked = cs.grow(rows, current, can_read=lambda p: True)
+        self.assertEqual(grown[:2], current, 'the current rows are kept as they were, first')
+        self.assertEqual([(r['sha256'], r['root']) for r in grown[2:]], [(sha(2), 'external')])
+        self.assertEqual(picked['external'], [(sha(2), '/Volumes/A/new.mov', 200)])
+        again, picked = cs.grow(rows, grown, can_read=lambda p: True)
+        self.assertEqual((again, picked), (grown, {'external': [], 'internal': []}), 'grown twice: nothing new')
+
+    def test_a_stratum_already_in_the_corpus_is_covered_and_the_budget_is_what_is_left(self):
+        self.s.add('/Volumes/A/big-old.mxf', 1, 200 * GB, 'mxf', 'dnxhd', '')
+        self.s.add('/Volumes/A/big-same-mix.mxf', 2, 100 * GB, 'mxf', 'dnxhd', '')
+        self.s.add('/Volumes/A/big-new-mix.mov', 3, 40 * GB, 'mov,mp4', 'prores', 'pcm_s24le')
+        self.s.add('/Volumes/A/big-too-much.mkv', 4, 60 * GB, 'matroska', 'ffv1', 'flac')
+        current = [dict(sha256=sha(1), path='/Volumes/A/big-old.mxf', size=200 * GB, why=cs.WHY_INTERNAL, root='internal')]
+        _, picked = cs.grow(self.s.rows(), current, can_read=lambda p: True)
+        self.assertEqual([p[0] for p in picked['internal']], [sha(3)], 'covered mix skipped; 60 GB would pass the 50 GB left')
+
+    def test_the_command_line_writes_the_whole_manifest_and_only_the_new_copy_lists(self):
+        self.s.add('/Volumes/A/old.mov', 1, 100)
+        path = self.s.db.close()
+        for side in ('-wal', '-shm'):
+            if os.path.exists(str(path) + side):
+                os.unlink(str(path) + side)
+        manifest = pathlib.Path(self.tmp.name, 'm.json')
+        manifest.write_text(json.dumps([dict(sha256=sha(5), path='/Volumes/A/kept.mov', size=1, why='x', root='internal')]))
+        out = pathlib.Path(self.tmp.name, 'out')
+        self.assertEqual(cs.main(['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)]), 0)
+        grown = json.loads((out / 'corpus-manifest-v2.json').read_text())
+        self.assertEqual(grown[0]['sha256'], sha(5))
+        self.assertEqual((out / 'v2_external.sha').read_text(), '', 'not readable here: nothing new to copy')
+
+
 if __name__ == '__main__':
     unittest.main()
