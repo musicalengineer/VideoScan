@@ -845,6 +845,19 @@ class SweepLaneTests(unittest.TestCase):
         self.assertEqual(len(cr.sweep_order(big, {x.sha: (n % 300,) for n, x in enumerate(big)})), 100_000)
         self.assertLess(time.monotonic() - t0, 5.0)
 
+    def test_a_sweep_that_could_not_open_most_files_is_red_not_green(self):
+        # 2026-11-18: 400 of 400 `unopenable` behind macOS's network-volume prompt read GREEN.
+        self.scene.plan['files'] = {sha_of(n): dict(probe='unopenable') for n in (0, 1)}
+        self.assertEqual(self.scene.run(), cr.EXIT_RED)
+        self.assertIn('RED: 2 of 3 files could not be probed', (self.scene.out / 'corpus-summary.txt').read_text())
+        status = '\n'.join(cr.status(self.scene.seal))
+        self.assertIn('corpus sweep: RED', status)
+        self.scene.plan['files'] = {sha_of(0): dict(probe='unopenable')}
+        with self.assertRaises(cr.Refused):
+            cr.accept(self.scene.seal, 'sweep', 'me')
+        self.assertEqual(self.scene.run(stamp='20261117_120500_1'), cr.EXIT_GREEN,
+                         'one unopenable file in three is an outcome, and the blocked run is no baseline')
+
     def test_a_file_missing_or_resized_on_the_mount_is_counted_and_not_run(self):
         os.unlink(self.scene.live / self.scene.files[0][1][len('/Volumes/'):])
         (self.scene.live / self.scene.files[1][1][len('/Volumes/'):]).write_bytes(b'z')

@@ -1604,6 +1604,14 @@ class SweepLane(Lane):
         if changed:
             report["failures"]["source:MISMATCH"] = changed    # RED: a file on the read-only mount moved under the run
         report["perf"] = sweep_cost(results, self.engines)
+        # A sweep whose files mostly could not even be probed did not sweep the collection: it met a
+        # permission prompt, a dead share or a broken stage (2026-11-18: 400 of 400 `unopenable`
+        # behind the network-volume prompt read GREEN). The corpus itself has 26 of 234.
+        unprobed = sum(1 for r in results.values()
+                       if r.get("probe") in ("unopenable", "drive_timeout", "crash", "timeout", "not_run")
+                       or str(r.get("probe", "")).startswith("error"))
+        if results and unprobed * 2 > len(results):
+            report["blocked"] = f"{unprobed} of {len(results)} files could not be probed — the files were not reachable, not judged"
 
     def run_files(self, entries: List[Entry], database: Path):
         self._swept = entries
@@ -1709,7 +1717,7 @@ def verdict_of(report: dict, against: Optional[dict]) -> str:
     """The lane's verdict (the module docstring's rule): `against` is its diff with the baseline."""
     if not report.get("engine_present", True):
         return "NORUN"
-    if cut_count(report) or (against or {}).get("problem"):
+    if cut_count(report) or (against or {}).get("problem") or report.get("blocked"):
         return "RED"
     return "AMBER" if (against or {}).get("changed") else "GREEN"
 
@@ -1755,6 +1763,8 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     lines.append("  engine failures (crash / timeout / error): " + (_counts(report["failures"]) if failed else "none")
                  + (f" — {cut} crashed or timed out: RED" if cut else ""))
     seal = report.get("seal") or {}
+    if report.get("blocked"):
+        lines.append("  RED: " + str(report["blocked"]))
     lines.append(f"  seal: home sealed={seal.get('homeSealed')} test host={seal.get('testHost')} "
                  f"archive designation={seal.get('archiveDesignation')} catalog records={seal.get('records')}")
     return lines + against_lines(against)
@@ -1911,7 +1921,7 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
         return run, {"what": "its accepted baseline", "accepted_at": word(str(record.get("accepted_at", "")).replace(" ", "_")),
                      "accepted_by": who_word(record.get("accepted_by"))}, None
     for run, report in usable_runs(seal, lane):
-        if run != exclude and not cut_count(report) and not report.get("limit"):
+        if run != exclude and not cut_count(report) and not report.get("limit") and not report.get("blocked"):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
     return None, {}, None
 
@@ -2041,6 +2051,8 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
         raise Refused(f"refused: the newest {lane} run has {cut_count(report)} files that crashed or timed out — a RED run is never the baseline")
     if report.get("limit"):
         raise Refused(f"refused: the newest {lane} run was limited to {report['limit']} files — a partial run is never the baseline")
+    if report.get("blocked"):
+        raise Refused(f"refused: the newest {lane} run could not reach most of its files — never the baseline")
     folder = seal.reports / lane
     try:
         was = json.loads(seal.contained(folder / BASELINE, seal.reports).read_text(encoding="utf-8")).get("run")
@@ -2080,6 +2092,7 @@ def clean_report(report) -> dict:
             "media_seconds": number(report.get("media_seconds")), "wall_s": number(report.get("wall_s")),
             "build_s": number(report.get("build_s")), "launches": int(number(report.get("launches"))),
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
+            "blocked": "the files were not reachable, not judged" if report.get("blocked") else None,
             "engines": {e: counter(engines.get(e)) for e in LANES[lane][1] if e in engines},
             "failures": counter(report.get("failures")),
             "seal": {k: (seal_facts.get(k) if isinstance(seal_facts.get(k), (bool, int)) else None)

@@ -34420,6 +34420,7 @@
         "test_a_stale_overlay_from_a_dead_run_is_moved_aside_first",
         "test_a_state_root_outside_corpus_state_is_refused",
         "test_a_sweep_reads_the_live_mount_in_place_and_reports_what_each_file_cost",
+        "test_a_sweep_that_could_not_open_most_files_is_red_not_green",
         "test_a_word_cannot_carry_a_path_a_filename_or_a_sentence",
         "test_a_work_folder_a_dead_run_left_is_removed_and_a_live_one_is_not",
         "test_accept_blesses_the_newest_run_and_records_who_when_and_which",
