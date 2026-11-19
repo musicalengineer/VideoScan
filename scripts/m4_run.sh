@@ -95,12 +95,12 @@
 # Roots: M4 ~/m4run (DerivedData ~/Library/Caches/videoscan-m4run-dd);
 #        Ultra ~/ultrarun (DerivedData ~/Library/Caches/videoscan-ultrarun-dd).
 #
-# The 50% floor (DECISIONS 2026-11-18, scripts/testbed_host.py clean): a run may use as much disk as it
+# The floor, 15% free = 85% used at rest (DECISIONS 2026-11-18, 2026-11-19; scripts/testbed_host.py clean): a run may use as much disk as it
 # needs; once its verdict and summary are written, its scratch goes (xcresult bundles, overlays, patched
 # test-run files; each log cut to its last 200 lines under its own name) and the summary gets one line:
-#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 50%) — removed 0.41 GB: this run 0.41 GB
+#   disk: free 52% after cleanup (lowest 38% during the run, 47% at the start; floor 15%) — removed 0.41 GB: this run 0.41 GB
 # At the start, and again at the end, under the lock: finished runs not yet tidied are tidied and
-# ~/corpus/work/<stamp>-<lane> folders removed; below 50% free, unfinished runs go oldest first, then the
+# ~/corpus/work/<stamp>-<lane> folders removed; below 15% free, unfinished runs go oldest first, then the
 # build caches below — only when that reaches the floor. M4 only. Deletion works through folder descriptors
 # opened from $HOME down without following links (~/m4run/out, ~/corpus/work, those two caches; never a mount, never
 # the corpus protected set), and refuses unless the lock names this run. A stuck cleanup stops at 900 s; the run
@@ -796,8 +796,8 @@ host_main() {   # __host <lane> <sha> <stamp>
     # Housekeeping, under the lock: old run folders go (the newest of each lane, every RED run and
     # whatever `latest*` names stay). A run with no helper beside it (an older install) skips this.
     [ -f "$SCRIPT_DIR/testbed_host.py" ] && python3 "$SCRIPT_DIR/testbed_host.py" prune "$H_ROOT" --current "$OUT" 2>&1
-    # The 50% floor (DECISIONS 2026-11-18), still under the lock: finished runs give up their scratch,
-    # dead corpus work goes, and below 50% free older unfinished runs (then the build caches, only when
+    # The 15% floor (85% used at rest; DECISIONS 2026-11-18, 2026-11-19), still under the lock: finished runs give up their scratch,
+    # dead corpus work goes, and below 15% free older unfinished runs (then the build caches, only when
     # that reaches the floor). One "disk:" line here; the run itself may use as much disk as it needs.
     # The M4 only: the ruling is about the testbed machine, and the helper refuses any root but $HOME/m4run.
     local clean_tool=""

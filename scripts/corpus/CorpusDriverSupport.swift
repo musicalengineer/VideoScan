@@ -25,7 +25,9 @@
 //     verbs lane) under the run's own work folder — the patched .xctestrun
 //     took effect — and this IS a test host;
 //   - the catalog names no Master Archive and every record is under
-//     ~/corpus/media, or (the verbs lane) under the run's folder of clones;
+//     ~/corpus/media or the adopted external volume's corpus/media (a row
+//     only: a file is given to an engine only while that volume is proven), or
+//     (the verbs lane) under the run's folder of clones;
 //   - the verbs lane's clone, archive and scratch folders are under the run's
 //     work folder, which is under ~/corpus/work.
 //
@@ -36,7 +38,7 @@
 // Privacy: only enum case names, codec/container names and numbers are
 // written. Never a filename, a path, an engine's sentence or stderr.
 //
-// Memory: the 234 loaded records and one small JSON line at a time.
+// Memory: the loaded records (~6,400 in v2, a few MB) and one small JSON line at a time.
 // (For Rick: `final class … @unchecked Sendable` with an NSLock ≈ a C++
 // class whose members are guarded by a std::mutex — the compiler is told
 // "I lock it myself".)
@@ -144,11 +146,14 @@ final class CorpusRun: @unchecked Sendable {
     let config: CorpusConfig
     let progress: CorpusProgress
     let deadline: CorpusDeadline
+    /// The external root as the seal found it when the run opened.
+    let external: CorpusExternal
 
-    private init(config: CorpusConfig, progress: CorpusProgress) {
+    private init(config: CorpusConfig, progress: CorpusProgress, external: CorpusExternal) {
         self.config = config
         self.progress = progress
         self.deadline = CorpusDeadline(progress: progress)
+        self.external = external
     }
 
     static func realHome() -> String {
@@ -193,7 +198,8 @@ final class CorpusRun: @unchecked Sendable {
             throw CorpusRefusal(word: word)
         }
         guard let config else { throw CorpusRefusal(word: "config_outside_the_corpus") }
-        return CorpusRun(config: config, progress: try CorpusProgress(path: config.progress))
+        return CorpusRun(config: config, progress: try CorpusProgress(path: config.progress),
+                         external: CorpusSeal.external(realHome: realHome()))
     }
 
     /// The sealed catalog through Core's read-only door for a non-writer. Refuses
@@ -205,12 +211,13 @@ final class CorpusRun: @unchecked Sendable {
             progress.write(["ev": "refused", "why": "catalog_would_not_open"])
             throw CorpusRefusal(word: "catalog_would_not_open")
         case .success(let loaded):
-            let media = config.volRoot ?? config.mediaRoot       // the verbs lane's catalog names its clones
+            // The verbs lane's catalog names its clones; the others' name ~/corpus/media and the adopted volume's copies.
+            let roots = config.volRoot.map { [$0] } ?? [config.mediaRoot] + (external.mount.map { [$0 + "/corpus/media"] } ?? [])
             guard loaded.masterArchiveJSON == nil else {
                 progress.write(["ev": "refused", "why": "catalog_names_a_master_archive"])
                 throw CorpusRefusal(word: "catalog_names_a_master_archive")
             }
-            guard loaded.records.allSatisfy({ CorpusRun.isUnder($0.fullPath, media) }) else {
+            guard loaded.records.allSatisfy({ record in roots.contains { CorpusRun.isUnder(record.fullPath, $0) } }) else {
                 progress.write(["ev": "refused", "why": "a_record_is_outside_the_corpus"])
                 throw CorpusRefusal(word: "a_record_is_outside_the_corpus")
             }

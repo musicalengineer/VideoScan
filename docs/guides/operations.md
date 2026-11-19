@@ -159,21 +159,29 @@ password (testing.md §4).
 - The PROCESS.md wording for which merges wait for the M4's verdict (Rick reviews it). The real-media testbed SSD
   (BACKLOG).
 
-### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17, phase 2 2026-11-18)
+### 1a. The real-data corpus on the M4 (`scripts/corpus_run.sh`; phase 1 built 2026-11-17, phase 2 2026-11-18, two roots 2026-11-19)
 
-*Rule: DECISIONS 2026-11-17, "The M4 holds a real-data test corpus". The header comments of `scripts/corpus_run.py`
-and `scripts/corpus/CorpusDriverSupport.swift` are the reference.*
+*Rules: DECISIONS 2026-11-17, "The M4 holds a real-data test corpus"; 2026-11-19, the corpus on the SSD and the
+Crucial X10. The header comments of `scripts/corpus_run.py` and `scripts/corpus/CorpusDriverSupport.swift` are the
+reference.*
 
-**What it is.** A curated copy of real family media on the M4, chosen by stratum (one-sided sound, edit lists, Avid
-halves, codec/container combinations, …), with the two documents that describe it and a `.backup` of the catalog, all
-under `~/corpus/` on the M4 and marked `THIS_IS_TEST_DATA.txt`. Automation runs the app's own engines across it and
-reports counts.
+**What it is.** A copy of real family media on the M4, on **two roots**, with the documents that describe it and a
+`.backup` of the catalog, marked `THIS_IS_TEST_DATA.txt`. v1 (234 files, ~130 GB) was chosen by stratum (one-sided
+sound, edit lists, Avid halves, codec/container combinations, …). v2 (`scripts/corpus_select.py`, its rules in its
+header) adds every other distinct content of the live catalog: under 8 GB onto the **external** root (the Crucial X10,
+6,096 files, ~1.58 TB), and at or over 8 GB the smallest file of each container/codec mix, up to 250 GB, onto the
+**internal** root (the SSD, 21 files, ~247 GB) — 6,351 files in all. Automation runs the app's own engines across it
+and reports counts.
 
-| Under `~/corpus/` on the M4 | What |
+| Where, on the M4 | What |
 |---|---|
-| `media/Volumes/<VolumeName>/…` | the copies (read-only for the harness) |
-| `corpus-manifest-v1.json`, `corpus-sha-v1.txt` | each file's SHA-256, size, original path and stratum |
-| `catalog-source-backup.sqlite` | the catalog backup the sealed catalog is derived from (never written) |
+| `~/corpus/media/Volumes/<VolumeName>/…` | the internal root's copies: v1 and v2's large files (read-only for the harness) |
+| `/Volumes/crucial10_testdata/corpus/media/Volumes/<VolumeName>/…` | the external root's copies (read-only; the volume carries its own `THIS_IS_TEST_DATA.txt`) |
+| `~/corpus/corpus-manifest-v2.json` | THE manifest when present: every file's SHA-256, size, original path, stratum and `root` (v1's rows included) |
+| `~/corpus/corpus-manifest-v1.json`, `corpus-sha-v1.txt` | v1's manifest and SHA-256 list (relative to `~/corpus`) |
+| `~/corpus/corpus-sha-v2-internal.txt`; `<X10>/corpus/corpus-sha-v2-external.txt` | v2's lists, each relative to its root's `media/` |
+| `~/corpus/catalog-source-backup-v2.sqlite` (v1: `catalog-source-backup.sqlite`) | the catalog backup the manifest was chosen from and the sealed catalog is derived from (never written) |
+| `~/corpus/external-volume.json` | the adopted external volume: its mount point and volume UUID (`adopt-volume`, once) |
 | `state/` | the sealed state `prepare` builds: the corpus catalog, `prepare.json`, the test host's home |
 | `work/<run>/` | a run's working files (the `verbs` lane's clones, scratch Trash and scratch archive); removed when the run ends |
 | `reports/<lane>/<commit>/<run>/` | `report.json`, `report.txt`, per-file `outcomes.json` keyed by SHA-256 |
@@ -194,8 +202,15 @@ reports counts.
   the app's own Trash call under a test host lands in the system's temporary folder, outside the run, and macOS gives
   no way to move it; that folder is counted afterwards and a file found there is RED. The lane sweeps the size,
   modification time, flags, link count and inode of every corpus file before and after; any difference is RED.
+- **The external root** is accepted only while the adopted volume is mounted at its path, that path is not reached
+  through a link, the volume carries the marker, and its volume UUID is the one in `~/corpus/external-volume.json`.
+  Nothing writes on it, mounted or not (the seal, and `testbed_host.py clean` never enters a mount or `/Volumes`).
+  **Unplugged**: `prepare` is refused; a lane runs the internal files and says *"external volume NOT MOUNTED: N files
+  on it NOT RUN"* — **AMBER** (no engine failed and no copy is at risk, but those files proved nothing), and such a
+  run is never a baseline. **Another volume there**, unmarked, or through a link: the lane is refused and runs nothing.
 - The seal is checked twice: `Seal` in `scripts/corpus_run.py`, and `scripts/corpus/CorpusSeal.swift` inside the test
-  host (one pure function, pinned by behaviour: `tests/test_corpus_run.py` compiles it and asks it about real folders).
+  host (one pure function, pinned by behaviour: `tests/test_corpus_run.py` compiles it and asks it about real folders,
+  and about a real disk image as the external volume, case by case beside the Python seal).
   The corpus folders must be themselves (a `work` that is a symlink is refused); a run's work folder is made new; what
   the harness reads back as its own (the sealed catalog, a stored run, a baseline) is refused if it is a link.
 - No credential is in the repo. The harness never signals a process: a file past its deadline is cut by the test host
@@ -203,10 +218,11 @@ reports counts.
 
 | From the Ultra | What happens on the M4 |
 |---|---|
-| `scripts/corpus_run.sh prepare` | builds the sealed catalog from the backup: only the manifest's rows, paths rewritten to the copies; verifies every file has a row and every row's file exists at its size. Idempotent |
-| `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio · the A/V pair link, on every file, at that commit |
-| `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on the one-sided-sound files; says so when the ref has no proof engine |
-| `scripts/corpus_run.sh run verbs [--ref <rev>]` | ~20 files, stratified and sized to fit, cloned (`cp -c`, no extra space) into `work/<run>/vol/`; a catalog over the clones; then the app's real engines: Update Catalog + Find Duplicates + Delete Duplicates on three byte-identical clones, Move to Trash on an extra copy and on the last copy, Remove and Remove from Catalog each followed by a rescan (does the row come back?), Promote into a scratch archive; every clone re-hashed afterwards |
+| `scripts/corpus_run.sh adopt-volume /Volumes/<name>` | once, by a person: pins that volume (mounted directly in `/Volumes`, marked, with `corpus/media`) as the external root by its volume UUID. Refused when one is already adopted (move `~/corpus/external-volume.json` into `~/corpus/.trash` to adopt another) |
+| `scripts/corpus_run.sh prepare` | builds the sealed catalog from the backup over EVERY file on both roots: only the manifest's rows, each path rewritten to its copy on its root; verifies every file has a row and every row's file exists at its size. Idempotent; refused while the external volume is away |
+| `scripts/corpus_run.sh run check [--ref <rev>]` | probe · Check Media (quick) · Verify Audio · the A/V pair link, on every file of both roots, at that commit |
+| `scripts/corpus_run.sh run proof --ref <rev>` | Balance Audio into `work/`, then the balanced-copy proof, on v1's one-sided-sound files plus those the newest whole check run heard one-sided (left or right only), smallest first, 40 at most; refused if the largest balanced copy would take the SSD past 95% used; says so when the ref has no proof engine |
+| `scripts/corpus_run.sh run verbs [--ref <rev>]` | ~20 files of the **internal** root (APFS clones are made within one volume), stratified and sized to fit, cloned (`cp -c`, no extra space) into `work/<run>/vol/`; a catalog over the clones; then the app's real engines: Update Catalog + Find Duplicates + Delete Duplicates on three byte-identical clones, Move to Trash on an extra copy and on the last copy, Remove and Remove from Catalog each followed by a rescan (does the row come back?), Promote into a scratch archive; every clone re-hashed afterwards; the media sweep covers both roots |
 | `scripts/corpus_run.sh run coverage [--ref <rev>]` | opt-in, ~2 h: `check`, `proof` and `verbs` on ONE instrumented Debug build (`<DerivedData>-coverage`), the same build's unit suite (CI plan, drivers skipped) and Core's `swift test --enable-code-coverage` (`<DerivedData>-coverage-core`); LCOV per side, compared over our sources: suite / corpus / union line and function %, what only the corpus runs by area and lane, the functions the suite never enters ranked by size. Each lane still stores its own run. Raw profiles go with the run's work folder; the report stays in `reports/coverage/<commit>/<run>/` (`scripts/corpus_coverage.py`) |
 | `scripts/corpus_run.sh status` | the lock, then each lane's newest run judged against its baseline: counts, outcome-word transitions, each changed file by SHA-256 prefix |
 | `scripts/corpus_run.sh accept <check\|proof\|verbs>` | blesses the lane's newest run as its baseline; refused for a run that crashed or timed out, a `--limit` run, or a run with no engine |
@@ -235,7 +251,17 @@ row per paired file, the way the app writes a link; the import evidence itself c
 run is refused by the schema). A half whose partner is not in the corpus keeps its link and reads
 `paired_partner_absent`. Not carried: other copies and removed rows of the same content, captions, transcripts, notes,
 people. Volume ids and identity stamps still describe the original drive. After a harness change that bumps the
-transform, run `prepare` once; a lane refuses a sealed catalog built by another version. Phase 1 trusts the corpus's own SHA-256 list and checks sizes; it does not re-hash 130 GB per run.
+transform, run `prepare` once; a lane refuses a sealed catalog built by another version. The harness trusts the
+corpus's own SHA-256 lists (verified with `shasum -c` when the copy was made) and checks sizes; it does not re-hash
+1.95 TB per run.
+
+**Growing the corpus** (how v2 was made; again the same way): on the Ultra, `scripts/corpus_select.py select` over a
+fresh catalog `.backup` with `--exclude` the current manifest writes the selection, the two SHA-256 lists and the
+rsync file lists into a scratch folder (never the repo: they hold real paths); `rsync -a --files-from` to each root
+(never `--delete`), then `shasum -a 256 -c` on the M4 from each root's `media/`; `corpus_select.py manifest` writes
+`corpus-manifest-v2.json`; copy it, the lists and the backup (as `catalog-source-backup-v2.sqlite`) into `~/corpus`;
+`adopt-volume` once; `prepare`. Disk (DECISIONS 2026-11-19): the SSD rests under 85% used (`testbed_host.py clean`'s
+floor, 15% free) and a run may take it to 95% if its scratch goes after the summary.
 
 ## 2. Storage layout
 

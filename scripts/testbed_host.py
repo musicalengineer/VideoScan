@@ -11,7 +11,7 @@
     testbed_host.py sample <root> <run dir>
     testbed_host.py stop <root> <run dir>
 
-clean and sample (DECISIONS 2026-11-18, the M4 kept at least 50% free): see the section
+clean and sample (DECISIONS 2026-11-18 and 2026-11-19, the M4 at rest under 85% used): see the section
 "clean" below. clean runs at a run start and once its summary is written, under the lock it
 must hold itself; it prints the one "disk: free N% ..." line the summary carries. sample keeps
 the lowest free figure seen while the run works.
@@ -216,7 +216,7 @@ def prune(root: str, current: str = "", keep: int = 0) -> str:
             % (removed, "" if removed == 1 else "s", freed / 1e9, kept, keep, red, held))
 
 
-# ── clean: the M4 kept at least 50% free (DECISIONS 2026-11-18) ────────────
+# ── clean: the M4 at rest under 85% used (DECISIONS 2026-11-18, 2026-11-19) ──
 #
 # Measured on the M4, 2026-11-18 (971 GB data volume, 40% free before this existed):
 #   a suite or testbed run folder   410-430 MB (suite-app.xcresult ~310 MB, suite.log and
@@ -235,7 +235,16 @@ def prune(root: str, current: str = "", keep: int = 0) -> str:
 # Worst case on disk: the largest run (testbed: ~0.45 GB) plus the two caches (~13 GB) plus what
 # the lanes write while they run. Memory: one 64 KB log tail at a time and one directory walk.
 
-FLOOR = 0.50
+# The resting floor: 15% free = 85% used (DECISIONS 2026-11-19; Rick: stay under 85-90% full at rest,
+# 95% is fine for a run whose intermediate files are deleted afterwards). Why 85, not 90: the corpus now
+# rests on this SSD too (v1 130 GB + v2 247 GB on a 971 GB data volume), and a run must be able to climb
+# about ten points above rest and still stop short of 95% (corpus_run.py TRANSIENT_CEILING), where APFS
+# snapshots and swap start to fail: the proof lane writes a balanced copy about the size of its largest
+# file (the largest corpus file is ~17.5 GB), the two warm caches are ~13 GB, a suite run adds its
+# bundles. 85% at rest leaves ~97 GB below 95%; 90% would leave ~49 GB, too close for a large proof
+# file plus a cold rebuild of the caches. The figure is a resting target: cleanup tidies toward it,
+# it never blocks a run.
+FLOOR = 0.15
 TAIL_LINES = 200
 TAIL_BYTES = 64 * 1024
 SAMPLE_SECONDS = 15
@@ -256,7 +265,11 @@ SCRATCH_CACHES = ("-dd-coverage", "-dd-coverage-core")
 # Never a target, whatever a path resolved through: the corpus sources, its documents, its stored
 # reports and accepted baselines, its sealed state, the read-only share mount.
 CORPUS_PROTECTED = ("media", "live", "state", "reports", "corpus-sha-v1.txt", "corpus-manifest-v1.json",
-                    "catalog-source-backup.sqlite", CORPUS_MARKER, "share.credentials", "_experiment", ".trash")
+                    "catalog-source-backup.sqlite", CORPUS_MARKER, "share.credentials", "_experiment", ".trash",
+                    # v2 (2026-11-19): the two-root manifest, its internal list and source backup, and the adopted
+                    # record of the external volume. The volume itself is a mount: never entered (_open_dir), and /Volumes is protected.
+                    "corpus-manifest-v2.json", "corpus-sha-v2-internal.txt", "catalog-source-backup-v2.sqlite",
+                    "external-volume.json")
 CLEAN_BUDGET = 900                # seconds: a cleanup past it stops and says so; the run still reaches OUTCOME
 STOP_BUDGET = 30                  # seconds for the stop marker (Codex #324 S5: every helper call is bounded)
 O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
