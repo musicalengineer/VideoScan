@@ -38,6 +38,10 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Semantics unchanged: hits over pfSearchBadgeBase (purge +
     /// set-aside pre-filter), pinned by CatalogSearchBudgetSensorTests.
     let searchHitCount: Int
+    /// The Showing box's last part, "1,247 of 18,903" (Rick 2026-11-18):
+    /// the table's filter pass publishes it (CatalogRows.Result.shownCount)
+    /// through ContentView — two Ints, no records walked here.
+    let shownCount: CatalogShowingSummary.ShownCount?
     /// TOTAL CATALOG · ARCHIVED · UNIQUE for the box beside the Showing
     /// box (Rick 2026-09-11). Computed by CatalogView off the main actor
     /// on the catalog-change triggers and handed down as a value —
@@ -113,7 +117,8 @@ struct CatalogToolbar<Dashboard: View>: View {
             hasMasterArchive: model.masterArchive != nil,
             focusLabel: focusLabel,
             selectedVolumeLabels: selectedVolumeLabels,
-            selectedPersonName: selectedPerson?.name)
+            selectedPersonName: selectedPerson?.name,
+            shownCount: shownCount)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
 

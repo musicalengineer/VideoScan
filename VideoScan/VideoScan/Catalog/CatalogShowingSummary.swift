@@ -79,6 +79,41 @@ enum CatalogShowingSummary {
         /// The Catalog's Person picker (2026-10-24): the chosen person's
         /// name; nil = Everyone. Session-only, like the volume selection.
         var selectedPersonName: String? = nil
+        /// How many files the table lists, of how many (Rick 2026-11-18).
+        /// Published by the table's own filter pass; nil until it has run
+        /// once (then the box draws no count rather than a guess).
+        var shownCount: ShownCount? = nil
+    }
+
+    // MARK: The count (Rick 2026-11-18)
+    //
+    // The last `·` part of the box: "… · Connected drives · 1,247 of 18,903".
+    // Both numbers come from ONE pass — `CatalogRows.rows`, the function that
+    // decides the table's rows — so the count is the rows on screen (what
+    // Select All selects) in the same update that changes them, never a
+    // second scan and never a stale figure.
+
+    /// `shown` = the rows the files table lists now (every narrowing, held
+    /// rows included). `total` = the catalog's rows that are not removed
+    /// (trashed) — the base the table's first step starts from.
+    struct ShownCount: Equatable {
+        var shown: Int
+        var total: Int
+        /// Nothing narrows the list: every not-removed row is on screen.
+        var isEverything: Bool { shown == total }
+    }
+
+    /// "1,247 of 18,903", or just "18,903" when nothing narrows. Digits are
+    /// grouped by `locale` (tests pin one; the app passes the user's).
+    static func countText(_ c: ShownCount, locale: Locale = .current) -> String {
+        let total = c.total.formatted(.number.locale(locale))
+        guard !c.isEverything else { return total }
+        return c.shown.formatted(.number.locale(locale)) + " of " + total
+    }
+
+    /// VoiceOver: "1,247 of 18,903 files shown" / "18,903 files shown".
+    static func countAccessibility(_ c: ShownCount, locale: Locale = .current) -> String {
+        countText(c, locale: locale) + (c.isEverything && c.total == 1 ? " file shown" : " files shown")
     }
 
     // MARK: The volume pill (Rick 2026-10-24)
@@ -263,7 +298,9 @@ enum CatalogShowingSummary {
 
     /// VoiceOver / log line: "Showing Not Yet Archived, Connected drives".
     static func sentence(for s: State) -> String {
-        "Showing " + pills(for: s).map(\.text).joined(separator: ", ")
+        let words = "Showing " + pills(for: s).map(\.text).joined(separator: ", ")
+        guard let count = s.shownCount else { return words }
+        return words + ", " + countAccessibility(count)
     }
 
     /// The box's tooltip: the whole truth, however short the drawn line is.
@@ -273,7 +310,8 @@ enum CatalogShowingSummary {
         }
         let on = filterPills(for: s.viewFilters).map(\.text)
         let filters = on.isEmpty ? "No Show filter is on." : "Show filters on: " + on.joined(separator: ", ") + "."
-        return "Showing " + boxPills(for: s).map(\.text).joined(separator: ", ") + ".\n" + filters
+        let count = s.shownCount.map { countAccessibility($0) + ".\n" } ?? ""
+        return "Showing " + boxPills(for: s).map(\.text).joined(separator: ", ") + ".\n" + count + filters
             + "\nUse the Show menu to change what is listed."
     }
 
@@ -338,7 +376,11 @@ struct CatalogShowingBox: View {
     let state: CatalogShowingSummary.State
 
     // Senior-friendly: 14pt semibold, one size up from the toolbar chrome.
-    static let font = Font.system(size: 14, weight: .semibold)
+    static let fontSize: CGFloat = 14
+    static let font = Font.system(size: fontSize, weight: .semibold)
+    /// The count: the words' own size (one constant, so it can never be
+    /// smaller), regular weight, primary colour.
+    static let countFont = Font.system(size: fontSize, weight: .regular)
     private let toDoGreen = Color(red: 0.10, green: 0.62, blue: 0.30)
     private let allBlue = Color(red: 0.13, green: 0.45, blue: 0.85)
 
@@ -353,8 +395,10 @@ struct CatalogShowingBox: View {
     }
 
     var body: some View {
-        // At most three short strings, built from a handful of values.
+        // At most three short strings, built from a handful of values; the
+        // count is two Ints the table's filter pass published — no row walk.
         let lines = CatalogShowingSummary.boxLines(for: state)
+        let count = state.shownCount.map { CatalogShowingSummary.countText($0) }
         HStack(spacing: 6) {
             if let mark {
                 Image(systemName: mark.symbol)
@@ -366,12 +410,24 @@ struct CatalogShowingBox: View {
             // filters it leaves out. (≈ picking the longest of N preformatted
             // strings that fits the column, instead of ellipsizing one.)
             ViewThatFits(in: .horizontal) {
+                // Every candidate line keeps the count as its last part — the
+                // words shorten, the count never goes. Same size, full
+                // contrast (Rick 2026-11-18: big enough for aging eyes);
+                // only the weight is regular and the digits monospaced.
+                // Part of the readout: no click.
                 ForEach(lines, id: \.self) { line in
-                    Text(line)
-                        .font(Self.font)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                    HStack(spacing: 0) {
+                        Text(line)
+                            .font(Self.font)
+                        if let count {
+                            Text(" \u{00B7} " + count)
+                                .font(Self.countFont)
+                                .monospacedDigit()
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
             }
         }

@@ -37102,6 +37102,30 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogShowingCountTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogShowingCountWordsTests",
+        "CatalogShowingCountTruthTests",
+        "CatalogShowingCountViewTests",
+        "CatalogShowingCountScaleTests",
+        "CatalogShowingCountSensorTests"
+      ],
+      "tests": [
+        "accessibilityWords",
+        "bothForms",
+        "countIsReadableAndInert",
+        "countIsTheRows",
+        "filterAndPersonChanges",
+        "hundredThousand",
+        "noRecountAnywhere",
+        "removedNeverCounts",
+        "searchThroughTheMountedView",
+        "sentenceAndHelp"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VideosWithSoundTests.swift",
       "stage": "regression",
       "suites": [
@@ -41060,7 +41084,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 820,
+      "expected_floor": 830,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41283,6 +41307,11 @@
         "VideoScanTests/CatalogRowsTests",
         "VideoScanTests/CatalogRowsScaleTests",
         "VideoScanTests/CatalogRowsSensorTests",
+        "VideoScanTests/CatalogShowingCountWordsTests",
+        "VideoScanTests/CatalogShowingCountTruthTests",
+        "VideoScanTests/CatalogShowingCountViewTests",
+        "VideoScanTests/CatalogShowingCountScaleTests",
+        "VideoScanTests/CatalogShowingCountSensorTests",
         "VideoScanTests/VideosWithSoundTests",
         "VideoScanTests/VideosWithSoundScaleTests",
         "VideoScanTests/VideosWithSoundSensorTests",
