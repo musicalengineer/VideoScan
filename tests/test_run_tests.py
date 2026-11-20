@@ -737,6 +737,8 @@ def test_full_with_a_host_other_than_the_m4_is_refused(monkeypatch, tmp_path, ca
 
 
 TESTBED_GREEN = """m4_run: testbed on M4 at aaaaaaaaa
+M4: idle
+last run: /Users/rickb/m4run/out/x-testbed
   OUTCOME AMBER 2026-11-20 13:00:00 lane=testbed sha=aaaaaaaaa — suite GREEN · corpus check GREEN · corpus proof AMBER
   testbed: AMBER at aaaaaaaaa — 3 lanes, wall 5199s
     suite         GREEN   3246s  app 14152 passed, 0 failed, 67 skipped; core 2587 passed, 0 failed, 7 skipped
@@ -773,6 +775,30 @@ def test_full_host_m4_runs_the_m4_testbed_and_counts_its_suite(monkeypatch, tmp_
     assert code == 0
     assert "16739 tests" in o, o
     assert "corpus proof AMBER" in o, "the testbed's own lines are not shown"
+
+
+def test_full_host_m4_counts_only_this_testbed_not_the_previous_suite_run(monkeypatch, tmp_path, capsys):
+    # M4 2026-11-20 13:03 (recorded, counts and words only): the status after the testbed also prints the
+    # 06:00 suite run (2 app + 1 core failed); the lane said "16740 passed, 3 failed" for a suite that was
+    # 14151 + 2587 passed, 0 failed.
+    text = """m4_run: testbed on M4 at 2b031dc15
+M4: idle
+last run: /Users/rickb/m4run/out/20261120_121609_18757-testbed
+  OUTCOME RED 2026-11-20 13:03:33 lane=testbed sha=2b031dc15 — suite GREEN · corpus check RED · corpus proof RED
+  testbed: RED at 2b031dc15 — 3 lanes, wall 2838s
+    suite         GREEN   2797s  app 14151 passed, 0 failed, 67 skipped; core 2587 passed, 0 failed, 7 skipped
+    corpus check  RED       20s  no facts file (see the lane's own lines)
+  suite: GREEN app 14151 passed, 0 failed, 67 skipped; core 2587 passed, 0 failed, 7 skipped (sha=2b031dc15, 2797s)
+  corpus check: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)
+last suite run: /Users/rickb/m4run/out/20261120_060035_19272-suite
+  suite: RED failed-tests:2 — app 14154 passed, 2 failed, 67 skipped; core 2586 passed, 1 failed, 7 skipped (sha=2b031dc15, 3789s)
+push watcher: 2026-11-20 07:07:50 2b031dc15 suite RED — suite: RED failed-tests:2 — app 14154 passed, 2 failed, 67 skipped; core 2586 passed, 1 failed
+"""
+    code, _ = drive_m4_full(monkeypatch, tmp_path, text, 1)
+    o = capsys.readouterr().out
+    assert code == 1
+    assert "16738 passed, 0 failed" in o, o
+    assert "3 failed" not in o
 
 
 def test_full_host_m4_red_busy_and_countless_runs_are_never_green(monkeypatch, tmp_path, capsys):

@@ -35692,6 +35692,7 @@
         "test_commands_use_debug_the_side_dd_and_only_testing",
         "test_corpus_from_a_mac_that_cannot_launch_it_is_refused",
         "test_every_selection_flag_has_help",
+        "test_full_host_m4_counts_only_this_testbed_not_the_previous_suite_run",
         "test_full_host_m4_dry_run_prints_the_testbed_command",
         "test_full_host_m4_red_busy_and_countless_runs_are_never_green",
         "test_full_host_m4_runs_the_m4_testbed_and_counts_its_suite",

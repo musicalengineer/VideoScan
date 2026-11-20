@@ -1052,6 +1052,24 @@ def m4_full_cmd(script_repo: Path, sha: str, force: bool) -> List[str]:
 M4_SUITE_COUNTS = re.compile(r"\b(app|core) (\d+) passed, (\d+) failed")
 
 
+def this_testbed_block(lines: Sequence[str]) -> List[str]:
+    """Only this run's block of m4_run's status: from "last run:" to the next "last …:" or "push watcher"
+    block. The status also prints the previous suite run (M4 2026-11-20: its 3 failures were counted as
+    this testbed's)."""
+    block: List[str] = []
+    inside = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("last run:"):
+            inside = True
+            continue
+        if inside and (s.startswith("last ") or s.startswith("push watcher")):
+            break
+        if inside:
+            block.append(line)
+    return block
+
+
 def m4_full_lane(lines: Sequence[str], rc: int, seconds: float) -> LaneResult:
     """The testbed's verdict as one lane: its exit (0 GREEN/AMBER · 1 RED · 2 could not run · 3 busy ·
     5 window), its suite counts (the last app/core pair it printed), never a green without a count."""
@@ -1061,9 +1079,9 @@ def m4_full_lane(lines: Sequence[str], rc: int, seconds: float) -> LaneResult:
         return lane
     lane.ran = True
     counts: Dict[str, Tuple[int, int]] = {}
-    for line in lines:
+    for line in this_testbed_block(lines):
         for kind, passed, failed in M4_SUITE_COUNTS.findall(line):
-            counts[kind] = (int(passed), int(failed))
+            counts.setdefault(kind, (int(passed), int(failed)))
     lane.passed = sum(c[0] for c in counts.values())
     lane.failed = sum(c[1] for c in counts.values())
     if any("AMBER" in l for l in lines if l.lstrip().startswith(("OUTCOME", "testbed:"))) and rc == 0:
