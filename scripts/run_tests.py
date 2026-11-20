@@ -17,10 +17,11 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     GUI session and are broken, GH #408); the hallie stage is the hallie eval's, not a smoke.
     `--full` delegates to what the nightly runs: scripts/nightly_local_tests.sh --on-demand
     (app + Core, Release) and scripts/run_python_tests.sh (PYTHON= an interpreter with pytest),
-    on THIS Mac only. `--full --host <another Mac>` is refused (exit 2): app-hosted tests cannot
-    start inside an ssh session, and the M4 already has the right door — scripts/m4_run.sh suite
-    --host m4 --ref <sha> --wait (the same runner, in the M4's GUI session); on any other Mac, type
-    run_tests.sh --full there. A stage flag with --full is refused too (--full runs every stage).
+    on THIS Mac. `--full --host m4` (from the Ultra) runs the M4's everything — scripts/m4_run.sh
+    testbed --ref <sha> --wait: the full suite in the M4's GUI session, then the whole real-corpus
+    check and proof — and shows the testbed's own summary (counts and words only). `--full --host`
+    another Mac is refused (exit 2): app-hosted tests cannot start inside an ssh session; type
+    run_tests.sh --full on that Mac. A stage flag with --full is refused too (--full runs every stage).
   * display — a googletest-style stream: [ RUN ] / [ OK ] / [ FAILED ] / [ SKIPPED ] per test
     with --verbose (coloured on a TTY), one line per lane otherwise plus a live [ n/N ] counter.
     The parser reads the three line shapes our runners print (XCTest, Swift Testing, pytest -v)
@@ -33,8 +34,9 @@ at the ref (default: the HEAD commit of the checkout this script is run from), D
 ~/Library/Caches/videoscan-runall-dd — never Rick's checkout or Xcode's DerivedData (CLAUDE.md
 rule 11; tests have been seen writing into a checkout, GH #495). A dirty side worktree is refused.
 
-Corpus lane: only from the Ultra with --host m4 (scripts/corpus_run.sh run check --limit 10
---wait); elsewhere it says NOT RUN and why. Only the harness's own summary lines are shown.
+Corpus lane: only from the Ultra with --host m4 (scripts/corpus_run.sh run check --smoke --wait:
+the harness's stratified subset, the smallest file of each codec mix; a first-N --limit picked
+multi-GB tapes and ran 40 min on 2026-11-20); elsewhere it says NOT RUN and why. Only the harness's own summary lines are shown.
 `--corpus --host m4` alone runs the corpus lane only (no host smoke). A selection with nothing to
 run on this Mac (e.g. --corpus without --host m4) is refused before anything is touched (exit 2).
 
@@ -54,7 +56,7 @@ child's process group is stopped (or, over ssh, its one LaunchAgent job booted o
 
 Exit: 0 every lane that ran is green · 1 a failure, or a lane that ran zero tests (or under half
 its selection), or nothing ran, or NOT READY: setup · 2 usage (also: a --host ref that is not on origin, nothing to run
-here, --full with --host or a stage flag) · 3 busy (the M4 testbed lock, another run_tests on this
+here, --full with a --host other than m4 or with a stage flag) · 3 busy (the M4 testbed lock, another run_tests on this
 Mac, or the M4's nightly window without --force) · 130 interrupted (the caller of a --host run
 then skips its corpus step, as it does on 2 and 3).
 
@@ -120,7 +122,8 @@ STAGE_FLAGS = {"unit": "unit", "regression": "regression", "integration": "integ
 NOT_HERE_RE = re.compile(r"opt-in|TSan|SANITIZER|real run|real-data|real catalog|real family|weights|MLX|"
                          r"POI profiles|phase 2|LiveCatalogCopy|live catalog", re.I)
 
-LANE_BUDGET = {"app": 3600, "core": 3600, "python": 1800, "build": 3600, "corpus": 7200}
+LANE_BUDGET = {"app": 3600, "core": 3600, "python": 1800, "build": 3600, "corpus": 7200,
+               "m4full": 22500 + 2 * 21600 + 1800}   # m4_run.sh's own TESTBED_WAIT_BUDGET, plus a margin
 SHRANK = 0.5               # a lane that ran under half of the tests its selection planned is RED
 QUEUE_LINES = 10000        # the reader thread's queue bound: the child blocks, nothing is dropped
 
@@ -1035,9 +1038,63 @@ def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional
 CORPUS_SUMMARY = re.compile(r"^\s*(corpus \w+|OUTCOME|m4_run: |M4: )")
 
 
-def corpus_cmd(script_repo: Path, sha: str, limit: Optional[int]) -> List[str]:
+def corpus_cmd(script_repo: Path, sha: str, smoke: bool) -> List[str]:
     return (["/bin/bash", str(script_repo / "scripts" / "corpus_run.sh"), "run", "check", "--ref", sha]
-            + (["--limit", str(limit)] if limit else []) + ["--wait"])
+            + (["--smoke"] if smoke else []) + ["--wait"])
+
+
+def m4_full_cmd(script_repo: Path, sha: str, force: bool) -> List[str]:
+    """--full --host m4: the M4's everything, through its own door (a LaunchAgent in its GUI session)."""
+    return (["/bin/bash", str(script_repo / "scripts" / "m4_run.sh"), "testbed", "--host", "m4", "--ref", sha, "--wait"]
+            + (["--force"] if force else []))
+
+
+M4_SUITE_COUNTS = re.compile(r"\b(app|core) (\d+) passed, (\d+) failed")
+
+
+def m4_full_lane(lines: Sequence[str], rc: int, seconds: float) -> LaneResult:
+    """The testbed's verdict as one lane: its exit (0 GREEN/AMBER · 1 RED · 2 could not run · 3 busy ·
+    5 window), its suite counts (the last app/core pair it printed), never a green without a count."""
+    lane = LaneResult("M4 testbed (suite + corpus check + proof)", rc=rc, seconds=seconds)
+    if rc in (3, 5):
+        lane.reason = "the M4 is busy (testbed lock)" if rc == 3 else "the M4's nightly/quiet window (--force runs anyway)"
+        return lane
+    lane.ran = True
+    counts: Dict[str, Tuple[int, int]] = {}
+    for line in lines:
+        for kind, passed, failed in M4_SUITE_COUNTS.findall(line):
+            counts[kind] = (int(passed), int(failed))
+    lane.passed = sum(c[0] for c in counts.values())
+    lane.failed = sum(c[1] for c in counts.values())
+    if any("AMBER" in l for l in lines if l.lstrip().startswith(("OUTCOME", "testbed:"))) and rc == 0:
+        lane.reason = "amber: see the testbed summary above"
+    elif rc != 0:
+        lane.reason = f"m4_run.sh testbed exit {rc}" + (" (could not run)" if rc == 2 else "")
+    elif not counts:
+        lane.reason = "the testbed printed no suite count"
+    return lane
+
+
+def run_m4_full(out: Out, script_repo: Path, sha: str, force: bool) -> Tuple[LaneResult, Path]:
+    runs = CACHE / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    prune_runs(runs, KEEP_RUNS - 1)
+    run_dir = runs / time.strftime("%Y%m%d-%H%M%S-m4full")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out.line("RUN", "M4 testbed: full suite, then the whole corpus check and proof (m4_run.sh's own lines)")
+    seen: List[str] = []
+
+    def show(raw: str) -> None:
+        s = raw.rstrip()
+        if s:
+            seen.append(s)
+            out.plain(" " * 13 + s)
+    rc, el = Runner(out, run_dir, dict(os.environ)).stream(m4_full_cmd(script_repo, sha, force), "m4-testbed.log",
+                                                          LANE_BUDGET["m4full"], on_line=show)
+    lane = m4_full_lane(seen, rc, el)
+    if lane.ran:
+        out.line("----------", f"M4 testbed: {lane.passed} passed, {lane.failed} failed, exit {rc} ({fmt_secs(el)})", lane.word)
+    return lane, run_dir
 
 
 REMOTE_TOTAL = re.compile(r"\[==========\] (GREEN|RED|NOT READY: setup) · [^\n]*?· (\d+) tests · ")
@@ -1082,10 +1139,10 @@ class CorpusLines:
         return s
 
 
-def run_corpus(out: Out, script_repo: Path, sha: str, run_dir: Path, verbose: bool, limit: Optional[int]) -> LaneResult:
+def run_corpus(out: Out, script_repo: Path, sha: str, run_dir: Path, verbose: bool, smoke: bool) -> LaneResult:
     lane = LaneResult("corpus")
-    cmd = corpus_cmd(script_repo, sha, limit)
-    out.line("RUN", f"corpus check on the M4{f' (--limit {limit})' if limit else ''} — the harness's own summary lines only")
+    cmd = corpus_cmd(script_repo, sha, smoke)
+    out.line("RUN", f"corpus check on the M4{' (--smoke: the smallest file of each codec mix)' if smoke else ''} — the harness's own summary lines only")
     r = Runner(out, run_dir, dict(os.environ))
     picker = CorpusLines()
 
@@ -1167,10 +1224,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     target = None if a.on_host else ssh_target(a.host, None)
     base = BASE_REPO if (a.on_host or SCRIPT_REPO is None) else SCRIPT_REPO
 
-    if target and a.mode == "full":
-        print("run_tests: --full runs on this Mac only (app-hosted tests cannot start inside an ssh session). "
-              "For the M4: scripts/m4_run.sh suite --host m4 --ref <commit> --wait (the same nightly runner, in "
-              "its GUI session); for another Mac: type scripts/run_tests.sh --full on that Mac.", file=sys.stderr)
+    if target and a.mode == "full" and a.host != "m4":
+        print("run_tests: --full --host runs only on the M4 (its testbed, in its GUI session); app-hosted tests "
+              "cannot start inside an ssh session elsewhere — type scripts/run_tests.sh --full on that Mac.",
+              file=sys.stderr)
         return 2
 
     # The commit: --ref, else HEAD of the checkout this script runs from.
@@ -1204,6 +1261,33 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     # Over ssh the host makes its own selection (and refuses an empty one); the corpus alone needs no host run.
     host_run = bool(target) and bool(a.kinds - {"corpus"})
 
+    # --full --host m4 (other hosts were refused above): the M4's testbed, waited on from here.
+    if target and a.mode == "full":
+        if not on_origin(base, sha):
+            print(f"run_tests: {ref_label} {sha[:9]} is not on origin — push it first (the M4 fetches from origin), "
+                  f"or pass --ref of a pushed commit", file=sys.stderr)
+            return 2
+        cmd = m4_full_cmd(SCRIPT_REPO or BASE_REPO, sha, a.force)
+        if a.dry_run:
+            print("+ " + " ".join(shlex.quote(x) for x in cmd))
+            return 0
+        out.plain(f"full · M4 · {ref_label} {sha[:9]} · m4_run.sh testbed: the full suite (~1 h), then corpus check "
+                  f"and proof over the whole real corpus (hours) · Ctrl-C stops the wait, not the M4's run")
+        if out.tty and not a.yes:
+            try:
+                countdown(out)
+            except KeyboardInterrupt:
+                out.plain("cancelled")
+                return 130
+        t0 = time.monotonic()
+        try:
+            lane, run_dir = run_m4_full(out, SCRIPT_REPO or BASE_REPO, sha, a.force)
+        except KeyboardInterrupt:
+            out.line("FAILED", "interrupted — the wait stopped; the testbed goes on on the M4 "
+                               "(scripts/m4_run.sh status --host m4)", "FAILED")
+            return 130
+        return summary(out, [lane], time.monotonic() - t0, run_dir)
+
     # Nothing to run: refused before anything is touched (no worktree, no lock, no run folder).
     if (not target and nothing_here(a, picks)) or (target and not host_run and not corpus_runs):
         if "corpus" in a.kinds and not (a.kinds - {"corpus"}):
@@ -1224,7 +1308,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 print("+ " + " ".join(shlex.quote(x) for x in copy) + f" < {SELF}")
                 print("+ " + " ".join(shlex.quote(x) for x in run))
             if corpus_runs:
-                print(f"+ scripts/corpus_run.sh run check --limit 10 --ref {sha} --wait")
+                print(f"+ scripts/corpus_run.sh run check --ref {sha} --smoke --wait")
             return 0
         out.plain(plan_line(a, host_label, ref_label, sha, picks, corpus_note, dirty))
         if out.tty and not a.yes:
@@ -1274,8 +1358,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         run_dir = runs / time.strftime("%Y%m%d-%H%M%S-corpus")
         run_dir.mkdir(parents=True, exist_ok=True)
         try:
-            lane = run_corpus(out, SCRIPT_REPO or BASE_REPO, sha, run_dir,
-                              a.verbose, 10 if a.mode == "smoke" else None)
+            lane = run_corpus(out, SCRIPT_REPO or BASE_REPO, sha, run_dir, a.verbose, a.mode == "smoke")
         except KeyboardInterrupt:
             out.line("FAILED", "interrupted — the corpus step is incomplete", "FAILED")
             return 130
@@ -1498,7 +1581,7 @@ def print_list(a, picks: List[Pick], sha: str, ref_label: str) -> int:
     if not a.stage_flags:
         print("# not in the default smoke: performance, stress (add --perf / --stress)")
     print("# not in v1: UI tests (need the GUI session; broken, GH #408) · the hallie stage (the hallie eval's)")
-    print("# corpus: only from the Ultra with --host m4 (corpus_run.sh run check --limit 10 --wait)")
+    print("# corpus: only from the Ultra with --host m4 (corpus_run.sh run check --smoke --wait)")
     return 0
 
 

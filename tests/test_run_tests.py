@@ -333,11 +333,28 @@ def test_app_tests_over_ssh_go_through_the_gui_domain():
 
 def test_the_corpus_call_keeps_ref_and_its_commit_together():
     # M4 smoke 2026-11-19: "--limit 10" was spliced between --ref and the commit → "m4_run: unexpected argument 10"
-    c = rt.corpus_cmd(Path("/r"), "abc123", 10)
+    c = rt.corpus_cmd(Path("/r"), "abc123", True)
     assert c[c.index("--ref") + 1] == "abc123"
-    assert c[c.index("--limit") + 1] == "10"
     assert c[-1] == "--wait" and c[2:4] == ["run", "check"]
-    assert "--limit" not in rt.corpus_cmd(Path("/r"), "abc123", None)
+    assert "--smoke" not in rt.corpus_cmd(Path("/r"), "abc123", False)
+
+
+def test_the_smoke_corpus_step_is_the_harness_stratified_smoke_not_the_first_n_files(monkeypatch, tmp_path):
+    # M4 2026-11-20: "--limit 10" took the first 10 files by SHA — 2.7 GB of tapes — and the smoke's
+    # corpus step ran 28 min (target: the whole smoke in 15). The harness's --smoke takes the smallest
+    # file per codec mix.
+    c = rt.corpus_cmd(Path("/r"), "abc123", True)
+    assert "--smoke" in c and "--limit" not in c
+    seen = {}
+
+    def fake_corpus(out, script_repo, sha_, run_dir, verbose, smoke):
+        seen["smoke"] = smoke
+        return rt.LaneResult("corpus", ran=True, passed=60, rc=0)
+    text, host_rc = host_summary_text(["--corpus"])
+    drive_remote(monkeypatch, tmp_path, ["--corpus", "--host", "m4", "--yes"], text, host_rc)
+    monkeypatch.setattr(rt, "run_corpus", fake_corpus)
+    assert rt.main(["--corpus", "--host", "m4", "--yes"]) == 0
+    assert seen["smoke"] is True
 
 
 def test_the_corpus_lane_counts_this_runs_files_and_stops_before_older_runs():
@@ -711,11 +728,67 @@ def test_corpus_from_a_mac_that_cannot_launch_it_is_refused(monkeypatch, tmp_pat
     assert "nothing to run here" in capsys.readouterr().err
 
 
-def test_full_with_host_is_refused_with_the_m4_door(monkeypatch, tmp_path, capsys):
+def test_full_with_a_host_other_than_the_m4_is_refused(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
     monkeypatch.setattr(rt, "git", lambda *a, **k: pytest.fail("git ran before the refusal"))
-    assert rt.main(["--full", "--host", "m4"]) == 2
-    assert "scripts/m4_run.sh suite --host m4 --ref <commit> --wait" in capsys.readouterr().err
+    for host in ("m5pro", "m1"):
+        assert rt.main(["--full", "--host", host]) == 2
+        assert "type scripts/run_tests.sh --full on that Mac" in capsys.readouterr().err
+
+
+TESTBED_GREEN = """m4_run: testbed on M4 at aaaaaaaaa
+  OUTCOME AMBER 2026-11-20 13:00:00 lane=testbed sha=aaaaaaaaa — suite GREEN · corpus check GREEN · corpus proof AMBER
+  testbed: AMBER at aaaaaaaaa — 3 lanes, wall 5199s
+    suite         GREEN   3246s  app 14152 passed, 0 failed, 67 skipped; core 2587 passed, 0 failed, 7 skipped
+    corpus check  GREEN    584s  6351 files
+"""
+
+
+def drive_m4_full(monkeypatch, tmp_path, text, rc, argv=("--full", "--host", "m4", "--yes")):
+    seen = {}
+
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        seen["cmd"], seen["budget"] = cmd, budget
+        for line in text.splitlines():
+            on_line(line)
+        return rc, 60.0
+    monkeypatch.setattr(rt, "git", fake_git_for("a" * 40))
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    monkeypatch.setattr(rt.subprocess, "Popen", lambda *a, **k: pytest.fail("ssh smoke started for --full"))
+    monkeypatch.setattr(rt, "run_corpus", lambda *a, **k: pytest.fail("the smoke corpus step ran for --full"))
+    return rt.main(list(argv)), seen
+
+
+def test_full_host_m4_runs_the_m4_testbed_and_counts_its_suite(monkeypatch, tmp_path, capsys):
+    # Rick 2026-11-20: "use the new scripts" — --full --host m4 was a refusal pointing at m4_run.sh.
+    code, seen = drive_m4_full(monkeypatch, tmp_path, TESTBED_GREEN, 0)
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("scripts/m4_run.sh") and cmd[2] == "testbed"
+    assert cmd[cmd.index("--ref") + 1] == "a" * 40 and cmd[cmd.index("--host") + 1] == "m4" and "--wait" in cmd
+    assert "--force" not in cmd
+    assert seen["budget"] >= 22500 + 2 * 21600, "the waiter would stop before m4_run.sh's own testbed budget"
+    o = capsys.readouterr().out
+    assert code == 0
+    assert "16739 tests" in o, o
+    assert "corpus proof AMBER" in o, "the testbed's own lines are not shown"
+
+
+def test_full_host_m4_red_busy_and_countless_runs_are_never_green(monkeypatch, tmp_path, capsys):
+    red = TESTBED_GREEN.replace("app 14152 passed, 0 failed", "app 14150 passed, 2 failed")
+    assert drive_m4_full(monkeypatch, tmp_path, red, 1)[0] == 1
+    assert drive_m4_full(monkeypatch, tmp_path, "m4_run: the testbed is busy\n", 3)[0] == 1
+    assert "busy" in capsys.readouterr().out
+    assert drive_m4_full(monkeypatch, tmp_path, "OUTCOME GREEN\n", 0)[0] == 1, "GREEN with no suite count"
+    code, seen = drive_m4_full(monkeypatch, tmp_path, TESTBED_GREEN, 0, ("--full", "--host", "m4", "--yes", "--force"))
+    assert "--force" in seen["cmd"]
+
+
+def test_full_host_m4_dry_run_prints_the_testbed_command(monkeypatch, tmp_path, capsys):
+    code, seen = drive_m4_full(monkeypatch, tmp_path, "", 0, ("--full", "--host", "m4", "--dry-run"))
+    assert code == 0 and not seen
+    assert "m4_run.sh testbed --host m4 --ref " + "a" * 40 + " --wait" in capsys.readouterr().out
 
 
 def test_a_bad_ref_says_unknown_ref_cleanly(monkeypatch, capsys):
