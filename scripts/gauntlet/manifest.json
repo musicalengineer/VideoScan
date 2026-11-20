@@ -34353,6 +34353,7 @@
         "test_2_a_run_folder_that_is_already_there_is_never_written_into",
         "test_2_an_aliased_m4run_or_out_folder_is_refused_by_the_shell_and_by_the_seal",
         "test_2_the_bounded_runner_never_appends_its_log_through_a_link",
+        "test_3_a_privacy_refusal_is_named_in_fixed_words_in_the_summary_and_status",
         "test_3_a_refusing_helpers_linked_summary_is_never_read_back",
         "test_3_a_summary_that_is_a_link_or_names_a_file_is_withheld_even_when_the_helper_finished",
         "test_3_an_out_file_with_a_second_name_is_never_emptied",

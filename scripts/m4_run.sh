@@ -739,7 +739,16 @@ host_corpus() {   # host_corpus <sha> <stamp>
             else
                 echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
             fi ;;
-        2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" >>"$OUT/summary.txt" ;;
+        2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" >>"$OUT/summary.txt"
+           # The one refusal Rick must act on at the M4 itself is named here, in fixed words matched
+           # on the access probe's own phrases; no text of the log is copied (#315-3).
+           if [ -f "$cout/corpus.log" ] && [ ! -L "$cout/corpus.log" ]; then
+               if grep -qF "macOS is waiting for permission to read the external volume" "$cout/corpus.log"; then
+                   echo "  the M4 is waiting for a privacy prompt on its screen: click Allow (Screen Sharing), or grant the corpus Python Removable Volumes / Full Disk Access in System Settings (path in corpus.log)" >>"$OUT/summary.txt"
+               elif grep -qF "macOS does not let this Python read the external volume" "$cout/corpus.log"; then
+                   echo "  macOS denied this Python access to the external volume: grant it Removable Volumes / Full Disk Access in System Settings on the M4 (path in corpus.log)" >>"$OUT/summary.txt"
+               fi
+           fi ;;
         124) ;;
         *) echo "corpus $CORPUS_LANE: RED the harness stopped (rc=$rc; see corpus.log on the M4)" >>"$OUT/summary.txt" ;;
     esac
