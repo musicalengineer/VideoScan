@@ -881,3 +881,22 @@ def test_the_caller_reads_a_hosts_not_ready_as_setup_not_red(monkeypatch, tmp_pa
     assert rt.remote_word(buf.getvalue()) == "NOT READY: setup"
     code, calls = drive_remote(monkeypatch, tmp_path, ["--host", "m4", "--yes"], buf.getvalue(), host_rc)
     assert calls["corpus"] == 1 and code == 1                    # the corpus still runs; the verdict is NOT READY
+
+
+def test_interrupt_summary_names_the_incomplete_lane_in_words():
+    """Live run 2026-11-19 (Ultra, Ctrl-C 75 s into the app lane) printed "interrupted ()",
+    "app: no test counted" after 174 tests ran, and "interrupted: interrupted"."""
+    buf = io.StringIO()
+    out = rt.Out(False, buf)
+    app = rt.LaneResult("app", ran=True, rc=-2)   # the stopped xcodebuild's exit
+    app.passed = 174
+    lanes = [app]
+    rt.mark_interrupted(out, lanes, KeyboardInterrupt())
+    code = rt.summary(out, lanes, 75.0, None)
+    text = buf.getvalue()
+    assert code == 130
+    assert "interrupted (Ctrl-C)" in text
+    assert "()" not in text
+    assert "no test counted" not in text
+    assert "interrupted: interrupted" not in text
+    assert "after 174 tests" in text
