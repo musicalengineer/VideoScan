@@ -3,9 +3,9 @@
 
 Why (Rick 2026-11-20: "2 hour testbeds in serial is not performant design"): the Python lane was one
 `pytest` process over every module — 37 min on the Ultra, 20 min on the M4 — with 30 / 16 cores idle.
-No new dependency (pytest-xdist is not installed on the fleet): modules are dealt to N shards, longest
-first by the last run's measured time per module (cache under ~/Library/Caches), each shard is one
-`pytest` process, and the shards run at once.
+No new dependency (pytest-xdist is not installed on the fleet): each module is one strand of
+scripts/testbed_strands.py — the testbed's one fan-out runner — N at a time, longest first by the
+last run's measured seconds, each in its own process group and TMPDIR.
 
 Output contract (scripts/script_tests_lane.py and run_tests.py read it): each failing shard's own
 output is printed whole; every FAILED / ERROR line is printed; the LAST line is pytest's own summary
@@ -17,59 +17,33 @@ usage: pytest_shards.py --python PY [--jobs N] [--timings FILE] [--] module...
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import testbed_strands as strands  # noqa: E402
 
 SUMMARY = re.compile(r"^=*\s*((?:\d+ [a-z]+(?: [a-z]+)?, )*\d+ [a-z]+(?: [a-z]+)?) in \d+(?:\.\d+)?s(?: \([\d:]+\))?\s*=*$")
 PART = re.compile(r"(\d+) ([a-z]+(?: [a-z]+)?)")
 NO_TESTS = re.compile(r"^=*\s*no tests ran\b")
 FAIL_LINE = re.compile(r"^(?:FAILED|ERROR) \S+")
+NO_TESTS_COLLECTED = 5                     # pytest's exit code when a file holds no test
 # pytest's own order for the summary words; anything else follows in the order first seen.
 ORDER = ["failed", "passed", "skipped", "deselected", "xfailed", "xpassed", "warnings", "warning", "error", "errors",
          "rerun", "subtests failed", "subtests passed", "subtests skipped"]
-DEFAULT_TIMINGS = Path.home() / "Library" / "Caches" / "videoscan-pytest-timings.json"
 
 
-def default_jobs() -> int:
-    """Half the cores (Rick 2026-11-20): leaves the machine room; at least 1."""
-    return max(1, (os.cpu_count() or 2) // 2)
-
-
-def load_timings(path: Path) -> Dict[str, float]:
-    try:
-        data = json.loads(path.read_text())
-        return {str(k): float(v) for k, v in data.items() if isinstance(v, (int, float))}
-    except (OSError, ValueError, AttributeError):
-        return {}
-
-
-def weight(module: str, timings: Dict[str, float]) -> float:
-    """Seconds the module took last time; unknown modules are weighed by size (~2 KB per second)
-    and never below the slowest known module's median, so a new big module is not packed last."""
-    if module in timings:
-        return timings[module]
+def estimate(module: str) -> float:
+    """First-run guess for a module with no measured time: ~2 KB of test source per second."""
     try:
         return max(os.path.getsize(module) / 2000.0, 1.0)
     except OSError:
         return 1.0
-
-
-def deal(modules: Sequence[str], jobs: int, timings: Dict[str, float]) -> List[List[str]]:
-    """Longest-processing-time-first: each module to the currently lightest shard. Deterministic
-    (ties by name). Never more shards than modules; empty shards are dropped."""
-    jobs = max(1, min(jobs, len(modules)))
-    bins: List[Tuple[float, int, List[str]]] = [(0.0, i, []) for i in range(jobs)]
-    for m in sorted(modules, key=lambda m: (-weight(m, timings), m)):
-        load, i, mods = min(bins, key=lambda b: (b[0], b[1]))
-        bins[i] = (load + weight(m, timings), i, mods + [m])
-    return [sorted(b[2]) for b in bins if b[2]]
 
 
 def summary_counts(text: str) -> Dict[str, int]:
@@ -103,81 +77,54 @@ def summary_line(total: Dict[str, int], seconds: float) -> str:
     return ", ".join(f"{total[k]} {k}" for k in keys) + f" in {seconds:.2f}s"
 
 
-def module_seconds(junit: Path) -> Dict[str, float]:
-    """Seconds per test file from a shard's junit xml (xunit1 carries the file attribute)."""
-    import xml.etree.ElementTree as ET
-    out: Dict[str, float] = {}
-    try:
-        root = ET.parse(str(junit)).getroot()
-    except (OSError, ET.ParseError):
-        return out
-    for case in root.iter("testcase"):
-        f = case.get("file")
-        if f:
-            out[f] = out.get(f, 0.0) + float(case.get("time") or 0.0)
-    return out
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--python", required=True)
-    ap.add_argument("--jobs", type=int, default=default_jobs())
-    ap.add_argument("--timings", type=Path, default=DEFAULT_TIMINGS)
+    ap.add_argument("--jobs", type=int, default=strands.default_jobs())
+    ap.add_argument("--timings", type=Path, default=strands.DEFAULT_TIMINGS)
     ap.add_argument("modules", nargs="+")
     a = ap.parse_args(argv)
 
-    timings = load_timings(a.timings)
-    shards = deal(a.modules, a.jobs, timings)
-    print(f"pytest shards: {len(shards)} at once over {len(a.modules)} modules "
-          f"(--jobs {a.jobs}; dealt by {'last run timings' if timings else 'file size'})", flush=True)
+    work = [strands.Strand(name=m, weight_key="pytest:" + m, estimate=estimate(m),
+                           cmd=[a.python, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", m])
+            for m in a.modules]
+    print(f"pytest strands: {len(work)} modules, {min(a.jobs, len(work))} at a time "
+          f"(scripts/testbed_strands.py; longest first by the last run)", flush=True)
     t0 = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="pytest-shards-") as tmp:
-        procs = []
-        for i, mods in enumerate(shards):
-            log = Path(tmp) / f"shard-{i}.log"
-            junit = Path(tmp) / f"shard-{i}.xml"
-            fh = open(log, "w")
-            cmd = [a.python, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "-o", "junit_family=xunit1",
-                   f"--junitxml={junit}", *mods]
-            procs.append((i, mods, log, junit, fh, subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT)))
-        results = []
-        try:
-            for i, mods, log, junit, fh, p in procs:
-                rc = p.wait()
-                fh.close()
-                results.append((i, mods, log.read_text(errors="replace"), junit, rc))
-        except KeyboardInterrupt:
-            for *_, p in procs:
-                p.terminate()
-            raise
+    with tempfile.TemporaryDirectory(prefix="pytest-strands-") as tmp:
+        results = strands.Runner(Path(tmp), jobs=a.jobs, timings_path=a.timings).run(work)
         elapsed = time.monotonic() - t0
-
-        counts, fails, worst = [], [], 0
-        new_timings = dict(timings)
-        for i, mods, text, junit, rc in results:
+        counts, fails, worst, empty = [], [], 0, []
+        for r in results:
+            text = r.text()
             c = summary_counts(text)
             counts.append(c)
-            new_timings.update(module_seconds(junit))
-            shard_fails = [l for l in text.splitlines() if FAIL_LINE.match(l)]
-            fails += shard_fails
-            if rc != 0:
-                worst = worst or rc
-                print(f"\n----- shard {i} exit {rc} ({len(mods)} modules) — its own output -----")
+            fails += [l for l in text.splitlines() if FAIL_LINE.match(l)]
+            if r.rc == NO_TESTS_COLLECTED and not r.timed_out:
+                # One file pytest found no test in (the tracked-file glob also matches helpers such as
+                # scripts/ci_test_verdict.py). Not a failure of that file; an import error is exit 2
+                # and stays RED, and a lane that ran no test at all is still RED by its total.
+                empty.append(r.strand.name)
+                continue
+            if not r.ok:
+                worst = worst or (r.rc if r.rc > 0 else 1)
+                why = "TIMEOUT" if r.timed_out else f"exit {r.rc}"
+                print(f"\n----- {r.strand.name}: {why} ({r.seconds:.1f}s) — its own output -----")
                 print(text.rstrip())
                 if not c:
-                    fails.append(f"ERROR shard-{i}: exit {rc} with no pytest summary")
-            else:
-                print(f"shard {i}: {summary_line(merge([c]), 0).rsplit(' in ', 1)[0]} ({len(mods)} modules)")
-        try:
-            a.timings.parent.mkdir(parents=True, exist_ok=True)
-            a.timings.write_text(json.dumps(new_timings, indent=0, sort_keys=True))
-        except OSError:
-            pass
+                    fails.append(f"ERROR {r.strand.name}: {why} with no pytest summary")
+    if empty:
+        print(f"no tests in {len(empty)} file(s): {', '.join(sorted(empty))}")
+    slowest = sorted(results, key=lambda r: -r.seconds)[:3]
+    print("slowest strands: " + ", ".join(f"{r.strand.name} {r.seconds:.0f}s" for r in slowest))
     if fails:
-        print("\nshort test summary (all shards)")
+        print("\nshort test summary (all strands)")
         for line in fails:
             print(line)
-    print(summary_line(merge(counts), elapsed), flush=True)
+    total = merge(counts)
+    print(summary_line(total, elapsed), flush=True)
+    if not worst and not total.get("passed"):
+        return 1                           # a lane that ran no test is red (CLAUDE.md rule 9)
     return worst
 
 
