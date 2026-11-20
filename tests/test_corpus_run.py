@@ -4440,6 +4440,17 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(json.loads((self.scene.report_dir(stamp='20261117_130000_2') / 'report.json').read_text())
                          ['launches_cut_short'], 0)
 
+    def test_a_run_with_a_launch_cut_short_is_never_the_baseline_implicit_or_accepted(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check', together_only=True)}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_AMBER)
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'x')
+        self.assertIn('a launch of files in flight together was cut short', str(refused.exception))
+        self.assertIsNone(cr.baseline_of(self.scene.seal, 'check')[0], 'never the implicit baseline either')
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=1), cr.EXIT_GREEN)
+        self.assertEqual(cr.baseline_of(self.scene.seal, 'check')[0].name, '20261117_130000_2', 'a clean run is')
+
     def test_what_a_dead_launch_left_in_the_work_folder_is_swept_before_the_next(self):
         self.scene.plan['litter'] = 'balanced-copy.partial'
         self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}

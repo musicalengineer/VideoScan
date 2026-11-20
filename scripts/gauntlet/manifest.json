@@ -34428,6 +34428,7 @@
         "test_a_ref_without_the_engine_says_so_and_builds_nothing",
         "test_a_refused_prepare_leaves_the_last_good_catalog_in_place",
         "test_a_relaunch_resumes_without_a_duplicate_or_a_gap",
+        "test_a_run_with_a_launch_cut_short_is_never_the_baseline_implicit_or_accepted",
         "test_a_run_without_the_external_volume_is_never_the_implicit_baseline",
         "test_a_smoke_run_is_labelled_never_accepted_and_never_the_implicit_baseline",
         "test_a_smoke_run_works_with_files_missing",

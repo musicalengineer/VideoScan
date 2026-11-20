@@ -2470,7 +2470,8 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
                      "accepted_by": who_word(record.get("accepted_by"))}, None
     for run, report in usable_runs(seal, lane):
         if (run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external")
-                and not report.get("problem_count") and not report.get("smoke") and report.get("files")):
+                and not report.get("problem_count") and not report.get("smoke") and not report.get("launches_cut_short")
+                and report.get("files")):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
     return None, {}, None
 
@@ -2706,6 +2707,9 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
         raise Refused(f"refused: the newest {lane} run was limited to {report['limit']} files — a partial run is never the baseline")
     if report.get("smoke"):
         raise Refused(f"refused: the newest {lane} run was a SMOKE run (a subset that proves the harness runs) — never the baseline")
+    if report.get("launches_cut_short"):
+        raise Refused(f"refused: in the newest {lane} run a launch of files in flight together was cut short "
+                      f"({report['launches_cut_short']}) — an AMBER finding is never the baseline; run it again")
     if report.get("not_run_external"):
         raise Refused(f"refused: the newest {lane} run did not run {report['not_run_external']} files (the external volume "
                       "was not mounted) — a partial run is never the baseline")
