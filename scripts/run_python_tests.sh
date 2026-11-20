@@ -144,4 +144,8 @@ fi
 # a test that starts skipping everywhere is indistinguishable from a
 # passing one in a bare summary line.
 echo
-"$PYTHON" -m pytest -q -rs "${MODULES[@]}"
+# Shards (2026-11-20, Rick: "N == 1 does not sound good"): the modules run as N concurrent pytest
+# processes, N = half the cores unless PYTEST_JOBS says otherwise (PYTEST_JOBS=1: one process, as
+# before). scripts/pytest_shards.py prints each failing shard whole, every FAILED/ERROR line, and a
+# last line in pytest's own summary grammar summed over the shards (script_tests_lane.py reads it).
+"$PYTHON" "$REPO_ROOT/scripts/pytest_shards.py" --python "$PYTHON" ${PYTEST_JOBS:+--jobs "$PYTEST_JOBS"} -- "${MODULES[@]}"
