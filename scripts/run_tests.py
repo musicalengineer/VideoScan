@@ -16,8 +16,11 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     new test file joins the day the manifest lists it. UI tests are left out (they need the
     GUI session and are broken, GH #408); the hallie stage is the hallie eval's, not a smoke.
     `--full` delegates to what the nightly runs: scripts/nightly_local_tests.sh --on-demand
-    (app + Core, Release) and scripts/run_python_tests.sh — or, for --host m4 from another Mac,
-    scripts/m4_run.sh suite --wait (the same runner, in the M4's GUI session).
+    (app + Core, Release) and scripts/run_python_tests.sh (PYTHON= an interpreter with pytest),
+    on THIS Mac only. `--full --host <another Mac>` is refused (exit 2): app-hosted tests cannot
+    start inside an ssh session, and the M4 already has the right door — scripts/m4_run.sh suite
+    --host m4 --ref <sha> --wait (the same runner, in the M4's GUI session); on any other Mac, type
+    run_tests.sh --full there. A stage flag with --full is refused too (--full runs every stage).
   * display — a googletest-style stream: [ RUN ] / [ OK ] / [ FAILED ] / [ SKIPPED ] per test
     with --verbose (coloured on a TTY), one line per lane otherwise plus a live [ n/N ] counter.
     The parser reads the three line shapes our runners print (XCTest, Swift Testing, pytest -v)
@@ -32,30 +35,55 @@ rule 11; tests have been seen writing into a checkout, GH #495). A dirty side wo
 
 Corpus lane: only from the Ultra with --host m4 (scripts/corpus_run.sh run check --limit 10
 --wait); elsewhere it says NOT RUN and why. Only the harness's own summary lines are shown.
+`--corpus --host m4` alone runs the corpus lane only (no host smoke). A selection with nothing to
+run on this Mac (e.g. --corpus without --host m4) is refused before anything is touched (exit 2).
 
-Exit: 0 every lane that ran is green · 1 a failure, or a lane that ran zero tests, or nothing
-ran · 2 usage (also: a --host ref that is not on origin) · 3 busy (the M4 testbed lock, another
-run_tests on this Mac, or the M4's nightly window without --force).
+Verdict: a lane is GREEN only with no failure, exit 0, at least one test, and at least half of the
+tests its selection planned (a filter that matches nothing exits 0: "selection shrank"). A lane
+past its budget is stopped (its process group: TERM, then KILL) and RED, whether or not it prints.
+
+Preflight (on the Mac that runs the lanes, before the worktree or a build): the tools the
+selected lanes need — the Metal Toolchain (`xcrun metal --version`; app), ffmpeg + ffprobe (app,
+Core, Python), node (Python), a Python with pytest (Python) — probed with /opt/homebrew/bin first
+on PATH (an ssh session may not have it). Anything missing is one block ("RicksM5 is missing: …"
+with the install command); the lanes that need it are NOT RUN (setup), the others still run, and
+the verdict is "NOT READY: setup" (exit 1) unless a lane that ran is RED.
+
+Stopping: Ctrl-C, SIGHUP (a dropped ssh session) and SIGTERM all take the same path — the running
+child's process group is stopped (or, over ssh, its one LaunchAgent job booted out) before exit.
+
+Exit: 0 every lane that ran is green · 1 a failure, or a lane that ran zero tests (or under half
+its selection), or nothing ran, or NOT READY: setup · 2 usage (also: a --host ref that is not on origin, nothing to run
+here, --full with --host or a stage flag) · 3 busy (the M4 testbed lock, another run_tests on this
+Mac, or the M4's nightly window without --force) · 130 interrupted (the caller of a --host run
+then skips its corpus step, as it does on 2 and 3).
 
 Memory: output is streamed line by line; held are the failure names and one message line each
 (≤ 300 chars), and the selection (a few hundred short records). Worst case a few MB.
-Disk: one run folder of raw logs per run under ~/Library/Caches/videoscan-runall/runs (newest
-20 kept), one Debug DerivedData (~15 GB), the side worktree and its SwiftPM .build.
+Disk: one run folder of raw logs per run (and per caller-side corpus step) under
+~/Library/Caches/videoscan-runall/runs (newest 20 kept), one Debug DerivedData (~15 GB), with
+--full also the nightly runner's Release DerivedData + Core scratch (videoscan-runall-dd-full,
+~7 GB), the side worktree and its SwiftPM .build.
+The reader thread's line queue is bounded (QUEUE_LINES lines, ~a few MB at worst).
 
 Tests: tests/test_run_tests.py.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
+import queue
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +121,8 @@ NOT_HERE_RE = re.compile(r"opt-in|TSan|SANITIZER|real run|real-data|real catalog
                          r"POI profiles|phase 2|LiveCatalogCopy|live catalog", re.I)
 
 LANE_BUDGET = {"app": 3600, "core": 3600, "python": 1800, "build": 3600, "corpus": 7200}
+SHRANK = 0.5               # a lane that ran under half of the tests its selection planned is RED
+QUEUE_LINES = 10000        # the reader thread's queue bound: the child blocks, nothing is dropped
 
 
 # ───────────────────────────────────────────────────────────── arguments
@@ -105,11 +135,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="run_tests.sh", description="Smoke or full test run, narrated live.")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--smoke", action="store_true", help="a few suites per module and stage (default)")
-    mode.add_argument("--full", action="store_true", help="everything, by the nightly's own runners")
-    for f in ("unit", "regression", "integration", "perf", "stress", "python", "corpus"):
-        ap.add_argument(f"--{f}", action="store_true")
+    mode.add_argument("--full", action="store_true",
+                      help="everything, by the nightly's own runners, on this Mac (not with --host or a stage flag)")
+    for f, h in (("unit", "only the unit stage (with the Swift lanes)"),
+                 ("regression", "only the regression stage (with the Swift lanes)"),
+                 ("integration", "only the integration stage (with the Swift lanes)"),
+                 ("perf", "the performance stage (left out of the default smoke)"),
+                 ("stress", "the stress stage (left out of the default smoke)"),
+                 ("python", "the Python lane (alone, or with the stage flags given)"),
+                 ("corpus", "the M4 corpus check (only from the Ultra with --host m4)")):
+        ap.add_argument(f"--{f}", action="store_true", help=h)
     ap.add_argument("--verbose", "-v", action="store_true", help="one line per test")
-    ap.add_argument("--host", choices=sorted(HOSTS), default=None)
+    ap.add_argument("--host", choices=sorted(HOSTS), default=None, help="run on that fleet Mac (default: this one)")
     ap.add_argument("--ref", default=None, help="commit to test (default: HEAD of this checkout)")
     ap.add_argument("--list", action="store_true", help="print the selection and stop")
     ap.add_argument("--dry-run", action="store_true", help="print what would run and stop")
@@ -123,6 +160,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     a.stages = [STAGE_FLAGS[f] for f in STAGE_FLAGS if getattr(a, f)] or \
         (list(STAGES) if a.mode == "full" else list(SMOKE_STAGES))
     a.stage_flags = any(getattr(a, f) for f in STAGE_FLAGS)
+    if a.full and a.stage_flags:
+        ap.error("--full runs every stage; a stage flag (--unit, --regression, …) narrows a --smoke only")
     # Kinds: --python / --corpus pick those; with a stage flag the Swift lanes come too.
     if a.python or a.corpus:
         kinds = set()
@@ -413,16 +452,23 @@ class LaneResult:
     seconds: float = 0.0
     reason: str = ""                       # why NOT RUN, or why RED beyond the counts
     failures: List[Event] = field(default_factory=list)
+    expected: int = 0                      # tests the selection planned (0: unknown, no floor)
+    setup: List[str] = field(default_factory=list)   # missing tools (preflight): NOT RUN, not RED
 
     @property
     def total(self) -> int:
         return self.passed + self.failed + self.skipped
 
     @property
+    def shrank(self) -> bool:
+        return self.expected > 0 and self.total < self.expected * SHRANK
+
+    @property
     def word(self) -> str:
         if not self.ran:
             return "NOT RUN"
-        if self.failed or self.passed == 0 or (self.rc not in (0, None) and not self.reason.startswith("amber")):
+        if self.failed or self.passed == 0 or self.shrank or \
+                (self.rc not in (0, None) and not self.reason.startswith("amber")):
             return "RED"
         return "GREEN"
 
@@ -432,7 +478,11 @@ def verdict(lanes: Sequence[LaneResult]) -> Tuple[int, str]:
     A lane that ran zero tests is RED (CLAUDE.md: a zero-test run is red); a lane that
     did not run is NOT RUN, never green — and if nothing ran the run is RED."""
     ran = [l for l in lanes if l.ran]
-    if not ran or any(l.word == "RED" for l in ran):
+    if any(l.word == "RED" for l in ran):
+        return 1, "RED"
+    if any(l.setup for l in lanes):
+        return 1, "NOT READY: setup"       # a missing tool is the Mac's setup, not a test failure
+    if not ran:
         return 1, "RED"
     return 0, "GREEN"
 
@@ -509,7 +559,7 @@ def fmt_secs(s: float) -> str:
 
 class Out:
     COLORS = {"OK": "\033[32m", "FAILED": "\033[31m", "SKIPPED": "\033[33m", "GREEN": "\033[32m",
-              "RED": "\033[31m", "NOT RUN": "\033[33m", "BUILD": "\033[36m"}
+              "RED": "\033[31m", "NOT RUN": "\033[33m", "BUILD": "\033[36m", "NOT READY: setup": "\033[33m"}
 
     def __init__(self, verbose: bool, stream=None) -> None:
         self.s = stream or sys.stdout
@@ -578,6 +628,26 @@ def gui_plist(label: str, args: List[str], env: Dict[str, str], cwd: str) -> str
             "</dict></plist>\n")
 
 
+@contextlib.contextmanager
+def stop_signals():
+    """While inside: SIGHUP (a dropped ssh session) and SIGTERM (`kill`) raise KeyboardInterrupt, so
+    they take the same stop() path as Ctrl-C instead of ending the runner with its child (its own
+    session, start_new_session) still running. Restored on the way out. signal.signal works on the
+    main thread only; elsewhere this is a no-op. (C++: an RAII guard around sigaction.)"""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt(signal.Signals(signum).name)
+    old = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGHUP, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
+
+
 class Runner:
     gui_label: Optional[str] = None
 
@@ -589,7 +659,18 @@ class Runner:
                parser: Optional[LineParser] = None, on_line=None, lane: Optional[LaneResult] = None,
                gui: bool = False) -> Tuple[int, float]:
         """Run cmd in its own process group, raw output to <run>/<log>, each line parsed live.
-        Past the budget the group gets TERM, then KILL (our own child only). Exit 124 on timeout."""
+        Past the budget the group gets TERM, then KILL (our own child only), printing or not: a
+        reader thread feeds a bounded queue and this thread waits on it with the deadline as its
+        timeout. Exit 124 on timeout. Any exception here (Ctrl-C, HUP/TERM via stop_signals, a
+        broken stdout pipe) stops the child before it propagates."""
+        with stop_signals():
+            try:
+                return self._stream(cmd, log_name, budget, cwd, parser, on_line, lane, gui)
+            except BaseException:
+                self.stop()
+                raise
+
+    def _stream(self, cmd, log_name, budget, cwd, parser, on_line, lane, gui) -> Tuple[int, float]:
         t0 = time.monotonic()
 
         def handle(raw: str) -> None:
@@ -615,16 +696,39 @@ class Runner:
                                       text=True, encoding="utf-8", errors="replace", bufsize=1)
         timed_out = False
         deadline = t0 + budget
-        assert self.child.stdout is not None
-        for raw in self.child.stdout:
-            log.write(raw)
-            handle(raw)
-            if time.monotonic() > deadline:
-                timed_out = True
-                self.stop()
-                break
-        rc = self.child.wait()
-        log.close()
+        child = self.child
+        stdout = child.stdout
+        assert stdout is not None
+        lines: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=QUEUE_LINES)
+
+        def read() -> None:                      # EOF (the child and its group gone) → None
+            try:
+                for raw in stdout:
+                    lines.put(raw)
+            except (OSError, ValueError):
+                pass
+            lines.put(None)
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    timed_out = True
+                    self.stop()
+                    break
+                try:
+                    raw = lines.get(timeout=min(left, 1.0))
+                except queue.Empty:
+                    continue
+                if raw is None:
+                    break
+                log.write(raw)
+                handle(raw)
+            rc = child.wait()
+        finally:
+            log.close()
+        reader.join(2)
         self.child = None
         return (124 if timed_out else rc), time.monotonic() - t0
 
@@ -680,18 +784,20 @@ class Runner:
         return rc, time.monotonic() - t0
 
     def stop(self) -> None:
+        """Idempotent: our one LaunchAgent job, or our child's process group (TERM, then KILL)."""
         if getattr(self, "gui_label", None):
             subprocess.run(["launchctl", "bootout", self.gui_label], capture_output=True)
             self.gui_label = None
-        if self.child is None:
+        child, self.child = self.child, None
+        if child is None:
             return
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
-                os.killpg(self.child.pid, sig)
+                os.killpg(child.pid, sig)
             except OSError:
                 return
             try:
-                self.child.wait(timeout=10)
+                child.wait(timeout=10)
                 return
             except subprocess.TimeoutExpired:
                 continue
@@ -712,6 +818,56 @@ def python_for_tests(repos: Sequence[Path]) -> Tuple[Optional[List[str]], str]:
     return None, f"no pytest in {', '.join(dict.fromkeys(cands))} (scripts/install_dev_tools.sh makes venv/)"
 
 
+PROBE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# tool → (the lanes that need it, how to get it). Lane names are run_lanes' (app, core, python).
+TOOLS = {
+    "metal": (("app",), "Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"),
+    "ffmpeg": (("app", "core", "python"), "ffmpeg (brew install ffmpeg)"),
+    "ffprobe": (("app", "core", "python"), "ffprobe (brew install ffmpeg)"),
+    "node": (("python",), "node (brew install node)"),
+    "pytest": (("python",), "a Python with pytest (scripts/install_dev_tools.sh makes venv/)"),
+}
+
+
+def preflight(lanes: set, env: Dict[str, str], which=shutil.which, run=subprocess.run,
+              find_python=None) -> Dict[str, List[str]]:
+    """{lane: [what is missing]} for the lanes about to run (app, core, python), probed on THIS Mac
+    with /opt/homebrew/bin first. Cheap: a few `which` lookups and one `xcrun metal --version`."""
+    path = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", PROBE_PATH)
+    probe_env = dict(env, PATH=path)
+    missing: List[str] = []
+    if "app" in lanes:
+        try:
+            ok = run(["xcrun", "metal", "--version"], capture_output=True, env=probe_env,
+                     stdin=subprocess.DEVNULL, timeout=60).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        if not ok:
+            missing.append("metal")
+    for tool in ("ffmpeg", "ffprobe", "node"):
+        if lanes & set(TOOLS[tool][0]) and not which(tool, path=path):
+            missing.append(tool)
+    if "python" in lanes:
+        interp, _ = (find_python or python_for_tests)([SCRIPT_REPO or BASE_REPO, BASE_REPO])
+        if interp is None:
+            missing.append("pytest")
+    out: Dict[str, List[str]] = {}
+    for tool in missing:
+        for lane in TOOLS[tool][0]:
+            if lane in lanes:
+                out.setdefault(lane, []).append(TOOLS[tool][1])
+    return out
+
+
+def missing_block(host: str, missing: Dict[str, List[str]]) -> str:
+    items = list(dict.fromkeys(x for xs in missing.values() for x in xs))
+    return f"{host} is missing: " + ", ".join(items) + f" — lanes NOT RUN (setup): {', '.join(sorted(missing))}"
+
+
+def setup_lane(name: str, missing: List[str]) -> LaneResult:
+    return LaneResult(name, reason="setup: missing " + ", ".join(missing), setup=list(missing))
+
+
 def corpus_applies(target_host: Optional[str], local_key: Optional[str]) -> Tuple[bool, str]:
     if target_host == "m4" and local_key == "ultra":
         return True, ""
@@ -725,7 +881,10 @@ def prune_runs(root: Path, keep: int = KEEP_RUNS) -> None:
         shutil.rmtree(p, ignore_errors=True)          # our own raw logs only, never media or a checkout
 
 
-def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Path, header: str) -> List[LaneResult]:
+def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Path, header: str,
+              missing: Optional[Dict[str, List[str]]] = None) -> List[LaneResult]:
+    """The smoke lanes. `missing` (preflight): a lane named there is NOT RUN (setup), the rest run."""
+    missing = missing or {}
     env = dict(os.environ)
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
     r = Runner(out, run_dir, env)
@@ -736,7 +895,9 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
     out.expected = sum(p.tests for p in picks)
     out.line("==========", header)
     try:
-        if "app" in a.kinds:
+        if "app" in a.kinds and app and "app" in missing:
+            lanes.append(setup_lane("app", missing["app"]))
+        elif "app" in a.kinds:
             lane = LaneResult("app")
             lanes.append(lane)
             if not app:
@@ -752,11 +913,13 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                     out.line("BUILD", f"VideoScan Debug build-for-testing {'.' * 8} {fmt_secs(el)}", "BUILD")
                     suites = sorted({s for p in app for s in p.suites})
                     out.line("RUN", f"app {'+'.join(a.stages_label)} ({len(suites)} suites, ~{sum(p.tests for p in app)} tests)")
-                    lane.ran = True
+                    lane.ran, lane.expected = True, sum(p.tests for p in app)
                     lane.rc, lane.seconds = r.stream(app_test_cmd(wt, suites), "app-test.log", LANE_BUDGET["app"],
                                                      parser=LineParser(), lane=lane, gui=True)
                     lane_end(out, lane, run_dir / "app-test.log")
-        if "core" in a.kinds:
+        if "core" in a.kinds and core and "core" in missing:
+            lanes.append(setup_lane("core", missing["core"]))
+        elif "core" in a.kinds:
             lane = LaneResult("core")
             lanes.append(lane)
             if not core:
@@ -764,7 +927,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
             else:
                 suites = sorted({s for p in core for s in p.suites})
                 out.line("RUN", f"core swift test, Debug ({len(suites)} suites, ~{sum(p.tests for p in core)} tests; builds first)")
-                lane.ran = True
+                lane.ran, lane.expected = True, sum(p.tests for p in core)
                 t_build = time.monotonic()
                 seen = {"started": False}
 
@@ -775,7 +938,9 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 lane.rc, lane.seconds = r.stream(core_cmd(wt, suites), "core.log", LANE_BUDGET["core"],
                                                  parser=LineParser(), lane=lane, on_line=mark)
                 lane_end(out, lane, run_dir / "core.log")
-        if "python" in a.kinds:
+        if "python" in a.kinds and py and "python" in missing:
+            lanes.append(setup_lane("python", missing["python"]))
+        elif "python" in a.kinds:
             lane = LaneResult("python")
             lanes.append(lane)
             pyfiles = [p.path for p in py if p.kind == "python"]
@@ -785,7 +950,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
             elif interp is None:
                 lane.reason = why
             else:
-                lane.ran = True
+                lane.ran, lane.expected = True, sum(p.tests for p in py if p.kind == "python")
                 out.line("RUN", f"python pytest via {interp[0]} ({len(pyfiles)} files, "
                                 f"~{sum(p.tests for p in py if p.kind == 'python')} tests)")
                 lane.rc, lane.seconds = r.stream(pytest_cmd(interp, pyfiles), "python.log", LANE_BUDGET["python"],
@@ -810,9 +975,9 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                         sl.failures.append(ev)
                     out.event(ev)
                 lane_end(out, sl, run_dir / "shell.log")
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as e:
         r.stop()
-        out.line("FAILED", "interrupted (Ctrl-C) — the run is incomplete", "FAILED")
+        out.line("FAILED", f"interrupted ({e or 'Ctrl-C'}) — the run is incomplete", "FAILED")
         lanes.append(LaneResult("interrupted", ran=True, rc=130, reason="interrupted"))
     return lanes
 
@@ -823,6 +988,9 @@ def lane_end(out: Out, lane: LaneResult, log: Path) -> None:
         extra = f", exit {lane.rc}" + (" (timed out)" if lane.rc == 124 else "")
     if lane.total == 0:
         extra += " — ZERO tests ran (red)"
+    elif lane.shrank:
+        lane.reason = lane.reason or f"selection shrank: ran {lane.total} of ~{lane.expected}"
+        extra += f" — selection shrank: ran {lane.total} of ~{lane.expected} (red)"
     out.line("----------", f"{lane.name}: {lane.passed} passed, {lane.failed} failed, {lane.skipped} skipped"
                            f"{extra} ({fmt_secs(lane.seconds)})", lane.word)
     if lane.word == "RED" and not lane.failed:
@@ -848,6 +1016,8 @@ def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional
             out.line("FAILED", f"{l.name}: {l.reason or 'no test counted'}", "FAILED")
     if run_dir is not None:
         out.plain(f"logs: {run_dir}")
+    if any(l.name == "interrupted" for l in lanes):
+        return 130                         # the --host caller skips its corpus step on this
     return code
 
 
@@ -861,7 +1031,14 @@ def corpus_cmd(script_repo: Path, sha: str, limit: Optional[int]) -> List[str]:
             + (["--limit", str(limit)] if limit else []) + ["--wait"])
 
 
-REMOTE_TOTAL = re.compile(r"\[==========\] (GREEN|RED) · [^\n]*?· (\d+) tests · ")
+REMOTE_TOTAL = re.compile(r"\[==========\] (GREEN|RED|NOT READY: setup) · [^\n]*?· (\d+) tests · ")
+
+
+def remote_word(text: str) -> str:
+    """The host's own verdict word from its last ==== line ("" when there is none)."""
+    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text).replace("\r", "\n")
+    ms = list(REMOTE_TOTAL.finditer(clean))
+    return ms[-1].group(1) if ms else ""
 
 
 def remote_counts(text: str) -> Tuple[int, int, List[str]]:
@@ -935,10 +1112,10 @@ def on_origin(repo: Path, sha: str) -> bool:
 
 def plan_line(a, host_label: str, ref_label: str, sha: str, picks: List[Pick], corpus_note: str, dirty: bool) -> str:
     kinds = [k for k in ("app", "core", "python") if k in a.kinds]
-    n = sum(p.tests for p in picks)
+    n = f"~{sum(p.tests for p in picks)} tests" if a.mode == "smoke" else "all suites (nightly runners)"
     est = "~10 min with a warm build" if a.mode == "smoke" else "1–2 h"
     s = (f"{a.mode} · {host_label} · {ref_label} {sha[:9]} · {', '.join(kinds) or '—'}"
-         f"{f' ({corpus_note})' if corpus_note else ''} · ~{n} tests · {est}")
+         f"{f' ({corpus_note})' if corpus_note else ''} · {n} · {est}")
     if a.mode == "smoke" and not a.stage_flags:
         s += " · perf/stress left out (--perf --stress)"
     if dirty:
@@ -952,6 +1129,20 @@ def countdown(out: Out, secs: int = 5) -> None:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # HUP/TERM become KeyboardInterrupt for the whole run: every path that handles Ctrl-C
+    # (the countdown, the lanes, the ssh caller) handles a dropped session and `kill` the same way.
+    with stop_signals():
+        return _main(argv)
+
+
+def nothing_here(a, picks: List[Pick]) -> bool:
+    """True when this Mac's own lanes would run nothing (corpus is never a local lane)."""
+    if a.mode == "full":
+        return not (a.kinds & {"app", "core", "python"})
+    return not picks
+
+
+def _main(argv: Optional[Sequence[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # --ref-label is internal (the ssh caller passes the name the user typed)
     ref_label = None
@@ -967,14 +1158,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     target = None if a.on_host else ssh_target(a.host, None)
     base = BASE_REPO if (a.on_host or SCRIPT_REPO is None) else SCRIPT_REPO
 
+    if target and a.mode == "full":
+        print("run_tests: --full runs on this Mac only (app-hosted tests cannot start inside an ssh session). "
+              "For the M4: scripts/m4_run.sh suite --host m4 --ref <commit> --wait (the same nightly runner, in "
+              "its GUI session); for another Mac: type scripts/run_tests.sh --full on that Mac.", file=sys.stderr)
+        return 2
+
     # The commit: --ref, else HEAD of the checkout this script runs from.
+    if not a.on_host:
+        git(base, "fetch", "-q", "origin", check=False)
+    ref = a.ref or "HEAD"
     try:
-        if not a.on_host:
-            git(base, "fetch", "-q", "origin", check=False)
-        ref = a.ref or "HEAD"
         sha = resolve(base, ref)
-    except Refused as e:
-        print(f"run_tests: cannot resolve the ref: {e}", file=sys.stderr)
+    except Refused:
+        print(f"run_tests: unknown ref {ref}", file=sys.stderr)
         return 2
     if ref_label is None:
         ref_label = ref if a.ref else (git(base, "rev-parse", "--abbrev-ref", "HEAD", check=False) or "HEAD")
@@ -990,21 +1187,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     effective_host = a.host or local_key
     corpus_ok, corpus_why = corpus_applies(effective_host, local_key if not a.on_host else None)
+    corpus_runs = bool(target) and corpus_ok and "corpus" in a.kinds
     corpus_note = ""
     if "corpus" in a.kinds and not a.on_host:
-        corpus_note = "corpus on the M4 after" if corpus_ok else f"corpus: NOT RUN — {corpus_why}"
+        corpus_note = "corpus on the M4 after" if corpus_runs else f"corpus: NOT RUN — {corpus_why}"
     host_label = HOST_NAMES.get(a.host, a.host) if target else local_name
+    # Over ssh the host makes its own selection (and refuses an empty one); the corpus alone needs no host run.
+    host_run = bool(target) and bool(a.kinds - {"corpus"})
+
+    # Nothing to run: refused before anything is touched (no worktree, no lock, no run folder).
+    if (not target and nothing_here(a, picks)) or (target and not host_run and not corpus_runs):
+        if "corpus" in a.kinds and not (a.kinds - {"corpus"}):
+            why = "corpus runs only on the M4 (--host m4, from the Ultra)"
+        else:
+            why = f"the selection is empty at {sha[:9]} ({', '.join(sorted(a.kinds))}; {', '.join(a.stages)})"
+        print(f"run_tests: nothing to run here: {why}", file=sys.stderr)
+        return 2
 
     if target:
-        if not on_origin(base, sha):
+        if host_run and not on_origin(base, sha):
             print(f"run_tests: {ref_label} {sha[:9]} is not on origin — push it first (the {HOST_NAMES[a.host]} "
                   f"fetches from origin), or pass --ref of a pushed commit", file=sys.stderr)
             return 2
         copy, run = remote_commands(target, sha, ref_label, argv)
         if a.dry_run:
-            print("+ " + " ".join(shlex.quote(x) for x in copy) + f" < {SELF}")
-            print("+ " + " ".join(shlex.quote(x) for x in run))
-            if corpus_ok and "corpus" in a.kinds:
+            if host_run:
+                print("+ " + " ".join(shlex.quote(x) for x in copy) + f" < {SELF}")
+                print("+ " + " ".join(shlex.quote(x) for x in run))
+            if corpus_runs:
                 print(f"+ scripts/corpus_run.sh run check --limit 10 --ref {sha} --wait")
             return 0
         out.plain(plan_line(a, host_label, ref_label, sha, picks, corpus_note, dirty))
@@ -1013,49 +1223,64 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 countdown(out)
             except KeyboardInterrupt:
                 out.plain("cancelled")
-                return 1
+                return 130
         t0 = time.monotonic()
-        with open(SELF, "rb") as fh:
-            p = subprocess.run(copy, stdin=fh)
-        if p.returncode != 0:
-            print(f"run_tests: cannot reach {target} over ssh (exit {p.returncode}). If the key is refused: "
-                  f"ssh-copy-id {target}", file=sys.stderr)
-            return 1
-        # Stream the host's bytes as they come (the live [ n/N ] counter has no newline), keeping
-        # the tail to read the host's own total. Memory: the last 256 KB.
-        proc = subprocess.Popen(run, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        tail = b""
-        assert proc.stdout is not None
-        try:
-            while True:
-                chunk = os.read(proc.stdout.fileno(), 65536)
-                if not chunk:
-                    break
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
-                tail = (tail + chunk)[-262144:]
-            rc = proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()                 # ssh: the host side gets a hangup and stops its own children
-            proc.wait()
-            return 1
-        if not (corpus_ok and "corpus" in a.kinds):
-            return rc
+        rc, tail = 0, b""
+        if host_run:
+            with open(SELF, "rb") as fh:
+                p = subprocess.run(copy, stdin=fh)
+            if p.returncode != 0:
+                print(f"run_tests: cannot reach {target} over ssh (exit {p.returncode}). If the key is refused: "
+                      f"ssh-copy-id {target}", file=sys.stderr)
+                return 1
+            # Stream the host's bytes as they come (the live [ n/N ] counter has no newline), keeping
+            # the tail to read the host's own total. Memory: the last 256 KB.
+            proc = subprocess.Popen(run, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            assert proc.stdout is not None
+            try:
+                while True:
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+                    tail = (tail + chunk)[-262144:]
+                rc = proc.wait()
+            except KeyboardInterrupt:
+                # With `ssh -t` the local tty is raw, so a Ctrl-C usually reaches the HOST runner, not
+                # this one; here when this side gets HUP/TERM. Ending ssh closes the host's pty, the host
+                # runner gets SIGHUP and stops its own child (stop_signals → Runner.stop).
+                proc.terminate()
+                proc.wait()
+                return 130
+            # 130 interrupted, 3 busy, 2 refused: the user did not get the run they asked for —
+            # never go on to start the corpus lane on the M4.
+            if rc in (2, 3, 130) or not corpus_runs:
+                return rc
         # The corpus lane, from this Mac (corpus_run.sh is launched from the Ultra), after the
         # remote run released the M4's testbed lock.
-        CACHE.mkdir(parents=True, exist_ok=True)
-        run_dir = CACHE / "runs" / time.strftime("%Y%m%d-%H%M%S-corpus")
+        runs = CACHE / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        prune_runs(runs, KEEP_RUNS - 1)
+        run_dir = runs / time.strftime("%Y%m%d-%H%M%S-corpus")
         run_dir.mkdir(parents=True, exist_ok=True)
-        lane = run_corpus(out, SCRIPT_REPO or BASE_REPO, sha, run_dir,
-                          a.verbose, 10 if a.mode == "smoke" else None)
+        try:
+            lane = run_corpus(out, SCRIPT_REPO or BASE_REPO, sha, run_dir,
+                              a.verbose, 10 if a.mode == "smoke" else None)
+        except KeyboardInterrupt:
+            out.line("FAILED", "interrupted — the corpus step is incomplete", "FAILED")
+            return 130
         if not lane.ran:
             out.line("NOT RUN", f"corpus: {lane.reason}", "NOT RUN")
-        if rc == 3:
-            return 3
-        n, nf, names = remote_counts(tail.decode("utf-8", "replace"))
-        host_lane = LaneResult(f"{HOST_NAMES[a.host]} smoke", ran=True, passed=max(n - nf, 0), failed=nf, rc=rc,
-                               reason=f"exit {rc}", failures=[Event("FAILED", x) for x in names])
-        return summary(out, [host_lane, lane], time.monotonic() - t0, run_dir)
+        lanes = [lane]
+        if host_run and remote_word(tail.decode("utf-8", "replace")) == "NOT READY: setup" \
+                and not remote_counts(tail.decode("utf-8", "replace"))[1]:
+            lanes.insert(0, setup_lane(f"{HOST_NAMES[a.host]} smoke", ["tools (the host's block above)"]))
+        elif host_run:
+            n, nf, names = remote_counts(tail.decode("utf-8", "replace"))
+            lanes.insert(0, LaneResult(f"{HOST_NAMES[a.host]} smoke", ran=True, passed=max(n - nf, 0), failed=nf,
+                                       rc=rc, reason=f"exit {rc}", failures=[Event("FAILED", x) for x in names]))
+        return summary(out, lanes, time.monotonic() - t0, run_dir)
 
     # ── on this Mac ──
     if a.dry_run:
@@ -1085,6 +1310,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if 130 <= hhmm < 600:
             print("run_tests: the M4's nightly window (01:30–06:00) — not now; --force to run anyway", file=sys.stderr)
             return 3
+    # Preflight: the tools the selected lanes need, on this Mac, before the worktree or a build.
+    want = {k for k in ("app", "core", "python") if k in a.kinds and
+            (a.mode == "full" or any((p.kind if p.kind != "shell" else "python") == k for p in picks))}
+    missing = preflight(want, dict(os.environ))
+    # The plan and the 5 s to cancel come BEFORE any side effect: Ctrl-C here changes nothing.
+    out.plain(plan_line(a, host_label, ref_label, sha, picks, corpus_note, dirty))
+    if missing:
+        out.line("NOT READY", missing_block(local_name, missing), "NOT RUN")
+        if not (want - set(missing)):           # nothing left that can run: no worktree, no build
+            lanes = [setup_lane(k, missing[k]) for k in sorted(missing)]
+            if "corpus" in a.kinds and not a.on_host:
+                lanes.append(LaneResult("corpus", reason=corpus_why or "runs from the Ultra with --host m4"))
+            return summary(out, lanes, 0.0, None)
+    if out.tty and not a.yes:
+        try:
+            countdown(out)
+        except KeyboardInterrupt:
+            out.plain("cancelled")
+            return 130
     CACHE.mkdir(parents=True, exist_ok=True)
     info = f"run_tests {a.mode} sha={sha[:9]} since {time.strftime('%F %T')}"
     held: List[int] = []
@@ -1105,21 +1349,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run_dir = CACHE / "runs" / time.strftime(f"%Y%m%d-%H%M%S-{a.mode}")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    out.plain(plan_line(a, host_label, ref_label, sha, picks, corpus_note, dirty))
-    if out.tty and not a.yes:
-        try:
-            countdown(out)
-        except KeyboardInterrupt:
-            out.plain("cancelled")
-            return 1
     t0 = time.monotonic()
     if a.mode == "full":
-        lanes = run_full(a, out, run_dir, local_key)
+        lanes = run_full(a, out, run_dir, local_key, missing)
     else:
         nlanes = len([k for k in ("app", "core", "python") if k in a.kinds])
         header = (f"smoke · {host_label} · {ref_label} {sha[:9]} · {nlanes} lanes, "
                   f"~{sum(p.tests for p in picks)} tests")
-        lanes = run_lanes(a, picks, RUN_WT, base, out, run_dir, header)
+        lanes = run_lanes(a, picks, RUN_WT, base, out, run_dir, header, missing)
     if "corpus" in a.kinds and not a.on_host:
         lanes.append(LaneResult("corpus", reason=corpus_why or "runs from the Ultra with --host m4"))
     return summary(out, lanes, time.monotonic() - t0, run_dir)
@@ -1132,20 +1369,25 @@ def full_commands(a, local_key: Optional[str]) -> List[List[str]]:
         cmds.append(["/bin/bash", str(wt / "scripts" / "nightly_local_tests.sh"), "--on-demand", "<run dir>/full",
                      "--repo", str(wt), "--dd", str(DD) + "-full"])
     if "python" in a.kinds:
-        cmds.append(["/bin/bash", str(wt / "scripts" / "run_python_tests.sh")])
+        cmds.append(["PYTHON=<python with pytest>", "/bin/bash", str(wt / "scripts" / "run_python_tests.sh")])
     return cmds
 
 
-def run_full(a, out: Out, run_dir: Path, local_key: Optional[str]) -> List[LaneResult]:
+def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
+             missing: Optional[Dict[str, List[str]]] = None) -> List[LaneResult]:
     """--full: the nightly's own runners, unchanged (one engine). Their logs are parsed for the
-    live display; their own verdict (exit code) decides the lane."""
+    live display; their own verdict (exit code) decides the lane. `missing` as in run_lanes."""
+    missing = missing or {}
+    swift_missing = list(dict.fromkeys(missing.get("app", []) + missing.get("core", [])))
     env = dict(os.environ)
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin")
     r = Runner(out, run_dir, env)
     lanes: List[LaneResult] = []
     out.line("==========", f"full · nightly_local_tests.sh --on-demand + run_python_tests.sh")
     try:
-        if a.kinds & {"app", "core"}:
+        if a.kinds & {"app", "core"} and swift_missing:
+            lanes.append(setup_lane("app+core (nightly runner, Release)", swift_missing))
+        elif a.kinds & {"app", "core"}:
             lane = LaneResult("app+core (nightly runner, Release)", ran=True)
             lanes.append(lane)
             (run_dir / "full").mkdir(exist_ok=True)
@@ -1156,20 +1398,31 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str]) -> List[LaneR
             lane.rc, lane.seconds = tail_while(r, cmd, [run_dir / "full" / "suite-core-test.log",
                                                         run_dir / "full" / "suite-app-test.log"], lane)
             lane_end(out, lane, run_dir / "full" / "suite.log")
-        if "python" in a.kinds:
-            lane = LaneResult("python (run_python_tests.sh)", ran=True)
+        if "python" in a.kinds and "python" in missing:
+            lanes.append(setup_lane("python (run_python_tests.sh)", missing["python"]))
+        elif "python" in a.kinds:
+            lane = LaneResult("python (run_python_tests.sh)")
             lanes.append(lane)
-            out.line("RUN", lane.name)
-            lane.rc, lane.seconds = r.stream(["/bin/bash", str(RUN_WT / "scripts" / "run_python_tests.sh")],
-                                             "python-full.log", 3600, cwd=RUN_WT, parser=LineParser(), lane=lane)
-            if lane.total == 0 and lane.rc == 0:
-                # run_python_tests.sh uses -q (dots, not names): trust its own summary line
-                txt = (run_dir / "python-full.log").read_text(errors="replace")
-                m = re.findall(r"(\d+) passed", txt)
-                lane.passed = int(m[-1]) if m else 0
-            lane_end(out, lane, run_dir / "python-full.log")
-    except KeyboardInterrupt:
+            # The side worktree has no venv/ (not in git): without PYTHON= the script falls back to
+            # a bare python3 that has no pytest on the fleet. Same interpreter choice as the smoke.
+            interp, why = python_for_tests([SCRIPT_REPO or BASE_REPO, BASE_REPO])
+            if interp is None:
+                lane.reason = why
+            else:
+                lane.ran = True
+                r.env["PYTHON"] = interp[0]
+                out.line("RUN", f"{lane.name} via {interp[0]}")
+                lane.rc, lane.seconds = r.stream(["/bin/bash", str(RUN_WT / "scripts" / "run_python_tests.sh")],
+                                                 "python-full.log", 3600, cwd=RUN_WT, parser=LineParser(), lane=lane)
+                if lane.total == 0 and lane.rc == 0:
+                    # run_python_tests.sh uses -q (dots, not names): trust its own summary line
+                    txt = (run_dir / "python-full.log").read_text(errors="replace")
+                    m = re.findall(r"(\d+) passed", txt)
+                    lane.passed = int(m[-1]) if m else 0
+                lane_end(out, lane, run_dir / "python-full.log")
+    except KeyboardInterrupt as e:
         r.stop()
+        out.line("FAILED", f"interrupted ({e or 'Ctrl-C'}) — the run is incomplete", "FAILED")
         lanes.append(LaneResult("interrupted", ran=True, rc=130, reason="interrupted"))
     return lanes
 

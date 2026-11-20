@@ -286,5 +286,103 @@ class GrowWriteTests(unittest.TestCase):
             self.assertEqual(code, 0, 'the write goes to a new file, renamed into place: the failing truncation never happens')
 
 
+
+def minimal_catalog(folder, rows):
+    """Only the columns catalog_rows reads (size_bytes may be NULL here: the real DDL is not the point)."""
+    import sqlite3
+    path = pathlib.Path(folder, 'catalog.sqlite')
+    conn = sqlite3.connect(str(path))
+    conn.execute('CREATE TABLE files (content_digest TEXT, full_path TEXT, size_bytes INTEGER, container TEXT,'
+                 ' video_codec TEXT, audio_codec TEXT, removal_state TEXT)')
+    conn.executemany('INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, NULL)', rows)
+    conn.commit()
+    conn.close()
+    return path
+
+
+def said(args):
+    from io import StringIO
+    from contextlib import redirect_stdout
+    buf = StringIO()
+    with redirect_stdout(buf):
+        code = cs.main(args)
+    return code, buf.getvalue()
+
+
+class ReviewTests(unittest.TestCase):
+    """Review 2026-11-19 (C1-C3 and two smaller findings). Each was RED on 693c2e5b8."""
+
+    def test_c1_a_copy_outside_volumes_never_becomes_the_chosen_path(self):
+        # "/Users/..." sorts before "/Volumes/...": ONE home-folder duplicate was chosen and the whole run refused
+        rows = [(1, sha(1), '/Users/someone/Movies/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
+                (2, sha(1), '/Volumes/M/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
+                (3, sha(2), '/Volumes/M/b.mov', 100, 'mov,mp4', 'h264', 'aac'),
+                (4, sha(3), '/Users/someone/only-here.mov', 100, 'mov,mp4', 'h264', 'aac')]
+        picked = cs.select(rows, [], can_read=lambda p: True)
+        self.assertEqual(sorted(p[1] for p in picked['external']), ['/Volumes/M/a.mov', '/Volumes/M/b.mov'])
+        with tempfile.TemporaryDirectory() as tmp:
+            cs.write_selection(picked, pathlib.Path(tmp, 'out'))
+
+    def test_c2_growing_twice_does_not_empty_the_copy_lists_of_files_not_yet_copied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = minimal_catalog(tmp, [(sha(2), '/Volumes/A/new.mov', 200, 'mov,mp4', 'h264', 'aac')])
+            out = pathlib.Path(tmp, 'out')
+            out.mkdir()
+            manifest = out / 'corpus-manifest-v2.json'
+            manifest.write_text('[]')
+            real = cs.readable
+            cs.readable = lambda p: True
+            try:
+                args = ['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)]
+                self.assertEqual(cs.main(args), 0)
+                self.assertEqual((out / 'v2_external.files').read_text(), 'Volumes/A/new.mov\n')
+                code, text = said(args)                                 # typed again before the rsync
+                self.assertEqual(code, 0)
+            finally:
+                cs.readable = real
+            self.assertEqual(len(json.loads(manifest.read_text())), 1)
+            self.assertEqual((out / 'v2_external.files').read_text(), 'Volumes/A/new.mov\n',
+                             'the list that copies the new file to the M4 was overwritten with nothing')
+            self.assertEqual((out / 'v2_external.sha').read_text(), f'{sha(2)}  Volumes/A/new.mov\n')
+            self.assertEqual(json.loads((out / 'selection.json').read_text())['external'],
+                             [[sha(2), '/Volumes/A/new.mov', 200]])
+            self.assertIn('external list kept: 1 files from an earlier grow', text)
+            self.assertNotIn('new.mov', text)
+
+    def test_c3_a_large_file_that_left_the_catalog_still_covers_its_stratum(self):
+        # `covered` was rebuilt from the NEWER catalog's rows only: once the large file's row is gone, its
+        # stratum read as uncovered and a second large file of the same mix was added
+        first = [(1, sha(1), '/Volumes/A/big-old.mxf', 100 * GB, 'mxf', 'dnxhd', '')]
+        grown, picked = cs.grow(first, [], can_read=lambda p: True)
+        self.assertEqual([p[0] for p in picked['internal']], [sha(1)])
+        self.assertEqual(grown[0]['stratum'], ['mxf', 'dnxhd', ''])
+        grown = json.loads(json.dumps(grown))                            # as the file on disk holds it
+        later = [(7, sha(2), '/Volumes/A/big-same-mix.mxf', 100 * GB, 'mxf', 'dnxhd', '')]   # big-old's row is gone
+        _, picked = cs.grow(later, grown, can_read=lambda p: True)
+        self.assertEqual(picked['internal'], [], 'a second 100 GB file of a mix the corpus already holds')
+
+    def test_skipped_contents_and_null_sizes_are_counted_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = minimal_catalog(tmp, [(sha(1), '/Volumes/Nowhere/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
+                                         (sha(2), '/Volumes/Nowhere/b.mov', 100, 'mov,mp4', 'h264', 'aac'),
+                                         (sha(3), '/Volumes/Nowhere/c.mov', None, 'mov,mp4', 'h264', 'aac')])
+            exclude = pathlib.Path(tmp, 'v1.json')
+            exclude.write_text('[]')
+            code, text = said(['select', '--catalog', str(path), '--exclude', str(exclude),
+                               '--out', str(pathlib.Path(tmp, 'out'))])
+        self.assertEqual(code, 0)
+        self.assertIn('corpus select: 2 contents skipped: no readable copy', text)
+        self.assertIn('corpus select: 1 rows skipped: no size_bytes', text)
+        self.assertNotIn('Nowhere', text)
+
+    def test_select_counts_into_stats_and_a_null_size_row_never_reaches_the_rules(self):
+        stats = {}
+        rows = [(1, sha(1), '/Volumes/A/a.mov', None, 'mov,mp4', 'h264', 'aac'),
+                (2, sha(1), '/Volumes/B/a.mov', 100, 'mov,mp4', 'h264', 'aac')]
+        picked = cs.select(rows, [], can_read=lambda p: True, stats=stats)
+        self.assertEqual(picked['external'], [(sha(1), '/Volumes/B/a.mov', 100)])
+        self.assertEqual(stats, {'unreadable': 0, 'no_size': 1})
+
+
 if __name__ == '__main__':
     unittest.main()

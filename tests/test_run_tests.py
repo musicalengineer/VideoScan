@@ -9,9 +9,14 @@ No build and no host here: the live run is exercised by running the script."""
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import os
+import signal
 import subprocess
 import sys
+import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -452,3 +457,427 @@ def test_list_runs_without_a_build(tmp_path):
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr
     assert "UI tests" in p.stdout and "# total" in p.stdout
+
+
+# ───────────────────────────── review 2026-11-19 (R1–R7 and the dry-run findings)
+# Each of these was RED on 693c2e5b8. Nothing here touches the real caches or a host:
+# CACHE / RUN_WT are temp folders, ssh and git are faked.
+
+def quiet_out():
+    return rt.Out(False, io.StringIO())
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def test_r1_a_silent_hang_is_cut_at_the_budget(tmp_path):
+    # the budget was looked at only when the child printed a line
+    r = rt.Runner(quiet_out(), tmp_path, dict(os.environ))
+    t0 = time.monotonic()
+    rc, _ = r.stream(["/bin/sleep", "6"], "hang.log", budget=1)
+    took = time.monotonic() - t0
+    assert rc == 124, f"a child that prints nothing ran past its 1 s budget (exit {rc} after {took:.1f}s)"
+    assert took < 4
+
+
+def test_r1_a_chatty_child_still_streams_every_line_and_its_exit_code(tmp_path):
+    lane = rt.LaneResult("py", ran=True)
+    r = rt.Runner(quiet_out(), tmp_path, dict(os.environ))
+    script = "; ".join(f"echo 'tests/t.py::test_{i} PASSED'" for i in range(500)) + "; exit 0"
+    rc, _ = r.stream(["/bin/sh", "-c", script], "chatty.log", budget=30, parser=rt.LineParser(), lane=lane)
+    assert (rc, lane.passed) == (0, 500)
+    assert sum(l.startswith("tests/t.py::") for l in (tmp_path / "chatty.log").read_text().splitlines()) == 500
+    assert r.child is None
+
+
+@pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGTERM])
+def test_r2_a_hangup_or_term_takes_the_child_down_too(tmp_path, sig):
+    # no SIGHUP/SIGTERM handling + start_new_session=True: a dropped ssh session left the child running
+    pidfile = tmp_path / "child.pid"
+    driver = tmp_path / "driver.py"
+    driver.write_text(textwrap.dedent(f"""
+        import importlib.util, io, os, sys
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("run_tests", {str(ROOT / 'scripts' / 'run_tests.py')!r})
+        rt = importlib.util.module_from_spec(spec); sys.modules["run_tests"] = rt; spec.loader.exec_module(rt)
+        r = rt.Runner(rt.Out(False, io.StringIO()), Path({str(tmp_path)!r}), dict(os.environ))
+        try:
+            r.stream(["/bin/sh", "-c", "echo $$ > {pidfile}; exec /bin/sleep 60"], "x.log", budget=120)
+        except KeyboardInterrupt:
+            r.stop()
+    """))
+    p = subprocess.Popen([sys.executable, str(driver)])
+    child = None
+    try:
+        for _ in range(200):
+            if pidfile.exists() and pidfile.read_text().strip():
+                break
+            time.sleep(0.05)
+        child = int(pidfile.read_text())
+        p.send_signal(sig)
+        p.wait(timeout=30)
+        time.sleep(1.0)
+        assert not alive(child), f"the runner died on {sig.name} and its child (pid {child}) is still running"
+    finally:
+        if child and alive(child):
+            os.kill(child, signal.SIGKILL)
+        if p.poll() is None:
+            p.kill()
+
+
+def test_r2_the_signal_handlers_are_restored_after_a_stream(tmp_path):
+    before = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)
+    rt.Runner(quiet_out(), tmp_path, dict(os.environ)).stream(["/usr/bin/true"], "t.log", budget=10)
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
+
+
+class FakeDone:
+    returncode = 0
+
+
+def fake_git_for(sha):
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return '{"assignments": []}'
+        if args[:2] == ("rev-parse", "--verify"):
+            return sha
+        if args[:2] == ("rev-parse", "--abbrev-ref"):
+            return "main"
+        if args[:1] == ("branch",):
+            return "origin/main"
+        return ""
+    return fake_git
+
+
+def drive_remote(monkeypatch, tmp_path, argv, host_text, host_rc):
+    """main() as the Ultra runs it for --host m4; the 'host' is a local process printing host_text."""
+    calls = {"corpus": 0, "host": 0}
+
+    def fake_corpus(out, script_repo, sha_, run_dir, verbose, limit):
+        calls["corpus"] += 1
+        return rt.LaneResult("corpus", ran=True, passed=10, rc=0)
+
+    real_popen = subprocess.Popen
+    script = tmp_path / "host.py"
+    script.write_text(f"import sys\nsys.stdout.write({host_text!r})\nsys.exit({host_rc})\n")
+
+    def fake_popen(cmd, **k):
+        calls["host"] += 1
+        return real_popen([sys.executable, str(script)], **k)
+    monkeypatch.setattr(rt, "git", fake_git_for("a" * 40))
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    monkeypatch.setattr(rt, "run_corpus", fake_corpus)
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: FakeDone())
+    monkeypatch.setattr(rt.subprocess, "Popen", fake_popen)
+    return rt.main(argv), calls
+
+
+def host_summary_text(argv):
+    """What the host prints for these args when no lane is selected: the real run_lanes + summary."""
+    a = rt.parse_args(argv + ["--on-host"])
+    a.stages_label = list(a.stages)
+    buf = io.StringIO()
+    out = rt.Out(False, buf)
+    lanes = rt.run_lanes(a, [], Path("/nonexistent"), Path("/nonexistent"), out, Path("/nonexistent"), "smoke")
+    code = rt.summary(out, lanes, 0.0, None)
+    return buf.getvalue(), code
+
+
+def test_r3_corpus_only_on_the_m4_runs_no_host_smoke_and_is_green_when_the_corpus_is(monkeypatch, tmp_path):
+    runs = tmp_path / "cache" / "runs"
+    for i in range(25):                                   # caller-side folders are pruned like run folders
+        (runs / f"20260101-0000{i:02d}-corpus").mkdir(parents=True)
+    text, host_rc = host_summary_text(["--corpus"])
+    code, calls = drive_remote(monkeypatch, tmp_path, ["--corpus", "--host", "m4", "--yes"], text, host_rc)
+    assert calls == {"corpus": 1, "host": 0}
+    assert code == 0, "the only lane asked for (corpus) was GREEN, yet the run is RED"
+    assert len(list(runs.iterdir())) == rt.KEEP_RUNS
+
+
+def test_r4_ctrl_c_on_the_host_exits_130_and_the_corpus_lane_is_not_started(monkeypatch, tmp_path):
+    buf = io.StringIO()
+    out = rt.Out(False, buf)
+    out.line("FAILED", "interrupted (Ctrl-C) — the run is incomplete", "FAILED")
+    host_rc = rt.summary(out, [rt.LaneResult("interrupted", ran=True, rc=130, reason="interrupted")], 12.0, None)
+    assert host_rc == 130
+    code, calls = drive_remote(monkeypatch, tmp_path, ["--host", "m4", "--yes"], buf.getvalue(), host_rc)
+    assert calls["corpus"] == 0, "the user pressed Ctrl-C; the corpus check was launched on the M4 anyway"
+    assert code == 130
+
+
+def test_r4_a_busy_host_does_not_start_the_corpus_lane(monkeypatch, tmp_path):
+    code, calls = drive_remote(monkeypatch, tmp_path, ["--host", "m4", "--yes"], "run_tests: busy\n", 3)
+    assert (code, calls["corpus"]) == (3, 0)
+
+
+def test_r5_full_python_lane_names_an_interpreter_that_has_pytest(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        seen["cmd"], seen["env"] = cmd, dict(self.env)
+        (self.run_dir / log_name).write_text("400 passed in 1.0s\n")
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    monkeypatch.setattr(rt, "python_for_tests", lambda repos: (["/some/venv/bin/python"], "/some/venv/bin/python"))
+    a = rt.parse_args(["--full", "--python"])
+    lanes = rt.run_full(a, quiet_out(), tmp_path, "ultra")
+    assert seen["cmd"][-1].endswith("run_python_tests.sh")
+    assert seen["env"].get("PYTHON") == "/some/venv/bin/python", \
+        "run_python_tests.sh is started with no PYTHON=: in the venv-less side worktree it uses bare python3"
+    assert lanes[0].passed == 400 and lanes[0].word == "GREEN"
+
+
+def test_r5_full_python_lane_without_pytest_anywhere_is_not_run_with_the_reason(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt.Runner, "stream", lambda *a, **k: pytest.fail("ran without pytest"))
+    monkeypatch.setattr(rt, "python_for_tests", lambda repos: (None, "no pytest in x"))
+    lanes = rt.run_full(rt.parse_args(["--full", "--python"]), quiet_out(), tmp_path, "ultra")
+    assert lanes[0].word == "NOT RUN" and lanes[0].reason == "no pytest in x"
+
+
+def test_r6_a_lane_that_ran_a_sliver_of_its_selection_is_not_green(monkeypatch, tmp_path):
+    # a lane was GREEN on ANY one pass: an -only-testing / --filter that matches nothing exits 0
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if lane is not None:
+            lane.passed += 1                      # one test ran, of ~500 selected
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    picks = [rt.Pick("core", "Core/Store", "unit", "x/ATests.swift", ("ATests",), 250),
+             rt.Pick("core", "Core/Store", "unit", "x/BTests.swift", ("BTests",), 250)]
+    a = rt.parse_args(["--unit"])
+    a.kinds = {"core"}
+    a.stages_label = ["unit"]
+    buf = io.StringIO()
+    lanes = rt.run_lanes(a, picks, tmp_path, tmp_path, rt.Out(False, buf), tmp_path, "smoke")
+    assert rt.verdict(lanes) == (1, "RED"), "1 of ~500 selected tests ran and the run is GREEN"
+    assert "selection shrank: ran 1 of ~500" in buf.getvalue()
+    assert lanes[0].reason == "selection shrank: ran 1 of ~500"
+
+
+def test_r6_the_floor_is_half_the_plan_and_unknown_plans_have_none():
+    assert L("core", ran=True, passed=250, rc=0, expected=500).word == "GREEN"
+    assert L("core", ran=True, passed=249, rc=0, expected=500).word == "RED"
+    assert L("core", ran=True, passed=900, rc=0, expected=500).word == "GREEN"     # parametrised cases: more is fine
+    assert L("full", ran=True, passed=3, rc=0).word == "GREEN"                       # --full: its runner's own floors
+
+
+def test_r7_a_stage_flag_with_full_is_refused(capsys):
+    with pytest.raises(SystemExit) as e:
+        rt.parse_args(["--full", "--unit"])
+    assert e.value.code == 2
+    assert "narrows a --smoke only" in capsys.readouterr().err
+
+
+def drive_local(monkeypatch, tmp_path, argv, tty=False, git=None, preflight=None):
+    """main() on this Mac (the Ultra) with git and the tool preflight faked; any side effect fails the test."""
+    monkeypatch.setattr(rt, "preflight", preflight or (lambda lanes, env, **k: {}))
+    def touched(*a, **k):
+        raise AssertionError("a side effect ran before the refusal / countdown")
+    monkeypatch.setattr(rt, "git", git or fake_git_for("b" * 40))
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt, "RUN_WT", tmp_path / "wt")
+    monkeypatch.setattr(rt, "prepare_worktree", touched)
+    monkeypatch.setattr(rt, "take_lock", touched)
+    monkeypatch.setattr(rt, "prune_runs", touched)
+    monkeypatch.setattr(rt.subprocess, "Popen", touched)
+
+    class TtyOut(rt.Out):
+        def __init__(self, verbose, stream=None):
+            super().__init__(verbose, sys.stdout)            # capsys sees it
+            self.tty = tty
+    monkeypatch.setattr(rt, "Out", TtyOut)
+    return rt.main(argv)
+
+
+def test_nothing_to_run_here_is_refused_up_front_and_touches_nothing(monkeypatch, tmp_path, capsys):
+    assert drive_local(monkeypatch, tmp_path, ["--corpus", "--yes"]) == 2
+    assert "nothing to run here: corpus runs only on the M4 (--host m4" in capsys.readouterr().err
+    assert not (tmp_path / "cache").exists() and not (tmp_path / "wt").exists()
+    assert drive_local(monkeypatch, tmp_path, ["--python", "--yes"]) == 2           # empty selection
+    assert "nothing to run here: the selection is empty" in capsys.readouterr().err
+
+
+def test_corpus_from_a_mac_that_cannot_launch_it_is_refused(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(rt, "git", fake_git_for("a" * 40))
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "m5pro")
+    monkeypatch.setattr(rt.subprocess, "Popen", lambda *a, **k: pytest.fail("ssh started"))
+    assert rt.main(["--corpus", "--host", "m4", "--yes"]) == 2
+    assert "nothing to run here" in capsys.readouterr().err
+
+
+def test_full_with_host_is_refused_with_the_m4_door(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    monkeypatch.setattr(rt, "git", lambda *a, **k: pytest.fail("git ran before the refusal"))
+    assert rt.main(["--full", "--host", "m4"]) == 2
+    assert "scripts/m4_run.sh suite --host m4 --ref <commit> --wait" in capsys.readouterr().err
+
+
+def test_a_bad_ref_says_unknown_ref_cleanly(monkeypatch, capsys):
+    def fake_git(repo, *args, check=True):
+        if args[:2] == ("rev-parse", "--verify"):
+            raise rt.Refused("git rev-parse --verify -q nope^{commit}: ")
+        return ""
+    monkeypatch.setattr(rt, "git", fake_git)
+    assert rt.main(["--ref", "nope", "--dry-run"]) == 2
+    assert capsys.readouterr().err.strip() == "run_tests: unknown ref nope"
+
+
+def test_the_full_plan_line_names_the_runners_not_zero_tests():
+    a = rt.parse_args(["--full"])
+    line = rt.plan_line(a, "RicksUltra", "main", "c" * 40, [], "", False)
+    assert "all suites (nightly runners)" in line and "~0 tests" not in line
+
+
+def test_every_selection_flag_has_help(capsys):
+    with pytest.raises(SystemExit):
+        rt.parse_args(["--help"])
+    text = capsys.readouterr().out
+    for f in ("--unit", "--regression", "--integration", "--perf", "--stress", "--python", "--corpus"):
+        line = next(l for l in text.splitlines() if l.strip().startswith(f))
+        assert len(line.strip()) > len(f) + 2, f"{f} has no help text"
+
+
+def test_the_countdown_comes_before_any_side_effect(monkeypatch, tmp_path):
+    def ctrl_c(out, secs=5):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(rt, "countdown", ctrl_c)
+    files, man = tree_and_manifest()
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    assert drive_local(monkeypatch, tmp_path, ["--unit"], tty=True, git=fake_git) == 130
+    assert not (tmp_path / "cache").exists() and not (tmp_path / "wt").exists()
+
+
+
+# ───────────────────────────── preflight (M5 Pro 2026-11-19: no Metal Toolchain → app build exit 65;
+# no node → 9 Python FileNotFoundError failures). Fake which / xcrun: nothing is installed or probed for real.
+
+class FakeRun:
+    def __init__(self, rc):
+        self.rc, self.calls = rc, []
+
+    def __call__(self, cmd, **k):
+        self.calls.append((cmd, k.get("env", {}).get("PATH", "")))
+        r = FakeDone()
+        r.returncode = self.rc
+        return r
+
+
+def fake_which(present, seen=None):
+    def which(name, path=None):
+        if seen is not None:
+            seen.append(path)
+        return f"/opt/homebrew/bin/{name}" if name in present else None
+    return which
+
+
+def test_preflight_names_each_missing_tool_against_the_lanes_that_need_it():
+    seen = []
+    run = FakeRun(rc=1)                                         # xcrun: "cannot execute tool 'metal'"
+    m = rt.preflight({"app", "core", "python"}, {"PATH": "/usr/bin:/bin"}, which=fake_which({"ffmpeg", "ffprobe"}, seen),
+                     run=run, find_python=lambda repos: (None, "no pytest"))
+    assert m == {"app": ["Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"],
+                 "python": ["node (brew install node)",
+                            "a Python with pytest (scripts/install_dev_tools.sh makes venv/)"]}
+    assert run.calls[0][0] == ["xcrun", "metal", "--version"]
+    assert run.calls[0][1].startswith("/opt/homebrew/bin:") and all(p.startswith("/opt/homebrew/bin:") for p in seen)
+
+
+def test_preflight_all_present_is_empty_and_only_probes_what_the_lanes_need():
+    run = FakeRun(rc=0)
+    allp = fake_which({"ffmpeg", "ffprobe", "node"})
+    assert rt.preflight({"app", "core", "python"}, {}, which=allp, run=run, find_python=lambda r: (["/p"], "/p")) == {}
+    run = FakeRun(rc=1)
+    assert rt.preflight({"core"}, {}, which=allp, run=run, find_python=lambda r: pytest.fail("probed")) == {}
+    assert run.calls == []                                      # no app lane: no xcrun
+    m = rt.preflight({"core"}, {}, which=fake_which(set()), run=run, find_python=lambda r: (["/p"], "/p"))
+    assert m == {"core": ["ffmpeg (brew install ffmpeg)", "ffprobe (brew install ffmpeg)"]}
+
+
+def test_preflight_survives_a_missing_xcrun():
+    def boom(*a, **k):
+        raise FileNotFoundError("xcrun")
+    m = rt.preflight({"app"}, {}, which=fake_which({"ffmpeg", "ffprobe"}), run=boom)
+    assert list(m) == ["app"]
+
+
+def test_a_lane_missing_a_tool_is_not_run_setup_and_the_others_still_run(monkeypatch, tmp_path):
+    ran = []
+
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        ran.append(log_name)
+        if lane is not None:
+            lane.passed += 3
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    picks = [rt.Pick("core", "Core/Store", "unit", "x/ATests.swift", ("ATests",), 3),
+             rt.Pick("python", "py/x", "unit", "tests/test_x.py", ("test_x.py",), 9)]
+    a = rt.parse_args(["--unit", "--python"])
+    a.stages_label = ["unit"]
+    a.kinds = {"core", "python"}
+    buf = io.StringIO()
+    out = rt.Out(False, buf)
+    lanes = rt.run_lanes(a, picks, tmp_path, tmp_path, out, tmp_path, "smoke",
+                         missing={"python": ["node (brew install node)"]})
+    assert ran == ["core.log"]
+    py = [l for l in lanes if l.name == "python"][0]
+    assert (py.word, py.setup, py.reason) == ("NOT RUN", ["node (brew install node)"], "setup: missing node (brew install node)")
+    code = rt.summary(out, lanes, 1.0, None)
+    text = buf.getvalue()
+    assert code == 1 and "NOT READY: setup" in text and "[  FAILED  ]" not in text
+    assert "python: setup: missing node (brew install node)" in text
+
+
+def test_red_outranks_not_ready_and_setup_alone_is_not_ready():
+    red = L("core", ran=True, passed=1, failed=1, rc=1)
+    setup = rt.setup_lane("python", ["node (brew install node)"])
+    assert rt.verdict([red, setup]) == (1, "RED")
+    assert rt.verdict([L("core", ran=True, passed=3, rc=0), setup]) == (1, "NOT READY: setup")
+    assert rt.verdict([setup]) == (1, "NOT READY: setup")
+
+
+def test_when_every_lane_is_missing_a_tool_no_worktree_is_made(monkeypatch, tmp_path, capsys):
+    files, man = tree_and_manifest()
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    monkeypatch.setattr(rt.socket, "gethostname", lambda: "RicksM5.local")
+    code = drive_local(monkeypatch, tmp_path, ["--unit", "--yes"], git=fake_git,
+                       preflight=lambda lanes, env, **k: {l: ["Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"]
+                                                          for l in lanes})
+    assert code == 1
+    text = capsys.readouterr()
+    assert "RicksM5 is missing: Metal Toolchain" in text.out + text.err
+    assert not (tmp_path / "cache").exists() and not (tmp_path / "wt").exists()
+
+
+def test_the_missing_block_names_the_mac_and_the_install_commands():
+    b = rt.missing_block("RicksM5", {"app": ["Metal Toolchain (xcodebuild -downloadComponent MetalToolchain)"],
+                                     "python": ["node (brew install node)"]})
+    assert b.startswith("RicksM5 is missing: Metal Toolchain (xcodebuild -downloadComponent MetalToolchain), "
+                        "node (brew install node)")
+    assert "NOT RUN (setup): app, python" in b
+
+
+def test_the_caller_reads_a_hosts_not_ready_as_setup_not_red(monkeypatch, tmp_path):
+    host = rt.setup_lane("python", ["node (brew install node)"])
+    buf = io.StringIO()
+    host_rc = rt.summary(rt.Out(False, buf), [host], 1.0, None)
+    assert rt.remote_word(buf.getvalue()) == "NOT READY: setup"
+    code, calls = drive_remote(monkeypatch, tmp_path, ["--host", "m4", "--yes"], buf.getvalue(), host_rc)
+    assert calls["corpus"] == 1 and code == 1                    # the corpus still runs; the verdict is NOT READY
