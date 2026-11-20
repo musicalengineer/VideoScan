@@ -92,7 +92,7 @@ struct FootageFieldCodableTests {
 
 // MARK: - The job, isolated
 
-@Suite("Find Similar Footage — MFO job on an isolated model", .serialized)
+@Suite("Find Similar Footage — MFO job on an isolated model")
 @MainActor
 struct FindSimilarFootageJobModelTests {
 
@@ -208,7 +208,7 @@ struct FindSimilarFootageJobModelTests {
 
 // MARK: - Rescan (QA MAJOR 1)
 
-@Suite("Find Similar Footage — the person's answers survive a real rescan cycle", .serialized)
+@Suite("Find Similar Footage — the person's answers survive a real rescan cycle")
 @MainActor
 struct FootageRescanSurvivalTests {
 
@@ -449,7 +449,7 @@ struct FootageArchiveAngelTests {
 
 // MARK: - FCP media identifier capture (synthetic ffmpeg fixture)
 
-@Suite("Find Similar Footage — FCP mediaIdentifier capture (test_* fixture)", .serialized)
+@Suite("Find Similar Footage — FCP mediaIdentifier capture (test_* fixture)")
 @MainActor
 struct FootageMediaIdentifierFixtureTests {
 

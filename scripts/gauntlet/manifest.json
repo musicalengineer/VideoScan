@@ -37509,6 +37509,43 @@
         "theShowingBoxHasNoTapGesture",
         "theTableFollowsCatalogEdits"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MFOVerbsParallelTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MFOVerbsParallelTests",
+        "MFOVerbsParallelInventorySensorTests"
+      ],
+      "tests": [
+        "everyKindHasAVerdict",
+        "everyVerbConcurrentlyMatchesAlone",
+        "theCenterHasNoGlobalQueue",
+        "theCrowdCoversEveryVerb"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MFOVerbsScalingTests.swift",
+      "stage": "performance",
+      "suites": [
+        "MFOVerbsScalingTests"
+      ],
+      "tests": [
+        "sweep"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaTrashTestHostRaceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "MediaTrashTestHostRaceTests"
+      ],
+      "tests": [
+        "concurrentSameNameMovesAllLand"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -40273,7 +40310,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3912,
+      "expected_floor": 3916,
       "name": "unit",
       "package_expected_floor": 904,
       "package_selectors": [
@@ -41013,7 +41050,9 @@
         "VideoScanTests/OneFolderViewTruthTests",
         "VideoScanTests/OneFolderViewScaleTests",
         "VideoScanTests/OneFolderViewIsolationTests",
-        "VideoScanTests/OneFolderViewSensorTests"
+        "VideoScanTests/OneFolderViewSensorTests",
+        "VideoScanTests/MFOVerbsParallelTests",
+        "VideoScanTests/MFOVerbsParallelInventorySensorTests"
       ]
     },
     {
@@ -41443,7 +41482,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 834,
+      "expected_floor": 835,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41681,7 +41720,8 @@
         "VideoScanTests/BalancedCopyProofTotalityTests",
         "VideoScanTests/BalancedCopyProofCorpusFindingsTests",
         "VideoScanTests/ArchivePromotionIndexFreshnessTests",
-        "VideoScanTests/CatalogTrashGroupTurnsWordsTests"
+        "VideoScanTests/CatalogTrashGroupTurnsWordsTests",
+        "VideoScanTests/MediaTrashTestHostRaceTests"
       ]
     },
     {
@@ -41915,7 +41955,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 69,
+      "expected_floor": 70,
       "name": "performance",
       "package_expected_floor": 15,
       "package_selectors": [
@@ -41954,7 +41994,8 @@
         "VideoScanTests/VerifyAudioScaleSensorTests",
         "VideoScanTests/CatalogSearchKeystrokeBudgetTests",
         "VideoScanTests/ConfirmedDateFilterScaleTests",
-        "VideoScanTests/DossierBackfillScaleTests"
+        "VideoScanTests/DossierBackfillScaleTests",
+        "VideoScanTests/MFOVerbsScalingTests"
       ]
     },
     {

@@ -120,7 +120,7 @@ enum UnlockedDVMedia {
     }
 }
 
-@Suite("Balance Audio — raw DV with unlocked sound (GH #482)", .serialized)
+@Suite("Balance Audio — raw DV with unlocked sound (GH #482)")
 @MainActor
 struct BalanceAudioUnlockedDVTests {
 

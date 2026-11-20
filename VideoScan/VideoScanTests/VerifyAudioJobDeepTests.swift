@@ -76,7 +76,7 @@ private func waitUntil(
 // MARK: - Cache eviction under a 200+ batch
 
 @MainActor
-@Suite("VerifyAudioJob — cache eviction under batch load", .serialized)
+@Suite("VerifyAudioJob — cache eviction under batch load")
 struct VerifyAudioCacheEvictionBatchTests {
 
     @Test func batchOf230BoundsTheCacheAndKeepsEveryPersistedVerdict() async {
@@ -123,7 +123,7 @@ struct VerifyAudioCacheEvictionBatchTests {
 // MARK: - Job-level gate classing (production dispatch path)
 
 @MainActor
-@Suite("VerifyAudioJob — per-disk gating at the job level", .serialized)
+@Suite("VerifyAudioJob — per-disk gating at the job level")
 struct VerifyAudioJobGateClassingTests {
 
     /// A diagnosis override that records begin/end on `probe` and HOLDS

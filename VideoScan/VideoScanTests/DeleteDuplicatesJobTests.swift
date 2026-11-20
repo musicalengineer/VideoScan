@@ -104,7 +104,7 @@ private func consoleText(_ model: VideoScanModel) async -> String {
     return model.dashboard.consoleLines.joined(separator: "\n")
 }
 
-@Suite(.serialized)
+@Suite
 @MainActor
 struct DeleteDuplicatesJobTests {
 

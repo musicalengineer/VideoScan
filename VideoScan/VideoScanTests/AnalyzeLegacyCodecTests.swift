@@ -238,7 +238,7 @@ enum AnalyzeLegacyCodecSupport {
 // MARK: - Media matrix + truth
 
 @MainActor
-@Suite("Analyze reads legacy codecs as is — media matrix", .serialized)
+@Suite("Analyze reads legacy codecs as is — media matrix")
 struct AnalyzeLegacyCodecMatrixTests {
     typealias S = AnalyzeLegacyCodecSupport
 
@@ -291,7 +291,7 @@ struct AnalyzeLegacyCodecMatrixTests {
 // MARK: - Isolation: an undecodable file among good ones
 
 @MainActor
-@Suite("Analyze — an undecodable file among good ones", .serialized)
+@Suite("Analyze — an undecodable file among good ones")
 struct AnalyzeUndecodableIsolationTests {
     typealias S = AnalyzeLegacyCodecSupport
 
@@ -349,7 +349,7 @@ struct AnalyzeUndecodableIsolationTests {
 // MARK: - The verb's routing (logic) and the menu (sensor)
 
 @MainActor
-@Suite("Analyze — one path, no reformat-first", .serialized)
+@Suite("Analyze — one path, no reformat-first")
 struct AnalyzeRoutingTests {
     typealias S = AnalyzeLegacyCodecSupport
 

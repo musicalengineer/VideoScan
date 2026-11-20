@@ -20,7 +20,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite(.serialized) @MainActor
+@Suite @MainActor
 struct TrimProvenanceTests {
 
     /// Deterministic encoder — same rationale as CatalogStoreAsyncSaveTests.

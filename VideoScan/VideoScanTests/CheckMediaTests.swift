@@ -459,7 +459,7 @@ struct CheckMediaCardPersistenceTests {
 
 // MARK: - Job (runner seams)
 
-@Suite("CheckMediaJob — persistence and summary", .serialized)
+@Suite("CheckMediaJob — persistence and summary")
 @MainActor
 struct CheckMediaJobTests {
 
@@ -623,7 +623,7 @@ struct CheckMediaMenuSensorTests {
 /// Prints the quick-tier report card for a real file when
 /// TEST_RUNNER_VS_CHECKMEDIA_REAL_PATH is set (xcodebuild passes it on as
 /// VS_CHECKMEDIA_REAL_PATH). READ-ONLY; skipped otherwise. No path in git.
-@Suite("Check Media — real file (opt-in)", .serialized)
+@Suite("Check Media — real file (opt-in)")
 struct CheckMediaRealFileTests {
     @Test(.timeLimit(.minutes(2)))
     func quickCardForARealFile() async throws {

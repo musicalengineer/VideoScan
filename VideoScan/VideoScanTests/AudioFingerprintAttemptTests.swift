@@ -92,7 +92,7 @@ enum AttemptScene {
     }
 }
 
-@Suite("Fingerprint sound — #416 part 2: heard-too-little and failed decodes are tried 3 times, not forever", .serialized)
+@Suite("Fingerprint sound — #416 part 2: heard-too-little and failed decodes are tried 3 times, not forever")
 @MainActor
 struct AudioFingerprintAttemptTests {
 

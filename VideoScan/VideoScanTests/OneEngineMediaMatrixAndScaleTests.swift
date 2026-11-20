@@ -19,7 +19,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("One engine — media matrix and scale (GH #143, #241)", .serialized)
+@Suite("One engine — media matrix and scale (GH #143, #241)")
 @MainActor
 struct OneEngineMediaMatrixAndScaleTests {
 

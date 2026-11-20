@@ -22,7 +22,7 @@ private func inode(_ path: String) -> Int? {
 
 // MARK: - Update on a locked file
 
-@Suite("Update… — locked archive files", .serialized)
+@Suite("Update… — locked archive files")
 @MainActor
 struct ArchiveUpdateLockTests {
 
@@ -158,7 +158,7 @@ struct ArchiveUpdateLockTests {
 
 // MARK: - The one-time lock catch-up job
 
-@Suite("Lock archive files… — the job", .serialized)
+@Suite("Lock archive files… — the job")
 @MainActor
 struct ArchiveLockJobTests {
 
@@ -441,7 +441,7 @@ final class LockCounter: @unchecked Sendable {
 
 // MARK: - Verify Copies: report only
 
-@Suite("Verify Copies — reports archived files that are NOT locked", .serialized)
+@Suite("Verify Copies — reports archived files that are NOT locked")
 @MainActor
 struct VerifyArchiveNotLockedTests {
 

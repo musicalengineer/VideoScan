@@ -66,7 +66,7 @@ private enum RealRun {
     }
 }
 
-@Suite("Frames — real run (headless driver; needs realrun.json)", .serialized, .enabled(if: RealRunConfig.present, "no realrun.json — not a lane test"))
+@Suite("Frames — real run (headless driver; needs realrun.json)", .enabled(if: RealRunConfig.present, "no realrun.json — not a lane test"))
 @MainActor
 struct FrameIndexRealRunTests {
 

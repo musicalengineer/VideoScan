@@ -20,6 +20,7 @@ import Foundation
 // (it publishes only a returned URL). A job-level run would mount a RAM
 // disk, and avoiding that means writing the user's persisted perf settings.
 
+// serialized: each test points the process-global VS_FFMPEG_PATH at its own fake ffmpeg (setenv)
 @Suite(.serialized, .timeLimit(.minutes(2)))
 struct CleanupLengthCheckTests {
 

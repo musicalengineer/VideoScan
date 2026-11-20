@@ -213,7 +213,7 @@ struct ShowAgainRulesTests {
 
 // MARK: - End to end
 
-@Suite("Show again — the run", .serialized)
+@Suite("Show again — the run")
 @MainActor
 struct ShowAgainApplyTests {
 

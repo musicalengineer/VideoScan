@@ -89,7 +89,7 @@ struct AnalyzerRunsLogicTests {
     }
 }
 
-@Suite("Content Analysis analyzers — a real Full Hashes run through the center", .serialized)
+@Suite("Content Analysis analyzers — a real Full Hashes run through the center")
 @MainActor
 struct AnalyzerRunsFollowUpTests {
 
@@ -177,7 +177,7 @@ struct AnalyzerRunsFollowUpTests {
     }
 }
 
-@Suite("Content Analysis analyzers — the automatic split's OUTCOME on catalog.sqlite", .serialized)
+@Suite("Content Analysis analyzers — the automatic split's OUTCOME on catalog.sqlite")
 @MainActor
 struct AnalyzerRunsSplitOutcomeTests {
 

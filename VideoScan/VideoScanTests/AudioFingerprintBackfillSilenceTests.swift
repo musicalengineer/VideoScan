@@ -95,7 +95,7 @@ private let ditherPass: AudioFingerprintBackfillJob.Pass = { _ in
     zeroLandmarkPrint(active: [true, true, true], seconds: 3, loud: 0)
 }
 
-@Suite("Fingerprint sound — silence is measured, never inferred (2026-10-20)", .serialized)
+@Suite("Fingerprint sound — silence is measured, never inferred (2026-10-20)")
 @MainActor
 struct AudioFingerprintBackfillSilenceTests {
 
@@ -200,7 +200,7 @@ struct AudioFingerprintBackfillSilenceTests {
     }
 }
 
-@Suite("Fingerprint sound — silence media matrix (real ffmpeg, 2026-10-20)", .serialized)
+@Suite("Fingerprint sound — silence media matrix (real ffmpeg, 2026-10-20)")
 @MainActor
 struct AudioFingerprintBackfillSilenceMediaTests {
 

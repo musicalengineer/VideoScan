@@ -410,7 +410,7 @@ private func roleHistory(_ model: VideoScanModel, _ digest: String) async throws
     return try await repository.read { try $0.provenanceRoleHistory(digest: digest) }
 }
 
-@Suite("Estimated provenance — the store and the writer cases on catalog.sqlite", .serialized)
+@Suite("Estimated provenance — the store and the writer cases on catalog.sqlite")
 @MainActor
 struct ProvenanceEstimateStoreTests {
 
@@ -918,7 +918,7 @@ struct ProvenanceEstimateSensorTests {
 
 // MARK: - Review 2026-11-10 (independent reviewer): written RED on 5cebfd5e6, green since the review fixes
 
-@Suite("Estimated provenance — review 2026-11-10", .serialized)
+@Suite("Estimated provenance — review 2026-11-10")
 @MainActor
 struct ProvenanceEstimateReviewTests {
 
@@ -1002,7 +1002,7 @@ struct ProvenanceEstimateReviewTests {
 
 // MARK: - The review's fixes: their own rules (each seen red by breaking the rule)
 
-@Suite("Estimated provenance — review fixes 2026-11-10", .serialized)
+@Suite("Estimated provenance — review fixes 2026-11-10")
 @MainActor
 struct ProvenanceEstimateReviewFixTests {
 

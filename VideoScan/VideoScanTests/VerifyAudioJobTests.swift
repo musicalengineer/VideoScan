@@ -446,7 +446,7 @@ struct VerifyAudioGateTests {
 
 // MARK: - Media matrix (one real end-to-end container)
 
-@Suite("VerifyAudioJob — media", .serialized)
+@Suite("VerifyAudioJob — media")
 @MainActor
 struct VerifyAudioJobMediaTests {
 

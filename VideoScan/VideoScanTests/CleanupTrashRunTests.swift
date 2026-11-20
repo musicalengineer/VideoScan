@@ -20,7 +20,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Cleanup — the run on real files", .serialized)
+@Suite("Cleanup — the run on real files")
 @MainActor
 struct CleanupTrashRunTests {
 

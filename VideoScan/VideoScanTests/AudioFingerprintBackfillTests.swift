@@ -91,7 +91,7 @@ private extension ShowAgainSandbox {
 
 // MARK: - Logic
 
-@Suite("Fingerprint sound — logic", .serialized)
+@Suite("Fingerprint sound — logic")
 @MainActor
 struct AudioFingerprintBackfillLogicTests {
 
@@ -423,7 +423,7 @@ struct AudioFingerprintBackfillLogicTests {
     }
 }
 
-@Suite("Fingerprint sound — QA round 1 (sharing identity, checkpoint race, budget across the gate)", .serialized)
+@Suite("Fingerprint sound — QA round 1 (sharing identity, checkpoint race, budget across the gate)")
 @MainActor
 struct AudioFingerprintBackfillQARound1Tests {
 
@@ -548,7 +548,7 @@ private actor ConcurrencyGauge {
 
 // MARK: - Scale
 
-@Suite("Fingerprint sound — scale (100k records)", .serialized)
+@Suite("Fingerprint sound — scale (100k records)")
 @MainActor
 struct AudioFingerprintBackfillScaleTests {
 
@@ -585,7 +585,7 @@ struct AudioFingerprintBackfillScaleTests {
 
 // MARK: - Isolation
 
-@Suite("Fingerprint sound — isolation: shared catalog, sidecar folder, drives", .serialized)
+@Suite("Fingerprint sound — isolation: shared catalog, sidecar folder, drives")
 @MainActor
 struct AudioFingerprintBackfillIsolationTests {
 
@@ -685,7 +685,7 @@ private final class CallCounter: @unchecked Sendable {
 
 // MARK: - Sensor
 
-@Suite("Fingerprint sound — sensor: read only on media, durable saves", .serialized)
+@Suite("Fingerprint sound — sensor: read only on media, durable saves")
 @MainActor
 struct AudioFingerprintBackfillSensorTests {
 
@@ -749,7 +749,7 @@ struct AudioFingerprintBackfillSensorTests {
 
 // MARK: - Media matrix
 
-@Suite("Fingerprint sound — media matrix (real ffmpeg)", .serialized)
+@Suite("Fingerprint sound — media matrix (real ffmpeg)")
 @MainActor
 struct AudioFingerprintBackfillMediaMatrixTests {
 
