@@ -517,19 +517,11 @@ struct MasterArchivePromoteSensorTests {
     /// was retired 2026-10-02, so it was excluded already; it keeps that.
     private static let foreignAppSupportSubtrees = ["team-channel/", "review-cycles/"]
 
+    // The shared isolation snapshot leaves out SQLite -shm files, which every reader
+    // touches: on 2026-11-20 (Ultra, full run) the Background helper's read-only poll moved
+    // catalog.sqlite-shm mid-test — 1 entry of 23,833 — and this test failed on it.
     private static func appSupportSnapshot() -> [String: String] {
-        let dir = (CatalogStore.shared.fileLocation as NSString).deletingLastPathComponent
-        let fm = FileManager.default
-        var out: [String: String] = [:]
-        guard let e = fm.enumerator(atPath: dir) else { return out }
-        for case let rel as String in e {
-            if foreignAppSupportSubtrees.contains(where: { rel.hasPrefix($0) }) { continue }
-            let attrs = (try? fm.attributesOfItem(atPath: (dir as NSString).appendingPathComponent(rel))) ?? [:]
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
-            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
-            out[rel] = "\(size):\(mtime)"
-        }
-        return out
+        AppSupportSnapshot.take().filter { key, _ in !foreignAppSupportSubtrees.contains(where: { key.hasPrefix($0) }) }
     }
 
     private static func diffKeys(_ a: NSDictionary, _ b: NSDictionary) -> [String] {
