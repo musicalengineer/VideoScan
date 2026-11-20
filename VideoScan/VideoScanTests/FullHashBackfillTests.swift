@@ -50,7 +50,7 @@ private final class CallCounter: @unchecked Sendable {
 
 // MARK: - Logic
 
-@Suite("Fill in full hashes — logic", .serialized)
+@Suite("Fill in full hashes — logic")
 @MainActor
 struct FullHashBackfillLogicTests {
 
@@ -183,7 +183,7 @@ struct FullHashBackfillLogicTests {
 
 // MARK: - Scale
 
-@Suite("Fill in full hashes — scale (100k records)", .serialized)
+@Suite("Fill in full hashes — scale (100k records)")
 @MainActor
 struct FullHashBackfillScaleTests {
 
@@ -216,7 +216,7 @@ struct FullHashBackfillScaleTests {
 
 // MARK: - Isolation
 
-@Suite("Fill in full hashes — isolation: drives away, poisoned marker", .serialized)
+@Suite("Fill in full hashes — isolation: drives away, poisoned marker")
 @MainActor
 struct FullHashBackfillIsolationTests {
 
@@ -279,7 +279,7 @@ struct FullHashBackfillIsolationTests {
 
 // MARK: - Sensor
 
-@Suite("Fill in full hashes — sensor: read only on media", .serialized)
+@Suite("Fill in full hashes — sensor: read only on media")
 @MainActor
 struct FullHashBackfillSensorTests {
 
@@ -314,7 +314,7 @@ struct FullHashBackfillSensorTests {
 
 // MARK: - Media matrix
 
-@Suite("Fill in full hashes — media matrix", .serialized)
+@Suite("Fill in full hashes — media matrix")
 @MainActor
 struct FullHashBackfillMediaMatrixTests {
 

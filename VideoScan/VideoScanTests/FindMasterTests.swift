@@ -318,7 +318,7 @@ struct FindMasterAnswerTests {
     }
 }
 
-@Suite("FindMasterJob", .serialized)
+@Suite("FindMasterJob")
 @MainActor
 struct FindMasterJobTests {
     typealias F = FindMasterFixtures

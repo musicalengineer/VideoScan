@@ -22,8 +22,8 @@
 // /Volumes/FamilyArchive, never App Support (MasterArchiveTestSupport).
 // Archived files are LOCKED by Promote; Sandbox.cleanup unlocks first.
 //
-// (For Rick: `@Suite(.serialized)` ≈ a gtest fixture whose cases run one at
-// a time; `#require` ≈ ASSERT_*, `#expect` ≈ EXPECT_*.)
+// Not serialized (2026-11-20): every case owns its sandbox and archive root.
+// (For Rick: `#require` ≈ ASSERT_*, `#expect` ≈ EXPECT_*.)
 
 import Foundation
 import Testing
@@ -107,7 +107,7 @@ enum PromoteIntegrityHarness {
 
 // MARK: - GH #219 (residual): the date the archived record cannot carry
 
-@Suite("GH #219 — Promote date: folder, filename, manifest and catalog agree, or Promote refuses", .serialized)
+@Suite("GH #219 — Promote date: folder, filename, manifest and catalog agree, or Promote refuses")
 @MainActor
 struct PromoteDateAgreementTests {
 
@@ -204,7 +204,7 @@ struct PromoteDateAgreementTests {
 
 // MARK: - GH #190: the same bytes never land in the archive twice
 
-@Suite("GH #190 — Promote refuses bytes the archive already holds", .serialized)
+@Suite("GH #190 — Promote refuses bytes the archive already holds")
 @MainActor
 struct PromoteDuplicateBytesTests {
 
@@ -386,7 +386,7 @@ private let dupMatrix: [DupMatrixCase] = [
     .init(label: "avi/dv", filename: "test_dup_dv.avi", size: "720x576", videoCodec: "dvvideo", audioCodec: "pcm_s16le", extra: ["-pix_fmt", "yuv420p"]),
 ]
 
-@Suite("GH #190 — duplicate refusal across the media matrix", .serialized)
+@Suite("GH #190 — duplicate refusal across the media matrix")
 @MainActor
 struct PromoteDuplicateMediaMatrixTests {
 

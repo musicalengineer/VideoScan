@@ -169,6 +169,7 @@ struct VerifyVideoJobLogicTests {
 
 // MARK: - Center
 
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("VerifyVideo — MFO center", .serialized)
 @MainActor
 struct VerifyVideoCenterTests {
@@ -254,7 +255,7 @@ struct VerifyVideoCodableTests {
 
 // MARK: - Isolation
 
-@Suite("VerifyVideo — persistence isolation", .serialized)
+@Suite("VerifyVideo — persistence isolation")
 @MainActor
 struct VerifyVideoIsolationTests {
 
@@ -278,7 +279,7 @@ struct VerifyVideoIsolationTests {
 
 // MARK: - Scale
 
-@Suite("VerifyVideo — scale", .serialized)
+@Suite("VerifyVideo — scale")
 @MainActor
 struct VerifyVideoScaleTests {
 
@@ -388,7 +389,7 @@ struct VerifyVideoMenuSensorTests {
 
 // MARK: - Media: one real job end to end
 
-@Suite("VerifyVideoJob — real media", .serialized)
+@Suite("VerifyVideoJob — real media")
 @MainActor
 struct VerifyVideoJobMediaTests {
 

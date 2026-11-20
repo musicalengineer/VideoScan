@@ -10,6 +10,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
+// serialized: sets the process-global ArchiveAngelPlanWriter.injectedFailure seam and VS_FFMPEG_PATH per test
 @Suite("Archive Angel — whole jobs on real media, failures injected", .serialized)
 @MainActor
 struct ArchiveAngelWholeJobTests {

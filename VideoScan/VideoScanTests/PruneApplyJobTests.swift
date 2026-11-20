@@ -13,6 +13,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("Prune — the job and its queue", .serialized)
 @MainActor
 struct PruneApplyJobTests {

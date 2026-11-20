@@ -167,7 +167,7 @@ struct ValidateScene {
     func log() -> String { sandbox.catalogLogText() }
 }
 
-@Suite("Validate Catalog — the job", .serialized)
+@Suite("Validate Catalog — the job")
 @MainActor
 struct ValidateCatalogJobTests {
 

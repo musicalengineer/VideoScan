@@ -97,7 +97,7 @@ enum FrameMatrixClips {
     static let red = ObsStubEmbedder.axis(0), blue = ObsStubEmbedder.axis(1)
 }
 
-@Suite("Frames mode — real decode (media matrix)", .serialized, .timeLimit(.minutes(5)), .enabled(if: FrameMatrixClips.ffmpeg, "ffmpeg is not installed"))
+@Suite("Frames mode — real decode (media matrix)", .timeLimit(.minutes(5)), .enabled(if: FrameMatrixClips.ffmpeg, "ffmpeg is not installed"))
 struct FrameIndexMediaMatrixTests {
 
     // MARK: Matrix

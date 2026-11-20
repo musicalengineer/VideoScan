@@ -58,7 +58,7 @@ enum VerifyVideoTestMedia {
     }
 }
 
-@Suite("VerifyVideo — media matrix", .serialized)
+@Suite("VerifyVideo — media matrix")
 struct VerifyVideoMediaMatrixTests {
 
     private func expectOK(name: String, videoCodec: String, extraVideoArgs: [String] = [],

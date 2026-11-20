@@ -389,7 +389,7 @@ struct PerceptualFingerprintScaleTests {
 }
 
 @MainActor
-@Suite("GH #293 — media matrix through the real backfill job", .serialized)
+@Suite("GH #293 — media matrix through the real backfill job")
 struct PerceptualFingerprintMediaMatrixTests {
 
     private static let fixtures: [(name: String, args: [String])] = [

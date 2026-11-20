@@ -82,7 +82,7 @@ enum VerifyAudioTestMedia {
 
 // MARK: - Matrix: healthy diagnosis across the checklist containers
 
-@Suite("VerifyAudio — media matrix", .serialized)
+@Suite("VerifyAudio — media matrix")
 @MainActor
 struct VerifyAudioMediaMatrixTests {
 
@@ -557,7 +557,7 @@ private final class LockedFlagBox: @unchecked Sendable {
 
 // MARK: - Rebuild Audio Track — real round-trip
 
-@Suite("VerifyAudio — rebuild round-trip", .serialized)
+@Suite("VerifyAudio — rebuild round-trip")
 @MainActor
 struct RebuildAudioJobRoundTripTests {
 

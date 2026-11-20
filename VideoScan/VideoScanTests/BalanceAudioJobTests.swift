@@ -21,7 +21,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite("Balance Audio — job", .serialized)
+@Suite("Balance Audio — job")
 @MainActor
 struct BalanceAudioJobTests {
 

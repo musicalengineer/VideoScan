@@ -73,7 +73,7 @@ private enum VerifyTestSupport {
 
 // MARK: - Logic
 
-@Suite("Verify Archive Copies — logic", .serialized)
+@Suite("Verify Archive Copies — logic")
 @MainActor
 struct VerifyArchiveCopiesLogicTests {
 
@@ -393,7 +393,7 @@ struct VerifyArchiveCopiesLogicTests {
 
 // MARK: - Verify vs. rescan race (codex #983 blocker 2)
 
-@Suite("Verify Archive Copies — conditional writes under a concurrent rescan", .serialized)
+@Suite("Verify Archive Copies — conditional writes under a concurrent rescan")
 @MainActor
 struct VerifyArchiveCopiesRaceTests {
 
@@ -766,7 +766,7 @@ private let verifyMatrix: [VerifyMatrixCase] = [
                      audioCodec: "pcm_s16le", size: "720x576", extraVideoArgs: ["-pix_fmt", "yuv420p"]),
 ]
 
-@Suite("Verify Archive Copies — media matrix", .serialized)
+@Suite("Verify Archive Copies — media matrix")
 @MainActor
 struct VerifyArchiveCopiesMediaMatrixTests {
 
@@ -846,6 +846,7 @@ struct VerifyArchiveCopiesScaleTests {
 
 // MARK: - Isolation + sensor
 
+// serialized: poisons CatalogStore.shared.masterArchive (process-global) and snapshots UserDefaults/App Support
 @Suite("Verify Archive Copies — isolation & sensor", .serialized)
 @MainActor
 struct VerifyArchiveCopiesIsolationTests {

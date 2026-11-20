@@ -471,9 +471,9 @@ struct CleanupTests {
 
 // MARK: - Full-job remediation integration (B1/M1/M2/M3/m2)
 
-// .serialized: full CleanupJob runs spawn real ffprobe children through
-// probeFile; serial keeps subprocess load deterministic.
-@Suite(.serialized) @MainActor
+// Not serialized (2026-11-20): each test owns its scratch folder; the real
+// ffprobe children run beside every other suite's anyway.
+@Suite @MainActor
 struct CleanupPublishRemediationTests {
 
     /// M3: a file that appears at the planned destination AFTER job init

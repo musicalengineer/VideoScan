@@ -819,7 +819,7 @@ struct VerifyCatalogReportTests {
 
 // MARK: - Scale
 
-@Suite("Verify Catalog — scale (100k rows, 2k events)", .serialized)
+@Suite("Verify Catalog — scale (100k rows, 2k events)")
 struct VerifyCatalogScaleTests {
 
     /// 100k synthetic rows with every relation kind sprinkled in (1 in 1,000
@@ -878,7 +878,7 @@ private func runVerify(_ sb: ShowAgainSandbox, events: [IntegrityEventFact] = []
     return job
 }
 
-@Suite("Verify Catalog — the job", .serialized)
+@Suite("Verify Catalog — the job")
 @MainActor
 struct VerifyCatalogJobTests {
 

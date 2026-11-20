@@ -135,7 +135,7 @@ extension ShowAgainSandbox {
 
 // MARK: - Logic
 
-@Suite("Audit catalog — logic", .serialized)
+@Suite("Audit catalog — logic")
 @MainActor
 struct CatalogAuditJobLogicTests {
 
@@ -428,7 +428,7 @@ struct CatalogAuditJobLogicTests {
 
 // MARK: - Scale
 
-@Suite("Audit catalog — scale (100k rows)", .serialized)
+@Suite("Audit catalog — scale (100k rows)")
 @MainActor
 struct CatalogAuditJobScaleTests {
 
@@ -483,7 +483,7 @@ struct CatalogAuditJobScaleTests {
 
 // MARK: - Isolation
 
-@Suite("Audit catalog — isolation: poisoned marker, refusals", .serialized)
+@Suite("Audit catalog — isolation: poisoned marker, refusals")
 @MainActor
 struct CatalogAuditJobIsolationTests {
 
@@ -553,7 +553,7 @@ struct CatalogAuditJobIsolationTests {
 
 // MARK: - Sensor
 
-@Suite("Audit catalog — sensor: one mark path, nothing on media", .serialized)
+@Suite("Audit catalog — sensor: one mark path, nothing on media")
 @MainActor
 struct CatalogAuditJobSensorTests {
 
@@ -768,7 +768,7 @@ extension ShowAgainSandbox {
     }
 }
 
-@Suite("Audit catalog — prove at the mark (codex 2026-10-16)", .serialized)
+@Suite("Audit catalog — prove at the mark (codex 2026-10-16)")
 @MainActor
 struct CatalogAuditProveAtTheMarkTests {
 

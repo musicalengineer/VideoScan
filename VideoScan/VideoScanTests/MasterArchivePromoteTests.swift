@@ -38,7 +38,7 @@ private let promoteMatrix: [PromoteMatrixCase] = [
                       videoCodec: "dvvideo", audioCodec: "pcm_s16le", extraVideoArgs: ["-pix_fmt", "yuv420p"]),
 ]
 
-@Suite("Master Archive — Promote media matrix", .serialized)
+@Suite("Master Archive — Promote media matrix")
 @MainActor
 struct MasterArchivePromoteMediaMatrixTests {
 
@@ -128,6 +128,7 @@ struct MasterArchivePromoteMediaMatrixTests {
 
 // MARK: - Sensor + convergence + safety
 
+// serialized: poisons CatalogStore.shared.masterArchive (process-global) and snapshots UserDefaults/App Support
 @Suite("Master Archive — Promote sensor & convergence", .serialized)
 @MainActor
 struct MasterArchivePromoteSensorTests {

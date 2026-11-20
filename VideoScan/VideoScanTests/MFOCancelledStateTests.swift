@@ -213,6 +213,7 @@ private func drainMainActor(until condition: () -> Bool) async {
 }
 
 @MainActor
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("Stored-state jobs — cancel mid-run ends Cancelled, never Failed", .serialized)
 struct MFOStoredStateCancelTests {
 
@@ -499,7 +500,7 @@ struct MFOTerminalCauseTests {
 }
 
 @MainActor
-@Suite("Stored-state jobs — a stall recorded before Stop stays Failed", .serialized)
+@Suite("Stored-state jobs — a stall recorded before Stop stays Failed")
 struct MFOStallBeforeStopTests {
 
     private func expectStalledFailure(_ state: MediaFileOperationState, _ label: String) {

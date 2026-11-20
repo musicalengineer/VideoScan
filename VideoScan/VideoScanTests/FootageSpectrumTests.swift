@@ -221,6 +221,7 @@ private final class StubFlags: @unchecked Sendable {
 }
 
 @MainActor
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("Footage Spectrum — job lifecycle", .serialized)
 struct FootageSpectrumJobTests {
 
@@ -410,7 +411,7 @@ struct FootageSpectrumJobTests {
 // MARK: - Isolation
 
 @MainActor
-@Suite("Footage Spectrum — isolation", .serialized)
+@Suite("Footage Spectrum — isolation")
 struct FootageSpectrumIsolationTests {
 
     /// Every file under `dir` with its size and modification date.

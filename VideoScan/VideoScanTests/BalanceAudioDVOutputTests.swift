@@ -39,7 +39,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite("Balance Audio — raw DV output container", .serialized)
+@Suite("Balance Audio — raw DV output container")
 @MainActor
 struct BalanceAudioDVOutputTests {
 

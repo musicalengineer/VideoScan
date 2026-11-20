@@ -157,6 +157,7 @@ struct MFOSummaryLineFormatTests {
 // MARK: - Center terminal watcher (fake jobs)
 
 @MainActor
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("MFO Center OUTCOME watcher", .serialized)
 struct MFOCenterOutcomeWatcherTests {
 
@@ -279,6 +280,7 @@ struct MFOCenterOutcomeWatcherTests {
 // MARK: - End-to-end through real jobs
 
 @MainActor
+// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
 @Suite("MFO log summaries end-to-end", .serialized)
 struct MFOLogSummaryEndToEndTests {
 

@@ -39,8 +39,21 @@ enum MediaTrash {
     nonisolated static let testHostTrash = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("VideoScan-tests/trash-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 
+    /// Serializes the name pick and the move below. Test host only: the
+    /// "exists? → move" pair is two steps, and parallel tests or jobs
+    /// trashing same-named files raced between them — one move failed
+    /// ("already exists") or landed on another's name
+    /// (MediaTrashTestHostRaceTests, 2026-11-20). The real Trash
+    /// (`trashItem`) picks its own unique name atomically.
+    /// (≈ a C++ static std::mutex around a check-then-act.)
+    private static let testHostTrashLock = NSLock()
+
     /// No-clobber move into `testHostTrash` ("a 2.mov" on a name clash).
     nonisolated static func moveToTestHostTrash(_ url: URL) throws -> URL {
+        try testHostTrashLock.withLock { try moveToTestHostTrashLocked(url) }
+    }
+
+    private nonisolated static func moveToTestHostTrashLocked(_ url: URL) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: testHostTrash, withIntermediateDirectories: true)
         let stem = url.deletingPathExtension().lastPathComponent

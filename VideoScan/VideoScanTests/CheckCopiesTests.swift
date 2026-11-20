@@ -46,7 +46,7 @@ private func runJob(_ model: VideoScanModel, _ ids: Set<UUID>,
 
 // MARK: - Logic
 
-@Suite("Check copies — fresh hashes promote proven copies", .serialized)
+@Suite("Check copies — fresh hashes promote proven copies")
 @MainActor
 struct CheckCopiesLogicTests {
 
@@ -125,7 +125,7 @@ struct CheckCopiesLogicTests {
 
 // MARK: - Scale
 
-@Suite("Check copies — scale (100k records)", .serialized)
+@Suite("Check copies — scale (100k records)")
 @MainActor
 struct CheckCopiesScaleTests {
 
@@ -154,7 +154,7 @@ struct CheckCopiesScaleTests {
 
 // MARK: - Sensor
 
-@Suite("Check copies — sensor: read only; offline is never the keeper", .serialized)
+@Suite("Check copies — sensor: read only; offline is never the keeper")
 @MainActor
 struct CheckCopiesSensorTests {
 
@@ -215,7 +215,7 @@ struct CheckCopiesSensorTests {
 
 // MARK: - Media matrix
 
-@Suite("Check copies — media matrix", .serialized)
+@Suite("Check copies — media matrix")
 @MainActor
 struct CheckCopiesMediaMatrixTests {
 

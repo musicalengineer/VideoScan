@@ -43,7 +43,7 @@ private func withStamp(_ f: ContentFixity, _ s: FileIdentityStamp) -> ContentFix
     ContentFixity(algorithm: f.algorithm, digest: f.digest, byteCount: f.byteCount, stamp: s, computedAt: f.computedAt)
 }
 
-@Suite("Fixity stamp volume identity — consumers, rehash, Bind Fixity to Volume", .serialized)
+@Suite("Fixity stamp volume identity — consumers, rehash, Bind Fixity to Volume")
 @MainActor
 struct FixityStampVolumeIdentityTests {
 

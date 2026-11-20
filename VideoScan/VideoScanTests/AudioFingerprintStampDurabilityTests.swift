@@ -112,7 +112,7 @@ private enum StampScene {
     }
 }
 
-@Suite("Fingerprint sound — #416: stamps reach catalog.sqlite and survive a relaunch", .serialized)
+@Suite("Fingerprint sound — #416: stamps reach catalog.sqlite and survive a relaunch")
 @MainActor
 struct AudioFingerprintStampDurabilityTests {
 
