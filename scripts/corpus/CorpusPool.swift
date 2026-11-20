@@ -33,22 +33,26 @@ import Foundation
 
 enum CorpusPool {
     /// Calls `body` once for every item, at most `width` at a time, and returns when all have
-    /// returned. `width` ≤ 1 is the plain loop: the items one after another, in order.
+    /// returned. `width` ≤ 1 is the plain loop: the items one after another, in order. Once the
+    /// calling task is cancelled no further item is started (the ones in flight finish).
     static func each<Item: Sendable>(_ items: [Item], width: Int,
                                      _ body: @escaping @Sendable (Item) async -> Void) async {
         guard width > 1, items.count > 1 else {
-            for item in items { await body(item) }
+            for item in items {
+                guard !Task.isCancelled else { return }
+                await body(item)
+            }
             return
         }
         await withTaskGroup(of: Void.self) { group in
             var next = items.makeIterator()
             for _ in 0..<width {
-                guard let item = next.next() else { break }
+                guard !Task.isCancelled, let item = next.next() else { break }
                 group.addTask { await body(item) }
             }
             // One finishes, the next starts: never more than `width` in flight, started in the given order.
             while await group.next() != nil {
-                if let item = next.next() { group.addTask { await body(item) } }
+                if !Task.isCancelled, let item = next.next() { group.addTask { await body(item) } }
             }
         }
     }
@@ -80,9 +84,15 @@ final class CorpusDeadline: @unchecked Sendable {
     }
 
     func arm(sha: String, seconds: Double) {
+        arm(shas: [sha], seconds: seconds)
+    }
+
+    /// One batch on ONE clock (the verbs lane's whole sample): its files fall due at the same
+    /// instant, so one tick cuts all of them — never some as `timeout` and the rest as `crash`.
+    func arm(shas: [String], seconds: Double) {
         let now = Date()
         lock.lock()
-        running[sha] = Running(engine: "", due: now.addingTimeInterval(seconds), started: now)
+        for sha in shas { running[sha] = Running(engine: "", due: now.addingTimeInterval(seconds), started: now) }
         lock.unlock()
     }
 

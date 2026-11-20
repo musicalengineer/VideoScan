@@ -92,11 +92,14 @@ with open(plan["calls"], "a") as f:
                         "target": target["BlueprintName"], "target_keys": sorted(target), "config": config,
                         "rows": [r[0] for r in __import__("sqlite3").connect("file:" + config["catalog"] + "?mode=ro", uri=True)
                                  .execute("SELECT full_path FROM files ORDER BY full_path")],
-                        "clones_exist": all(os.path.isfile(p) for i in config["pending"] for p in [i["path"]] + (i.get("copies") or []))}) + "\n")
+                        "clones_exist": all(os.path.isfile(p) for i in config["pending"] for p in [i["path"]] + (i.get("copies") or [])),
+                        "work_files": sorted(os.listdir(config["work"]))}) + "\n")
 if plan.get("remove") and os.path.lexists(plan["remove"]):   # the world changes under the run (Codex #331 F2)
     os.remove(plan["remove"])
 if plan.get("vandal"):                                   # an engine that reaches the pristine corpus (it must turn the lane RED)
     os.utime(plan["vandal"], (5, 5))
+if plan.get("litter"):                                   # what a balancing engine leaves when the host dies mid-copy
+    open(os.path.join(config["work"], plan["litter"] + "-" + str(len(os.listdir(config["work"])))), "w").write("partial")
 if plan.get("lock"):                                     # what Promote does to what it archives
     locked = os.path.join(config["archiveRoot"], "locked.bin")
     open(locked, "w").write("x"); os.chflags(locked, 0x2)
@@ -123,6 +126,8 @@ for first in range(0, len(pending), jobs):
     for engine in engines:
         for item in group:
             how = plan["files"].get(item["sha"], {})
+            if how.get("together_only") and jobs == 1:          # a fault only files in flight together cause
+                how = {}
             if how.get("crash") == engine:
                 out.write('{"ev": "engine", "sha": "cut-mid-li')        # a line cut by the crash
                 out.flush(); os._exit(139)
@@ -4395,6 +4400,93 @@ class ParallelLaneTests(unittest.TestCase):
         self.assertEqual((results['b']['probe'], results['c']['probe']), ('timeout', 'crash'))
 
 
+class ReviewFixTests(unittest.TestCase):
+    """Review of 327576126 (2026-11-20): a launch of N that died is counted and said, never absorbed; the proof
+    lane's leftovers are swept before a relaunch and its width counts what the balancing engine needs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = ManyFileScene(self.tmp.name)
+        self.shas = sorted(sha_of(n) for n, _, _, _ in ManyFileScene.FILES)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def report(self):
+        return json.loads((self.scene.report_dir() / 'report.json').read_text())
+
+    def test_a_launch_of_n_that_died_is_said_in_the_report_with_the_files_run_again_alone(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}
+        self.scene.run(jobs=4)
+        report = self.report()
+        self.assertEqual(report.get('launches_cut_short'), 1, 'one launch of four died with files in flight')
+        self.assertEqual(report.get('run_again_alone'), 4, 'the four files it left unfinished were run again alone')
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertIn('1 launch of 4 cut short; 4 files run again alone (1 failed alone)', summary)
+        self.assertIn('RED', summary.splitlines()[0], 'a file that crashes alone is still RED')
+
+    def test_a_crash_only_files_in_flight_together_cause_is_amber_never_green(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check', together_only=True)}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_AMBER)
+        report = self.report()
+        self.assertEqual((report['launches_cut_short'], report['run_again_alone'], report['failures']), (1, 4, {}))
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertTrue(summary.startswith('corpus check: AMBER 12 files'), summary.splitlines()[0])
+        self.assertIn('1 launch of 4 cut short; 4 files run again alone (none failed alone) — AMBER', summary)
+        self.assertEqual(cr.clean_report(report)['launches_cut_short'], 1, 'status reads it back')
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=1), cr.EXIT_GREEN, 'one at a time it never happens')
+        self.assertEqual(json.loads((self.scene.report_dir(stamp='20261117_130000_2') / 'report.json').read_text())
+                         ['launches_cut_short'], 0)
+
+    def test_what_a_dead_launch_left_in_the_work_folder_is_swept_before_the_next(self):
+        self.scene.plan['litter'] = 'balanced-copy.partial'
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}
+        self.scene.run(jobs=4)
+        listings = [c['work_files'] for c in self.scene.recorded_calls() if 'work_files' in c]
+        self.assertGreater(len(listings), 1)
+        for listing in listings:
+            leftovers = [name for name in listing if name.startswith('balanced-copy')]
+            self.assertEqual(leftovers, [], 'a launch began beside an earlier launch\'s partial copy')
+
+    def test_the_sweep_takes_only_the_runs_own_loose_files(self):
+        work = self.scene.seal.work_root / 'run-sweep'
+        self.scene.seal.mkdir(work / 'tmp')
+        for name in ('config-1.json', 'progress-1.jsonl', 'abc_balanced.mov', 'abc.partial'):
+            (work / name).write_text('x')
+        (work / 'linked').symlink_to(self.scene.corpus / cr.MARKER)
+        twin = work / 'second-name'
+        os.link(str(self.scene.corpus / cr.MARKER), str(twin))
+        cr.sweep_work(self.scene.seal, work)
+        self.assertEqual(sorted(p.name for p in work.iterdir()),
+                         ['config-1.json', 'linked', 'progress-1.jsonl', 'second-name', 'tmp'])
+        self.assertTrue((self.scene.corpus / cr.MARKER).exists(), 'a corpus document is never reached through a link or a second name')
+
+    def test_the_verbs_batch_is_begun_on_one_clock_and_the_run_is_plainly_sendable(self):
+        verbs = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+        self.assertIn('run.begin(stage.items)', verbs)
+        self.assertNotIn('for item in stage.items { run.begin(item) }', verbs)
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        self.assertIn('deadline.arm(shas: items.map(\\.sha), seconds: config.deadlineSeconds)', support)
+        self.assertIn('final class CorpusRun: Sendable {', support, 'every member is Sendable: no @unchecked')
+
+    def test_the_proof_width_counts_what_the_balancing_engine_needs_not_the_source_size(self):
+        MB = 1 << 20
+        self.assertEqual(cr.proof_need(100 * MB, 60.0), 100 * MB + 12_000_000 + 64 * MB)     # BalanceAudioFix.requiredFreeBytes
+        self.assertEqual(cr.proof_need(100 * MB, -5.0), 100 * MB + 64 * MB)
+        scene = LaneScene(pathlib.Path(self.tmp.name, 'proof').as_posix(), with_proof_engine=True)
+        scene.plan['engines'] = ['balance', 'proof']
+        real = cr.shutil.disk_usage
+        floor = 100 * 10**9 * (1 - cr.TRANSIENT_CEILING)
+        cr.shutil.disk_usage = lambda path: type('U', (), dict(total=100 * 10**9, used=0, free=int(floor) + 10 * MB))()
+        try:
+            self.assertEqual(scene.run('proof'), cr.EXIT_REFUSED, 'a 1,200-byte file still needs the 64 MB cushion')
+        finally:
+            cr.shutil.disk_usage = real
+        self.assertIn('a run stops short of 95% used', (scene.out / 'corpus-summary.txt').read_text())
+
+
 class ParallelScaleTests(unittest.TestCase):
 
     def test_settle_over_100k_interleaved_events_stays_inside_the_budget(self):
@@ -4478,6 +4570,64 @@ def pool_binary():
             raise AssertionError('CorpusPool.swift does not compile by itself in Swift 6 mode:\n' + done.stdout + done.stderr)
         _POOL_BUILD.extend([build, binary])
     return _POOL_BUILD[1]
+
+
+POOL_REVIEW_MAIN = r"""
+import Foundation
+final class Box: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    private var n = 0
+    func add(_ s: String) { lock.lock(); lines.append(s); lock.unlock() }
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+}
+func cancelled(width: Int) async -> Int {
+    let started = Box()
+    let walk = Task {
+        await CorpusPool.each(Array(0..<12), width: width) { _ in
+            started.bump()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    walk.cancel()
+    await walk.value
+    return started.count
+}
+func main() async {
+    print("cancel1=\(await cancelled(width: 1)) cancel2=\(await cancelled(width: 2))")
+    // One batch (the verbs lane's whole sample), armed on ONE clock even with a pause inside the call's caller.
+    let cut = Box(), halted = Box()
+    let deadline = CorpusDeadline(write: { if $0["cut"] != nil { cut.add($0["sha"] as? String ?? "?") } },
+                                  halt: { halted.bump() })
+    deadline.arm(shas: ["x", "y", "z"], seconds: 1.6)
+    deadline.entering("purge")
+    while halted.count == 0 { try? await Task.sleep(nanoseconds: 50_000_000) }
+    print("batch=\(cut.all.sorted().joined(separator: ","))")
+}
+await main()
+"""
+
+
+@unittest.skipUnless(shutil.which('swiftc'), 'needs the Swift compiler')
+class SwiftPoolReviewTests(unittest.TestCase):
+    """Review of 327576126: the pool stops starting files once cancelled; a batch is armed on one clock."""
+
+    def test_a_cancelled_walk_starts_no_more_files_and_a_batch_is_cut_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            main = pathlib.Path(tmp, 'main.swift')
+            main.write_text(POOL_REVIEW_MAIN)
+            binary = pathlib.Path(tmp, 'review')
+            done = subprocess.run(['swiftc', '-swift-version', '6', '-o', str(binary), str(SCRIPTS / 'corpus' / 'CorpusPool.swift'),
+                                   str(main)], capture_output=True, text=True, timeout=600)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+        facts = dict(part.split('=') for part in ran.stdout.split())
+        self.assertLessEqual(int(facts['cancel1']), 2, 'one at a time: no file begins after the cancel')
+        self.assertLessEqual(int(facts['cancel2']), 4, 'two at a time: no file begins after the cancel')
+        self.assertEqual(facts['batch'], 'x,y,z', 'the whole batch is cut by one tick, never part of it')
 
 
 @unittest.skipUnless(shutil.which('swiftc'), 'needs the Swift compiler')

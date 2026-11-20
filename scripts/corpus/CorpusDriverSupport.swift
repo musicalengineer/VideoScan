@@ -111,7 +111,7 @@ final class CorpusProgress: @unchecked Sendable {
     }
 }
 
-final class CorpusRun: @unchecked Sendable {
+final class CorpusRun: Sendable {
     let config: CorpusConfig
     let progress: CorpusProgress
     let deadline: CorpusDeadline
@@ -212,6 +212,12 @@ final class CorpusRun: @unchecked Sendable {
     func begin(_ item: CorpusConfig.Item) {
         progress.write(["ev": "begin", "sha": item.sha])
         deadline.arm(sha: item.sha, seconds: config.deadlineSeconds)
+    }
+
+    /// A batch begun together (the verbs lane): one `begin` line each, then one deadline clock for all.
+    func begin(_ items: [CorpusConfig.Item]) {
+        for item in items { progress.write(["ev": "begin", "sha": item.sha]) }
+        deadline.arm(shas: items.map(\.sha), seconds: config.deadlineSeconds)
     }
 
     func end(_ item: CorpusConfig.Item) {

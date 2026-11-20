@@ -1508,6 +1508,11 @@ class Lane:
         self.closing: Dict[str, int] = {}
         self.housekeeping: List[str] = []
         self.not_run_external = 0                            # files on an external volume that is not mounted
+        # Launches of N that died with files in flight (their widths), and the files they left to be run again alone:
+        # said in the report, and the run is AMBER at best — a fault only files in flight together cause (an engine
+        # race, memory pressure) is a finding, never absorbed (review of 327576126).
+        self.cut_widths: List[int] = []
+        self.ran_alone: set = set()
         self.proven_uuid: Optional[str] = None               # the external volume proven at the start (its UUID)
         self.inventory: Dict[str, Dict[str, int]] = {}       # per root, files by state (present, missing, ...)
         self.ledger: Optional["Ledger"] = None
@@ -1725,6 +1730,8 @@ class Lane:
             solo = [e for e in pending if e.sha in alone]
             batch = solo or pending                          # those to be judged alone first, one at a time
             width = 1 if solo else min(self.launch_width(), len(batch))
+            if self.launches and self.lane != "verbs":      # what a dead launch's engines left half-written goes first
+                sweep_work(self.seal, self.work)
             events = self.launch(batch, database, xctestrun, width)
             for ev in events:
                 if ev.get("ev") == "hello" and not hello:
@@ -1741,6 +1748,9 @@ class Lane:
             # alone did progress (those launches are width 1 and settle every file they begin).
             if settled == 0 and len(alone) == before:
                 raise Refused("the driver started no file — see corpus-test.log on the host")
+            if len(alone) > before:
+                self.cut_widths.append(width)
+        self.ran_alone = set(alone)
         return results, hello
 
     def launch_width(self) -> int:
@@ -1817,6 +1827,10 @@ class Lane:
                 "media_seconds": round(sum(r.get("duration", 0) or 0 for r in results.values()), 1),
                 "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "build_reused": self.build_reused,
                 "launches": self.launches, "jobs": self.jobs,
+                "launches_cut_short": len(self.cut_widths), "cut_short_width": max(self.cut_widths, default=0),
+                "run_again_alone": len(self.ran_alone),
+                "failed_alone": sum(1 for sha in self.ran_alone if sha in results and (
+                    results[sha].get("unfinished") or any(results[sha].get(e) in CUT_WORDS for e in engines))),
                 "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
                 "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
                 "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
@@ -1868,8 +1882,9 @@ class Lane:
             report["against"] = None
             self.store(report, {})
             return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, None), EXIT_RED)
-        if self.lane == "proof":                             # one balanced copy per file in flight, about its source's size
-            self.jobs = transient_room(seal, [e.size for e in entries], self.jobs)
+        if self.lane == "proof":                             # one balanced copy per file in flight: what the engine asks for
+            lengths = durations(self.database) if self.database else {}
+            self.jobs = transient_room(seal, [proof_need(e.size, lengths.get(e.sha, 0.0)) for e in entries], self.jobs)
         seal.out_folder(self.out)
         self.housekeeping = prune(seal, self.lane)
         # The run's work folder is made by this run and by nothing before it: whatever is found
@@ -1960,6 +1975,49 @@ def smoke_sample(entries: List[Entry], codecs: Dict[str, Tuple[str, str, str]], 
             if queue and len(picked) < cap:
                 picked.append(queue.pop(0))
     return sorted(picked, key=lambda e: e.sha)
+
+
+def durations(database: Path) -> Dict[str, float]:
+    """Each sealed row's duration in seconds as the catalog has it, by SHA-256 (read-only door)."""
+    import catalog_db
+    conn = catalog_db.connect(database)
+    try:
+        return {sha: float(d or 0.0) for sha, d in conn.execute("SELECT content_digest, duration_s FROM files")}
+    finally:
+        conn.close()
+
+
+def proof_need(size: int, seconds: float) -> int:
+    """What the balancing engine asks free for one copy (BalanceAudioFix.requiredFreeBytes, the app's own rule):
+    the source's size, plus 200 KB per second of sound (lossy -> 48 kHz stereo PCM), plus a 64 MB cushion."""
+    return int(size) + int(max(0.0, float(seconds or 0.0)) * 200_000) + (64 << 20)
+
+
+def sweep_work(seal: Seal, work: Path) -> None:
+    """Before a relaunch: the loose files a dead launch's engines left in the run's work folder (a balanced
+    copy half-written when the host exited — `_exit` runs no cleanup) go, through `_remove_at`. Only regular
+    files with ONE name on the home volume; never the launches' own config-*/progress-* files, never a
+    folder, a link or a second name of anything."""
+    path = str(seal.writable(work))
+    dev = seal.home_device()
+    try:
+        fd = os.open(path, O_DIR)
+    except OSError:
+        return
+    try:
+        if os.fstat(fd).st_dev != dev:
+            return
+        for name in os.listdir(fd):
+            if name.startswith(("config-", "progress-")):
+                continue
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_dev == dev:
+                _remove_at(fd, name, os.path.join(path, name), dev)
+    finally:
+        os.close(fd)
 
 
 _HOST = object()
@@ -2179,8 +2237,9 @@ def verdict_of(report: dict, against: Optional[dict]) -> str:
     # Files NOT RUN because the external volume is not mounted: AMBER, never GREEN (the run proves
     # nothing about them) and never RED (no engine failed and no copy is at risk; the count is said).
     # Files mismatched, vanished or changed: AMBER, named. Files MISSING (not yet copied) never move it.
+    # A launch of N that died (its files then ran alone): AMBER — the fault needed files in flight together.
     return "AMBER" if ((against or {}).get("changed") or report.get("not_run_external")
-                       or report.get("problem_count")) else "GREEN"
+                       or report.get("problem_count") or report.get("launches_cut_short")) else "GREEN"
 
 
 def against_lines(against: Optional[dict]) -> List[str]:
@@ -2236,6 +2295,12 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     for state in PROBLEM_STATES:
         if (report.get("problems") or {}).get(state):
             lines.append(f"  {state} (AMBER): " + " ".join(report["problems"][state]))
+    if report.get("launches_cut_short"):
+        cut, failed = report["launches_cut_short"], report.get("failed_alone", 0)
+        lines.append(f"  {cut} launch{'es' if cut != 1 else ''} of {report.get('cut_short_width', 0)} cut short; "
+                     f"{report.get('run_again_alone', 0)} files run again alone ("
+                     + (f"{failed} failed alone)" if failed else "none failed alone) — AMBER: a fault only files in flight "
+                        "together cause (an engine race, memory pressure); --jobs 1 runs one at a time"))
     if report.get("not_run_external"):
         lines.append(f"  external volume NOT MOUNTED: {report['not_run_external']} files on it NOT RUN — AMBER; "
                      "mount it and run again (a run without them is never a baseline)")
@@ -2722,6 +2787,10 @@ def clean_report(report) -> dict:
             "media_seconds": number(report.get("media_seconds")), "wall_s": number(report.get("wall_s")),
             "build_s": number(report.get("build_s")), "launches": int(number(report.get("launches"))),
             "jobs": int(number(report.get("jobs"))) or None,
+            "launches_cut_short": int(number(report.get("launches_cut_short"))),
+            "cut_short_width": int(number(report.get("cut_short_width"))),
+            "run_again_alone": int(number(report.get("run_again_alone"))),
+            "failed_alone": int(number(report.get("failed_alone"))),
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
             "problem_count": int(number(report.get("problem_count"))),
