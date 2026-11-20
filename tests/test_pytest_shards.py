@@ -16,16 +16,6 @@ lane = importlib.util.module_from_spec(spec2)
 spec2.loader.exec_module(lane)
 
 
-def test_modules_are_dealt_longest_first_to_the_lightest_shard_and_every_module_once():
-    timings = {"a.py": 100.0, "b.py": 60.0, "c.py": 50.0, "d.py": 10.0, "e.py": 5.0}
-    shards = ps.deal(list(timings), 2, timings)
-    assert sorted(m for s in shards for m in s) == sorted(timings)
-    loads = sorted(sum(timings[m] for m in s) for s in shards)
-    assert loads == [110.0, 115.0], loads          # LPT: a | b+c+e … balanced within one module
-    assert ps.deal(["x.py"], 8, {}) == [["x.py"]], "never more shards than modules"
-    assert ps.deal(list(timings), 1, timings) == [sorted(timings)], "N=1 is one pytest over every module"
-
-
 def test_the_summary_sums_shards_in_pytests_own_grammar_and_the_lane_reads_it():
     a = ps.summary_counts("....\n1 failed, 40 passed, 2 skipped, 1 warning, 3 subtests passed in 1.20s\n")
     b = ps.summary_counts("== 60 passed, 1 warning in 2.00s ==\n")
@@ -55,10 +45,10 @@ def test_shards_run_at_once_a_failure_is_shown_and_the_exit_is_nonzero(tmp_path)
     secs = float(re.search(r"in (\d+\.\d+)s", last).group(1))
     assert secs < 2.6, f"three 1 s modules in 3 shards took {secs}s — they did not run at once"
     assert "FAILED test_bad.py::test_c" in out
-    assert "shard" in out and "exit 1" in out, "the failing shard's own output is not shown"
+    assert "test_bad.py: exit 1" in out, "the failing strand's own output is not shown"
     import json
     known = json.loads(timings.read_text())
-    assert set(known) >= {"test_ok_one.py", "test_ok_two.py", "test_bad.py"}, "per-module timings not recorded"
+    assert set(known) >= {"pytest:test_ok_one.py", "pytest:test_ok_two.py", "pytest:test_bad.py"}, known
 
 
 def test_a_shard_that_dies_without_a_summary_is_red_never_green(tmp_path):
@@ -68,6 +58,25 @@ def test_a_shard_that_dies_without_a_summary_is_red_never_green(tmp_path):
                         "--jobs", "2", "--timings", str(tmp_path / "t.json"), "--", "test_ok.py", "test_dies.py"],
                        cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert p.returncode != 0
-    assert "ERROR shard-" in p.stdout and "with no pytest summary" in p.stdout
+    assert "ERROR test_dies.py: exit 3 with no pytest summary" in p.stdout, p.stdout
     ok, words = lane.verdict(p.stdout, p.returncode, False, 1500)
     assert not ok, words
+
+
+def test_a_file_with_no_tests_is_named_not_failed_but_a_lane_of_no_tests_is_red(tmp_path):
+    # 2026-11-20, one strand per module: the tracked-file glob also matches helpers with no tests
+    # (scripts/ci_test_verdict.py, scripts/pytest_shards.py); pytest exits 5 on them alone.
+    (tmp_path / "test_ok.py").write_text("def test_a():\n    pass\n")
+    (tmp_path / "helper_test_x.py").write_text("X = 1\n")
+    run = lambda *mods: subprocess.run([sys.executable, str(ROOT / "scripts" / "pytest_shards.py"), "--python",
+                                        sys.executable, "--jobs", "2", "--timings", str(tmp_path / "t.json"), "--",
+                                        *mods], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    p = run("test_ok.py", "helper_test_x.py")
+    assert p.returncode == 0, p.stdout
+    assert "no tests in 1 file(s): helper_test_x.py" in p.stdout
+    assert p.stdout.strip().splitlines()[-1].startswith("1 passed in ")
+    p = run("helper_test_x.py")
+    assert p.returncode != 0, "a lane that ran no test at all must be red"
+    (tmp_path / "test_broken.py").write_text("import no_such_module_xyz\ndef test_a():\n    pass\n")
+    p = run("test_ok.py", "test_broken.py")
+    assert p.returncode != 0 and "test_broken.py" in p.stdout, "an import error is never 'no tests'"
