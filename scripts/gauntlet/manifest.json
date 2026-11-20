@@ -18223,6 +18223,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ScanCheckpointIsolationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ScanCheckpointIsolationTests"
+      ],
+      "tests": [
+        "checkpointDirectoryUnderTestIsSandboxed",
+        "productionResolutionIsAppSupport",
+        "saveListDeleteStayInSandbox"
+      ]
+    },
+    {
       "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
@@ -24510,6 +24523,7 @@
         "defaultInitDoesNotWriteRealDB",
         "defaultPathUnderTestIsSandboxed",
         "explicitPathInjectionRoundTrips",
+        "realStoreProbeOpensNothing",
         "videoScanModelCacheIsSandboxed"
       ]
     },
@@ -41359,7 +41373,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 831,
+      "expected_floor": 834,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41533,6 +41547,7 @@
         "VideoScanTests/RemovalReservationTests",
         "VideoScanTests/RestoreResetsTrashedStageTests",
         "VideoScanTests/SQLiteCatalogLoaderTests",
+        "VideoScanTests/ScanCheckpointIsolationTests",
         "VideoScanTests/ScanLocationVolumeModelTests",
         "VideoScanTests/ScanLocationVolumeSensorTests",
         "VideoScanTests/ScanLocationVolumeTests",

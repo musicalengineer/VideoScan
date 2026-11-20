@@ -20,16 +20,39 @@ struct ScanCheckpoint: Codable {
     /// (no such key) still loads with the safe default `false`.
     var walkHadEnumerationErrors: Bool = false
 
+    /// The one place every checkpoint path is resolved (save/load/delete/
+    /// listAll/exists all go through it). Production: Application Support/
+    /// VideoScan/scan_checkpoints. Under a test host: the per-PID sandbox
+    /// `$TMPDIR/VideoScanTests-<pid>/VideoScan/scan_checkpoints` — same shape
+    /// as `MetadataCache.defaultPath` and `ScanJobsStorage.storeDir`.
+    /// Regression 2026-11-20: tests that save checkpoints wrote them into
+    /// Rick's real folder (and left July files keyed by temp paths there).
+    /// Computed once per process (a `static let` is a thread-safe lazy
+    /// global — C++: a function-local static); test-host status cannot change.
     static let directory: URL = {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSHomeDirectory())
-        let dir = appSupport
-            .appendingPathComponent("VideoScan", isDirectory: true)
-            .appendingPathComponent("scan_checkpoints", isDirectory: true)
+        let dir = resolveDirectory(testHost: TestEnvironment.isTestHost)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    /// Pure path arithmetic (creates nothing), so both branches are testable.
+    static func resolveDirectory(testHost: Bool) -> URL {
+        let base: URL
+        if testHost {
+            base = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(
+                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true
+                )
+        } else {
+            base = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        }
+        return base
+            .appendingPathComponent("VideoScan", isDirectory: true)
+            .appendingPathComponent("scan_checkpoints", isDirectory: true)
+    }
 }
 
 extension ScanCheckpoint {

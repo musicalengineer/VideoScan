@@ -941,20 +941,10 @@ struct VerifyArchiveCopiesIsolationTests {
         #expect(copies.map { $0.archiveFixity?.digest } == digests, "digests stable across runs")
     }
 
-    // Same snapshot helpers as MasterArchivePromoteTests (private there).
-    private static func appSupportSnapshot() -> [String: String] {
-        let dir = (CatalogStore.shared.fileLocation as NSString).deletingLastPathComponent
-        let fm = FileManager.default
-        var out: [String: String] = [:]
-        guard let e = fm.enumerator(atPath: dir) else { return out }
-        for case let rel as String in e {
-            let attrs = (try? fm.attributesOfItem(atPath: (dir as NSString).appendingPathComponent(rel))) ?? [:]
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
-            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
-            out[rel] = "\(size):\(mtime)"
-        }
-        return out
-    }
+    // The shared isolation snapshot (AppSupportSnapshotTestSupport.swift): it leaves out
+    // SQLite -shm files, which every reader touches (2026-11-20: the Background helper's
+    // read-only poll moved catalog.sqlite-shm mid-test and failed this suite's twin).
+    private static func appSupportSnapshot() -> [String: String] { AppSupportSnapshot.take() }
 
     /// What a running VideoScan writes on every catalog save / sync
     /// (CatalogStore, CatalogLock, CatalogGenerationSidecar, CatalogSync):
