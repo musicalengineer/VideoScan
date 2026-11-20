@@ -21,8 +21,11 @@
 //            `measurement`, `estimatedSeconds`, `statesRangeOnOneSideOnly`
 //            and `earlyEndingHeader` (2026-11-18); an older ref does not build.
 // The balanced copy is removed from work/ as soon as its proof is recorded,
-// so at most one copy is on disk (worst case: the size of the largest
-// one-sided corpus file plus its PCM sound).
+// so at most one copy per file in flight is on disk — `jobs` of them, which
+// scripts/corpus_run.py (`proof_width`) sets so that the largest `jobs` files'
+// copies together still leave the disk under its ceiling. Each file has its
+// own bare model and its own copy named by its SHA-256, so files in flight
+// share nothing but the progress file.
 
 import Foundation
 import XCTest
@@ -74,12 +77,13 @@ final class CorpusProofDriver: XCTestCase {
             return XCTFail("corpus harness refused: \(refusal.word)")
         }
 
-        for item in run.config.pending {
+        // N files in flight (the config's `jobs`); each step stays on the main actor, as the job is.
+        await run.each { @MainActor item in
             run.begin(item)
             guard let record = records[item.path] else {
                 await run.engine(item, "balance") { ("no_record", []) }
                 run.end(item)
-                continue
+                return
             }
             var balanced: URL?
             await run.engine(item, "balance") {

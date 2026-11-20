@@ -130,12 +130,17 @@ This file never signals a process. A file that overruns its deadline is cut
 by the driver exiting its own test host (CorpusDriverSupport.swift); the
 whole lane sits under m4_run.sh's existing lane watchdog.
 
+N FILES IN FLIGHT (`default_jobs`, `--jobs`): the check and proof drivers keep `jobs`
+files in flight (CorpusPool.swift), each under its own deadline. A launch of
+N that dies is judged by no one: the files it left unfinished are run again
+one at a time, and only such a launch writes `crash` or `timeout` (`settle`).
+
 Memory: the manifest (6,351 rows in v2, ~2 MB as JSON) and the run's event lines
 (~6 per file: a few MB), read once per launch; the config handed to the driver
 lists every pending file (~1 MB).
-Disk: the sealed catalog (~1 MB per 234 files: ~30 MB in v2); the proof lane holds one balanced copy at
-a time under ~/corpus/work/<run>/ and the run's work folder is removed at
-the end. The verbs lane's clones share their blocks with the corpus (0 bytes
+Disk: the sealed catalog (~1 MB per 234 files: ~30 MB in v2); the proof lane holds one balanced copy per
+file in flight under ~/corpus/work/<run>/ — as many as the disk holds under TRANSIENT_CEILING
+(`proof_width`), at most `jobs` — and the run's work folder is removed at the end. The verbs lane's clones share their blocks with the corpus (0 bytes
 until written; nothing writes them); its scratch archive holds real copies of
 the promoted files — at most VERBS_PROMOTE_BYTES (4 GB) — and the lane refuses
 to start with less than VERBS_FREE_FLOOR (20 GB) free. Python 3.9 (the M4's /usr/bin/python3) is the floor.
@@ -202,12 +207,23 @@ SMOKE_NOTE = "SMOKE: a stratified subset — the verdict means the harness, the 
 # lane -> (XCTest class, its engines in order, default per-file deadline in seconds, driver sources)
 LANES = {
     "check": ("CorpusCheckDriver", ["probe", "check", "audio", "pair"], 300,
-              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift"]),
+              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusPool.swift", "CorpusCheckDriver.swift"]),
     "proof": ("CorpusProofDriver", ["balance", "proof"], 3600,
-              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusProofDriver.swift"]),
+              ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusPool.swift", "CorpusProofDriver.swift"]),
     "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
-              3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusVerbsDriver.swift"]),
+              3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusPool.swift", "CorpusVerbsDriver.swift"]),
 }
+# N FILES IN FLIGHT (Rick 2026-11-20: "2 hour testbeds in serial is not performant design … N == 1 does not sound
+# good"). The check and proof drivers walk their files through CorpusPool.swift, `jobs` at a time, each file under
+# its own deadline; the config carries `jobs`. The default is half the host's logical cores (Rick 2026-11-20: the
+# M4's 16 -> 8, the Ultra's 30 -> 15; the other half is left for the machine — the work is ffprobe/ffmpeg children,
+# several threads each). No lower cap for memory: N files hold ~N x 2.5 MB of engine output (ProcessRunner's caps)
+# and the hosts have 64-96 GB. `--jobs` sets it, 1..JOBS_MAX, and `--jobs 1` is the serial
+# run exactly. A launch with more than one file in flight NEVER convicts: a crash or a deadline there leaves every
+# file it had not finished to be run again ALONE (`settle`'s `alone`), and only a launch of one file at a time
+# writes `crash` or `timeout` — a file is never RED for what the file beside it did, or for sharing the cores.
+# The verbs lane is one batch (its steps act on the whole sample together): always one launch of width 1.
+JOBS_MAX = 32
 # ONE BUILD (Charter §7; Rick: "obviously you don't want to recompile if you don't have to"), the gauntlet's
 # pattern (scripts/gauntlet/Runner.swift: one build-for-testing, then test-without-building per stage): the
 # overlay always holds EVERY lane's driver, so one build serves check, proof and verbs. After a build the
@@ -218,8 +234,8 @@ LANES = {
 # the next corpus lane builds again. The full suite lane is NOT this build: it builds Release into its
 # own folder (nightly_local_tests.sh) and must never compile the untracked driver sources; the smoke
 # testbed's sensor lane builds Debug without the overlay; so a testbed run makes two builds, not four.
-ALL_DRIVERS = ("CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift", "CorpusProofDriver.swift",
-               "CorpusVerbsDriver.swift")
+ALL_DRIVERS = ("CorpusSeal.swift", "CorpusPool.swift", "CorpusDriverSupport.swift", "CorpusCheckDriver.swift",
+               "CorpusProofDriver.swift", "CorpusVerbsDriver.swift")
 BUILD_MARK = "corpus-build.json"
 VERBS_SAMPLE = 20                                # files the verbs lane clones (--limit changes it)
 VERBS_ROLES = ("dup", "purge", "set_aside", "promote")     # dealt round-robin over the sample
@@ -1333,12 +1349,20 @@ def read_events(progress: Path) -> List[dict]:
     return events
 
 
-def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> Tuple[int, Optional[str]]:
+def settle(events: List[dict], engines: List[str], results: Dict[str, dict], width: int = 1,
+           alone: Optional[set] = None) -> Tuple[int, Optional[str]]:
     """Fold one launch's events into `results` (sha -> record). A file that began and never
     ended is a `crash` at the engine it was in; a file the driver cut at its deadline arrives
     with `timeout` already written. Engines after either are `not_run`. Returns (files settled,
-    the driver's refusal word if it refused)."""
-    began, ended, refusal = [], set(), None
+    the driver's refusal word if it refused).
+
+    `width` is how many files the launch had in flight. Above one, the lines of N files
+    interleave (the order of the lines is not the order of the files: every fold here is by
+    SHA-256) and a launch that died left several files unfinished, only one of which — if any —
+    did it. So such a launch convicts no one: each file it began and did not END cleanly (no
+    `end`, or an `end` cut at its deadline) is left unsettled and added to `alone`, to be run
+    again in a launch of its own width 1, where this same fold convicts as it always has."""
+    began, ended, cut_short, refusal = [], set(), set(), None
     per = defaultdict(dict)
     for ev in events:
         kind, sha = ev.get("ev"), ev.get("sha")
@@ -1348,6 +1372,8 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
             began.append(sha)
         elif kind == "end" and sha:
             ended.add(sha)
+            if ev.get("cut"):
+                cut_short.add(sha)
         elif kind == "facts" and sha:
             per[sha].setdefault("facts", {}).update(ev)      # a driver may report facts in more than one step
         elif kind == "engine" and sha:
@@ -1355,6 +1381,10 @@ def settle(events: List[dict], engines: List[str], results: Dict[str, dict]) -> 
     settled = 0
     for sha in began:
         if sha not in results or results[sha].get("settled"):
+            continue
+        if width > 1 and (sha not in ended or sha in cut_short):
+            if alone is not None:
+                alone.add(sha)                               # judged again on its own; nothing of this launch is kept
             continue
         record, seen = results[sha], per[sha].get("engines", {})
         facts = per[sha].get("facts", {})
@@ -1459,9 +1489,10 @@ class Lane:
 
     def __init__(self, seal: Seal, lane: str, sha: str, stamp: str, out: Path, worktree: Path, derived_data: Path,
                  bin_dir: Path, deadline: Optional[int] = None, limit: Optional[int] = None,
-                 xcodebuild: str = "xcodebuild", smoke: bool = False):
+                 xcodebuild: str = "xcodebuild", smoke: bool = False, jobs: Optional[int] = None):
         self.seal, self.lane, self.sha, self.stamp = seal, lane, sha, stamp
         self.smoke = smoke
+        self.jobs = int(jobs or default_jobs())              # files in flight at most (default_jobs); a launch takes fewer when it has fewer
         self.database: Optional[Path] = None
         self.out, self.worktree, self.derived_data, self.bin_dir = Path(out), Path(worktree), Path(derived_data), Path(bin_dir)
         self.test_class, self.engines, default_deadline, self.sources = LANES[lane]
@@ -1606,7 +1637,8 @@ class Lane:
         self.build_seconds = time.time() - t0
         return rc
 
-    def launch(self, pending: List[Entry], database: Path, xctestrun: Path) -> List[dict]:
+    def launch(self, pending: List[Entry], database: Path, xctestrun: Path, width: int = 1) -> List[dict]:
+        """One test-host launch over `pending`, `width` files in flight (the config's `jobs`)."""
         self.launches += 1
         seal = self.seal
         config = self.work / f"config-{self.launches}.json"
@@ -1614,7 +1646,8 @@ class Lane:
         seal.write_json(config, {
             "lane": self.lane, "corpusRoot": str(seal.corpus), "stateRoot": str(seal.state), "catalog": str(database),
             "mediaRoot": str(seal.media), "work": str(self.work), "progress": str(progress),
-            "deadlineSeconds": self.deadline, "pending": [self.pending_item(e) for e in pending], **self.config_extra()})
+            "deadlineSeconds": self.deadline, "jobs": width,
+            "pending": [self.pending_item(e) for e in pending], **self.config_extra()})
         seal.write_text(progress, "")
         home = self.home()
         sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home),
@@ -1682,13 +1715,17 @@ class Lane:
         hello: Dict[str, object] = {}
         xctestrun = find_xctestrun(self.derived_data)
         self.seal.mkdir(self.work / "tmp")
+        alone: set = set()                                   # left unfinished by a launch of N: each is run again on its own
         while True:
             pending = [e for e in entries if not results[e.sha].get("settled")]
             if pending:                                      # proven at go(); again after the build and at each relaunch
                 pending = self.reprove(pending, results)
             if not pending:
                 break
-            events = self.launch(pending, database, xctestrun)
+            solo = [e for e in pending if e.sha in alone]
+            batch = solo or pending                          # those to be judged alone first, one at a time
+            width = 1 if solo else min(self.launch_width(), len(batch))
+            events = self.launch(batch, database, xctestrun, width)
             for ev in events:
                 if ev.get("ev") == "hello" and not hello:
                     hello = {k: ev.get(k) for k in ("homeSealed", "records", "archiveDesignation", "testHost")}
@@ -1696,12 +1733,19 @@ class Lane:
                     self.closing = {k: ev[k] for k in ("trashFiles", "trashedByEngines", "strayTrashFiles", "receiptsInRun",
                                                        "receiptsOutsideTheRun", "records")
                                     if isinstance(ev.get(k), int) and not isinstance(ev.get(k), bool)}
-            settled, refusal = settle(events, self.engines, results)
+            before = len(alone)
+            settled, refusal = settle(events, self.engines, results, width=width, alone=alone)
             if refusal:
                 raise Refused(f"refused by the driver: {refusal}")
-            if settled == 0:                                 # no progress: never loop on a driver that cannot start
+            # No progress: never loop on a driver that cannot start. A launch of N that only left files to be run
+            # alone did progress (those launches are width 1 and settle every file they begin).
+            if settled == 0 and len(alone) == before:
                 raise Refused("the driver started no file — see corpus-test.log on the host")
         return results, hello
+
+    def launch_width(self) -> int:
+        """Files in flight in a launch of this lane (before a launch caps it at its own file count)."""
+        return self.jobs
 
     def restat(self, pending: List[Entry], results: Dict[str, dict]) -> List[Entry]:
         """Each pending file is still the one the ledger proved (size, mtime, inode), right before the
@@ -1772,7 +1816,7 @@ class Lane:
                 "bytes": sum(r.get("size", 0) for r in results.values()),
                 "media_seconds": round(sum(r.get("duration", 0) or 0 for r in results.values()), 1),
                 "wall_s": round(wall, 1), "build_s": round(self.build_seconds, 1), "build_reused": self.build_reused,
-                "launches": self.launches,
+                "launches": self.launches, "jobs": self.jobs,
                 "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
                 "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
                 "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
@@ -1824,8 +1868,8 @@ class Lane:
             report["against"] = None
             self.store(report, {})
             return {"GREEN": EXIT_GREEN, "AMBER": EXIT_AMBER}.get(verdict_of(report, None), EXIT_RED)
-        if self.lane == "proof":                             # one balanced copy at a time, about its source's size
-            transient_room(seal, max(e.size for e in entries))
+        if self.lane == "proof":                             # one balanced copy per file in flight, about its source's size
+            self.jobs = transient_room(seal, [e.size for e in entries], self.jobs)
         seal.out_folder(self.out)
         self.housekeeping = prune(seal, self.lane)
         # The run's work folder is made by this run and by nothing before it: whatever is found
@@ -1918,12 +1962,38 @@ def smoke_sample(entries: List[Entry], codecs: Dict[str, Tuple[str, str, str]], 
     return sorted(picked, key=lambda e: e.sha)
 
 
-def transient_room(seal: Seal, need: int) -> None:
-    """Refused unless `need` more bytes on the M4's disk leave it under TRANSIENT_CEILING used."""
-    usage = shutil.disk_usage(str(seal.corpus))
-    if usage.free - need < usage.total * (1 - TRANSIENT_CEILING):
-        raise Refused(f"refused: {usage.free / 1e9:.0f} GB free on the M4 and this lane may write {need / 1e9:.0f} GB — "
+_HOST = object()
+
+
+def default_jobs(cpus=_HOST) -> int:
+    """Files in flight by default: half the host's logical cores (each file's engines are ffprobe/ffmpeg
+    children, some of them threaded), at least 1, at most JOBS_MAX. `cpus` is a seam for the tests."""
+    count = os.cpu_count() if cpus is _HOST else cpus
+    return max(1, min(JOBS_MAX, (count or 1) // 2))
+
+
+def proof_width(free: int, total: int, sizes: List[int], jobs: int) -> int:
+    """How many proof files may be in flight: each holds one balanced copy about its own size under
+    ~/corpus/work at once, so the `width` LARGEST of them together must leave the disk under
+    TRANSIENT_CEILING used. The largest that fits, at most `jobs`; Refused when not even one copy fits."""
+    room = free - total * (1 - TRANSIENT_CEILING)
+    largest = sorted(sizes, reverse=True)
+    if not largest or largest[0] > room:
+        need = largest[0] if largest else 0
+        raise Refused(f"refused: {free / 1e9:.0f} GB free on the M4 and this lane may write {need / 1e9:.0f} GB — "
                       f"a run stops short of {TRANSIENT_CEILING:.0%} used")
+    width, used = 0, 0
+    for size in largest[:max(1, jobs)]:
+        if used + size > room:
+            break
+        width, used = width + 1, used + size
+    return width
+
+
+def transient_room(seal: Seal, sizes: List[int], jobs: int = 1) -> int:
+    """The proof lane's width on the M4's disk now (`proof_width`); Refused when one copy would pass the ceiling."""
+    usage = shutil.disk_usage(str(seal.corpus))
+    return proof_width(usage.free, usage.total, sizes, jobs)
 
 
 def proof_files(seal: Seal, entries: List[Entry], cap: int = PROOF_CAP) -> Tuple[List[Entry], Dict[str, object]]:
@@ -2006,9 +2076,13 @@ class VerbsLane(Lane):
         self.before: Dict[str, Tuple[int, int]] = {}
         self.all_entries: List[Entry] = []
         self.free_before = 0
+        self.jobs = 1                                        # one batch: every step acts on the whole sample together
 
     def home(self) -> Path:
         return self.work / "home"                           # nothing this run's engines remember outlives the run
+
+    def launch_width(self) -> int:
+        return 1
 
     def scope(self, entries: List[Entry]) -> List[Entry]:
         self.all_entries = entries
@@ -2143,7 +2217,9 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     lines = [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
              f"{report['media_seconds'] / 3600:.1f} h of media) at {report['sha'][:9]} — wall {report['wall_s']:.0f}s "
              + ("(the build reused: same commit, same drivers)" if report.get("build_reused") else f"(build {report['build_s']:.0f}s)")
-             + f", {report['launches']} launch(es), per-file deadline {report['deadline_s']}s"
+             + f", {report['launches']} launch(es)"
+             + (f", {report['jobs']} file{'s' if report['jobs'] != 1 else ''} at a time" if report.get("jobs") else "")
+             + f", per-file deadline {report['deadline_s']}s"
              + (f", limited to {report['limit']} files" if report.get("limit") else "")]
     for e in engines:
         lines.append(f"  {e}: {_counts(report['engines'][e])}")
@@ -2645,6 +2721,7 @@ def clean_report(report) -> dict:
             "files": int(number(report.get("files"))), "bytes": number(report.get("bytes")),
             "media_seconds": number(report.get("media_seconds")), "wall_s": number(report.get("wall_s")),
             "build_s": number(report.get("build_s")), "launches": int(number(report.get("launches"))),
+            "jobs": int(number(report.get("jobs"))) or None,
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
             "problem_count": int(number(report.get("problem_count"))),
@@ -2724,6 +2801,7 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
     host.add_argument("--bin", required=True)
     host.add_argument("--deadline", type=int)
     host.add_argument("--limit", type=int)
+    host.add_argument("--jobs", type=int, help=f"files in flight (1..{JOBS_MAX}; default half the logical cores)")
     host.add_argument("--smoke", action="store_true")
     args = parser.parse_args(argv)
     lines: List[str] = []
@@ -2744,17 +2822,19 @@ def main(argv: Optional[List[str]] = None, seal: Optional[Seal] = None, xcodebui
             sys.path.insert(0, args.bin)
             if args.smoke and args.lane not in ("check", "proof", "verbs"):
                 raise Refused("refused: --smoke is for check, proof and verbs")
+            if args.jobs is not None and not 1 <= args.jobs <= JOBS_MAX:
+                raise Refused(f"refused: --jobs is a number of files in flight, 1 to {JOBS_MAX}")
             if args.lane == "coverage":                      # the three lanes instrumented, beside the suite (corpus_coverage.py)
                 import corpus_coverage
                 run = corpus_coverage.CoverageRun(seal, args.sha, args.stamp, Path(args.out), Path(args.worktree),
                                                   Path(args.derived_data), Path(args.bin), args.deadline, args.limit,
-                                                  xcodebuild, cp=cp, xcrun=xcrun, swift=swift)
+                                                  xcodebuild, cp=cp, xcrun=xcrun, swift=swift, jobs=args.jobs)
                 code = run.go()
                 print("\n".join(run.lines))
                 return code
             lane = Lane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
                         Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild,
-                        smoke=args.smoke) if args.lane != "verbs" else \
+                        smoke=args.smoke, jobs=args.jobs) if args.lane != "verbs" else \
                 VerbsLane(seal, args.lane, args.sha, args.stamp, Path(args.out), Path(args.worktree),
                           Path(args.derived_data), Path(args.bin), args.deadline, args.limit, xcodebuild, cp=cp,
                           smoke=args.smoke)
