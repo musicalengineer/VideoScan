@@ -4050,5 +4050,144 @@ class CodexRound336Tests(unittest.TestCase):
         self.assertTrue(lines[0].startswith('corpus proof SMOKE: NOT RUN'), lines[0])
 
 
+# ── The access probe: the macOS privacy prompt on the headless M4 (2026-11-19 incident) ─────
+
+SLEEPER = [sys.executable, '-c', 'import time; time.sleep(5)']   # past every injected timeout; gone soon after
+
+
+class AccessProbeTests(unittest.TestCase):
+    """`access_probe` alone, over plain temporary folders: a child that never answers, a read
+    refused, a readable volume. The timeout is injected small: every test is well under a second."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.mount = pathlib.Path(self.tmp.name, 'X10')
+        (self.mount / 'corpus' / 'media' / 'Volumes' / 'Drive').mkdir(parents=True)
+        (self.mount / cr.MARKER).write_text('test data\n')
+        self.media = self.mount / 'corpus' / 'media' / 'Volumes' / 'Drive' / 'clip.mp4'
+        self.media.write_bytes(b'z' * 200)
+        self.interpreter = os.path.realpath(sys.executable)
+
+    def tearDown(self):
+        for path in (self.mount, self.mount / cr.MARKER, self.media):
+            if path.exists():
+                path.chmod(0o755 if path.is_dir() else 0o644)
+        self.tmp.cleanup()
+
+    def patch_command(self, command):
+        saved = cr.access_probe_command
+        cr.access_probe_command = lambda mount: command
+        self.addCleanup(setattr, cr, 'access_probe_command', saved)
+
+    def test_a_child_that_never_answers_is_refused_within_the_timeout_and_names_the_interpreter(self):
+        self.patch_command(SLEEPER)
+        t0 = time.monotonic()
+        with self.assertRaises(cr.Refused) as refused:
+            cr.access_probe(str(self.mount), timeout=0.4)
+        took = time.monotonic() - t0
+        self.assertLess(took, 3.0, 'the probe waited for its child instead of refusing at the timeout')
+        message = str(refused.exception)
+        for words in ('macOS is waiting for permission to read the external volume', 'Click Allow on the M4',
+                      'Full Disk Access', self.interpreter, 'per interpreter path', 'Cellar', 'Nothing ran.'):
+            self.assertIn(words, message)
+
+    def test_the_timeout_is_the_module_constant_when_none_is_given(self):
+        self.patch_command(SLEEPER)
+        saved = cr.ACCESS_PROBE_TIMEOUT_S
+        cr.ACCESS_PROBE_TIMEOUT_S = 0.3
+        self.addCleanup(setattr, cr, 'ACCESS_PROBE_TIMEOUT_S', saved)
+        t0 = time.monotonic()
+        with self.assertRaises(cr.Refused):
+            cr.access_probe(str(self.mount))
+        self.assertLess(time.monotonic() - t0, 3.0)
+        self.assertEqual(saved, 20.0, 'the M4 waits 20 s for a readable volume')
+
+    def test_a_child_refused_with_eperm_is_refused_without_waiting(self):
+        self.patch_command([sys.executable, '-c', 'import errno; raise PermissionError(errno.EPERM, "no")'])
+        with self.assertRaises(cr.Refused):        # a child that dies of it (exit 1) is refused too, as a failed probe
+            cr.access_probe(str(self.mount), timeout=5)
+        self.patch_command([sys.executable, '-c', f'import sys; sys.exit({cr.ACCESS_PROBE_DENIED})'])
+        with self.assertRaises(cr.Refused) as refused:
+            cr.access_probe(str(self.mount), timeout=5)
+        message = str(refused.exception)
+        self.assertIn('does not let this Python read the external volume', message)
+        self.assertNotIn('waiting', message)
+        for words in (self.interpreter, 'per interpreter path', 'Nothing ran.'):
+            self.assertIn(words, message)
+
+    @unittest.skipIf(os.geteuid() == 0, 'root reads through file modes')
+    def test_the_real_child_reports_a_refused_read_of_the_volume_the_marker_or_a_media_file(self):
+        for locked in (self.media, self.mount / cr.MARKER, self.mount):
+            with self.subTest(locked=locked.name):
+                locked.chmod(0)
+                try:
+                    with self.assertRaises(cr.Refused) as refused:
+                        cr.access_probe(str(self.mount), timeout=10)
+                    self.assertIn('does not let this Python read', str(refused.exception))
+                finally:
+                    locked.chmod(0o755 if locked.is_dir() else 0o644)
+
+    def test_a_readable_volume_passes_and_what_is_missing_is_the_seals_to_judge(self):
+        cr.access_probe(str(self.mount), timeout=10)
+        self.media.unlink()
+        (self.mount / cr.MARKER).unlink()
+        cr.access_probe(str(self.mount), timeout=10)        # the seal says "carries no marker", not the probe
+
+    def test_the_child_is_this_interpreter(self):
+        command = cr.access_probe_command('/Volumes/X')
+        self.assertEqual((command[0], command[-1]), (sys.executable, '/Volumes/X'))
+
+
+class AccessProbeSealTests(TwoRootTestCase):
+    """The probe in its place: `Seal.external`, before the first read of the external root, so
+    `prepare` and every lane are refused (rc 2, the lock released) instead of hanging."""
+
+    def hang(self):
+        saved = cr.access_probe_command
+        cr.access_probe_command = lambda mount: SLEEPER
+        self.addCleanup(setattr, cr, 'access_probe_command', saved)
+        self.scene.seal.access_probe = lambda mount: cr.access_probe(mount, timeout=0.4)
+        self.scene.seal._external = None
+        self.scene.seal._readable = set()
+
+    def test_prepare_is_refused_rc2_when_the_external_volume_does_not_answer(self):
+        self.scene.grow(prepare=False)
+        self.hang()
+        before = (self.scene.seal.state / 'prepare.json').read_bytes()
+        t0 = time.monotonic()
+        code = self.scene.run('prepare')
+        self.assertLess(time.monotonic() - t0, 10.0)
+        self.assertEqual(code, cr.EXIT_REFUSED)
+        summary = self.summary()
+        self.assertIn('corpus: RED refused: macOS is waiting for permission to read the external volume', summary)
+        self.assertIn(os.path.realpath(sys.executable), summary)
+        self.assertEqual((self.scene.seal.state / 'prepare.json').read_bytes(), before, 'a refused prepare changed the state')
+
+    def test_a_lane_is_refused_rc2_and_launches_nothing(self):
+        self.scene.grow()
+        self.hang()
+        code = self.scene.run('check')
+        self.assertEqual(code, cr.EXIT_REFUSED)
+        self.assertIn('macOS is waiting for permission', self.summary())
+        self.assertEqual([c for c in self.scene.recorded_calls() if 'config' in c], [], 'a refused lane launched the driver')
+
+    def test_a_readable_volume_is_probed_once_per_process_and_the_run_proceeds(self):
+        self.scene.grow(prepare=False)
+        asked = []
+        self.scene.seal.access_probe = lambda mount: (asked.append(mount), cr.access_probe(mount))
+        self.scene.seal._external, self.scene.seal._readable = None, set()
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.scene.seal._external = None                    # the re-proof before each launch
+        self.assertEqual(self.scene.seal.external().state, 'ok')
+        self.assertEqual(asked, [str(self.volume.mount)], 'the probe runs once per mount per process')
+
+    def test_the_internal_root_alone_never_probes(self):
+        self.scene.grow(prepare=False)
+        self.volume.detach()
+        self.hang()
+        self.assertEqual(self.scene.seal.external().state, 'absent')
+
+
 if __name__ == '__main__':
     unittest.main()
