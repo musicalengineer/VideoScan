@@ -25,23 +25,20 @@ struct MetadataCacheIsolationTests {
             .appendingPathComponent("metadata_cache.sqlite").path
     }
 
-    /// Count rows in the REAL sqlite file matching `path`, via an
-    /// independent connection (so we see what's actually on disk, WAL
-    /// included). Returns 0 if the file doesn't exist or has no
-    /// probe_cache table.
-    private static func realDBRowCount(forPath path: String) -> Int {
-        guard FileManager.default.fileExists(atPath: realDBPath) else { return 0 }
-        var db: OpaquePointer?
-        guard sqlite3_open(realDBPath, &db) == SQLITE_OK else { return 0 }
-        defer { sqlite3_close(db) }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            db, "SELECT COUNT(*) FROM probe_cache WHERE path = ?", -1, &stmt, nil
-        ) == SQLITE_OK else { return 0 }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1,
-                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    /// The guard's ONLY look at the real store: stat the db, its -wal and
+    /// its -shm — name → "size@mtime", absent files absent. It never opens
+    /// the database: an open writes the -shm and, as the last connection,
+    /// checkpoints a pending WAL into the main file (2026-11-20; pinned by
+    /// `realStoreProbeOpensNothing`). Any write by a cache that wrongly
+    /// opened the real path lands in the -wal (or creates it) or the db, so
+    /// comparing db + -wal before/after still catches the leak.
+    static func realStoreProbe(dbPath: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for suffix in ["", "-wal", "-shm"] {
+            guard let a = try? FileManager.default.attributesOfItem(atPath: dbPath + suffix) else { continue }
+            out["db" + suffix] = "\((a[.size] as? NSNumber)?.int64Value ?? -1)@\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)"
+        }
+        return out
     }
 
     // Carrier-based (step 4): the cache API now trafficks in the Sendable
@@ -63,19 +60,17 @@ struct MetadataCacheIsolationTests {
     @Test("default-init MetadataCache never writes to the real Application Support sqlite")
     func defaultInitDoesNotWriteRealDB() throws {
         let realPath = Self.realDBPath
-        // Drain any WAL the real app left behind BEFORE baselining mtime:
-        // realDBRowCount's read-write connection checkpoints a pending WAL
-        // into the main db file on close, which moved the mtime and failed
-        // this test (2026-06-11) even though no test wrote anything. After
-        // this throwaway drain, only a genuine write can change the mtime.
-        _ = Self.realDBRowCount(forPath: "/nonexistent-wal-drain-probe")
-        let mtimeBefore = (try? FileManager.default
-            .attributesOfItem(atPath: realPath)[.modificationDate]) as? Date
+        // db + -wal only: the -shm moves whenever any reader looks (Rick's
+        // app), and holds no data (same rule as AppSupportSnapshot).
+        func realWritten() -> [String: String] { Self.realStoreProbe(dbPath: realPath).filter { $0.key != "db-shm" } }
+        let realBefore = realWritten()
 
-        let canary = "/tmp/metacache-canary-\(UUID().uuidString).mov"
         let cache = MetadataCache()
-        // Self-cleaning: removes the canary from whichever db the cache
-        // actually opened (real one pre-fix, sandbox post-fix).
+        // Refuse BEFORE any write if the gate regressed: this test must
+        // never be the thing that writes Rick's real cache.
+        try #require(cache.dbPath != realPath,
+                     "MetadataCache() default init resolved to the REAL metadata_cache.sqlite — refusing to write a canary")
+        let canary = "/tmp/metacache-canary-\(UUID().uuidString).mov"
         defer { cache.clearForPathPrefix(canary) }
 
         cache.store(outcome: Self.makeCanaryOutcome(path: canary),
@@ -88,15 +83,8 @@ struct MetadataCacheIsolationTests {
                              modDate: Date(timeIntervalSince1970: 1_000_000)) != nil,
                 "Precondition failed: store()/lookup() round-trip broken — isolation assertion would be vacuous")
 
-        #expect(Self.realDBRowCount(forPath: canary) == 0,
-                "MetadataCache() default init wrote a row into the user's REAL metadata_cache.sqlite")
-
-        if let mtimeBefore {
-            let mtimeAfter = (try? FileManager.default
-                .attributesOfItem(atPath: realPath)[.modificationDate]) as? Date
-            #expect(mtimeAfter == mtimeBefore,
-                    "Real metadata_cache.sqlite mtime changed under test (\(String(describing: mtimeBefore)) -> \(String(describing: mtimeAfter)))")
-        }
+        #expect(realWritten() == realBefore,
+                "the REAL metadata_cache.sqlite (db or -wal) changed under test: \(realBefore) -> \(realWritten())")
     }
 
     @Test("default path under test resolves to the per-PID sandbox, not Application Support")
@@ -130,6 +118,52 @@ struct MetadataCacheIsolationTests {
         )
         #expect(!model.metadataCache.dbPath.hasPrefix(appSupportURL.path),
                 "VideoScanModel's metadataCache opened a db inside Application Support: \(model.metadataCache.dbPath)")
+    }
+
+    // MARK: - (a2) The guard's own look at the real store must open nothing
+
+    /// REGRESSION (2026-11-20, full Release run on the M5 Ultra): the guard
+    /// above used to OPEN the user's real metadata_cache.sqlite read-write to
+    /// count canary rows. Opening a WAL database writes its -shm (seen: real
+    /// -shm mtime 13:01:55, the second this suite ran) and, as the last
+    /// connection, CHECKPOINTS a pending WAL into the main file on close — a
+    /// test writing Rick's real cache in order to prove tests don't. The
+    /// guard's look at the real store (`realStoreProbe`) must leave every
+    /// byte and mtime of db / -wal / -shm as it found them. Proved here on a
+    /// scratch WAL store with a pending WAL, so the real one is never at risk.
+    @Test("the guard's probe of the real store leaves a WAL database's db, -wal and -shm untouched")
+    func realStoreProbeOpensNothing() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("metacache-probe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("metadata_cache.sqlite").path
+
+        // A store shaped like the real one when the app stopped without a
+        // final checkpoint: WAL mode, a committed frame still in the -wal,
+        // -shm present. Made by copying a live writer's three files while
+        // its connection is still open (the writer's own close would
+        // checkpoint), then closing the writer on the original.
+        let live = dir.appendingPathComponent("live.sqlite").path
+        var db: OpaquePointer?
+        try #require(sqlite3_open(live, &db) == SQLITE_OK)
+        sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA wal_autocheckpoint=0", nil, nil, nil)
+        sqlite3_exec(db, "CREATE TABLE probe_cache (path TEXT)", nil, nil, nil)
+        sqlite3_exec(db, "INSERT INTO probe_cache VALUES ('/x.mov')", nil, nil, nil)
+        for suffix in ["", "-wal", "-shm"] {
+            try FileManager.default.copyItem(atPath: live + suffix, toPath: path + suffix)
+        }
+        sqlite3_close(db)
+        let before = Self.realStoreProbe(dbPath: path)
+        try #require(before["db-wal"] != nil && before["db"] != nil,
+                     "precondition: a pending WAL must exist, else the test proves nothing: \(before)")
+
+        Thread.sleep(forTimeInterval: 0.05)   // mtime resolution: a touch must read differently
+        _ = Self.realStoreProbe(dbPath: path)   // the guard's look, exactly as it is run against the real store
+
+        #expect(Self.realStoreProbe(dbPath: path) == before,
+                "the guard's probe changed the store on disk: \(before) -> \(Self.realStoreProbe(dbPath: path))")
     }
 
     // MARK: - (b) Explicit injection bypasses the gate and round-trips
