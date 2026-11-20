@@ -258,7 +258,6 @@ final class ThumbnailPrecacher {
         // for them.
         let failureStore = model.thumbnailFailureStore
         let diskCache = model.previewDiskCache
-        let memoryCache = model.previewService.thumbnailCache   // Sendable (lock-guarded ledger)
         let bound = max(1, concurrency)
         let label = volumeLabel
         let runID = UUID()
@@ -399,12 +398,21 @@ final class ThumbnailPrecacher {
             let how = Task.isCancelled ? "cancelled"
                 : stoppedForMemory ? "stopped: low memory headroom" : "complete"
             // OUTCOME through the one log sink; N is probed (evidence),
-            // once per pass row, off main — never per thumbnail.
-            log.write(ThumbnailCachePolicy.outcomeLine(
-                how: how, label: label,
-                cachedNow: memoryCache.cachedCount(of: items.map { $0.path }), rowsNeeding: items.count,
-                stored: generated, failed: failed, seconds: secs,
-                cache: memoryCache.snapshot, limitBytes: memoryCache.totalCostLimit))
+            // once per pass, never per thumbnail. The cache is read on the
+            // main actor, where it lives: capturing it into this detached
+            // task compiles under Debug's approachable-concurrency rules but
+            // NOT under Release's (RegionIsolation::SendingClosureRisksDataRace,
+            // 2026-11-19 — the Release build broke on main). One lock-guarded
+            // lookup per pass row, once per pass (~ms for 19k rows).
+            let paths = items.map { $0.path }
+            await MainActor.run {
+                guard let memoryCache = model.object?.previewService.thumbnailCache else { return }
+                log.write(ThumbnailCachePolicy.outcomeLine(
+                    how: how, label: label,
+                    cachedNow: memoryCache.cachedCount(of: paths), rowsNeeding: items.count,
+                    stored: generated, failed: failed, seconds: secs,
+                    cache: memoryCache.snapshot, limitBytes: memoryCache.totalCostLimit))
+            }
 
             // Clear `task` so isRunning reads false after a natural finish —
             // but only if a newer start() hasn't superseded this run.
