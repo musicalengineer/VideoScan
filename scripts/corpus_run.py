@@ -279,6 +279,92 @@ def diskutil_volume_uuid(mount: str) -> str:
         return ""
 
 
+# ── The access probe (the macOS privacy prompt on a headless M4) ─────────
+# A Python that reads a removable volume for the first time makes macOS (TCC) ask "Python would like
+# to access files on a removable volume" — and the asking open() blocks in the kernel until someone
+# clicks. Under the per-run LaunchAgent (gui/501) on the headless M4 nobody does: 2026-11-19 `prepare`
+# sat 35+ minutes at 0% CPU in open() on the external root, the lock held, until the lane watchdog.
+# So before anything of ours reads the external root, a CHILD process of the same interpreter (the
+# grant is per interpreter path) reads there; if it does not finish in time the run is refused and
+# the child is left behind (never waited on, never signalled: it may be stuck in the kernel).
+ACCESS_PROBE_TIMEOUT_S = 20.0            # a readable volume answers in milliseconds; the prompt never does
+ACCESS_PROBE_DENIED = 13                 # the child's exit status when a read is refused (EPERM/EACCES)
+# The child: list the volume, read 64 bytes of the marker and of one media file (TCC may gate a
+# file's contents, not only its name). Any OSError but a permission one is not the probe's to judge
+# (the seal's own checks speak for a missing marker or folder): exit 0. Bounded: at most 64 names a
+# folder and 16 folders deep on the way to the first file.
+_ACCESS_PROBE_CHILD = r"""
+import errno, os, sys
+mount = sys.argv[1]
+def read(path):
+    with open(path, "rb") as f:
+        f.read(64)
+def first_file(folder, depth=0):
+    if depth > 16:
+        return None
+    with os.scandir(folder) as names:
+        entries = sorted((e for _, e in zip(range(64), names)), key=lambda e: e.name)
+    for e in entries:
+        if e.is_file(follow_symlinks=False):
+            return e.path
+    for e in entries:
+        if e.is_dir(follow_symlinks=False):
+            found = first_file(e.path, depth + 1)
+            if found:
+                return found
+    return None
+try:
+    os.listdir(mount)
+    for step in (lambda: read(os.path.join(mount, "THIS_IS_TEST_DATA.txt")),
+                 lambda: (lambda f: f and read(f))(first_file(os.path.join(mount, "corpus", "media")))):
+        try:
+            step()
+        except OSError as error:
+            if isinstance(error, PermissionError) or error.errno in (errno.EPERM, errno.EACCES):
+                raise
+except OSError as error:
+    if isinstance(error, PermissionError) or error.errno in (errno.EPERM, errno.EACCES):
+        sys.exit(13)
+sys.exit(0)
+"""
+
+
+def access_probe_command(mount: str) -> List[str]:
+    """The probe child's command line: THIS interpreter (TCC grants per executable path), isolated.
+    A seam: the tests put a child that sleeps past the timeout or is refused in its place."""
+    return [sys.executable, "-I", "-c", _ACCESS_PROBE_CHILD, mount]
+
+
+def access_probe(mount: str, timeout: Optional[float] = None) -> None:
+    """Refused unless a child process of this interpreter can list the external root and read a few
+    bytes of its marker and of one media file within `timeout` seconds (ACCESS_PROBE_TIMEOUT_S).
+    Worst case: one child process and `timeout` seconds; nothing is kept."""
+    limit = ACCESS_PROBE_TIMEOUT_S if timeout is None else timeout
+    interpreter = os.path.realpath(sys.executable)
+    where = (f"in System Settings › Privacy & Security › Files and Folders (Removable Volumes) or Full Disk Access "
+             f"allow {interpreter} — the grant is per interpreter path, so a Homebrew Python upgrade (a new Cellar "
+             f"path) needs it again. Nothing ran.")
+    try:
+        child = subprocess.Popen(access_probe_command(mount), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+    except OSError as error:
+        raise Refused(f"refused: the external-volume access probe could not start ({type(error).__name__}). Nothing ran.")
+    try:
+        code = child.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        # Left as it is, never waited on and never signalled (the harness sends no signal: SealTests):
+        # it holds no pipe of ours (all three streams are /dev/null), so nothing downstream waits for
+        # it; it exits by itself once the prompt is answered, or with the LaunchAgent's process group.
+        raise Refused(f"refused: macOS is waiting for permission to read the external volume (a privacy prompt on the "
+                      f"M4's screen; the probe got no answer in {limit:g} s). Click Allow on the M4 (Screen Sharing), or "
+                      + where)
+    if code == ACCESS_PROBE_DENIED:
+        raise Refused("refused: macOS does not let this Python read the external volume (Operation not permitted). "
+                      "On the M4, " + where)
+    if code != 0:
+        raise Refused(f"refused: the external-volume access probe failed (exit {code}). Nothing ran.")
+
+
 class External:
     """The external root as the seal found it. `state`: "none" (no volume was adopted), "absent"
     (adopted, and nothing is mounted at its mount point) or "ok" (mounted there, the marker on it,
@@ -310,6 +396,8 @@ class Seal:
         self.volume_uuid = diskutil_volume_uuid              # a seam: the tests ask diskutil about a real disk image too
         self.hasher = sha256_file                            # a seam: the tests' fake media stand for their manifest SHA-256
         self._external: Optional[External] = None
+        self.access_probe = access_probe                     # a seam (tests); asked once per mount per process:
+        self._readable: set = set()                          # the TCC grant is the process's, not the run's
 
     @classmethod
     def here(cls, state_root: Optional[str] = None) -> "Seal":
@@ -395,7 +483,8 @@ class Seal:
         """The external root, proven (asked once per process; a lane is minutes, a mount is not
         swapped under it by anything of ours). Absent: nothing is mounted at the adopted mount point
         (it is not there, or is a plain folder). Refused: the mount point is reached through a link,
-        or what is mounted there carries no marker or is not the adopted volume (its volume UUID)."""
+        this interpreter may not read it in time (`access_probe`: the macOS privacy prompt), or what
+        is mounted there carries no marker or is not the adopted volume (its volume UUID)."""
         if self._external is not None:
             return self._external
         pin = self.pin()
@@ -411,6 +500,11 @@ class Seal:
         if not os.path.ismount(mount):
             self._external = External("absent", Path(mount))
             return self._external
+        # Before the first read of anything on it (the marker below, the lists, the media): may this
+        # interpreter read there at all, or is macOS holding the read for a privacy click nobody makes?
+        if mount not in self._readable:
+            self.access_probe(mount)
+            self._readable.add(mount)
         try:
             marker = os.lstat(os.path.join(mount, MARKER))
         except OSError:

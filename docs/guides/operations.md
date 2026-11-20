@@ -208,6 +208,11 @@ and reports counts.
   **Unplugged**: `prepare` ingests what it can reach; a lane runs the internal files and says *"external volume NOT MOUNTED: N files
   on it NOT RUN"* — **AMBER** (no engine failed and no copy is at risk, but those files proved nothing), and such a
   run is never a baseline. **Another volume there**, unmarked, or through a link: the lane is refused and runs nothing.
+  **Privacy prompt**: before the first read of the external root, a child of the same Python reads its marker and one media
+  file (20 s, `ACCESS_PROBE_TIMEOUT_S`); no answer (macOS is showing "Python would like to access files on a removable volume"
+  on the headless M4) or EPERM refuses the run (rc 2, the lock released, the interpreter's real path named) instead of hanging
+  to the watchdog. Grant once in System Settings › Privacy & Security › Files and Folders (or Full Disk Access) for that path;
+  it is per interpreter path, so a Homebrew Python upgrade (a new Cellar path) needs it again.
   The proof (that volume, by UUID) is made again before every launch and, in the test host, before every engine on every
   file. Everything the harness writes, moves or removes is on the **home volume** — checked at every folder on the way, so
   a volume mounted inside or over a corpus folder is refused — and an internal copy must itself be on the home volume.
