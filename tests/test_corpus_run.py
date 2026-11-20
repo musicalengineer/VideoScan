@@ -2246,6 +2246,12 @@ if "link" in mode:
     os.symlink(os.path.join(here, "private.txt"), summary)
 if "name" in mode:
     open(summary, "w").write("corpus check: GREEN 3 files\n  Grandma Birthday 1988.mov: OK\n  check: OK 3\n")
+if "prompt" in mode:
+    print("corpus: RED refused: macOS is waiting for permission to read the external volume (a privacy prompt on the "
+          "M4's screen; the probe got no answer in 20 s). Grandma Birthday 1988.mov", file=sys.stderr)
+if "denied" in mode:
+    print("corpus: RED refused: macOS does not let this Python read the external volume (Operation not permitted).",
+          file=sys.stderr)
 sys.exit(int(mode[0]))
 """
 
@@ -2383,6 +2389,26 @@ class CodexRound3Tests(unittest.TestCase):
         text = (out / 'run.log').read_text() + (out / 'summary.txt').read_text() + self.status()
         self.assertNotIn(PRIVATE, text)
         self.assertIn('corpus check: RED refused by the harness (rc=2', text)
+
+    def test_3_a_privacy_refusal_is_named_in_fixed_words_in_the_summary_and_status(self):
+        # Night of 11/19: the summary said only "the reason is in corpus.log on the M4"; the fix
+        # (click Allow, or grant the interpreter) was one ssh away. Fixed words only: no log text is copied.
+        for stamp, mode, want in (('tcc1', '2 prompt', 'waiting for a privacy prompt on its screen'),
+                                  ('tcc2', '2 denied', 'macOS denied this Python access')):
+            with self.subTest(mode=mode):
+                p = self.host(stamp, mode)
+                self.assertEqual(p.returncode, 1, p.stderr)
+                summary = (self.root / 'out' / f'{stamp}-corpus' / 'summary.txt').read_text()
+                status = self.status()
+                text = summary + status
+                self.assertIn('corpus check: RED refused by the harness (rc=2', summary)
+                self.assertIn(want, summary)
+                self.assertIn('Removable Volumes', summary)
+                self.assertIn(want, status)
+                self.assertNotIn('Birthday', text)
+        p = self.host('tcc3', '2')
+        summary = (self.root / 'out' / 'tcc3-corpus' / 'summary.txt').read_text()
+        self.assertNotIn('privacy', summary)
 
     def test_3_a_summary_that_is_a_link_or_names_a_file_is_withheld_even_when_the_helper_finished(self):
         p = self.host('leak2', '0 link')
