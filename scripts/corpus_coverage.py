@@ -383,8 +383,10 @@ class CoverageRun:
 
     def __init__(self, seal: cr.Seal, sha: str, stamp: str, out: Path, worktree: Path, derived_data: Path,
                  bin_dir: Path, deadline: Optional[int] = None, limit: Optional[int] = None,
-                 xcodebuild: str = "xcodebuild", cp: str = "/bin/cp", xcrun: str = "xcrun", swift: str = "swift"):
+                 xcodebuild: str = "xcodebuild", cp: str = "/bin/cp", xcrun: str = "xcrun", swift: str = "swift",
+                 jobs: Optional[int] = None):
         self.seal, self.sha, self.stamp = seal, sha, stamp
+        self.jobs = jobs                                     # files in flight per lane (corpus_run.default_jobs when None)
         self.out, self.worktree, self.bin_dir = Path(out), Path(worktree), Path(bin_dir)
         self.dd = Path(str(derived_data) + "-coverage")
         self.core_scratch = Path(str(derived_data) + "-coverage-core")
@@ -471,7 +473,7 @@ class CoverageRun:
             if not out.is_dir():
                 os.mkdir(str(out))
             kind = cr.VerbsLane if name == "verbs" else cr.Lane
-            extra = {"cp": self.cp} if name == "verbs" else {}
+            extra = {"cp": self.cp} if name == "verbs" else {"jobs": self.jobs}
             lane = kind(self.seal, name, self.sha, self.stamp, out, self.worktree, self.dd, self.bin_dir,
                         self.deadline, self.limit, self.xcodebuild, **extra)
             lane.profiles = self.seal.mkdir(self.work / "raw" / name)

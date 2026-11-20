@@ -31,14 +31,22 @@
 //   - the verbs lane's clone, archive and scratch folders are under the run's
 //     work folder, which is under ~/corpus/work.
 //
-// Deadline: a file that overruns `deadlineSeconds` is recorded as `timeout`
-// and the test host EXITS ITSELF (`_exit`); the Python side relaunches for
-// the files left. No other process is ever signalled.
+// N in flight: `each` walks the pending files through CorpusPool, the
+// config's `jobs` at a time (1 = the serial loop). Everything a file does is
+// keyed by its SHA-256 — begin, facts, engine, end, its deadline — and every
+// line goes through CorpusProgress's lock whole, so N files' lines interleave
+// but never mix; the Python side folds them by SHA-256, not by order.
+//
+// Deadline: a file that overruns `deadlineSeconds` from its own `begin` is
+// recorded as `timeout` and the test host EXITS ITSELF (`_exit`); the Python
+// side relaunches for the files left (and runs again ALONE every file a launch
+// of N left unfinished). No other process is ever signalled.
 //
 // Privacy: only enum case names, codec/container names and numbers are
 // written. Never a filename, a path, an engine's sentence or stderr.
 //
-// Memory: the loaded records (~6,400 in v2, a few MB) and one small JSON line at a time.
+// Memory: the loaded records (~6,400 in v2, a few MB), one small JSON line per file in flight, and each
+// file's engine output (bounded by ProcessRunner: ~2.5 MB a file at worst, × `jobs` — half the host's cores by default).
 // (For Rick: `final class … @unchecked Sendable` with an NSLock ≈ a C++
 // class whose members are guarded by a std::mutex — the compiler is told
 // "I lock it myself".)
@@ -103,55 +111,7 @@ final class CorpusProgress: @unchecked Sendable {
     }
 }
 
-/// The per-file deadline. Armed at `begin`, told which engine is running; when the
-/// file overruns, it writes the `timeout` and exits this process.
-final class CorpusDeadline: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current: (sha: String, engine: String, due: Date, started: Date)?
-    private let progress: CorpusProgress
-    private let timer: DispatchSourceTimer
-
-    init(progress: CorpusProgress) {
-        self.progress = progress
-        timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
-        timer.schedule(deadline: .now() + 1, repeating: 1)
-        timer.setEventHandler { [weak self] in self?.tick() }
-        timer.resume()
-    }
-
-    func arm(sha: String, seconds: Double) {
-        lock.lock()
-        current = (sha, "", Date().addingTimeInterval(seconds), Date())
-        lock.unlock()
-    }
-
-    func entering(_ engine: String) {
-        lock.lock()
-        current?.engine = engine
-        lock.unlock()
-    }
-
-    func disarm() {
-        lock.lock()
-        current = nil
-        lock.unlock()
-    }
-
-    private func tick() {
-        lock.lock()
-        let now = current
-        lock.unlock()
-        guard let now, Date() > now.due else { return }
-        if !now.engine.isEmpty {
-            progress.write(["ev": "engine", "sha": now.sha, "engine": now.engine, "outcome": "timeout",
-                            "s": Date().timeIntervalSince(now.started)])
-        }
-        progress.write(["ev": "end", "sha": now.sha, "cut": true])
-        _exit(86)
-    }
-}
-
-final class CorpusRun: @unchecked Sendable {
+final class CorpusRun: Sendable {
     let config: CorpusConfig
     let progress: CorpusProgress
     let deadline: CorpusDeadline
@@ -162,7 +122,7 @@ final class CorpusRun: @unchecked Sendable {
     private init(config: CorpusConfig, progress: CorpusProgress, external: CorpusExternal) {
         self.config = config
         self.progress = progress
-        self.deadline = CorpusDeadline(progress: progress)
+        self.deadline = CorpusDeadline(write: { progress.write($0) }, halt: { _exit(86) })
         self.external = external
     }
 
@@ -244,13 +204,24 @@ final class CorpusRun: @unchecked Sendable {
         }
     }
 
+    /// Every pending file once, `config.width` at a time, each from `begin` to `end` inside `body`.
+    func each(_ body: @escaping @Sendable (CorpusConfig.Item) async -> Void) async {
+        await CorpusPool.each(config.pending, width: config.width, body)
+    }
+
     func begin(_ item: CorpusConfig.Item) {
         progress.write(["ev": "begin", "sha": item.sha])
         deadline.arm(sha: item.sha, seconds: config.deadlineSeconds)
     }
 
+    /// A batch begun together (the verbs lane): one `begin` line each, then one deadline clock for all.
+    func begin(_ items: [CorpusConfig.Item]) {
+        for item in items { progress.write(["ev": "begin", "sha": item.sha]) }
+        deadline.arm(shas: items.map(\.sha), seconds: config.deadlineSeconds)
+    }
+
     func end(_ item: CorpusConfig.Item) {
-        deadline.disarm()
+        deadline.disarm(sha: item.sha)
         progress.write(["ev": "end", "sha": item.sha])
     }
 
@@ -273,7 +244,7 @@ final class CorpusRun: @unchecked Sendable {
                             "kinds": [String](), "s": 0])
             return
         }
-        deadline.entering(name)
+        deadline.entering(sha: item.sha, name)
         let started = Date()
         var outcome = "error:unknown", kinds: [String] = []
         do {

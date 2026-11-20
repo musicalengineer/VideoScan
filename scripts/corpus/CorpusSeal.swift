@@ -57,11 +57,16 @@ struct CorpusConfig: Decodable, Sendable {
     let work: String
     let progress: String
     let deadlineSeconds: Double
+    /// Files in flight (CorpusPool). Absent — a config written before it — is one at a time.
+    let jobs: Int?
     let pending: [Item]
     /// The verbs lane only, each under `work`: the clones, the scratch archive root, scratch space.
     let volRoot: String?
     let archiveRoot: String?
     let scratch: String?
+
+    /// `jobs` as the pool takes it: 1 when absent or below 1, never more than 32 (Python's JOBS_MAX).
+    var width: Int { min(max(jobs ?? 1, 1), 32) }
 }
 
 /// Everything the seal decides from. The driver fills it from the process; the tests fill it by hand.

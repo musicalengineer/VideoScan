@@ -45,12 +45,14 @@ final class CorpusCheckDriver: XCTestCase {
             return XCTFail("corpus harness refused: \(refusal.word)")
         }
 
-        for item in run.config.pending {
+        // N files in flight (the config's `jobs`; 1 = one after another): the engines are
+        // `@concurrent` statics over ProcessRunner, with no shared mutable state.
+        await run.each { item in
             run.begin(item)
             guard let context = contexts[item.path] else {
                 await run.engine(item, "probe") { ("no_record", []) }
                 run.end(item)
-                continue
+                return
             }
             await run.engine(item, "probe") {
                 switch await CheckMediaProbe.facts(path: item.path) {

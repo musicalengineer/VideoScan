@@ -224,7 +224,7 @@ final class CorpusVerbsDriver: XCTestCase {
         guard VerbsStage.isEmptyFolder(scratch), VerbsStage.isEmptyFolder(archive) else { return refuse("a_verbs_folder_is_not_empty") }
 
         let stage = VerbsStage(run: run, vol: vol, scratch: scratch, trash: trash)
-        for item in stage.items { run.begin(item) }
+        run.begin(stage.items)
 
         // The trash and catalog verbs: one model over the clones.
         guard let model = stage.makeModel("verbs") else { return refuse("a_store_folder_is_not_this_runs") }

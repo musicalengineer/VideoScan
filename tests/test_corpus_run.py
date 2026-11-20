@@ -92,11 +92,14 @@ with open(plan["calls"], "a") as f:
                         "target": target["BlueprintName"], "target_keys": sorted(target), "config": config,
                         "rows": [r[0] for r in __import__("sqlite3").connect("file:" + config["catalog"] + "?mode=ro", uri=True)
                                  .execute("SELECT full_path FROM files ORDER BY full_path")],
-                        "clones_exist": all(os.path.isfile(p) for i in config["pending"] for p in [i["path"]] + (i.get("copies") or []))}) + "\n")
+                        "clones_exist": all(os.path.isfile(p) for i in config["pending"] for p in [i["path"]] + (i.get("copies") or [])),
+                        "work_files": sorted(os.listdir(config["work"]))}) + "\n")
 if plan.get("remove") and os.path.lexists(plan["remove"]):   # the world changes under the run (Codex #331 F2)
     os.remove(plan["remove"])
 if plan.get("vandal"):                                   # an engine that reaches the pristine corpus (it must turn the lane RED)
     os.utime(plan["vandal"], (5, 5))
+if plan.get("litter"):                                   # what a balancing engine leaves when the host dies mid-copy
+    open(os.path.join(config["work"], plan["litter"] + "-" + str(len(os.listdir(config["work"])))), "w").write("partial")
 if plan.get("lock"):                                     # what Promote does to what it archives
     locked = os.path.join(config["archiveRoot"], "locked.bin")
     open(locked, "w").write("x"); os.chflags(locked, 0x2)
@@ -109,22 +112,33 @@ if plan.get("silent"):
     sys.exit(1)
 say(ev="hello", lane=config["lane"], homeSealed=True, testHost=True, archiveDesignation=False, records=len(config["pending"]))
 engines = plan["engines"]
-for item in config["pending"]:
-    how = plan["files"].get(item["sha"], {})
-    say(ev="begin", sha=item["sha"])
-    say(ev="facts", sha=item["sha"], container=how.get("container", "mov,mp4,m4a,3gp,3g2,mj2"), vcodec=how.get("vcodec", "h264"),
-        acodec=how.get("acodec", "aac"), duration=60.0, bytes=1)
+# `jobs` files in flight (CorpusPool): each group of `jobs` begins together and its lines interleave, engine by
+# engine, as N concurrent files' do. jobs = 1 is one file after another — the serial driver's exact order.
+jobs = max(1, int(config.get("jobs") or 1))
+pending = config["pending"]
+for first in range(0, len(pending), jobs):
+    group = pending[first:first + jobs]
+    for item in group:
+        how = plan["files"].get(item["sha"], {})
+        say(ev="begin", sha=item["sha"])
+        say(ev="facts", sha=item["sha"], container=how.get("container", "mov,mp4,m4a,3gp,3g2,mj2"), vcodec=how.get("vcodec", "h264"),
+            acodec=how.get("acodec", "aac"), duration=60.0, bytes=1)
     for engine in engines:
-        if how.get("crash") == engine:
-            out.write('{"ev": "engine", "sha": "cut-mid-li')        # a line cut by the crash
-            out.flush(); os._exit(139)
-        if how.get("timeout") == engine:
-            say(ev="engine", sha=item["sha"], engine=engine, outcome="timeout", s=1.0)
-            say(ev="end", sha=item["sha"], cut=True); os._exit(86)
-        say(ev="engine", sha=item["sha"], engine=engine, outcome=how.get(engine, "OK"), kinds=how.get(engine + "_kinds", []), s=0.5)
-    if how.get("crash") == "end":                        # every engine answered; the host dies before `end`
-        os._exit(139)
-    say(ev="end", sha=item["sha"])
+        for item in group:
+            how = plan["files"].get(item["sha"], {})
+            if how.get("together_only") and jobs == 1:          # a fault only files in flight together cause
+                how = {}
+            if how.get("crash") == engine:
+                out.write('{"ev": "engine", "sha": "cut-mid-li')        # a line cut by the crash
+                out.flush(); os._exit(139)
+            if how.get("timeout") == engine:
+                say(ev="engine", sha=item["sha"], engine=engine, outcome="timeout", s=1.0)
+                say(ev="end", sha=item["sha"], cut=True); os._exit(86)
+            say(ev="engine", sha=item["sha"], engine=engine, outcome=how.get(engine, "OK"), kinds=how.get(engine + "_kinds", []), s=0.5)
+    for item in group:
+        if plan["files"].get(item["sha"], {}).get("crash") == "end":    # every engine answered; the host dies before `end`
+            os._exit(139)
+        say(ev="end", sha=item["sha"])
 if config["lane"] == "verbs":
     say(ev="verbs", trashFiles=plan.get("trash_files", 0), trashedByEngines=plan.get("trash_files", 0),
         strayTrashFiles=plan.get("stray", 0), receiptsInRun=plan.get("receipts", [0, 0])[0],
@@ -579,12 +593,16 @@ class LaneScene(CorpusScene):
         self.plan = dict(calls=str(self.calls), engines=['probe', 'check', 'audio'], files={})
         cr.prepare(self.seal)
 
-    def run(self, lane='check', sha='a' * 40, stamp='20261117_120000_1', **extra):
+    def run(self, lane='check', sha='a' * 40, stamp='20261117_120000_1', jobs=1, **extra):
+        """jobs=1 (one file at a time, the serial order every older test pinned) unless a test asks for N;
+        jobs=None leaves the flag off: the host's own default."""
         self.plan_path.write_text(json.dumps(self.plan))
         os.environ['FAKE_PLAN'] = str(self.plan_path)
         os.environ['FAKE_CP_CALLS'] = str(self.cp_calls)
         argv = ['host', lane, '--sha', sha, '--stamp', stamp, '--out', str(self.out), '--worktree', str(self.worktree),
                 '--derived-data', str(self.dd), '--bin', str(SCRIPTS / 'corpus')]
+        if jobs is not None:
+            argv += ['--jobs', str(jobs)]
         for key, value in extra.items():
             argv += ['--' + key] + ([str(value)] if value != '' else [])
         try:
@@ -3099,7 +3117,7 @@ class SwiftExternalSealTests(TwoRootTestCase):
             self.assertEqual(answer, 'a_writable_path_is_on_another_volume')
             support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
             self.assertIn('info.st_dev == CorpusSeal.homeDevice(realHome: CorpusRun.realHome())',
-                          support[support.index('final class CorpusProgress'):support.index('final class CorpusDeadline')])
+                          support[support.index('final class CorpusProgress'):support.index('final class CorpusRun')])
         finally:
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', str(run)], capture_output=True, timeout=120)
 
@@ -3235,7 +3253,7 @@ class SwiftExternalSealTests(TwoRootTestCase):
         self.assertEqual(fact[2], 'false', 'a refusal may not be written to a progress file with a second name')
         self.assertEqual(pin.read_bytes(), before)
         support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
-        self.assertIn('info.st_nlink == 1', support[support.index('final class CorpusProgress'):support.index('final class CorpusDeadline')])
+        self.assertIn('info.st_nlink == 1', support[support.index('final class CorpusProgress'):support.index('final class CorpusRun')])
 
     def pin(self, **changes):
         path = self.scene.corpus / cr.VOLUME_PIN
@@ -4213,6 +4231,501 @@ class AccessProbeSealTests(TwoRootTestCase):
         self.volume.detach()
         self.hang()
         self.assertEqual(self.scene.seal.external().state, 'absent')
+
+
+# ── N files in flight (Rick 2026-11-20: "2 hour testbeds in serial is not performant design … N == 1 does not
+# sound good"). The config carries `jobs`; the driver walks the pending files through CorpusPool (N at a time,
+# each file under its own deadline); a launch with N > 1 in flight never convicts a file of a crash or a
+# timeout: every file it left unfinished is run again ALONE, and only a launch of one file at a time convicts.
+
+class ManyFileScene(LaneScene):
+    """Twelve files: enough for three groups of four in flight."""
+    MORE = range(40, 49)                                 # contents no other row of the scene's source catalog uses
+    FILES = LaneScene.FILES + [(n, f'/Volumes/PrivateDrive/Tapes/tape {n}.mov', 1000 + n, 'codec/container combo') for n in MORE]
+
+
+def launches_of(scene):
+    """Each test-host launch's config, in order."""
+    return [c['config'] for c in scene.recorded_calls() if 'config' in c]
+
+
+def progress_events(scene, lane='check', stamp='20261117_120000_1'):
+    """(launch number, event) for every line of every launch's progress file, in order."""
+    out = []
+    for path in sorted(scene.report_dir(lane, stamp=stamp).glob('progress-*.jsonl'), key=lambda p: int(p.stem.split('-')[1])):
+        for line in path.read_text().splitlines():
+            try:
+                out.append((int(path.stem.split('-')[1]), json.loads(line)))
+            except ValueError:
+                pass
+    return out
+
+
+class ParallelLaneTests(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = ManyFileScene(self.tmp.name)
+        self.shas = sorted(sha_of(n) for n, _, _, _ in ManyFileScene.FILES)     # the order the lane gives them: by content
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def outcomes(self, stamp='20261117_120000_1'):
+        return json.loads((self.scene.report_dir(stamp=stamp) / 'outcomes.json').read_text())
+
+    def test_n_comes_through_the_config_and_the_default_is_the_hosts(self):
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_GREEN)
+        self.assertEqual([c['jobs'] for c in launches_of(self.scene)], [4])
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['jobs'], 4)
+        self.assertIn('1 launch(es), 4 files at a time, per-file deadline 300s', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=None), cr.EXIT_GREEN)
+        self.assertEqual(launches_of(self.scene)[-1]['jobs'], min(cr.default_jobs(), 12), 'never more in flight than files to run')
+        # Half the host's logical cores (Rick 2026-11-20: M4 16 -> 8, Ultra 30 -> 15), never under one, never past JOBS_MAX.
+        self.assertEqual([cr.default_jobs(c) for c in (None, 1, 2, 3, 16, 30, 128)], [1, 1, 1, 1, 8, 15, cr.JOBS_MAX])
+        self.assertEqual(cr.JOBS_MAX, 32)
+
+    def test_a_poisoned_n_is_refused_before_anything_runs(self):
+        for bad in (0, -3, cr.JOBS_MAX + 1):
+            self.assertEqual(self.scene.run(jobs=bad), cr.EXIT_REFUSED, bad)
+        self.assertIn('--jobs', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertEqual(self.scene.recorded_calls(), [], 'nothing was built or launched')
+
+    def test_one_at_a_time_is_the_serial_order_and_n_at_a_time_gives_the_same_records(self):
+        self.assertEqual(self.scene.run(jobs=1), cr.EXIT_GREEN)
+        order = [(ev['ev'], ev['sha']) for _, ev in progress_events(self.scene) if ev.get('ev') in ('begin', 'end')]
+        pending = [i['sha'] for i in launches_of(self.scene)[0]['pending']]
+        self.assertEqual(order, [(word, sha) for sha in pending for word in ('begin', 'end')], 'N=1: one file, then the next')
+        serial = self.outcomes()
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=4), cr.EXIT_GREEN)
+        self.assertEqual(self.outcomes('20261117_130000_2'), serial, 'the same record for every file, whatever N')
+        events = [ev for _, ev in progress_events(self.scene, stamp='20261117_130000_2')]
+        firsts = [ev['ev'] for ev in events if ev.get('ev') in ('begin', 'end')][:4]
+        self.assertEqual(firsts, ['begin'] * 4, 'four files were in flight together')
+
+    def test_n_in_flight_every_file_gets_exactly_one_record_per_engine(self):
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_GREEN)
+        events = [ev for _, ev in progress_events(self.scene)]
+        for sha in self.shas:
+            mine = [ev for ev in events if ev.get('sha') == sha]
+            self.assertEqual([ev['ev'] for ev in mine].count('begin'), 1)
+            self.assertEqual([ev['ev'] for ev in mine].count('end'), 1)
+            self.assertEqual(sorted(ev['engine'] for ev in mine if ev['ev'] == 'engine'), sorted(self.scene.plan['engines']))
+        outcomes = self.outcomes()
+        self.assertEqual(sorted(outcomes), sorted(self.shas))
+        self.assertTrue(all(r['outcome'] == 'probe=OK check=OK audio=OK pair=not_run' for r in outcomes.values()))
+
+    def test_a_crash_with_others_in_flight_convicts_only_the_file_that_crashes_alone(self):
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_RED)
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['engines']['check'], {'OK': 11, 'crash': 1})
+        self.assertEqual(report['engines']['audio'], {'OK': 11, 'not_run': 1})
+        self.assertEqual(report['failures'], {'check:crash': 1}, 'the three files in flight beside it are not crashes')
+        self.assertEqual(self.outcomes()[self.shas[5]]['check'], 'crash')
+        launches = launches_of(self.scene)
+        # 1: all twelve, four at a time — dies in the second group. 2: that group ALONE, one at a time — 4 ends,
+        # 5 crashes (convicted). 3: the two left of the group, alone. 4: the last group, four at a time again.
+        self.assertEqual([(len(c['pending']), c['jobs']) for c in launches], [(12, 4), (4, 1), (2, 1), (4, 4)])
+        self.assertEqual([i['sha'] for i in launches[1]['pending']], [i['sha'] for i in launches[0]['pending']][4:8])
+
+    def test_a_relaunch_resumes_without_a_duplicate_or_a_gap(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])       # every engine answers: file 9 dies only before `end`
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check'), self.shas[9]: dict(crash='end')}
+        self.scene.run(jobs=4)
+        clean = [(n, ev['sha']) for n, ev in progress_events(self.scene) if ev.get('ev') == 'end' and not ev.get('cut')]
+        ended = Counter_of(sha for _, sha in clean)
+        self.assertEqual(sorted(ended), sorted(set(self.shas) - {self.shas[5], self.shas[9]}), 'every other file ended')
+        self.assertEqual(set(ended.values()), {1}, 'no file that ended was run again')
+        ended_in = {sha: n for n, sha in clean}
+        launches = launches_of(self.scene)
+        for n, config in enumerate(launches, 1):
+            for item in config['pending']:
+                self.assertGreaterEqual(ended_in.get(item['sha'], n), n, 'a file that had ended was given to a later launch')
+        self.assertEqual([(len(c['pending']), c['jobs']) for c in launches], [(12, 4), (4, 1), (2, 1), (4, 4), (3, 1), (2, 1)])
+        self.assertEqual(sorted(self.outcomes()), sorted(self.shas), 'one record per file: no gap, no duplicate')
+        self.assertTrue(self.outcomes()[self.shas[9]].get('unfinished'), 'the file that never ended, run alone, is RED')
+
+    def test_a_deadline_with_others_in_flight_is_judged_again_alone(self):
+        self.scene.plan['files'] = {self.shas[2]: dict(timeout='audio')}
+        self.assertEqual(self.scene.run(jobs=4, deadline=7), cr.EXIT_RED)
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['failures'], {'audio:timeout': 1})
+        self.assertEqual(report['engines']['probe'], {'OK': 12})
+        self.assertEqual(report['engines']['audio'], {'OK': 11, 'timeout': 1})
+        launches = launches_of(self.scene)
+        self.assertEqual({c['deadlineSeconds'] for c in launches}, {7}, 'each file has the same deadline of its own')
+        self.assertEqual(launches[1]['jobs'], 1, 'the cut file and the three beside it are run again one at a time')
+
+    def test_every_file_crashing_in_parallel_still_ends(self):
+        self.scene.plan['files'] = {sha: dict(crash='probe') for sha in self.shas}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_RED)
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['engines']['probe'], {'crash': 12})
+        self.assertEqual(report['launches'], 3 + 12, 'three groups, then each file alone: bounded, never a loop')
+
+    def test_the_verbs_lane_stays_one_batch(self):
+        scene = self.scene
+        scene.plan['engines'] = list(cr.LANES['verbs'][1])
+        scene.run('verbs', jobs=4)
+        self.assertEqual({c['jobs'] for c in launches_of(scene)}, {1}, 'the verbs act on the sample together: never split')
+
+    def test_the_proof_lane_takes_as_many_at_a_time_as_the_disk_holds_copies_for(self):
+        GB = 1 << 30
+        # 100 GB disk, 30 GB free: the run may use 25 GB (it stops short of 95% used).
+        self.assertEqual(cr.proof_width(30 * GB, 100 * GB, [6 * GB, 10 * GB, 2 * GB, 8 * GB], 4), 3, '10+8+6 fit; +2 does not')
+        self.assertEqual(cr.proof_width(30 * GB, 100 * GB, [1 * GB] * 9, 8), 8)
+        self.assertEqual(cr.proof_width(30 * GB, 100 * GB, [20 * GB, 20 * GB], 1), 1)
+        with self.assertRaises(cr.Refused):
+            cr.proof_width(30 * GB, 100 * GB, [26 * GB], 4)
+        scene = LaneScene(pathlib.Path(self.tmp.name, 'proof').as_posix(), with_proof_engine=True)
+        scene.plan['engines'] = ['balance', 'proof']
+        scene.plan['files'] = {sha_of(0): dict(balance='balanced', proof='same_content')}
+        self.assertEqual(scene.run('proof', jobs=4), cr.EXIT_GREEN)
+        self.assertEqual([c['jobs'] for c in launches_of(scene)], [1], 'one one-sided file: one at a time')
+
+    def test_settle_in_a_launch_of_n_convicts_no_one_and_names_the_files_to_run_alone(self):
+        events = [dict(ev='begin', sha='a'), dict(ev='begin', sha='b'), dict(ev='begin', sha='c'),
+                  dict(ev='engine', sha='a', engine='probe', outcome='probed'), dict(ev='end', sha='a'),
+                  dict(ev='engine', sha='b', engine='probe', outcome='timeout'), dict(ev='end', sha='b', cut=True)]
+        results = {'a': {}, 'b': {}, 'c': {}}
+        alone = set()
+        settled, refusal = cr.settle(events, ['probe'], results, width=3, alone=alone)
+        self.assertEqual((settled, refusal, alone), (1, None, {'b', 'c'}))
+        self.assertEqual(results['a']['probe'], 'probed')
+        self.assertFalse(results['b'].get('settled') or results['c'].get('settled'), 'not convicted in a launch of three')
+        results = {'a': {}, 'b': {}, 'c': {}}
+        self.assertEqual(cr.settle(events, ['probe'], results), (3, None), 'one at a time: convicted, as before')
+        self.assertEqual((results['b']['probe'], results['c']['probe']), ('timeout', 'crash'))
+
+
+class ReviewFixTests(unittest.TestCase):
+    """Review of 327576126 (2026-11-20): a launch of N that died is counted and said, never absorbed; the proof
+    lane's leftovers are swept before a relaunch and its width counts what the balancing engine needs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = ManyFileScene(self.tmp.name)
+        self.shas = sorted(sha_of(n) for n, _, _, _ in ManyFileScene.FILES)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def report(self):
+        return json.loads((self.scene.report_dir() / 'report.json').read_text())
+
+    def test_a_launch_of_n_that_died_is_said_in_the_report_with_the_files_run_again_alone(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}
+        self.scene.run(jobs=4)
+        report = self.report()
+        self.assertEqual(report.get('launches_cut_short'), 1, 'one launch of four died with files in flight')
+        self.assertEqual(report.get('run_again_alone'), 4, 'the four files it left unfinished were run again alone')
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertIn('1 launch of 4 cut short; 4 files run again alone (1 failed alone)', summary)
+        self.assertIn('RED', summary.splitlines()[0], 'a file that crashes alone is still RED')
+
+    def test_a_crash_only_files_in_flight_together_cause_is_amber_never_green(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check', together_only=True)}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_AMBER)
+        report = self.report()
+        self.assertEqual((report['launches_cut_short'], report['run_again_alone'], report['failures']), (1, 4, {}))
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertTrue(summary.startswith('corpus check: AMBER 12 files'), summary.splitlines()[0])
+        self.assertIn('1 launch of 4 cut short; 4 files run again alone (none failed alone) — AMBER', summary)
+        self.assertEqual(cr.clean_report(report)['launches_cut_short'], 1, 'status reads it back')
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=1), cr.EXIT_GREEN, 'one at a time it never happens')
+        self.assertEqual(json.loads((self.scene.report_dir(stamp='20261117_130000_2') / 'report.json').read_text())
+                         ['launches_cut_short'], 0)
+
+    def test_a_run_with_a_launch_cut_short_is_never_the_baseline_implicit_or_accepted(self):
+        self.scene.plan['engines'] = list(cr.LANES['check'][1])
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check', together_only=True)}
+        self.assertEqual(self.scene.run(jobs=4), cr.EXIT_AMBER)
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'x')
+        self.assertIn('a launch of files in flight together was cut short', str(refused.exception))
+        self.assertIsNone(cr.baseline_of(self.scene.seal, 'check')[0], 'never the implicit baseline either')
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=1), cr.EXIT_GREEN)
+        self.assertEqual(cr.baseline_of(self.scene.seal, 'check')[0].name, '20261117_130000_2', 'a clean run is')
+
+    def test_what_a_dead_launch_left_in_the_work_folder_is_swept_before_the_next(self):
+        self.scene.plan['litter'] = 'balanced-copy.partial'
+        self.scene.plan['files'] = {self.shas[5]: dict(crash='check')}
+        self.scene.run(jobs=4)
+        listings = [c['work_files'] for c in self.scene.recorded_calls() if 'work_files' in c]
+        self.assertGreater(len(listings), 1)
+        for listing in listings:
+            leftovers = [name for name in listing if name.startswith('balanced-copy')]
+            self.assertEqual(leftovers, [], 'a launch began beside an earlier launch\'s partial copy')
+
+    def test_the_sweep_takes_only_the_runs_own_loose_files(self):
+        work = self.scene.seal.work_root / 'run-sweep'
+        self.scene.seal.mkdir(work / 'tmp')
+        for name in ('config-1.json', 'progress-1.jsonl', 'abc_balanced.mov', 'abc.partial'):
+            (work / name).write_text('x')
+        (work / 'linked').symlink_to(self.scene.corpus / cr.MARKER)
+        twin = work / 'second-name'
+        os.link(str(self.scene.corpus / cr.MARKER), str(twin))
+        cr.sweep_work(self.scene.seal, work)
+        self.assertEqual(sorted(p.name for p in work.iterdir()),
+                         ['config-1.json', 'linked', 'progress-1.jsonl', 'second-name', 'tmp'])
+        self.assertTrue((self.scene.corpus / cr.MARKER).exists(), 'a corpus document is never reached through a link or a second name')
+
+    def test_the_verbs_batch_is_begun_on_one_clock_and_the_run_is_plainly_sendable(self):
+        verbs = (SCRIPTS / 'corpus' / 'CorpusVerbsDriver.swift').read_text()
+        self.assertIn('run.begin(stage.items)', verbs)
+        self.assertNotIn('for item in stage.items { run.begin(item) }', verbs)
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        self.assertIn('deadline.arm(shas: items.map(\\.sha), seconds: config.deadlineSeconds)', support)
+        self.assertIn('final class CorpusRun: Sendable {', support, 'every member is Sendable: no @unchecked')
+
+    def test_the_proof_width_counts_what_the_balancing_engine_needs_not_the_source_size(self):
+        MB = 1 << 20
+        self.assertEqual(cr.proof_need(100 * MB, 60.0), 100 * MB + 12_000_000 + 64 * MB)     # BalanceAudioFix.requiredFreeBytes
+        self.assertEqual(cr.proof_need(100 * MB, -5.0), 100 * MB + 64 * MB)
+        scene = LaneScene(pathlib.Path(self.tmp.name, 'proof').as_posix(), with_proof_engine=True)
+        scene.plan['engines'] = ['balance', 'proof']
+        real = cr.shutil.disk_usage
+        floor = 100 * 10**9 * (1 - cr.TRANSIENT_CEILING)
+        cr.shutil.disk_usage = lambda path: type('U', (), dict(total=100 * 10**9, used=0, free=int(floor) + 10 * MB))()
+        try:
+            self.assertEqual(scene.run('proof'), cr.EXIT_REFUSED, 'a 1,200-byte file still needs the 64 MB cushion')
+        finally:
+            cr.shutil.disk_usage = real
+        self.assertIn('a run stops short of 95% used', (scene.out / 'corpus-summary.txt').read_text())
+
+
+class ParallelScaleTests(unittest.TestCase):
+
+    def test_settle_over_100k_interleaved_events_stays_inside_the_budget(self):
+        engines = ['probe', 'check', 'audio', 'pair']
+        shas = [f'{n:064x}' for n in range(20_000)]
+        events = []
+        for first in range(0, len(shas), 8):                 # eight in flight, lines interleaved engine by engine
+            group = shas[first:first + 8]
+            events += [dict(ev='begin', sha=s) for s in group]
+            events += [dict(ev='engine', sha=s, engine=e, outcome='OK', kinds=[], s=0.1) for e in engines for s in group]
+            events += [dict(ev='end', sha=s) for s in group]
+        results = {s: {} for s in shas}
+        t0 = time.monotonic()
+        settled, _ = cr.settle(events, engines, results, width=8, alone=set())
+        elapsed = time.monotonic() - t0
+        self.assertEqual((len(events), settled), (120_000, 20_000))
+        self.assertTrue(all(r['audio'] == 'OK' for r in results.values()))
+        self.assertLess(elapsed, 5.0, f'{elapsed:.2f}s for 120k lines')
+
+
+POOL_MAIN = r"""
+import Foundation
+struct Step: Decodable, Sendable { let sha: String; let seconds: Double }
+struct Plan: Decodable { let width: Int; let deadline: Double; let progress: String; let items: [Step] }
+final class Lines: @unchecked Sendable {
+    private let lock = NSLock()
+    private let handle: FileHandle
+    init(_ path: String) {
+        FileManager.default.createFile(atPath: path, contents: nil)
+        handle = FileHandle(forWritingAtPath: path)!
+    }
+    func write(_ event: [String: Any]) {
+        let data = try! JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+        lock.lock(); defer { lock.unlock() }
+        handle.write(data); handle.write(Data("\n".utf8))
+    }
+}
+final class Gauge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var now = 0
+    private(set) var peak = 0
+    func enter() { lock.lock(); now += 1; peak = max(peak, now); lock.unlock() }
+    func leave() { lock.lock(); now -= 1; lock.unlock() }
+}
+func main() async throws {
+    let plan = try JSONDecoder().decode(Plan.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+    let lines = Lines(plan.progress), gauge = Gauge(), seconds = plan.deadline
+    let deadline = CorpusDeadline(write: { lines.write($0) }, halt: { _exit(86) })
+    let started = Date()
+    // As CorpusRun.begin / engine / end do it, around the pool.
+    await CorpusPool.each(plan.items, width: plan.width) { step in
+        lines.write(["ev": "begin", "sha": step.sha])
+        deadline.arm(sha: step.sha, seconds: seconds)
+        gauge.enter()
+        deadline.entering(sha: step.sha, "work")
+        try? await Task.sleep(nanoseconds: UInt64(step.seconds * 1_000_000_000))
+        lines.write(["ev": "engine", "sha": step.sha, "engine": "work", "outcome": "OK"])
+        gauge.leave()
+        deadline.disarm(sha: step.sha)
+        lines.write(["ev": "end", "sha": step.sha])
+    }
+    print("\(gauge.peak) \(Date().timeIntervalSince(started))")
+}
+try await main()
+"""
+
+
+_POOL_BUILD = []
+
+
+def pool_binary():
+    """CorpusPool.swift (Foundation only) compiled in Swift 6 mode beside POOL_MAIN, once per test process."""
+    if not _POOL_BUILD:
+        build = tempfile.TemporaryDirectory()
+        main = pathlib.Path(build.name, 'main.swift')
+        main.write_text(POOL_MAIN)
+        binary = pathlib.Path(build.name, 'pool')
+        done = subprocess.run(['swiftc', '-swift-version', '6', '-o', str(binary), str(SCRIPTS / 'corpus' / 'CorpusPool.swift'),
+                               str(main)], capture_output=True, text=True, timeout=600)
+        if done.returncode != 0:
+            raise AssertionError('CorpusPool.swift does not compile by itself in Swift 6 mode:\n' + done.stdout + done.stderr)
+        _POOL_BUILD.extend([build, binary])
+    return _POOL_BUILD[1]
+
+
+POOL_REVIEW_MAIN = r"""
+import Foundation
+final class Box: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    private var n = 0
+    func add(_ s: String) { lock.lock(); lines.append(s); lock.unlock() }
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+}
+func cancelled(width: Int) async -> Int {
+    let started = Box()
+    let walk = Task {
+        await CorpusPool.each(Array(0..<12), width: width) { _ in
+            started.bump()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    walk.cancel()
+    await walk.value
+    return started.count
+}
+func main() async {
+    print("cancel1=\(await cancelled(width: 1)) cancel2=\(await cancelled(width: 2))")
+    // One batch (the verbs lane's whole sample), armed on ONE clock even with a pause inside the call's caller.
+    let cut = Box(), halted = Box()
+    let deadline = CorpusDeadline(write: { if $0["cut"] != nil { cut.add($0["sha"] as? String ?? "?") } },
+                                  halt: { halted.bump() })
+    deadline.arm(shas: ["x", "y", "z"], seconds: 1.6)
+    deadline.entering("purge")
+    while halted.count == 0 { try? await Task.sleep(nanoseconds: 50_000_000) }
+    print("batch=\(cut.all.sorted().joined(separator: ","))")
+}
+await main()
+"""
+
+
+@unittest.skipUnless(shutil.which('swiftc'), 'needs the Swift compiler')
+class SwiftPoolReviewTests(unittest.TestCase):
+    """Review of 327576126: the pool stops starting files once cancelled; a batch is armed on one clock."""
+
+    def test_a_cancelled_walk_starts_no_more_files_and_a_batch_is_cut_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            main = pathlib.Path(tmp, 'main.swift')
+            main.write_text(POOL_REVIEW_MAIN)
+            binary = pathlib.Path(tmp, 'review')
+            done = subprocess.run(['swiftc', '-swift-version', '6', '-o', str(binary), str(SCRIPTS / 'corpus' / 'CorpusPool.swift'),
+                                   str(main)], capture_output=True, text=True, timeout=600)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+        facts = dict(part.split('=') for part in ran.stdout.split())
+        self.assertLessEqual(int(facts['cancel1']), 2, 'one at a time: no file begins after the cancel')
+        self.assertLessEqual(int(facts['cancel2']), 4, 'two at a time: no file begins after the cancel')
+        self.assertEqual(facts['batch'], 'x,y,z', 'the whole batch is cut by one tick, never part of it')
+
+
+@unittest.skipUnless(shutil.which('swiftc'), 'needs the Swift compiler')
+class SwiftPoolTests(unittest.TestCase):
+    """The in-app pool and per-file deadline pinned by BEHAVIOUR: scripts/corpus/CorpusPool.swift compiled by
+    itself and given files that take a known time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.binary = pool_binary()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def pool(self, width, steps, deadline=60.0):
+        progress = pathlib.Path(self.tmp.name, f'progress-{width}-{len(steps)}.jsonl')
+        plan = pathlib.Path(self.tmp.name, 'plan.json')
+        plan.write_text(json.dumps(dict(width=width, deadline=deadline, progress=str(progress),
+                                        items=[dict(sha=s, seconds=t) for s, t in steps])))
+        t0 = time.monotonic()
+        done = subprocess.run([str(self.binary), str(plan)], capture_output=True, text=True, timeout=60)
+        wall = time.monotonic() - t0
+        events = [json.loads(line) for line in progress.read_text().splitlines()]
+        return done, events, wall
+
+    def test_one_at_a_time_is_the_given_order(self):
+        steps = [(f'f{n}', 0.02) for n in range(6)]
+        done, events, _ = self.pool(1, steps)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([(e['ev'], e['sha']) for e in events],
+                         [(w, s) for s, _ in steps for w in ('begin', 'engine', 'end')])
+        self.assertEqual(done.stdout.split()[0], '1')
+
+    def test_n_in_flight_never_more_and_every_file_exactly_once(self):
+        steps = [(f'f{n:02d}', 0.3) for n in range(12)]
+        done, events, wall = self.pool(4, steps)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split()[0], '4', 'four in flight at the peak, never five')
+        for sha, _ in steps:
+            self.assertEqual([e['ev'] for e in events if e['sha'] == sha], ['begin', 'engine', 'end'], sha)
+        self.assertLess(float(done.stdout.split()[1]), 12 * 0.3 / 2, 'twelve 0.3 s files four at a time took ~0.9 s, not 3.6 s')
+
+    def test_a_width_below_one_is_one_at_a_time(self):
+        done, events, _ = self.pool(0, [('a', 0.01), ('b', 0.01)])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([e['ev'] for e in events], ['begin', 'engine', 'end'] * 2)
+
+    def test_the_deadline_is_each_files_own_not_the_launchs(self):
+        # Six 0.9 s files two at a time: the launch takes ~2.7 s, past a 2 s deadline; no FILE is past it.
+        done, events, _ = self.pool(2, [(f'f{n}', 0.9) for n in range(6)], deadline=2.0)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn('timeout', json.dumps(events))
+        self.assertEqual(sum(1 for e in events if e['ev'] == 'end'), 6)
+
+    def test_the_file_past_its_deadline_is_cut_alone_and_the_host_exits(self):
+        done, events, wall = self.pool(3, [('slow', 8.0), ('a', 0.2), ('b', 0.2), ('c', 0.2)], deadline=1.5)
+        self.assertEqual(done.returncode, 86)
+        self.assertLess(wall, 5.0, 'cut at its deadline, not at the end of its 8 s')
+        cut = [e for e in events if e.get('outcome') == 'timeout' or e.get('cut')]
+        self.assertEqual(cut, [dict(ev='engine', sha='slow', engine='work', outcome='timeout', s=cut[0]['s']),
+                               dict(ev='end', sha='slow', cut=True)])
+        self.assertGreaterEqual(cut[0]['s'], 1.5)
+        for sha in ('a', 'b', 'c'):
+            self.assertEqual([e['ev'] for e in events if e['sha'] == sha], ['begin', 'engine', 'end'], 'the others ran clean')
+
+    def test_two_files_past_their_deadlines_at_once_are_both_cut(self):
+        done, events, _ = self.pool(2, [('x', 8.0), ('y', 8.0)], deadline=1.0)
+        self.assertEqual(done.returncode, 86)
+        self.assertEqual(sorted(e['sha'] for e in events if e.get('cut')), ['x', 'y'])
+
+
+class ParallelDriverSourceTests(unittest.TestCase):
+    """The drivers go through the pool; the pool is laid over the testbed with them."""
+
+    def test_check_and_proof_walk_their_files_through_the_pool_and_verbs_stays_one_batch(self):
+        for name in ('CorpusCheckDriver.swift', 'CorpusProofDriver.swift'):
+            text = (SCRIPTS / 'corpus' / name).read_text()
+            self.assertIn('await run.each', text, name)
+            self.assertNotIn('for item in run.config.pending', text, name)
+        self.assertIn('CorpusPool.swift', cr.ALL_DRIVERS)
+        for lane, (_, _, _, sources) in cr.LANES.items():
+            self.assertIn('CorpusPool.swift', sources, lane)
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        self.assertIn('deadline.entering(sha: item.sha, name)', support, 'the deadline is told WHICH file is in which engine')
 
 
 if __name__ == '__main__':
