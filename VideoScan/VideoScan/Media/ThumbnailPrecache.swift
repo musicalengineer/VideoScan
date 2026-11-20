@@ -123,6 +123,36 @@ enum ThumbnailCachePolicy {
             + " · NSCache evictions since launch \(cache.evictions) (our removals \(cache.removals))"
             + " · " + String(format: "%.1fs", seconds)
     }
+
+    /// What the pass's end-of-run probe read from the L1 cache, on the main
+    /// actor, handed back to the detached task as a value (all members are
+    /// Sendable, so the tuple is — C++: a POD struct returned by value).
+    typealias Probe = (cachedNow: Int, snapshot: ThumbnailMemoryCache.Snapshot, limitBytes: Int)
+
+    /// The OUTCOME line from an optional probe. `nil` = the model (and its
+    /// cache) was gone when the pass ended: the line still lands, and says
+    /// it could not count what is cached rather than guessing a number.
+    static func outcomeLine(how: String,
+                            label: String,
+                            rowsNeeding: Int,
+                            stored: Int,
+                            failed: Int,
+                            seconds: Double,
+                            probe: Probe?) -> String {
+        guard let probe else {
+            return "Thumbnail prewarm OUTCOME (\(how)) — \(label): cache could not be probed (model gone);"
+                + " \(rowsNeeding) rows needing a thumbnail (\(stored) stored this pass, \(failed) skipped/failed)"
+                + " · " + String(format: "%.1fs", seconds)
+        }
+        return outcomeLine(how: how, label: label, cachedNow: probe.cachedNow, rowsNeeding: rowsNeeding,
+                           stored: stored, failed: failed, seconds: seconds,
+                           cache: probe.snapshot, limitBytes: probe.limitBytes)
+    }
+
+    /// The START line of a prewarm pass — same sink as its OUTCOME (MFO).
+    static func startLine(label: String, candidates: Int, concurrency: Int) -> String {
+        "Thumbnail prewarm START — \(label): \(candidates) candidates, concurrency \(concurrency)"
+    }
 }
 
 // MARK: - Planner (pure)
@@ -271,6 +301,9 @@ final class ThumbnailPrecacher {
         let model = WeakRef(model)
         task = Task.detached(priority: .utility) { [weak self] in
             let started = CFAbsoluteTimeGetCurrent()
+            // MFO START through the same sink as the OUTCOME, off the main actor.
+            log.write(ThumbnailCachePolicy.startLine(label: label, candidates: items.count,
+                                                     concurrency: bound))
 
             // Generate one thumbnail; returns true on a cache store.
             // autoreleasepool for the synchronous bitmap work lives inside
@@ -397,22 +430,16 @@ final class ThumbnailPrecacher {
 
             let how = Task.isCancelled ? "cancelled"
                 : stoppedForMemory ? "stopped: low memory headroom" : "complete"
-            // OUTCOME through the one log sink; N is probed (evidence),
-            // once per pass, never per thumbnail. The cache is read on the
-            // main actor, where it lives: capturing it into this detached
-            // task compiles under Debug's approachable-concurrency rules but
-            // NOT under Release's (RegionIsolation::SendingClosureRisksDataRace,
-            // 2026-11-19 — the Release build broke on main). One lock-guarded
-            // lookup per pass row, once per pass (~ms for 19k rows).
-            let paths = items.map { $0.path }
-            await MainActor.run {
-                guard let memoryCache = model.object?.previewService.thumbnailCache else { return }
-                log.write(ThumbnailCachePolicy.outcomeLine(
-                    how: how, label: label,
-                    cachedNow: memoryCache.cachedCount(of: paths), rowsNeeding: items.count,
-                    stored: generated, failed: failed, seconds: secs,
-                    cache: memoryCache.snapshot, limitBytes: memoryCache.totalCostLimit))
-            }
+            // OUTCOME through the one log sink (writePassOutcome). Capturing
+            // the cache itself into this detached task compiled in Debug but
+            // NOT in Release (RegionIsolation::SendingClosureRisksDataRace,
+            // GH #497). Not an approachable-concurrency difference —
+            // SWIFT_APPROACHABLE_CONCURRENCY is YES in both configs; Release
+            // is whole-module + optimised, Debug single-file -Onone, and the
+            // diagnostic fired only in the Release build.
+            await Self.writePassOutcome(how: how, label: label, paths: items.map { $0.path },
+                                        stored: generated, failed: failed, seconds: secs,
+                                        model: model, log: log)
 
             // Clear `task` so isRunning reads false after a natural finish —
             // but only if a newer start() hasn't superseded this run.
@@ -421,5 +448,28 @@ final class ThumbnailPrecacher {
                 self.task = nil
             }
         }
+    }
+
+    /// The pass's end step: probe the L1 cache, then write the ONE OUTCOME
+    /// line through the sink. N is probed (evidence), once per pass, never
+    /// per thumbnail: one lock-guarded lookup per pass row (~ms for 19k).
+    ///
+    /// The cache is read on the main actor, where it lives, and only VALUES
+    /// come back (`Probe` is a tuple of Sendable members): capturing the
+    /// cache itself into the detached pass trips Release's region-isolation
+    /// check (SendingClosureRisksDataRace, GH #497). The log write happens
+    /// after the hop, off the main actor. A gone model still gets a line —
+    /// one that says the cache could not be probed.
+    nonisolated static func writePassOutcome(how: String, label: String, paths: [String],
+                                             stored: Int, failed: Int, seconds: Double,
+                                             model: WeakRef<VideoScanModel>,
+                                             log: any LogSink) async {
+        let probe: ThumbnailCachePolicy.Probe? = await MainActor.run {
+            guard let memoryCache = model.object?.previewService.thumbnailCache else { return nil }
+            return (memoryCache.cachedCount(of: paths), memoryCache.snapshot, memoryCache.totalCostLimit)
+        }
+        log.write(ThumbnailCachePolicy.outcomeLine(
+            how: how, label: label, rowsNeeding: paths.count,
+            stored: stored, failed: failed, seconds: seconds, probe: probe))
     }
 }
