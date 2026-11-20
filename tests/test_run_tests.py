@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -929,7 +930,7 @@ def test_a_lane_missing_a_tool_is_not_run_setup_and_the_others_still_run(monkeyp
     out = rt.Out(False, buf)
     lanes = rt.run_lanes(a, picks, tmp_path, tmp_path, out, tmp_path, "smoke",
                          missing={"python": ["node (brew install node)"]})
-    assert ran == ["core.log"]
+    assert ran == ["core-build.log", "core.log"]          # Core builds, then tests from the bundle; Python never starts
     py = [l for l in lanes if l.name == "python"][0]
     assert (py.word, py.setup, py.reason) == ("NOT RUN", ["node (brew install node)"], "setup: missing node (brew install node)")
     code = rt.summary(out, lanes, 1.0, None)
@@ -999,3 +1000,523 @@ def test_interrupt_summary_names_the_incomplete_lane_in_words():
     assert "no test counted" not in text
     assert "interrupted: interrupted" not in text
     assert "after 174 tests" in text
+
+
+# ───────────────────────────── 2026-11-20: concurrent runs, the registry, --status, --filter
+# Rick: "run_tests.sh blocks so I can't run MFO verbs and in another shell a specific unit test …
+# we should minimize the lock … I cannot query the testbed runner about what is running."
+
+# --filter grammar (gtest's --gtest_filter)
+
+def test_filter_parses_positives_negatives_and_globs():
+    f = rt.TestFilter.parse("Catalog*:MFOVerbsParallelTests.theCrowd*-CatalogSlowTests:*.testHuge*")
+    assert f.pos == ["Catalog*", "MFOVerbsParallelTests.theCrowd*"]
+    assert f.neg == ["CatalogSlowTests", "*.testHuge*"]
+    assert f.wants("CatalogStoreTests", "testInsert")
+    assert not f.wants("CatalogSlowTests", "testInsert")                 # a negative suite
+    assert not f.wants("CatalogStoreTests", "testHugeImport")             # a negative test
+    assert f.wants("MFOVerbsParallelTests", "theCrowdCoversEveryVerb")
+    assert not f.wants("MFOVerbsParallelTests", "everyVerbAlone")
+    assert not f.wants("ArchiveFixityTests", "testX")
+
+
+def test_filter_suite_star_equals_the_suite_and_a_dotted_pattern_names_tests():
+    for text in ("CatalogStoreTests", "CatalogStoreTests.*", "Catalog*.*"):
+        f = rt.TestFilter.parse(text)
+        assert f.whole("CatalogStoreTests") and f.wants("CatalogStoreTests", "anything"), text
+    f = rt.TestFilter.parse("CatalogStoreTests.testInsert")
+    assert not f.whole("CatalogStoreTests") and f.touches("CatalogStoreTests")
+    assert f.wants("CatalogStoreTests", "testInsert") and not f.wants("CatalogStoreTests", "testInsertMany")
+    assert rt.TestFilter.parse("S.f()").wants("S", "f")                      # Swift Testing's () is optional
+    assert not rt.TestFilter.parse("catalog*").wants("CatalogStoreTests", "t")  # case-sensitive, like gtest
+
+
+def test_filter_with_only_negatives_means_everything_else_and_empty_is_usage(capsys):
+    f = rt.TestFilter.parse("-*Perf*")
+    assert f.pos == ["*"] and f.wants("A", "b") and not f.wants("APerfTests", "b")
+    with pytest.raises(rt.Usage):
+        rt.TestFilter.parse("  ")
+    with pytest.raises(SystemExit) as e:
+        rt.parse_args(["--filter", ""])
+    assert e.value.code == 2
+    with pytest.raises(SystemExit) as e:
+        rt.parse_args(["--full", "--filter", "X"])
+    assert e.value.code == 2 and "--filter narrows a --smoke" in capsys.readouterr().err
+
+
+def test_a_filter_picks_from_every_stage_and_never_asks_for_the_corpus():
+    a = rt.parse_args(["--filter", "X*"])
+    assert a.stages == rt.STAGES and a.kinds == {"app", "core", "python"}
+    a = rt.parse_args(["--filter", "X*", "--unit"])
+    assert a.stages == ["unit"]
+    assert rt.parse_args(["--filter", "X*", "--python"]).kinds == {"python"}
+
+
+# the source parsers (same rules as scripts/gauntlet/inventory.swift)
+
+SWIFT_SRC = '''
+import Testing
+import XCTest
+
+final class CatalogStoreTests: XCTestCase {
+    func testInsert() throws {
+        struct Boom: Error {}          // a helper type inside a test is not a suite
+        func helper() {}
+    }
+    func testDelete() {}
+    func notATest() {}
+}
+
+@Suite("VerifyAudio — persistence isolation")
+struct VerifyAudioIsolationTests {
+    @Test("never writes the real catalog") func neverWrites() {}
+    @Test("each fixture decodes", arguments: ["a", "b"])
+    func decodes(name: String) throws {}
+    @Test(
+        "multi-line attribute and labels",
+        arguments: [1, 2], [3]
+    )
+    func pairs(_ a: Int,
+               second b: Int) async throws {}
+    // @Test func commentedOut() {}
+    struct Nested {
+        @Test func inner() {}
+    }
+}
+'''
+
+
+def test_swift_cases_credit_the_type_name_and_carry_swift_testing_identifiers():
+    cases = rt.swift_cases(SWIFT_SRC)
+    assert cases == [
+        ("CatalogStoreTests", "testInsert", "testInsert"),
+        ("CatalogStoreTests", "testDelete", "testDelete"),
+        ("VerifyAudioIsolationTests", "neverWrites", "neverWrites()"),
+        ("VerifyAudioIsolationTests", "decodes", "decodes(name:)"),          # parameterized: one id, all cases
+        ("VerifyAudioIsolationTests", "pairs", "pairs(_:second:)"),
+        ("Nested", "inner", "inner()"),
+    ]
+
+
+def test_python_cases_give_pytest_node_ids():
+    src = textwrap.dedent('''
+        import pytest
+
+        def test_a():
+            def test_nested_helper():
+                pass
+
+        class TestC:
+            def test_b(self):
+                pass
+
+            @pytest.mark.parametrize("x", [1, 2])
+            def test_c(self, x):
+                pass
+
+        @pytest.mark.parametrize("y", [1])
+        def test_d(y):
+            pass
+
+        def helper():
+            pass
+    ''')
+    assert rt.python_cases(src, "test_mod") == [
+        ("test_mod", "test_a", "test_a"), ("test_mod", "test_b", "TestC::test_b"),
+        ("test_mod", "test_c", "TestC::test_c"), ("test_mod", "test_d", "test_d")]
+
+
+# the filter over a pool, and its mapping per lane
+
+def filter_pool():
+    A, C = "VideoScan/VideoScanTests/", "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/"
+    pool = [rt.Pick("app", "Catalog", "unit", A + "CatalogStoreTests.swift",
+                    ("CatalogStoreTests", "Nested", "VerifyAudioIsolationTests"), 6),
+            rt.Pick("app", "Other", "unit", A + "ZebraTests.swift", ("ZebraTests",), 3),
+            rt.Pick("core", "Core/Store", "unit", C + "CoreStoreTests.swift", ("CoreStoreTests",), 2),
+            rt.Pick("python", "py/run", "unit", "tests/test_mod.py", ("test_mod.py",), 4)]
+    texts = {A + "CatalogStoreTests.swift": SWIFT_SRC,
+             C + "CoreStoreTests.swift": "final class CoreStoreTests: XCTestCase {\n func testA() {}\n func testB() {}\n}\n",
+             "tests/test_mod.py": "def test_a():\n    pass\n\nclass TestC:\n    def test_b(self):\n        pass\n"
+                                  "    def test_c(self):\n        pass\n\ndef test_d():\n    pass\n"}
+    return pool, texts
+
+
+def run_filter(text):
+    pool, texts = filter_pool()
+    asked = []
+
+    def read(paths):
+        asked.extend(paths)
+        return {p: texts[p] for p in paths}
+    return rt.apply_filter(pool, rt.TestFilter.parse(text), read), asked
+
+
+def test_whole_suites_need_no_source_and_keep_the_manifest_count():
+    picks, asked = run_filter("Zebra*:CoreStoreTests")
+    assert [(p.path.rsplit("/", 1)[-1], p.tests, p.cases) for p in picks] == [
+        ("ZebraTests.swift", 3, ()), ("CoreStoreTests.swift", 2, ())]
+    assert asked == []                                  # nothing to read: whole suites
+
+
+def test_a_partial_file_runs_only_the_named_tests_and_suites_match_by_type_name():
+    picks, asked = run_filter("VerifyAudioIsolationTests.decodes:CatalogStoreTests")
+    assert asked == ["VideoScan/VideoScanTests/CatalogStoreTests.swift"]   # only the file it must split
+    (p,) = picks
+    assert p.suites == ("CatalogStoreTests", "VerifyAudioIsolationTests") and p.tests == 3
+    assert p.cases == (("VerifyAudioIsolationTests", "decodes", "decodes(name:)"),)
+    assert rt.app_selectors(picks) == ["CatalogStoreTests", "VerifyAudioIsolationTests/decodes(name:)"]
+    # the display name is not the suite's name
+    assert run_filter("VerifyAudio — persistence isolation")[0] == []
+    assert run_filter("VerifyAudio*.*")[0][0].tests == 3
+
+
+def test_negatives_split_a_suite_and_every_lane_maps_its_cases():
+    picks, _ = run_filter("*-CoreStoreTests.testB:test_mod.test_c:CatalogStoreTests:Nested")
+    by = {p.kind: p for p in picks}
+    assert by["core"].cases == (("CoreStoreTests", "testA", "testA"),) and by["core"].tests == 1
+    rx = re.compile(rt.core_filter(by["core"].suites, by["core"].cases))
+    assert rx.search("VideoScanCoreTests.CoreStoreTests/testA")
+    assert not rx.search("VideoScanCoreTests.CoreStoreTests/testB")
+    assert not rx.search("VideoScanCoreTests.CoreStoreTests/testAB")
+    assert rt.python_targets(picks) == ["tests/test_mod.py::test_a", "tests/test_mod.py::TestC::test_b",
+                                        "tests/test_mod.py::test_d"]
+    sel = rt.app_selectors(picks)
+    assert "VerifyAudioIsolationTests" in sel and "ZebraTests" in sel and not any("Catalog" in s or "Nested" in s for s in sel)
+
+
+def test_core_regex_for_swift_testing_identifiers_and_whole_suites_together():
+    rx = re.compile(rt.core_filter(["Whole", "Split"], [("Split", "f", "f(x:)")]))
+    assert rx.search("VideoScanCoreTests.Whole/anything()")
+    assert rx.search("VideoScanCoreTests.Split/f(x:)")
+    assert rx.search("VideoScanCoreTests.Outer/Split/f()")
+    assert not rx.search("VideoScanCoreTests.Split/fg()")
+    assert not rx.search("VideoScanCoreTests.Split/g()")
+
+
+def test_a_filter_that_matches_nothing_is_refused_before_anything_is_built(monkeypatch, tmp_path, capsys):
+    files, man = tree_and_manifest()
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    monkeypatch.setattr(rt, "cat_files", lambda repo, sha_, paths: {})
+    assert drive_local(monkeypatch, tmp_path, ["--filter", "NoSuch*", "--yes"], git=fake_git) == 2
+    assert "--filter 'NoSuch*' matches no test" in capsys.readouterr().err
+    assert not (tmp_path / "cache").exists() and not (tmp_path / "wt").exists()
+    # a filter that names only tests that cannot run here says so
+    assert drive_local(monkeypatch, tmp_path, ["--filter", "ArchiveRealRunTests", "--yes"], git=fake_git) == 2
+    err = capsys.readouterr().err
+    assert "cannot run here" in err and "opt-in real run" in err
+
+
+def test_list_with_a_filter_shows_the_matched_cases(monkeypatch, capsys):
+    files, man = tree_and_manifest()
+    man["assignments"][0]["tests"] = ["testA", "testB", "testC"]
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    src = "final class CatalogQueriesDecadeTests: XCTestCase {\n func testA() {}\n func testB() {}\n func testC() {}\n}\n"
+    monkeypatch.setattr(rt, "git", fake_git)
+    monkeypatch.setattr(rt, "cat_files", lambda repo, sha_, paths: {p: src for p in paths})
+    assert rt.main(["--list", "--filter", "CatalogQueriesDecadeTests.testB:Zebra*"]) == 0
+    o = capsys.readouterr().out
+    assert "--filter 'CatalogQueriesDecadeTests.testB:Zebra*'" in o
+    assert "CatalogQueriesDecadeTests.testB" in o and "testA" not in o
+    assert "# total ~2 tests" in o
+
+
+def test_a_filtered_lane_expects_the_filtered_count(monkeypatch, tmp_path):
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if lane is not None:
+            lane.passed += 1
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    picks = [rt.Pick("core", "Core/Store", "unit", "x/ATests.swift", ("ATests",), 1, (("ATests", "testA", "testA"),))]
+    a = rt.parse_args(["--filter", "ATests.testA"])
+    a.kinds, a.stages_label = {"core"}, ["unit"]
+    lanes = rt.run_lanes(a, picks, tmp_path, tmp_path, quiet_out(), tmp_path, "smoke")
+    assert lanes[0].expected == 1 and lanes[0].word == "GREEN"
+
+
+def test_cat_files_reads_each_path_at_the_commit(repo):
+    out = rt.cat_files(repo, sha(repo), ["f.txt", "missing.txt"])
+    assert out == {"f.txt": "1"}
+
+
+def test_the_core_test_phase_runs_the_built_bundle_not_swift_test(tmp_path):
+    cmd = rt.core_test_cmd(Path("/wt"), "(\\.|/)(A)/")
+    assert cmd[1:3] == [str(rt.SELF), "--core-exec"] and cmd[3].endswith("VideoScanCore/.build/debug")
+    assert "swift" not in cmd[0] and "test" not in cmd
+    assert rt.core_build_cmd(Path("/wt"))[:3] == ["swift", "build", "--build-tests"]
+    p = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_tests.py"), "--core-exec", str(tmp_path), "x"],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1 and "no built test bundle" in p.stdout
+
+
+# slots: one worktree + DerivedData pair per commit, shared by runs at that commit
+
+@pytest.fixture
+def slots(monkeypatch, tmp_path, repo):
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt, "RUN_WT", tmp_path / "wt" / "run-all")
+    monkeypatch.setattr(rt, "DD", tmp_path / "dd" / "videoscan-runall-dd")
+    held = []
+    yield held
+    for s in held:
+        s.release()
+
+
+def take(held, repo, ref):
+    s = rt.acquire_slot(repo, sha(repo, ref))
+    held.append(s)
+    return s
+
+
+def test_runs_at_different_commits_use_different_slots_and_share_no_lock(slots, repo):
+    a = take(slots, repo, "HEAD~1")
+    b = take(slots, repo, "HEAD")                  # does not wait for, or refuse because of, a
+    assert a.wt != b.wt and a.dd != b.dd
+    assert sha(a.wt) == sha(repo, "HEAD~1") and sha(b.wt) == sha(repo, "HEAD")
+    assert {a.wt.name, b.wt.name} <= {"run-all", "run-all-2", "run-all-3"}
+    assert "videoscan-runall-dd" in {a.dd.name, b.dd.name}       # slot 1 keeps the old warm DerivedData
+
+
+def test_runs_at_one_commit_share_its_slot(slots, repo):
+    a = take(slots, repo, "HEAD")
+    b = take(slots, repo, "HEAD")
+    assert a.index == b.index and a.wt == b.wt
+
+
+def test_a_slot_a_live_run_holds_is_never_moved_or_pruned(slots, repo, monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "N_SLOTS", 2)
+    live = take(slots, repo, "HEAD~1")             # a live run at HEAD~1 (held shared)
+    other = take(slots, repo, "HEAD")
+    other.release()                                # idle now, and the most recently used
+    os.utime(str(rt.slot_dir() / f"{live.index}.used"), (1, 1))   # the live one looks least recently used
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "three", cwd=repo)
+    t = take(slots, repo, "HEAD")                  # a third commit: one slot must move
+    assert t.index == other.index, "the slot a live run holds was moved"
+    assert sha(live.wt) == sha(repo, "HEAD~2")     # untouched
+    with pytest.raises(rt.Busy, match="in use by live runs"):
+        rt.acquire_slot(repo, sha(repo, "HEAD~1"))  # both held, at other commits: refused, nothing moved
+    assert sha(live.wt) == sha(repo, "HEAD~2") and sha(t.wt) == sha(repo)
+
+
+def test_an_old_run_tests_holding_the_whole_run_lock_keeps_slot_one(slots, repo, monkeypatch):
+    old = rt.take_lock(rt.CACHE / "lock", "run_tests smoke sha=old (an older checkout)")
+    try:
+        s = take(slots, repo, "HEAD")
+        assert s.index != 0 and not (rt.RUN_WT / ".git").exists()
+        line = rt.slot_lines([], disk=False)[0]
+        assert "in use by an older run_tests" in line and "sha=old" in line   # live 11-20: it said "idle"
+    finally:
+        os.close(old)
+
+
+def test_a_dirty_slot_worktree_is_refused_never_touched(slots, repo):
+    s = take(slots, repo, "HEAD")
+    (s.wt / "f.txt").write_text("changed")
+    with pytest.raises(rt.Refused, match="local changes"):
+        rt.acquire_slot(repo, sha(repo))
+    assert (s.wt / "f.txt").read_text() == "changed"
+
+
+def test_a_second_run_at_the_same_commit_waits_only_for_the_build_then_tests(slots, repo, monkeypatch, tmp_path):
+    s = take(slots, repo, "HEAD")
+    head = sha(repo)
+    # run 1 is building: it holds the slot's app build lock
+    lock = rt.slot_dir() / f"{s.index}.build-app"
+    fd = rt._lock_fd(lock)
+    fcntl_mod = rt.fcntl
+    fcntl_mod.flock(fd, fcntl_mod.LOCK_EX)
+    Path(str(lock) + ".info").write_text(f"4242 {head} {time.time():.0f} app\n")
+    streams = []
+
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        streams.append(log_name)
+        if lane is not None:
+            lane.passed += 1
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    picks = [rt.Pick("app", "Catalog", "unit", "x/ATests.swift", ("ATests",), 1)]
+    a = rt.parse_args(["--unit"])
+    a.kinds, a.stages_label = {"app"}, ["unit"]
+    buf = io.StringIO()
+    result = {}
+    import threading
+    th = threading.Thread(target=lambda: result.update(lanes=rt.run_lanes(
+        a, picks, s.wt, repo, rt.Out(False, buf), tmp_path, "smoke", slot=s, sha=head)))
+    th.start()
+    for _ in range(200):
+        if "waiting for the build" in buf.getvalue():
+            break
+        time.sleep(0.02)
+    assert f"waiting for the build of {head[:9]} (pid 4242, since " in buf.getvalue()
+    assert streams == []                           # nothing ran while the build was going
+    rt.mark_built(s, "app", head)                  # run 1's build succeeded …
+    os.close(fd)                                   # … and it let go of the lock
+    th.join(10)
+    assert streams == ["app-test.log"], "the second run rebuilt instead of testing from the built products"
+    assert "already built at" in buf.getvalue() and result["lanes"][0].word == "GREEN"
+
+
+def test_a_slot_moved_to_another_commit_forgets_its_builds(slots, repo, monkeypatch):
+    monkeypatch.setattr(rt, "N_SLOTS", 1)
+    s = take(slots, repo, "HEAD~1")
+    rt.mark_built(s, "app", sha(repo, "HEAD~1"))
+    s.release()
+    t = take(slots, repo, "HEAD")
+    assert rt.built_at(t, "app") is None
+
+
+def test_each_run_has_its_own_run_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "CACHE", tmp_path)
+    d = rt.new_run_dir("smoke")
+    assert d.name.endswith(f"-smoke-{os.getpid()}") and d.is_dir()
+    t = rt.app_test_cmd(Path("/wt"), ["S"], Path("/dd"), d / "app.xcresult")
+    assert t[t.index("-resultBundlePath") + 1] == str(d / "app.xcresult") and "/dd" in t
+    assert any(x.startswith("--basetemp=") for x in rt.pytest_cmd(["py"], ["t.py"], d / "pytest-tmp"))
+
+
+# the run registry and --status
+
+def dead_pid():
+    p = subprocess.Popen(["/usr/bin/true"])
+    p.wait()
+    return p.pid
+
+
+def test_the_registry_is_written_updated_and_removed(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "CACHE", tmp_path)
+    live = rt.LiveRun({"argv": ["--filter", "X*"], "mode": "smoke", "filter": "X*", "sha": "a" * 40, "slot": "2",
+                       "phase": "starting"})
+    f = tmp_path / "live" / f"{os.getpid()}.json"
+    assert json.loads(f.read_text())["filter"] == "X*"
+    live.update(phase="app: testing", done=0, total=9)
+    assert json.loads(f.read_text())["phase"] == "app: testing"
+    live.update(done=5)                            # progress: at most a write a second
+    live.last = 0.0
+    live.update(done=6)
+    assert json.loads(f.read_text())["done"] == 6
+    (runs,) = rt.live_runs()
+    assert runs["pid"] == os.getpid()
+    live.close()
+    assert not f.exists() and rt.live_runs() == []
+
+
+def test_a_stale_registry_file_is_ignored_and_cleaned(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "CACHE", tmp_path)
+    (tmp_path / "live").mkdir()
+    stale = tmp_path / "live" / "99.json"
+    stale.write_text(json.dumps({"pid": dead_pid(), "sha": "b" * 40}))
+    (tmp_path / "live" / "junk.json").write_text("{not json")
+    assert rt.live_runs() == []
+    assert not stale.exists()
+
+
+def test_status_lists_every_live_run_the_slots_and_the_m4_holder(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt, "RUN_WT", tmp_path / "wt" / "run-all")
+    monkeypatch.setattr(rt, "DD", tmp_path / "dd")
+    live = rt.LiveRun({"argv": [], "mode": "smoke", "filter": "MFOVerbs*", "sha": "c" * 40, "slot": "1",
+                       "phase": "app: testing", "done": 3, "total": 5})
+    now = time.time()
+    st = {"state": "running", "lock": "suite sha=b42d38c38 since " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 600))
+          + " out=/x", "last": {"lane": "suite", "running": True},
+          "testbed": {"lanes": [{"name": "suite", "seconds": 2797, "verdict": "GREEN"}]}}
+    monkeypatch.setattr(rt, "m4_status_json", lambda repo, timeout=25: st)
+    try:
+        assert rt.main(["--status"]) == 0
+    finally:
+        live.close()
+    o = capsys.readouterr().out
+    assert "1 live run" in o
+    assert f"pid {os.getpid()} · smoke --filter 'MFOVerbs*' · ccccccccc · slot 1 · app: testing 3/5" in o
+    assert "slot 1  run-all" in o and "slot 3  run-all-3" in o
+    assert "M4 testbed: busy — suite sha=b42d38c38" in o and "est. finish ~" in o and "46m37s in the last testbed" in o
+
+
+def test_the_m4_estimate_comes_from_that_lanes_last_finished_run_else_its_planned_length():
+    now = time.mktime(time.strptime("2026-11-20 18:00:00", "%Y-%m-%d %H:%M:%S"))
+    st = {"state": "running", "lock": "testbed sha=abc since 2026-11-20 17:30:00 out=/x",
+          "testbed": {"lane": "testbed", "running": False, "started": "2026-11-20 12:16:12", "ended": "2026-11-20 13:03:33"}}
+    line = rt.m4_lock_line(st, now)
+    assert "est. finish ~18:17" in line and "the last testbed run took 47m21s" in line
+    st = {"state": "running", "lock": "corpus sha=abc since 2026-11-20 17:50:00 out=/x"}
+    assert "est. finish ~18:35" in rt.m4_lock_line(st, now) and "planned at 45 min" in rt.m4_lock_line(st, now)
+    st = {"state": "running", "lock": "corpus sha=abc since 2026-11-20 10:00:00 out=/x"}
+    assert "past its usual length" in rt.m4_lock_line(st, now)
+    assert rt.m4_lock_line({"state": "idle", "lock": None}, now) == "M4 testbed: idle"
+
+
+def test_a_busy_refusal_prints_the_status_block_not_one_opaque_line(monkeypatch, tmp_path, capsys):
+    files, man = tree_and_manifest()
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    monkeypatch.setattr(rt, "git", fake_git)
+    monkeypatch.setattr(rt, "preflight", lambda lanes, env, **k: {})
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt, "RUN_WT", tmp_path / "wt" / "run-all")
+
+    def busy(base, sha_):
+        raise rt.Busy("all 3 side worktrees are in use by live runs at other commits")
+    monkeypatch.setattr(rt, "acquire_slot", busy)
+    assert rt.main(["--unit", "--yes"]) == 3
+    err = capsys.readouterr().err
+    assert "busy — all 3 side worktrees are in use" in err
+    assert "run_tests on " in err and "slot 1" in err
+    assert not list((tmp_path / "cache" / "live").glob("*.json")), "the refused run left a registry entry"
+
+
+def test_the_m4_lock_stays_and_its_busy_message_names_the_holder(monkeypatch, tmp_path, capsys):
+    files, man = tree_and_manifest()
+
+    def fake_git(repo, *args, check=True):
+        if args[:1] == ("show",):
+            return json.dumps(man)
+        if args[:1] == ("ls-tree",):
+            return "\n".join(files)
+        return fake_git_for("b" * 40)(repo, *args, check=check)
+    monkeypatch.setattr(rt, "git", fake_git)
+    monkeypatch.setattr(rt, "preflight", lambda lanes, env, **k: {})
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "m4")
+    monkeypatch.setattr(rt, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(rt, "RUN_WT", tmp_path / "wt" / "run-all")
+    monkeypatch.setattr(rt, "M4_LOCKDIR", tmp_path / "m4lock")
+    monkeypatch.setattr(rt, "acquire_slot", lambda *a: pytest.fail("took a slot past the busy M4 lock"))
+    real = time.strftime
+    monkeypatch.setattr(rt.time, "strftime", lambda fmt, *a: "1200" if fmt == "%H%M" else real(fmt, *a))
+    fd = rt.take_lock(tmp_path / "m4lock", "suite sha=b42d38c38 since 2026-11-20 17:55:40")
+    try:
+        assert rt.main(["--unit", "--yes"]) == 3
+    finally:
+        os.close(fd)
+    err = capsys.readouterr().err
+    assert "the M4 testbed lock is held: suite sha=b42d38c38 since 2026-11-20 17:55:40" in err
+    assert "run_tests on " in err
+
+
+def test_a_host_run_carries_the_filter_quoted_and_a_no_match_never_reaches_ssh(monkeypatch, tmp_path, capsys):
+    _, run = rt.remote_commands("ricksm4.local", "a" * 40, "main", ["--host", "m4", "--filter", "Catalog*-*.testHuge*"])
+    assert "--filter 'Catalog*-*.testHuge*'" in run[-1]
+    monkeypatch.setattr(rt, "cat_files", lambda repo, sha_, paths: {})
+    monkeypatch.setattr(rt.subprocess, "Popen", lambda *a, **k: pytest.fail("ssh started for a filter that matches nothing"))
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: pytest.fail("ssh copy started"))
+    monkeypatch.setattr(rt, "git", fake_git_for("a" * 40))
+    monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
+    assert rt.main(["--host", "m4", "--filter", "Nope*", "--yes"]) == 2
+    assert "matches no test" in capsys.readouterr().err
