@@ -977,9 +977,18 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 lane_end(out, sl, run_dir / "shell.log")
     except KeyboardInterrupt as e:
         r.stop()
-        out.line("FAILED", f"interrupted ({e or 'Ctrl-C'}) — the run is incomplete", "FAILED")
-        lanes.append(LaneResult("interrupted", ran=True, rc=130, reason="interrupted"))
+        mark_interrupted(out, lanes, e)
     return lanes
+
+
+def mark_interrupted(out: Out, lanes: List[LaneResult], e: BaseException) -> None:
+    """Ctrl-C / SIGHUP / SIGTERM: the lane that was running is incomplete, not failed; say so in words."""
+    why = str(e) or "Ctrl-C"               # a bare KeyboardInterrupt has no text (was printed as "()")
+    for l in lanes:
+        if l.ran and l.word == "RED" and not l.failures and not l.reason:
+            l.reason = f"stopped by the interrupt after {l.total} tests (incomplete, not a test failure)"
+    out.line("FAILED", f"interrupted ({why}) — the run is incomplete", "FAILED")
+    lanes.append(LaneResult("interrupted", ran=True, rc=130, reason="the run is incomplete"))
 
 
 def lane_end(out: Out, lane: LaneResult, log: Path) -> None:
@@ -1422,8 +1431,7 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
                 lane_end(out, lane, run_dir / "python-full.log")
     except KeyboardInterrupt as e:
         r.stop()
-        out.line("FAILED", f"interrupted ({e or 'Ctrl-C'}) — the run is incomplete", "FAILED")
-        lanes.append(LaneResult("interrupted", ran=True, rc=130, reason="interrupted"))
+        mark_interrupted(out, lanes, e)
     return lanes
 
 

@@ -35693,6 +35693,7 @@
         "test_every_selection_flag_has_help",
         "test_full_with_host_is_refused_with_the_m4_door",
         "test_host_words_map_to_ssh_names_or_local",
+        "test_interrupt_summary_names_the_incomplete_lane_in_words",
         "test_list_runs_without_a_build",
         "test_mode_defaults_and_exclusive_flags",
         "test_modules_map_from_the_source_folders",
