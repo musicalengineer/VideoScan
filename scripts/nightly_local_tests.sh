@@ -145,6 +145,11 @@
 #     ~/Library/Caches/videoscan-nightly-* are never touched). With no
 #     arguments the script behaves exactly as before.
 #     Tests: tests/test_m4_run_suite_lane.py.
+#
+#   2026-11-20: the Core lane's environment sampler kills its `sleep 300` nap
+#     when it is stopped. The orphaned nap held the nightly's stdout/stderr
+#     for up to five minutes after the lane returned (the failure-modes
+#     self-test waited 291 s for it under pytest). Test: failure modes 14.
 
 set -u
 
@@ -464,10 +469,19 @@ CORE_TEST_JSON='{"core_status":"not-run","core_reason":"lane-not-reached"}'
 
 # Every 5 min until killed: load, swap and the three busiest processes, to the
 # nightly log, so a slow night records what else the machine was doing.
+# The nap is a child the sampler waits on, and the TERM trap kills it: a
+# plain `sleep 300` outlived the sampler's kill by up to five minutes, holding
+# the nightly's stdout/stderr, so a caller reading them (an ssh session, the
+# self-test under pytest) hung until it woke (2026-11-20, test 14).
 sample_core_lane_environment() {
+    local nap=""
+    trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while :; do
         log "Core lane machine: $(uptime | sed 's/.*load/load/') · swap $(sysctl -n vm.swapusage | awk '{print $6}') used · busiest: $(ps -Ao %cpu,comm -r | sed -n '2,4p' | awk '{n=$2; sub(".*/","",n); printf "%s %s%%; ", n, $1}')"
-        sleep 300
+        sleep 300 &
+        nap=$!
+        wait "$nap"
+        nap=""   # reaped: never signal a PID that may since have been reused
     done
 }
 
@@ -493,9 +507,9 @@ run_core_package_tests() {
     # (default 900 s, ~9x that) means a hang: stop there, name the test that
     # was running, and leave `sample` stacks of the test process beside the
     # nightly log so the next hang is diagnosable from the morning.
-    # 9>&-: the sampler (and the `sleep 300` that outlives its kill) must not
-    # inherit the testbed lock on fd 9 (scripts/testbed_lock.py), or the lock
-    # stays held for up to five minutes after a short run has ended.
+    # 9>&-: the sampler (and its `sleep 300` nap) must not inherit the
+    # testbed lock on fd 9 (scripts/testbed_lock.py): belt and braces with the
+    # sampler's TERM trap, which now ends the nap with it.
     sample_core_lane_environment 9>&- &
     local sampler_pid=$!
     rm -f "$NIGHTLY_CORE_SAMPLE_FILE"

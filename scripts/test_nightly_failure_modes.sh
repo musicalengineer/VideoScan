@@ -7,15 +7,80 @@
 # bare repo, points the publish_row helpers at it, and exercises
 # them in isolation.
 #
-# Usage:  scripts/test_nightly_failure_modes.sh
-# Exit:   0 if all assertions pass, 1 if any fail.
+# Usage:  scripts/test_nightly_failure_modes.sh                 # every section, in order
+#         SELFTEST_SECTIONS="1 2 3 7b" scripts/test_nightly_failure_modes.sh
+#         scripts/test_nightly_failure_modes.sh --list-sections  # "<section> [needs…]" per line
+# Exit:   0 if all assertions pass, 1 if any fail, 2 if SELFTEST_SECTIONS
+#         names an unknown section or leaves out a section's prerequisite.
+#
+# Sections (2026-11-20, Rick: "we do not want to serialize when we can
+# parallelize"): each "== Test N ==" block is a function section_N, run in
+# script order. SELFTEST_SECTIONS picks a subset; each run builds its own
+# mktemp sandbox, so concurrent runs share no path, port or HOME
+# (tests/test_nightly_failure_modes_<group>.py run the groups at once).
+# Fixtures several sections read (an extracted nightly function, row_fields.py,
+# the fake metrics repo, the fake rota HOME) are built on first use by a
+# need_* function, so a section run alone builds what it reads. State one
+# section LEAVES for another (row counts on origin, the pending queue) is a
+# real dependency: SECTION_NEEDS names it, and a selection without the
+# prerequisite is refused rather than run half-set-up.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SANDBOX="${TMPDIR:-/tmp}/nightly-failure-mode-sandbox-$$"
-mkdir -p "$SANDBOX"
-trap "rm -rf $SANDBOX" EXIT
+
+# Script order. A new section is a section_<name> function AND a word here
+# (tests/test_nightly_shell_selftests.py pins both, and every word in a group).
+SECTIONS="1 2 3 4 5 6 7 7b 8 9 9b 10 11 12 12b 13 14 14b 15 16 17 18"
+# "<section>:<prerequisite>" — the prerequisite left state this section asserts on.
+#   2:1, 3:2  origin row counts (Test 2 asserts >= 3 rows: Test 1's + its own)
+#   6:5       Test 6 drains the row Test 5 queued in pending.jsonl
+SECTION_NEEDS="2:1 3:2 6:5"
+
+section_needs() {   # section → its prerequisites, space separated
+    local pair out=""
+    for pair in $SECTION_NEEDS; do
+        [ "${pair%%:*}" = "$1" ] && out="$out ${pair#*:}"
+    done
+    echo "${out# }"
+}
+
+if [ "${1:-}" = "--list-sections" ]; then
+    for s in $SECTIONS; do echo "$s $(section_needs "$s")" | sed 's/ $//'; done
+    exit 0
+fi
+
+has_word() {   # word list → 0 when word is in list
+    local w
+    for w in $2; do [ "$w" = "$1" ] && return 0; done
+    return 1
+}
+
+if [ -n "${SELFTEST_SECTIONS:-}" ]; then
+    for s in $SELFTEST_SECTIONS; do
+        if ! has_word "$s" "$SECTIONS"; then
+            echo "SELFTEST_SECTIONS: unknown section '$s' (known: $SECTIONS)" >&2
+            exit 2
+        fi
+        for need in $(section_needs "$s"); do
+            if ! has_word "$need" "$SELFTEST_SECTIONS"; then
+                echo "SELFTEST_SECTIONS: section $s needs section $need (it asserts on state $need leaves); select both" >&2
+                exit 2
+            fi
+        done
+    done
+    RUN_SECTIONS="$SELFTEST_SECTIONS"
+else
+    RUN_SECTIONS="$SECTIONS"
+fi
+
+# mktemp, never a fixed or PID-derived name: a run killed before its EXIT trap
+# leaves its sandbox behind, and a later run that reused the name would start
+# on a stale origin.git.
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/nightly-failure-mode-sandbox.XXXXXX")" || exit 2
+trap 'rm -rf "$SANDBOX"' EXIT
+# Nothing relative may land in the caller's directory (the repo, under pytest).
+cd "$SANDBOX" || exit 2
 
 FAILS=0
 PASSES=0
@@ -27,7 +92,12 @@ fail() { FAILS=$((FAILS + 1));  RESULTS+=("FAIL: $*"); echo "  FAIL: $*"; }
 # ───────────────────────────────────────────────────────────────────
 # Setup: a fake "origin" bare repo with a `metrics` branch that has
 # one prior row, plus a workspace repo with `metrics` available.
+# Built once, on first use by a publish section (1–6).
 # ───────────────────────────────────────────────────────────────────
+PUBLISH_SANDBOX_READY=false
+need_publish_sandbox() {
+$PUBLISH_SANDBOX_READY && return 0
+PUBLISH_SANDBOX_READY=true
 echo "== Setting up sandbox at $SANDBOX =="
 ORIGIN="$SANDBOX/origin.git"
 WORK="$SANDBOX/work"
@@ -91,10 +161,109 @@ awk '/^# ── Row publisher with backlog queue/,/^# ── Branch \+ dirty-tre
     cat "$PUBLISH_LIB"
 } > "$PUBLISH_LIB.full"
 mv "$PUBLISH_LIB.full" "$PUBLISH_LIB"
+}
+
+# ── Fixtures more than one section reads, built on first use ────────
+# (each is idempotent; in the full run the first reader builds it at the
+# point the old serial script did).
+
+WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
+need_watchdog_lib() {   # Tests 11, 12, 12b, 14, 14b, 15
+    [ -e "$WATCHDOG_LIB" ] && return 0
+    # The watchdog itself lives in scripts/lib/process_group_watchdog.sh (lifted
+    # 2026-10-01); the nightly sources it. Test the real lib plus the nightly's
+    # own helpers around it, minus the nightly's `source` line (it resolves
+    # relative to the nightly script, not to this extracted copy).
+    cat "$SCRIPT_DIR/lib/process_group_watchdog.sh" > "$WATCHDOG_LIB"
+    awk '/^nightly_timeout_reason\(\)/,/^# Refresh the privacy-safe person-recognition fields/' \
+        "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' \
+        | grep -v '^source .*process_group_watchdog\.sh' >> "$WATCHDOG_LIB"
+    grep -q '^source .*lib/process_group_watchdog\.sh' "$SCRIPT_DIR/nightly_local_tests.sh" \
+        || fail "nightly_local_tests.sh no longer sources lib/process_group_watchdog.sh"
+}
+
+PERSON_LIB="$SANDBOX/person_lib.sh"
+need_person_lib() {   # Tests 9, 9b
+    [ -e "$PERSON_LIB" ] && return 0
+    awk '/^with_person_metrics\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$PERSON_LIB"
+}
+
+need_row_fields() {   # Tests 9b, 14, 14b: print the named keys of a JSON row, '|'-joined
+    [ -e "$SANDBOX/row_fields.py" ] && return 0
+    cat > "$SANDBOX/row_fields.py" <<'PYF'
+import json, sys
+r = json.load(sys.stdin)
+print("|".join(str(r.get(k)) for k in sys.argv[1:]))
+PYF
+}
+
+CORE_LIB="$SANDBOX/core_lib.sh"
+need_core_lib() {   # Tests 14, 14b: the watchdog lib + the nightly's lane functions
+    [ -e "$CORE_LIB" ] && return 0
+    need_watchdog_lib
+    cat "$WATCHDOG_LIB" > "$CORE_LIB"
+    awk '/^with_person_metrics\(\)/,/^log "=== Nightly local test run starting/' \
+        "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' >> "$CORE_LIB"
+}
+
+need_wiring_lines() {   # Tests 14, 14b: where the nightly builds and classifies
+    BUILD_CALL_LINE=$(grep -n '^run_nightly_build$' "$SCRIPT_DIR/nightly_local_tests.sh" | head -1 | cut -d: -f1)
+    CLASSIFY_LINE=$(grep -n '^classify_nightly_test_result \\$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+}
+
+# The fake rota machine for Tests 16–18: copies of the real guard, installers
+# and rota in $RT/scripts, a sandbox HOME, fake scutil / launchctl / crontab.
+RT="$SANDBOX/rota"
+need_rota() {
+    [ -d "$RT/scripts" ] && return 0
+    mkdir -p "$RT/scripts" "$RT/bin" "$RT/home/Library/LaunchAgents"
+    cp "$SCRIPT_DIR/nightly_guarded.sh" "$SCRIPT_DIR/install_nightly.sh" "$SCRIPT_DIR/nightly_rota.py" "$SCRIPT_DIR/nightly_rota.json" "$RT/scripts/"
+    printf '%s\n' '#!/bin/sh' 'echo "$FAKE_HOST"' > "$RT/bin/scutil"
+    printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_LAUNCHCTL_LOG"' > "$RT/bin/launchctl"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/crontab"
+    chmod +x "$RT/bin"/*
+}
+rota_run() {
+    # args: host script -> rc; logs in $RT
+    : > "$RT/launchctl.log"; : > "$RT/git.log"
+    HOME="$RT/home" FAKE_HOST="$1" FAKE_LAUNCHCTL_LOG="$RT/launchctl.log" FAKE_GIT_LOG="$RT/git.log" \
+        PATH="$RT/bin:$PATH" bash "$RT/scripts/$2" > "$RT/out.log" 2>&1
+}
+
+# Tests 17, 18: a git whose `show` prints $FAKE_ROWS and whose `rev-parse`
+# says where origin/main is ($FAKE_MAIN; 2026-11-10: the guard skips only for
+# a green row of THAT commit); a caffeinate that records the run.
+GUARD_FAKES_READY=false
+need_guard_fakes() {
+    $GUARD_FAKES_READY && return 0
+    GUARD_FAKES_READY=true
+    need_rota
+    TODAY_UTC="$(date -u +%Y-%m-%d)"
+    MAIN_NOW=4dc4eb2a6c5ef9c4baf812d8b6b068abeb853fce
+    MAIN_BEFORE=25bcbab2e3f8ecfe7b3701bcefdc5c29ce2b35c5
+    printf '%s\n' '#!/bin/sh' 'case "$1" in show) cat "$FAKE_ROWS" ;; rev-parse) echo "${FAKE_MAIN:-}" ;; esac' 'exit 0' > "$RT/bin/git"
+    printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_CAFF_LOG"' 'exit 0' > "$RT/bin/caffeinate"
+    chmod +x "$RT/bin/git" "$RT/bin/caffeinate"
+    M4_GREEN="{\"ts\":\"${TODAY_UTC}T06:47:12Z\",\"host\":\"RicksM4\",\"commit\":\"${MAIN_NOW:0:9}\",\"status\":\"ok\",\"total\":12632}"
+    ULTRA_GREEN="{\"ts\":\"${TODAY_UTC}T09:50:00Z\",\"host\":\"RicksUltra\",\"commit\":\"${MAIN_NOW:0:9}\",\"status\":\"ok\",\"total\":12632}"
+    ULTRA_GREEN_BEFORE="{\"ts\":\"${TODAY_UTC}T05:40:00Z\",\"host\":\"RicksUltra\",\"commit\":\"${MAIN_BEFORE:0:9}\",\"status\":\"ok\",\"total\":12632}"
+}
+guard_ran() {
+    # args: host rows-json-lines -> 0 when the guard started the nightly
+    printf '%s\n' "$2" > "$RT/rows.jsonl"; : > "$RT/caff.log"
+    HOME="$RT/home" FAKE_HOST="$1" FAKE_ROWS="$RT/rows.jsonl" FAKE_CAFF_LOG="$RT/caff.log" FAKE_MAIN="$MAIN_NOW" \
+        PATH="$RT/bin:$PATH" bash "$RT/scripts/nightly_guarded.sh" > "$RT/out.log" 2>&1
+    grep -q 'nightly_local_tests.sh' "$RT/caff.log"
+}
+
+# Section bodies are not indented inside their functions: several carry
+# heredocs whose text and terminator must stay at column 0.
 
 # ───────────────────────────────────────────────────────────────────
 # Test 1: Happy path — publish a single row to a healthy metrics branch.
 # ───────────────────────────────────────────────────────────────────
+section_1() {
+need_publish_sandbox
 echo
 echo "== Test 1: happy path =="
 (
@@ -124,9 +293,13 @@ else
     pass "happy path: pending queue is empty"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 2: Worktree on WRONG BRANCH — script should rebuild it.
 # ───────────────────────────────────────────────────────────────────
+section_2() {
+need_publish_sandbox
 echo
 echo "== Test 2: worktree on wrong branch =="
 # Simulate a poisoned worktree: existing dir, but on `main` (not metrics).
@@ -152,9 +325,13 @@ else
     fail "wrong-branch worktree recovery FAILED (rc=$TEST2_RC, origin rows=$TIP_ROWS)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 3: Corrupted worktree dir (.git missing) — should rebuild.
 # ───────────────────────────────────────────────────────────────────
+section_3() {
+need_publish_sandbox
 echo
 echo "== Test 3: corrupted worktree =="
 rm -rf "$METRICS_WT_TEST"
@@ -175,6 +352,8 @@ else
     fail "corrupted worktree recovery FAILED (rc=$TEST3_RC, origin rows=$TIP_ROWS)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 4: Push CONFLICT — another writer added a row between our
 # fetch and push. Should rebase+retry and end up with BOTH rows.
@@ -184,6 +363,8 @@ fi
 # origin. We do that by patching a competitor commit in via a separate
 # clone, then running publish_row.
 # ───────────────────────────────────────────────────────────────────
+section_4() {
+need_publish_sandbox
 echo
 echo "== Test 4: push conflict (concurrent writer) =="
 # First step: clean up any leftover worktree from prior tests so we
@@ -224,10 +405,14 @@ else
     fail "push conflict FAILED (rc=$TEST4_RC, competitor=$COMPETITOR_PRESENT, ours=$OURS_PRESENT)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 5: ORIGIN UNREACHABLE — push fails entirely. Row should be
 # queued in PENDING_QUEUE for next-run replay.
 # ───────────────────────────────────────────────────────────────────
+section_5() {
+need_publish_sandbox
 echo
 echo "== Test 5: origin unreachable =="
 (cd "$WORK" && rm -rf "$METRICS_WT_TEST")
@@ -236,6 +421,10 @@ echo "== Test 5: origin unreachable =="
 (
     cd "$WORK"
     source "$PUBLISH_LIB"
+    # All six push attempts and their rebase/fetch retries still run; only
+    # the jittered backoff between them (2+4+…+12 s plus jitter, ~54 s of
+    # waiting on a remote that cannot appear) is not slept.
+    sleep() { :; }
     : > "$PENDING_Q"
     ROW='{"ts":"2026-06-14T06:04:00Z","source":"nightly-local","host":"TestHost","status":"ok","reason":"","passed":1851,"failed":0,"total":1860}'
     publish_row "$ROW"
@@ -250,9 +439,13 @@ fi
 # Restore origin.
 (cd "$WORK" && git remote set-url origin "$ORIGIN")
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 6: NEXT RUN drains the pending queue along with the new row.
 # ───────────────────────────────────────────────────────────────────
+section_6() {
+need_publish_sandbox
 echo
 echo "== Test 6: queue drain on next successful run =="
 # The pending queue from Test 5 still has 1 row. Now publish a new row;
@@ -274,9 +467,12 @@ else
     fail "queue drain FAILED (rc=$TEST6_RC, backlog=$ROW_5_PRESENT, new=$ROW_6_PRESENT, queue=$QUEUE_AFTER)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 7: make_status_row produces VALID JSON for every failure mode.
 # ───────────────────────────────────────────────────────────────────
+section_7() {
 echo
 echo "== Test 7: make_status_row JSON validity for every reason code =="
 # Use the function from the real script via shell extraction.
@@ -298,12 +494,15 @@ for reason in "off-main:feature/foo" "dirty-tree:scripts/x.sh,VideoScan/y.swift"
     fi
 done
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 7b: a row builder sourced WITHOUT NIGHTLY_CONFIGURATION under set -u
 # (exactly how this harness and any future extractor use it) must still emit
 # valid JSON — configuration "unknown", never an unbound-variable abort that
 # would lose the night's row.
 # ───────────────────────────────────────────────────────────────────
+section_7b() {
 echo
 echo "== Test 7b: make_status_row without NIGHTLY_CONFIGURATION under set -u =="
 MAKE_LIB_NOCFG="$SANDBOX/make_lib_nocfg.sh"
@@ -318,6 +517,8 @@ if echo "$NOCFG_OUT" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.
 else
     fail "unset NIGHTLY_CONFIGURATION broke the row under set -u: '$NOCFG_OUT'"
 fi
+
+}
 
 # ───────────────────────────────────────────────────────────────────
 # Test 8: parse_test_counts — fixture-driven count + failed_names check.
@@ -338,6 +539,7 @@ fi
 #     only its test's own "failed after N seconds" line counts the 1,
 #     and no message text leaks into failed_names.
 # ───────────────────────────────────────────────────────────────────
+section_8() {
 echo
 echo "== Test 8: parse_test_counts fixture counts =="
 PARSE_LIB="$SANDBOX/parse_lib.sh"
@@ -491,15 +693,17 @@ else
     fail "nightly no longer pins strict timing budgets (VIDEOSCAN_TIMING_STRICT=1)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 9: every nightly row can carry additive person and POI-cycle fields.
 # This pins the sensor that keeps the red 0 visible even on build/test failure
 # rows, without changing their original status or reason.
 # ───────────────────────────────────────────────────────────────────
+section_9() {
 echo
 echo "== Test 9: person metrics merge into failure row =="
-PERSON_LIB="$SANDBOX/person_lib.sh"
-awk '/^with_person_metrics\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$PERSON_LIB"
+need_person_lib
 if [ ! -s "$PERSON_LIB" ]; then
     fail "with_person_metrics could not be extracted from nightly_local_tests.sh"
 else
@@ -520,19 +724,19 @@ print(f"{r.get('"'"'status'"'"')}|{r.get('"'"'reason'"'"')}|{r.get('"'"'person_e
     fi
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 9b: the Hallie replay lane rides in the same row (2026-09-08) and can
 # only ADD fields — it must never touch status, reason or the test counts —
 # and with the lane unset the merge still yields a valid, unchanged row.
 # ───────────────────────────────────────────────────────────────────
+section_9b() {
 echo
 echo "== Test 9b: Hallie replay lane merges additively and never overwrites the verdict =="
+need_person_lib
+need_row_fields
 if [ -s "$PERSON_LIB" ]; then
-    cat > "$SANDBOX/row_fields.py" <<'PYF'
-import json, sys
-r = json.load(sys.stdin)
-print("|".join(str(r.get(k)) for k in sys.argv[1:]))
-PYF
     replay_merged=$(
         PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
         HALLIE_REPLAY_JSON='{"hallie_replay_status":"failed","hallie_strict_pass":3,"hallie_strict_fail":1,"status":"ok","failed":0,"reason":"tampered"}'
@@ -559,11 +763,14 @@ PYF
     fi
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 10: refresh_person_metrics invokes the collector with and without
 # --allow-quality under macOS Bash 3.2 set -u. An empty array expansion must
 # not abort before python3 is called.
 # ───────────────────────────────────────────────────────────────────
+section_10() {
 echo
 echo "== Test 10: person collector optional quality flag under set -u =="
 REFRESH_LIB="$SANDBOX/refresh_lib.sh"
@@ -613,25 +820,18 @@ else
     fi
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 11: process-group watchdog expires deterministically, without Xcode
 # or a wall-clock timeout. The injected deadline waits only for the fixture's
 # parent to spawn a TERM-ignoring child, then fires immediately. KILL must
 # remove both members of the private process group and return 124.
 # ───────────────────────────────────────────────────────────────────
+section_11() {
 echo
 echo "== Test 11: deterministic process-group watchdog timeout =="
-WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
-# The watchdog itself lives in scripts/lib/process_group_watchdog.sh (lifted
-# 2026-10-01); the nightly sources it. Test the real lib plus the nightly's
-# own helpers around it, minus the nightly's `source` line (it resolves
-# relative to the nightly script, not to this extracted copy).
-cat "$SCRIPT_DIR/lib/process_group_watchdog.sh" > "$WATCHDOG_LIB"
-awk '/^nightly_timeout_reason\(\)/,/^# Refresh the privacy-safe person-recognition fields/' \
-    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' \
-    | grep -v '^source .*process_group_watchdog\.sh' >> "$WATCHDOG_LIB"
-grep -q '^source .*lib/process_group_watchdog\.sh' "$SCRIPT_DIR/nightly_local_tests.sh" \
-    || fail "nightly_local_tests.sh no longer sources lib/process_group_watchdog.sh"
+need_watchdog_lib
 WATCHDOG_FIXTURE="$SANDBOX/watchdog-fixture.sh"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
@@ -801,12 +1001,16 @@ else
     fi
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 12: timeout classification has precedence over zero tests, failures,
 # and an ordinary xcodebuild rc. This is the row reason the dashboard sees.
 # ───────────────────────────────────────────────────────────────────
+section_12() {
 echo
 echo "== Test 12: timeout reason and classification precedence =="
+need_watchdog_lib
 (
     # shellcheck disable=SC1090
     source "$WATCHDOG_LIB"
@@ -830,6 +1034,8 @@ else
     fail "timeout classification broke (zero=$TIMEOUT_ZERO failures=$TIMEOUT_FAILURES build=$BUILD_REASON)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 12b: THE 2026-09-07 FALSE-GREEN SENSOR. A crashing test host prints no
 # failure line, so `failed` stays 0 while xcodebuild exits 65. Before this,
@@ -841,8 +1047,10 @@ fi
 #   ui_runner_hung       → failed  (incomplete execution, never green)
 #   test_rc != 0         → failed  (nothing explained it; fail closed)
 # ───────────────────────────────────────────────────────────────────
+section_12b() {
 echo
 echo "== Test 12b: a crashed host and an unexplained rc can never publish green =="
+need_watchdog_lib
 classify_case() {
     # shellcheck disable=SC1090
     ( source "$WATCHDOG_LIB"
@@ -895,11 +1103,14 @@ else
     fail "adding crashed broke 6-arg callers under set -u: got '$LEGACY_6ARG'"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 13: a test timeout publishes its partial counts immediately with null
 # coverage and the pre-build readiness snapshot. Neither xccov nor the live
 # person evaluator may run before that durable-row path returns.
 # ───────────────────────────────────────────────────────────────────
+section_13() {
 echo
 echo "== Test 13: timeout publishes partial row before optional metrics =="
 TIMEOUT_PUBLISH_LIB="$SANDBOX/timeout_publish_lib.sh"
@@ -959,6 +1170,8 @@ else
     fail "timeout publication broke (rc=$TIMEOUT_PUBLISH_RC row=$TIMEOUT_ROW_SUMMARY optional=$([ -e "$OPTIONAL_WORK_FILE" ] && echo ran || echo skipped))"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 14 (2026-10-18): the VideoScanCore package lane. A fake `swift` on
 # PATH prints a fixture log and exits with a chosen rc, so the REAL
@@ -969,12 +1182,12 @@ fi
 # Core verdict turns a green app row red and never rewrites a red one; only
 # core_* keys merge into the row; the lane runs BEFORE the app build.
 # ───────────────────────────────────────────────────────────────────
+section_14() {
 echo
 echo "== Test 14: VideoScanCore package lane =="
-CORE_LIB="$SANDBOX/core_lib.sh"
-cat "$WATCHDOG_LIB" > "$CORE_LIB"
-awk '/^with_person_metrics\(\)/,/^log "=== Nightly local test run starting/' \
-    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' >> "$CORE_LIB"
+need_core_lib
+need_row_fields
+need_wiring_lines
 CORE_BIN="$SANDBOX/core-bin"
 mkdir -p "$CORE_BIN"
 printf '%s\n' \
@@ -1039,6 +1252,27 @@ else
     [ "$args" = "test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build --no-parallel" ] \
         && pass "swift test gets the package path, -c release, the private scratch path and --no-parallel" \
         || fail "swift test arguments changed: '$args'"
+    # 2026-11-20: the lane's environment sampler naps in a child `sleep 300`.
+    # Killing the sampler left that sleep alive, holding the caller's output,
+    # so whoever reads the nightly's output waited up to five minutes after
+    # the lane returned (here: pytest, 291 of this self-test's 365 s; on the
+    # fleet: an ssh session running the on-demand nightly). Nothing the lane
+    # started may still hold its output once it has returned.
+    HOLD_OUT="$SANDBOX/core-output-holders.txt"
+    ( run_core_case "$SANDBOX/core-green.log" 0 ok "" ) > "$HOLD_OUT" 2>&1
+    holders=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        holders=$(lsof -t -- "$HOLD_OUT" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+        [ -z "$holders" ] && break
+        sleep 0.2
+    done
+    if [ -z "$holders" ]; then
+        pass "the Core lane leaves nothing holding its caller's output when it returns"
+    else
+        fail "the Core lane left PID(s) $holders holding its output: $(ps -o command= -p "${holders// /,}" | tr '\n' ';')"
+        # Ours (spawned by this case): stop them so this red run ends now.
+        kill $holders 2>/dev/null || true
+    fi
     got=$(run_core_case "$SANDBOX/core-red.log" 1 ok "")
     want='failed|core-failed-tests:1|7|7|failed|failed-tests:1|2|1|0|3|0|1|release|["commitHighWater()"]'
     [ "$got" = "$want" ] && pass "a Core failure turns a green app row red (core-failed-tests:1) and names the test" \
@@ -1106,15 +1340,15 @@ CHL
         || fail "Core merge broke the row contract: '$tampered'"
 fi
 CORE_CALL_LINE=$(grep -n '^run_core_package_tests "\$REPO/VideoScan/VideoScanCore"' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
-BUILD_CALL_LINE=$(grep -n '^run_nightly_build$' "$SCRIPT_DIR/nightly_local_tests.sh" | head -1 | cut -d: -f1)
 VERDICT_LINE=$(grep -n '^apply_core_package_verdict$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
-CLASSIFY_LINE=$(grep -n '^classify_nightly_test_result \\$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
 if [ -n "$CORE_CALL_LINE" ] && [ -n "$BUILD_CALL_LINE" ] && [ "$CORE_CALL_LINE" -lt "$BUILD_CALL_LINE" ] &&
    [ -n "$VERDICT_LINE" ] && [ -n "$CLASSIFY_LINE" ] && [ "$VERDICT_LINE" -gt "$CLASSIFY_LINE" ]; then
     pass "the Core lane runs before the app build and its verdict folds in after classification"
 else
     fail "Core lane wiring moved (core=$CORE_CALL_LINE build=$BUILD_CALL_LINE classify=$CLASSIFY_LINE verdict=$VERDICT_LINE)"
 fi
+
+}
 
 # ───────────────────────────────────────────────────────────────────
 # Test 14b (2026-11-05): the MODEL lane. The M5 Ultra ran a week without the
@@ -1126,8 +1360,12 @@ fi
 # app verdict keeps its reason; only model_smoke_* keys merge; the lane runs
 # before the app build and its verdict folds in after classification.
 # ───────────────────────────────────────────────────────────────────
+section_14b() {
 echo
 echo "== Test 14b: model lane (required weights + real-model audio smoke) =="
+need_core_lib
+need_row_fields
+need_wiring_lines
 MS_REPO="$SANDBOX/ms-repo"
 mkdir -p "$MS_REPO/scripts" "$MS_REPO/venv/bin" "$MS_REPO/tests"
 cat > "$MS_REPO/scripts/check_models.py" <<'MSC'
@@ -1213,6 +1451,8 @@ else
     fail "model lane wiring moved (lane=$MS_CALL_LINE build=$BUILD_CALL_LINE classify=$CLASSIFY_LINE verdict=$MS_VERDICT_LINE)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 15 (2026-10-21, GH #360 item 5): machine setup is the machine, not a
 # test result. Fake automationmodetool / xcodebuild / xcrun drive the REAL
@@ -1223,8 +1463,10 @@ fi
 # the diagnosis line), while a timeout, a real failure or a run with tests is
 # never rewritten; the preflight runs before any build; UI tests stay skipped.
 # ───────────────────────────────────────────────────────────────────
+section_15() {
 echo
 echo "== Test 15: machine-setup preflight and test-host-hang diagnosis =="
+need_watchdog_lib
 MS_BIN="$SANDBOX/ms-bin"
 mkdir -p "$MS_BIN"
 printf '%s\n' '#!/bin/sh' 'echo "Automation Mode is disabled."' 'echo "This device DOES NOT REQUIRE user authentication to enable Automation Mode."' > "$MS_BIN/amt-ok"
@@ -1341,6 +1583,8 @@ else
     fail "UI tests may be back in the nightly (test invocations=$TEST_INVOCATIONS, UI skips=$UI_SKIPS)"
 fi
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 16 (2026-10-21, GH #360 item 4): the M1 is OFF the nightly rotation.
 # scripts/nightly_rota.json is the one source. The REAL guard and installer
@@ -1349,23 +1593,14 @@ fi
 # the job down (bootout + plist moved aside), an on-rota Mac gets its slot from
 # the rotation, and a Mac on neither list is refused.
 # ───────────────────────────────────────────────────────────────────
+section_16() {
 echo
 echo "== Test 16: the nightly rotation (M1 off) =="
-RT="$SANDBOX/rota"
-mkdir -p "$RT/scripts" "$RT/bin" "$RT/home/Library/LaunchAgents"
-cp "$SCRIPT_DIR/nightly_guarded.sh" "$SCRIPT_DIR/install_nightly.sh" "$SCRIPT_DIR/nightly_rota.py" "$SCRIPT_DIR/nightly_rota.json" "$RT/scripts/"
-printf '%s\n' '#!/bin/sh' 'echo "$FAKE_HOST"' > "$RT/bin/scutil"
-printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_LAUNCHCTL_LOG"' > "$RT/bin/launchctl"
-printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/crontab"
+need_rota
 # A git that records it was called: the off-rota guard must exit before it.
+# (Tests 17/18 replace it with need_guard_fakes' git.)
 printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_GIT_LOG"' 'exit 1' > "$RT/bin/git"
-chmod +x "$RT/bin"/*
-rota_run() {
-    # args: host script -> rc; logs in $RT
-    : > "$RT/launchctl.log"; : > "$RT/git.log"
-    HOME="$RT/home" FAKE_HOST="$1" FAKE_LAUNCHCTL_LOG="$RT/launchctl.log" FAKE_GIT_LOG="$RT/git.log" \
-        PATH="$RT/bin:$PATH" bash "$RT/scripts/$2" > "$RT/out.log" 2>&1
-}
+chmod +x "$RT/bin/git"
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM4)" = "on 14 0" ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksUltra)" = "on 2 0" ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5 | cut -c1-4)" = "off " ] &&
@@ -1409,33 +1644,18 @@ INST_RC=$?
     && pass "a Mac on neither list is refused by the installer" \
     || fail "unknown host was installed (rc=$INST_RC)"
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 17 (2026-10-29): every on-rota Studio runs its own nightly. The
 # metrics page shows both Studios (DECISIONS 2026-10-28), but the guard
 # skipped the Ultra at 05:00 because the M4 had already published green.
 # Only this host's own green row today makes the guard a no-op.
 # ───────────────────────────────────────────────────────────────────
+section_17() {
 echo
 echo "== Test 17: the guard counts only this host's green row =="
-TODAY_UTC="$(date -u +%Y-%m-%d)"
-# A git whose `show` prints $FAKE_ROWS and whose `rev-parse` says where
-# origin/main is ($FAKE_MAIN; 2026-11-10: the guard skips only for a green row
-# of THAT commit); a caffeinate that records the run.
-MAIN_NOW=4dc4eb2a6c5ef9c4baf812d8b6b068abeb853fce
-MAIN_BEFORE=25bcbab2e3f8ecfe7b3701bcefdc5c29ce2b35c5
-printf '%s\n' '#!/bin/sh' 'case "$1" in show) cat "$FAKE_ROWS" ;; rev-parse) echo "${FAKE_MAIN:-}" ;; esac' 'exit 0' > "$RT/bin/git"
-printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_CAFF_LOG"' 'exit 0' > "$RT/bin/caffeinate"
-chmod +x "$RT/bin/git" "$RT/bin/caffeinate"
-guard_ran() {
-    # args: host rows-json-lines -> 0 when the guard started the nightly
-    printf '%s\n' "$2" > "$RT/rows.jsonl"; : > "$RT/caff.log"
-    HOME="$RT/home" FAKE_HOST="$1" FAKE_ROWS="$RT/rows.jsonl" FAKE_CAFF_LOG="$RT/caff.log" FAKE_MAIN="$MAIN_NOW" \
-        PATH="$RT/bin:$PATH" bash "$RT/scripts/nightly_guarded.sh" > "$RT/out.log" 2>&1
-    grep -q 'nightly_local_tests.sh' "$RT/caff.log"
-}
-M4_GREEN="{\"ts\":\"${TODAY_UTC}T06:47:12Z\",\"host\":\"RicksM4\",\"commit\":\"${MAIN_NOW:0:9}\",\"status\":\"ok\",\"total\":12632}"
-ULTRA_GREEN="{\"ts\":\"${TODAY_UTC}T09:50:00Z\",\"host\":\"RicksUltra\",\"commit\":\"${MAIN_NOW:0:9}\",\"status\":\"ok\",\"total\":12632}"
-ULTRA_GREEN_BEFORE="{\"ts\":\"${TODAY_UTC}T05:40:00Z\",\"host\":\"RicksUltra\",\"commit\":\"${MAIN_BEFORE:0:9}\",\"status\":\"ok\",\"total\":12632}"
+need_guard_fakes
 guard_ran RicksUltra "$M4_GREEN" \
     && pass "the Ultra runs its nightly although the M4 is already green today" \
     || fail "the Ultra was skipped because another host was green: $(tail -1 "$RT/home/Library/Logs/VideoScan/nightly_guard.log")"
@@ -1448,6 +1668,8 @@ guard_ran RicksUltra "$ULTRA_GREEN_BEFORE" \
     && pass "a green row from today for an OLDER main does not skip the run (by commit, not by date)" \
     || fail "skipped by date although main moved: $(tail -1 "$RT/home/Library/Logs/VideoScan/nightly_guard.log")"
 
+}
+
 # ───────────────────────────────────────────────────────────────────
 # Test 18 (2026-10-29): the toolchain update an hour before the nightly.
 # (a) the guard waits for its lock, capped; (b) the update runs brew with
@@ -1455,8 +1677,10 @@ guard_ran RicksUltra "$ULTRA_GREEN_BEFORE" \
 # upgraded, writes the summary and releases its lock; (c) the installer
 # schedules it one hour before the rota slot.
 # ───────────────────────────────────────────────────────────────────
+section_18() {
 echo
 echo "== Test 18: toolchain update before the nightly =="
+need_guard_fakes
 LOCKDIR="$RT/home/Library/Logs/VideoScan/toolchain_update.lock"
 mkdir -p "$LOCKDIR"
 printf '%s\n' "$M4_GREEN" > "$RT/rows.jsonl"; : > "$RT/caff.log"
@@ -1487,9 +1711,19 @@ SH
 printf '%s\n' '#!/bin/sh' 'case "$1" in -version) echo "Xcode 27.1"; echo "Build version 27A9275" ;; esac' 'exit 0' > "$RT/bin/xcodebuild"
 printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/xcrun"
 chmod +x "$RT/bin/brew" "$RT/bin/xcodebuild" "$RT/bin/xcrun"
+# The "is a nightly running?" pgrep -f pattern must match no real process.
+# 2026-11-20: concurrent self-test runs made Test 18 red (SKIPPED: a nightly
+# … in progress) — each run's own `pgrep -f <pattern>` carries the pattern in
+# its argv, so a sibling run's pgrep matched it. The bracket keeps the regex
+# from matching its own text (the `grep [p]attern` idiom). The decoy is that
+# sibling: one process (exec -a, so killing it leaves no child) whose command
+# line carries this run's pattern.
+TC_BUSY='no-such-[p]rocess-xyzzy'
+bash -c "exec -a 'tc-decoy $TC_BUSY' sleep 60" > /dev/null 2>&1 &
+TC_DECOY=$!
 : > "$RT/brew.log"; rm -f "$RT/brew.count"
 HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
-    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN=no-such-process-xyzzy \
+    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN="$TC_BUSY" \
     PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
 TC_LOG="$RT/home/Library/Logs/VideoScan/toolchain_update.log"
 TC_SUM="$RT/home/Library/Logs/VideoScan/toolchain_update_latest.json"
@@ -1504,8 +1738,9 @@ else
 fi
 mkdir -p "$LOCKDIR"; : > "$RT/brew.log"
 HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
-    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN=no-such-process-xyzzy \
+    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN="$TC_BUSY" \
     PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
+kill "$TC_DECOY" 2>/dev/null; wait "$TC_DECOY" 2>/dev/null
 [ ! -s "$RT/brew.log" ] && [ -d "$LOCKDIR" ] && grep -q 'SKIPPED: another toolchain update holds' "$TC_LOG" \
     && pass "a second update while one holds the lock touches nothing and leaves the lock alone" \
     || fail "concurrent toolchain update ran brew: $(tr '\n' ';' < "$RT/brew.log")"
@@ -1517,6 +1752,15 @@ TC_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.toolchain-update.plist"
 grep -q '^bootstrap gui/' "$RT/launchctl.log" \
     && pass "the installer schedules the update one hour before the M4's 14:00 slot (13:00)" \
     || fail "toolchain installer: out='$(tr '\n' ' ' < "$RT/out.log")'"
+
+}
+
+# ───────────────────────────────────────────────────────────────────
+# Run the selected sections in script order.
+# ───────────────────────────────────────────────────────────────────
+for s in $SECTIONS; do
+    has_word "$s" "$RUN_SECTIONS" && "section_$s"
+done
 
 # ───────────────────────────────────────────────────────────────────
 # Summary
