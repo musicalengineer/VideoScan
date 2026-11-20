@@ -269,6 +269,30 @@ struct ThumbnailPrecacheTests {
         #expect(cache.snapshot == .init(entries: 0, bytesHeld: 0, evictions: 0, removals: 2))
     }
 
+    // Review findings 2026-11-19 (fix/thumb-cache-review): ledger drift.
+    @Test("Isolation: re-storing the SAME image under the same key is one entry, one cost (NSCache fires no willEvict)")
+    func sameImageRestoredDoesNotDrift() {
+        let cache = ThumbnailMemoryCache()
+        let img = Self.image()
+        let one = ThumbnailMemoryCache.cost(of: img)
+        cache.setObject(img, forKey: "a", cost: one)
+        cache.setObject(img, forKey: "a", cost: one)
+        #expect(cache.contains("a"))
+        #expect(cache.snapshot == .init(entries: 1, bytesHeld: one, evictions: 0, removals: 0))
+    }
+
+    @Test("Isolation: an object NSCache evicts inside its own setObject (cost > limit) is not counted as held")
+    func overLimitObjectIsNotCountedAsHeld() {
+        let cache = ThumbnailMemoryCache()
+        cache.totalCostLimit = 10
+        let img = Self.image()                                     // 64 bytes > 10
+        cache.setObject(img, forKey: "big", cost: 64)
+        let held = cache.contains("big")
+        #expect(cache.snapshot.entries == (held ? 1 : 0))
+        #expect(cache.snapshot.bytesHeld == (held ? 64 : 0))
+        #expect(cache.snapshot.entries + cache.snapshot.evictions == 1)
+    }
+
     @Test("The model's preview cache is the metering cache and storePrecachedThumbnail feeds it")
     @MainActor
     func modelCacheMeters() {
@@ -321,6 +345,38 @@ struct ThumbnailPrecacheTests {
         #expect(outcomes.count == 1)
         #expect(outcomes.first?.contains("(complete) — \(label): 1 of 3 rows needing a thumbnail now cached (0 stored this pass, 3 skipped/failed)") == true,
                 "\(outcomes)")
+        // MFO: the START line goes through the same sink, before the OUTCOME.
+        let starts = sink.lines.enumerated().filter { $0.element.contains("Thumbnail prewarm START") && $0.element.contains(label) }
+        #expect(starts.count == 1, "\(sink.lines)")
+        let outcomeIndex = sink.lines.firstIndex { $0.contains("Thumbnail prewarm OUTCOME") && $0.contains(label) }
+        if let s = starts.first?.offset, let o = outcomeIndex { #expect(s < o) }
+        #expect(starts.first?.element.contains("\(label): 3 candidates, concurrency 2") == true, "\(starts)")
+    }
+
+    @Test("Isolation: the model gone before the probe still writes ONE OUTCOME line that says the cache could not be probed")
+    @MainActor
+    func modelGoneStillWritesOutcome() async {
+        // The pass's end step, called directly with the model already gone
+        // (a released VideoScanModel is freed asynchronously, so an
+        // end-to-end start() cannot pin the timing).
+        let sink = InMemoryLogSink()
+        let label = "gone-\(UUID().uuidString)"
+        await ThumbnailPrecacher.writePassOutcome(
+            how: "complete", label: label, paths: ["/v/a.mov", "/v/b.mov"],
+            stored: 0, failed: 2, seconds: 0.1, model: WeakRef<VideoScanModel>(nil), log: sink)
+        let outcomes = sink.lines.filter { $0.contains("Thumbnail prewarm OUTCOME") && $0.contains(label) }
+        #expect(outcomes.count == 1, "\(sink.lines)")
+        #expect(outcomes.first?.contains("cache could not be probed") == true, "\(outcomes)")
+        #expect(outcomes.first?.contains("2 rows needing a thumbnail (0 stored this pass, 2 skipped/failed)") == true, "\(outcomes)")
+    }
+
+    @Test("Unprobed OUTCOME line format")
+    func unprobedOutcomeLineFormat() {
+        let line = ThumbnailCachePolicy.outcomeLine(
+            how: "cancelled", label: "VHS Rescue", rowsNeeding: 10, stored: 4, failed: 1,
+            seconds: 2.04, probe: nil)
+        #expect(line == "Thumbnail prewarm OUTCOME (cancelled) — VHS Rescue: cache could not be probed (model gone);"
+                + " 10 rows needing a thumbnail (4 stored this pass, 1 skipped/failed) · 2.0s")
     }
 
     // MARK: - Scale
@@ -347,6 +403,10 @@ struct ThumbnailPrecacheTests {
         let code = SourceTree.strippingComments(try SourceTree.appCode(named: "ThumbnailPrecache.swift"))
         #expect(code.contains("static let costLimitBytes: Int = costLimit(physicalMemory: ProcessInfo.processInfo.physicalMemory)"))
         #expect(code.contains("log.write(ThumbnailCachePolicy.outcomeLine("))
+        #expect(code.contains("log.write(ThumbnailCachePolicy.startLine("))
+        // The OUTCOME is written off the main actor: the hop only probes and
+        // returns a Sendable value (review finding 5, 2026-11-19).
+        #expect(code.contains("let probe: ThumbnailCachePolicy.Probe? = await MainActor.run"))
         let service = SourceTree.strippingComments(try SourceTree.appCode(named: "PreviewService.swift"))
         #expect(service.contains("cache.totalCostLimit = ThumbnailCachePolicy.costLimitBytes"))
         #expect(service.contains("let thumbnailCache: ThumbnailMemoryCache"))

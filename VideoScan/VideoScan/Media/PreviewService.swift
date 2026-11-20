@@ -510,18 +510,31 @@ final class PreviewService {
 /// NSCache calls `willEvictObject` on EVERY removal — cost-limit eviction,
 /// memory-pressure purge, replacing a key, removeObject, removeAllObjects
 /// (measured 2026-11-19, ThumbnailMemoryCacheTests pins it). So the byte
-/// ledger is symmetric: + at set, − at every delegate call, both sides
-/// computed from the image's own pixel size (never the caller's `cost:`,
-/// so a 0-cost caller cannot drift it). Our own replacements and removals
-/// are told apart from NSCache's evictions by the identity of the outgoing
-/// object (held alive by the override across the super call, so the
-/// identity is unique) — the fast→best upgrade is not an eviction.
+/// ledger is symmetric: + at set (before super, so an object NSCache drops
+/// inside its own setObject nets to zero), − at every delegate call, both
+/// sides computed from the image's own pixel size (never the caller's
+/// `cost:`, so a 0-cost caller cannot drift it). Re-storing the SAME object
+/// fires no delegate call, so that + is undone. Our own replacements and
+/// removals are told apart from NSCache's evictions by the identity of the
+/// outgoing object (held alive by the override across the super call, so
+/// the identity is unique) — the fast→best upgrade is not an eviction.
+///
+/// Writers: on the main actor (storePrecachedThumbnail, the interactive
+/// preview path, invalidateThumbnailCacheEntry — all @MainActor today).
+/// The ledger is exact only for serialised writers: the look-up of the
+/// outgoing object and super's replace are check-then-act. A memory-
+/// pressure purge landing between the two can file one entry as a removal
+/// instead of an eviction (entries/bytesHeld stay exact). Two CONCURRENT
+/// setters on one key are not supported: they can misfile and drift the
+/// counts by one. Moving a writer off the main actor means revisiting this.
 ///
 /// Memory: a handful of integers plus, transiently, the identities of the
-/// objects being replaced right now (≤ concurrent setters). Thread-safe:
-/// NSCache is, and the ledger sits behind one unfair lock that is never
-/// held while calling into NSCache (the delegate takes it inside NSCache's
-/// own call, so the order is always NSCache → ledger; no inversion).
+/// objects being replaced right now (≤ concurrent setters). Thread-safety:
+/// `@unchecked Sendable` because NSCache calls the delegate on its own
+/// threads (memory-pressure purge) and the snapshot may be read from any
+/// thread; the ledger sits behind one unfair lock that is never held while
+/// calling into NSCache (the delegate takes it inside NSCache's own call,
+/// so the order is always NSCache → ledger; no inversion).
 final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @unchecked Sendable {
 
     /// A consistent read of the ledger.
@@ -559,7 +572,8 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
     func contains(_ key: String) -> Bool { object(forKey: key as NSString) != nil }
 
     /// How many of `keys` are cached now — the prewarm OUTCOME's N. One
-    /// lookup per key, O(keys), called once per pass off the main actor.
+    /// lookup per key, O(keys), called once per pass on the main actor
+    /// (the prewarm's end-of-pass probe; the log write follows off it).
     func cachedCount(of keys: [String]) -> Int {
         keys.reduce(0) { $0 + (contains($1) ? 1 : 0) }
     }
@@ -571,13 +585,25 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
 
     override func setObject(_ obj: NSImage, forKey key: NSString, cost g: Int) {
         let old = object(forKey: key)          // kept alive across super
-        if let old { ledger.withLock { _ = $0.outgoing.insert(ObjectIdentifier(old)) } }
-        super.setObject(obj, forKey: key, cost: g)
         let added = Self.cost(of: obj)
+        // Account BEFORE super, in one lock section: NSCache may evict the
+        // new object inside its own setObject (cost > limit, measured
+        // 2026-11-19) and the delegate's − must find the + already there.
         ledger.withLock {
-            if let old { $0.outgoing.remove(ObjectIdentifier(old)) }
+            if let old { $0.outgoing.insert(ObjectIdentifier(old)) }
             $0.snapshot.entries += 1
             $0.snapshot.bytesHeld += added
+        }
+        super.setObject(obj, forKey: key, cost: g)
+        ledger.withLock {
+            guard let old else { return }
+            // `remove` returns nil when the delegate already consumed the
+            // id (the normal replace). Still present + same object = NSCache
+            // re-stored it silently (no willEvict): undo our +.
+            if $0.outgoing.remove(ObjectIdentifier(old)) != nil, old === obj {
+                $0.snapshot.entries -= 1
+                $0.snapshot.bytesHeld -= added
+            }
         }
         withExtendedLifetime(old) {}
     }
@@ -602,8 +628,10 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
         let gone = image.map(Self.cost(of:)) ?? 0
         let id = image.map(ObjectIdentifier.init)
         ledger.withLock {
-            $0.snapshot.entries = max(0, $0.snapshot.entries - 1)
-            $0.snapshot.bytesHeld = max(0, $0.snapshot.bytesHeld - gone)
+            // No clamps: every − follows its + (set accounts before super),
+            // so a negative here would be a real ordering bug, not noise.
+            $0.snapshot.entries -= 1
+            $0.snapshot.bytesHeld -= gone
             if let id, $0.outgoing.remove(id) != nil {
                 $0.snapshot.removals += 1
             } else if $0.purging > 0 {
