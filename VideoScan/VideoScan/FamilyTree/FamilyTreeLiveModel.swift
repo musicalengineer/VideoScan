@@ -23,6 +23,7 @@
 import AppKit
 import Combine
 import Foundation
+import VideoScanCore
 
 // MARK: - Model
 
@@ -767,7 +768,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 if let self = model.object, self.loadGeneration == generation { self.loadPhase = phase }
             }
         }
-        let loaded = await Task.detached(priority: .userInitiated) { ()
+        let loaded = await TaskTreeScope.detached(priority: .userInitiated) { ()
             -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?, FamilyIdentityDecisions?) in
             let clock = ContinuousClock()
             var mark = clock.now
@@ -850,7 +851,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadPhase = "Opening the compiled family tree (read-only)…"
         let store = liveCompiledStore
         let overlay = readOnlyOverlayStore
-        let loaded = await Task.detached(priority: .userInitiated) {
+        let loaded = await TaskTreeScope.detached(priority: .userInitiated) {
             () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
             let clock = ContinuousClock()
             let mark = clock.now

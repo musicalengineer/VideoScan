@@ -271,4 +271,18 @@ public struct TaskTreeScope: Sendable {
             }
         }
     }
+
+    /// The throwing form, as `Task.detached` has one: the task's failure
+    /// is the operation's error; nothing else differs.
+    public static func detached<Success: Sendable>(
+        priority: TaskPriority? = nil,
+        operation: sending @escaping () async throws -> Success
+    ) -> Task<Success, any Error> {
+        let scope = current
+        return Task.detached(priority: priority) {
+            try await ProcessRunner.$executor.withValue(scope.executor) {
+                try await LogScope.$bound.withValue(scope.logSink) { try await operation() }
+            }
+        }
+    }
 }

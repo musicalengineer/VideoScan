@@ -298,7 +298,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             let snapshot = plan
             let entry = plan.entries[idx]
             let generation = nextSaveGeneration()
-            cleanupTask = Task.detached(priority: .utility) { [weak self] in
+            cleanupTask = TaskTreeScope.detached(priority: .utility) { [weak self] in
                 ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
                 do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
                     appLog.write("Archive Angel: could not save the skip of \(entry.filename) — \(error.localizedDescription)")
@@ -357,7 +357,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         model?.ledgerAngelAttention(.angelSkipped, recordIDs: [id], batchID: fresh.batchID, reason: "skip", at: now)
         let generation = nextSaveGeneration()
         let snapshot = fresh
-        cleanupTask = Task.detached(priority: .utility) {
+        cleanupTask = TaskTreeScope.detached(priority: .utility) {
             do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
                 appLog.write("Archive Angel: could not save the skip of \(filename) — \(error.localizedDescription)")
             }
@@ -1179,7 +1179,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let root = bufferRoot   // the delete guard: only <root>/batch-… may go
         // The files below go; their catalog records go AFTER them, and
         // only for files confirmed gone (codex #1572; review 2026-09-20 #4).
-        cleanupTask = Task.detached(priority: .utility) { [weak self] in
+        cleanupTask = TaskTreeScope.detached(priority: .utility) { [weak self] in
             do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
                 appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
             }

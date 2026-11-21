@@ -224,6 +224,26 @@ struct AppLogScopeEscapeTests {
                 "the watchdog line escaped the capture: \(sink.lines)")
     }
 
+    /// The MFO window forwarder schedules its "open the window" work with
+    /// DispatchQueue.main.asyncAfter; that work writes the forward line.
+    /// A GCD block inherits no task-locals.
+    @MainActor
+    @Test("regression: work scheduled through MainQueueForwardScheduler runs under its scheduler's capture")
+    func mainQueueForwardSchedulerKeepsTheScope() async {
+        let sink = InMemoryLogSink()
+        let tag = "window-forward-\(UUID().uuidString)"
+        let ran = LockedDouble(0)
+        await withAppLog(sink) {
+            MainQueueForwardScheduler().schedule(after: 0) {
+                appLog.write(tag)
+                ran.value = 1
+            }
+            for _ in 0..<24_000 where ran.value == 0 { try? await Task.sleep(for: .milliseconds(5)) }
+        }
+        #expect(ran.value == 1, "the scheduled work never ran")
+        #expect(sink.lines == [tag], "the forward line escaped the capture: \(sink.lines)")
+    }
+
     @Test("a detached task that logs through the global appLog is carried by TaskTreeScope.detached, lost by Task.detached")
     func detachedThroughTheGlobal() async {
         let sink = InMemoryLogSink()

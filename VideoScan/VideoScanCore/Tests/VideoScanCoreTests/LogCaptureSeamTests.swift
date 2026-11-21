@@ -96,6 +96,34 @@ struct LogCaptureSeamTests {
         #expect(stray.lines.isEmpty)
     }
 
+    @Test("TaskTreeScope.detached, throwing form: the scope is carried, the error comes out of .value, and the task is still detached (no inherited cancellation, the given priority)")
+    func throwingDetachedCarriesTheScope() async {
+        struct Boom: Error {}
+        let mine = LogCapture(), stray = LogCapture()
+        await mine.scoped {
+            let failing: Task<Int, any Error> = TaskTreeScope.detached {
+                logLine("before the throw", default: stray)
+                throw Boom()
+            }
+            await #expect(throws: Boom.self) { try await failing.value }
+        }
+        #expect(mine.lines == ["before the throw"])
+        #expect(stray.lines.isEmpty)
+
+        // Detached means detached: cancelling the parent does not cancel it.
+        let outer = Task {
+            let inner = TaskTreeScope.detached(priority: .utility) { () -> (Bool, TaskPriority) in
+                try? await Task.sleep(for: .milliseconds(50))
+                return (Task.isCancelled, Task.basePriority ?? .medium)   // base: awaiting .value escalates the current one
+            }
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await inner.value
+        }
+        let (cancelled, priority) = await outer.value
+        #expect(!cancelled, "a detached task must not inherit its creator's cancellation")
+        #expect(priority == .utility)
+    }
+
     @Test("ProcessRunner.detachedKeepingExecutor is the same helper: it carries the log sink too")
     func executorHelperCarriesTheLogSink() async {
         let mine = LogCapture(), stray = LogCapture()
@@ -330,6 +358,15 @@ struct LogScopeSensorTests {
         let stall = try String(contentsOf: app.appendingPathComponent("Shared/StallMonitor.swift"), encoding: .utf8)
         #expect(stall.contains("pollTask = TaskTreeScope.detached("), "StallMonitor's poll task must keep its starter's scope")
         #expect(!stall.contains("pollTask = Task.detached("))
+        let forwarder = try String(contentsOf: app.appendingPathComponent("MediaOps/MediaFileOperationsWindowForwarder.swift"), encoding: .utf8)
+        #expect(forwarder.contains("scope.run { MainActor.assumeIsolated { work() } }"))
+        // Detached blocks that log through appLog (audit 2026-11-20): the count of scope-carrying detaches per file.
+        for (rel, atLeast) in [("ArchiveAngel/Prepare/ArchiveAngelJob.swift", 3), ("FamilyTree/FamilySearchPullCoordinator.swift", 1),
+                               ("FamilyTree/FamilyTreeLiveModel.swift", 2), ("FamilyTree/PersonOfTheDayCenter.swift", 1),
+                               ("Hallie/HallieAppTurnCoordinator.swift", 2)] {
+            let text = try String(contentsOf: app.appendingPathComponent(rel), encoding: .utf8)
+            #expect(text.components(separatedBy: "TaskTreeScope.detached(").count - 1 >= atLeast, "\(rel)")
+        }
         let center = try String(contentsOf: app.appendingPathComponent("MediaOps/MediaFileOperations.swift"), encoding: .utf8)
         #expect(center.contains("logScopes[job.id] = TaskTreeScope.current"), "the Center must remember the scope a job was added under")
     }

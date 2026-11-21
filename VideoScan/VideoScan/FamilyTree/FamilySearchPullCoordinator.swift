@@ -765,7 +765,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // skipped; the manifest still reports every source.
         let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
         let writeMode = self.writeMode
-        let staged = await Task.detached(priority: .userInitiated) { () -> MergeStaged in
+        let staged = await TaskTreeScope.detached(priority: .userInitiated) { () -> MergeStaged in
             guard let new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             }
