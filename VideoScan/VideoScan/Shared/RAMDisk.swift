@@ -40,12 +40,20 @@ actor RAMDisk {
     struct OwnedDevice: Sendable, Equatable {
         let node: String
 
-        /// nil unless `attachOutput`, trimmed, is exactly one whole-disk
-        /// node `/dev/diskN` with N ≥ 1. Refused: empty output, two lines,
-        /// a slice (`/dev/disk4s1`), a mount point, a volume name, text
-        /// around the node, and `/dev/disk0` (always the internal boot
-        /// disk — a RAM device can never be given that number).
-        init?(attachOutput: String) {
+        /// nil unless the WHOLE of what attach printed is exactly one
+        /// whole-disk node `/dev/diskN` (N ≥ 1) plus whitespace. Refused:
+        /// empty output, two lines, a slice (`/dev/disk4s1`), a mount
+        /// point, a volume name, text around the node, and `/dev/disk0`
+        /// (always the internal boot disk — a RAM device can never be
+        /// given that number).
+        ///
+        /// `collectionCap` is the `stdoutLimitBytes` the output was
+        /// collected under. A copy that REACHED the cap may be a truncated
+        /// prefix of something longer — "/dev/disk5", padding up to the
+        /// cap, then a second node the runner dropped — so it is not the
+        /// whole output and is refused (Codex r1 P1, 2026-11-21).
+        init?(attachOutput: String, collectionCap: Int) {
+            guard attachOutput.utf8.count < collectionCap else { return nil }
             let text = attachOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             let prefix = "/dev/disk"
             guard text.hasPrefix(prefix) else { return nil }
@@ -67,6 +75,9 @@ actor RAMDisk {
     }
 
     static let volumeName = "VideoScan_Temp"
+    /// The cap attach's stdout is collected under (hdiutil prints ~40
+    /// bytes). `OwnedDevice` refuses output that reaches it.
+    static let attachOutputCap = 4096
     static let hdiutil = "/usr/bin/hdiutil"
     static let diskutil = "/usr/sbin/diskutil"
 
@@ -118,17 +129,17 @@ actor RAMDisk {
         // Step 1: create the RAM device.
         let attach = await ProcessRunner.runProcess(
             executable: hdiutil, arguments: ["attach", "-nomount", "ram://\(sectors)"],
-            stdoutLimitBytes: 4096, stderrLimitBytes: 16 * 1024,
+            stdoutLimitBytes: attachOutputCap, stderrLimitBytes: 16 * 1024,
             deadlineSeconds: timeouts.attachSeconds, killGraceSeconds: timeouts.killGraceSeconds)
         guard attach.launched, attach.exitCode == 0 else {
             note("ram disk: hdiutil attach failed (\(describe(attach))) — no RAM disk; nothing erased, nothing detached")
             return nil
         }
-        guard let owned = OwnedDevice(attachOutput: attach.stdout ?? "") else {
+        guard let owned = OwnedDevice(attachOutput: attach.stdout ?? "", collectionCap: attachOutputCap) else {
             // Refuse rather than guess: `diskutil eraseVolume` accepts a
             // mount point or a volume name as its device argument.
-            note("ram disk: REFUSED — hdiutil attach exited 0 but printed \(String((attach.stdout ?? "").prefix(200)).debugDescription), "
-                 + "not one /dev/diskN; nothing erased, nothing detached (a RAM device it made, if any, is left for the quit sweep)")
+            note("ram disk: REFUSED — hdiutil attach exited 0 but printed \((attach.stdout ?? "").utf8.count) byte(s) "
+                 + "\(String((attach.stdout ?? "").prefix(200)).debugDescription), not exactly one /dev/diskN; nothing erased, nothing detached (a RAM device it made, if any, is left for the quit sweep)")
             return nil
         }
 
@@ -247,7 +258,7 @@ actor RAMDisk {
                 executable: hdiutil, arguments: ["detach", mountPath, "-force"],
                 stdoutLimitBytes: 4096, stderrLimitBytes: 16 * 1024,
                 deadlineSeconds: timeouts.detachSeconds, killGraceSeconds: timeouts.killGraceSeconds)
-            guard result.launched else {
+            guard result.launched || result.timedOut else {
                 appLog.write("ram disk sweep: could not launch hdiutil for \(mountPath): \(result.stderr)")
                 continue
             }

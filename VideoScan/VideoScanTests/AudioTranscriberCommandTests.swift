@@ -125,7 +125,7 @@ struct AudioTranscriberCommandTests {
     func hangToTheDeadline() async throws {
         guard let b = try bench() else { return }
         defer { b.cleanup() }
-        let mock = b.mock().on("python3", .hang(stderr: "loading weights…"))
+        let mock = b.mock().on("python3", .hang(stderr: "loading weights…", maxSeconds: 30))
         let started = ContinuousClock.now
         await mock.scoped {
             do {
@@ -144,7 +144,7 @@ struct AudioTranscriberCommandTests {
     func cancelStopsIt() async throws {
         guard let b = try bench() else { return }
         defer { b.cleanup() }
-        let mock = b.mock().on("python3", .hang())
+        let mock = b.mock().on("python3", .hang(maxSeconds: 30))
         let runner = b.runner
         let video = b.video
         let task = Task { try await mock.scoped { try await runner.transcribe(videoPath: video, deadlineSeconds: 600) } }

@@ -56,6 +56,32 @@ struct RAMDiskNegativeMatrixTests {
         var attachOutput: ScriptedExecutor.Behaviour { .output(stdout: "\(node)          \t         \n") }
     }
 
+    /// A hung tool. FINITE on purpose (Codex r1, 2026-11-21): if nothing
+    /// stops it — the very regression these rows exist to catch — the child
+    /// ends by itself after 20 s instead of living on as a day-long
+    /// `/bin/sleep` orphan (the first red run of this suite left two).
+    static let hang = ScriptedExecutor.Behaviour.hang(maxSeconds: 20)
+
+    /// A result another task will deliver, read with a bound.
+    /// (C++: a mutex-guarded std::optional — a future you can poll.)
+    final class Outcome: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Bool?
+        func set(_ v: Bool) { lock.lock(); value = v; lock.unlock() }
+        var current: Bool? { lock.lock(); defer { lock.unlock() }; return value }
+
+        /// The value once it is delivered, or nil if `limit` passes first.
+        /// Polls — it never awaits the producing task, so a producer that
+        /// hangs for ever cannot hold the test (awaiting an unstructured
+        /// task's value inside a task group could: cancelAll does not end
+        /// that wait, and leaving the group waits for it).
+        func wait(_ limit: Duration) async -> Bool? {
+            let deadline = ContinuousClock.now + limit
+            while current == nil, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+            return current
+        }
+    }
+
     static let fast = RAMDisk.Timeouts(attachSeconds: 0.4, eraseSeconds: 0.4, detachSeconds: 0.4, killGraceSeconds: 0.5)
 
     /// "tool arg arg …" per call, for exact-sequence assertions.
@@ -153,7 +179,7 @@ struct RAMDiskNegativeMatrixTests {
     @Test("attach hangs: stopped at its deadline, no RAM disk, nothing erased or detached")
     func attachHangs() async {
         let b = Bench()
-        let mock = b.mock().on("hdiutil", containing: ["attach"], .hang())
+        let mock = b.mock().on("hdiutil", containing: ["attach"], Self.hang)
         let disk = RAMDisk(timeouts: Self.fast)
         let started = ContinuousClock.now
         await withAppLog(b.log) {
@@ -182,6 +208,13 @@ struct RAMDiskNegativeMatrixTests {
         "/dev/disk0",                                    // the internal boot disk
         "/dev/disk912345 /Volumes/NoSuchVolume-RAMDiskMatrix",
         "/dev/disk９",                                    // a full-width digit
+        // Codex r1 P1: a valid-looking node, padding up to the 4096-byte
+        // collection cap, then a SECOND node the runner's cap drops — the
+        // collected prefix alone would read as one clean device.
+        "/dev/disk912345" + String(repeating: " ", count: 4096 - "/dev/disk912345".utf8.count) + "\n/dev/disk912346\n",
+        // …and the boundary: output that exactly fills the cap is not known to be whole.
+        "/dev/disk912345" + String(repeating: " ", count: 4096 - "/dev/disk912345".utf8.count),
+        "/dev/disk912345" + String(repeating: "\n", count: 8000),
     ]
 
     @Test("attach exits 0 but prints garbage: REFUSED before any erase — no diskutil, no detach",
@@ -195,7 +228,7 @@ struct RAMDiskNegativeMatrixTests {
         let disk = RAMDisk()
         await withAppLog(b.log) {
             await mock.scoped {
-                #expect(await disk.mount(sizeMB: b.sizeMB) == false, "garbage accepted as a device: \(output.debugDescription)")
+                #expect(await disk.mount(sizeMB: b.sizeMB) == false, "garbage accepted as a device: \(output.prefix(60).debugDescription)… (\(output.utf8.count) bytes)")
                 #expect(await disk.mountPoint == nil)
                 await disk.unmount()
             }
@@ -210,12 +243,20 @@ struct RAMDiskNegativeMatrixTests {
 
     @Test("the device node parser accepts exactly hdiutil's own shape")
     func ownedDeviceParser() {
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk4          \t         \n")?.node == "/dev/disk4")
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk27\n")?.node == "/dev/disk27")
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk1")?.node == "/dev/disk1")
+        let cap = RAMDisk.attachOutputCap
+        #expect(cap == 4096)
+        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk4          \t         \n", collectionCap: cap)?.node == "/dev/disk4")
+        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk27\n", collectionCap: cap)?.node == "/dev/disk27")
+        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk1", collectionCap: cap)?.node == "/dev/disk1")
         for bad in Self.garbage + ["/dev/disk04", "/dev/disk1234567", "/dev/disk4s", "/dev/disk-4", "/dev/disk4\u{0}"] {
-            #expect(RAMDisk.OwnedDevice(attachOutput: bad) == nil, "\(bad.debugDescription)")
+            // What the runner hands over: at most `cap` bytes of it.
+            let collected = String(decoding: Data(bad.utf8).prefix(cap), as: UTF8.self)
+            #expect(RAMDisk.OwnedDevice(attachOutput: collected, collectionCap: cap) == nil, "\(bad.prefix(60).debugDescription)… (\(bad.utf8.count) bytes)")
         }
+        // One byte under the cap is whole; at the cap it is not.
+        let node = "/dev/disk7"
+        #expect(RAMDisk.OwnedDevice(attachOutput: node + String(repeating: " ", count: cap - 1 - node.utf8.count), collectionCap: cap)?.node == node)
+        #expect(RAMDisk.OwnedDevice(attachOutput: node + String(repeating: " ", count: cap - node.utf8.count), collectionCap: cap) == nil)
     }
 
     // MARK: - eraseVolume fails
@@ -256,31 +297,22 @@ struct RAMDiskNegativeMatrixTests {
         let b = Bench()
         let mock = b.mock()
             .on("hdiutil", containing: ["attach"], b.attachOutput)
-            .on("diskutil", .hang())
+            .on("diskutil", Self.hang)
             .on("hdiutil", containing: ["detach"], .output())
         let disk = RAMDisk(timeouts: Self.fast)
         let sink = b.log
         let size = b.sizeMB
         // Bounded wait: before the deadline existed this mount never
-        // returned, so the test must not simply await it.
-        let mounting = Task { await withAppLog(sink) { await mock.scoped { await disk.mount(sizeMB: size) } } }
-        let finished = await Self.finishes(mounting, within: .seconds(15))
-        #expect(finished == false, "mount is still waiting on a hung diskutil (or reported success)")
+        // returned, so the test must not await it — it polls an Outcome.
+        let outcome = Outcome()
+        let mounting = Task { outcome.set(await withAppLog(sink) { await mock.scoped { await disk.mount(sizeMB: size) } }) }
+        let finished = await outcome.wait(.seconds(8))
         mounting.cancel()
-        _ = await mounting.value
+        #expect(finished == false, finished == nil ? "mount is still waiting on a hung diskutil after 8 s"
+                                                    : "mount reported SUCCESS over a diskutil that never finished")
+        guard finished != nil else { return }      // nothing more to assert; the hung child ends itself (Self.hang)
         #expect(Self.lines(mock) == [Self.line("hdiutil", b.attach), Self.line("diskutil", b.erase), Self.line("hdiutil", b.detach)])
         #expect(b.log.contains("diskutil eraseVolume on \(b.node) failed (timed out"), "\(b.log.lines)")
-    }
-
-    /// The task's value if it ends within `limit`, else nil (still running).
-    static func finishes(_ task: Task<Bool, Never>, within limit: Duration) async -> Bool? {
-        await withTaskGroup(of: Bool?.self) { group in
-            group.addTask { await task.value }
-            group.addTask { try? await Task.sleep(for: limit); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
     }
 
     @Test("the caller is cancelled while eraseVolume runs: the attached device is STILL detached (no leaked RAM device)")
@@ -288,14 +320,16 @@ struct RAMDiskNegativeMatrixTests {
         let b = Bench()
         let mock = b.mock()
             .on("hdiutil", containing: ["attach"], b.attachOutput)
-            .on("diskutil", .hang())
+            .on("diskutil", Self.hang)
             .on("hdiutil", containing: ["detach"], .output())
         let disk = RAMDisk(timeouts: Self.fast)
         let size = b.sizeMB
-        let mounting = Task { await mock.scoped { await disk.mount(sizeMB: size) } }
+        let outcome = Outcome()
+        let mounting = Task { outcome.set(await mock.scoped { await disk.mount(sizeMB: size) }) }
         for _ in 0..<400 where mock.calls(to: "diskutil").isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
         mounting.cancel()
-        #expect(await mounting.value == false)
+        let finished = await outcome.wait(.seconds(8))      // never an unbounded await of the task
+        #expect(finished == false, "\(finished.map { "mount returned \($0)" } ?? "mount had not returned 8 s after the cancel")")
         #expect(Self.lines(mock) == [Self.line("hdiutil", b.attach), Self.line("diskutil", b.erase), Self.line("hdiutil", b.detach)],
                 "a cancelled caller must not skip the detach of the device it attached")
     }
@@ -323,7 +357,7 @@ struct RAMDiskNegativeMatrixTests {
     func unmountDetachFails(_ how: String) async {
         let b = Bench()
         let failing: ScriptedExecutor.Behaviour = how == "exit" ? .output(stderr: "Resource busy\n", exit: 16)
-            : how == "hang" ? .hang() : .launchFailure
+            : how == "hang" ? Self.hang : .launchFailure
         let mock = b.mock()
             .on("hdiutil", containing: ["attach"], b.attachOutput)
             .on("diskutil", .output())
@@ -410,7 +444,7 @@ struct RAMDiskNegativeMatrixTests {
         let s = try SweepBench(["VideoScan_Temp", "VideoScan_Temp 1"])
         defer { s.cleanup() }
         let failing: ScriptedExecutor.Behaviour = how == "exit" ? .output(stderr: "Resource busy\n", exit: 16)
-            : how == "hang" ? .hang() : .launchFailure
+            : how == "hang" ? Self.hang : .launchFailure
         // The first mount misbehaves; the second detaches cleanly.
         let mock = ScriptedExecutor(claiming: [s.volumes.path])
             .on("hdiutil", where: { $0 == ["detach", s.path("VideoScan_Temp"), "-force"] }, failing)
