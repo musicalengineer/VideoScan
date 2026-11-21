@@ -333,7 +333,7 @@ sys.exit(0 if d["verdict"] == "GREEN" else 1)
         calls = self.calls()
         dd = str(self.home / 'Library/Caches/videoscan-m4run-dd-suite')
         self.assertIn(f'xctest_shards.py --products {dd}/app/Build/Products --all --stages all --jobs 4 '
-                      f'--run-dir {out}/suite-app-shards/run --stream --timeout 1800 --timings {dd}/xctest-timings.json '
+                      f'--run-dir {out}/suite-app-shards/run --stream --timeout 1800 --timings {dd}-xctest-timings.json '
                       f'--summary {out}/suite-app-shards/summary.json', calls)
         self.assertFalse([c for c in calls if ' test-without-building ' in c], 'the single host ran as well')
         self.assertRegex(summary, r'suite: GREEN app 5 passed, 0 failed, 1 skipped; core 4 passed, 0 failed, 0 skipped ')
@@ -383,8 +383,11 @@ sys.exit(0 if d["verdict"] == "GREEN" else 1)
 
     def test_a_failed_test_is_red_and_named_with_where_the_repo_declares_it(self):
         self.plant(app=app_log(failed=('theLedgerKeepsEveryRow()', '"A display name with spaces"', 'ghost()')), test_rc=65)
-        p, log, summary, _ = self.host('r1')
+        p, log, summary, out = self.host('r1')
         self.assertEqual(p.returncode, 1, log)
+        # What each failure said is repeated at the end of the runner's log, which is what the testbed keeps.
+        self.assertIn('failure detail: ✘ Test theLedgerKeepsEveryRow() recorded an issue at X.swift:1:1: Expectation failed: false',
+                      (out / 'suite.log').read_text())
         self.assertIn('OUTCOME RED', log)
         self.assertIn('suite: RED failed-tests:3 — app 5 passed, 3 failed, 1 skipped; core 4 passed', summary)
         self.assertIn('  failed (app): theLedgerKeepsEveryRow() — VideoScan/VideoScanTests/LedgerTests.swift:3', summary)

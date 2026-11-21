@@ -252,7 +252,12 @@ if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
     NIGHTLY_DD="$NIGHTLY_ON_DEMAND_DD/app"
     NIGHTLY_CORE_SCRATCH="$NIGHTLY_ON_DEMAND_DD/core"
     NIGHTLY_APP_SHARDS_DIR="$NIGHTLY_ON_DEMAND_OUT/suite-app-shards"
-    NIGHTLY_APP_SHARDS_TIMINGS="$NIGHTLY_ON_DEMAND_DD/xctest-timings.json"
+    # Beside the cache root, not inside it: the testbed removes the build caches
+    # whenever the disk is at its floor (the M4, 2026-11-21: 13 GB after every
+    # run), and a deal with no recorded seconds goes by test count (that run:
+    # shards of 204 to 483 s). A few kilobytes; its own file, never the
+    # scheduled run's.
+    NIGHTLY_APP_SHARDS_TIMINGS="${NIGHTLY_ON_DEMAND_DD%/}-xctest-timings.json"
     # Never used on demand (publish_row returns before them). Pointed into the
     # run's own directory anyway, so that no fault in that gate can reach the
     # scheduled run's metrics worktree (publish_row resets it, commits into it
@@ -1953,6 +1958,14 @@ TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISSUE_TESTS} passed with known issues)"
 [ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
 [ "${CRASHED:-0}" -gt 0 ] && log "Crashed tests (host died, no failure line): $CRASHED_NAMES_JSON"
+# What each failure SAID, here at the end of the log (at most 60 lines): the
+# hosts' own lines are megabytes further up, and the testbed keeps only a
+# log's last 200 lines once a run is summarized (the M4, 2026-11-21: a timing
+# budget failed and the measured figure was gone with the shard's log).
+if [ "$FAILED" -gt 0 ]; then
+    grep -a -A3 -E '(✘ Test .* recorded an issue|: error: -\[)' "$NIGHTLY_TEST_LOG" 2>/dev/null | grep -av '^--$' \
+        | head -n 60 | cut -c1-400 | while IFS= read -r detail; do log "  failure detail: $detail"; done
+fi
 
 # Look for the UI test runner timeout/hang marker — the unit-test pass
 # count is still honest, but we want the row to flag this so a sudden

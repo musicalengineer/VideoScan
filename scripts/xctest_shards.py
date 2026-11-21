@@ -149,6 +149,9 @@ SERIAL_TAIL: Dict[str, str] = {
     "VolumeRenameMigrationTests": TIMING_SEEN + " (a 100k-record migration under 15 s; beside 14 hosts its rename "
                                                "candidate was not there after the rebuild it awaited, so the migration "
                                                "aborted before the budget was judged; 2026-11-21 nightly run 1)",
+    # the M4 (16 cores, K=8), the nightly's on-demand run of 4fcf28776, Release, strict
+    "ArchiveAngelBufferHygieneClearTests": TIMING_SEEN + " (Clear all over a 100k-record catalog, the synchronous part "
+                                                        "under 400 ms; 2026-11-21 M4 run, beside 7 other hosts)",
     # not a budget: a race the load exposes, parked here until the test waits for a FRESH snapshot
     "CleanupTrashRunTests": "load race: its forced archive-volume snapshot was superseded while awaited (any volume "
                             "mount/rename on the Mac invalidates it), so the next line saw a provisional one and the "
