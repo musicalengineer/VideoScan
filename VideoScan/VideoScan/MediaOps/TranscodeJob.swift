@@ -73,7 +73,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     /// True when the user answered "Replace" to "Replace Existing
     /// Transcode?". Even then the existing file is never deleted: it goes
-    /// to the Trash, only after the new output exists, and only when the
+    /// to the Trash, only after the new output exists AND was verified
+    /// (FFmpegEncodeCheck `.verified`, GH #500), and only when the
     /// Master Archive rule allows it — otherwise the new file is published
     /// beside it (DerivativeOutputPublish.swift, 2026-09-22).
     let replaceExisting: Bool
@@ -134,6 +135,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// Set-once ledger of the first terminal cause (watchdog stall vs the
     /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
     private var terminalCause = MFOTerminalCause()
+    /// True once the publish moved the previous file to the Trash.
+    private var replacedPrevious = false
     private var stallReason: String? { terminalCause.stallReason }
 
     // Archive-grade telemetry for the preservation summary (videoscan.log).
@@ -319,82 +322,43 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         encodeMonitor.stop()
         encodeElapsed = Date().timeIntervalSince(encodeStart)
 
-        // Watchdog stall wins over a generic cancel (the watchdog cancels
-        // the Task) — surface the specific cause, not "Cancelled".
-        if let stallReason {
-            discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (stall, encode): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
-            await finish(failed: stallReason)
+        // Stalled (the watchdog cancels the Task — the specific cause wins
+        // over "Cancelled") or cancelled mid-run?
+        if await stoppedBeforePublish(partialURL) { return }
+
+        // The gate between the encode and the publish (TranscodeJob+
+        // EncodeGate.swift): exit code, length, a non-trivial file — and,
+        // with Replace, VERIFIED (GH #500, Rick 2026-11-20: "verify the
+        // temp, only when verified could it replace anything"). It only
+        // reads; nothing has been trashed or renamed yet. A new file that
+        // fails it is removed (discardPartial: this run's own reserved
+        // partial, nothing else) and the file at the output name is never
+        // touched.
+        let size: Int64
+        let verified: PartialFileNaming.FileStamp?
+        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath,
+                                     replace: replaceExisting) {
+        case .failed(let failure, let stage):
+            await failEncode(failure, stage: stage, partial: partialURL)
             return
+        case .unverified(let cause):
+            await refuseUnverifiedReplace(cause: cause, partial: partialURL)
+            return
+        case .passed(let bytes, let stamp):
+            size = bytes
+            verified = stamp
         }
 
-        // Cancelled mid-run?
-        if Task.isCancelled || state == .cancelling {
-            discardPartial(partialURL)
-            await finish(cancelled: true)
-            return
-        }
-
-        // Verify output is non-trivial (ffmpeg occasionally returns 0 but
-        // writes a header-only file when a codec library is missing or the
-        // input has an unrecoverable stream).
-        // Exit code, then length, before anything is published
-        // (FFmpegEncodeCheck). A partial that failed either is deleted.
-        if FileManager.default.fileExists(atPath: partialPath),
-           let failure = await FFmpegEncodeCheck.verdict(for: encodeResult, sourcePath: inputPath,
-                                                        outputPath: partialPath) {
-            discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
-            return
-        }
-        if let failure = FFmpegEncodeCheck.exitFailure(exitCode: encodeResult.exitCode, stderr: encodeResult.stderr) {
-            // The partial is gone (or unreadable) and ffmpeg failed: the
-            // exit reason beats "no output file". Remove whatever is left
-            // of this run's reserved partial.
-            discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (encode, no output): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
-            return
-        }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        // The reservation is an empty file: still empty (or gone) ⇒ ffmpeg
-        // wrote nothing — the same verdict as before reservations existed.
-        guard attrs != nil, size > 0 else {
-            discardPartial(partialURL)
-            await finish(failed: "ffmpeg finished but no output file was produced")
-            return
-        }
-        if size < 10_000 {
-            discardPartial(partialURL)
-            await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
-            return
-        }
+        // A Stop that landed while the gate was out is still a Stop (codex
+        // r1 F3): the probes' good answers do not publish over it.
+        if await stoppedBeforePublish(partialURL) { return }
 
         // Publish: a complete, non-trivial encode takes the output name in
         // one no-clobber rename (#6.3) — or, when the name is taken, the
         // existing file is kept (or, with Replace allowed, Trashed first)
         // and the job says which. Verify (if any) then reads the PUBLISHED
         // file, which it only ever reads.
-        let publishNote: String
-        do {
-            let outcome = try await Self.publishOffMain(
-                partial: partialPath, final: outputURL, policy: existingFilePolicy(),
-                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem)
-            publishedURL = outcome.url
-            publishNote = logPublishOutcome(outcome)
-        } catch {
-            // The partial is our own complete encode: kept, named, so the
-            // work is not lost. Nothing else was changed by a failed publish.
-            // Moved OFF the partial pattern (`.vs-kept.`, no-clobber) so no
-            // stale sweep can remove it once this run releases it.
-            let kept = await Self.keepUnpublishedOffMain(partialURL)
-            transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
-            appLog.write("transcode: \(self.record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
-            return
-        }
+        guard let publishNote = await publish(partialURL, verified: verified) else { return }
         let finalPath = publishedURL.path
 
         // Preservation: PROVE the master is bit-exact before we declare
@@ -461,13 +425,100 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     }
 
     /// Remove this run's own partial after a stall / cancel / failed
-    /// encode (name-guarded, releases the reservation). A failure is
-    /// logged, never swallowed; a leftover is a later sweep's to remove.
-    private func discardPartial(_ partial: URL) {
+    /// encode (name- AND identity-guarded: only the file this run reserved;
+    /// releases the reservation). Returns what actually happened; a failure
+    /// is logged, never swallowed; a leftover is a later sweep's to remove.
+    @discardableResult
+    private func discardPartial(_ partial: URL) -> PartialCleanup {
         do {
-            try PartialFileNaming.remove(partial)
+            return try PartialFileNaming.remove(partial) == .removed ? .removed : .alreadyGone
         } catch {
             transcodeLog.error("transcode: could not remove partial \(partial.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .notRemoved(error.localizedDescription)
+        }
+    }
+
+    /// Stop, or a watchdog stall, seen before anything is published: the
+    /// partial is discarded and the job ends Cancelled — or Failed with the
+    /// stall that caused it, which with Replace also says the original was
+    /// not replaced and what the cleanup did (codex r2 F4). True = the run
+    /// is over.
+    private func stoppedBeforePublish(_ partial: URL) async -> Bool {
+        guard stallReason != nil || Task.isCancelled || state == .cancelling else { return false }
+        let cleanup = discardPartial(partial)
+        guard let stallReason else {
+            await finish(cancelled: true)
+            return true
+        }
+        let message = replaceExisting
+            ? Self.failedReplaceMessage(failure: stallReason, original: outputURL.lastPathComponent, cleanup: cleanup)
+            : stallReason
+        transcodeLog.error("transcode FAILED (stall): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
+        return true
+    }
+
+    /// The encode failed the gate: remove the new file, say why — and, with
+    /// Replace, that the original was not replaced and what became of the
+    /// new file (codex r1 F5).
+    private func failEncode(_ failure: String, stage: String, partial: URL) async {
+        let cleanup = discardPartial(partial)
+        let message = replaceExisting
+            ? Self.failedReplaceMessage(failure: failure, original: outputURL.lastPathComponent, cleanup: cleanup)
+            : failure
+        transcodeLog.error("transcode FAILED (\(stage, privacy: .public)): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
+    }
+
+    /// Replace refused: the new file is not verified. Removed through the
+    /// failed-encode path; the message reports the cleanup's own result.
+    private func refuseUnverifiedReplace(cause: String, partial: URL) async {
+        let cleanup = discardPartial(partial)
+        let message = Self.unverifiedReplaceMessage(cause: cause, original: outputURL.lastPathComponent, cleanup: cleanup)
+        transcodeLog.error("transcode FAILED (verify, Replace refused): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
+    }
+
+    /// Publish the partial; returns the summary's note, or nil when the
+    /// job has been finished as failed here.
+    private func publish(_ partialURL: URL, verified: PartialFileNaming.FileStamp?) async -> String? {
+        do {
+            let outcome = try await Self.publishVerified(
+                partial: partialURL.path, final: outputURL, policy: existingFilePolicy(),
+                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem,
+                verified: verified)
+            publishedURL = outcome.url
+            return logPublishOutcome(outcome)
+        } catch is CancellationError {
+            // Stop (or a stall) before the commit point: nothing moved.
+            _ = await stoppedBeforePublish(partialURL)
+            return nil
+        } catch is ChangedSinceVerified {
+            // Not the file that was verified: nothing was trashed or renamed.
+            await refuseUnverifiedReplace(cause: Self.changedAfterVerification, partial: partialURL)
+            return nil
+        } catch {
+            // The partial is our own complete encode: kept, named, so the
+            // work is not lost. Nothing else was changed by a failed publish.
+            // Moved OFF the partial pattern (`.vs-kept.`, no-clobber) so no
+            // stale sweep can remove it once this run releases it.
+            let kept = await Self.keepUnpublishedOffMain(partialURL)
+            transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
+            appLog.write("transcode: \(self.record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
+            // MIXED STATE (codex r3): the previous file is already in the
+            // Trash. Say where both files are and how to restore.
+            let mixed = (error as? DerivativeOutputPublish.Failure).flatMap { failure in
+                failure.previousFileTrashedAt.map {
+                    Self.replaceNotCompletedMessage(cause: failure.cause ?? failure.message, original: outputURL,
+                                                    trashedAt: $0, keptAt: kept.path)
+                }
+            }
+            // A failed publish leaves a finished encode on disk (and maybe
+            // the original in the Trash): it is a FAILURE that must be
+            // read, never a "Cancelled" row over it, whenever Stop came.
+            await finish(failed: mixed ?? "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)",
+                         evenIfStopped: true)
+            return nil
         }
     }
 
@@ -479,16 +530,6 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     @concurrent
     nonisolated private static func sweepStalePartialsOffMain(beside output: URL) async {
         DerivativeOutputPublish.sweepStalePartials(beside: output)
-    }
-
-    /// The disk half of the publish, off the main thread.
-    @concurrent
-    nonisolated private static func publishOffMain(
-        partial: String, final: URL, policy: DerivativeOutputPublish.ExistingFilePolicy,
-        archiveCheck: ArchiveRemovalCheck?, trash: @escaping @Sendable (URL) throws -> URL?
-    ) async throws -> DerivativeOutputPublish.Outcome {
-        try DerivativeOutputPublish.publish(partial: partial, as: final, policy: policy,
-                                            archiveCheck: archiveCheck, trash: trash)
     }
 
     /// Log where the derivative went; returns the sentence the job's
@@ -507,6 +548,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             let line = "transcode: new \(preset.rawValue) derivative took the name \(url.lastPathComponent); the previous file is at \(whereTo)"
             transcodeLog.notice("\(line, privacy: .public)")
             appLog.write(line)
+            replacedPrevious = true
             return " The previous file is in the Trash."
         }
     }
@@ -888,20 +930,25 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     // MARK: Finish helpers
 
-    private func finish(success: String) async {
+    private func finish(success base: String) async {
+        // A Stop pressed after the publish's commit point could not stop
+        // it: the job finished, and its one line says so (codex r2 F3).
+        let success = terminalCause.isCancel ? base + Self.lateStopNote(replaced: replacedPrevious) : base
         state = .finished(summary: success)
         subtitleText = success
         fractionValue = 1.0
         isIndeterminateValue = false
     }
 
-    private func finish(failed: String) async {
+    private func finish(failed: String, evenIfStopped: Bool = false) async {
         // Rick 2026-08-26: a job whose cancel was the FIRST terminal cause
         // NEVER ends .failed — the SIGTERM'd child's non-zero exit, or any
         // typed error thrown while the Task unwinds, is the user's Stop,
         // not a failure. A stall recorded before the Stop is not diverted
         // (codex gate 2026-08-26) — see MFOTerminalCause.
-        if terminalCause.isCancel { await finish(cancelled: true); return }
+        // `evenIfStopped`: the publish failed after the encode was done —
+        // files were left that the row must name (codex r3).
+        if terminalCause.isCancel, !evenIfStopped { await finish(cancelled: true); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false

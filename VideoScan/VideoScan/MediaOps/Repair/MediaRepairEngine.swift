@@ -570,7 +570,7 @@ struct MediaRepairPartial: Sendable {
     func keep(reason: String) -> MediaRepairOutcome {
         var st = stat()
         if lstat(url.path, &st) != 0 || st.st_size == 0 {
-            try? PartialFileNaming.remove(url)
+            _ = try? PartialFileNaming.remove(url)   // empty partial: best effort; the result is not needed here
             return .failed(reason: reason, keptAt: nil)
         }
         let kept = DerivativeOutputPublish.keepUnpublished(url)

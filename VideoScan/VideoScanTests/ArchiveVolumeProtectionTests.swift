@@ -890,7 +890,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         // (QA 3, 2026-09-22) and its protection guard (codex #1642); the
         // sweep skips live AND protected partials and removes via remove().
         let shared = try SourceTree.appSource(named: "PartialFileNaming.swift")
-        let sharedRemove = try #require(shared.range(of: "static func remove(_ url: URL) throws {"))
+        let sharedRemove = try #require(shared.range(of: "static func remove(_ url: URL) throws -> Removal {"))
         let sharedGuard = try #require(shared.range(of: "guard isPartialName(url.lastPathComponent) else {",
                                                     range: sharedRemove.upperBound..<shared.endIndex))
         let protectGuard = try #require(shared.range(of: "guard !isProtected(url) else {",
@@ -900,6 +900,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         #expect(shared.components(separatedBy: "unlink(url.path)").count - 1 == 1)
         #expect(sharedUnlink.lowerBound > sharedGuard.upperBound && sharedUnlink.lowerBound > protectGuard.upperBound,
                 "the one partial unlink sits behind remove()'s is-a-partial AND is-not-protected guards")
+        // …and behind the identity guard (codex GH #500 r1 F1): a reserved
+        // pathname that now holds a different file is never unlinked.
+        let identityGuard = try #require(shared.range(of: "guard FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino)) == reserved else {",
+                                                      range: sharedRemove.upperBound..<shared.endIndex))
+        #expect(sharedUnlink.lowerBound > identityGuard.upperBound)
         let sharedSweep = try #require(shared.range(of: "static func sweepStale("))
         let sweepBody = shared[sharedSweep.upperBound...]
         #expect(sweepBody.contains("if isLive(url) { continue }"))

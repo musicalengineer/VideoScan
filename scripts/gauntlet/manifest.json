@@ -16150,11 +16150,13 @@
       ],
       "tests": [
         "aCleanExitWithATruncatedFileIsAFailure",
+        "aLengthThatCannotBeReadSaysExactlyWhy",
         "aNonZeroExitWithAPlausibleFileIsAFailure",
         "aRealEncodeStillPublishes",
         "anUnmeasurableLengthIsNeverAVerdict",
         "nonZeroExitNamesFfmpegsLastWordsNotItsProgress",
         "shortOutputFailsLongEnoughPasses",
+        "verificationHasThreeAnswersAndVerdictKeepsItsMeaning",
         "zeroExitIsNotAFailure"
       ]
     },
@@ -25593,13 +25595,16 @@
         "aLivePartialSurvivesATranscodeSweep",
         "aLiveTranscodePartialPastTheThresholdSurvivesACombineSweep",
         "aPausedTranscodePartialOlderThanSixHoursSurvivesACombineSweep",
+        "aRefusedSubstituteSurvivesTheStaleSweep",
         "aTranscodeSweepNeverRemovesADirectory",
         "anUnpublishedTranscodeEncodeIsKeptOffThePartialPattern",
         "bothSweepsUseTheOneTwentyFourHourThreshold",
         "keepingNeverOverwritesAnExistingKeptFile",
         "livePartialSurvivesASweepThroughAnAliasedPath",
         "publishReleasesTheReservation",
+        "removeRefusesADifferentFileAtAReservedPartialsName",
         "removeRefusesADirectoryWearingAPartialName",
+        "removeStillRemovesTheReservedFileAndToleratesGone",
         "stagingDirIsRemovedWhenBufferingTheAudioThrowsAfterTheVideoCopied",
         "stagingDirIsRemovedWhenBufferingTheVideoThrows",
         "stagingDirSurvivesASuccessfulBuffer",
@@ -30814,7 +30819,14 @@
         "TranscodeReplaceNegativeMatrixTests"
       ],
       "tests": [
+        "aFileSubstitutedAtTheNewFilesNameIsNeverRemovedByTheCleanup",
+        "aNewFileSwappedDuringVerificationIsNeverPublished",
+        "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
+        "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
+        "aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre",
+        "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
+        "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
         "encodeCrash",
         "encodeHangThenStop",
@@ -30822,7 +30834,25 @@
         "encodeLaunchFailure",
         "encodeMissingOutput",
         "encodeNonzeroExit",
-        "encodeTruncated"
+        "encodeTruncated",
+        "preservationReplaceProvesLosslessOnlyAfterTheReplace",
+        "stopAfterTheProbesAnsweredNeverPublishes",
+        "stopAfterTheReplaceBeganFinishesAndSaysSo",
+        "stopBeforeTheReplaceBeginsCancels",
+        "theCauseIsBounded",
+        "theDispositionSentenceReportsTheCleanupsOwnResult",
+        "thePublishRefusesAFileThatIsNotTheVerifiedOne"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodeReplaceVerifiedMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodeReplaceVerifiedMatrixTests"
+      ],
+      "tests": [
+        "aVerifiedReplacePublishesAndTrashesOnce"
       ]
     },
     {
@@ -41703,7 +41733,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 844,
+      "expected_floor": 859,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41943,7 +41973,8 @@
         "VideoScanTests/ArchivePromotionIndexFreshnessTests",
         "VideoScanTests/CatalogTrashGroupTurnsWordsTests",
         "VideoScanTests/MediaTrashTestHostRaceTests",
-        "VideoScanTests/TranscodeReplaceNegativeMatrixTests"
+        "VideoScanTests/TranscodeReplaceNegativeMatrixTests",
+        "VideoScanTests/TranscodeReplaceVerifiedMatrixTests"
       ]
     },
     {

@@ -68,6 +68,13 @@ enum DerivativeOutputPublish {
 
     struct Failure: LocalizedError, CustomStringConvertible {
         let message: String
+        /// Set only for the MIXED STATE (codex GH #500 r3): the previous
+        /// file was already moved to the Trash when the publish failed.
+        /// Where it went (a path, or "the Trash" when the system did not
+        /// say) and the bare cause, so the caller can say where both files
+        /// are after it has dealt with the new one.
+        var previousFileTrashedAt: String?
+        var cause: String?
         var description: String { message }
         var errorDescription: String? { message }
     }
@@ -180,6 +187,14 @@ enum DerivativeOutputPublish {
             } else if !fm.fileExists(atPath: partial) {
                 throw Failure(message: "the finished output vanished before it could replace \(final.lastPathComponent)")
             } else {
+                // THE COMMIT POINT (codex GH #500 r2 F3). Everything above
+                // only read, or failed a no-clobber rename; the next step
+                // moves the previous file to the Trash. A Stop (task
+                // cancellation) seen here is still honoured — nothing has
+                // moved, the partial is at its own name for the caller.
+                // From the Trash move on a replace is not undone: it runs
+                // to the end and the caller reports a too-late Stop.
+                try Task.checkCancellation()
                 switch try trashThenTake(partial: partial, final: final, trash: trash) {
                 case .taken(let outcome): return outcome
                 case .keep(let reason): keepReason = reason
@@ -232,7 +247,8 @@ enum DerivativeOutputPublish {
         do {
             if try renameNoClobber(partial, final.path) { return .taken(.replaced(final, trashedTo: trashedTo)) }
         } catch {
-            throw Failure(message: "\(error.localizedDescription) — the previous \(final.lastPathComponent) is in the Trash at \(whereTo); the new output is still at \(partial)")
+            throw Failure(message: "\(error.localizedDescription) — the previous \(final.lastPathComponent) is in the Trash at \(whereTo); the new output is still at \(partial)",
+                          previousFileTrashedAt: whereTo, cause: error.localizedDescription)
         }
         return .keep("another file took the name while the previous one was moved to the Trash (it is at \(whereTo))")
     }

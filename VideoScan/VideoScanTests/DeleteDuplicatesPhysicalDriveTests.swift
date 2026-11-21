@@ -384,7 +384,7 @@ struct BulkVerbRemovalBoundaryTests {
         // Transcode's Replace Existing: policy and check are taken AT the
         // publish, and the publish asks the check for the file it would Trash.
         let transcode = try SourceTree.appCode(named: "TranscodeJob.swift")
-        #expect(transcode.contains("partial: partialPath, final: outputURL, policy: existingFilePolicy(),\n                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem)"))
+        #expect(transcode.contains("partial: partialURL.path, final: outputURL, policy: existingFilePolicy(),\n                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem,\n                verified: verified)"))
         #expect(try SourceTree.appCode(named: "DerivativeOutputPublish.swift").contains("} else if let note = archiveCheck?.refusalNote(forPath: final.path) {"))
     }
 }

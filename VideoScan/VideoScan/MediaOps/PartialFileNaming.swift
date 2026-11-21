@@ -7,7 +7,9 @@
 //
 //   reserve(for:)   O_CREAT|O_EXCL the unique name AND register it live
 //   remove(_:)      unlink(2) a reserved partial (refuses any other name,
-//                   a directory, and a PROTECTED finished output), unregister
+//                   a directory, a PROTECTED finished output, and — when the
+//                   registry knows the reserved file — any OTHER file now at
+//                   that pathname, by device + inode), unregister
 //   keepUnpublished protect a verified-but-unpublished output, then move it
 //                   OFF the pattern (`.vs-kept.`, never overwriting)
 //   unregisterLive  on publish / keep / job end
@@ -127,6 +129,27 @@ enum PartialFileNaming {
         return FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino))
     }
 
+    /// Which file, and which state of it: identity plus size and
+    /// modification time. Two equal stamps taken around a read mean the
+    /// read was of this file as it still is (codex GH #500 r1 F2: a length
+    /// measured on one file must not vouch for another put at its name).
+    struct FileStamp: Hashable, Sendable {
+        let id: FileID
+        let sizeBytes: Int64
+        let modifiedSeconds: Int
+        let modifiedNanoseconds: Int
+    }
+
+    /// lstat only; nil when the path cannot be stat'ed.
+    static func fileStamp(_ path: String) -> FileStamp? {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return nil }
+        return FileStamp(id: FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino)),
+                         sizeBytes: Int64(st.st_size),
+                         modifiedSeconds: Int(st.st_mtimespec.tv_sec),
+                         modifiedNanoseconds: Int(st.st_mtimespec.tv_nsec))
+    }
+
     struct LiveSet: Sendable {
         /// standardized path at registration → identity (nil when the file
         /// did not exist yet; then the path is the only key).
@@ -173,6 +196,15 @@ enum PartialFileNaming {
         live.withLock { set in
             set.pinnedPaths.insert(key)
             if let id { set.pinnedIDs.insert(id) }
+        }
+    }
+
+    /// Pinned for the life of the process: this pathname, or this file.
+    static func isPinned(_ url: URL) -> Bool {
+        let key = url.standardizedFileURL.path
+        let id = fileID(url)
+        return live.withLock { set in
+            set.pinnedPaths.contains(key) || (id.map { set.pinnedIDs.contains($0) } ?? false)
         }
     }
 
@@ -265,13 +297,30 @@ enum PartialFileNaming {
         throw Failure(message: "no free partial name beside \(output.lastPathComponent)")
     }
 
+    /// What `remove` found: it unlinked the file, or nothing was there.
+    enum Removal: Sendable, Equatable { case removed, alreadyGone }
+
     /// Remove a partial and release its reservation. Refuses (throws) for
     /// any name that is not a partial, so a caller bug can never delete a
     /// final — and for a PROTECTED partial (a finished output kept in place,
     /// codex #1642). unlink(2), never a recursive removal: a directory
     /// swapped in under a partial's name is refused (EPERM on macOS) and
-    /// left intact. Already-gone is success.
-    static func remove(_ url: URL) throws {
+    /// left intact. Already-gone is success (`.alreadyGone`).
+    ///
+    /// IDENTITY (codex GH #500 r1 F1): when this pathname was reserved in
+    /// this process and the registry recorded the reserved file (device +
+    /// inode), only THAT file is unlinked. A different file at the pathname
+    /// (the partial moved aside, something else renamed in) is refused —
+    /// "a different file is at … — left untouched" — and a pathname that
+    /// cannot be stat'ed is refused too (identity unproven). The check was
+    /// name + marker only, so a refusal's cleanup could delete a substituted
+    /// file for good. ffmpeg `-y` writes into the reserved inode (measured:
+    /// mov, mp4 +faststart, mkv), so a job's own partial always matches.
+    /// Not reserved here (a stale sweep's leftover): name rules only, as
+    /// before. Residual: lstat-then-unlink is two syscalls — POSIX has no
+    /// unlink-by-inode — so a swap inside that instant is not caught.
+    @discardableResult
+    static func remove(_ url: URL) throws -> Removal {
         guard isPartialName(url.lastPathComponent) else {
             throw Failure(message: "refusing to remove \(url.lastPathComponent): not a partial")
         }
@@ -279,13 +328,46 @@ enum PartialFileNaming {
             throw Failure(message: "refusing to remove \(url.lastPathComponent): it is a finished output VideoScan kept "
                           + "(\(protectionMarkerURL(for: url).lastPathComponent))")
         }
+        // A pathname (or file) pinned for the process is never removed:
+        // a kept output without a marker, or a file refused below as
+        // "different" (codex GH #500 r2 F1).
+        guard !isPinned(url) else {
+            throw Failure(message: "refusing to remove \(url.path): it is not this run's partial — left untouched")
+        }
         defer { unregisterLive(url) }
-        guard unlink(url.path) != 0 else { return }
+        let key = url.standardizedFileURL.path
+        let reserved: FileID? = live.withLock { $0.byPath[key] ?? nil }
+        if let reserved {
+            var st = stat()
+            guard lstat(url.path, &st) == 0 else {
+                let e = errno
+                if e == ENOENT { return .alreadyGone }
+                throw couldNotRemove(url, errno: e)
+            }
+            guard FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino)) == reserved else {
+                // The reservation is released (the defer), but the file
+                // found here stays protected from every later cleanup in
+                // this process — else the next stale sweep, seeing an
+                // unreserved partial name with an old date, would delete
+                // the very file just refused (codex r2 F1). In-process, as
+                // the registry is; after a restart a file still wearing a
+                // partial's name is a leftover like any other.
+                pin(url)
+                let line = "a different file is at \(url.path) — left untouched"
+                partialLog.error("\(line, privacy: .public)")
+                throw Failure(message: line)
+            }
+        }
+        guard unlink(url.path) != 0 else { return .removed }
         let e = errno
-        if e == ENOENT { return }
+        if e == ENOENT { return .alreadyGone }
+        throw couldNotRemove(url, errno: e)
+    }
+
+    private static func couldNotRemove(_ url: URL, errno e: Int32) -> Failure {
         let line = "could not remove partial \(url.path): " + String(cString: strerror(e)) + " (errno \(e))"
         partialLog.error("\(line, privacy: .public)")
-        throw Failure(message: line)
+        return Failure(message: line)
     }
 
     // MARK: keep (a finished output that could not be published)
