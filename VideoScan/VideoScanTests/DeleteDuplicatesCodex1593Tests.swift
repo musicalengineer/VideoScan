@@ -201,7 +201,7 @@ struct SignatureVerificationCodex1593Tests {
 
         let two = Counter()
         _ = try SignatureVerification.verify(keeperPath: keeper.path, duplicatePath: copy.path, hooks: two.hooks()).get()
-        #expect(two.opens(of: keeper.path) == 2, "two-file path: head compare + full hash")
+        #expect(two.opens(of: keeper.path) == 3, "two-file path: head compare + full hash + the second full hash of a pair that verifies (GH #504 D3a)")
         #expect(two.opens(of: copy.path) == 2)
 
         let fixity = try #require(ContentFixity.captured(path: keeper.path, digest: plainSHA256(keeper), byteCount: Int64(size)))
@@ -807,6 +807,6 @@ struct FixityInvalidationCodex1593Tests {
         let proof = try SignatureVerification.verifyAgainstStoredKeeper(
             keeperPath: keeper.path, keeperFixity: rec.contentFixity, duplicatePath: copy.path, hooks: counter.hooks()).get()
         #expect(proof.keeperReadInFull == true)
-        #expect(counter.blocks("keeper") == 3)
+        #expect(counter.blocks("keeper") == 6, "read in full twice: the pair verified, so the keeper's second read was made (GH #504 D3a)")
     }
 }

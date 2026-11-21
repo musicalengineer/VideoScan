@@ -255,7 +255,7 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         #expect(FileManager.default.fileExists(atPath: rig.trashedCopyURL.path), "to the Trash, not gone")
         #expect(quarantineFolders(in: rig.dir).isEmpty)
         #expect(job.result.bytesFreed == 0 && job.result.deleted == 1)
-        #expect(probe.opens("keeper.mov") == 0, "the keeper is stat'ed, never read")
+        #expect(probe.opens("keeper.mov") == 1, "the keeper is read once to confirm its stored fixity (GH #504 D4), then only stat'ed")
         await rig.model.mediaLedger.waitForPendingWrites()
         let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed || $0.event == .copyDeleted }
         #expect(events.count == 1 && events.first?.event == .copyTrashed)
@@ -289,7 +289,7 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
             let plan = try #require(job.plan)
             let row = plan.entries[0]
             #expect(quarantineFolders(in: rig.dir).isEmpty, Comment(rawValue: variant))
-            #expect(probe.opens("keeper.mov") == 0, "\(variant): the keeper is never read")
+            #expect(probe.opens("keeper.mov") == 1, "\(variant): the keeper is read once to confirm its stored fixity (D4), never again")
             if variant == "siblingOnly" {
                 #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 2,
                         "\(variant): \(row.status): \(row.tierReason ?? "")")
@@ -339,13 +339,13 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         #expect(FileManager.default.fileExists(atPath: rig.trashedCopyURL.path), "to the Trash, not gone")
         #expect(FileManager.default.fileExists(atPath: archive.fullPath), "the archive itself is never touched")
         #expect(job.result.bytesFreed == 0 && job.result.deleted == 1)
-        #expect(probe.opens("keeper.mov") == 0)
+        #expect(probe.opens("keeper.mov") == 1, "the one confirming read (GH #504 D4)")
     }
 
     /// (d) Nothing changed during the save: the tier stands as decided,
     /// the row is not rewritten, the file is unlinked, and the keeper was
     /// neither opened nor hashed — the re-check is stat only.
-    @Test func unchangedEvidenceKeepsTheTierAndNeverReadsTheKeeper() async throws {
+    @Test func unchangedEvidenceKeepsTheTierAndTheKeeperIsReadOnlyToConfirm() async throws {
         let rig = Rig("unchanged"); defer { rig.cleanup() }
         let probe = Probe()
         let job = rig.job(probe)
@@ -377,8 +377,9 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         #expect(!FileManager.default.fileExists(atPath: rig.copy.fullPath) && FileManager.default.fileExists(atPath: rig.trashedCopyURL.path),
                 "Trash only: in the (scratch) Trash, never unlinked")
         #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
-        #expect(probe.opens("keeper.mov") == 0 && probe.blocks("keeper") == 0, "keeper stat'ed, never read")
-        #expect(probe.blocks("quarantine") == 3, "the one read of the duplicate; nothing else")
+        #expect(probe.opens("keeper.mov") == 1 && probe.blocks("keeper") == 3,
+                "the keeper is read once, before the hold, to confirm its stored fixity (GH #504 D4); the removal boundary only stats it")
+        #expect(probe.blocks("quarantine") == 6, "the two reads of the duplicate in quarantine (D3a); nothing else")
         let console = await consoleText(rig.model)
         #expect(!console.contains("re-checked before removal"), "nothing to say when nothing changed")
     }

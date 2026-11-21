@@ -319,12 +319,15 @@ struct DeletionTierRuleTests {
 
 // MARK: - 1. The single-read gate
 
-@Suite("Single read — move first, hash once in quarantine")
+@Suite("Single read — confirm the keeper, move first, hash twice in quarantine")
 struct SingleReadGateTests {
 
     private let size = FileHasher.segmentSize * 2 + 777
 
-    @Test func holdMovesBeforeReadingAndTheKeeperIsNeverRead() throws {
+    /// GH #504 D3a / D4 (2026-11-21): the keeper is read ONCE, before
+    /// anything moves, to confirm its stored fixity (unless the caller says
+    /// this run already did); the held file is read TWICE in quarantine.
+    @Test func holdConfirmsTheKeeperThenMovesBeforeReadingTheDuplicate() throws {
         let dir = tempDir("hold"); defer { try? FileManager.default.removeItem(at: dir) }
         let bytes = (0..<size).map { UInt8($0 % 251) }
         let keeper = dir.appendingPathComponent("keeper.mov"); write(keeper, bytes)
@@ -338,21 +341,79 @@ struct SingleReadGateTests {
         }
         #expect(!FileManager.default.fileExists(atPath: copy.path), "moved before any read")
         #expect(FileManager.default.fileExists(atPath: hold.quarantinedPath))
-        #expect(probe.blocks("quarantine") == 0 && probe.blocks("duplicate") == 0, "nothing read yet")
+        #expect(probe.blocks("quarantine") == 0 && probe.blocks("duplicate") == 0, "the duplicate is not read yet")
+        #expect(probe.blocks("keeper") == 3 && probe.opens(of: keeper.path) == 1,
+                "the keeper was read once, in full, to confirm its stored fixity (before the move: DedupeHashReadSeamSensorTests)")
         #expect(hold.baseline.hasChangeTime)
 
         guard case .verified(let ticket) = SignatureVerification.verifyHeld(hold, hooks: probe.hooks) else {
             Issue.record("expected verified"); return
         }
-        #expect(probe.blocks("quarantine") == 3, "ONE full read, in quarantine")
-        #expect(probe.blocks("duplicate") == 0 && probe.blocks("keeper") == 0)
-        #expect(probe.opens(of: keeper.path) == 0 && probe.opens(of: copy.path) == 0)
+        #expect(probe.blocks("quarantine") == 6, "TWO full reads, in quarantine")
+        #expect(probe.blocks("duplicate") == 0 && probe.blocks("keeper") == 3)
+        #expect(probe.opens(of: keeper.path) == 1 && probe.opens(of: copy.path) == 0)
         #expect(ticket.hashedInQuarantine && !ticket.proof.keeperReadInFull)
         #expect(ticket.proof.fullHash == fixity.digest)
 
         #expect(SignatureVerification.deleteQuarantined(ticket, disposal: .trash, hooks: probe.hooks).trashedBytes == Int64(size))
-        #expect(probe.blocks("quarantine") == 3, "the unlink step re-stats only — no second read")
+        #expect(probe.blocks("quarantine") == 6, "the Trash step re-stats only — no third read")
         #expect(!FileManager.default.fileExists(atPath: copy.path))
+        #expect(quarantineFolders(in: dir).isEmpty)
+
+        // A keeper this run has already confirmed is not read again.
+        let copy2 = dir.appendingPathComponent("copy2.mov"); write(copy2, bytes)
+        let again = Probe()
+        guard case .held(let hold2) = SignatureVerification.holdForSingleRead(
+            keeperPath: keeper.path, keeperFixity: fixity, duplicatePath: copy2.path,
+            keeperConfirmedThisRun: true, hooks: again.hooks) else {
+            Issue.record("expected a hold"); return
+        }
+        guard case .verified = SignatureVerification.verifyHeld(hold2, hooks: again.hooks) else { Issue.record("expected verified"); return }
+        #expect(again.blocks("keeper") == 0 && again.opens(of: keeper.path) == 0, "confirmed this run: stat only")
+        #expect(again.blocks("quarantine") == 6)
+    }
+
+    /// D4: a stored keeper fixity that a fresh read CONTRADICTS is unusable —
+    /// nothing moves, and the caller takes the two-file path.
+    @Test func aStoredKeeperFixityAFreshReadContradictsIsUnusableAndNothingMoves() throws {
+        let dir = tempDir("contradicted"); defer { try? FileManager.default.removeItem(at: dir) }
+        let bytes = (0..<size).map { UInt8($0 % 251) }
+        let keeper = dir.appendingPathComponent("keeper.mov"); write(keeper, bytes)
+        let copy = dir.appendingPathComponent("copy.mov"); write(copy, bytes)
+        // The keeper's own stamp, a digest of other bytes.
+        let falseFixity = try #require(ContentFixity.captured(path: keeper.path, digest: String(repeating: "cd", count: 32),
+                                                              byteCount: Int64(size)))
+        let probe = Probe()
+        var reread: ContentFixity?
+        var hooks = probe.hooks
+        hooks.didRereadKeeper = { reread = $0 }
+        #expect(SignatureVerification.holdForSingleRead(keeperPath: keeper.path, keeperFixity: falseFixity,
+                                                        duplicatePath: copy.path, hooks: hooks) == .keeperFixityUnusable)
+        #expect(reread?.digest == plainSHA256(keeper), "the fresh read is reported, with the keeper's true digest")
+        #expect(FileManager.default.fileExists(atPath: copy.path) && quarantineFolders(in: dir).isEmpty && probe.quarantineCount == 0,
+                "refuse before mutating: nothing was moved")
+        #expect(probe.blocks("keeper") == 3 && probe.blocks("quarantine") == 0 && probe.blocks("duplicate") == 0)
+    }
+
+    /// D3a at the gate: a Stop between the held file's two reads puts it back.
+    @Test func aStopBetweenTheHeldFilesTwoReadsPutsItBackUnchanged() throws {
+        let dir = tempDir("stopbetween"); defer { try? FileManager.default.removeItem(at: dir) }
+        let bytes = (0..<size).map { UInt8($0 % 251) }
+        let keeper = dir.appendingPathComponent("keeper.mov"); write(keeper, bytes)
+        let copy = dir.appendingPathComponent("copy.mov"); write(copy, bytes)
+        let fixity = try #require(ContentFixity.captured(path: keeper.path, digest: plainSHA256(keeper), byteCount: Int64(size)))
+        let probe = Probe()
+        guard case .held(let hold) = SignatureVerification.holdForSingleRead(
+            keeperPath: keeper.path, keeperFixity: fixity, duplicatePath: copy.path,
+            keeperConfirmedThisRun: true, hooks: probe.hooks) else {
+            Issue.record("expected a hold"); return
+        }
+        // Stop as soon as the first read of the held file is complete (3 blocks).
+        var hooks = probe.hooks
+        hooks.shouldCancel = { probe.blocks("quarantine") >= 3 }
+        #expect(SignatureVerification.verifyHeld(hold, hooks: hooks) == .refused(.cancelled))
+        #expect(probe.blocks("quarantine") == 3, "the second read never started")
+        #expect((try? Data(contentsOf: copy)) == Data(bytes), "put back at its path, byte for byte")
         #expect(quarantineFolders(in: dir).isEmpty)
     }
 
@@ -420,7 +481,8 @@ struct SingleReadGateTests {
         }
         #expect(SignatureVerification.verifyHeld(hold, hooks: probe.hooks) == .refused(.contentDiffers))
         #expect((try? Data(contentsOf: copy)) == Data(other))
-        #expect(probe.blocks("keeper") == 0 && probe.opens(of: keeper.path) == 0)
+        #expect(probe.blocks("keeper") == 3 && probe.opens(of: keeper.path) == 1, "only the confirming read (GH #504 D4)")
+        #expect(probe.blocks("quarantine") == 3, "a first read that differs is the verdict: no second read")
     }
 
     @Test func noUsableFixityMovesNothingAndSizeMismatchRefusesBeforeMoving() throws {
@@ -512,8 +574,8 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
         #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path),
                 "in the (scratch) Trash — never unlinked")
-        #expect(probe.blocks("keeper") == 0 && probe.blocks("quarantine") == 3 && probe.blocks("duplicate") == 0,
-                "single read: keeper 0, duplicate once in quarantine")
+        #expect(probe.blocks("keeper") == 3 && probe.blocks("quarantine") == 6 && probe.blocks("duplicate") == 0,
+                "keeper once to confirm its stored fixity (D4), duplicate twice in quarantine (D3a), never at its path")
         await rig.model.mediaLedger.waitForPendingWrites()
         #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.isEmpty, "Trash only")
         let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
@@ -638,14 +700,16 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(reason.contains("archive copy on ") && reason.contains("holds different bytes"), Comment(rawValue: reason))
         #expect(plan.entries[0].tier == .trash && plan.entries[0].remainingVerifiedCopies == 1 && plan.entries[0].hasVerifiedArchive == false)
         #expect(quarantineFolders(in: rig.dir).isEmpty)
-        #expect(probe.quarantineCount == 1 && probe.blocks("quarantine") == 3, "the single read of the copy, in quarantine")
+        #expect(probe.quarantineCount == 1 && probe.blocks("quarantine") == 6, "the two reads of the copy, in quarantine (GH #504 D3a)")
     }
 
     /// QA #3: two pairs of ONE family in flight together must not count
     /// each other — both may go, so each sees archive + keeper = 2 → the
-    /// Trash, never both permanent.
+    /// Trash, never both permanent. (Three copies since GH #504 D4: the
+    /// family's first pair confirms the keeper alone; the second and third
+    /// are the two in flight together.)
     @Test func twoPairsOfOneFamilyDoNotCountEachOther() async throws {
-        let rig = makeRig("twopairs", copies: 2, keeperFixity: true); defer { rig.cleanup() }
+        let rig = makeRig("twopairs", copies: 3, keeperFixity: true); defer { rig.cleanup() }
         addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper, withSibling: false)
         for c in rig.copies {
             c.contentFixity = ContentFixity.captured(path: c.fullPath, digest: plainSHA256(URL(fileURLWithPath: c.fullPath)),
@@ -658,9 +722,9 @@ struct DeleteDuplicatesTierAndSpeedTests {
         job.mediaTechForPath = { _ in .ssd }
         job.start(); await job.task?.value
 
-        #expect(job.peakInFlight == 2, "both were in flight together")
+        #expect(job.peakInFlight == 2 && job.keeperReadWaits == 1, "two were in flight together, after the one confirming keeper read")
         let plan = try #require(job.plan)
-        #expect(plan.entries.map(\.status) == [.trashed, .trashed], "\(plan.entries.map(\.status))")
+        #expect(plan.entries.map(\.status) == [.trashed, .trashed, .trashed], "\(plan.entries.map(\.status))")
         #expect(plan.entries.allSatisfy { $0.tier == .trash && $0.remainingVerifiedCopies == 2 })
         #expect(plan.entries[0].tierReason?.contains("sibling copy2.mov on ") == true
                 && plan.entries[0].tierReason?.contains("still to be decided in this run") == true,
@@ -703,9 +767,10 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path))
     }
 
-    /// The first pair of a keeper without a stored fixity still reads it
-    /// once (path 1); every later pair is single-read.
-    @Test func keeperWithoutFixityIsReadOnceThenEveryPairIsSingleRead() async throws {
+    /// The first pair of a keeper without a stored fixity reads it (path 1:
+    /// twice, GH #504 D3a); the fixity that pair verified is fresh evidence
+    /// for the run (D4), so no later pair reads the keeper again.
+    @Test func keeperWithoutFixityIsReadByItsFirstPairOnlyThenNeverAgainThisRun() async throws {
         let rig = makeRig("firstpair", copies: 3, keeperFixity: false); defer { rig.cleanup() }
         addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper)
         let probe = Probe()
@@ -713,9 +778,10 @@ struct DeleteDuplicatesTierAndSpeedTests {
         job.mediaTechForPath = { _ in .ssd }
         job.start(); await job.task?.value
         #expect(job.result.deleted == 3)
-        #expect(probe.blocks("keeper") == 3, "the keeper is read exactly once, even on an SSD")
+        #expect(probe.blocks("keeper") == 6, "the keeper is read twice by its first pair and never again, even on an SSD")
         #expect(probe.blocks("duplicate") == 3, "only the first pair reads its duplicate at its path")
-        #expect(probe.blocks("quarantine") == 9, "first pair re-read (3) + two single-read pairs (6)")
+        #expect(probe.blocks("quarantine") == 15, "first pair re-read (3) + two later pairs, each read twice in quarantine (12)")
+        #expect(job.runTally.keeperRereads == 0, "the verified pair's fixity needs no confirming read")
     }
 
     // MARK: Parallelism
@@ -738,33 +804,36 @@ struct DeleteDuplicatesTierAndSpeedTests {
         }
     }
 
+    /// Three copies since GH #504 D4: the family's first pair confirms the
+    /// keeper alone and goes; the second and third are the two in flight.
     @Test func cancelWithTwoInFlightPutsBothBackNeverHalf() async throws {
-        let rig = makeRig("cancel2", copies: 2, keeperFixity: true); defer { rig.cleanup() }
+        let rig = makeRig("cancel2", copies: 3, keeperFixity: true); defer { rig.cleanup() }
         addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper)
         let probe = Probe()
-        probe.barrierFor = ["copy1.mov", "copy2.mov"]     // each blocks at its first open (the quarantine read)
-        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
+        probe.barrierFor = ["copy2.mov", "copy3.mov"]     // each blocks at its first open (the quarantine read)
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
+                                      hooks: probe.hooks.withScratchTrash(in: rig.dir), planRoot: rig.root)
         job.mediaTechForPath = { _ in .ssd }
         job.start()
-        await waitUntil { probe.hasBlocked("copy1.mov") && probe.hasBlocked("copy2.mov") }
+        await waitUntil { probe.hasBlocked("copy2.mov") && probe.hasBlocked("copy3.mov") }
         #expect(job.inFlightCount == 2 && job.peakInFlight == 2)
-        #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath) && !FileManager.default.fileExists(atPath: rig.copies[1].fullPath),
+        #expect(!FileManager.default.fileExists(atPath: rig.copies[1].fullPath) && !FileManager.default.fileExists(atPath: rig.copies[2].fullPath),
                 "both moved into quarantine")
 
         job.cancel()
-        probe.release("copy1.mov"); probe.release("copy2.mov")
+        probe.release("copy2.mov"); probe.release("copy3.mov")
         await job.task?.value
 
         #expect(job.state == .cancelled)
-        for c in rig.copies {
+        for c in rig.copies.dropFirst() {
             #expect(FileManager.default.fileExists(atPath: c.fullPath), "put back: \(c.filename)")
             #expect((try? Data(contentsOf: URL(fileURLWithPath: c.fullPath))) == Data(rig.bytes))
             #expect(c.duplicateDisposition == .extraCopy)
         }
         #expect(quarantineFolders(in: rig.dir).isEmpty, "no half-state left behind")
         let plan = try #require(job.plan)
-        #expect(plan.entries.allSatisfy { $0.status == .pending }, "\(plan.entries.map(\.status))")
-        #expect(plan.isResumable && job.result.deleted == 0)
+        #expect(plan.entries.map(\.status) == [.trashed, .pending, .pending], "\(plan.entries.map(\.status))")
+        #expect(plan.isResumable && job.result.deleted == 1, "only the first pair, which had settled, went")
     }
 
     // MARK: Pause / quit / stop
@@ -936,7 +1005,7 @@ struct DeleteDuplicatesCodexFollowupTests {
             #expect(FileManager.default.fileExists(atPath: c.path), "\(quit ? "quit" : "stop"): put back, not unlinked")
             #expect((try? Data(contentsOf: c)) == Data(bytes))
             #expect(quarantineFolders(in: rig.dir).isEmpty)
-            #expect(probe.blocks("quarantine") == 3, "the one read happened; phase 2 did not")
+            #expect(probe.blocks("quarantine") == 6, "the held file's two reads happened (GH #504 D3a); phase 2 did not")
             let plan = try #require(job.plan)
             #expect(plan.entries[0].status == .pending, "\(plan.entries[0].status): \(plan.entries[0].note)")
             #expect(plan.entries[0].quarantineDirectory == nil)
@@ -1062,10 +1131,10 @@ struct DeleteDuplicatesCodexFollowupTests {
 
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.status) == [.refused, .trashed, .trashed], "\(plan.entries.map(\.status))")
-        #expect(probe.blocks("keeper") == 10, "the refused pair's read is not kept: the second pair reads the keeper again — \(probe.blocks("keeper")) blocks")
-        #expect(probe.opens(of: rig.keeper.fullPath) == 4, "head compare + one full read, in each of the first two pairs — \(probe.opens(of: rig.keeper.fullPath))")
+        #expect(probe.blocks("keeper") == 15, "the refused pair's read is not kept (5); the second pair reads the keeper again, twice because it verifies (10) — \(probe.blocks("keeper")) blocks")
+        #expect(probe.opens(of: rig.keeper.fullPath) == 5, "head compare + one full read (refused pair), head compare + two full reads (verified pair) — \(probe.opens(of: rig.keeper.fullPath))")
         #expect(probe.blocks("duplicate") == 10, "the first two pairs read their file at its path")
-        #expect(probe.blocks("quarantine") == 10, "the second pair's re-read in quarantine + the third pair's single read")
+        #expect(probe.blocks("quarantine") == 15, "the second pair's re-read in quarantine (5) + the third pair's two reads there (10)")
         #expect(plan.entries[1].keeperMatchedByStoredFixity != true, "the second pair read the keeper itself")
         #expect(plan.entries[2].keeperMatchedByStoredFixity == true, "the third pair stands on the fixity the second pair verified")
         let fixity = try #require(rig.keeper.contentFixity, "published by the pair that VERIFIED")

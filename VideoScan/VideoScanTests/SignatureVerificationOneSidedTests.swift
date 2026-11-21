@@ -97,7 +97,7 @@ struct SignatureVerificationOneSidedTests {
             keeperPath: keeper.path, keeperFixity: nil, duplicatePath: copy.path, hooks: counter.hooks).get()
 
         #expect(proof.keeperReadInFull == true)
-        #expect(counter.blocks("keeper") == 3 && counter.blocks("duplicate") == 3)
+        #expect(counter.blocks("keeper") == 6 && counter.blocks("duplicate") == 3)
         #expect(proof.keeperFixity.digest == plainSHA256(keeper), "the fixity is the plain sha256 — same as the archive's")
         #expect(proof.keeperFixity.stampMatches(path: keeper.path))
         #expect(proof.keeperFixity.byteCount == Int64(size))
@@ -128,8 +128,8 @@ struct SignatureVerificationOneSidedTests {
         let proof = try SignatureVerification.verifyAgainstStoredKeeper(
             keeperPath: keeper.path, keeperFixity: stale, duplicatePath: copy.path, hooks: counter.hooks).get()
 
-        #expect(proof.keeperReadInFull == true, "a changed stamp costs one full read of the keeper")
-        #expect(counter.blocks("keeper") == 3)
+        #expect(proof.keeperReadInFull == true, "a changed stamp costs full reads of the keeper")
+        #expect(counter.blocks("keeper") == 6, "twice: the pair verified, so the keeper's second read was made (GH #504 D3a)")
         #expect(proof.keeperFixity != stale)
         #expect(proof.keeperFixity.stampMatches(path: keeper.path), "the fresh fixity carries the NEW stamp")
     }
@@ -221,7 +221,7 @@ struct SignatureVerificationOneSidedTests {
         let counter = ReadCounter()
         let proof = try SignatureVerification.verifyAgainstStoredKeeper(
             keeperPath: keeper.path, keeperFixity: old, duplicatePath: copy.path, hooks: counter.hooks).get()
-        #expect(proof.keeperReadInFull == true && counter.blocks("keeper") == 3)
+        #expect(proof.keeperReadInFull == true && counter.blocks("keeper") == 6)
         #expect(proof.keeperFixity.stamp.hasChangeTime && proof.keeperFixity.isUsableForVerification)
     }
 
@@ -235,7 +235,7 @@ struct SignatureVerificationOneSidedTests {
         let counter = ReadCounter()
         let proof = try SignatureVerification.verifyAgainstStoredKeeper(
             keeperPath: keeper.path, keeperFixity: foreign, duplicatePath: copy.path, hooks: counter.hooks).get()
-        #expect(proof.keeperReadInFull == true && counter.blocks("keeper") == 3)
+        #expect(proof.keeperReadInFull == true && counter.blocks("keeper") == 6)
     }
 
     /// The two-file path's digest is the plain sha256 the archive manifest

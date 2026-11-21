@@ -16,6 +16,16 @@
 // mismatch is "not proven" — the caller withholds the words or holds the
 // file. Cost: one open+fstat per file checked (no reads); disk I/O, so call
 // it off the main actor for anything but a handful of files.
+//
+// A STAMP-LESS copy (a Master Archive copy known only by its read-back
+// digest; a Migrate adoption) has no stat stamp to trust, so it is hashed in
+// full, now — and, since GH #504 D3a (2026-11-21), TWICE: a single read that
+// happens to match the digest on record must never be the only witness that
+// lets the last other copy go to the Trash. Two fresh reads (each a new
+// open) must both produce the digest on record; when the first matches and
+// the second does not, the verdict is `.readsDisagreed` and nothing moves.
+// Cost: two full reads of that copy (the second from the page cache when the
+// file fits in RAM); memory one 1 MiB buffer.
 // (An `enum` with no cases is Swift's namespace ≈ a C++ struct of statics.)
 
 import CryptoKit
@@ -119,16 +129,45 @@ enum ContentCopyProof {
             self.byteCount = archive.sizeBytes; self.fixity = nil
         }
 
-        /// The claim still holds for the file at `path` NOW. With a stamp:
-        /// the persistent digest policy (racily-clean rule included). A
-        /// Master Archive copy known only by its read-back digest has no
-        /// stamp to trust, so it is HASHED IN FULL here, now (Codex closing
-        /// pass F3, rule 2) — a same-size replacement fails. Off the main
-        /// actor; cost = one full read of that copy.
-        nonisolated func holdsNow(readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Bool {
-            if let fixity { return ContentCopyProof.describesFileNow(fixity, path: path) }
-            return ContentCopyProof.sha256(path: path, expectedBytes: byteCount, readHook: readHook) == digest
+        /// What asking the file itself found.
+        enum Standing: Equatable, Sendable {
+            case holds
+            case doesNotHold
+            /// Stamp-less only: the first full read produced the digest on
+            /// record and the second did not (GH #504 D3a).
+            case readsDisagree
         }
+
+        /// Does the claim still hold for the file at `path` NOW? With a
+        /// stamp: the persistent digest policy (racily-clean rule included).
+        /// A Master Archive copy known only by its read-back digest has no
+        /// stamp to trust, so it is HASHED IN FULL here, now (Codex closing
+        /// pass F3, rule 2) — a same-size replacement fails — and hashed a
+        /// SECOND time: both fresh reads must produce the digest on record
+        /// (D3a). A cancelled task between the two reads is "does not hold":
+        /// nothing is removed. Off the main actor; cost = two full reads of
+        /// that copy.
+        nonisolated func standingNow(readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Standing {
+            if let fixity { return ContentCopyProof.describesFileNow(fixity, path: path) ? .holds : .doesNotHold }
+            guard ContentCopyProof.sha256(path: path, expectedBytes: byteCount, readHook: readHook) == digest,
+                  !Task.isCancelled,
+                  let again = ContentCopyProof.sha256(path: path, expectedBytes: byteCount, readHook: readHook)
+            else { return .doesNotHold }
+            return again == digest ? .holds : .readsDisagree
+        }
+
+        nonisolated func holdsNow(readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Bool {
+            standingNow(readHook: readHook) == .holds
+        }
+    }
+
+    /// What `verdict` found for one source and its candidate copies.
+    enum Verdict: Equatable, Sendable {
+        case proven
+        case notProven
+        /// No copy was proven, and for the copy at `path` two full reads
+        /// disagreed (GH #504 D3a) — the caller says so.
+        case readsDisagreed(path: String)
     }
 
     /// `source` and at least one of `copies` hold the same bytes NOW: same
@@ -137,11 +176,27 @@ enum ContentCopyProof {
     /// `readHook`: the read-fault test seam, see `sha256(path:expectedBytes:readHook:)`.
     nonisolated static func proven(source: Claim, copies: [Claim],
                                    readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Bool {
+        verdict(source: source, copies: copies, readHook: readHook) == .proven
+    }
+
+    /// `proven`, with the reason when it is not: the first copy that holds
+    /// proves it; otherwise, when a stamp-less copy's two reads disagreed,
+    /// that copy is named.
+    nonisolated static func verdict(source: Claim, copies: [Claim],
+                                    readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Verdict {
         let candidates = copies.filter {
             $0.digest == source.digest && $0.byteCount == source.byteCount && $0.path != source.path
         }
-        guard !candidates.isEmpty, source.fixity != nil, source.holdsNow(readHook: readHook) else { return false }
-        return candidates.contains { $0.holdsNow(readHook: readHook) }
+        guard !candidates.isEmpty, source.fixity != nil, source.holdsNow(readHook: readHook) else { return .notProven }
+        var disagreed: String?
+        for copy in candidates {
+            switch copy.standingNow(readHook: readHook) {
+            case .holds: return .proven
+            case .readsDisagree: disagreed = disagreed ?? copy.path
+            case .doesNotHold: break
+            }
+        }
+        return disagreed.map { .readsDisagreed(path: $0) } ?? .notProven
     }
 }
 
