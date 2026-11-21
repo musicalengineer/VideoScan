@@ -43,6 +43,9 @@ extension PromoteToArchiveJob {
         enum Code: String {
             case duplicate
             case storedDigestMismatch = "stored-digest-mismatch"
+            /// Adoption only (GH #504 D3c): the source's proving read and
+            /// its confirming second read produced different digests.
+            case readsDisagree = "reads-disagree"
             case changedDuringCopy = "changed-during-copy"
             case dateAgreement = "date-agreement"
             case filingYear = "filing-year"
@@ -247,9 +250,19 @@ extension PromoteToArchiveJob {
             return .cancelled
         } catch ArchivePromoteEngine.Failure.cancelled {
             return .cancelled
+        } catch let refused as RefusedByGuard {
+            return .refused(refused.refusal)
         } catch {
             return .failed(Self.describe(error))
         }
+    }
+
+    /// A guard deep in one file's steps refused it before anything was
+    /// written: carried out as a throw, reported as `.refused(refusal)`.
+    /// (For Rick: ≈ a typed C++ exception caught one frame up and turned
+    /// back into a result code.)
+    struct RefusedByGuard: Error {
+        let refusal: Refusal
     }
 
     /// Manifest-leg adoption: the manifest names this source; verify the
@@ -352,6 +365,12 @@ extension PromoteToArchiveJob {
         guard ArchivePathResolver.isInside(path: destURL.path, root: ctx.root) else {
             return .failed("resolved destination escapes the archive root (\(choice.relPath)) — refused")
         }
+        // GH #504 D3c — ADOPTION makes no copy, so nothing re-proves the
+        // source the way the copy pass does. Before the journal, the claim
+        // or the manifest can tie this source to the file already there, a
+        // second fresh read of the source must reproduce the proving digest
+        // (throws `RefusedByGuard` / `CancellationError`; a no-op for a copy).
+        try await confirmSourceIfAdopting(choice, source: source, entry: entry, digest: digest)
         claimedNames.insert(destURL.path)
         model.notePromotedDigest(digest, relPath: choice.relPath, root: ctx.root)
         claimPath = choice.relPath

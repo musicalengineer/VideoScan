@@ -21,18 +21,20 @@
 // of the proving read, re-proved against the bytes the copy pass reads) is
 // what catches a flipped proving read there. It does not protect:
 //
-//   P1 (parked, Codex r1 #3) — `aFlippedProvingReadAdoptsAnotherFile`: the
-//   ADOPTION branch. When a file already sits at the proposed destination
-//   and hashes to the proving read's digest, Promote adopts it — no copy, no
-//   second read of the source. A bit flipped in that one proving read can
-//   make the source "equal" a different file; the manifest row, the journal
-//   and the archive record then tie the source to bytes it does not have.
+//   GH #504 D3c (FIXED 2026-11-21; was P1, Codex r1 #3) —
+//   `aFlippedProvingReadAdoptsAnotherFile`: the ADOPTION branch. When a file
+//   already sits at the proposed destination and hashes to the proving
+//   read's digest, Promote adopts it — no copy. Before it does, the source
+//   is now read a SECOND time and must reproduce the proving digest, so a
+//   bit flipped in the one proving read can no longer tie the source to a
+//   different file in the manifest, the journal and the catalog.
 //
-// Corrected outcomes:
+// Outcomes:
 //   read faulted            fresh copy                       destination already holds a file
-//   proving read, EIO/short failed ("could not be read in    (not covered)
+//   proving read, EIO/short failed ("could not be read in    failed
 //                           full")
-//   proving read, bit flip  failed ("source changed")        ADOPTED as identical — P1, parked
+//   proving read, bit flip  failed ("source changed")        failed ("two reads of <file> disagreed")
+//   source's 2nd read       (no such read)                   failed (EIO/short); clean → adopted
 //   copy pass / read-back   failed                           (no such read on this path)
 //
 // Wording (GH #504 D1, fixed 2026-11-21): EIO and a read that ends early are
@@ -177,11 +179,12 @@ struct HashReadFaultPromoteTests {
         #expect(model.masterArchiveCopy(of: rec)?.archiveFixity?.digest == trueDigest)
     }
 
-    /// Codex r1 #3 (P1, parked). Source A has no stored fixity. An
-    /// unindexed file B — same size, one bit different at byte 20,000 —
-    /// already sits where A would be filed. The flip lands on that byte of
-    /// A's proving read, so the digest Promote holds for A is SHA-256(B).
-    @Test("P1 (parked): a bit flipped in the proving read makes the source 'identical' to a different file at the destination — ADOPTED, recorded as archived; expected: not adopted, nothing recorded",
+    /// Codex r1 #3 (was P1; GH #504 D3c, fixed). Source A has no stored
+    /// fixity. An unindexed file B — same size, one bit different at byte
+    /// 20,000 — already sits where A would be filed. The flip lands on that
+    /// byte of A's proving read, so the digest Promote holds for A is
+    /// SHA-256(B). The source's SECOND read, made before adopting, disagrees.
+    @Test("a bit flipped in the proving read makes the source 'identical' to a different file at the destination — NOT adopted: the source's second read disagrees, 'two reads of <file> disagreed — nothing was recorded'",
           .timeLimit(.minutes(2)))
     func aFlippedProvingReadAdoptsAnotherFile() async throws {
         // Where would this file be filed? Ask a clean promote in a scratch sandbox.
@@ -222,16 +225,89 @@ struct HashReadFaultPromoteTests {
         let copy = model.masterArchiveCopy(of: rec)
         print("[hash-matrix] promote | bitFlip in sourceProof, a one-bit-different file at the destination | \(row.kind) | \(row.detail) | source reads \(fault.passCount) | manifest sha \(rows.first?[ArchiveManifestCSV.sha256Column].prefix(12) ?? "-")")
 
-        withKnownIssue("PARKED 2026-11-20 (P1, Codex r1 #3): Promote's adoption branch trusts ONE read of the source. A flip in the proving read makes the source's digest equal a different file already at the destination; Promote adopts it with no second source read and records the manifest row, journal entry, archive record and source stage for bytes the source does not have. Proposed: before adopting, re-read the source (or compare source and existing file byte-for-byte) so two independent reads of the source must agree.") {
-            #expect(row.kind != .adopted && row.kind != .promoted, "\(row.kind): \(row.detail)")
-            #expect(rows.isEmpty, "a manifest row was written: \(rows)")
-            #expect(copy == nil, "an archive record ties the source to \(copy?.archiveFixity?.digest.prefix(12) ?? "?")…")
-            #expect(rec.archiveStage != .masterAssigned, "the source is marked archived")
-        }
-        // What the archive holds for this source is NOT the source's bytes.
+        // Seen RED 2026-11-21: outcome `adopted`, the manifest's sha was the
+        // OTHER file's, after one source read.
+        #expect(fault.passCount == 2, "the source was read a second time before adopting — \(fault.passCount)")
+        #expect(row.kind == .failed, "\(row.kind): \(row.detail)")
+        #expect(row.detail.contains("two reads of \(Self.fileName) disagreed — nothing was recorded"), "\(row.detail)")
+        #expect(rows.isEmpty, "a manifest row was written: \(rows)")
+        #expect(copy == nil, "an archive record ties the source to \(copy?.archiveFixity?.digest.prefix(12) ?? "?")…")
+        #expect(rec.archiveStage != .masterAssigned && rec.contentFixity == nil, "the source is marked archived / given a fixity")
+        let journal = (try? String(contentsOf: sb.journalURL, encoding: .utf8)) ?? ""
+        #expect(!journal.contains(rec.id.uuidString), "a journal entry records the adoption:\n\(journal)")
+        guard case .failed(let summary) = job.state else { Issue.record("the job did not end failed — \(job.state)"); return }
+        #expect(summary.contains("Promoted 0") && summary.contains("failed 1"), "\(summary)")
+        // Both files are exactly what they were.
         #expect(try Data(contentsOf: src) == a)
         #expect(try Data(contentsOf: squatter) == b)
-        if let copy { #expect(copy.archiveFixity?.digest == digestB && copy.archiveFixity?.digest != digestA) }
+        #expect(MasterArchiveTestSupport.sha256(ofFile: squatter.path) == digestB)
+
+        // The refusal was the fault's and blocks nothing: a clean retry sees
+        // that the file at the destination is NOT the source's bytes and
+        // promotes the source beside it.
+        let retry = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
+        guard case .finished = retry.state else { Issue.record("the clean retry: \(retry.state) \(retry.outcomes)"); return }
+        #expect(retry.outcomes.first?.kind == .promoted, "\(retry.outcomes)")
+        #expect(model.masterArchiveCopy(of: rec)?.archiveFixity?.digest == digestA)
+        #expect(try Data(contentsOf: squatter) == b, "the file that was already there is untouched")
+    }
+
+    /// Where a clean promote files this suite's source: asked of a scratch
+    /// sandbox, so the answer is the engine's own.
+    private func whereItWouldBeFiled() async throws -> String {
+        let probe = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_probe"); defer { probe.cleanup() }
+        let probeSrc = try MasterArchiveTestSupport.writeBlob(at: probe.sources.appendingPathComponent(Self.fileName),
+                                                              bytes: Self.bytes, seed: 21)
+        let probeModel = MasterArchiveTestSupport.makeModel(probe)
+        try MasterArchiveTestSupport.initialize(probeModel, in: probe)
+        let probeRec = MasterArchiveTestSupport.makeRecord(path: probeSrc.path, userDate: "1994-05-01")
+        probeModel.records = [probeRec]
+        _ = try #require(await MasterArchiveTestSupport.promote(probeModel, ids: [probeRec.id]))
+        return try #require(MasterArchiveTestSupport.archivedFiles(probe).first)
+    }
+
+    /// D3c's other half: a GENUINE adoption (the file at the destination
+    /// really holds the source's bytes) still adopts — after the source's
+    /// second read agreed — and a fault in that second read refuses by name.
+    @Test("ADOPTION, the source's SECOND read: clean → adopted after exactly two source reads, no copy; EIO or a read that ends early → failed 'could not be read in full', nothing recorded",
+          .timeLimit(.minutes(2)), arguments: [HashReadFault.Kind?.none, .eio, .shortRead])
+    func theConfirmingReadBeforeAnAdoption(_ kind: HashReadFault.Kind?) async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt2"); defer { sb.cleanup() }
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
+                                                         bytes: Self.bytes, seed: 21)
+        let a = try Data(contentsOf: src)
+        let digestA = try #require(MasterArchiveTestSupport.sha256(ofFile: src.path))
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1994-05-01")
+        model.records = [rec]
+        let existing = sb.archiveRoot.appendingPathComponent(try await whereItWouldBeFiled())
+        try FileManager.default.createDirectory(at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try a.write(to: existing)
+
+        // Counts every source read; faults the second one when asked.
+        let fault = HashReadFault(kind ?? .eio, pathSuffix: "Sources/" + Self.fileName,
+                                  atByte: kind == nil ? 1 << 40 : Self.faultAt, onPass: 2)
+        let partials = HashReadFault(.eio, where: { $0.hasSuffix(".partial") }, atByte: 1 << 40, onPass: 0)
+        let hook: ArchivePromoteEngine.ReadHook = { fd, off, n in fault.hook(fd, off, n) ?? partials.hook(fd, off, n) }
+        let job = try #require(await ArchivePromoteEngine.$readHook.withValue(hook) {
+            await MasterArchiveTestSupport.promote(model, ids: [rec.id])
+        })
+        await job.completionTask?.value
+        let row = try #require(job.outcomes.first)
+        print("[hash-matrix] promote adoption | \(kind.map { "\($0)" } ?? "clean") in the source's second read | \(row.kind) | \(row.detail) | source reads \(fault.passCount)")
+        #expect(fault.passCount == 2 && partials.passCount == 0, "two source reads, no copy: source \(fault.passCount), partial \(partials.passCount)")
+        #expect(try Data(contentsOf: existing) == a && Data(contentsOf: src) == a)
+        guard let kind else {
+            #expect(row.kind == .adopted, "\(row.kind): \(row.detail)")
+            #expect(model.masterArchiveCopy(of: rec)?.archiveFixity?.digest == digestA)
+            #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1)
+            return
+        }
+        #expect(fault.firedCount == 1)
+        #expect(row.kind == .failed && row.detail.contains("could not be read in full"), "\(kind): \(row.kind): \(row.detail)")
+        #expect(MasterArchiveTestSupport.manifestRows(sb).isEmpty && model.masterArchiveCopy(of: rec) == nil)
+        #expect(rec.archiveStage != .masterAssigned)
     }
 
     /// EIO and a read that ends early are named as READ failures (GH #504
