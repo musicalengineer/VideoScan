@@ -38281,6 +38281,27 @@
         "unmountDetachFails",
         "unmountWithoutMount"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeRescueRsyncNegativeMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VolumeRescueRsyncNegativeMatrixTests"
+      ],
+      "tests": [
+        "exitZeroWithoutTheFile",
+        "hangThenStop",
+        "killedBySignal",
+        "launchFailure",
+        "mkdirCannotStart",
+        "mkdirExitsNonzero",
+        "noStartOutcomeInTheLog",
+        "oneOfThreeFails",
+        "partialTransferExit",
+        "stopBeforeTheFirstFile",
+        "theCommandLinesAndARealCopy"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42269,7 +42290,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 923,
+      "expected_floor": 934,
       "name": "regression",
       "package_expected_floor": 346,
       "package_selectors": [
@@ -42522,7 +42543,8 @@
         "VideoScanTests/HallieWebFfmpegCommandTests",
         "VideoScanTests/AudioTranscriberCommandTests",
         "VideoScanTests/PersistentLogRotationGzipTests",
-        "VideoScanTests/RAMDiskNegativeMatrixTests"
+        "VideoScanTests/RAMDiskNegativeMatrixTests",
+        "VideoScanTests/VolumeRescueRsyncNegativeMatrixTests"
       ]
     },
     {
