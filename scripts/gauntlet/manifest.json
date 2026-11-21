@@ -38208,6 +38208,24 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioTranscriberCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AudioTranscriberCommandTests"
+      ],
+      "tests": [
+        "cancelStopsIt",
+        "exitZeroWithoutATranscript",
+        "hangToTheDeadline",
+        "launchFailure",
+        "nonzeroExit",
+        "stderrTailIsBounded",
+        "stdoutGoesToTheLog",
+        "theCommandLine"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieWebFfmpegCommandTests.swift",
       "stage": "regression",
       "suites": [
@@ -42210,7 +42228,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 894,
+      "expected_floor": 902,
       "name": "regression",
       "package_expected_floor": 346,
       "package_selectors": [
@@ -42460,7 +42478,8 @@
         "VideoScanTests/HashReadFaultVerifyArchiveTests",
         "VideoScanTests/HashReadSeamTests",
         "VideoScanTests/HashReadSeamSensorTests",
-        "VideoScanTests/HallieWebFfmpegCommandTests"
+        "VideoScanTests/HallieWebFfmpegCommandTests",
+        "VideoScanTests/AudioTranscriberCommandTests"
       ]
     },
     {
