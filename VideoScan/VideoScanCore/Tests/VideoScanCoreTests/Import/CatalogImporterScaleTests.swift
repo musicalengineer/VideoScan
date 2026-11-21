@@ -34,7 +34,7 @@ struct CatalogImporterScaleTests {
         return result == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
     }
 
-    @Test func oneHundredThousandRowsImportWithinBudget() async throws {
+    @Test(.tags(.quietMachine)) func oneHundredThousandRowsImportWithinBudget() async throws {
         let rows = 100_000
         let scene = try ImporterScene.make(healthyRows: rows)
         defer { scene.remove() }

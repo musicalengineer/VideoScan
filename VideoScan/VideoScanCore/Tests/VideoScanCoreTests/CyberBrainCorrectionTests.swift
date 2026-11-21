@@ -621,7 +621,7 @@ struct CyberBrainCorrectionScaleTests {
     /// O(items²) slip (1e8 comparisons) fails it.
     static let budget: Duration = .seconds(5)
 
-    @Test func oneCorrectionInATenThousandItemArchive() throws {
+    @Test(.tags(.quietMachine)) func oneCorrectionInATenThousandItemArchive() throws {
         let root = try tempRoot("scale")
         defer { try? FileManager.default.removeItem(at: root) }
         var people: [CyberBrainPerson] = []

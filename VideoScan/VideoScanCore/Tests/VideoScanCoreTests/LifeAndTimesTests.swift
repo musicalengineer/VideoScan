@@ -617,7 +617,7 @@ struct LifeAndTimesScaleTests {
     /// ≈ 2.5× that; TimingBudget widens it further under load / on CI.
     static let budget: Duration = .seconds(30)
 
-    @Test func hundredThousandPeople() {
+    @Test(.tags(.quietMachine)) func hundredThousandPeople() {
         let people = LifeAndTimesSynthetic.people(count: 100_000)
         let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()

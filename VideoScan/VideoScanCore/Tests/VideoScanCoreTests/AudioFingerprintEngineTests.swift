@@ -162,7 +162,7 @@ struct AudioFingerprintEngineTests {
     /// across two chunks is reassembled, the cap is honoured mid-chunk, a
     /// trailing unpaired byte is dropped, and an hour of 64 KB chunks is
     /// a few milliseconds (it was 2.6 s with a per-element append).
-    @Test func sinkReassemblesSamplesAcrossChunkBoundaries() {
+    @Test(.tags(.quietMachine)) func sinkReassemblesSamplesAcrossChunkBoundaries() {
         let expected: [Int16] = (0..<1_000).map { Int16(truncatingIfNeeded: $0 &* 7_919 &- 30_000) }
         var bytes = Data()
         for s in expected { withUnsafeBytes(of: s.littleEndian) { bytes.append(contentsOf: $0) } }
@@ -456,7 +456,7 @@ struct AudioFingerprintEngineTests {
     /// is 10^10 visits per pass. A hash that appears everywhere in the
     /// master says nothing about WHERE the query is, so it is skipped —
     /// the match is bounded and the verdict is "different", not a claim.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func repeatedHashMatchesInBoundedTime() {
         let n = 100_000
         let hashes = [UInt32](repeating: AudioFingerprint.packHash(f1: 100, f2: 200, dt: 10), count: n)
@@ -476,7 +476,7 @@ struct AudioFingerprintEngineTests {
     /// real-file shape of the case above. 30 s of clicks against 10 min
     /// of clicks is bounded and makes no containment claim (every offset
     /// fits equally well: self-similar audio is not placeable).
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func metronomeAgainstMetronomeIsBoundedAndNotAClaim() {
         let master = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: metronome(seconds: 600)))
         let query = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: metronome(seconds: 30)))
@@ -532,7 +532,7 @@ struct AudioFingerprintEngineTests {
     /// 798 KB (13.3 KB/min); PCM 57.6 MB in RAM. Budget ≈ 2×.
     /// Re-measured after codex F5 (buffer reuse, incremental sink): see the
     /// review doc's Closure section for the before/after numbers.
-    @Test(.tags(.scale), .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"))
+    @Test(.tags(.scale, .quietMachine), .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"))
     func sixtyMinuteMasterFingerprintsAndIndexesWithinBudget() async throws {
         let budget: Duration = .seconds(6)
         let sampleRate = 8_000

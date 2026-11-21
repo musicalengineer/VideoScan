@@ -94,6 +94,7 @@ struct ThrottledMainActorUpdateTests {
         let b = ThrottledMainActorUpdate.monotonicSeconds()
         #expect(b >= a)
         let uptime = ProcessInfo.processInfo.systemUptime
+        // quiet-machine: not a budget — two readings of the same clock, 5 s apart at most: which clock, not how fast
         #expect(abs(b - uptime) < 5, "default clock should be system uptime, got \(b) vs uptime \(uptime)")
     }
 }

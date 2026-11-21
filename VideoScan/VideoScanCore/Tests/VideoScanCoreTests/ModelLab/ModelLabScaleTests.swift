@@ -40,7 +40,7 @@ struct ModelLabScaleTests {
     /// Measured 2026-10-30, M5 Ultra, Debug, load ~5/30 while another agent
     /// built the app: 114,831 windows and 1,671,298 frame times in 0.095 s.
     /// Budget 2 s ≈ 20× (an O(n²) slip in cut snapping would show at once).
-    @Test("100k files × 450 h planned through WindowSampler(60 s, 1 fps, scene cuts) inside 2 s; every plan covers its file")
+    @Test("100k files × 450 h planned through WindowSampler(60 s, 1 fps, scene cuts) inside 2 s; every plan covers its file", .tags(.quietMachine))
     func hundredThousandFilePlans() {
         let durations = Self.durations(files: 100_000, totalHours: 450)
         #expect(abs(durations.reduce(0, +) - 450 * 3_600) < 1)
@@ -69,7 +69,7 @@ struct ModelLabScaleTests {
     /// pages while the second connection wrote 20k rows; file 376 MB.
     /// Budgets 20 s / 5 s ≈ 5× / 7×.
     @Test("1.6 M outputs rows: batched writes, then 256-row keyset pages while a second connection inserts — no SQLITE_BUSY, every row seen once",
-          .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"))
+          .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"), .tags(.quietMachine))
     func sixteenHundredThousandRowsPagedUnderAWriter() async throws {
         let dir = try modelLabScratch("1m6"); defer { try? FileManager.default.removeItem(at: dir) }
         let total = 1_600_000

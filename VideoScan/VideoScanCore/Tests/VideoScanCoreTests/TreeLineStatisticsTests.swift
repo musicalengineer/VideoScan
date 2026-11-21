@@ -345,7 +345,7 @@ struct TreeLineStatisticsScaleTests {
     /// scale sensors.
     static let budget: Duration = .seconds(2)
 
-    @Test func hundredThousandPeopleStatsAndKinshipWithinBudget() throws {
+    @Test(.tags(.quietMachine)) func hundredThousandPeopleStatsAndKinshipWithinBudget() throws {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         _ = graph.index   // prebuilt in production
         let root = try #require(graph.rootPersonID)

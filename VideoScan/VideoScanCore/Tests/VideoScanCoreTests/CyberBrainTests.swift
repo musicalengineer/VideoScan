@@ -434,7 +434,7 @@ struct CyberBrainTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func hundredThousandPeopleIndexAndLookupStayWithinExplicitBudget() throws {
         var people: [CyberBrainPerson] = []
         people.reserveCapacity(100_000)
@@ -473,7 +473,7 @@ struct CyberBrainTests {
                                  budget: .seconds(3), loadBefore: loadBefore)
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func hundredThousandItemsIndexSortHashAndBoundedQueryStayWithinBudget() throws {
         var items: [CyberBrainItem] = []
         items.reserveCapacity(100_000)

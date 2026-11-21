@@ -329,7 +329,7 @@ struct AnalysisResultsReportTests {
 
     // MARK: SCALE
 
-    @Test(.tags(.scale), .timeLimit(.minutes(5)))
+    @Test(.tags(.scale, .quietMachine), .timeLimit(.minutes(5)))
     func oneHundredThousandContentsBuildWithinBudget() async throws {
         let count = 100_000
         let fixture = try await EraFixture.catalog((1...count).map {
@@ -361,7 +361,7 @@ struct AnalysisResultsReportTests {
 
     /// Review 11/05 (C): a 100k "still to do" is listed with its LIMIT in SQL —
     /// one 10k page, never 100k rows read then cut — inside the same budget.
-    @Test(.tags(.scale), .timeLimit(.minutes(5)))
+    @Test(.tags(.scale, .quietMachine), .timeLimit(.minutes(5)))
     func oneHundredThousandStillToDoListsOnePageWithinBudget() async throws {
         let count = 100_000
         let fixture = try await EraFixture.catalog((1...count).map { .init(n: $0, path: "/V/\($0 % 100)/clip-\($0).mov") })

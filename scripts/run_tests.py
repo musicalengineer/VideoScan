@@ -817,8 +817,15 @@ def core_products(wt: Path) -> Path:
 
 
 def core_test_cmd(wt: Path, regex: str) -> List[str]:
-    """The Core test phase, run as one child: this file with --core-exec (core_exec below) runs the built
-    bundle directly — no `swift test`, so no SwiftPM .build lock, so runs at one commit go side by side."""
+    """The Core test phase, run as one child on the built bundle — no `swift test`, so no SwiftPM .build
+    lock, so runs at one commit go side by side. The engine is the checkout-under-test's own
+    scripts/core_lane.py (2026-11-20; the nightly's Core lane runs the same script): phase A, every test
+    not marked quiet-machine, in parallel; phase B, the marked ones (wall-time budgets, resident-size
+    bounds), one at a time; each phase's count checked against the bundle's listing. A commit from
+    before core_lane.py keeps the old single pass (this file's --core-exec, core_exec below)."""
+    lane = wt / "scripts" / "core_lane.py"
+    if lane.exists():
+        return [sys.executable, "-u", str(lane), "run", "--products", str(core_products(wt)), "--filter", regex]
     return [sys.executable, str(SELF), "--core-exec", str(core_products(wt)), regex]
 
 
@@ -843,7 +850,9 @@ def python_targets(picks: Sequence[Pick]) -> List[str]:
 # ───────────────────────────────────────────────────────────── the Core test phase (child)
 
 def core_exec(products: str, regex: str) -> int:
-    """`run_tests.py --core-exec <products> <regex>`: what `swift test --skip-build --filter <regex>` runs,
+    """Only for a commit that has no scripts/core_lane.py (core_test_cmd): one pass, Swift Testing in
+    parallel, the quiet-machine tests beside the rest.
+    `run_tests.py --core-exec <products> <regex>`: what `swift test --skip-build --filter <regex>` runs,
     without SwiftPM (whose .build lock serializes every `swift test` on one package, even --skip-build:
     "Another instance of SwiftPM … waiting", measured 2026-11-20). XCTest: list the bundle's tests with
     swiftpm-xctest-helper, keep those whose `Module.Class/test` the regex finds, run them with `xcrun
@@ -2002,7 +2011,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 else:
                     if el:
                         out.line("BUILD", f"VideoScanCore (swift build --build-tests) {'.' * 8} {fmt_secs(el)}", "BUILD")
-                    out.line("RUN", f"core, Debug, from the built bundle ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
+                    out.line("RUN", f"core, Debug, from the built bundle, two phases ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
                     lane.ran, lane.expected = True, sum(p.tests for p in core)
                     lane.exact = exact(core)
                     phase(phase="core: testing", done=out.done, total=out.expected)

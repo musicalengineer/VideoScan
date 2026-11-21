@@ -11,7 +11,7 @@ import XCTest
 ///   Sensor    — a full exact name reaches at least what the substring
 ///               filter reached, with a same-named person on top
 /// No media is opened, so no media-matrix dimension.
-final class FamilyTreeNameSearchTests: XCTestCase {
+final class FamilyTreeNameSearchTests: QuietMachineXCTestCase {
 
     static let fixture = """
     0 HEAD

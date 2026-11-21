@@ -146,7 +146,7 @@ struct EraJobRetryReviewTests {
         }
     }
 
-    @Test("SCALE: recording one try must not rewrite every entry — EraAttempts.swift:76-89 publish the whole map per record (O(n) per unit, O(n²) per run)")
+    @Test("SCALE: recording one try must not rewrite every entry — EraAttempts.swift:76-89 publish the whole map per record (O(n) per unit, O(n²) per run)", .tags(.quietMachine))
     func recordingATryDoesNotRewriteEveryEntry() throws {
         let clock = ContinuousClock()
         let empty = try EraAttemptStore(stateRoot: try EraFixture.stateRoot())

@@ -561,7 +561,7 @@ struct EraJobRunTests {
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME era") && $0.contains("1 run") })
     }
 
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)), .tags(.quietMachine))
     func orderAndPathYearOverOneHundredThousandInsideABudget() {
         let candidates = (0..<100_000).map { i in
             EraCandidate(digest: EraFixture.hex(i), path: "/Volumes/T/\(1960 + i % 60) box/clip \(i).mov", durationS: 60,

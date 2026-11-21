@@ -139,7 +139,7 @@ struct CatalogCommitReplacementTests {
         #expect(!text.contains("pathKey"), "the replacement is the plan's explicit relation, never a path match (codex #123)")
     }
 
-    @Test("scale: 2,000 replaced rows whose replacements are ALL refused — none purged, within budget")
+    @Test("scale: 2,000 replaced rows whose replacements are ALL refused — none purged, within budget", .tags(.quietMachine))
     func scaleAllRefusedNonePurged() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let count = 2_000

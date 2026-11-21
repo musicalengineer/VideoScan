@@ -261,6 +261,30 @@ class HostSuiteLaneTests(Testbed):
             self.assertNotIn('videoscan-nightly-', call, "the scheduled run's caches are not this run's")
             self.assertNotIn('/tmp/nightly-', call)
 
+    def test_a_worktree_that_has_the_two_phase_core_lane_runs_its_own_copy_of_it(self):
+        # 2026-11-20: the Core lane is scripts/core_lane.py OF THE COMMIT UNDER TEST (its quiet-machine
+        # marks decide the split), not swift test --no-parallel over everything. The testbed repo above
+        # has none (an older commit): that is the fallback the test before this one pins.
+        lane = self.work / 'scripts/core_lane.py'
+        lane.write_text('import os, sys\n'
+                        'fake = os.environ["SUITE_FAKE"]\n'
+                        'open(fake + "/calls", "a").write("core_lane.py " + " ".join(sys.argv[1:]) + "\\n")\n'
+                        'sys.stdout.write(open(fake + "/core.log").read())\n'
+                        'sys.exit(int(open(fake + "/core_rc").read()))\n')
+        git = ['/usr/bin/git', '-C', str(self.work)]
+        subprocess.run(git + ['add', '-A'], check=True, env=self.git_env)
+        subprocess.run(git + ['commit', '-q', '-m', 'two-phase core lane'], check=True, env=self.git_env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=self.git_env,
+                                  capture_output=True, text=True).stdout.strip()
+        p, log, summary, out = self.host('g3')
+        self.assertEqual(p.returncode, 0, log)
+        calls = self.calls()
+        dd = str(self.home / 'Library/Caches/videoscan-m4run-dd-suite')
+        self.assertIn(f'core_lane.py run --package-path {self.work}/VideoScan/VideoScanCore -c release --scratch-path {dd}/core', calls)
+        self.assertFalse([c for c in calls if c.startswith('swift test')], 'the whole lane was serialized again')
+        row = json.loads((out / 'suite-row.json').read_text())
+        self.assertEqual((row['core_passed'], row['core_status']), (4, 'ok'))
+
     def test_a_failed_test_is_red_and_named_with_where_the_repo_declares_it(self):
         self.plant(app=app_log(failed=('theLedgerKeepsEveryRow()', '"A display name with spaces"', 'ghost()')), test_rc=65)
         p, log, summary, _ = self.host('r1')

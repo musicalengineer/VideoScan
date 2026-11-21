@@ -381,7 +381,7 @@ struct FamilyMapEuropeTests {
     /// string varied so nothing is memoised) through the resolver. Thread
     /// CPU time against a load-aware Debug ceiling (GH #208), never flat
     /// wall clock: the CI runner is a 3-core VM.
-    @Test func oneHundredThousandEuropeanPlacesUnderBudget() {
+    @Test(.tags(.quietMachine)) func oneHundredThousandEuropeanPlacesUnderBudget() {
         let places = Self.table.map(\.place) + [
             "Sheffield, Yorkshire, England", "Boston, Suffolk, Massachusetts Bay Colony, British Colonial America",
             "Warsaw, Poland", "ENGLAND OR Wales or France", "", "Somewhere",

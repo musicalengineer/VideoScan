@@ -77,7 +77,7 @@ struct PythonClipWorkerTests {
         #expect(await worker.workerPID == nil)
     }
 
-    @Test func aClipPastItsCapIsKilledAndTheNextClipRespawnsAndReloads() async throws {
+    @Test(.tags(.quietMachine)) func aClipPastItsCapIsKilledAndTheNextClipRespawnsAndReloads() async throws {
         let log = ClipWorkerFixture.temporaryFile("fake-clip-log")
         defer { try? FileManager.default.removeItem(at: log) }
         let worker = PythonClipWorker(configuration: ClipWorkerFixture.configuration(clipTimeout: .seconds(2), log: log),

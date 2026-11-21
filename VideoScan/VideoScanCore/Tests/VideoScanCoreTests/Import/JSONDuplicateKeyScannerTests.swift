@@ -91,7 +91,7 @@ struct JSONDuplicateKeyScannerScaleTests {
     /// 100k-row importer scale test covers the real file.
     static let budget: Duration = .seconds(10)
 
-    @Test func hundredThousandRecordsScanWithinBudget() {
+    @Test(.tags(.quietMachine)) func hundredThousandRecordsScanWithinBudget() {
         var text = "{\"version\":6,\"records\":["
         text.reserveCapacity(10_000_000)
         for i in 0..<100_000 {

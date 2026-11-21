@@ -9,7 +9,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("JobSupervisor — ISOLATION: kill, corrupt checkpoint, disk full")
+@Suite("JobSupervisor — ISOLATION: kill, corrupt checkpoint, disk full", .tags(.quietMachine))
 struct JobSupervisorIsolationTests {
 
     @Test("killed mid-unit: a second supervisor on the same folders resumes and no completed unit runs twice")

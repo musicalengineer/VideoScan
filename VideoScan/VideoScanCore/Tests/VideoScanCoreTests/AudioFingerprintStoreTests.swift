@@ -50,6 +50,7 @@ struct AudioFingerprintStoreLogicTests {
         let partialKey = AudioFingerprintStore.Key(contentDigest: "sha256:partial", sizeBytes: 9)
         try store.put([.init(key: partialKey, fingerprint: fingerprint(seed: 8, seconds: 14_400, complete: false), sourcePath: "/p")])
         #expect(try store.summary(for: partialKey)?.complete == false, "complete is stored beside the blob, from the engine")
+        // quiet-machine: not a budget — two stored timestamps compared as data (a round trip)
         #expect(abs(s.computedAt.timeIntervalSince(when)) < 0.001)
         #expect(try store.summary(for: .init(contentDigest: "sha256:abc", sizeBytes: 1)) == nil, "size is part of the key")
         #expect(try store.fingerprint(for: .init(contentDigest: "v1:abc", sizeBytes: 1_234)) == nil, "digest kind is part of the key")
@@ -278,7 +279,7 @@ struct AudioFingerprintStoreScaleTests {
 
     /// 2,000 rows in 80 batches of 25 (the job's checkpoint size), then
     /// 2,000 summary lookups. Budget (Debug, M4 Max, ×3 headroom): 3 s.
-    @Test func twoThousandRows() throws {
+    @Test(.tags(.quietMachine)) func twoThousandRows() throws {
         let dir = try scratch("scale"); defer { try? FileManager.default.removeItem(at: dir) }
         let store = try AudioFingerprintStore(directory: dir)
         let clock = ContinuousClock()

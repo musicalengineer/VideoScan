@@ -31,7 +31,7 @@ import Foundation
 import XCTest
 @testable import VideoScanCore
 
-final class TreeLifecycleChainTests: XCTestCase {
+final class TreeLifecycleChainTests: QuietMachineXCTestCase {
 
     private var root: URL!
     private var storeRoot: URL!

@@ -1173,11 +1173,16 @@ fi
 }
 
 # ───────────────────────────────────────────────────────────────────
-# Test 14 (2026-10-18): the VideoScanCore package lane. A fake `swift` on
-# PATH prints a fixture log and exits with a chosen rc, so the REAL
-# run_core_package_tests (watchdog, parse_test_counts, classification, row
-# builder) runs end to end without compiling anything. Pins: the Release
-# flags reach swift test; counts use the app lane's rules; a failure, a
+# Test 14 (2026-10-18): the VideoScanCore package lane. A fake lane script
+# (VIDEOSCAN_NIGHTLY_CORE_LANE; since 2026-11-20 the lane runs
+# scripts/core_lane.py, two phases, not `swift test --no-parallel` — the real
+# script is tested by tests/test_core_lane.py) prints a fixture log and exits
+# with a chosen rc, so the REAL run_core_package_tests (watchdog,
+# parse_test_counts, classification, row builder) runs end to end without
+# compiling anything. Pins: the Release configuration, package and scratch
+# paths reach core_lane.py and nothing serializes the whole lane again; the
+# two phases' counts are summed; a phase that did not run its plan is red by
+# name; counts use the app lane's rules; a failure, a
 # silent crash (rc only) and a build error (zero tests) each publish red; the
 # Core verdict turns a green app row red and never rewrites a red one; only
 # core_* keys merge into the row; the lane runs BEFORE the app build.
@@ -1190,12 +1195,20 @@ need_row_fields
 need_wiring_lines
 CORE_BIN="$SANDBOX/core-bin"
 mkdir -p "$CORE_BIN"
-printf '%s\n' \
-    '#!/bin/sh' \
-    'printf "%s\n" "$*" > "$CORE_FAKE_ARGS"' \
-    'cat "$CORE_FAKE_LOG"' \
-    '[ -n "${CORE_FAKE_HANG:-}" ] && exec sleep "$CORE_FAKE_HANG"' \
-    'exit "$CORE_FAKE_RC"' > "$CORE_BIN/swift"
+cat > "$CORE_BIN/core_lane.py" <<'CFL'
+import os, sys, time
+with open(os.environ["CORE_FAKE_ARGS"], "w") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+with open(os.environ["CORE_FAKE_LOG"]) as f:
+    sys.stdout.write(f.read())
+sys.stdout.flush()
+if os.environ.get("CORE_FAKE_HANG"):
+    time.sleep(float(os.environ["CORE_FAKE_HANG"]))
+sys.exit(int(os.environ["CORE_FAKE_RC"]))
+CFL
+# A `swift` that fails loudly: the nightly itself must no longer call it for
+# the Core lane (core_lane.py owns the build and both phases).
+printf '%s\n' '#!/bin/sh' 'echo "nightly called swift $*" >> "$CORE_FAKE_ARGS.swift"' 'exit 97' > "$CORE_BIN/swift"
 chmod +x "$CORE_BIN/swift"
 ZW=$(printf '\342\200\213')   # U+200B, the indent Swift Testing really prints
 cat > "$SANDBOX/core-green.log" <<CGL
@@ -1207,6 +1220,35 @@ ${ZW}✔ Test importRoundTrip() passed after 0.010 seconds.
 ━ Test loadQuarantine() passed after 0.030 seconds with 1 known issue.
 ✔ Test run with 3 tests in 1 suite passed after 0.100 seconds.
 CGL
+# The real shape since 2026-11-20: two phases in one log, each with its own
+# run summary and core_lane.py's own lines (which are not tests).
+cat > "$SANDBOX/core-two-phase.log" <<CTL
+core-lane: phase A (parallel, timing not strict): 3 tests planned (1 XCTest + 2 Swift Testing)
+Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
+${ZW}✔ Test importRoundTrip() passed after 0.010 seconds.
+➜ Test needsFfmpeg() skipped.
+✔ Test run with 2 tests in 1 suite passed after 0.100 seconds.
+core-lane: phase B (serial, quiet machine, VIDEOSCAN_TIMING_STRICT=1): 3 tests planned (1 XCTest + 2 Swift Testing)
+Test Case '-[VideoScanCoreTests.GedcomPerfBaselineTests testMemory100k]' passed (2.010 seconds).
+✔ Test hundredThousandAdvances() passed after 20.000 seconds.
+━ Test oneHundredThousandRowsLoadWithinBudget() passed after 3.030 seconds with 1 known issue.
+━ Test run with 2 tests in 1 suite passed after 23.100 seconds with 1 known issue.
+core-lane: phase A (parallel, timing not strict): 2 passed / 0 failed / 1 skipped — 3 of 3 planned, 0 with known issues, 1 s, largest test process so far 1800 MB
+core-lane: phase B (serial, quiet machine, strict): 3 passed / 0 failed / 0 skipped — 3 of 3 planned, 1 with known issues, 25 s
+core-lane: total 5 passed / 0 failed / 1 skipped — 6 of 6 planned, 26 s → GREEN
+CTL
+cat > "$SANDBOX/core-phase-short.log" <<CPL
+core-lane: phase A (parallel, timing not strict): 3 tests planned (1 XCTest + 2 Swift Testing)
+Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
+✔ Test importRoundTrip() passed after 0.010 seconds.
+✔ Test commitHighWater() passed after 0.020 seconds.
+core-lane: phase B (serial, quiet machine, VIDEOSCAN_TIMING_STRICT=1): 3 tests planned (1 XCTest + 2 Swift Testing)
+core-lane: phase A (parallel, timing not strict): 3 passed / 0 failed / 0 skipped — 3 of 3 planned, 0 with known issues, 1 s, largest test process so far 1800 MB
+core-lane: phase B (serial, quiet machine, strict): 0 passed / 0 failed / 0 skipped — 0 of 3 planned, 0 with known issues, 0 s
+core-lane: total 3 passed / 0 failed / 0 skipped — 3 of 6 planned, 1 s → RED
+core-lane: RED — phase B (serial, quiet machine): XCTest ran ZERO of its 1 tests
+core-lane: RED — phase B (serial, quiet machine): Swift Testing ran ZERO of its 2 tests
+CPL
 cat > "$SANDBOX/core-red.log" <<CRL
 Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
 ✔ Test importRoundTrip() passed after 0.010 seconds.
@@ -1221,8 +1263,9 @@ run_core_case() {   # log rc app_status app_reason → status|reason|core_*… l
     (
         # shellcheck disable=SC1090
         source "$CORE_LIB"
-        log() { :; }
+        log() { [ -n "${CORE_CASE_LOG:-}" ] && printf '%s\n' "$*" >> "$CORE_CASE_LOG"; :; }
         export PATH="$CORE_BIN:$PATH"
+        export VIDEOSCAN_NIGHTLY_CORE_LANE="${VIDEOSCAN_NIGHTLY_CORE_LANE_UNDER_TEST:-$CORE_BIN/core_lane.py}"
         export CORE_FAKE_LOG="$1" CORE_FAKE_RC="$2" CORE_FAKE_ARGS="$SANDBOX/core-args.txt"
         NIGHTLY_CONFIGURATION="Release"
         NIGHTLY_CORE_LOG="$SANDBOX/core-run.log"
@@ -1249,9 +1292,47 @@ else
     [ "$got" = "$want" ] && pass "green Core lane: 2 XCTest + 3 Swift Testing (1 known issue) counted, row stays green" \
         || fail "green Core lane: got '$got' want '$want'"
     args=$(cat "$SANDBOX/core-args.txt" 2>/dev/null)
-    [ "$args" = "test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build --no-parallel" ] \
-        && pass "swift test gets the package path, -c release, the private scratch path and --no-parallel" \
-        || fail "swift test arguments changed: '$args'"
+    [ "$args" = "run --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build" ] \
+        && pass "core_lane.py run gets the package path, -c release and the private scratch path" \
+        || fail "core_lane.py arguments changed: '$args'"
+    [ ! -e "$SANDBOX/core-args.txt.swift" ] \
+        && pass "the nightly no longer runs swift for the Core lane itself (core_lane.py owns the build and both phases)" \
+        || fail "the nightly called swift directly: $(cat "$SANDBOX/core-args.txt.swift")"
+    # Without the override the lane is the script beside the nightly, found
+    # from the package path (<repo>/VideoScan/VideoScanCore → <repo>/scripts).
+    grep -q 'core_lane="${VIDEOSCAN_NIGHTLY_CORE_LANE:-$package_path/../../scripts/core_lane.py}"' "$SCRIPT_DIR/nightly_local_tests.sh" \
+        && [ -f "$SCRIPT_DIR/core_lane.py" ] \
+        && pass "the default lane is scripts/core_lane.py of the checkout under test" \
+        || fail "the nightly's default Core lane script moved or is missing"
+    # A checkout from before core_lane.py (the testbed can test any commit) has
+    # no quiet-machine marks to split on: it gets the old single serial pass,
+    # and only it.
+    got=$(VIDEOSCAN_NIGHTLY_CORE_LANE_UNDER_TEST="$SANDBOX/no-such-core_lane.py" run_core_case "$SANDBOX/core-green.log" 97 ok "")
+    args=$(cat "$SANDBOX/core-args.txt.swift" 2>/dev/null)
+    rm -f "$SANDBOX/core-args.txt.swift"
+    [ "$args" = "nightly called swift test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build --no-parallel" ] \
+        && pass "a checkout without scripts/core_lane.py still gets swift test --no-parallel (one serial pass)" \
+        || fail "fallback for a checkout without core_lane.py: swift got '$args' (row '$got')"
+    # Two phases in one log: the row is their SUM, and the per-phase lines
+    # reach the nightly log.
+    got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; run_core_case "$SANDBOX/core-two-phase.log" 0 ok "")
+    want='ok||7|7|ok||5|0|1|6|1|0|release|[]'
+    [ "$got" = "$want" ] && pass "two phases: 2+1 skipped (parallel) and 3 (serial, 1 known issue) sum to 5p/0f/1s of 6" \
+        || fail "two-phase Core lane: got '$got' want '$want'"
+    grep -q 'core-lane: phase B (serial, quiet machine, strict): 3 passed / 0 failed / 0 skipped — 3 of 3 planned' "$SANDBOX/core-case.log" \
+        && grep -q 'core-lane: phase A (parallel, timing not strict): 2 passed' "$SANDBOX/core-case.log" \
+        && pass "each phase's counts and seconds are logged on their own line" \
+        || fail "the per-phase lines did not reach the nightly log: $(cat "$SANDBOX/core-case.log")"
+    # A phase that ran zero of its plan: core_lane.py exits 2 with no failed
+    # test. The row is red BY NAME, not a bare rc.
+    got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; run_core_case "$SANDBOX/core-phase-short.log" 2 ok "")
+    case "$got" in
+        "failed|core-phase-count-mismatch|7|7|failed|phase-count-mismatch|3|0|0|3|"*)
+            grep -q 'core-lane: RED — phase B (serial, quiet machine): Swift Testing ran ZERO of its 2 tests' "$SANDBOX/core-case.log" \
+                && pass "a phase that ran zero of its plan is red (phase-count-mismatch) and the log names the phase" \
+                || fail "phase-count red did not log which phase: $(cat "$SANDBOX/core-case.log")" ;;
+        *) fail "a serial phase that ran nothing: got '$got'" ;;
+    esac
     # 2026-11-20: the lane's environment sampler naps in a child `sleep 300`.
     # Killing the sampler left that sleep alive, holding the caller's output,
     # so whoever reads the nightly's output waited up to five minutes after

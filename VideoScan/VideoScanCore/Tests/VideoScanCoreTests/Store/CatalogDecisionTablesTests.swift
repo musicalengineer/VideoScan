@@ -281,7 +281,7 @@ struct CatalogDecisionTablesTests {
     /// minutes. Load-aware (GH #208 busy-machine rule, 2026-10-21): measured
     /// 5.2 s on its own, 33 s at load 40–190 on 16 cores — a busy miss
     /// within 3× is a known issue, a real miss still fails.
-    @Test(.timeLimit(.minutes(3)))
+    @Test(.timeLimit(.minutes(3)), .tags(.quietMachine))
     func oneHundredThousandPairsRecordAndReadInsideBudgets() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }

@@ -408,7 +408,7 @@ struct FamilyMapUnitsTests {
 
     /// 200 units on a grid, each a 300-vertex near-circle; 1,000 lookups
     /// that mostly land inside a unit. Budget 20 ms (Debug, load-aware).
-    @Test func thousandLookupsOverTwoHundredUnitsUnderBudget() {
+    @Test(.tags(.quietMachine)) func thousandLookupsOverTwoHundredUnitsUnderBudget() {
         var units: [FamilyMapUnits.Unit] = []
         for i in 0..<200 {
             let row = Double(i / 20), col = Double(i % 20)

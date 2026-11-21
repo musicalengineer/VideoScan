@@ -428,7 +428,7 @@ struct PersonFactOverlayApplyTests {
     /// Budget 3 s in a Debug `swift test` build for the date path — the one
     /// every ordinary refresh takes. Measured locally well under that; the
     /// budget is a regression alarm, not a target.
-    @Test func overlayOverFortyThousandPeople() {
+    @Test(.tags(.quietMachine)) func overlayOverFortyThousandPeople() {
         var lines = ["0 HEAD"]
         let count = 40_000
         lines.reserveCapacity(count * 5)

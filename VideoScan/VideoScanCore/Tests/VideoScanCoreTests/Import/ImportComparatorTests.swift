@@ -496,7 +496,7 @@ struct ImportComparatorScaleTests {
     /// set-difference over 100k rows; re-baseline on the M4 and tighten.
     static let budget: Duration = .seconds(5)
 
-    @Test func hundredThousandOccurrencesCompareWithinBudget() {
+    @Test(.tags(.quietMachine)) func hundredThousandOccurrencesCompareWithinBudget() {
         let n = 100_000
         let digests = (0..<n).map { String(format: "%064lx", $0) }
         let rows = (0..<n).map { i in

@@ -84,7 +84,7 @@ struct CatalogOpenCornerTests {
     }
 
     @Test("case 9: another connection holds the write lock — open is refused or read-only within the busy timeout, with words; nothing written; it opens once the lock is gone",
-          .timeLimit(.minutes(1)))
+          .timeLimit(.minutes(1)), .tags(.quietMachine))
     func writeLockHeldElsewhere() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 2)
         defer { fixture.remove() }

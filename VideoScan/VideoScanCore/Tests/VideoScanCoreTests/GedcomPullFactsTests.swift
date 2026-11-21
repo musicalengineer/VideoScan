@@ -299,7 +299,7 @@ struct GedcomPullFactsTests {
 
     // MARK: 2. Scale
 
-    @Test("100 MB pull: the header read touches only the head (budget 100 ms)")
+    @Test("100 MB pull: the header read touches only the head (budget 100 ms)", .tags(.quietMachine))
     func scaleHugePull() throws {
         let dir = try Dir()
         let url = dir.root.appendingPathComponent("huge.ged")

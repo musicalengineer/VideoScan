@@ -96,7 +96,7 @@ struct VideoRecordIdentityGenerationTests {
         #expect(delta >= UInt64(writers * perWriter), "lost increments: delta \(delta)")
     }
 
-    @Test func aBurstOfWritesCostsMicrosecondsEach() {
+    @Test(.tags(.quietMachine)) func aBurstOfWritesCostsMicrosecondsEach() {
         // Budget sensor: 100k identity writes (a full rescan's worth of
         // record construction) must stay well under a second.
         let record = VideoRecord()

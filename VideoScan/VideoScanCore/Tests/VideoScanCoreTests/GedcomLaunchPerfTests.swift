@@ -5,7 +5,7 @@ import XCTest
 /// Reads the REAL promoted artifact read-only when present, and the
 /// synthetic 39,250 / 100k pedigrees always. Prints cold and warm (p95 of
 /// 10) decode times; Release budgets apply only in Release.
-final class GedcomLaunchPerfTests: XCTestCase {
+final class GedcomLaunchPerfTests: QuietMachineXCTestCase {
     static let compiledRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/VideoScan/family-tree/compiled")
 

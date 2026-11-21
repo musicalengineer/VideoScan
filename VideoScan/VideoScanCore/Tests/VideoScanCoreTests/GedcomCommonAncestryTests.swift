@@ -6,7 +6,7 @@
 import XCTest
 @testable import VideoScanCore
 
-final class GedcomCommonAncestryTests: XCTestCase {
+final class GedcomCommonAncestryTests: QuietMachineXCTestCase {
 
     /// One INDI record. `birth: nil` leaves BIRT out.
     private static func indi(_ id: String, _ name: String, _ sex: String, birth: String? = "1700",

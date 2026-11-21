@@ -345,7 +345,7 @@ struct FileDossierTests {
 
     // MARK: SCALE
 
-    @Test func scaleOpeningOneDossierIn100kFilesIsInsideTheBudget() async throws {
+    @Test(.tags(.quietMachine)) func scaleOpeningOneDossierIn100kFilesIsInsideTheBudget() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         try DossierFixture.seedScale(fixture, count: 100_000)

@@ -12,6 +12,8 @@ import VideoScanCore
 
 func assertTimingJudgements(_ judgements: [TimingBudget.Judgement],
                             file: StaticString = #filePath, line: UInt = #line) throws {
+    // XCTest has no tag to read: the phase is the run-time check (QuietMachine.swift).
+    if let problem = QuietMachinePhase.problem() { XCTFail(problem, file: file, line: line) }
     var anyFail = false
     for j in judgements where j.verdict == .fail {
         anyFail = true

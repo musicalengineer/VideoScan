@@ -216,7 +216,7 @@ struct CaptionTextQualityTests {
 
     // MARK: - Scale: 100k captions under a time budget
 
-    @Test("scale: 100k mixed captions classified within 5 s, counts exact")
+    @Test("scale: 100k mixed captions classified within 5 s, counts exact", .tags(.quietMachine))
     func scale() {
         var caps: [SceneCaption] = []
         caps.reserveCapacity(100_000)

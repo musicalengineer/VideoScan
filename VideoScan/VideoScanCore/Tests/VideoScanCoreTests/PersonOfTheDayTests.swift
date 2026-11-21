@@ -314,7 +314,7 @@ struct PersonOfTheDayScaleTests {
     /// parses each), 0.2 s scoring + sorting + picking. Budget ≈ 3×.
     static let budget: Duration = .seconds(6)
 
-    @Test func hundredThousandCandidatesWithinBudget() throws {
+    @Test(.tags(.quietMachine)) func hundredThousandCandidatesWithinBudget() throws {
         let months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
         let lines: [TreeWalk.Line] = [.first, .second, .both, .none]
         let clock = ContinuousClock()

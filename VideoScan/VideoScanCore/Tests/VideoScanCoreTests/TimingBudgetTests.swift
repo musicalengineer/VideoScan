@@ -179,7 +179,7 @@ struct TimingBudgetTests {
         #expect(Self.judge(150, before: Self.busy, after: Self.busy, env: [TimingBudget.strictEnvironmentKey: "1"]).verdict == .fail)
     }
 
-    @Test("RED 2026-10-31 (Codex P2): the reference-only wrapper still records a HANG (> 3×) off the reference run")
+    @Test("RED 2026-10-31 (Codex P2): the reference-only wrapper still records a HANG (> 3×) off the reference run", .tags(.quietMachine))
     func referenceOnlyWrapperStillFailsAHang() {
         // Off the reference run the wrapper logs instead of asserting (GH #385) — but a
         // measurement beyond 3× the budget is a hang or a regression no host explains, and
@@ -263,7 +263,7 @@ struct TimingBudgetTests {
     //   - knownIssue recorded as a hard issue → this test fails;
     //   - fail recorded as known (or not at all) → the outer withKnownIssue
     //     sees no issue and fails the test.
-    @Test("mapping: pass records nothing, known issue stays green, fail records an issue")
+    @Test("mapping: pass records nothing, known issue stays green, fail records an issue", .tags(.quietMachine))
     func swiftTestingMapping() {
         recordTimingJudgement(Self.judge(99))
         recordTimingJudgement(Self.judge(150, before: Self.busy))
@@ -286,7 +286,7 @@ struct TimingBudgetTests {
     // are pinned — a clock that returned wall time would fail the sleep
     // case; one that returned zero (or another thread's time) would fail
     // the spin case.
-    @Test("thread CPU time: a sleep costs ~nothing, a spin costs about its length")
+    @Test("thread CPU time: a sleep costs ~nothing, a spin costs about its length", .tags(.quietMachine))
     func threadCPUTimeCountsWorkNotWaiting() {
         let wall = ContinuousClock()
         var slept = Duration.zero
@@ -307,7 +307,7 @@ struct TimingBudgetTests {
         #expect(spinCPU <= .milliseconds(260), "thread CPU \(spinCPU) exceeds the 200 ms spin — not per-thread?")
     }
 
-    @Test("thread CPU time ignores other threads' work")
+    @Test("thread CPU time ignores other threads' work", .tags(.quietMachine))
     func threadCPUTimeIsPerThread() {
         let done = DispatchSemaphore(value: 0)
         let cpu = TimingBudget.measureThreadCPUTime {
@@ -404,7 +404,7 @@ struct TimingBudgetRatioTests {
     /// The detector on real work, on this host whatever its speed: a linear
     /// loop grows ≈ 4× for a 4× input and passes ×8; a quadratic one grows
     /// ≈ 16× and fails it.
-    @Test func aQuadraticLoopFailsTheGrowthLimitALinearOnePasses() {
+    @Test(.tags(.quietMachine)) func aQuadraticLoopFailsTheGrowthLimitALinearOnePasses() {
         // A dependent LCG chain per step: no optimizer can fold it into a
         // closed form, so Release measures the loop as written.
         var sink: UInt64 = 1

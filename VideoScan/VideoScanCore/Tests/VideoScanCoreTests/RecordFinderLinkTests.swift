@@ -302,7 +302,7 @@ struct RecordFinderScaleTests {
     /// 100k synthetic people through the whole registry. The menu builds
     /// links for ONE person when it opens; this pins that the per-person
     /// cost is small enough that even a whole-tree pass would not stall.
-    @Test func hundredThousandPeopleUnderBudget() {
+    @Test(.tags(.quietMachine)) func hundredThousandPeopleUnderBudget() {
         let places = ["Skibbereen, County Cork, Ireland", "Bolton, Lancashire, England",
                       "Paisley, Renfrewshire, Scotland", "Boston, Massachusetts", "Derry, Ireland", ""]
         let start = Date()

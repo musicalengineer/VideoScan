@@ -288,7 +288,7 @@ struct MachineEraResolverTests {
         await repository.close()
     }
 
-    @Test(.tags(.scale), .timeLimit(.minutes(5)))
+    @Test(.tags(.scale, .quietMachine), .timeLimit(.minutes(5)))
     func oneHundredThousandErasInOneStreamedQueryWithinBudget() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }

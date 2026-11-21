@@ -161,6 +161,7 @@ struct ScriptedExecutorFidelityTests {
         let real = await Self.sh("for l in out_time_us=1 out_time_us=2 progress=end; do echo $l; sleep 0.05; done")
         let started = ContinuousClock.now
         let mock = await Self.mocked(.streamLines(["out_time_us=1", "out_time_us=2", "progress=end"], interval: .milliseconds(50)))
+        // quiet-machine: not a budget — a LOWER bound on a scripted delay; load can only lengthen it
         #expect(ContinuousClock.now - started >= .milliseconds(100), "two 50 ms gaps between three lines")
         // The real child's chunking may differ (one read per line or several
         // lines per read), so the data callback is compared in bytes.
@@ -184,6 +185,7 @@ struct ScriptedExecutorFidelityTests {
     func afterDelaysThenBehaves() async {
         let started = ContinuousClock.now
         let late = await Self.mocked(.after(.milliseconds(150), then: .output(stdout: "done\n")))
+        // quiet-machine: not a budget — a LOWER bound on a scripted delay; load can only lengthen it
         #expect(ContinuousClock.now - started >= .milliseconds(150))
         #expect(late.stdout == "done\n" && late.exitCode == 0 && late.launched)
         let task = Task { await Self.mocked(.after(.seconds(60), then: .output())) }

@@ -113,7 +113,7 @@ struct CatalogDataSchemaScaleTests {
             .map { $0[3] as String }.joined(separator: " | ")
     }
 
-    @Test func hundredThousandFilesInOneImportTransaction() async throws {
+    @Test(.tags(.quietMachine)) func hundredThousandFilesInOneImportTransaction() async throws {
         let fixture = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
         defer { fixture.remove() }
         let repository = GRDBCatalogRepository(host: "scale-host", durability: .volatileForTests)
@@ -170,7 +170,7 @@ struct CatalogDataSchemaScaleTests {
     /// SQLite's own count of work done (`sqlite3_stmt_status`, the trigger's
     /// steps included), so the growth ratio is deterministic; wall time is
     /// budgeted load-aware beside it.
-    @Test func identicalDerivedValuesFlagConflictsInLinearWork() async throws {
+    @Test(.tags(.quietMachine)) func identicalDerivedValuesFlagConflictsInLinearWork() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let queue = try DatabaseQueue(path: fixture.url.path)

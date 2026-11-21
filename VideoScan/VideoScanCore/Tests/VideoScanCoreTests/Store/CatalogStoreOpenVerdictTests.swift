@@ -254,7 +254,7 @@ struct CatalogStoreOpenVerdictTests {
     /// A healthy current catalog in rollback-journal mode, held under
     /// `BEGIN EXCLUSIVE` by another connection for a second. The open must
     /// wait (the store's 5 s busy timeout) and open read-write.
-    @Test func aBrieflyLockedCatalogIsWaitedFor() async throws {
+    @Test(.tags(.quietMachine)) func aBrieflyLockedCatalogIsWaitedFor() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 1)
         defer { fixture.remove() }
         let setup = try DatabaseQueue(path: fixture.url.path)

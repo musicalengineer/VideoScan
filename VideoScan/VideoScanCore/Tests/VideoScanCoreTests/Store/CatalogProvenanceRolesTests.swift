@@ -328,7 +328,7 @@ struct CatalogProvenanceRolesTests {
     /// row. Budgets (Debug, M4 Max): write 30 s; the whole current-role
     /// reading 5 s; 1,000 single-digest lookups 2 s — a scan per lookup
     /// (no `(digest, role_id)` index) would be minutes. Load-aware (GH #208).
-    @Test(.timeLimit(.minutes(3)))
+    @Test(.timeLimit(.minutes(3)), .tags(.quietMachine))
     func oneHundredThousandContentsCurrentRoleInsideBudgets() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }

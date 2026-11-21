@@ -287,7 +287,7 @@ struct ContentFixityVolumeIdentityScaleTests {
 
     /// 100k stored-vs-current comparisons: the
     /// comparison is pure field compares; budget is generous for Debug.
-    @Test func hundredThousandComparisonsUnderBudget() {
+    @Test(.tags(.quietMachine)) func hundredThousandComparisonsUnderBudget() {
         let n = 100_000
         let stored = (0..<n).map { i in fixity(stamp(ino: UInt64(i), uuid: i % 2 == 0 ? uuidA : nil)) }
         let current = (0..<n).map { i in stamp(dev: 9, ino: UInt64(i)) }
@@ -302,7 +302,7 @@ struct ContentFixityVolumeIdentityScaleTests {
 
     /// Real captures (open + fstat + fgetattrlist + stat + close) — the
     /// per-file cost every consumer pays. 20k on one file < 3 s.
-    @Test func captureCostUnderBudget() throws {
+    @Test(.tags(.quietMachine)) func captureCostUnderBudget() throws {
         let dir = try scratch("cost"); defer { try? FileManager.default.removeItem(at: dir) }
         let a = dir.appendingPathComponent("a.mov"); try Data(count: 64).write(to: a)
         var withUUID = 0

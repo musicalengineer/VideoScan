@@ -148,7 +148,7 @@ struct CatalogCommitArchiveProvenanceTests {
         #expect(body.contains("replacing"), "the INSERT must consult the rows the record replaces")
     }
 
-    @Test("scale: 100 import-era archive copies replaced in ONE commit — all land as 'import', all 100 old rows purged, within budget")
+    @Test("scale: 100 import-era archive copies replaced in ONE commit — all land as 'import', all 100 old rows purged, within budget", .tags(.quietMachine))
     func scaleHundredImportEraReplacements() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let count = 100

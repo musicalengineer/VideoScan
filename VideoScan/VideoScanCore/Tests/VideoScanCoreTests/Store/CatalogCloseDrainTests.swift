@@ -157,7 +157,7 @@ struct CatalogCloseDrainTests {
         #expect(answered + refused == 40 * 16)
     }
 
-    @Test("SCALE: 2,000 reads in flight at close all return, and close finishes within 10 s")
+    @Test("SCALE: 2,000 reads in flight at close all return, and close finishes within 10 s", .tags(.quietMachine))
     func closeDrainsTwoThousandReads() async throws {
         let (fixture, repository) = try await Self.openStore()
         defer { fixture.remove() }
