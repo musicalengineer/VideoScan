@@ -146,7 +146,7 @@ struct LogCaptureSeamTests {
                     done.resume()
                 }
             }
-            await Task.detached { await scope.run { logLine("detached carried", default: stray) } }.value
+            await Task.detached { scope.run { logLine("detached carried", default: stray) } }.value
         }
         #expect(mine.lines == ["gcd carried", "detached carried"])
         #expect(stray.lines == ["gcd bare"])
@@ -169,7 +169,7 @@ struct LogCaptureSeamTests {
                 },
                 stderrLine: { line in logLine("stderr: \(line)", default: stray) })
             #expect(result.exitCode == 0)
-            await ProcessRunner.runProcess(executable: "/bin/echo", arguments: ["raw"],
+            _ = await ProcessRunner.runProcess(executable: "/bin/echo", arguments: ["raw"],
                                            stdoutData: { data in logLine("data: \(data.count) bytes", default: stray) })
             for _ in 0..<400 where hops.all.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
         }
