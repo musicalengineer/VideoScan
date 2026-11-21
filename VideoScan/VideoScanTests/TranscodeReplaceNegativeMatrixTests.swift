@@ -19,9 +19,17 @@
 //
 // Rows: encode hang + Stop · encode hang + the stall watchdog · encode crash ·
 // nonzero exit with a plausible file · launch failure · exit 0 but no output
-// · and the output's length probe crashing / failing to launch / returning
-// garbage — the last three are RED (see `anUnmeasurableOutputIsNeverTrustedWithAReplace`).
+// · truncated output · and — GH #500, Rick 2026-11-20: "transcode to a temp,
+// verify the temp, only when verified could it replace anything" — the
+// output's length probe crashing / failing to launch / returning garbage /
+// saying "Invalid data" / hanging to its deadline, and the SOURCE's length
+// being unreadable. Each of those refuses the Replace, removes the new file,
+// and says exactly why in the row and the OUTCOME line.
 // A positive control proves the bench can publish and trash at all.
+//
+// Two rows stay RED under `withKnownIssue`, reported for Rick, not fixed
+// here: plain Transcode (no Replace) adopting an unmeasurable output, and
+// Preservation + Replace running its frame-MD5 proof AFTER the Replace.
 //
 // Parallel by design (each test binds its own mock and Trash seam).
 
@@ -70,7 +78,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    func bench(_ label: String) throws -> Bench {
+    func bench(_ label: String, preset: TranscodePreset = .archival) throws -> Bench {
         let sb = try MasterArchiveTestSupport.makeSandbox("negmx_\(label)")
         let model = MasterArchiveTestSupport.makeModel(sb)
         let srcURL = sb.sources.appendingPathComponent(Self.sourceName)
@@ -79,7 +87,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         source.durationSeconds = 12
         let outDir = sb.root.appendingPathComponent("Edits", isDirectory: true)
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
-        let target = TranscodeDestination.outputURL(in: outDir, record: source, preset: .archival)
+        let target = TranscodeDestination.outputURL(in: outDir, record: source, preset: preset)
         _ = try MasterArchiveTestSupport.writeBlob(at: target, bytes: 4096, seed: 42)       // the prior derivative
         model.records = [source, MasterArchiveTestSupport.makeRecord(path: target.path)]
         let fakeTrash = sb.root.appendingPathComponent("FakeTrash", isDirectory: true)
@@ -101,17 +109,18 @@ struct TranscodeReplaceNegativeMatrixTests {
     /// Strict script: the encode, the two length probes, the catalog's full
     /// probe of a published output — anything else is a failure.
     func mock(_ b: Bench, encode: ScriptedExecutor.Behaviour,
+              sourceProbe: ScriptedExecutor.Behaviour = Self.twelveSeconds,
               outputProbe: ScriptedExecutor.Behaviour = Self.twelveSeconds) throws -> ScriptedExecutor {
         try ScriptedExecutor(claiming: [b.sb.root.path])
             .on("ffmpeg", containing: [Self.sourceName], encode)
-            .on("ffprobe", containing: ["format=duration", Self.sourceName], Self.twelveSeconds)
+            .on("ffprobe", containing: ["format=duration", Self.sourceName], sourceProbe)
             .on("ffprobe", containing: ["format=duration", ".vs-partial."], outputProbe)
             .on("ffprobe", containing: ["-show_streams"], .output(stdout: Self.h264ProbeJSON()))
     }
 
-    func run(_ b: Bench, _ mock: ScriptedExecutor,
+    func run(_ b: Bench, _ mock: ScriptedExecutor, preset: TranscodePreset = .archival, replace: Bool = true,
              whileRunning: (@MainActor (TranscodeJob) async -> Void)? = nil) async -> TranscodeJob {
-        let job = TranscodeJob(record: b.source, preset: .archival, outputURL: b.target, model: b.model, replaceExisting: true)
+        let job = TranscodeJob(record: b.source, preset: preset, outputURL: b.target, model: b.model, replaceExisting: replace)
         let trashed = b.trashed, fakeTrash = b.fakeTrash
         await mock.scoped {
             await DerivativeOutputPublish.$trashItem.withValue({ url in
@@ -245,40 +254,169 @@ struct TranscodeReplaceNegativeMatrixTests {
         expectRefused(b, job, catalogBefore: before, reason: ["stopped early", "0:02", "0:12"])
     }
 
-    // MARK: - The output cannot be measured (RED)
+    // MARK: - The new file cannot be verified (GH #500)
 
-    enum Unmeasurable: String, CaseIterable, Sendable { case crash, launchFailure, garbage, emptyOutput }
+    enum Unmeasurable: String, CaseIterable, Sendable {
+        case crash, launchFailure, garbage, emptyOutput, hang
 
-    /// RED (2026-11-20, not fixed — data-risk path, reported for review):
-    /// FFmpegEncodeCheck.verdict returns nil ("publish it") whenever either
-    /// length cannot be read, by design ("a check that cannot measure must
-    /// not invent a verdict"). With REPLACE that nil also authorises the
-    /// Trash: an encode that exits 0 but leaves a file ffprobe cannot read
-    /// (crash, garbage, no ffprobe) is published as "Transcoded", the
-    /// prior file goes to the Trash and the unreadable output is adopted
-    /// into the catalog. Real ffprobe on a 20 KB file of zeros takes this
-    /// path too. Expected: an output nobody could measure is never grounds
-    /// to remove the prior file or to record a derivative (rules 1, 2:
-    /// refuse rather than guess). `withKnownIssue` keeps the lane green and
-    /// turns red the day the fix lands, so the marker is then removed.
-    @Test("RED: an output whose length probe crashes / cannot launch / returns garbage never trashes the prior file",
+        /// `{"format": {"dur` — written with escapes so this file's braces
+        /// balance (the gauntlet inventory counts them to find suites).
+        static let truncatedJSON = "\u{7B}\"format\": \u{7B}\"dur"
+
+        var probe: ScriptedExecutor.Behaviour {
+            switch self {
+            case .crash: .crash(signal: SIGSEGV, stderr: "")
+            case .launchFailure: .launchFailure
+            case .garbage: .garbage(stdout: Self.truncatedJSON)
+            // What real ffprobe 9.0.2 says for a 20 KB file of zeros.
+            case .emptyOutput: .output(stdout: "", stderr: "Invalid data found when processing input\n", exit: 1)
+            // A REAL hung child under the real runner's deadline machinery
+            // (SIGTERM at the deadline, `timedOut`), with the probe's 60 s
+            // deadline shortened to 0.5 s so the row takes half a second.
+            case .hang: .custom { request in
+                var short = request
+                short.deadlineSeconds = 0.5
+                return await ScriptedExecutor().on("*", .hang()).run(short)
+            }
+            }
+        }
+
+        /// The specific cause the row and the OUTCOME line must carry:
+        /// the tool, its exit code, its own first words.
+        var causeWords: [String] {
+            switch self {
+            case .crash: ["ffprobe stopped with exit code \(SIGSEGV)"]
+            case .launchFailure: ["ffprobe could not be started (exit code -1)", "doesn’t exist"]
+            case .garbage: ["ffprobe exited 0 but its answer was not a length", Self.truncatedJSON]
+            case .emptyOutput: ["ffprobe stopped with exit code 1", "Invalid data found when processing input"]
+            case .hang: ["ffprobe did not answer within 60 s and was stopped", "exit code \(SIGTERM)"]
+            }
+        }
+    }
+
+    /// What a Replace refused for want of verification must show the user
+    /// and the log (Rick 2026-11-20: "we must fail but fail and record the
+    /// error clearly and log it clearly. The user must be told"): the job
+    /// is FAILED, never "Transcoded"; the row's line opens with the plain
+    /// words and carries the specific cause; the Center's one OUTCOME line
+    /// (console, videoscan.log, catalog.log — `terminalSummaryLine`, the
+    /// pure function the Center writes from) names the verb, the source,
+    /// the cause, that the original was not touched and that the new file
+    /// was removed; and nothing on disk or in the catalog changed.
+    func expectUnverifiedReplaceRefused(_ b: Bench, _ job: TranscodeJob, _ m: ScriptedExecutor, catalogBefore: [String],
+                                        file whose: String, cause: [String],
+                                        sourceLocation: SourceLocation = #_sourceLocation) {
+        let plain = "Could not verify the new file — the original was not replaced."
+        expectRefused(b, job, catalogBefore: catalogBefore, reason: [plain, whose] + cause, sourceLocation: sourceLocation)
+        guard case .failed(let message) = job.state else { return }
+        #expect(message.hasPrefix(plain), "the row must open with the plain words: \(message)", sourceLocation: sourceLocation)
+        #expect(message.contains("\(b.target.lastPathComponent) was not moved or changed"), "\(message)", sourceLocation: sourceLocation)
+        #expect(message.contains("the unverified new file was removed"), "\(message)", sourceLocation: sourceLocation)
+        #expect(!message.contains("Transcoded"), sourceLocation: sourceLocation)
+        #expect(job.subtitle == message, "the MFO row shows the same sentence: \(job.subtitle)", sourceLocation: sourceLocation)
+        #expect(!job.wasRefused, "work was done and failed: the OUTCOME says FAILED", sourceLocation: sourceLocation)
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title,
+                                                                    state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome == "transcode FAILED: \(Self.sourceName) — \(message)", "OUTCOME: \(outcome ?? "nil")", sourceLocation: sourceLocation)
+        for words in cause + ["the original was not replaced", "was not moved or changed", "the unverified new file was removed"] {
+            #expect(outcome?.contains(words) == true, "OUTCOME lacks “\(words)”: \(outcome ?? "nil")", sourceLocation: sourceLocation)
+        }
+        #expect((outcome ?? "").count < 900, "the OUTCOME line is bounded", sourceLocation: sourceLocation)
+        // Nothing reached the Trash seam's folder; nothing probed the
+        // output for the catalog; the encode ran once and was not retried.
+        let inTrash = (try? FileManager.default.contentsOfDirectory(atPath: b.fakeTrash.path)) ?? ["unreadable"]
+        #expect(inTrash.isEmpty, "\(inTrash)", sourceLocation: sourceLocation)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty, "the unverified output was probed for the catalog", sourceLocation: sourceLocation)
+        #expect(m.calls(to: "ffmpeg").count == 1, "\(m.calls)", sourceLocation: sourceLocation)
+        // Only the source and the prior file are in their folders.
+        let beside = ((try? FileManager.default.contentsOfDirectory(atPath: b.outDir.path)) ?? []).sorted()
+        #expect(beside == [b.target.lastPathComponent], "left beside the original: \(beside)", sourceLocation: sourceLocation)
+    }
+
+    /// GH #500 (was RED on main under `withKnownIssue`): FFmpegEncodeCheck
+    /// answered nil ("publish it") whenever a length could not be read, and
+    /// with REPLACE that nil also sent the prior file to the Trash and
+    /// catalogued the unreadable output as "Transcoded".
+    @Test("an output whose length probe crashes / cannot launch / returns garbage / says Invalid data / hangs: Replace refused, new file removed, the cause said",
           arguments: Unmeasurable.allCases)
     func anUnmeasurableOutputIsNeverTrustedWithAReplace(_ kind: Unmeasurable) async throws {
         let b = try bench("unmeasurable_\(kind.rawValue)"); defer { b.sb.cleanup() }
         let before = b.catalogSnapshot()
-        let probe: ScriptedExecutor.Behaviour = switch kind {
-        case .crash: .crash(signal: SIGSEGV, stderr: "")
-        case .launchFailure: .launchFailure
-        case .garbage: .garbage(stdout: "{\"format\": {\"dur")
-        case .emptyOutput: .output(stdout: "", stderr: "Invalid data found when processing input\n", exit: 1)
-        }
-        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: probe)
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: kind.probe)
         let job = await run(b, m)
-        withKnownIssue("RED: FFmpegEncodeCheck treats an unmeasurable output as a pass, and Replace then trashes the prior file") {
-            if case .finished = job.state { Issue.record("an unmeasured output was published as \(job.state)") }
-            #expect(b.trashed.all.isEmpty, "the prior file was trashed on an output nobody measured: \(b.trashed.all)")
-            #expect(Self.sha(b.target) == b.priorSHA, "the prior file was replaced by an unmeasured output")
+        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+                                       file: "the new file's length could not be read", cause: kind.causeWords)
+    }
+
+    @Test("the SOURCE's length cannot be read (no container duration): nothing to compare the new file against, so Replace is refused the same way")
+    func anUnmeasurableSourceIsNotAVerifiedReplace() async throws {
+        let b = try bench("unmeasurable_source"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .output(stdout: "N/A\n"))
+        let job = await run(b, m)
+        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+                                       file: "the source's length could not be read to compare against",
+                                       cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
+    }
+
+    @Test("the refusal's cause is bounded: a tool that prints pages is quoted for two lines and 240 characters")
+    func theCauseIsBounded() async throws {
+        let b = try bench("unmeasurable_flood"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let flood = (0..<400).map { "line \($0) " + String(repeating: "x", count: 300) }.joined(separator: "\n")
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .output(stdout: "", stderr: flood, exit: 1))
+        let job = await run(b, m)
+        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+                                       file: "the new file's length could not be read", cause: ["ffprobe stopped with exit code 1", "line 0 x"])
+        guard case .failed(let message) = job.state else { return }
+        #expect(!message.contains("line 2 "), "only the first two lines are quoted")
+        #expect(message.count < 800, "\(message.count)")
+    }
+
+    // MARK: - Reported for Rick, not fixed here (RED under withKnownIssue)
+
+    /// RED (2026-11-20, reported, NOT changed — the #500 ruling is about
+    /// Replace). Plain Transcode, no Replace: an output ffprobe cannot read
+    /// is still published (beside the existing file — nothing is removed,
+    /// rule 2 holds) and the job says "Transcoded" and adopts it into the
+    /// catalog as a derivative: a success claim nobody verified (rule 1).
+    @Test("RED: plain Transcode (no Replace) reports an unmeasurable output as Transcoded and catalogues it", arguments: [Unmeasurable.emptyOutput, .crash])
+    func aPlainTranscodeStillAdoptsAnUnmeasurableOutput(_ kind: Unmeasurable) async throws {
+        let b = try bench("plain_unmeasurable_\(kind.rawValue)"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: kind.probe)
+        let job = await run(b, m, replace: false)
+        // Rule 2 holds today and must keep holding: nothing is removed.
+        #expect(b.trashed.all.isEmpty)
+        #expect(Self.sha(b.target) == b.priorSHA)
+        withKnownIssue("RED: without Replace an unmeasurable output is published as “Transcoded” and adopted into the catalog") {
+            if case .finished(let summary) = job.state { Issue.record("an unmeasured output was reported as: \(summary)") }
             #expect(b.catalogSnapshot() == before, "an unmeasured output was adopted into the catalog")
+        }
+    }
+
+    /// RED (2026-11-20, reported, NOT changed — needs its own design).
+    /// Preservation + Replace: the bit-exact proof (frame MD5) runs against
+    /// the PUBLISHED file, i.e. after the prior file went to the Trash. A
+    /// master that fails the proof ends "Lossless verification FAILED"
+    /// (correctly failed, never a success) — but the Replace already
+    /// happened. Under "verify the temp, only when verified could it
+    /// replace anything" the proof belongs before the publish; moving it
+    /// changes where the mismatch sidecar and a kept failed master live.
+    @Test("RED: Preservation + Replace trashes the prior master BEFORE the frame-MD5 proof that then fails")
+    func preservationReplaceProvesLosslessOnlyAfterTheReplace() async throws {
+        let b = try bench("preservation_order", preset: .preservation); defer { b.sb.cleanup() }
+        let m = try ScriptedExecutor(claiming: [b.sb.root.path])
+            .on("ffmpeg", containing: ["framemd5", Self.sourceName], .output(stdout: "0,          0,          0,        1,   115200, 11111111111111111111111111111111\n"))
+            .on("ffmpeg", containing: ["framemd5"], .output(stdout: "0,          0,          0,        1,   115200, 22222222222222222222222222222222\n"))
+            .on("ffmpeg", containing: [Self.sourceName], .writeOutputFile(Data(repeating: 0x5A, count: 20_000)))
+            .on("ffprobe", containing: ["format=duration"], Self.twelveSeconds)
+        let job = await run(b, m, preset: .preservation)
+        guard case .failed(let reason) = job.state else { Issue.record("expected the proof to fail the job, got \(job.state)"); return }
+        #expect(reason.contains("Lossless verification FAILED"), "\(reason)")
+        withKnownIssue("RED: the prior master is in the Trash although the new one failed its lossless proof") {
+            #expect(b.trashed.all.isEmpty, "trashed before the proof: \(b.trashed.all)")
+            #expect(Self.sha(b.target) == b.priorSHA, "the name now holds a master that failed its proof")
         }
     }
 }

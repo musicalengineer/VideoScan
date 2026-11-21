@@ -265,9 +265,19 @@ struct PartialRegistryCrossJobTests {
     @Test func transcodeExitFailureDiscardsItsPartialAndPublishFailureKeepsTheEncode() throws {
         let text = try SourceTree.appSource(named: "TranscodeJob.swift")
         #expect(!text.contains("No partial at all"), "stale wording: the partial is reserved up front")
-        let exitBranch = try #require(text.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
-        let nextReturn = try #require(text.range(of: "return", range: exitBranch.upperBound..<text.endIndex))
-        #expect(text[exitBranch.upperBound..<nextReturn.lowerBound].contains("discardPartial(partialURL)"))
+        // The exit-failure check moved into the one pre-publish gate (GH
+        // #500, TranscodeJob+EncodeGate.swift): it still answers `.failed`
+        // there, and BOTH of the job's refusing cases remove the partial
+        // before they return. (Behaviour: TranscodeReplaceNegativeMatrixTests.)
+        let gate = try SourceTree.appSource(named: "TranscodeJob+EncodeGate.swift")
+        let exitBranch = try #require(gate.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
+        let gateReturn = try #require(gate.range(of: "return", range: exitBranch.upperBound..<gate.endIndex))
+        #expect(gate[gateReturn.upperBound...].hasPrefix(" .failed("), "an ffmpeg exit failure with no output is a failed gate")
+        for refusing in ["case .failed(let message, let stage):", "case .unverified(let cause):"] {
+            let branch = try #require(text.range(of: refusing), "\(refusing)")
+            let nextReturn = try #require(text.range(of: "return", range: branch.upperBound..<text.endIndex))
+            #expect(text[branch.upperBound..<nextReturn.lowerBound].contains("discardPartial(partialURL)"), "\(refusing)")
+        }
         #expect(text.contains("await Self.keepUnpublishedOffMain(partialURL)")
                 && text.contains("DerivativeOutputPublish.keepUnpublished(partial)"),
                 "a failed publish moves the encode off the partial pattern")

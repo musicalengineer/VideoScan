@@ -16150,11 +16150,13 @@
       ],
       "tests": [
         "aCleanExitWithATruncatedFileIsAFailure",
+        "aLengthThatCannotBeReadSaysExactlyWhy",
         "aNonZeroExitWithAPlausibleFileIsAFailure",
         "aRealEncodeStillPublishes",
         "anUnmeasurableLengthIsNeverAVerdict",
         "nonZeroExitNamesFfmpegsLastWordsNotItsProgress",
         "shortOutputFailsLongEnoughPasses",
+        "verificationHasThreeAnswersAndVerdictKeepsItsMeaning",
         "zeroExitIsNotAFailure"
       ]
     },
@@ -30814,7 +30816,9 @@
         "TranscodeReplaceNegativeMatrixTests"
       ],
       "tests": [
+        "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
+        "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
         "encodeCrash",
         "encodeHangThenStop",
@@ -30822,7 +30826,20 @@
         "encodeLaunchFailure",
         "encodeMissingOutput",
         "encodeNonzeroExit",
-        "encodeTruncated"
+        "encodeTruncated",
+        "preservationReplaceProvesLosslessOnlyAfterTheReplace",
+        "theCauseIsBounded"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodeReplaceVerifiedMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodeReplaceVerifiedMatrixTests"
+      ],
+      "tests": [
+        "aVerifiedReplacePublishesAndTrashesOnce"
       ]
     },
     {
@@ -41703,7 +41720,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 844,
+      "expected_floor": 849,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41943,7 +41960,8 @@
         "VideoScanTests/ArchivePromotionIndexFreshnessTests",
         "VideoScanTests/CatalogTrashGroupTurnsWordsTests",
         "VideoScanTests/MediaTrashTestHostRaceTests",
-        "VideoScanTests/TranscodeReplaceNegativeMatrixTests"
+        "VideoScanTests/TranscodeReplaceNegativeMatrixTests",
+        "VideoScanTests/TranscodeReplaceVerifiedMatrixTests"
       ]
     },
     {

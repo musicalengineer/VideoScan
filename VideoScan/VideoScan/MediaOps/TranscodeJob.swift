@@ -73,7 +73,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     /// True when the user answered "Replace" to "Replace Existing
     /// Transcode?". Even then the existing file is never deleted: it goes
-    /// to the Trash, only after the new output exists, and only when the
+    /// to the Trash, only after the new output exists AND was verified
+    /// (FFmpegEncodeCheck `.verified`, GH #500), and only when the
     /// Master Archive rule allows it — otherwise the new file is published
     /// beside it (DerivativeOutputPublish.swift, 2026-09-22).
     let replaceExisting: Bool
@@ -335,41 +336,31 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return
         }
 
-        // Verify output is non-trivial (ffmpeg occasionally returns 0 but
-        // writes a header-only file when a codec library is missing or the
-        // input has an unrecoverable stream).
-        // Exit code, then length, before anything is published
-        // (FFmpegEncodeCheck). A partial that failed either is deleted.
-        if FileManager.default.fileExists(atPath: partialPath),
-           let failure = await FFmpegEncodeCheck.verdict(for: encodeResult, sourcePath: inputPath,
-                                                        outputPath: partialPath) {
+        // The gate between the encode and the publish (TranscodeJob+
+        // EncodeGate.swift): exit code, length, a non-trivial file — and,
+        // with Replace, VERIFIED (GH #500, Rick 2026-11-20: "verify the
+        // temp, only when verified could it replace anything"). It only
+        // reads; nothing has been trashed or renamed yet. A new file that
+        // fails it is removed (discardPartial: this run's own reserved
+        // partial, nothing else) and the file at the output name is never
+        // touched.
+        let size: Int64
+        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath,
+                                     replace: replaceExisting) {
+        case .failed(let message, let stage):
             discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
+            transcodeLog.error("transcode FAILED (\(stage, privacy: .public)): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+            await finish(failed: message)
             return
-        }
-        if let failure = FFmpegEncodeCheck.exitFailure(exitCode: encodeResult.exitCode, stderr: encodeResult.stderr) {
-            // The partial is gone (or unreadable) and ffmpeg failed: the
-            // exit reason beats "no output file". Remove whatever is left
-            // of this run's reserved partial.
+        case .unverified(let cause):
             discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (encode, no output): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
+            let message = Self.unverifiedReplaceMessage(cause: cause, original: outputURL.lastPathComponent,
+                                                        partialStillAt: Self.pathIfPresent(partialPath))
+            transcodeLog.error("transcode FAILED (verify, Replace refused): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+            await finish(failed: message)
             return
-        }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        // The reservation is an empty file: still empty (or gone) ⇒ ffmpeg
-        // wrote nothing — the same verdict as before reservations existed.
-        guard attrs != nil, size > 0 else {
-            discardPartial(partialURL)
-            await finish(failed: "ffmpeg finished but no output file was produced")
-            return
-        }
-        if size < 10_000 {
-            discardPartial(partialURL)
-            await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
-            return
+        case .passed(let bytes):
+            size = bytes
         }
 
         // Publish: a complete, non-trivial encode takes the output name in
