@@ -327,7 +327,7 @@ struct DeleteDuplicatesQuitLatchCodex1606Tests {
             #expect((try? Data(contentsOf: URL(fileURLWithPath: path))) == Data(rig.bytes))
             #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path))
             #expect(quarantineFolders(in: rig.dir).isEmpty)
-            #expect(probe.blocks("quarantine") == 3, "the one read happened; phase 2 did not")
+            #expect(probe.blocks("quarantine") == 6, "the held file's two reads happened (GH #504 D3a); phase 2 did not")
             #expect(job.result.deleted == 0)
             let plan = try #require(job.plan)
             #expect(plan.entries[0].status == .pending && plan.entries[0].quarantineDirectory == nil,

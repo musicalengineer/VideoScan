@@ -665,9 +665,11 @@ extension VideoScanModel {
 
     /// Of the Bucket D adoptions, how many are PROVEN (Codex closing pass
     /// F1): the source row carries a whole-file SHA-256 on record and the
-    /// adopted destination file hashes to it, fresh, now. Detached; cost =
-    /// one full read of each adopted file (adoption is the rare bucket),
-    /// memory one 1 MiB buffer at a time.
+    /// adopted destination file hashes to it, fresh, now — TWICE, both reads
+    /// agreeing (GH #504 D3a: a stamp-less copy is never proven on one
+    /// read). Detached; cost = two full reads of each adopted file (adoption
+    /// is the rare bucket; the second read comes from the page cache when
+    /// the file fits in RAM), memory one 1 MiB buffer at a time.
     /// Codex round 3: the source's stored digest counts only if its stamp
     /// still describes the SOURCE file now (captured before the path was
     /// rewritten — `reconcile.adoptionSources`; persistent digest policy,

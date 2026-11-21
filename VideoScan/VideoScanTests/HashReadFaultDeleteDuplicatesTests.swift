@@ -13,12 +13,15 @@
 // recorded from a faulted read; the row line, the audit line, the receipt and
 // the plan journal all say what happened.
 //
-// Reads, by path of the gate:
+// Reads, by path of the gate (GH #504 D3a / D4, 2026-11-21 — no single read
+// is the only witness for a Trash move):
 //   UNCACHED keeper (no stored fixity) — "two-file path": the KEEPER in full,
-//     the DUPLICATE in full at its path, then, in quarantine, the RE-HASH.
+//     the DUPLICATE in full at its path, the KEEPER A SECOND TIME (only when
+//     the pair would verify), then, in quarantine, the RE-HASH.
 //   CACHED keeper (stamp-valid stored fixity) — "single-read path": the
-//     duplicate is moved into quarantine and read ONCE there. The keeper is
-//     never read.
+//     KEEPER is read once in full to CONFIRM its stored fixity (once per
+//     keeper per run, before anything moves), then the duplicate is moved
+//     into quarantine and read TWICE there.
 //   SIBLING proof: unreachable from the job since KEEP ONE (2026-10-09) — the
 //     keeper alone reaches the goal, so no sibling is read. Pinned
 //     (`theJobReadsNoSibling`), and the matrix is run on `SiblingProver.prove`.
@@ -28,39 +31,44 @@
 //
 //   read                 EIO mid-file            premature EOF           bit flip                     partial read
 //   KEEPER               refused "could not      refused "could not      refused "content differs —   trashed
-//                        read <keeper>"          read <keeper>"          NOT a duplicate"             (proven)
-//                                                                        + P1: the FLIPPED digest is
-//                                                                        STORED as the keeper's fixity
+//                        read <keeper>"          read <keeper>"          NOT a duplicate"; no         (proven)
+//                                                                        keeper fixity is stored
+//                                                                        (D2, fixed 2026-11-21)
 //   DUPLICATE at path    refused "could not      refused "could not      refused "content differs —   trashed
 //                        read <dup>"             read <dup>"             NOT a duplicate"
-//   quarantine RE-HASH   put back; P3: named     put back; P3: named     put back "<dup> changed      trashed
-//                        "<dup> changed during   "<dup> changed during   during verification"
-//                        verification"           verification"
+//   quarantine RE-HASH   put back "could not     put back "could not     put back "<dup> changed      trashed
+//                        read <dup>"             read <dup>"             during verification"
 //   quarantine SINGLE    put back "could not     put back "could not     put back "content differs —  trashed
 //   READ (cached keeper) read <dup>"             read <dup>"             NOT a duplicate"
-//   SIBLING (prover)     "could not be read —    "could not be read —    "differs" + P1: the FLIPPED  matches
-//                        not counted"            not counted"            digest is the sibling's
-//                                                                        fixity (stored by the job)
+//   KEEPER 2nd read      refused "could not      refused "could not      refused "two reads of        trashed
+//   (uncached)           read <keeper>"          read <keeper>"          <keeper> disagreed"
+//   quarantine 2nd read  put back "could not     put back "could not     put back "two reads of       trashed
+//   (cached keeper)      read <dup>"             read <dup>"             <dup> disagreed"
+//   KEEPER CONFIRM read  refused "could not      refused "could not      stored fingerprint not       trashed
+//   (cached keeper)      read <keeper>"          read <keeper>"          used; both files read in
+//                                                                        full → trashed (proven by
+//                                                                        clean reads), said in the log
+//   SIBLING (prover)     "could not be read —    "could not be read —    "differs"; no fixity is      matches
+//                        not counted"            not counted"            handed back to store (D2)
 //
 // CODEX'S SHAPES (GH #504):
 //   A  the duplicate is the keeper's bytes + a tail, its read ends at the
 //      keeper's length — CLOSED: the size gate refuses before any read, and
 //      the hasher compares bytes consumed with the size (seam suite).
 //   B  two files ONE BIT apart, the flip lands on that bit:
-//        in the KEEPER's read (uncached)       → 🔴 P0: THE DUPLICATE IS TRASHED
+//        in the KEEPER's read (uncached)       → held: the keeper's SECOND read disagrees (was 🔴 P0)
 //        in the duplicate's read at its path   → held: the quarantine re-read disagrees
-//        in the SINGLE quarantine read (cached)→ 🔴 P0: THE DUPLICATE IS TRASHED
-//   C  a stale/false but stamp-valid CACHED keeper fixity → 🔴 P0 (Codex r1:
-//      "persistent removal authority, not merely bad metadata"): the keeper is
-//      NOT re-read; a file holding the cached digest's bytes is trashed with
-//      every read clean. The poisoned cache is SUPPLIED by the P1 in the
-//      matrix's keeper/bit-flip cell: a refused pair still publishes the
-//      flipped keeper fixity (DeleteDuplicatesJob.swift ~:1556).
+//        in the 1st quarantine read (cached)   → held: the SECOND quarantine read disagrees (was 🔴 P0)
+//   C  a stale/false but stamp-valid CACHED keeper fixity → held (was 🔴 P0,
+//      Codex r1: "persistent removal authority"): the keeper is read once to
+//      confirm the stored digest; the fresh read contradicts it, so it is not
+//      used — both files are read in full and the pair is refused as the
+//      mismatch it is. The supplier of such a digest (a refused pair
+//      publishing a flipped keeper fixity) was closed by D2.
 //
-// Every misbehaviour is parked under `withKnownIssue` with severity, what
-// happens, where the media ends up and a proposed fix. NOTHING IS FIXED HERE
-// (data-risk code: Rick and Codex, rule 10). The Trash is recoverable: in
-// every P0 below the file is in the Trash, intact, and the keeper is intact.
+// FIXED 2026-11-21 (GH #504 D2, D3a, D4), each seen RED first. Still parked
+// below: the sibling prover's shape B (unreachable from the job under KEEP
+// ONE).
 //
 // Parallel-safe: a temp folder per test; unique file names (the test-host
 // Trash is one shared folder); task-local hook and log.
@@ -83,9 +91,15 @@ private func sha(_ data: Data) -> String { SHA256.hash(data: data).map { String(
 
 enum DedupeReadSite: String, Sendable, CaseIterable, CustomStringConvertible {
     case keeper, duplicateAtPath, quarantineRehash, quarantineSingleRead
+    /// GH #504 D3a / D4 — the reads added on 2026-11-21: the keeper's second
+    /// read (two-file path), the held file's second read and the keeper's
+    /// confirming read (cached-keeper path).
+    case keeperSecondRead, quarantineSecondRead, keeperConfirmRead
     var description: String { rawValue }
     /// The single-read path needs the keeper's stored fixity.
-    var cachedKeeper: Bool { self == .quarantineSingleRead }
+    var cachedKeeper: Bool { self == .quarantineSingleRead || self == .quarantineSecondRead || self == .keeperConfirmRead }
+    /// Which full read of the file carries the fault (1-based).
+    var pass: Int { self == .keeperSecondRead || self == .quarantineSecondRead ? 2 : 1 }
 }
 
 struct DedupeFaultCell: Sendable, CustomStringConvertible {
@@ -125,12 +139,13 @@ private struct Rig {
         let keeperName = keeperName, dupName = dupName
         let quarantine = SignatureVerification.quarantineDirectoryPrefix
         switch site {
-        case .keeper:
-            return DedupeReadFault(kind, where: { $0.hasSuffix("/" + keeperName) }, atByte: atByte)
+        case .keeper, .keeperSecondRead, .keeperConfirmRead:
+            return DedupeReadFault(kind, where: { $0.hasSuffix("/" + keeperName) }, atByte: atByte, onPass: site.pass)
         case .duplicateAtPath:
             return DedupeReadFault(kind, where: { $0.hasSuffix("/" + dupName) && !$0.contains(quarantine) }, atByte: atByte)
-        case .quarantineRehash, .quarantineSingleRead:
-            return DedupeReadFault(kind, where: { $0.hasSuffix("/" + dupName) && $0.contains(quarantine) }, atByte: atByte)
+        case .quarantineRehash, .quarantineSingleRead, .quarantineSecondRead:
+            return DedupeReadFault(kind, where: { $0.hasSuffix("/" + dupName) && $0.contains(quarantine) }, atByte: atByte,
+                                   onPass: site.pass)
         }
     }
 }
@@ -186,7 +201,12 @@ private struct Ran {
     let receipt: String
     let journal: String
     /// "[dupjob] refused …" / "[dupjob] trashed …" for the duplicate.
-    var rowLine: String { log.components(separatedBy: "\n").first { $0.hasPrefix("[dupjob] ") && !$0.contains("audit:") && $0.contains("test_dup_") } ?? "" }
+    var rowLine: String {
+        log.components(separatedBy: "\n").first {
+            $0.hasPrefix("[dupjob] ") && !$0.contains("audit:") && $0.contains("test_dup_")
+                && !$0.hasPrefix("[dupjob] keeper ") && !$0.hasPrefix("[dupjob] read ")   // the keeper-evidence lines (D4)
+        } ?? ""
+    }
     var auditLine: String { log.components(separatedBy: "\n").first { $0.hasPrefix("[dupjob] audit: ") && $0.contains("test_dup_") } ?? "" }
     var outcomeLine: String { log.components(separatedBy: "\n").first { $0.hasPrefix("[dupjob] audit: OUTCOME") } ?? "" }
     var summaryLine: String { log.components(separatedBy: "\n").first { $0.hasPrefix("delete duplicates done:") } ?? "" }
@@ -246,7 +266,7 @@ struct HashReadFaultDeleteDuplicatesTests {
     /// is the file that stays; the duplicate already gets its second read in
     /// quarantine) — or the first pair's keeper digest is confirmed by a
     /// second read before it is used or stored.
-    @Test("🔴 P0 (parked): two files ONE BIT apart, the flip lands on that bit in the KEEPER's only read → the duplicate is sent to the Trash as 'verified identical', and the flipped digest is stored as the keeper's fixity")
+    @Test("was 🔴 P0 (D3a, fixed): two files ONE BIT apart, the flip lands on that bit in the KEEPER's first read → the keeper's SECOND read disagrees: refused 'two reads of <keeper> disagreed', nothing in the Trash, no keeper fixity stored")
     func p0_aFlippedKeeperReadTrashesAFileOneBitApart() async throws {
         let rig = try makeRig("p0keeper", cachedKeeper: false) { var d = $0; d[Int(faultByte)] ^= 0x01; return d }
         defer { rig.cleanup() }
@@ -256,12 +276,15 @@ struct HashReadFaultDeleteDuplicatesTests {
         #expect(fault.firedCount == 1, "the flip never reached the keeper's read")
         print("[hash-matrix] delete duplicates | shape B: flip on the differing bit, KEEPER read | \(ran.row.status) | \(ran.rowLine)")
 
-        withKnownIssue("🔴 P0 PARKED 2026-11-21 (Delete Duplicates, two-file path): one flipped bit in the keeper's ONLY full read makes a file one bit apart 'verified identical' → it is moved to the Trash (recoverable; keeper untouched), and the flipped digest is stored as the keeper's stamp-bound fixity. SignatureVerification.verify reads the keeper once; nothing re-reads it before deleteQuarantined. Proposed: a second, fresh read of the keeper must agree before the removal (and before didComputeKeeperFixity stores anything).") {
-            #expect(!rig.inTrash, "THE DUPLICATE IS IN THE TRASH on a keeper digest that came from a faulted read: \(rig.trashURL.path)")
-            #expect(rig.atPath, "the duplicate is no longer at its path")
-            #expect(ran.row.status == .refused, "the row says \(ran.row.status)")
-            #expect(rig.keeper.contentFixity?.digest != sha(rig.dupData), "the keeper's stored fixity is the DUPLICATE's digest")
-        }
+        // Seen RED 2026-11-21: the duplicate was in the Trash and the keeper
+        // carried the DUPLICATE's digest.
+        #expect(!rig.inTrash, "THE DUPLICATE IS IN THE TRASH on a keeper digest that came from a faulted read: \(rig.trashURL.path)")
+        #expect(rig.atPath, "the duplicate is no longer at its path")
+        #expect(ran.row.status == .refused, "the row says \(ran.row.status)")
+        #expect(ran.row.note == "two reads of \(rig.keeperName) disagreed — nothing was removed", "\(ran.row.note)")
+        #expect(ran.rowLine.contains(ran.row.note) && ran.auditLine.contains(ran.row.note), "\(ran.rowLine) / \(ran.auditLine)")
+        #expect(rig.keeper.contentFixity == nil, "nothing is stored from a pair that did not verify")
+        #expect(fault.passCount == 2, "the keeper was read twice — \(fault.passCount)")
         // Where the media is, whatever the verdict: both files exist, intact.
         let where_ = rig.inTrash ? rig.trashURL : URL(fileURLWithPath: rig.dup.fullPath)
         #expect(try Data(contentsOf: where_) == rig.dupData, "the duplicate's bytes are intact (Trash or path)")
@@ -281,7 +304,7 @@ struct HashReadFaultDeleteDuplicatesTests {
     /// held file would double the I/O that path exists to save. Rick's call;
     /// the same question as GH #504's "is the cost of a second read
     /// acceptable?".
-    @Test("🔴 P0 (parked): two files ONE BIT apart, the flip lands on that bit in the duplicate's SINGLE quarantine read (cached keeper) → the duplicate is sent to the Trash on one faulted read")
+    @Test("was 🔴 P0 (D3a, fixed): two files ONE BIT apart, the flip lands on that bit in the duplicate's FIRST quarantine read (cached keeper) → the SECOND quarantine read disagrees: put back, refused 'two reads of <dup> disagreed'")
     func p0_aFlippedSingleReadTrashesAFileOneBitApart() async throws {
         let rig = try makeRig("p0single", cachedKeeper: true) { var d = $0; d[Int(faultByte)] ^= 0x01; return d }
         defer { rig.cleanup() }
@@ -293,15 +316,16 @@ struct HashReadFaultDeleteDuplicatesTests {
         }
         let ran = try await runThroughTheCenter(rig, hook: both)
         #expect(fault.firedCount == 1, "the flip never reached the quarantine read")
-        #expect(fault.passCount == 1, "the held file was read exactly once")
-        #expect(keeperReads.passCount == 0, "the keeper is never read on the single-read path")
+        #expect(fault.passCount == 2, "the held file was read exactly twice — \(fault.passCount)")
+        #expect(keeperReads.passCount == 1, "the keeper is read once to confirm its stored fixity (D4) — \(keeperReads.passCount)")
         print("[hash-matrix] delete duplicates | shape B: flip on the differing bit, SINGLE quarantine read | \(ran.row.status) | \(ran.rowLine)")
 
-        withKnownIssue("🔴 P0 PARKED 2026-11-21 (Delete Duplicates, single-read path): one flipped bit in the duplicate's ONLY read makes a file one bit apart from the keeper match the keeper's stored digest → it is moved to the Trash (recoverable; keeper untouched). verifyHeld hashes once; the ticket is `hashedInQuarantine`, so deleteQuarantined does not re-read. Proposed (Rick's call — it costs the read this path saves): a second read of the held file must agree before the Trash move.") {
-            #expect(!rig.inTrash, "THE DUPLICATE IS IN THE TRASH on one faulted read: \(rig.trashURL.path)")
-            #expect(rig.atPath)
-            #expect(ran.row.status == .refused, "the row says \(ran.row.status)")
-        }
+        // Seen RED 2026-11-21: the duplicate was in the Trash.
+        #expect(!rig.inTrash, "THE DUPLICATE IS IN THE TRASH on one faulted read: \(rig.trashURL.path)")
+        #expect(rig.atPath)
+        #expect(ran.row.status == .refused, "the row says \(ran.row.status)")
+        #expect(ran.row.note == "two reads of \(rig.dupName) disagreed — nothing was removed", "\(ran.row.note)")
+        #expect(ran.rowLine.contains(ran.row.note) && ran.auditLine.contains(ran.row.note), "\(ran.rowLine) / \(ran.auditLine)")
         let where_ = rig.inTrash ? rig.trashURL : URL(fileURLWithPath: rig.dup.fullPath)
         #expect(try Data(contentsOf: where_) == rig.dupData)
         #expect(try Data(contentsOf: URL(fileURLWithPath: rig.keeper.fullPath)) == rig.keeperData)
@@ -309,9 +333,16 @@ struct HashReadFaultDeleteDuplicatesTests {
     }
 
     // MARK: The matrix (byte-identical files)
+    //
+    // `.serialized`: 28 cells, each two full runs of the job on a 12 MiB pair,
+    // all main-actor bound. Run at once (as the 16 cells were before GH #504
+    // added three read sites) they held the main actor long enough, in a
+    // parallel run on a busy machine, for a neighbouring suite's wall-clock
+    // fixture to time out (the real Migrate in HashReadFaultContentCopyProofTests,
+    // 30 s). One cell at a time; still parallel with every other test.
 
-    @Test("MATRIX: {EIO, premature EOF, partial read, bit flip} × {keeper, duplicate at its path, quarantine re-hash, quarantine single read} — only the benign partial read reaches the Trash; every other cell is refused, named, journalled, and the duplicate is back at its path, byte for byte",
-          .timeLimit(.minutes(3)), arguments: DedupeFaultCell.all)
+    @Test("MATRIX: {EIO, premature EOF, partial read, bit flip} × {keeper, duplicate at its path, quarantine re-hash, quarantine single read, keeper 2nd read, quarantine 2nd read, keeper confirming read} — only the benign partial read (and a flipped CONFIRMING read, after which both files are proven by clean reads) reaches the Trash; every other cell is refused, named, journalled, and the duplicate is back at its path, byte for byte",
+          .serialized, .timeLimit(.minutes(3)), arguments: DedupeFaultCell.all)
     func aFaultedReadNeverReachesTheTrash(_ c: DedupeFaultCell) async throws {
         let rig = try makeRig("m_\(c.site)_\(c.kind)", cachedKeeper: c.site.cachedKeeper)
         defer { rig.cleanup() }
@@ -327,16 +358,23 @@ struct HashReadFaultDeleteDuplicatesTests {
         #expect(rig.quarantineFolders.isEmpty, "\(c): \(rig.quarantineFolders)")
         #expect(try Data(contentsOf: URL(fileURLWithPath: rig.keeper.fullPath)) == rig.keeperData)
 
-        if c.kind == .partialRead {
+        // D4: a flip in the keeper's CONFIRMING read contradicts its (true)
+        // stored fixity; the stored fixity is then not used, both files are
+        // read in full by clean reads (the keeper twice more) and the pair
+        // verifies. The file goes on proof, and the log names the contradiction.
+        let contradictedConfirm = c.site == .keeperConfirmRead && c.kind == .bitFlip
+        if contradictedConfirm {
+            #expect(ran.log.contains("does NOT match a fresh read"), "\(c): the contradiction is not in the log:\n\(ran.log)")
+            #expect(ran.row.keeperMatchedByStoredFixity != true, "\(c): the stored fixity vouched")
+        }
+        if c.kind == .partialRead || contradictedConfirm {
             // A partial read is a COMPLETE read: both files proven, equal digests.
             #expect(ran.row.status == .trashed && rig.inTrash && !rig.atPath, "\(c): \(ran.row.status) — \(ran.row.note)")
             #expect(try Data(contentsOf: rig.trashURL) == rig.dupData)
             #expect(rig.dup.removal?.state == .inTrash)
             #expect(ran.rowLine.hasPrefix("[dupjob] trashed \(rig.dupName)"), "\(ran.rowLine)")
             #expect(ran.auditLine.contains("audit: moved "), "\(ran.auditLine)")
-            if !c.site.cachedKeeper {
-                #expect(rig.keeper.contentFixity?.digest == trueDigest, "the keeper's clean read is stored")
-            }
+            #expect(rig.keeper.contentFixity?.digest == trueDigest, "the keeper's fixity is the true digest")
             return
         }
 
@@ -356,16 +394,25 @@ struct HashReadFaultDeleteDuplicatesTests {
         // --- The words. `expected` is the truthful name of what happened.
         let note = ran.row.note
         switch (c.site, c.kind) {
-        case (.keeper, .eio), (.keeper, .prematureEOF):
+        case (.keeper, .eio), (.keeper, .prematureEOF),
+             (.keeperSecondRead, .eio), (.keeperSecondRead, .prematureEOF),
+             (.keeperConfirmRead, .eio), (.keeperConfirmRead, .prematureEOF):
             #expect(note == "could not read \(rig.keeperName) to verify", "\(c): \(note)")
         case (.duplicateAtPath, .eio), (.duplicateAtPath, .prematureEOF),
-             (.quarantineSingleRead, .eio), (.quarantineSingleRead, .prematureEOF):
+             (.quarantineSingleRead, .eio), (.quarantineSingleRead, .prematureEOF),
+             (.quarantineSecondRead, .eio), (.quarantineSecondRead, .prematureEOF):
             #expect(note == "could not read \(rig.dupName) to verify", "\(c): \(note)")
+        case (.keeperSecondRead, .bitFlip):
+            // The keeper's two reads disagree (D3a).
+            #expect(note == "two reads of \(rig.keeperName) disagreed — nothing was removed", "\(c): \(note)")
+        case (.quarantineSecondRead, .bitFlip):
+            // The held file's two reads disagree (D3a).
+            #expect(note == "two reads of \(rig.dupName) disagreed — nothing was removed", "\(c): \(note)")
         case (.quarantineRehash, .eio), (.quarantineRehash, .prematureEOF):
-            #expect(!note.isEmpty)
-            withKnownIssue("PARKED 2026-11-21 (P3, wording): the quarantine RE-READ that fails or ends early is reported as \"<file> changed during verification\" — the file did not change, it could not be read. deleteQuarantined passes restoreOrRetain the true reason (\"quarantined file could not be re-read before removal\") but the refusal it returns is .changedSinceVerification, and that is what the row, the log and the receipt say. Nothing moves: the file is put back. Proposed: return .unreadable(original) for an empty re-hash.") {
-                #expect(note.contains("could not") && note.contains("read"), "\(c): \(note)")
-            }
+            // GH #504 (was P3, wording; seen RED 2026-11-21: "<dup> changed during
+            // verification"): a re-read that FAILED is named unreadable — the
+            // file did not change, it could not be read. It is put back.
+            #expect(note == "could not read \(rig.dupName) to verify", "\(c): \(note)")
         case (.quarantineRehash, .bitFlip):
             // Two reads of one file disagree: "changed during verification" is
             // the honest inference from inside the gate.
@@ -388,26 +435,22 @@ struct HashReadFaultDeleteDuplicatesTests {
 
         // --- No fixity from a faulted read.
         switch c.site {
-        case .keeper:
-            if c.kind == .bitFlip {
-                withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B — and the SUPPLIER of shape C's P0 poisoned cache): a bit flipped in the keeper's one full read is STORED as the keeper's whole-file fixity — `verify` calls didComputeKeeperFixity before the pair's verdict and the job stores it (`learnedKeeperFixity`), stamp-bound, although the pair it came from was refused as a mismatch. Every later stamp-trusting reader believes it without a read: Delete Duplicates' single-read path then refuses the keeper's TRUE duplicates as 'NOT a duplicate' and would trash a file that holds the flipped bytes (shape C); ContentCopyProof vouches by it. No media moves in this cell. Proposed: store a keeper fixity only from a pair that verified (two files' reads agreed), or after a second read of the keeper agrees.") {
-                    #expect(rig.keeper.contentFixity == nil || rig.keeper.contentFixity?.digest == trueDigest,
-                            "\(c): the keeper's stored fixity is a digest no clean read ever produced")
-                }
-            } else {
-                #expect(rig.keeper.contentFixity == nil, "\(c): a fixity was stored from a keeper read that failed")
-            }
+        case .keeper, .keeperSecondRead:
+            // GH #504 D2 (was P1, the SUPPLIER of shape C's poisoned cache;
+            // seen RED 2026-11-21: the flipped digest was stored, stamp-bound,
+            // from a pair that was refused). A keeper fixity is published only
+            // from a pair that verified — so in every faulted cell: nothing.
+            #expect(rig.keeper.contentFixity == nil, "\(c): a fixity was stored on the keeper from a pair that did not verify")
         case .duplicateAtPath, .quarantineRehash:
             // The keeper's own read was clean: its true digest may be kept.
             #expect(rig.keeper.contentFixity == nil || rig.keeper.contentFixity?.digest == trueDigest, "\(c)")
-        case .quarantineSingleRead:
+        case .quarantineSingleRead, .quarantineSecondRead, .keeperConfirmRead:
             #expect(rig.keeper.contentFixity == keeperFixityBefore, "\(c): the cached keeper fixity changed")
         }
 
         // --- The refusal was the fault's: the same run, clean, trashes the copy.
         #expect(rig.dup.duplicateDisposition == .review, "\(c): a refused pair is re-marked Review")
         rig.dup.duplicateDisposition = .extraCopy
-        if c.site == .keeper && c.kind == .bitFlip { rig.keeper.contentFixity = nil }   // drop the parked false digest
         let clean = try await runThroughTheCenter(rig, hook: nil)
         #expect(clean.row.status == .trashed && rig.inTrash, "\(c): the clean re-run: \(clean.row.status) — \(clean.row.note)")
     }
@@ -471,7 +514,7 @@ struct HashReadFaultDeleteDuplicatesTests {
     /// `learnedKeeperFixity` stored at DeleteDuplicatesJob.swift ~:1556), and
     /// GH #504's Bind Fixity overwrite.
     /// WHERE THE MEDIA IS: in the Trash, intact, recoverable; keeper untouched.
-    @Test("🔴 P0 (parked) Codex shape C: a FALSE but stamp-valid cached keeper fixity is trusted — the keeper is not re-read, and a file that matches the false digest (not the keeper) is sent to the Trash")
+    @Test("was 🔴 P0 (D4, fixed) Codex shape C: a FALSE but stamp-valid cached keeper fixity is NOT trusted unread — the keeper is read once, the fresh read contradicts the stored digest, both files are read in full and the file is refused; the log says the stored fingerprint was not used")
     func shapeC_aFalseCachedKeeperFixityIsTrusted() async throws {
         let rig = try makeRig("shapeC", cachedKeeper: false) { var d = $0; d[Int(faultByte)] ^= 0x01; return d }
         defer { rig.cleanup() }
@@ -481,13 +524,19 @@ struct HashReadFaultDeleteDuplicatesTests {
         let keeperReads = DedupeReadCounter(where: { [name = rig.keeperName] in $0.hasSuffix("/" + name) })
         let ran = try await runThroughTheCenter(rig, hook: keeperReads.hook)
         print("[hash-matrix] delete duplicates | shape C: false cached keeper fixity, no fault | \(ran.row.status) | \(ran.rowLine) | full reads of the keeper \(keeperReads.passCount)")
-        // PINNED: what it does today.
-        #expect(keeperReads.passCount == 0, "the keeper was re-read — the contract changed; promote the parked assertion below")
-        #expect(ran.row.keeperMatchedByStoredFixity == true)
-        withKnownIssue("🔴 P0 PARKED 2026-11-21 (re-ranked from P1 by Codex r1: persistent removal authority, not merely bad metadata; design — Rick + Codex): Delete Duplicates trusts a stamp-valid stored keeper fixity and never re-reads the keeper (holdForSingleRead / verifyHeld; Rick 2026-09-20 'single read'). With a FALSE stored digest — which GH #504's Bind Fixity overwrite and this suite's keeper-flip P1 (a refused pair still publishes the flipped keeper fixity, DeleteDuplicatesJob.swift ~:1556) can both write — a file that is NOT the keeper's bytes is moved to the Trash (recoverable; keeper untouched) and logged 'verified identical … keeper matched by stored fixity'. The trust is only as good as every writer of contentFixity. Proposed: fix the writers first (never store a digest from one unconfirmed read); then decide whether the first use of a cached keeper digest in a run earns one keeper re-read.") {
-            #expect(!rig.inTrash, "a file that is not the keeper's bytes is in the Trash: \(rig.trashURL.path)")
-            #expect(ran.row.status == .refused, "\(ran.row.status)")
-        }
+        // Seen RED 2026-11-21: the keeper was never read, the file was in the
+        // Trash "keeper matched by stored fixity".
+        #expect(keeperReads.passCount == 2, "the confirming read, then the two-file path's read — \(keeperReads.passCount)")
+        #expect(ran.row.keeperMatchedByStoredFixity != true, "the stored fixity vouched for nothing")
+        #expect(!rig.inTrash, "a file that is not the keeper's bytes is in the Trash: \(rig.trashURL.path)")
+        #expect(ran.row.status == .refused, "\(ran.row.status)")
+        #expect(ran.row.note == "content differs from keeper \(rig.keeperName) — NOT a duplicate", "\(ran.row.note)")
+        #expect(ran.log.contains("[dupjob] keeper \(rig.keeperName)") && ran.log.contains("does NOT match a fresh read"),
+                "the log does not say the stored fingerprint was contradicted:\n\(ran.log)")
+        #expect(ran.job.runTally.keeperRereads == 1 && ran.summaryLine.contains("1 keeper re-read to confirm"), "\(ran.summaryLine)")
+        // One read never replaces a digest: the false stored fixity is left
+        // as it was (and is contradicted again, and said again, next run).
+        #expect(rig.keeper.contentFixity?.digest == sha(rig.dupData))
         let where_ = rig.inTrash ? rig.trashURL : URL(fileURLWithPath: rig.dup.fullPath)
         #expect(try Data(contentsOf: where_) == rig.dupData)
         #expect(try Data(contentsOf: URL(fileURLWithPath: rig.keeper.fullPath)) == rig.keeperData)
@@ -510,7 +559,7 @@ struct HashReadFaultDeleteDuplicatesTests {
         #expect(ran.row.remainingVerifiedCopies == 1)
     }
 
-    @Test("SIBLING × fault, at the prover (goal 2): a sibling whose read fails or ends early is 'could not be read — not counted' and gets no fixity; a partial read proves it; a flipped read makes it 'differs' and hands back the FLIPPED digest as its fixity (P1, parked)",
+    @Test("SIBLING × fault, at the prover (goal 2): a sibling whose read fails or ends early is 'could not be read — not counted' and gets no fixity; a partial read proves it; a flipped read makes it 'differs' and hands back NO fixity to store (D2)",
           arguments: DedupeFaultKind.allCases)
     func theSiblingProofUnderEachFault(_ kind: DedupeFaultKind) async throws {
         let rig = try makeRig("sib_\(kind)", cachedKeeper: true); defer { rig.cleanup() }
@@ -542,12 +591,10 @@ struct HashReadFaultDeleteDuplicatesTests {
         case .bitFlip:
             // Not counted — the safe direction…
             #expect(read.result == .differs && facts.remainingVerifiedCopies == 1, "\(kind): \(read.result)")
-            // …but the flipped digest is handed back as the sibling's fixity, and
-            // the job stores every `read.fixity` on the sibling's record
-            // (noteSiblingReads), whatever the result.
-            withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B; unreachable from the job while KEEP ONE reads no sibling): one flipped bit in a sibling's proving read is returned as that sibling's stamp-bound fixity (SiblingRead.fixity) and named 'holds different bytes'; DeleteDuplicatesJob.noteSiblingReads stores it on the sibling's record whether it matched or not. No media moves. Proposed: store a sibling's fixity only when it matched the duplicate's digest (two reads of two files agreed); a lone disagreeing read is reported, not recorded.") {
-                #expect(read.fixity == nil, "a digest no clean read produced is on its way to the sibling's record: \(read.fixity?.digest ?? "")")
-            }
+            // …and (GH #504 D2, was P1; seen RED 2026-11-21) no fixity is handed
+            // back for the job to store: a lone read that disagrees is
+            // reported, never recorded.
+            #expect(read.fixity == nil, "a digest no clean read produced is on its way to the sibling's record: \(read.fixity?.digest ?? "")")
         }
         #expect(try Data(contentsOf: sibURL) == rig.keeperData)
     }

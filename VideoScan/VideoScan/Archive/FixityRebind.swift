@@ -103,11 +103,13 @@ enum FixityRebind {
             return .changedDuringRead("the path no longer names the opened file")
         }
         guard before.isBoundToVolume else { return .noVolumeIdentity }
-        var seen: Int64 = 0
         let digest: String?
         do {
             digest = try ArchivePromoteEngine.sha256(fd: fd, shouldCancel: { control.shouldInterrupt },
-                                                     progress: { n in seen = n; control.noteBytes(n) })
+                                                     progress: { n in control.noteBytes(n) })
+        } catch ArchivePromoteEngine.Failure.changedDuringRead(let how) {
+            // Its size moved under the read: changed, not unreadable.
+            return .changedDuringRead("changed during the read (\(how))")
         } catch {
             return .unreadable("read: \(error)")
         }
@@ -118,9 +120,8 @@ enum FixityRebind {
         guard after == before else {
             return .changedDuringRead(Self.difference(before, after))
         }
-        guard seen == after.size else {
-            return .changedDuringRead("read \(seen) bytes, the file has \(after.size)")
-        }
+        // No byte count to compare here: the reader itself returns a digest
+        // only when size-before == size-after == bytes consumed (GH #504 D1).
         return .bound(ContentFixity(digest: digest, byteCount: after.size, stamp: after))
     }
 

@@ -43,6 +43,9 @@ extension PromoteToArchiveJob {
         enum Code: String {
             case duplicate
             case storedDigestMismatch = "stored-digest-mismatch"
+            /// Adoption only (GH #504 D3c): the source's proving read and
+            /// its confirming second read produced different digests.
+            case readsDisagree = "reads-disagree"
             case changedDuringCopy = "changed-during-copy"
             case dateAgreement = "date-agreement"
             case filingYear = "filing-year"
@@ -144,7 +147,6 @@ extension PromoteToArchiveJob {
         var completed = 0
         for (sourceID, entry) in latest where entry.state != .done && entry.state != .abandoned {
             if Task.isCancelled { break }
-            let fm = FileManager.default
             // Containment FIRST (codex R4-A): a journal relpath is data from
             // disk, not a trusted value. Non-contained ⇒ logged and skipped —
             // never unlinked, read, or adopted.
@@ -177,21 +179,15 @@ extension PromoteToArchiveJob {
                 continue
             }
             // Published. Establish the digest we can trust.
-            let expected: String?
-            if let journaled = entry.sha256 {
-                expected = journaled
-            } else if let manifestRow = ctx.manifestRows[sourceID] {
-                expected = manifestRow.sha256
-            } else if fm.fileExists(atPath: entry.sourcePath) {
-                expected = try? await Self.hashOffMain(path: entry.sourcePath)
-            } else {
-                expected = nil
-            }
+            let expected = await reconcileReference(for: entry, sourceID: sourceID, matching: actual, ctx: ctx)
             guard let expected, actual == expected else {
                 promoteLog.error("promote reconcile: \(entry.destRelPath, privacy: .public) is in the archive but its digest could not be confirmed — left in place, NOT indexed; check it by hand")
                 appLog.write("promote reconcile: \(entry.destRelPath) could not be verified against its source — left in place, not indexed")
                 continue
             }
+            // GH #504 D3c: indexing this file ties the source to it with no
+            // copy pass — one matching read is not enough; read it again.
+            guard await reconcileSecondReadConfirms(relPath: entry.destRelPath, first: actual, root: ctx.root) else { continue }
             do {
                 try await finishPublished(sourceID: sourceID,
                                           source: model.record(forID: sourceID),
@@ -208,6 +204,60 @@ extension PromoteToArchiveJob {
             }
         }
         return completed
+    }
+
+    /// The reconcile leg's second read of an archive file about to be
+    /// indexed as an interrupted promotion's result (GH #504 D3c). true = a
+    /// second full read produced `first` again. Anything else — the reads
+    /// disagree, the second read failed, a Stop — leaves the file in place,
+    /// NOT indexed, and says so; the source is then promoted like any other.
+    private func reconcileSecondReadConfirms(relPath: String, first: String, root: String) async -> Bool {
+        let again = try? await Self.hashContainedOffMain(root: root, relPath: relPath)
+        if again == first { return true }
+        let why = again == nil ? "its second read could not be completed"
+                               : ArchivePromoteEngine.Failure.readsDisagree(relPath).description
+        promoteLog.error("promote reconcile: \(relPath, privacy: .public) — \(why, privacy: .public); left in place, NOT indexed; check it by hand")
+        appLog.write("promote reconcile: \(relPath) — \(why); left in place, not indexed")
+        model?.log("Promote: \(relPath) is in the archive from an interrupted promotion, but \(why) — left in place, not indexed.")
+        return false
+    }
+
+    /// The digest an interrupted promotion's archive file (`actual` = its
+    /// first read) must match before it is indexed: the journaled digest,
+    /// else the manifest row's, else the SOURCE's — and a source digest is
+    /// a witness only when two fresh full reads of the source agree (GH #504
+    /// D3c, Codex r2 P1: one flipped source read can equal the destination's
+    /// bytes). The second source read is made only on a match, the one case
+    /// that would index. nil ⇒ no trustworthy reference; the caller indexes
+    /// nothing.
+    private func reconcileReference(for entry: ArchivePromoteJournal.Entry, sourceID: UUID,
+                                    matching actual: String, ctx: RunContext) async -> String? {
+        if let journaled = entry.sha256 { return journaled }
+        if let manifestRow = ctx.manifestRows[sourceID] { return manifestRow.sha256 }
+        guard FileManager.default.fileExists(atPath: entry.sourcePath),
+              let first = try? await Self.hashOffMain(path: entry.sourcePath) else { return nil }
+        guard first == actual else { return first }
+        return await reconcileSourceSecondReadConfirms(sourcePath: entry.sourcePath, first: first,
+                                                       relPath: entry.destRelPath) ? first : nil
+    }
+
+    /// The reconcile leg's second read of the SOURCE, when the source's own
+    /// one read was the only reference for the file at `relPath` (no journal
+    /// or manifest digest; GH #504 D3c, Codex r2 P1). true = a fresh full
+    /// read of the source produced `first` again. Anything else — the reads
+    /// disagree, the second read failed, a Stop — leaves the archive file in
+    /// place, NOT indexed, and says so; the source is then promoted like any
+    /// other (its own proving read and copy pass follow).
+    private func reconcileSourceSecondReadConfirms(sourcePath: String, first: String, relPath: String) async -> Bool {
+        let again = try? await Self.hashOffMain(path: sourcePath)
+        if again == first { return true }
+        let name = (sourcePath as NSString).lastPathComponent
+        let why = again == nil ? "the source's second read could not be completed"
+                               : ArchivePromoteEngine.Failure.readsDisagree(name).description
+        promoteLog.error("promote reconcile: \(relPath, privacy: .public) — \(why, privacy: .public); left in place, NOT indexed; check it by hand")
+        appLog.write("promote reconcile: \(relPath) — \(why); left in place, not indexed")
+        model?.log("Promote: \(relPath) is in the archive from an interrupted promotion, but \(why) — left in place, not indexed.")
+        return false
     }
 
     // MARK: One file
@@ -247,9 +297,19 @@ extension PromoteToArchiveJob {
             return .cancelled
         } catch ArchivePromoteEngine.Failure.cancelled {
             return .cancelled
+        } catch let refused as RefusedByGuard {
+            return .refused(refused.refusal)
         } catch {
             return .failed(Self.describe(error))
         }
+    }
+
+    /// A guard deep in one file's steps refused it before anything was
+    /// written: carried out as a throw, reported as `.refused(refusal)`.
+    /// (For Rick: ≈ a typed C++ exception caught one frame up and turned
+    /// back into a result code.)
+    struct RefusedByGuard: Error {
+        let refusal: Refusal
     }
 
     /// Manifest-leg adoption: the manifest names this source; verify the
@@ -268,11 +328,14 @@ extension PromoteToArchiveJob {
         }
         let dest = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(row.relPath).standardizedFileURL
-        // Adoption still reads the whole file back to verify its digest, so
-        // it is every bit as silent as a copy without a begin line.
+        // Adoption still reads the whole file back to verify its digest —
+        // twice when it matches (GH #504 D3c: one matching read is never the
+        // only witness for an adoption) — so it is every bit as silent as a
+        // copy without a begin line.
         model.log("Promote: verifying the copy already at \(row.relPath) for \(entry.filename)…")
         do {
-            guard let actual = try await Self.hashContainedOffMain(root: ctx.root, relPath: row.relPath) else {
+            guard let actual = try await Self.hashContainedConfirmingOffMain(root: ctx.root, relPath: row.relPath,
+                                                                                expected: row.sha256) else {
                 appLog.write("promote reconcile: manifest lists \(entry.filename) at \(row.relPath) but the file is missing — skipped; check the archive by hand")
                 return .skipped("the manifest already lists this file at \(row.relPath) but it is missing from the archive — check by hand")
             }
@@ -352,6 +415,12 @@ extension PromoteToArchiveJob {
         guard ArchivePathResolver.isInside(path: destURL.path, root: ctx.root) else {
             return .failed("resolved destination escapes the archive root (\(choice.relPath)) — refused")
         }
+        // GH #504 D3c — ADOPTION makes no copy, so nothing re-proves the
+        // source the way the copy pass does. Before the journal, the claim
+        // or the manifest can tie this source to the file already there, a
+        // second fresh read of the source must reproduce the proving digest
+        // (throws `RefusedByGuard` / `CancellationError`; a no-op for a copy).
+        try await confirmSourceIfAdopting(choice, source: source, entry: entry, digest: digest)
         claimedNames.insert(destURL.path)
         model.notePromotedDigest(digest, relPath: choice.relPath, root: ctx.root)
         claimPath = choice.relPath
@@ -827,7 +896,7 @@ extension PromoteToArchiveJob {
             if let fd = try ArchivePromoteEngine.openContainedFile(root: root, relativePath: candidate) {
                 defer { Darwin.close(fd) }
                 if let sha = try ArchivePromoteEngine.identicalDigest(
-                    fd: fd, sourceSize: sourceSize,
+                    fd: fd, sourceSize: sourceSize, what: candidate,
                     sourceSHA: sourceSHA, shouldCancel: { Task.isCancelled }) {
                     return DestinationChoice(relPath: candidate, identicalExistingSHA: sha)
                 }
@@ -886,6 +955,16 @@ extension PromoteToArchiveJob {
     #endif
     static func hashContainedOffMain(root: String, relPath: String) async throws -> String? {
         try ArchivePromoteEngine.sha256(root: root, relativePath: relPath, shouldCancel: { Task.isCancelled })
+    }
+
+    /// The manifest leg's read of the file a manifest row points at:
+    /// `ArchivePromoteEngine.sha256(root:relativePath:confirmingWhenEqualTo:)`.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func hashContainedConfirmingOffMain(root: String, relPath: String, expected: String) async throws -> String? {
+        try ArchivePromoteEngine.sha256(root: root, relativePath: relPath, confirmingWhenEqualTo: expected,
+                                        shouldCancel: { Task.isCancelled })
     }
 
     #if compiler(>=6.2)

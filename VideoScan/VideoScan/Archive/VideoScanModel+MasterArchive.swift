@@ -1189,7 +1189,10 @@ extension VideoScanModel {
         guard reason == .alreadyPromoted, let rec = record(forID: recordID) else { return nil }
         if let copy = masterArchiveCopy(of: rec) { return copy.fullPath }
         if let copy = identicalArchivedCopy(of: rec), let digest = rec.contentFixity?.digest {
-            return "\(copy.fullPath) — identical bytes (sha256 \(digest.lowercased().prefix(12))…)"
+            // GH #504 D4 — say what was actually compared. This is a refusal
+            // to COPY, made from the file's STORED fingerprint and a stat; the
+            // file was not read. Nothing is removed on it.
+            return "\(copy.fullPath) — same stored fingerprint (sha256 \(digest.lowercased().prefix(12))…); this file was not re-read, nothing was copied and nothing was removed"
         }
         return nil
     }

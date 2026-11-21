@@ -152,7 +152,7 @@ struct DeleteDuplicatesJobTests {
         return Rig(dir: dir, root: root, model: model, keeper: keeper, copies: copies, different: different)
     }
 
-    @Test func deletesOnlyVerifiedPairsReadsKeeperOnceLedgersAndNamesKeeper() async throws {
+    @Test func deletesOnlyVerifiedPairsReadsKeeperOnlyInItsFirstPairLedgersAndNamesKeeper() async throws {
         let rig = makeRig("verified"); defer { rig.cleanup() }
         let probe = Probe()
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
@@ -170,21 +170,24 @@ struct DeleteDuplicatesJobTests {
         #expect(FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(rig.different.duplicateDisposition == .review)
 
-        // The keeper was read ONCE (three blocks) across three pairs. The
-        // FIRST pair (no stored fixity yet) read its duplicate at its path
-        // and once more in quarantine — the two-read shape. Every later
-        // pair is SINGLE-READ (Rick 2026-09-20 evening): moved into
-        // quarantine first, hashed there once, never read at its path —
-        // the look-alike included, which was put back after its one read.
-        #expect(probe.blocks("keeper") == 3, "keeper read \(probe.blocks("keeper")) blocks — expected exactly one full read")
+        // The keeper was read by its FIRST pair only, TWICE in full (six
+        // blocks; GH #504 D3a: its second read, made because the pair
+        // verified). That pair (no stored fixity yet) read its duplicate at
+        // its path and once more in quarantine. The verified pair's keeper
+        // fixity is fresh evidence for the rest of the run (D4), so every
+        // later pair moves its file into quarantine first, reads it there
+        // TWICE (D3a) and never reads the keeper — the look-alike included,
+        // which was put back after its first read disagreed.
+        #expect(probe.blocks("keeper") == 6, "keeper read \(probe.blocks("keeper")) blocks — expected exactly two full reads, both in the first pair")
         #expect(probe.blocks("duplicate") == 3, "only the first pair reads its duplicate at its path")
-        #expect(probe.blocks("quarantine") == 9, "first pair re-read + two single-read pairs × three blocks")
+        #expect(probe.blocks("quarantine") == 12, "first pair re-read (3) + the true copy read twice (6) + the look-alike once (3)")
         // The metric that matters is OPENS of the keeper path, whatever the
-        // read: exactly two — the 4 MiB head compare and the full hash —
-        // both in the first pair, i.e. before any quarantine; never again.
-        #expect(probe.opens(of: rig.keeper.fullPath) == 2,
-                "keeper opened \(probe.opens(of: rig.keeper.fullPath)) times — expected head compare + one full read")
-        #expect(probe.quarantinesBeforeEachOpen(of: rig.keeper.fullPath) == [0, 0], "no keeper open after the first pair")
+        // read: exactly three — the 4 MiB head compare and the two full
+        // hashes — all in the first pair, i.e. before any quarantine; never again.
+        #expect(probe.opens(of: rig.keeper.fullPath) == 3,
+                "keeper opened \(probe.opens(of: rig.keeper.fullPath)) times — expected head compare + two full reads")
+        #expect(probe.quarantinesBeforeEachOpen(of: rig.keeper.fullPath) == [0, 0, 0], "no keeper open after the first pair")
+        #expect(job.runTally.keeperRereads == 0, "a fixity this run verified needs no confirming read")
         #expect(probe.opens(of: rig.copies[0].fullPath) == 2, "first duplicate: head compare + full hash at its path")
         #expect(probe.opens(of: rig.copies[1].fullPath) == 0, "single-read path: never opened at its public path")
         #expect(probe.opens(of: rig.different.fullPath) == 0, "the look-alike was read once, in quarantine, then put back")

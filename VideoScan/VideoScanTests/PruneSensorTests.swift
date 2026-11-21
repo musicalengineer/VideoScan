@@ -62,8 +62,8 @@ struct PruneSensorTests {
         #expect(makers == ["VideoScanModel+PruneVerification.swift"], "\(makers)")
         let verify = try SourceTree.appCode(named: "VideoScanModel+PruneVerification.swift")
         #expect(verify.components(separatedBy: "PruneProof(copyID:").count - 1 == 1)
-        #expect(verify.contains("switch pruneFullRead(item.path, hooks: hooks)"), "the candidate is read in full")
-        #expect(verify.contains("switch pruneFullRead(path, hooks: hooks)"), "the archive file is read in full")
+        #expect(verify.contains("switch pruneFullRead(item.path, hooks: hooks, readHook: readHook)"), "the candidate is read in full")
+        #expect(verify.contains("switch pruneFullRead(path, hooks: hooks, readHook: readHook)"), "the archive file is read in full")
         for file in Self.applyFiles {
             let code = try SourceTree.appCode(named: file)
             #expect(!code.contains("describesFileNow"), "\(file): a stored stamp must never replace a read")

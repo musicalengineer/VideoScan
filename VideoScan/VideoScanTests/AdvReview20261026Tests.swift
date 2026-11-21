@@ -166,6 +166,12 @@ struct RelocateSummaryProofTests {
     }
 
     static func bytes(_ seed: Int) -> Data { Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ seed) }) }
+    /// A liveness bound on waiting for the Migrate summary, not a budget: the
+    /// Migrate finishes in ~2–10 s alone, but HashReadFaultContentCopyProofTests
+    /// calls these helpers from the in-process parallel fault lane, where the job
+    /// queues behind every other job test on the main actor (GH #504: 30 s ran
+    /// out there on 2026-11-21).
+    static let summaryLivenessBound: TimeInterval = 120
 
     /// A catalog row for `url`, with its full SHA-256 fixity when `hashed`.
     static func row(_ url: URL, hashed: Bool) -> VideoRecord {
@@ -211,7 +217,7 @@ struct RelocateSummaryProofTests {
         model.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
                                              maxConcurrency: 1, dryRun: false,
                                              skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = Date().addingTimeInterval(Self.summaryLivenessBound)
         while model.pendingRelocateSummary == nil && Date() < deadline {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
@@ -308,7 +314,7 @@ struct RelocateSummaryProofTests {
         model.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
                                              maxConcurrency: 1, dryRun: false,
                                              skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = Date().addingTimeInterval(Self.summaryLivenessBound)
         while model.pendingRelocateSummary == nil && Date() < deadline {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }

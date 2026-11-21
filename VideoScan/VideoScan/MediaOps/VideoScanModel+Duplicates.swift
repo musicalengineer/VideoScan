@@ -1525,6 +1525,9 @@ func duplicateRefusalNote(_ failure: SignatureVerification.Failure,
         return "keeper and copy are the same file"
     case .changedSinceVerification(let path):
         return "\(URL(fileURLWithPath: path).lastPathComponent) changed during verification"
+    case .readsDisagree(let path):
+        // GH #504 D3a: the file's stamp held; one of two full reads was wrong.
+        return "two reads of \(URL(fileURLWithPath: path).lastPathComponent) disagreed — nothing was removed"
     case .cancelled:
         return "verification was cancelled"
     }

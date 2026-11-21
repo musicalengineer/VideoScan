@@ -309,7 +309,7 @@ struct DedupeHashReadSeamTests {
         let once = InterruptOnce(atOffset: 0)
         let digest = try? ArchivePromoteEngine.$readHook.withValue(once.hook) { try ArchivePromoteEngine.sha256(path: url.path) }
         #expect(once.fired)
-        withKnownIssue("PARKED 2026-11-21 (P3, seam fidelity only — no product defect): ArchivePromoteEngine's reader applies an injected .errno(EINTR) AFTER its EINTR-retry loop, so a test cannot simulate an interrupted archive read (it gets Failure.writeFailed \"read errno 4\"). Proposed: in ChunkRing.startReader, an injected EINTR re-issues the pread (as applyReadFault does for the serial hashers).") {
+        withKnownIssue("PARKED 2026-11-21 (P3, seam fidelity only — no product defect): ArchivePromoteEngine's reader applies an injected .errno(EINTR) AFTER its EINTR-retry loop, so a test cannot simulate an interrupted archive read (it gets Failure.readFailed \"read errno 4\"). Proposed: in ChunkRing.startReader, an injected EINTR re-issues the pread (as applyReadFault does for the serial hashers).") {
             #expect(digest == hashSeamReference(data))
         }
     }
@@ -362,7 +362,7 @@ struct DedupeHashReadSeamSensorTests {
         let allowed: Set<String> = [
             "let readHook = hooks.readHook ?? ArchivePromoteEngine.readHook",   // cancellableFullHash
             "copy.readHook = bound",                                            // carryingReadHook()
-            "let readHook = ArchivePromoteEngine.readHook",                     // Relocate ×2
+            "let readHook = ArchivePromoteEngine.readHook",                     // Relocate ×2, the prune job ×2
             "private let readHook = ArchivePromoteEngine.readHook",             // CatalogTrashMoveProofs
         ]
         var seen: [String: Int] = [:]
@@ -379,7 +379,7 @@ struct DedupeHashReadSeamSensorTests {
         }
         #expect(seen["let readHook = hooks.readHook ?? ArchivePromoteEngine.readHook"] == 1)
         #expect(seen["copy.readHook = bound"] == 1)
-        #expect(seen["let readHook = ArchivePromoteEngine.readHook"] == 2)
+        #expect(seen["let readHook = ArchivePromoteEngine.readHook"] == 4)
         #expect(seen["private let readHook = ArchivePromoteEngine.readHook"] == 1)
     }
 
@@ -406,8 +406,35 @@ struct DedupeHashReadSeamSensorTests {
         #expect(count("if let readHook, !chunk.isEmpty {", in: code) == 1)
         #expect(code.contains("try handle.read(upToCount: 1 << 20)"))
         #expect(code.contains("guard total == expectedBytes else { return nil }"))
-        #expect(count("readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook", in: code) == 3,
-                "sha256, holdsNow and proven default to the calling task's hook")
+        #expect(count("readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook", in: code) == 5,
+                "sha256, standingNow, holdsNow, proven and verdict default to the calling task's hook")
+    }
+
+    /// GH #504 D3a / D4 (2026-11-21): the reads that keep one read from being
+    /// the only witness for a Trash move are each in ONE place, and every one
+    /// is a call of the same seamed hasher (so it is fresh, cancellable and
+    /// reachable by the fault matrix).
+    @Test("SENSOR, no single read is the only witness: the gate's second read has one maker and two callers (the keeper on the two-file path, the held file on the cached path); the keeper's confirming read is asked in the hold, before the move; a stamp-less copy is hashed twice in one function")
+    func theSecondReadsAreInOnePlaceEach() throws {
+        let gate = try SourceTree.appCode(named: "SignatureVerification.swift")
+        #expect(count("private static func secondReadFailure(", in: gate) == 1)
+        #expect(count("secondReadFailure(of:", in: gate) == 2, "pairVerdict (keeper) and verifyHeld (held file)")
+        #expect(count("private static func storedKeeperFixityProblem(", in: gate) == 1)
+        #expect(count("storedKeeperFixityProblem(fixity,", in: gate) == 1)
+        let hold = try #require(gate.range(of: "let stop = storedKeeperFixityProblem(fixity,"))
+        let move = try #require(gate.range(of: "switch moveIntoQuarantine(originalPath: duplicatePath"))
+        #expect(hold.lowerBound < move.lowerBound, "the keeper is confirmed BEFORE the duplicate is moved")
+        #expect(gate.contains("if !keeperConfirmedThisRun,"), "the confirming read is skipped only on the caller's word")
+        // Published only after the verdict AND the second keeper read (D2 + D3a).
+        let verdict = try #require(gate.range(of: "guard read.keeperHash == read.duplicateHash else { return .failure(.contentDiffers) }"))
+        let publish = try #require(gate.range(of: "hooks.didComputeKeeperFixity?(keeperFixity)"))
+        #expect(verdict.lowerBound < publish.lowerBound && count("hooks.didComputeKeeperFixity?(", in: gate) == 1)
+        let job = try SourceTree.appCode(named: "DeleteDuplicatesJob.swift")
+        #expect(count("keeperConfirmedThisRun: item.keeperConfirmedThisRun,", in: job) == 1, "the worker passes the run's word to the hold")
+        #expect(count("keeperConfirmedThisRun: keeperIsConfirmedThisRun(keeper),", in: job) == 1, "decided per pair, at dispatch, from this run's evidence")
+        let proof = try SourceTree.appCode(named: "ContentCopyProof.swift")
+        #expect(count("ContentCopyProof.sha256(path: path, expectedBytes: byteCount, readHook: readHook)", in: proof) == 2,
+                "a stamp-less copy is hashed twice, both through the seam")
     }
 
     @Test("the engine's shared applier is called from the two serial hashers only; the job's two hashing workers carry the hook by value; the detached proof callers pass it in")
@@ -424,12 +451,12 @@ struct DedupeHashReadSeamSensorTests {
         let relocate = try SourceTree.appCode(named: "VideoScanModel+Relocate.swift")
         #expect(count("ContentCopyProof.proven(source: $1.source, copies: $1.copies, readHook: readHook)", in: relocate) == 2)
         let trash = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
-        #expect(count("ContentCopyProof.proven(source: source, copies: staying, readHook: readHook)", in: trash) == 1)
+        #expect(count("ContentCopyProof.verdict(source: source, copies: staying, readHook: readHook)", in: trash) == 1)
         // Every caller of the proof, app-wide, is one of those three.
         var provers = 0
         for entry in SourceTree.appSources {
             let text = try String(contentsOf: entry.url, encoding: .utf8)
-            provers += count("ContentCopyProof.proven(", in: text)
+            provers += count("ContentCopyProof.proven(", in: text) + count("ContentCopyProof.verdict(", in: text)
         }
         #expect(provers == 3, "a new ContentCopyProof.proven caller: does it hop to Task.detached? then it must pass readHook")
     }

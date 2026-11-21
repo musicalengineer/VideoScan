@@ -481,6 +481,12 @@ extension VideoScanModel {
     nonisolated static let copyNotProvenAtTheMoveNote =
         "no other copy of it could be proven on disk just now (whole-file SHA-256) — nothing moved"
 
+    /// GH #504 D3a: the surviving copy has no stat stamp to trust, so it was
+    /// read in full twice — and the two reads did not agree.
+    nonisolated static func copyReadsDisagreedAtTheMoveNote(_ copyPath: String) -> String {
+        "two reads of \((copyPath as NSString).lastPathComponent) disagreed — nothing was removed"
+    }
+
     /// One outcome per selected row, in selection order: the routine's
     /// outcome for a row it was handed, else the plan's refusal as a named
     /// hold (or "offline" for a drive that isn't connected).
@@ -644,8 +650,11 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
             let pinned = Set(RemovalReservations.shared.pin(copies.map(\.path), for: path))
             let staying = copies.filter { pinned.contains($0.path) }
             if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
-            return ContentCopyProof.proven(source: source, copies: staying, readHook: readHook)
-                ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
+            switch ContentCopyProof.verdict(source: source, copies: staying, readHook: readHook) {
+            case .proven: return nil
+            case .notProven: return VideoScanModel.copyNotProvenAtTheMoveNote
+            case .readsDisagreed(let copyPath): return VideoScanModel.copyReadsDisagreedAtTheMoveNote(copyPath)
+            }
         case nil:
             return VideoScanModel.copyNotProvenAtTheMoveNote
         }
