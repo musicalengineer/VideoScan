@@ -38240,6 +38240,18 @@
         "proxyLaunchFailure",
         "proxyNonzeroExit"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersistentLogRotationGzipTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PersistentLogRotationGzipTests"
+      ],
+      "tests": [
+        "gzipFailureIsContained",
+        "theCommandLine"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42228,7 +42240,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 902,
+      "expected_floor": 904,
       "name": "regression",
       "package_expected_floor": 346,
       "package_selectors": [
@@ -42479,7 +42491,8 @@
         "VideoScanTests/HashReadSeamTests",
         "VideoScanTests/HashReadSeamSensorTests",
         "VideoScanTests/HallieWebFfmpegCommandTests",
-        "VideoScanTests/AudioTranscriberCommandTests"
+        "VideoScanTests/AudioTranscriberCommandTests",
+        "VideoScanTests/PersistentLogRotationGzipTests"
       ]
     },
     {

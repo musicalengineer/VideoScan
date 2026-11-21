@@ -141,10 +141,22 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         // Compress detached — never blocks a writer. gzip replaces the
         // .log with .log.gz on success; on failure the plain .log
         // archive remains (worse disk, same forensics).
-        let gzip = Process()
-        gzip.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
-        gzip.arguments = [archiveURL.path]
-        try? gzip.run()
+        //
+        // Through ProcessRunner (2026-11-21; it was a hand-rolled
+        // `Process()` started and never waited for): same executable and
+        // argv, still fire-and-forget — the task is detached, so this
+        // returns at once under the write lock. Failure stays CONTAINED:
+        // nothing is thrown, and nothing is logged from here (this IS the
+        // log; writing to it under its own lock would deadlock). Gained: a
+        // wedged gzip is stopped after 10 minutes instead of living for
+        // ever, and a test's ScriptedExecutor answers the command
+        // (`TaskTreeScope.detached` carries the scope).
+        let archivePath = archiveURL.path
+        _ = TaskTreeScope.detached(priority: .utility) {
+            _ = await ProcessRunner.runProcess(executable: "/usr/bin/gzip", arguments: [archivePath],
+                                               stdoutLimitBytes: 0, stderrLimitBytes: 0,
+                                               deadlineSeconds: 600)
+        }
     }
 
     /// Open the log file.
