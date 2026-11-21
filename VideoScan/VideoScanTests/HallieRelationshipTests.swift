@@ -11,7 +11,7 @@ import VideoScanCore
 /// and the executor answer over a synthetic tree (no real family data —
 /// 2026-08-03 privacy policy).
 @MainActor
-@Suite("Hallie relationship + pronoun binding", .serialized)
+@Suite("Hallie relationship + pronoun binding")
 struct HallieRelationshipTests {
 
     // MARK: Fixture: Rick Breen → father Al → mother Grace → mother Hallie Mae

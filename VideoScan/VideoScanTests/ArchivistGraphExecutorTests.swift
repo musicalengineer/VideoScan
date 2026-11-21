@@ -3,6 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
+// serialized: profileResolutionScaleSensor (100k profiles, a 1-minute allowance) timed out beside its siblings in 5 of 5 parallel runs 2026-11-21
 @Suite("Family Archivist deterministic graph executor", .serialized)
 struct ArchivistGraphExecutorTests {
     private static let familyTree = """

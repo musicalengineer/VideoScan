@@ -3,6 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
+// serialized: two 100k-record tests assert 2 s wall-clock budgets (red 3 of 5 parallel runs 2026-11-21)
 @Suite("Family Archivist deterministic aggregate executor", .serialized)
 struct ArchivistAggregateExecutorTests {
     private let stamp = Date(timeIntervalSince1970: 1_700_000_000)

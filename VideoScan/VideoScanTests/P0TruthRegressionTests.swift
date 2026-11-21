@@ -41,7 +41,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("P0 truth regressions — a surface states only what it verified (GH #327)", .serialized)
+@Suite("P0 truth regressions — a surface states only what it verified (GH #327)")
 @MainActor
 struct P0TruthRegressionTests {
 

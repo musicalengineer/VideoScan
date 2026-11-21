@@ -16,7 +16,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Archive Angel recommendation policy — default = today, overrides refused unless sound", .serialized)
+@Suite("Archive Angel recommendation policy — default = today, overrides refused unless sound")
 @MainActor
 struct ArchiveAngelRecommendationPolicyTests {
 

@@ -6,7 +6,7 @@ import Testing
 /// resolved / ambiguous / missing / unselected record scope produces, the
 /// chips, conversation memory, and the answer plan.
 @MainActor
-@Suite("Hallie record-scope turns", .serialized)
+@Suite("Hallie record-scope turns")
 struct HallieRecordScopeTurnTests {
     private let recordID = UUID()
     private let path = "/Volumes/Archive/1994/New Hampshire.mov"

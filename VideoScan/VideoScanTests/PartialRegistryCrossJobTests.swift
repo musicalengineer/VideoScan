@@ -18,7 +18,7 @@ import Foundation
 //
 // All files are `test_` prefixed in a per-test temp dir.
 
-@Suite("Partial registry — cross-job sweeps", .serialized) @MainActor
+@Suite("Partial registry — cross-job sweeps") @MainActor
 struct PartialRegistryCrossJobTests {
 
     static func makeDir(_ purpose: String) throws -> URL {

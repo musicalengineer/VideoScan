@@ -3,6 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
+// serialized: one test writes UserDefaults.standard (the Ollama hosts key) and restores it; one asserts a 100k-record wall-clock budget (red beside its siblings 2026-11-21)
 @Suite("Hallie app QueryAST-v2 integration", .serialized)
 struct HallieAppV2IntegrationTests {
     private enum FixtureError: Error {

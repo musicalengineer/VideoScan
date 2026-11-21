@@ -945,17 +945,40 @@ actor ArchiveAngelPlanWriter {
     /// folder whose name contains `batchNameContains`, every write after
     /// the first `afterWrites` throws "out of space". Always compiled —
     /// nil in production, and Release test runs (TestDriver, the testbed)
-    /// must be able to set it (codex #1570: a DEBUG-only seam made the
+    /// must be able to bind it (codex #1570: a DEBUG-only seam made the
     /// whole-job suite uncompilable in Release).
-    nonisolated(unsafe) static var injectedFailure: (batchNameContains: String, afterWrites: Int)?
+    struct InjectedFailure: Sendable, Equatable {
+        let batchNameContains: String
+        let afterWrites: Int
+    }
+
+    /// The fault a TEST bound for its own task tree; nil in production,
+    /// always (a sensor holds that no app source binds it). Until
+    /// 2026-11-21 this was a process-global `static var`, which forced the
+    /// whole-job suite `.serialized` and let one test's fault reach any
+    /// other test's batch whose path matched.
+    ///   ArchiveAngelPlanWriter.$injectedFailure.withValue(.init(…)) { await job… }
+    /// (C++: a thread_local that follows the coroutine and its children
+    /// instead of the OS thread; there is no setter, only a scoped bind.)
+    ///
+    /// It is read by the CALLER of `write` (the default argument below),
+    /// never inside the actor, so a save requested on the task tree and
+    /// performed in a detached task still carries it: the job reads it
+    /// before `TaskTreeScope.detached` and passes the value in
+    /// (capture-and-pass — a detached task inherits no task-locals).
+    @TaskLocal static var injectedFailure: InjectedFailure? = nil
     private var writesPerBatch: [String: Int] = [:]
 
     /// Writes unless a newer generation of this batch is already on disk.
     /// Returns false when the save was dropped as stale.
+    /// `injecting` is the test fault for this one write; its default is
+    /// evaluated at the call site, on the caller's task (C++: a default
+    /// argument is an expression the CALLER runs).
     @discardableResult
-    func write(_ plan: ArchiveAngelPlan, generation: UInt64) throws -> Bool {
+    func write(_ plan: ArchiveAngelPlan, generation: UInt64,
+               injecting inject: InjectedFailure? = ArchiveAngelPlanWriter.injectedFailure) throws -> Bool {
         let key = URL(fileURLWithPath: plan.batchDir).standardizedFileURL.path
-        if let inject = Self.injectedFailure, key.contains(inject.batchNameContains) {
+        if let inject, key.contains(inject.batchNameContains) {
             writesPerBatch[key, default: 0] += 1
             if writesPerBatch[key, default: 0] > inject.afterWrites { throw CocoaError(.fileWriteOutOfSpace) }
         }

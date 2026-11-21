@@ -11,7 +11,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Catalog Delete Selected Files — pair groups: live catalog and the unit contract", .serialized)
+@Suite("Catalog Delete Selected Files — pair groups: live catalog and the unit contract")
 @MainActor
 struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
 

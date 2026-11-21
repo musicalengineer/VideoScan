@@ -24,6 +24,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
+// serialized: planScale100k asserts a 10 s wall-clock budget (red 2 of 5 parallel runs 2026-11-21, once past its 1-minute allowance)
 @Suite("Prune — one plan, both files read, Trash only", .serialized)
 @MainActor
 struct PruneApplyTests {

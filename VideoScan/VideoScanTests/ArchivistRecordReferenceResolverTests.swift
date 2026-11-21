@@ -19,7 +19,7 @@ import Testing
 /// also what exercises the per-hit revalidation path on its own); the one
 /// test of the generation key itself asserts behaviour and a lower bound.
 @MainActor
-@Suite("Family Archivist record reference resolver", .serialized)
+@Suite("Family Archivist record reference resolver")
 struct ArchivistRecordReferenceResolverTests {
     private func record(_ path: String) -> VideoRecord {
         let value = VideoRecord()

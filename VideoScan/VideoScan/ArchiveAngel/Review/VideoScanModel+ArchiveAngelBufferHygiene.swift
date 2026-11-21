@@ -128,14 +128,29 @@ struct ArchiveAngelBatchClearAllOutcome: Sendable {
     var finished: Task<Int, Never>
 }
 
-extension VideoScanModel {
+/// Clear's test seam (codex #1714 R3). Its own type, not a static on the
+/// model: a task-local needs no actor, and new state does not go on
+/// `VideoScanModel` (rule 12).
+enum ArchiveAngelClearSeam {
+    /// Called at the start of each off-main disk phase with its name
+    /// ("path", "plan") and the batch folder. A test records which thread
+    /// ran it and can stall it to stand in for slow storage. Nil in
+    /// production, always (a sensor holds that no app source binds it);
+    /// always compiled so Release test runs can bind it.
+    ///
+    /// Task-local since 2026-11-21 (it was a process-global `static var`
+    /// every test had to filter by batch folder and nil in a `defer`): a
+    /// test binds it for its own task tree and no other test can see it.
+    ///   ArchiveAngelClearSeam.$diskProbe.withValue({ phase, dir in … }) { await model.clear… }
+    /// Both phases run in the CALLER's task (`@concurrent` moves the work
+    /// to the global executor, not to another task), so the binding
+    /// reaches them with no carry.
+    /// (C++: a thread_local that follows the coroutine, bound by an RAII
+    /// scope — the closure cannot outlive the `withValue` block's tasks.)
+    @TaskLocal static var diskProbe: (@Sendable (_ phase: String, _ batchDir: String) -> Void)? = nil
+}
 
-    /// Test seam (codex #1714 R3): called at the start of each off-main
-    /// disk phase with its name ("path", "plan") and the batch folder. A
-    /// test records which thread ran it and can stall it (for its own batch
-    /// only — suites run in parallel) to stand in for slow storage. Nil in
-    /// production; always compiled so Release test runs can set it.
-    nonisolated(unsafe) static var clearDiskProbe: (@Sendable (String, String) -> Void)?
+extension VideoScanModel {
 
     /// What the off-main checks found (codex #1714 R3): the path guards and
     /// the folder's existence (phase 1), then the CURRENT plan.json read and
@@ -159,7 +174,7 @@ extension VideoScanModel {
     @concurrent
     #endif
     nonisolated static func clearPathChecks(batchDir: String) async -> ArchiveAngelBatchClearOutcome.Refusal? {
-        clearDiskProbe?("path", batchDir)
+        ArchiveAngelClearSeam.diskProbe?("path", batchDir)
         let parent = URL(fileURLWithPath: batchDir).standardizedFileURL.deletingLastPathComponent()
         do {
             try ArchiveAngelPlanStore.checkBatchFolder(batchDir, bufferRoot: parent)
@@ -179,7 +194,7 @@ extension VideoScanModel {
     @concurrent
     #endif
     nonisolated static func clearPlanPhase(batchDir: String, reason: String, at now: Date) async -> ClearDiskPhase {
-        clearDiskProbe?("plan", batchDir)
+        ArchiveAngelClearSeam.diskProbe?("plan", batchDir)
         var plan: ArchiveAngelPlan
         do {
             plan = try ArchiveAngelPlanStore.load(batchDir: batchDir)

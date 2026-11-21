@@ -13,7 +13,7 @@ import Foundation
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("File Journey — Codex #292 findings (red on f997a9146)", .serialized)
+@Suite("File Journey — Codex #292 findings (red on f997a9146)")
 @MainActor
 struct FileJourneyCodexFindingsTests {
 

@@ -21,6 +21,7 @@ import Testing
 import UniformTypeIdentifiers
 @testable import VideoScan
 
+// serialized: five tests install the process-global PersonDocumentLog.shared extra sink and reset its reported-once sets; a sibling's detach empties another's capture (red 5 of 5 parallel runs 2026-11-21)
 @Suite("Family documents — store", .serialized)
 struct FamilyDocumentStoreTests {
     private let fileManager = FileManager.default

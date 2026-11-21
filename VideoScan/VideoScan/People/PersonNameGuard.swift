@@ -11,8 +11,10 @@
 // opened, must hit the same wall.
 //
 // C++ readers: a namespace of static functions plus one injectable
-// "roster" closure (≈ a function pointer with a default) so tests can hand
-// in a synthetic gallery without touching the per-process store.
+// "roster" closure (≈ a thread_local function pointer with a default, one
+// that follows the coroutine instead of the thread) so a test can hand in a
+// synthetic gallery for its own task tree without touching the per-process
+// store — and without any other test seeing it.
 
 import Foundation
 
@@ -26,9 +28,16 @@ enum PersonNameGuard {
     }
 
     /// The saved profiles the guard checks against. Default: the gallery on
-    /// disk. `nonisolated(unsafe)` ≈ a plain global — tests replace it for
-    /// the duration of a test; production never touches it.
-    nonisolated(unsafe) static var roster: () -> [POIProfile] = { POIProfile.listAll() }
+    /// disk, which is what production always reads (a sensor holds that no
+    /// app source binds this). A test binds a synthetic gallery for its own
+    /// task tree:
+    ///   try PersonNameGuard.$roster.withValue({ fixture }) { try sink.record(…) }
+    /// Task-local since 2026-11-21 — it was a process-global `static var`
+    /// a test swapped and restored, so a parallel test's name-keyed write
+    /// was judged against another test's roster. Read where `check` and the
+    /// catalog writeback are called, on the caller's task; neither is
+    /// reached through a detached task.
+    @TaskLocal static var roster: @Sendable () -> [POIProfile] = { POIProfile.listAll() }
 
     /// True when more than one profile in `profiles` has this canonical
     /// short name (case-insensitive).

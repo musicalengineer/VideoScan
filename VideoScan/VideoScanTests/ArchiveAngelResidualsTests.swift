@@ -23,6 +23,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
+// serialized: R3 measures the main actor's own responsiveness (a 10 ms heartbeat must tick 10 times across a 0.3 s stalled disk phase) and its @MainActor siblings running beside it starve it (2 of 2 parallel runs 2026-11-21: 3 ticks). Clear's disk probe is no longer a reason: it is a task-local since that day.
 @Suite("Archive Angel residuals (codex #1714)", .serialized)
 @MainActor
 struct ArchiveAngelResidualsTests {
@@ -52,9 +53,18 @@ struct ArchiveAngelResidualsTests {
         return e
     }
 
-    /// The console flushes on a 0.15 s timer (DashboardState.log).
+    /// The console flushes on a 0.15 s timer (DashboardState.log) — its own
+    /// main-actor task. Every caller EXPECTS the line, so wait for it (10 s
+    /// cap) instead of a fixed 0.3 s: beside other suites' main-actor tests
+    /// the flush can be overdue when a fixed sleep returns (red 2 of 5
+    /// parallel runs, 2026-11-21; the DeleteDuplicatesJobTests fix of the
+    /// same day is this one).
+    /// (C++: poll a condition with a deadline, not sleep-and-hope.)
     private func consoleContains(_ model: VideoScanModel, _ text: String) async -> Bool {
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline, !model.dashboard.consoleLines.contains(where: { $0.contains(text) }) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
         return model.dashboard.consoleLines.contains { $0.contains(text) }
     }
 
@@ -209,10 +219,7 @@ struct ArchiveAngelResidualsTests {
     @Test("R3: Clear reads and saves plan.json off the main actor; a stalled disk phase does not stall main; order and outcome unchanged")
     func clearDiskPhasesRunOffMain() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("r3offmain")
-        defer {
-            VideoScanModel.clearDiskProbe = nil
-            sb.cleanup()
-        }
+        defer { sb.cleanup() }
         let model = try makeModel(sb)
         let rowID = catalogued(model)
         let batchDir = sb.root.appendingPathComponent("buffer/batch-r3").path
@@ -222,9 +229,10 @@ struct ArchiveAngelResidualsTests {
         try ArchiveAngelPlanStore.save(plan)
 
         let seen = OSAllocatedUnfairLock(initialState: [(phase: String, onMain: Bool)]())
-        VideoScanModel.clearDiskProbe = { phase, dir in
-            guard dir == batchDir else { return }          // other suites run in parallel
-            seen.withLock { $0.append((phase, Thread.isMainThread)) }
+        // Bound for this test's task tree: no other test's Clear reaches it,
+        // so an unexpected folder here is a leak of the seam, not noise.
+        let probe: @Sendable (String, String) -> Void = { phase, dir in
+            seen.withLock { $0.append((phase + (dir == batchDir ? "" : " for \(dir)"), Thread.isMainThread)) }
             if phase == "plan" { Thread.sleep(forTimeInterval: 0.3) }   // slow external storage
         }
         // A main-actor heartbeat: if the plan phase ran on main, it could not tick.
@@ -235,7 +243,9 @@ struct ArchiveAngelResidualsTests {
                 try? await Task.sleep(nanoseconds: 10_000_000)
             }
         }
-        let out = await model.clearArchiveAngelBatch(plan, reason: "r3")
+        let out = await ArchiveAngelClearSeam.$diskProbe.withValue(probe) {
+            await model.clearArchiveAngelBatch(plan, reason: "r3")
+        }
         heartbeat.cancel()
 
         let phases = seen.withLock { $0 }
@@ -251,10 +261,7 @@ struct ArchiveAngelResidualsTests {
     @Test("R3: the batch is CLAIMED across the off-main phases — a job cannot begin it, a second Clear is refused live")
     func batchIsClaimedDuringOffMainPhases() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("r3claim")
-        defer {
-            VideoScanModel.clearDiskProbe = nil
-            sb.cleanup()
-        }
+        defer { sb.cleanup() }
         let model = try makeModel(sb)
         let rowID = UUID()
         let batchDir = sb.root.appendingPathComponent("buffer/batch-r3claim").path
@@ -264,14 +271,16 @@ struct ArchiveAngelResidualsTests {
         try ArchiveAngelPlanStore.save(plan)
 
         let observed = OSAllocatedUnfairLock<(live: Bool, secondClaim: Bool)?>(initialState: nil)
-        VideoScanModel.clearDiskProbe = { phase, dir in
+        let probe: @Sendable (String, String) -> Void = { phase, dir in
             guard dir == batchDir, phase == "plan" else { return }
             let live = ArchiveAngelLiveBatches.isLive(dir)
             let second = ArchiveAngelLiveBatches.claim(dir)
             if second { ArchiveAngelLiveBatches.end(dir) }
             observed.withLock { $0 = (live, second) }
         }
-        let out = await model.clearArchiveAngelBatch(plan, reason: "r3 claim")
+        let out = await ArchiveAngelClearSeam.$diskProbe.withValue(probe) {
+            await model.clearArchiveAngelBatch(plan, reason: "r3 claim")
+        }
         let seen = try #require(observed.withLock { $0 }, "the plan phase never ran")
         #expect(seen.live, "the plan was read and saved while the batch looked idle")
         #expect(!seen.secondClaim, "a second claimant got the batch mid-clear")

@@ -76,7 +76,7 @@ private let sharedSurnameTree: String = {
     return lines.joined(separator: "\n")
 }()
 
-@Suite("Hallie — an exact People-tab match outranks a tree full of namesakes", .serialized)
+@Suite("Hallie — an exact People-tab match outranks a tree full of namesakes")
 struct PeopleTabPrecedenceTests {
     typealias Exec = HallieTurnExecutor
 

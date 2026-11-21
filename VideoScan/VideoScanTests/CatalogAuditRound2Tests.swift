@@ -39,7 +39,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Audit catalog — codex rounds 2–3 (fd-bound proof, revision ownership, supersession, the one proof rule, no link anywhere, rescan carries history)", .serialized)
+@Suite("Audit catalog — codex rounds 2–3 (fd-bound proof, revision ownership, supersession, the one proof rule, no link anywhere, rescan carries history)")
 @MainActor
 struct CatalogAuditRound2Tests {
 

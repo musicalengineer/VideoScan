@@ -10,8 +10,10 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-// serialized: sets the process-global ArchiveAngelPlanWriter.injectedFailure seam per test
-@Suite("Archive Angel — whole jobs on real media, failures injected", .serialized)
+// Parallel since 2026-11-21: the plan writer's disk-full fault is a
+// task-local a test binds for its own job (it was a process-global, which
+// is why this suite was `.serialized`); every test has its own sandbox.
+@Suite("Archive Angel — whole jobs on real media, failures injected")
 @MainActor
 struct ArchiveAngelWholeJobTests {
     static let ffmpeg = ToolLocator.ffmpegPath
@@ -162,9 +164,12 @@ struct ArchiveAngelWholeJobTests {
         let b = try bench("wholejob_diskfull"); defer { b.sb.cleanup() }
         let x = try await clip("test_wj_x.mp4", in: b.sb.sources)
         let y = try await clip("test_wj_y.mp4", in: b.sb.sources)
-        ArchiveAngelPlanWriter.injectedFailure = (batchNameContains: b.buffer.path, afterWrites: 3)
-        defer { ArchiveAngelPlanWriter.injectedFailure = nil }
-        let job = await run(b, [record(x), record(y)])
+        // Bound for this job's task tree only (`job.start()` makes its Task
+        // inside the scope, and a Task copies the task-locals it is born under).
+        let fault = ArchiveAngelPlanWriter.InjectedFailure(batchNameContains: b.buffer.path, afterWrites: 3)
+        let job = await ArchiveAngelPlanWriter.$injectedFailure.withValue(fault) {
+            await run(b, [record(x), record(y)])
+        }
         guard case .failed(let reason) = job.state else {
             Issue.record("a failed plan save ended as \(job.state)"); return
         }

@@ -112,7 +112,7 @@ private func fixtureTree(rickHasParents: Bool) -> String {
     return lines.joined(separator: "\n")
 }
 
-@Suite("Hallie — 'find videos of dad' is Dad Breen, never a Welshman named Dad", .serialized)
+@Suite("Hallie — 'find videos of dad' is Dad Breen, never a Welshman named Dad")
 struct HallieDadNotDafyddTests {
     typealias Exec = HallieTurnExecutor
     typealias Answer = HallieLineageAnswer

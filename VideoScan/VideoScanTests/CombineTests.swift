@@ -116,7 +116,7 @@ import os
 
 // MARK: - CombineEngine Extended Tests
 
-@Suite(.serialized) struct CombineEngineExtendedTests {
+@Suite struct CombineEngineExtendedTests {
 
     private static func canDecodeFrame(path: String, streamType: String) async -> Bool {
         let args: [String]

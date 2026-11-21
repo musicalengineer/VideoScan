@@ -29,7 +29,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Scan — a file still being written is skipped, not catalogued", .serialized)
+@Suite("Scan — a file still being written is skipped, not catalogued")
 @MainActor
 struct ScanStillBeingWrittenTests {
 

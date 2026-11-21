@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -11,8 +12,13 @@ import Testing
 // Everything runs in the per-process test store (POIStorage.storeDir under a
 // test host); PersonFinderSettings writes are diverted from the real prefs
 // by its own test-host gate.
+//
+// Parallel since 2026-11-21: the one process-global it swapped
+// (PersonNameGuard.roster) is a task-local the test binds for itself; every
+// test names its people with a fresh UUID tag, so the shared per-process
+// store never holds two tests' namesakes under one name.
 
-@Suite("Two Richards — consumer sensors", .serialized)
+@Suite("Two Richards — consumer sensors")
 struct TwoRichardsConsumerSensorTests {
 
     private struct Pair {
@@ -403,42 +409,42 @@ struct TwoRichardsConsumerSensorTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let tag = String(UUID().uuidString.prefix(6))
         let given = "Richard\(tag)"
-        // Roster: first one Richard (sheet opens), then two.
-        var roster = [POIProfile(name: given, referencePath: "")]
-        let saved = PersonNameGuard.roster
-        PersonNameGuard.roster = { roster }
-        defer { PersonNameGuard.roster = saved }
+        // Roster: first one Richard (sheet opens), then two. Bound for this
+        // test's task tree only (a lock-guarded box: the closure is @Sendable
+        // and the test changes the roster mid-way).
+        let roster = OSAllocatedUnfairLock(initialState: [POIProfile(name: given, referencePath: "")])
+        try PersonNameGuard.$roster.withValue({ roster.withLock { $0 } }) {
+            let header = "reviewId,fullPath,rickConfirm(yes/no),notes"   // the contract header
+            let csv = dir.appendingPathComponent(HoldoutReviewQueue.csvFilename)
+            try Data("\(header)\r\nr1,/v/a.mov,,\r\n".utf8).write(to: csv)
+            try Data(given.utf8).write(to: dir.appendingPathComponent(HoldoutReviewQueue.personSidecarFilename))
+            var queue = try HoldoutReviewQueue.load(csvURL: csv)
+            #expect(queue.personName == given)
+            let labels = ValidationLabelStore(directory: dir)
 
-        let header = "reviewId,fullPath,rickConfirm(yes/no),notes"   // the contract header
-        let csv = dir.appendingPathComponent(HoldoutReviewQueue.csvFilename)
-        try Data("\(header)\r\nr1,/v/a.mov,,\r\n".utf8).write(to: csv)
-        try Data(given.utf8).write(to: dir.appendingPathComponent(HoldoutReviewQueue.personSidecarFilename))
-        var queue = try HoldoutReviewQueue.load(csvURL: csv)
-        #expect(queue.personName == given)
-        let labels = ValidationLabelStore(directory: dir)
+            // Unique name: both sinks accept.
+            try queue.recordAnswer(reviewId: "r1", confirm: "yes", notes: "ok")
+            _ = try labels.record(recordPath: "/v/a.mov", person: given, rating: .definitely, signals: [], score: 1)
+            let csvAfterFirst = try Data(contentsOf: csv)
+            let labelsAfterFirst = try Data(contentsOf: dir.appendingPathComponent("validation_labels.json"))
 
-        // Unique name: both sinks accept.
-        try queue.recordAnswer(reviewId: "r1", confirm: "yes", notes: "ok")
-        _ = try labels.record(recordPath: "/v/a.mov", person: given, rating: .definitely, signals: [], score: 1)
-        let csvAfterFirst = try Data(contentsOf: csv)
-        let labelsAfterFirst = try Data(contentsOf: dir.appendingPathComponent("validation_labels.json"))
-
-        // The namesake appears while the sheet is open.
-        roster.append(POIProfile(name: given, referencePath: ""))
-        try Data("\(header)\r\nr1,/v/a.mov,yes,ok\r\nr2,/v/b.mov,,\r\n".utf8).write(to: csv)
-        queue = try HoldoutReviewQueue.load(csvURL: csv)
-        let csvBefore = try Data(contentsOf: csv)
-        #expect(throws: PersonNameGuard.Refused(name: given, operation: "holdout review")) {
-            try queue.recordAnswer(reviewId: "r2", confirm: "no", notes: "")
+            // The namesake appears while the sheet is open.
+            roster.withLock { $0.append(POIProfile(name: given, referencePath: "")) }
+            try Data("\(header)\r\nr1,/v/a.mov,yes,ok\r\nr2,/v/b.mov,,\r\n".utf8).write(to: csv)
+            queue = try HoldoutReviewQueue.load(csvURL: csv)
+            let csvBefore = try Data(contentsOf: csv)
+            #expect(throws: PersonNameGuard.Refused(name: given, operation: "holdout review")) {
+                try queue.recordAnswer(reviewId: "r2", confirm: "no", notes: "")
+            }
+            #expect(try Data(contentsOf: csv) == csvBefore)
+            #expect(throws: PersonNameGuard.Refused(name: given, operation: "recording confirmation labels")) {
+                _ = try labels.record(recordPath: "/v/b.mov", person: given, rating: .no, signals: [], score: 0)
+            }
+            #expect(try Data(contentsOf: dir.appendingPathComponent("validation_labels.json")) == labelsAfterFirst)
+            #expect(csvAfterFirst != csvBefore, "the first, legitimate answer did land")
+            let message = PersonNameGuard.Refused(name: given, operation: "holdout review").errorDescription ?? ""
+            #expect(message.contains("Two people are called \(given)"))
         }
-        #expect(try Data(contentsOf: csv) == csvBefore)
-        #expect(throws: PersonNameGuard.Refused(name: given, operation: "recording confirmation labels")) {
-            _ = try labels.record(recordPath: "/v/b.mov", person: given, rating: .no, signals: [], score: 0)
-        }
-        #expect(try Data(contentsOf: dir.appendingPathComponent("validation_labels.json")) == labelsAfterFirst)
-        #expect(csvAfterFirst != csvBefore, "the first, legitimate answer did land")
-        let message = PersonNameGuard.Refused(name: given, operation: "holdout review").errorDescription ?? ""
-        #expect(message.contains("Two people are called \(given)"))
     }
 
     /// (4) A legacy name-keyed relationship to a shared short name stays

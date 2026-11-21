@@ -27,6 +27,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
+// serialized: one test snapshots the real UserDefaults scan-target keys before and after (read-only); kept serial as shared state, not seen red in parallel 2026-11-21
 @Suite(.serialized) @MainActor
 struct VolumeRenameMigrationTests {
 

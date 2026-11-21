@@ -32,7 +32,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-@Suite("RescueFileCopier — .partial publish + measured bytes", .serialized)
+@Suite("RescueFileCopier — .partial publish + measured bytes")
 struct RescueFileCopierTests {
 
     // MARK: - helpers

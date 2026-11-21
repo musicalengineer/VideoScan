@@ -261,7 +261,7 @@ enum RepairFixtures {
 
 // MARK: - Outcomes on disk
 
-@Suite(.serialized, .timeLimit(.minutes(3)))
+@Suite(.timeLimit(.minutes(3)))
 struct MediaRepairEngineTests {
 
     typealias F = RepairFixtures

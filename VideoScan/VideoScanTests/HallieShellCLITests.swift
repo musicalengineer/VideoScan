@@ -5,6 +5,7 @@ import os
 @testable import VideoScan
 
 @MainActor
+// serialized: two tests write UserDefaults.standard (the Ollama hosts key) and restore it; one asserts a 100k-record wall-clock budget (red beside its siblings, parallel run 2026-11-21)
 @Suite("Hallie standalone shell", .serialized)
 struct HallieShellCLITests {
     final class Harness {

@@ -7,7 +7,7 @@ import VideoScanCore
 /// parser, the state machine through the chat coordinator, the read-back,
 /// persistence, the manifest, the shell text loop, and scale.
 @MainActor
-@Suite("Hallie pronunciation drill", .serialized)
+@Suite("Hallie pronunciation drill")
 struct HalliePronunciationDrillTests {
 
     /// Opt-in for this suite's one wall-clock budget. See `PerformanceLane`.

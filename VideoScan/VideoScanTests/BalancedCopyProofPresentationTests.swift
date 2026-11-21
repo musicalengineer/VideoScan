@@ -20,7 +20,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Balanced copy proof — what plays (Codex #304, DECISIONS 2026-11-17)", .serialized)
+@Suite("Balanced copy proof — what plays (Codex #304, DECISIONS 2026-11-17)")
 struct BalancedCopyProofPresentationTests {
 
     typealias Proof = BalancedCopyProof

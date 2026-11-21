@@ -345,4 +345,71 @@ struct ArchiveAngelLifecycleCompanionTests {
         #expect(!fm.fileExists(atPath: job.plan.batchDir), "…and nothing resurrected it")
         #expect(byID(big2.id)?.isBufferShort == true)
     }
+
+    // MARK: - The plan writer's test fault reaches both Skip saves (Codex #347 P2)
+    //
+    // Each Skip saves the plan in a DETACHED task, which inherits no
+    // task-locals: the job reads `ArchiveAngelPlanWriter.injectedFailure` on
+    // the tree and hands the value in. A source pin cannot tell a capture
+    // made before the detach from one made inside it (where it reads nil
+    // and the save silently succeeds), so each path is driven for real: a
+    // fault bound around the Skip must fail THAT save and be said in the log.
+
+    @Test("Skip of a waiting row while the batch runs: a bound plan-writer fault fails the Skip's detached save, and the log says so")
+    func skipWhileRunningHandsTheFaultToItsDetachedSave() async throws {
+        let b = try bench("lifecycle_skip_fault"); defer { b.sb.cleanup() }
+        let slow = try await clip("test_lc_sf_slow.mp4", in: b.sb.sources)
+        try await slowFFmpeg(in: b.sb, slowMarker: "test_lc_sf_slow", seconds: 4).scoped {
+            let recSlow = record(slow)
+            let other = record(b.sb.sources.appendingPathComponent("test_lc_sf_big.mkv"), sizeBytes: 1_000_000_000_000_000)
+            b.model.records = [recSlow, other]
+            let job = ArchiveAngelJob(model: b.model, center: b.center, count: 2, makeLossless: false,
+                                      bufferRoot: b.buffer, explicitRecordIDs: [recSlow.id, other.id])
+            job.start()   // started UNBOUND: the loop's own saves are not faulted
+            defer { job.cancel() }
+            try await waitUntil("the slow row is being prepared") { job.preparingEntryID == recSlow.id }
+
+            // Nobody is holding `other`: the non-live path, a detached save.
+            let sink = InMemoryLogSink(name: "skip-fault-running")
+            let fault = ArchiveAngelPlanWriter.InjectedFailure(batchNameContains: b.buffer.path, afterWrites: 0)
+            let accepted = withAppLog(sink) {
+                ArchiveAngelPlanWriter.$injectedFailure.withValue(fault) { job.skip(entryID: other.id) }
+            }
+            #expect(accepted, "fixture: the row was skippable")
+            await job.cleanupTask?.value
+            #expect(sink.contains("could not save the skip of test_lc_sf_big.mkv"),
+                    "the Skip's detached save did not see the fault: \(sink.lines.suffix(6))")
+
+            job.cancel()
+            await job.task?.value
+            await job.cleanupTask?.value
+        }
+    }
+
+    @Test("Skip of a waiting row after the job finished: a bound plan-writer fault fails the Skip's detached save; the plan on disk is unchanged and the log says so")
+    func skipAfterFinishHandsTheFaultToItsDetachedSave() async throws {
+        let b = try bench("lifecycle_skip_fault_done"); defer { b.sb.cleanup() }
+        let a = try await clip("test_lc_sfd_a.mp4", in: b.sb.sources)
+        let big = record(b.sb.sources.appendingPathComponent("test_lc_sfd_big.mkv"), sizeBytes: 1_000_000_000_000_000)
+        let small = record(a)
+        b.model.records = [big, small]
+        let job = ArchiveAngelJob(model: b.model, center: b.center, count: 2, makeLossless: false,
+                                  bufferRoot: b.buffer, explicitRecordIDs: [big.id, small.id])
+        job.start()
+        await job.task?.value
+        guard case .finished = job.state else { Issue.record("\(job.state) — \(job.plan.log.suffix(4))"); return }
+        try #require(job.plan.entries.first { $0.id == big.id }?.isBufferShort == true, "fixture: parked for space")
+
+        let sink = InMemoryLogSink(name: "skip-fault-finished")
+        let fault = ArchiveAngelPlanWriter.InjectedFailure(batchNameContains: b.buffer.path, afterWrites: 0)
+        let accepted = withAppLog(sink) {
+            ArchiveAngelPlanWriter.$injectedFailure.withValue(fault) { job.skip(entryID: big.id) }
+        }
+        #expect(accepted, "fixture: the waiting row was skippable")
+        await job.cleanupTask?.value
+        #expect(sink.contains("could not save the skip of test_lc_sfd_big.mkv"),
+                "the Skip's detached save did not see the fault: \(sink.lines.suffix(6))")
+        let onDisk = try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir)
+        #expect(onDisk.entries.first { $0.id == big.id }?.status != .skipped, "the faulted save wrote plan.json")
+    }
 }

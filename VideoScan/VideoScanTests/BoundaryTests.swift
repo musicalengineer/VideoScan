@@ -522,7 +522,7 @@ struct DuplicateDetectorBoundaryTests {
 
 // MARK: - MediaAnalyzer Boundary Tests
 
-@Suite(.serialized) struct MediaAnalyzerBoundaryTests {
+@Suite struct MediaAnalyzerBoundaryTests {
 
     @Test func scoreCompletelyEmptyRecord() {
         let r = VideoRecord()

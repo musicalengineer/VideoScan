@@ -211,6 +211,7 @@ struct SQLiteCatalogLoaderTests {
 
 // MARK: - ISOLATION: the flip
 
+// serialized: pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives is load-sensitive (red 2 of 5 runs beside other suites even serialized, 1 of 5 without, 2026-11-21; cause not established), so not shown parallel-safe
 @Suite("Catalog authority flip — no latch refuses (GH #354); refused words make catalog.json read-only", .serialized)
 @MainActor
 struct CatalogAuthorityFlipTests {

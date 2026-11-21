@@ -15,7 +15,7 @@ import VideoScanCore
 /// tradition) under invented names. Every CyberBrain and tree here is built
 /// in memory; nothing reads Rick's real files (see `isolation`).
 @MainActor
-@Suite("Hallie family military-service stories", .serialized)
+@Suite("Hallie family military-service stories")
 struct HallieServiceStoriesTests {
 
     // MARK: - Fixtures
