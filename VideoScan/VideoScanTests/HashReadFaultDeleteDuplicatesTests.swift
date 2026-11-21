@@ -169,8 +169,8 @@ private func makeRig(_ label: String, cachedKeeper: Bool, duplicate: ((Data) -> 
     let keeper = record(keeperURL, size: keeperData.count, group: group, .keep)
     let dup = record(dupURL, size: dupData.count, group: group, .extraCopy)
     if cachedKeeper {
-        keeper.contentFixity = try #require(ContentFixity.captured(path: keeperURL.path, digest: sha(keeperData),
-                                                                   byteCount: Int64(keeperData.count)))
+        keeper.contentFixity = ContentFixity.captured(path: keeperURL.path, digest: sha(keeperData),
+                                                      byteCount: Int64(keeperData.count))
     }
     model.records = [keeper, dup]
     return Rig(dir: dir, plans: dir.appendingPathComponent("plans", isDirectory: true), model: model,
@@ -476,8 +476,8 @@ struct HashReadFaultDeleteDuplicatesTests {
         let rig = try makeRig("shapeC", cachedKeeper: false) { var d = $0; d[Int(faultByte)] ^= 0x01; return d }
         defer { rig.cleanup() }
         // Stamp of the KEEPER, digest of the OTHER file.
-        rig.keeper.contentFixity = try #require(ContentFixity.captured(path: rig.keeper.fullPath, digest: sha(rig.dupData),
-                                                                       byteCount: Int64(rig.keeperData.count)))
+        rig.keeper.contentFixity = ContentFixity.captured(path: rig.keeper.fullPath, digest: sha(rig.dupData),
+                                                          byteCount: Int64(rig.keeperData.count))
         let keeperReads = DedupeReadCounter(where: { [name = rig.keeperName] in $0.hasSuffix("/" + name) })
         let ran = try await runThroughTheCenter(rig, hook: keeperReads.hook)
         print("[hash-matrix] delete duplicates | shape C: false cached keeper fixity, no fault | \(ran.row.status) | \(ran.rowLine) | full reads of the keeper \(keeperReads.passCount)")
