@@ -69,7 +69,8 @@ final class HashReadFault: @unchecked Sendable {
     static func path(of fd: Int32) -> String? {
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard fcntl(fd, F_GETPATH, &buf) == 0 else { return nil }
-        return String(cString: buf)
+        // Up to the first NUL, decoded as UTF-8 (String(cString:) on an array is deprecated).
+        return String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// The hook to bind. Runs on the engine's reader thread.
