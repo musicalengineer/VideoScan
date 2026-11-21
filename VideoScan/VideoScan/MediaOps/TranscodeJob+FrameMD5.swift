@@ -47,18 +47,25 @@ extension TranscodeJob {
     ///     0,          1,          1,     1,   152064, 9e107d...<hash>
     ///
     /// We:
-    ///   - drop comment/header lines (those starting with `#`),
-    ///   - take the LAST whitespace/comma-separated token of each remaining
-    ///     line as that frame's hash,
+    ///   - read both through `frameMD5Records` (the one line parser: `#`
+    ///     headers and blank lines dropped, every other line a full record,
+    ///     else `.malformed`),
     ///   - compare the two hash arrays element-wise,
     ///   - on the first divergence return `.mismatch` with the 0-based
     ///     frame index and both hashes,
     ///   - empty input or differing frame counts → a sensible verdict.
     nonisolated static func compareFrameMD5(source: String,
                                             output: String) -> FrameMD5Verdict {
-        let srcHashes = frameMD5Hashes(from: source)
-        let outHashes = frameMD5Hashes(from: output)
+        switch (frameMD5Records(source), frameMD5Records(output)) {
+        case (.malformed(let why), _): return .malformed("source framemd5 stream: \(why)")
+        case (_, .malformed(let why)): return .malformed("output framemd5 stream: \(why)")
+        case (.hashes(let src), .hashes(let out)): return compareFrameMD5(sourceHashes: src, outputHashes: out)
+        }
+    }
 
+    /// The comparison of two record lists already read by `frameMD5Records`.
+    nonisolated private static func compareFrameMD5(sourceHashes srcHashes: [String],
+                                                    outputHashes outHashes: [String]) -> FrameMD5Verdict {
         if srcHashes.isEmpty && outHashes.isEmpty {
             return .malformed("both framemd5 streams were empty — no frame hashes parsed")
         }
@@ -89,22 +96,99 @@ extension TranscodeJob {
         return .match
     }
 
-    /// Extract the per-frame hash tokens from a framemd5 stream. Comment /
-    /// header lines (leading `#`) and blank lines are dropped; for every
-    /// remaining line the hash is the LAST comma-or-whitespace token.
-    nonisolated private static func frameMD5Hashes(from stream: String) -> [String] {
+    /// One framemd5 answer, read once: every record's MD5 in order, or why
+    /// the answer is not framemd5 output.
+    enum FrameMD5Records: Equatable {
+        case hashes([String])
+        case malformed(String)
+    }
+
+    /// THE line parser — the record check, the comparison and the frame
+    /// count all read the answer through this one function. THE BUG (Codex
+    /// r2 #3, P0): the check (an ICU regex, which ends a line at `\r` too)
+    /// and the comparison (split on `\n`, last token of each line) read the
+    /// same text differently, so `\r`-separated source [A, A] against master
+    /// [B, A] "matched". A line ends at `\n` or `\r` (`\r\n` leaves a blank
+    /// line, which is skipped); any other byte that is not a field's own
+    /// makes the record malformed (a Unicode line separator, a form feed).
+    /// A line that is blank or opens with `#` is a header; every other line
+    /// must be six comma-separated fields — stream index 0, four integers
+    /// (dts, pts, duration, size), a 32-hex-digit MD5 — with spaces or tabs
+    /// around them. O(bytes), one pass over the UTF-8 in place. Worst case:
+    /// a 4-hour tape is 432,000 records (~30 MB) per stream → 432,000
+    /// 32-byte strings (~25 MB with headers), released by the caller.
+    nonisolated static func frameMD5Records(_ stream: String) -> FrameMD5Records {
+        var text = stream   // `withUTF8` may make a bridged string contiguous (≈ c_str() on a rope)
+        return text.withUTF8 { frameMD5Records(bytes: $0) }
+    }
+
+    nonisolated private static func frameMD5Records(bytes b: UnsafeBufferPointer<UInt8>) -> FrameMD5Records {
         var hashes: [String] = []
-        hashes.reserveCapacity(1024)
-        for rawLine in stream.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") { continue }
-            // framemd5 columns are comma-separated, but be liberal and also
-            // split on whitespace so a hand-written fixture still parses.
-            let tokens = line.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
-            guard let last = tokens.last else { continue }
-            hashes.append(String(last))
+        var lineStart = 0
+        while lineStart < b.count {
+            var end = lineStart
+            while end < b.count && b[end] != 0x0A && b[end] != 0x0D { end += 1 }   // \n, \r
+            let line = FrameMD5Byte.trimmed(b, lineStart..<end)
+            switch frameMD5Line(b, line) {
+            case .header:
+                break
+            case .record(let md5):
+                hashes.append(FrameMD5Byte.ascii(b, md5))
+            case .notARecord:
+                let shown = FrameMD5Byte.text(b, line)
+                return .malformed("record \(hashes.count + 1) of ffmpeg's answer (“\(shown.count > 60 ? String(shown.prefix(60)) + "…" : shown)”)"
+                                  + " is not a frame MD5 record")
+            }
+            lineStart = end + 1
         }
-        return hashes
+        return .hashes(hashes)
+    }
+
+    /// What one line of a framemd5 answer is.
+    private enum FrameMD5Line { case header, record(md5: Range<Int>), notARecord }
+
+    /// One line, trimmed of spaces and tabs: blank or `#` → a header; six
+    /// comma-separated fields that `isFrameMD5Field` accepts → a record
+    /// (with where its MD5 is); anything else → not a record.
+    nonisolated private static func frameMD5Line(_ b: UnsafeBufferPointer<UInt8>, _ line: Range<Int>) -> FrameMD5Line {
+        guard let first = line.first, b[first] != 0x23 else { return .header }   // `#`
+        var p = line.lowerBound, md5 = p..<p
+        for field in 0..<6 {
+            let token = FrameMD5Byte.token(b, from: &p, before: line.upperBound)
+            guard isFrameMD5Field(field, b, token) else { return .notARecord }
+            if field == 5 { md5 = token; continue }
+            guard p < line.upperBound, b[p] == 0x2C else { return .notARecord }   // `,`
+            p += 1
+        }
+        return p == line.upperBound ? .record(md5: md5) : .notARecord
+    }
+
+    /// Field 0 is the stream index (0 — one stream is mapped); 1–4 are
+    /// dts, pts, duration, size (integers, dts may be negative); 5 is the
+    /// MD5 (32 hex digits).
+    nonisolated private static func isFrameMD5Field(_ field: Int, _ b: UnsafeBufferPointer<UInt8>, _ token: Range<Int>) -> Bool {
+        // `while` over indices, not `for … in`: an iterator per field is the
+        // dominant cost of a Debug build's 432,000-record answer.
+        var i = token.lowerBound
+        switch field {
+        case 0:
+            return token.count == 1 && b[i] == 0x30   // `0`
+        case 5:
+            guard token.count == 32 else { return false }
+            while i < token.upperBound && FrameMD5Byte.isHex(b[i]) { i += 1 }
+        default:
+            if i < token.upperBound && b[i] == 0x2D { i += 1 }   // `-`
+            guard i < token.upperBound else { return false }
+            while i < token.upperBound && b[i] >= 0x30 && b[i] <= 0x39 { i += 1 }
+        }
+        return i == token.upperBound
+    }
+
+    /// The per-frame hashes of a framemd5 stream, or none when the stream
+    /// is malformed (the comparison reports why through `frameMD5Records`).
+    nonisolated private static func frameMD5Hashes(from stream: String) -> [String] {
+        if case .hashes(let hashes) = frameMD5Records(stream) { return hashes }
+        return []
     }
 
     /// Number of per-frame MD5 rows in a framemd5 dump (ignores `#` headers).
@@ -136,16 +220,23 @@ extension TranscodeJob {
     /// counts when they disagree. O(frames), no I/O.
     nonisolated static func frameMD5Evidence(source: String, output: String) -> String? {
         // A hash stream must BE a hash stream before two of them can agree
-        // (Codex r1 #3: both decodes printing the same `garbage` "matched").
-        if let bad = frameMD5Malformed(source) { return "the source's video frame MD5 could not be computed: \(bad)" }
-        if let bad = frameMD5Malformed(output) { return "the new master's video frame MD5 could not be computed: \(bad)" }
-        switch compareFrameMD5(source: source, output: output) {
+        // (Codex r1 #3: both decodes printing the same `garbage` "matched"),
+        // and the records checked are the records compared (Codex r2 #3).
+        let a: [String], b: [String]
+        switch frameMD5Records(source) {
+        case .malformed(let bad): return "the source's video frame MD5 could not be computed: \(bad)"
+        case .hashes(let hashes): a = hashes
+        }
+        switch frameMD5Records(output) {
+        case .malformed(let bad): return "the new master's video frame MD5 could not be computed: \(bad)"
+        case .hashes(let hashes): b = hashes
+        }
+        switch compareFrameMD5(sourceHashes: a, outputHashes: b) {
         case .match:
             return nil
         case .malformed(let why):
             return "the video frame MD5s could not be compared: \(why)"
         case .mismatch(let frameIndex, let src, let out):
-            let a = frameMD5Hashes(from: source), b = frameMD5Hashes(from: output)
             let compared = min(a.count, b.count)
             var differing = 0
             for i in 0..<compared where a[i] != b[i] { differing += 1 }
@@ -163,35 +254,12 @@ extension TranscodeJob {
 
     /// Why `stream` is not ffmpeg `-f framemd5` output, or nil when every
     /// record is well formed (or there are none — the comparison reports an
-    /// empty stream in its own words). A record is six comma-separated
-    /// fields: stream index (0 — one stream is mapped), dts, pts, duration,
-    /// size — all integers — and a 32-hex-digit MD5. THE BUG (Codex r1 #3,
-    /// P0): the parser took the last token of ANY line for a hash, so two
-    /// decodes that printed the same garbage were "bit-exact". O(lines).
+    /// empty stream in its own words). Read by `frameMD5Records`, the same
+    /// parser the comparison uses (Codex r1 #3, r2 #3).
     nonisolated static func frameMD5Malformed(_ stream: String) -> String? {
-        // One ICU regex search (compiled C, fast in a Debug build too) for
-        // the first line that is neither blank, a `#` header, nor a record.
-        // Worst case: a 4-hour tape is 432,000 records (~30 MB) per stream;
-        // ICU reads it as UTF-16, a transient ~60 MB copy, released on return.
-        guard let notARecord, let recordLine else { return "the frame MD5 record check could not be built" }   // fail closed
-        let text = stream as NSString
-        guard let bad = notARecord.firstMatch(in: stream, range: NSRange(location: 0, length: text.length)) else { return nil }
-        let number = recordLine.numberOfMatches(in: stream, range: NSRange(location: 0, length: bad.range.location)) + 1
-        let line = text.substring(with: bad.range).trimmingCharacters(in: .whitespaces)
-        let shown = line.count > 60 ? String(line.prefix(60)) + "…" : line
-        return "record \(number) of ffmpeg's answer (“\(shown)”) is not a frame MD5 record"
+        if case .malformed(let why) = frameMD5Records(stream) { return why }
+        return nil
     }
-
-    /// A line that is not blank, not a `#` header, and not
-    /// `0, <int>, <int>, <int>, <int>, <32 hex>`. `[ \t]`, never `\s`, so a
-    /// field can never span a line break.
-    nonisolated private static let notARecord = try? NSRegularExpression(   // a constant pattern: a typo fails every proof, closed
-        pattern: #"^(?![ \t]*(?:#.*)?$)(?![ \t]*0[ \t]*(?:,[ \t]*-?[0-9]+[ \t]*){4},[ \t]*[0-9a-fA-F]{32}[ \t]*$).*$"#,
-        options: [.anchorsMatchLines])
-
-    /// The start of a line that counts as a record for numbering (not blank, not `#`).
-    nonisolated private static let recordLine = try? NSRegularExpression(
-        pattern: #"^[ \t]*[^#\s]"#, options: [.anchorsMatchLines])
 
     /// Why one side's whole-stream audio MD5 is not an MD5, or nil.
     nonisolated private static func audioMD5Malformed(_ hash: String, whose: String) -> String? {
@@ -224,5 +292,47 @@ extension TranscodeJob {
             return "\(what) could not be computed: ffmpeg stopped with exit code \(result.exitCode)\(said)"
         }
         return nil
+    }
+}
+
+/// The one line parser's small byte-range helpers. (≈ a C++ namespace of
+/// inline functions over a `const uint8_t*` and index ranges.) The bytes
+/// are literals, not `static let`s: in a Debug build every `static let`
+/// read is a lazy-global accessor call, and these run once per byte of a
+/// ~30 MB answer.
+private enum FrameMD5Byte {
+    static func isBlank(_ c: UInt8) -> Bool { c == 0x20 || c == 0x09 }   // space, tab
+    static func isHex(_ c: UInt8) -> Bool { (c >= 0x30 && c <= 0x39) || (c >= 0x61 && c <= 0x66) || (c >= 0x41 && c <= 0x46) }
+
+    /// `range` without leading or trailing spaces and tabs.
+    static func trimmed(_ b: UnsafeBufferPointer<UInt8>, _ range: Range<Int>) -> Range<Int> {
+        var s = range.lowerBound, e = range.upperBound
+        while s < e && isBlank(b[s]) { s += 1 }
+        while e > s && isBlank(b[e - 1]) { e -= 1 }
+        return s..<e
+    }
+
+    /// The next field from `p`: blanks skipped on both sides, the token
+    /// ends at a comma, a blank or `end`. `p` is left on the comma (or end).
+    static func token(_ b: UnsafeBufferPointer<UInt8>, from p: inout Int, before end: Int) -> Range<Int> {
+        while p < end && (b[p] == 0x20 || b[p] == 0x09) { p += 1 }
+        let start = p
+        while p < end && b[p] != 0x2C && b[p] != 0x20 && b[p] != 0x09 { p += 1 }   // `,`, space, tab
+        let token = start..<p
+        while p < end && (b[p] == 0x20 || b[p] == 0x09) { p += 1 }
+        return token
+    }
+
+    /// Bytes already checked to be ASCII (an MD5's 32 hex digits) as a
+    /// String — the direct decode, which cannot be lossy here.
+    static func ascii(_ b: UnsafeBufferPointer<UInt8>, _ range: Range<Int>) -> String {
+        // swiftlint:disable:next optional_data_string_conversion
+        String(decoding: UnsafeBufferPointer(rebasing: b[range]), as: UTF8.self)
+    }
+
+    /// The bytes as text; anything not UTF-8 shows as U+FFFD (only ever quoted, never compared).
+    static func text(_ b: UnsafeBufferPointer<UInt8>, _ range: Range<Int>) -> String {
+        String(bytes: UnsafeBufferPointer(rebasing: b[range]), encoding: .utf8)
+            ?? String(repeating: "\u{FFFD}", count: min(range.count, 61))
     }
 }

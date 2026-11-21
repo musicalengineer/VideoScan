@@ -483,6 +483,40 @@ struct TranscodePreservationProofMatrixTests {
                 == "F. Nothing was published or added to the catalog: the failed new file was NOT removed: could not remove partial /x/p: Permission denied.")
     }
 
+    /// Codex r2 #3 (P0): the record check accepted `\r`-separated records
+    /// (ICU counts `\r` as a line end) while the comparison split only on
+    /// `\n` and kept the last token — so source [A, A] against master
+    /// [B, A] "matched". One line parser now serves both; a line end is
+    /// `\n`, `\r\n` or `\r`, and anything else in a record (a Unicode line
+    /// separator, a form feed) makes the record malformed.
+    @Test("CR / CRLF / mixed line ends: records are checked and compared one by one — [A, A] against [B, A] is never a match")
+    func carriageReturnSeparatedRecordsAreComparedOneByOne() {
+        typealias J = TranscodeJob
+        let a = Self.hashA, b = Self.hashB
+        func stream(_ hashes: [String], _ end: String) -> String {
+            "#format: frame checksums" + end + hashes.enumerated().map { "0, \($0.offset), \($0.offset), 1, 115200, \($0.element)" }
+                .joined(separator: end) + end
+        }
+        for end in ["\r", "\r\n", "\n\r"] {
+            let named = end.unicodeScalars.map { $0 == "\r" ? "CR" : "LF" }.joined(separator: "+")
+            #expect(J.frameMD5Evidence(source: stream([a, a], end), output: stream([b, a], end))
+                    == "video frame 0 (0-based) is the first of 1 that differ in 2 compared (source MD5 \(a), new master MD5 \(b))", "\(named)")
+            #expect(J.frameMD5Evidence(source: stream([a, a], end), output: stream([a, a], end)) == nil, "\(named): equal records still match")
+            #expect(J.frameMD5Malformed(stream([a, b], end)) == nil, "\(named)")
+            #expect(J.frameCount(stream([a, b, a], end)) == 3, "\(named)")
+            #expect(J.compareFrameMD5(source: stream([a, a], end), output: stream([b, a], end)) == .mismatch(frameIndex: 0, source: a, output: b), "\(named)")
+        }
+        // Mixed ends in one answer: each record is its own record.
+        #expect(J.frameMD5Evidence(source: "0, 0, 0, 1, 1, \(a)\r0, 1, 1, 1, 1, \(a)\n", output: "0, 0, 0, 1, 1, \(b)\r\n0, 1, 1, 1, 1, \(a)\n") != nil)
+        // A line end ffmpeg never prints is not a record separator: the answer is malformed, never a match.
+        for odd in ["\u{2028}", "\u{2029}", "\u{0085}", "\u{000C}", "\u{000B}"] {
+            let evidence = J.frameMD5Evidence(source: "0, 0, 0, 1, 1, \(a)\(odd)0, 1, 1, 1, 1, \(a)\n",
+                                              output: "0, 0, 0, 1, 1, \(b)\(odd)0, 1, 1, 1, 1, \(a)\n")
+            #expect(evidence?.hasPrefix("the source's video frame MD5 could not be computed: record 1 of ffmpeg's answer") == true,
+                    "U+\(String(odd.unicodeScalars.first?.value ?? 0, radix: 16, uppercase: true)): \(evidence ?? "nil — a MATCH")")
+        }
+    }
+
     /// Scale: a 4-hour tape at 30 fps is 432,000 frames per stream. The
     /// evidence is computed from two such streams (≈30 MB of text each) in
     /// well under the budget, and stays one bounded sentence.
