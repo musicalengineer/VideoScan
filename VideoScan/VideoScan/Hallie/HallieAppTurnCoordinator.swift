@@ -1022,7 +1022,7 @@ enum HallieAppTurnCoordinator {
         dependencies: Dependencies
     ) async throws -> HallieSocialConversation.Reply {
         guard reply.composedByModel else { return reply }
-        let worker = Task.detached(priority: .userInitiated) {
+        let worker = TaskTreeScope.detached(priority: .userInitiated) {
             () throws -> HallieSocialConversation.Reply in
             try Task.checkCancellation()
             let context = HallieTurnExecutor.Context(
@@ -1242,7 +1242,7 @@ enum HallieAppTurnCoordinator {
             -> HallieTurnExecutor.Result
     ) async throws -> Response {
         let ast = intent.ast
-        let worker = Task.detached(priority: .userInitiated) {
+        let worker = TaskTreeScope.detached(priority: .userInitiated) {
             () async throws -> Response in
             try Task.checkCancellation()
             var result = try await operation()

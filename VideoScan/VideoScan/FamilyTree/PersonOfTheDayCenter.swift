@@ -169,7 +169,7 @@ final class PersonOfTheDayCenter: ObservableObject {
         let people = decorations?.people ?? [:]
         task = Task { [weak self] in
             do { try await Task.sleep(for: debounce) } catch { return }   // superseded
-            let work = Task.detached(priority: .utility) { () -> PersonOfTheDay.Pick? in
+            let work = TaskTreeScope.detached(priority: .utility) { () -> PersonOfTheDay.Pick? in
                 let hints = configuration?.makeStore().portraitHints() ?? .none
                 if Task.isCancelled { return nil }
                 let context = FamilyTreeFeatureContext(graph: graph, decorations: people, displayNames: displayNames,

@@ -13,8 +13,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("Prune — the job and its queue", .serialized)
+@Suite("Prune — the job and its queue")
 @MainActor
 struct PruneApplyJobTests {
 
@@ -238,19 +237,18 @@ struct PruneApplyJobTests {
         let g = try await fixture("err2"); defer { g.sb.cleanup() }
         let fp = await shown(f), gp = await shown(g)
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let center = MediaFileOperationsCenter()
-        f.model.isReadOnly = true
-        let first = start(center, f, fp, selected: [f.copy.id], batchID: "er1")
-        let second = start(center, g, gp, selected: [g.copy.id], batchID: "er2")
-        await first.task?.value
-        try await Task.sleep(for: .milliseconds(300))
-        guard case .failed(let why) = first.state else { Issue.record("\(first.state)"); return }
-        #expect(second.task == nil && second.droppedWhileQueued && exists(g.copy.fullPath))
-        let line = PruneApplyJob.droppedLine(title: second.title, count: 1, bytes: g.copy.sizeBytes, reason: .batchBeforeFailed(why))
-        #expect(sink.lines.contains { $0.contains(line) }, "\(sink.lines)")
+        try await withAppLog(sink) {
+            let center = MediaFileOperationsCenter()
+            f.model.isReadOnly = true
+            let first = start(center, f, fp, selected: [f.copy.id], batchID: "er1")
+            let second = start(center, g, gp, selected: [g.copy.id], batchID: "er2")
+            await first.task?.value
+            try await Task.sleep(for: .milliseconds(300))
+            guard case .failed(let why) = first.state else { Issue.record("\(first.state)"); return }
+            #expect(second.task == nil && second.droppedWhileQueued && exists(g.copy.fullPath))
+            let line = PruneApplyJob.droppedLine(title: second.title, count: 1, bytes: g.copy.sizeBytes, reason: .batchBeforeFailed(why))
+            #expect(sink.lines.contains { $0.contains(line) }, "\(sink.lines)")
+        }
     }
 
     /// A Trash seam that throws on the Nth call and moves every other file aside.

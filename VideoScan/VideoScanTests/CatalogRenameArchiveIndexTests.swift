@@ -15,12 +15,13 @@
 //   SCALE     — 50k-line manifest + 50k-line ledger mirror within a budget.
 //
 // Everything lives under FileManager.temporaryDirectory; no real volume,
-// no real Application Support. Serialized: two tests swap the global appLog.
+// no real Application Support. Log lines are captured per task tree (`withAppLog`).
 
 import Foundation
 import Testing
 @testable import VideoScan
 
+// serialized: the SCALE test (50k-line manifest + ledger mirror) holds a wall-clock budget; siblings running beside it would spend it
 @Suite("Catalog rename — carries through to the archive index", .serialized)
 @MainActor
 struct CatalogRenameArchiveIndexTests {

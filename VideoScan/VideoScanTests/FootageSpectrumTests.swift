@@ -221,8 +221,7 @@ private final class StubFlags: @unchecked Sendable {
 }
 
 @MainActor
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("Footage Spectrum — job lifecycle", .serialized)
+@Suite("Footage Spectrum — job lifecycle")
 struct FootageSpectrumJobTests {
 
     private let fakeTools = FootageSpectrumTools(python: "/bin/sh", script: "/bin/sh", ffmpeg: "/bin/sh", ffprobe: "/bin/sh")
@@ -265,33 +264,32 @@ struct FootageSpectrumJobTests {
 
     @Test func aSuccessfulRunEndsWithTheSummaryAndThePageAndLogsOnce() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let root = try tempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let flags = StubFlags()
-        let center = MediaFileOperationsCenter()
-        var console: [String] = []
-        let title = "life-\(UUID().uuidString)"
-        let job = center.startFootageSpectrum(candidates: candidates("life"), title: title,
-                                              store: FootageSpectrumStore(root: root), tools: .success(fakeTools),
-                                              launcher: successLauncher(flags: flags), console: { console.append($0) })
-        await waitUntilDone(job)
-        for _ in 0..<100 where !sink.lines.contains(where: { $0.hasPrefix("compare footage done: \(title)") }) {
-            try? await Task.sleep(nanoseconds: 5_000_000)
+        try await withAppLog(sink) {
+            let root = try tempRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let flags = StubFlags()
+            let center = MediaFileOperationsCenter()
+            var console: [String] = []
+            let title = "life-\(UUID().uuidString)"
+            let job = center.startFootageSpectrum(candidates: candidates("life"), title: title,
+                                                  store: FootageSpectrumStore(root: root), tools: .success(fakeTools),
+                                                  launcher: successLauncher(flags: flags), console: { console.append($0) })
+            await waitUntilDone(job)
+            for _ in 0..<100 where !sink.lines.contains(where: { $0.hasPrefix("compare footage done: \(title)") }) {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            #expect(job.state == .finished(summary: "Compared 2 videos — 1 the same footage"))
+            #expect(job.pageURL == FootageSpectrumStore(root: root).pageFile(job.id))
+            #expect(job.fraction == 1)
+            #expect(flags.launches == 1)
+            #expect(job.detailLines.map(\.text) == ["the reference", "the same footage, starting 0:12 into the reference"])
+            let mine = sink.lines.filter { $0.contains(title) }
+            #expect(mine.filter { $0.hasPrefix("compare footage: \(title) — read 2 videos") }.count == 1, "\(mine)")
+            #expect(mine.filter { $0.hasPrefix("compare footage done: \(title)") }.count == 1, "\(mine)")
+            #expect(mine.filter { $0.contains("— reading ") }.count == 2, "one line per file: \(mine)")
+            #expect(console.contains { $0.hasPrefix("compare footage done: \(title)") })
+            #expect(job.handledEvents == 5, "four kinds of line understood, the chatter ignored")
         }
-        #expect(job.state == .finished(summary: "Compared 2 videos — 1 the same footage"))
-        #expect(job.pageURL == FootageSpectrumStore(root: root).pageFile(job.id))
-        #expect(job.fraction == 1)
-        #expect(flags.launches == 1)
-        #expect(job.detailLines.map(\.text) == ["the reference", "the same footage, starting 0:12 into the reference"])
-        let mine = sink.lines.filter { $0.contains(title) }
-        #expect(mine.filter { $0.hasPrefix("compare footage: \(title) — read 2 videos") }.count == 1, "\(mine)")
-        #expect(mine.filter { $0.hasPrefix("compare footage done: \(title)") }.count == 1, "\(mine)")
-        #expect(mine.filter { $0.contains("— reading ") }.count == 2, "one line per file: \(mine)")
-        #expect(console.contains { $0.hasPrefix("compare footage done: \(title)") })
-        #expect(job.handledEvents == 5, "four kinds of line understood, the chatter ignored")
     }
 
     @Test func progressLinesDriveTheRowText() async throws {
@@ -385,26 +383,25 @@ struct FootageSpectrumJobTests {
 
     @Test func fewerThanTwoReadableIsARefusedRowAndNothingRuns() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let root = try tempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let flags = StubFlags()
-        var c = candidates("ref")
-        c[1].isReadable = false
-        let title = "refused-\(UUID().uuidString)"
-        let center = MediaFileOperationsCenter()
-        let job = center.startFootageSpectrum(candidates: c, title: title, store: FootageSpectrumStore(root: root),
-                                              tools: .success(fakeTools), launcher: successLauncher(flags: flags))
-        #expect(job.wasRefused && !job.state.isActive)
-        #expect(center.jobs.contains { $0.id == job.id })
-        for _ in 0..<100 where !sink.lines.contains(where: { $0.contains(title) }) {
-            try? await Task.sleep(nanoseconds: 5_000_000)
+        try await withAppLog(sink) {
+            let root = try tempRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let flags = StubFlags()
+            var c = candidates("ref")
+            c[1].isReadable = false
+            let title = "refused-\(UUID().uuidString)"
+            let center = MediaFileOperationsCenter()
+            let job = center.startFootageSpectrum(candidates: c, title: title, store: FootageSpectrumStore(root: root),
+                                                  tools: .success(fakeTools), launcher: successLauncher(flags: flags))
+            #expect(job.wasRefused && !job.state.isActive)
+            #expect(center.jobs.contains { $0.id == job.id })
+            for _ in 0..<100 where !sink.lines.contains(where: { $0.contains(title) }) {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            #expect(sink.lines.filter { $0.contains(title) } == ["compare footage refused: \(title) — \(job.subtitle)"])
+            #expect(flags.launches == 0)
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("runs").path), "nothing written")
         }
-        #expect(sink.lines.filter { $0.contains(title) } == ["compare footage refused: \(title) — \(job.subtitle)"])
-        #expect(flags.launches == 0)
-        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("runs").path), "nothing written")
     }
 }
 

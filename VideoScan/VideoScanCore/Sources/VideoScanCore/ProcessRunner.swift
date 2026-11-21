@@ -232,9 +232,18 @@ public enum ProcessRunner {
         // The seam (2026-11-20, CommandExecutor.swift): one request, handed
         // to the task's executor — `RealCommandExecutor` (→ realRunProcess
         // below) unless a test bound a mock for its own task tree.
-        await executor.run(CommandRequest(
+        //
+        // The callbacks are invoked on the pipe-reader (GCD) threads, which
+        // carry no task-locals; a `Task {}` started there (every job's
+        // "hop to the main actor with this progress line") would leave the
+        // caller's task tree — and its log capture / command mock. They are
+        // delivered under the caller's scope instead. In production the
+        // scope is the default and `carrying` hands back the same closure.
+        let scope = TaskTreeScope.current
+        return await executor.run(CommandRequest(
             executable: executable, arguments: arguments, environment: environment,
-            stdoutLine: stdoutLine, stderrLine: stderrLine, stdoutData: stdoutData,
+            stdoutLine: scope.carrying(stdoutLine), stderrLine: scope.carrying(stderrLine),
+            stdoutData: scope.carrying(stdoutData),
             stdoutLimitBytes: stdoutLimitBytes, stderrLimitBytes: stderrLimitBytes,
             deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds,
             control: control))

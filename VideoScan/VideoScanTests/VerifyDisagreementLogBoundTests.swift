@@ -5,14 +5,14 @@
 // already capped its sample at 20; the persistent line now carries the
 // total count plus the same 20-entry sample, never more.
 //
-// Swaps the global appLog for an in-memory sink (serialized suite).
+// The test binds an in-memory sink for its own task tree (`withAppLog`).
 
 import Foundation
 import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Codex 2026-10-02 #8 — Verify's disagreement log line is bounded", .serialized)
+@Suite("Codex 2026-10-02 #8 — Verify's disagreement log line is bounded")
 @MainActor
 struct VerifyDisagreementLogBoundTests {
 
@@ -44,18 +44,17 @@ struct VerifyDisagreementLogBoundTests {
             copy.userDate = "1990"; copy.userDateConfidence = UserDateConfidence.known.rawValue
         }
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let job = VerifyArchiveCopiesJob(model: model)
-        job.start(); await job.task?.value
-        #expect(job.tally.dateDisagreements == 25)
-        #expect(job.dateDisagreementLines.count == 25, "the UI keeps every line")
-        let logged = sink.lines.filter { $0.contains("DATE DISAGREES") }
-        #expect(logged.count == 1, "\(logged)")
-        let line = try #require(logged.first)
-        #expect(line.contains("(25)"), "\(line)")
-        #expect(line.components(separatedBy: " | ").count == 20, "\(line)")
-        #expect(line.contains("5 more"), "\(line)")
+        try await withAppLog(sink) {
+            let job = VerifyArchiveCopiesJob(model: model)
+            job.start(); await job.task?.value
+            #expect(job.tally.dateDisagreements == 25)
+            #expect(job.dateDisagreementLines.count == 25, "the UI keeps every line")
+            let logged = sink.lines.filter { $0.contains("DATE DISAGREES") }
+            #expect(logged.count == 1, "\(logged)")
+            let line = try #require(logged.first)
+            #expect(line.contains("(25)"), "\(line)")
+            #expect(line.components(separatedBy: " | ").count == 20, "\(line)")
+            #expect(line.contains("5 more"), "\(line)")
+        }
     }
 }

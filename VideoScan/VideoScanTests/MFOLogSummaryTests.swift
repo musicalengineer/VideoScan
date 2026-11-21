@@ -22,10 +22,9 @@ import Foundation
 //     duplicate-refusal) — including that the jobs' REMOVED ad-hoc
 //     appLog lines don't come back (no double start, no double done).
 //
-// All tests swap the global `appLog` for an InMemoryLogSink, so the
-// suite is `.serialized` (see LogSinks+Test.swift). Assertions grep for
-// UUID-unique filenames, so a stray line from another suite can never
-// flip a verdict.
+// Each test binds its own InMemoryLogSink for its task tree
+// (`withAppLog`, see LogSinks+Test.swift), so the suites run in parallel
+// and no other test's line can reach a sink.
 
 // MARK: - Fake job
 
@@ -157,24 +156,39 @@ struct MFOSummaryLineFormatTests {
 // MARK: - Center terminal watcher (fake jobs)
 
 @MainActor
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("MFO Center OUTCOME watcher", .serialized)
+@Suite("MFO Center OUTCOME watcher")
 struct MFOCenterOutcomeWatcherTests {
 
     @Test func finishedJobWritesExactlyOneDoneLine() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .trim, title: name)
+            center.add(job)
+            job.settableState = .finished(summary: "ok")
+            await drainMainActor { !lines(in: sink, containing: name).isEmpty }
 
+            #expect(lines(in: sink, containing: name) == ["trim done: \(name) — ok"])
+        }
+    }
+
+    /// Regression (2026-11-20, log seam): the OUTCOME hop starts from the
+    /// job's change publisher, so it runs in whatever task published the
+    /// terminal state — here a detached one, with no task-locals. The
+    /// Center writes the line under the scope the job was ADDED in.
+    @Test("regression: a terminal state published from outside the task tree still writes its OUTCOME to the adder's capture")
+    func outcomeFromADetachedPublisherReachesTheAddersCapture() async {
+        let sink = InMemoryLogSink()
         let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        let job = FakeSummaryJob(kind: .trim, title: name)
-        center.add(job)
-        job.settableState = .finished(summary: "ok")
-        await drainMainActor { !lines(in: sink, containing: name).isEmpty }
-
-        #expect(lines(in: sink, containing: name) == ["trim done: \(name) — ok"])
+        await withAppLog(sink) {
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .trim, title: name)
+            center.add(job)
+            await Task.detached { @MainActor in job.settableState = .finished(summary: "ok") }.value
+            _ = await sink.waitForLine(containing: name, timeout: .seconds(120))
+        }
+        #expect(lines(in: sink, containing: name) == ["trim done: \(name) — ok"], "\(sink.lines)")
     }
 
     /// The change-event flood must not double the OUTCOME: keep firing
@@ -182,23 +196,21 @@ struct MFOCenterOutcomeWatcherTests {
     /// publishes subtitle/fraction churn from straggler beats).
     @Test func terminalLineIsWrittenOnlyOnceDespiteEventFlood() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .cleanup, title: name)
+            center.add(job)
+            job.settableState = .finished(summary: "done clause")
+            for _ in 0..<10 {
+                job.settableState = .finished(summary: "done clause")   // re-fires objectWillChange
+                await Task.yield()
+            }
+            await drainMainActor { !lines(in: sink, containing: name).isEmpty }
+            await drainMainActor { false }   // exhaust any stragglers
 
-        let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        let job = FakeSummaryJob(kind: .cleanup, title: name)
-        center.add(job)
-        job.settableState = .finished(summary: "done clause")
-        for _ in 0..<10 {
-            job.settableState = .finished(summary: "done clause")   // re-fires objectWillChange
-            await Task.yield()
+            #expect(lines(in: sink, containing: name).count == 1)
         }
-        await drainMainActor { !lines(in: sink, containing: name).isEmpty }
-        await drainMainActor { false }   // exhaust any stragglers
-
-        #expect(lines(in: sink, containing: name).count == 1)
     }
 
     /// A job can arrive at the Center already terminal (the parked
@@ -206,52 +218,46 @@ struct MFOCenterOutcomeWatcherTests {
     /// check once by itself.
     @Test func alreadyTerminalJobAtAddStillGetsItsLine() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            center.add(FakeSummaryJob(kind: .compare, title: name,
+                                      state: .failed(message: "boom")))
+            await drainMainActor { !lines(in: sink, containing: name).isEmpty }
 
-        let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        center.add(FakeSummaryJob(kind: .compare, title: name,
-                                  state: .failed(message: "boom")))
-        await drainMainActor { !lines(in: sink, containing: name).isEmpty }
-
-        #expect(lines(in: sink, containing: name) == ["compare FAILED: \(name) — boom"])
+            #expect(lines(in: sink, containing: name) == ["compare FAILED: \(name) — boom"])
+        }
     }
 
     @Test func refusedFlagFlipsWordingToRefused() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .balanceAudio, title: name)
+            job.refused = true
+            center.add(job)
+            job.settableState = .failed(message: "safety gate said no")
+            await drainMainActor { !lines(in: sink, containing: name).isEmpty }
 
-        let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        let job = FakeSummaryJob(kind: .balanceAudio, title: name)
-        job.refused = true
-        center.add(job)
-        job.settableState = .failed(message: "safety gate said no")
-        await drainMainActor { !lines(in: sink, containing: name).isEmpty }
-
-        #expect(lines(in: sink, containing: name)
-            == ["balance audio refused: \(name) — safety gate said no"])
+            #expect(lines(in: sink, containing: name)
+                == ["balance audio refused: \(name) — safety gate said no"])
+        }
     }
 
     @Test func cancelledJobWritesCancelledLine() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .ripFrames, title: name)
+            center.add(job)
+            job.settableState = .cancelling            // active — no line yet
+            job.settableState = .cancelled
+            await drainMainActor { !lines(in: sink, containing: name).isEmpty }
 
-        let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        let job = FakeSummaryJob(kind: .ripFrames, title: name)
-        center.add(job)
-        job.settableState = .cancelling            // active — no line yet
-        job.settableState = .cancelled
-        await drainMainActor { !lines(in: sink, containing: name).isEmpty }
-
-        #expect(lines(in: sink, containing: name) == ["extract frames cancelled: \(name)"])
+            #expect(lines(in: sink, containing: name) == ["extract frames cancelled: \(name)"])
+        }
     }
 
     /// clearFinished in the SAME main-actor turn as the terminal
@@ -260,28 +266,25 @@ struct MFOCenterOutcomeWatcherTests {
     /// must not double it afterwards.
     @Test func sameTurnClearFinishedStillWritesExactlyOneLine() async {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let name = "fake-\(UUID().uuidString).mov"
+            let center = MediaFileOperationsCenter()
+            let job = FakeSummaryJob(kind: .transcode, title: name)
+            center.add(job)
+            job.settableState = .finished(summary: "ok")
+            center.clearFinished()                     // same turn — no awaits between
+            #expect(lines(in: sink, containing: name) == ["transcode done: \(name) — ok"])
 
-        let name = "fake-\(UUID().uuidString).mov"
-        let center = MediaFileOperationsCenter()
-        let job = FakeSummaryJob(kind: .transcode, title: name)
-        center.add(job)
-        job.settableState = .finished(summary: "ok")
-        center.clearFinished()                     // same turn — no awaits between
-        #expect(lines(in: sink, containing: name) == ["transcode done: \(name) — ok"])
-
-        await drainMainActor { false }             // let the deferred check land
-        #expect(lines(in: sink, containing: name).count == 1)
+            await drainMainActor { false }             // let the deferred check land
+            #expect(lines(in: sink, containing: name).count == 1)
+        }
     }
 }
 
 // MARK: - End-to-end through real jobs
 
 @MainActor
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("MFO log summaries end-to-end", .serialized)
+@Suite("MFO log summaries end-to-end")
 struct MFOLogSummaryEndToEndTests {
 
     private func record(_ path: String,
@@ -298,61 +301,57 @@ struct MFOLogSummaryEndToEndTests {
     /// exactly one START line and one "compare done:" line, in order.
     @Test func compareWritesOneStartAndOneDoneLine() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        try await withAppLog(sink) {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("MFOLogTests-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let stem = "dup-\(UUID().uuidString.prefix(8))"
+            let bytes = Data(repeating: 0x42, count: 64 * 1024)
+            let a = dir.appendingPathComponent("\(stem)A.bin").path
+            let b = dir.appendingPathComponent("\(stem)B.bin").path
+            FileManager.default.createFile(atPath: a, contents: bytes)
+            FileManager.default.createFile(atPath: b, contents: bytes)
 
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MFOLogTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let stem = "dup-\(UUID().uuidString.prefix(8))"
-        let bytes = Data(repeating: 0x42, count: 64 * 1024)
-        let a = dir.appendingPathComponent("\(stem)A.bin").path
-        let b = dir.appendingPathComponent("\(stem)B.bin").path
-        FileManager.default.createFile(atPath: a, contents: bytes)
-        FileManager.default.createFile(atPath: b, contents: bytes)
+            let center = MediaFileOperationsCenter()
+            let job = center.startCompare(recordA: record(a), recordB: record(b))
+            await job.task?.value
+            await drainMainActor {
+                lines(in: sink, containing: stem).contains { $0.hasPrefix("compare done: ") }
+            }
 
-        let center = MediaFileOperationsCenter()
-        let job = center.startCompare(recordA: record(a), recordB: record(b))
-        await job.task?.value
-        await drainMainActor {
-            lines(in: sink, containing: stem).contains { $0.hasPrefix("compare done: ") }
+            let mine = lines(in: sink, containing: stem)
+            #expect(mine.count == 2)
+            #expect(mine.first == "compare: \(stem)A.bin vs \(stem)B.bin — duplicate check")
+            #expect(mine.last == "compare done: \(stem)A.bin vs \(stem)B.bin — \(PairCompareVerdict.exactDuplicates.title)")
         }
-
-        let mine = lines(in: sink, containing: stem)
-        #expect(mine.count == 2)
-        #expect(mine.first == "compare: \(stem)A.bin vs \(stem)B.bin — duplicate check")
-        #expect(mine.last == "compare done: \(stem)A.bin vs \(stem)B.bin — \(PairCompareVerdict.exactDuplicates.title)")
     }
 
     /// Compare against a missing file: the OUTCOME is a FAILED line
     /// carrying the job's user-facing reason.
     @Test func compareFailureWritesFailedLine() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let stem = "missing-\(UUID().uuidString.prefix(8))"
+            let a = "/tmp/MFOLogTests-\(stem)-a.bin"
+            let b = "/tmp/MFOLogTests-\(stem)-b.bin"
 
-        let stem = "missing-\(UUID().uuidString.prefix(8))"
-        let a = "/tmp/MFOLogTests-\(stem)-a.bin"
-        let b = "/tmp/MFOLogTests-\(stem)-b.bin"
+            let center = MediaFileOperationsCenter()
+            let job = center.startCompare(recordA: record(a), recordB: record(b))
+            await job.task?.value
+            await drainMainActor {
+                lines(in: sink, containing: stem).contains { $0.hasPrefix("compare FAILED: ") }
+            }
 
-        let center = MediaFileOperationsCenter()
-        let job = center.startCompare(recordA: record(a), recordB: record(b))
-        await job.task?.value
-        await drainMainActor {
-            lines(in: sink, containing: stem).contains { $0.hasPrefix("compare FAILED: ") }
+            let mine = lines(in: sink, containing: stem)
+            #expect(mine.count == 2)
+            #expect(mine.first?.hasPrefix("compare: ") == true)
+            guard case .failed(let message) = job.state else {
+                Issue.record("expected .failed, got \(job.state)")
+                return
+            }
+            #expect(mine.last?.hasSuffix(message) == true)
         }
-
-        let mine = lines(in: sink, containing: stem)
-        #expect(mine.count == 2)
-        #expect(mine.first?.hasPrefix("compare: ") == true)
-        guard case .failed(let message) = job.state else {
-            Issue.record("expected .failed, got \(job.state)")
-            return
-        }
-        #expect(mine.last?.hasSuffix(message) == true)
     }
 
     /// Cleanup on a missing source fails fast (no ffmpeg): exactly one
@@ -360,30 +359,28 @@ struct MFOLogSummaryEndToEndTests {
     /// removed, this pins that it stays removed) and one FAILED line.
     @Test func cleanupFailFastWritesOneStartOneFailed() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let stem = "cleanup-\(UUID().uuidString.prefix(8))"
+            let missing = "/tmp/MFOLogTests-\(stem).mov"
+            let source = makeCleanupSourceRecord(path: missing,
+                                                 durationSeconds: 0,
+                                                 fieldOrder: "tt")
 
-        let stem = "cleanup-\(UUID().uuidString.prefix(8))"
-        let missing = "/tmp/MFOLogTests-\(stem).mov"
-        let source = makeCleanupSourceRecord(path: missing,
-                                             durationSeconds: 0,
-                                             fieldOrder: "tt")
+            let center = MediaFileOperationsCenter()
+            let job = center.startCleanup(record: source,
+                                          recipe: CleanupRecipeRegistry.vhsQuickClean,
+                                          model: VideoScanModel())
+            await job.task?.value
+            await drainMainActor {
+                lines(in: sink, containing: stem).contains { $0.hasPrefix("cleanup FAILED: ") }
+            }
 
-        let center = MediaFileOperationsCenter()
-        let job = center.startCleanup(record: source,
-                                      recipe: CleanupRecipeRegistry.vhsQuickClean,
-                                      model: VideoScanModel())
-        await job.task?.value
-        await drainMainActor {
-            lines(in: sink, containing: stem).contains { $0.hasPrefix("cleanup FAILED: ") }
+            let mine = lines(in: sink, containing: stem)
+            #expect(mine.count == 2)
+            #expect(mine.first?.hasPrefix("cleanup: MFOLogTests-\(stem).mov — ") == true)
+            #expect(mine.last?.contains("Source file missing on disk") == true)
+            #expect(!mine.contains { $0.hasPrefix("cleanup done: ") })
         }
-
-        let mine = lines(in: sink, containing: stem)
-        #expect(mine.count == 2)
-        #expect(mine.first?.hasPrefix("cleanup: MFOLogTests-\(stem).mov — ") == true)
-        #expect(mine.last?.contains("Source file missing on disk") == true)
-        #expect(!mine.contains { $0.hasPrefix("cleanup done: ") })
     }
 
     /// Duplicate trim dispatch: the second job is refused — one
@@ -392,81 +389,77 @@ struct MFOLogSummaryEndToEndTests {
     /// own one start + one FAILED pair.
     @Test func duplicateTrimDispatchWritesRefusedLine() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        await withAppLog(sink) {
+            let stem = "trim-\(UUID().uuidString.prefix(8))"
+            let missing = "/tmp/MFOLogTests-\(stem).mov"
+            let source = record(missing)
+            let range = TrimRange(inSeconds: 0, outSeconds: 1)
+            let model = VideoScanModel()
 
-        let stem = "trim-\(UUID().uuidString.prefix(8))"
-        let missing = "/tmp/MFOLogTests-\(stem).mov"
-        let source = record(missing)
-        let range = TrimRange(inSeconds: 0, outSeconds: 1)
-        let model = VideoScanModel()
+            let center = MediaFileOperationsCenter()
+            // Same main-actor turn: the first job's run Task hasn't begun,
+            // so it is still .running when the second dispatch arrives.
+            let first = center.startTrim(record: source, range: range, model: model)
+            let second = center.startTrim(record: source, range: range, model: model)
+            #expect(second.wasRefused)
 
-        let center = MediaFileOperationsCenter()
-        // Same main-actor turn: the first job's run Task hasn't begun,
-        // so it is still .running when the second dispatch arrives.
-        let first = center.startTrim(record: source, range: range, model: model)
-        let second = center.startTrim(record: source, range: range, model: model)
-        #expect(second.wasRefused)
+            await first.task?.value
+            await second.task?.value
+            await drainMainActor {
+                lines(in: sink, containing: stem).contains { $0.hasPrefix("trim refused: ") }
+                    && lines(in: sink, containing: stem).contains { $0.hasPrefix("trim FAILED: ") }
+            }
 
-        await first.task?.value
-        await second.task?.value
-        await drainMainActor {
-            lines(in: sink, containing: stem).contains { $0.hasPrefix("trim refused: ") }
-                && lines(in: sink, containing: stem).contains { $0.hasPrefix("trim FAILED: ") }
+            let mine = lines(in: sink, containing: stem)
+            // first job: start + FAILED; second job: refused only.
+            #expect(mine.count == 3)
+            #expect(mine.filter { $0.hasPrefix("trim: ") }.count == 1)
+            #expect(mine.filter { $0.hasPrefix("trim FAILED: ") }.count == 1)
+            #expect(mine.filter { $0.hasPrefix("trim refused: ") }.count == 1)
         }
-
-        let mine = lines(in: sink, containing: stem)
-        // first job: start + FAILED; second job: refused only.
-        #expect(mine.count == 3)
-        #expect(mine.filter { $0.hasPrefix("trim: ") }.count == 1)
-        #expect(mine.filter { $0.hasPrefix("trim FAILED: ") }.count == 1)
-        #expect(mine.filter { $0.hasPrefix("trim refused: ") }.count == 1)
     }
 
     /// Balance duplicate dispatch returns nil (no job row) — the
     /// Center writes the refused line directly.
     @Test func duplicateBalanceDispatchWritesRefusedLine() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
+        withAppLog(sink) {
+            let stem = "balance-\(UUID().uuidString.prefix(8))"
+            let path = "/tmp/MFOLogTests-\(stem).mov"
+            let source = record(path)
+            let analysis = AudioBalanceAnalysis(
+                classification: .leftOnly,
+                measurements: AudioBalanceMeasurements(
+                    channels: [AudioChannelLevels(rmsDBFS: -20, peakDBFS: -10),
+                               AudioChannelLevels(rmsDBFS: -90, peakDBFS: -80)],
+                    differenceRMSDBFS: nil),
+                shape: AudioBalanceStreamShape(
+                    videoCodec: "h264", totalStreams: 2, videoStreams: 1,
+                    audioStreams: 1, audioCodec: "aac", audioChannels: 2,
+                    audioBitRate: nil, durationSeconds: 1,
+                    audioStreamInfos: [AudioBalanceStreamInfo(
+                        absoluteIndex: 1, codec: "aac", channels: 2, bitRate: nil)]),
+                programStreamCount: 1,
+                programStreamIndex: 1,
+                droppedStreamIndices: [])
+            let model = VideoScanModel()
 
-        let stem = "balance-\(UUID().uuidString.prefix(8))"
-        let path = "/tmp/MFOLogTests-\(stem).mov"
-        let source = record(path)
-        let analysis = AudioBalanceAnalysis(
-            classification: .leftOnly,
-            measurements: AudioBalanceMeasurements(
-                channels: [AudioChannelLevels(rmsDBFS: -20, peakDBFS: -10),
-                           AudioChannelLevels(rmsDBFS: -90, peakDBFS: -80)],
-                differenceRMSDBFS: nil),
-            shape: AudioBalanceStreamShape(
-                videoCodec: "h264", totalStreams: 2, videoStreams: 1,
-                audioStreams: 1, audioCodec: "aac", audioChannels: 2,
-                audioBitRate: nil, durationSeconds: 1,
-                audioStreamInfos: [AudioBalanceStreamInfo(
-                    absoluteIndex: 1, codec: "aac", channels: 2, bitRate: nil)]),
-            programStreamCount: 1,
-            programStreamIndex: 1,
-            droppedStreamIndices: [])
-        let model = VideoScanModel()
+            let center = MediaFileOperationsCenter()
+            // Park an ACTIVE (never-started, so state stays .running)
+            // balance job for the record, then dispatch a duplicate.
+            let parked = BalanceAudioJob(record: source, analysis: analysis, model: model)
+            center.add(parked)
+            let refused = center.startBalanceAudio(record: source, analysis: analysis,
+                                                   model: model)
+            #expect(refused == nil)
 
-        let center = MediaFileOperationsCenter()
-        // Park an ACTIVE (never-started, so state stays .running)
-        // balance job for the record, then dispatch a duplicate.
-        let parked = BalanceAudioJob(record: source, analysis: analysis, model: model)
-        center.add(parked)
-        let refused = center.startBalanceAudio(record: source, analysis: analysis,
-                                               model: model)
-        #expect(refused == nil)
+            let mine = lines(in: sink, containing: stem)
+            #expect(mine.count == 1)
+            #expect(mine.first?.hasPrefix("balance audio refused: ") == true)
+            #expect(mine.first?.contains("already running") == true)
 
-        let mine = lines(in: sink, containing: stem)
-        #expect(mine.count == 1)
-        #expect(mine.first?.hasPrefix("balance audio refused: ") == true)
-        #expect(mine.first?.contains("already running") == true)
-
-        parked.cancel()   // don't leave an active fake row behind
+            parked.cancel()   // don't leave an active fake row behind
+        }
     }
 
     /// TrimJob.refuseToStart marks the job refused — the flag the

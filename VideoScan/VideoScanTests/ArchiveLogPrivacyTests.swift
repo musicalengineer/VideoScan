@@ -15,7 +15,8 @@
 // would pass a privacy test vacuously) and that the UI still has the
 // detail. Synthetic names only; sandbox only.
 //
-// Serialized: the global appLog is swapped for an in-memory sink.
+// appLog is captured per task tree (`cap.scoped { … }`), which needs no
+// serialization; the unified log and catalog.log windows below do.
 
 import Foundation
 import OSLog
@@ -26,11 +27,11 @@ import VideoScanCore
 let privateSentinel = "PRIVATE_SUBJECT_SENTINEL"
 
 /// Everything a trigger writes to persistent logs between `init` and `finish()`.
+/// Run the trigger inside `scoped { … }` so its appLog lines land in `sink`.
 @MainActor
 final class PersistentLogCapture {
     let model: VideoScanModel
     let sink = InMemoryLogSink()
-    private let previous: LogSink
     private let catalogLogOffset: Int
     private let since: Date
     private let extraFiles: [URL]
@@ -39,17 +40,18 @@ final class PersistentLogCapture {
     init(model: VideoScanModel, extraFiles: [URL] = []) {
         self.model = model
         self.extraFiles = extraFiles
-        previous = appLog
         since = Date()
         let begin = beginMarker
         Self.markerLog.notice("\(begin, privacy: .public)")
         catalogLogOffset = (try? Data(contentsOf: model.dashboard.catalogLog.url))?.count ?? 0
-        appLog = sink
     }
 
-    /// Restores appLog and returns every captured persistent line.
+    /// Bind `sink` as appLog for the trigger (its task tree only).
+    func scoped<R>(_ body: () throws -> R) rethrows -> R { try withAppLog(sink, body) }
+    func scoped<R>(_ body: () async throws -> R) async rethrows -> R { try await withAppLog(sink, body) }
+
+    /// Returns every captured persistent line.
     func finish() throws -> [String] {
-        appLog = previous
         var out: [String] = []
         let catalogLog = (try? Data(contentsOf: model.dashboard.catalogLog.url)) ?? Data()
         out += (String(bytes: catalogLog.dropFirst(catalogLogOffset), encoding: .utf8) ?? "")
@@ -117,6 +119,7 @@ final class PersistentLogCapture {
     static func leaks(_ lines: [String]) -> [String] { lines.filter { $0.contains(privateSentinel) } }
 }
 
+// serialized: each test reads a begin/end marker window of the process-wide unified log (a sibling's lines would land in it)
 @Suite("Codex 2026-10-02 #7 — no media path or identifying filename in persistent logs", .serialized)
 @MainActor
 struct ArchiveLogPrivacyTests {
@@ -148,8 +151,10 @@ struct ArchiveLogPrivacyTests {
         try FileManager.default.createSymbolicLink(atPath: loop.path, withDestinationPath: loop.path)
 
         let cap = PersistentLogCapture(model: m)
-        let identical = m.refuseOverlappingMigrate(source: src.path, destination: src, when: "before queuing")
-        let unresolvable = m.refuseOverlappingMigrate(source: src.path, destination: loop, when: "at start")
+        let (identical, unresolvable) = cap.scoped {
+            (m.refuseOverlappingMigrate(source: src.path, destination: src, when: "before queuing"),
+             m.refuseOverlappingMigrate(source: src.path, destination: loop, when: "at start"))
+        }
         let lines = try cap.finish()
 
         #expect(identical != nil && unresolvable != nil)
@@ -171,14 +176,17 @@ struct ArchiveLogPrivacyTests {
         let journal = CatalogWriteJournal.journalURL(besideCatalogAt: URL(fileURLWithPath: m.catalogStore.fileLocation))
 
         let cap = PersistentLogCapture(model: m, extraFiles: [journal])
-        m.masterArchive = d
-        #expect(m.catalogStore.saveNow(records: []))
-        m.masterArchive = nil                                   // poisoned: no Clear
-        #expect(!m.catalogStore.saveNow(records: []))
-        let uiReason = m.catalogStore.lastWriteError?.userFacingDescription ?? ""
-        m.masterArchive = d
-        m.clearMasterArchive()
-        #expect(m.catalogStore.saveNow(records: []))
+        let uiReason: String = cap.scoped {
+            m.masterArchive = d
+            #expect(m.catalogStore.saveNow(records: []))
+            m.masterArchive = nil                                   // poisoned: no Clear
+            #expect(!m.catalogStore.saveNow(records: []))
+            let reason = m.catalogStore.lastWriteError?.userFacingDescription ?? ""
+            m.masterArchive = d
+            m.clearMasterArchive()
+            #expect(m.catalogStore.saveNow(records: []))
+            return reason
+        }
         let lines = try cap.finish()
 
         #expect(uiReason.contains(privateSentinel), "the UI reason still names the archive: \(uiReason)")
@@ -206,9 +214,11 @@ struct ArchiveLogPrivacyTests {
         m.masterArchive = nil
 
         let cap = PersistentLogCapture(model: m)
-        let found = await m.findMasterArchivesAwaitingReadoption(volumesRoot: vols.path)
-        let candidate = try #require(found.first { $0.targetPath.contains(privateSentinel) })
-        m.offerReadoptMasterArchive(candidate)
+        try await cap.scoped {
+            let found = await m.findMasterArchivesAwaitingReadoption(volumesRoot: vols.path)
+            let candidate = try #require(found.first { $0.targetPath.contains(privateSentinel) })
+            m.offerReadoptMasterArchive(candidate)
+        }
         let lines = try cap.finish()
 
         #expect(m.pendingMasterArchiveInitOffer?.targetPath.contains(privateSentinel) == true, "the sheet still names it")
@@ -247,14 +257,17 @@ struct ArchiveLogPrivacyTests {
         let d = try H.source(sb, m, name: "test_d.mov", seed: 74, bytes: 64_000, subfolder: "\(privateSentinel)_cardD")
 
         let cap = PersistentLogCapture(model: m)
-        let job1 = try await H.run(m, ids: [b.id, c.id, e.id]) {
-            $0.archiveDateOverrides[e.id] = .decade(startYear: 1940); $0.archiveDateSources[e.id] = .typed
+        let (job1, job2) = try await cap.scoped {
+            let job1 = try await H.run(m, ids: [b.id, c.id, e.id]) {
+                $0.archiveDateOverrides[e.id] = .decade(startYear: 1940); $0.archiveDateSources[e.id] = .typed
+            }
+            let job2 = try H.job(m, ids: [d.id])
+            job2.testHookAfterSourceProof = { rec in
+                _ = try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: rec.fullPath), bytes: 64_000, seed: 98)
+            }
+            job2.start(); await job2.task?.value; await job2.completionTask?.value
+            return (job1, job2)
         }
-        let job2 = try H.job(m, ids: [d.id])
-        job2.testHookAfterSourceProof = { rec in
-            _ = try? MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: rec.fullPath), bytes: 64_000, seed: 98)
-        }
-        job2.start(); await job2.task?.value; await job2.completionTask?.value
         let lines = try cap.finish()
 
         // The UI keeps the detail.

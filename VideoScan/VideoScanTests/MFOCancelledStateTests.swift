@@ -31,7 +31,8 @@ import Foundation
 //     outputs cleaned per the job's contract; a genuine failure still
 //     → .failed (regression guard)
 //
-// Suites that swap `appLog` or spawn children are `.serialized`.
+// Log capture is per task tree (`withAppLog`), so no suite here is
+// `.serialized`: each test's children and sinks are its own.
 
 // MARK: - Pure badge mapping
 
@@ -213,8 +214,7 @@ private func drainMainActor(until condition: () -> Bool) async {
 }
 
 @MainActor
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("Stored-state jobs — cancel mid-run ends Cancelled, never Failed", .serialized)
+@Suite("Stored-state jobs — cancel mid-run ends Cancelled, never Failed")
 struct MFOStoredStateCancelTests {
 
     // MARK: Verify Audio — typed probe error thrown after cancel
@@ -229,32 +229,29 @@ struct MFOStoredStateCancelTests {
         let model = VideoScanModel()
         model.records = [rec]
 
-        // Manual appLog swap (withAppLog is synchronous; this test awaits
-        // across the swap). Restored in defer — RAII-style scope guard.
+        // The capture is bound for this test's task tree only.
         let sink = InMemoryLogSink()
-        let previousLog = appLog
-        appLog = sink
-        defer { appLog = previousLog }
+        try await withAppLog(sink) {
+            let job = VerifyAudioJob(record: rec, model: model, diagnoseOverride: { _ in
+                try await blockUntilCancelledThenThrow(
+                    AudioVerifyProbeError.probeFailed("ffmpeg exited with status 255"))
+            })
+            let center = MediaFileOperationsCenter()
+            center.add(job)
+            job.start()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            job.cancel()
+            #expect(job.state == .cancelling)
+            await job.task?.value
+            await drainMainActor { sink.lines.contains { $0.contains(name) && $0.contains("cancelled") } }
 
-        let job = VerifyAudioJob(record: rec, model: model, diagnoseOverride: { _ in
-            try await blockUntilCancelledThenThrow(
-                AudioVerifyProbeError.probeFailed("ffmpeg exited with status 255"))
-        })
-        let center = MediaFileOperationsCenter()
-        center.add(job)
-        job.start()
-        try await Task.sleep(nanoseconds: 100_000_000)
-        job.cancel()
-        #expect(job.state == .cancelling)
-        await job.task?.value
-        await drainMainActor { sink.lines.contains { $0.contains(name) && $0.contains("cancelled") } }
-
-        #expect(job.state == .cancelled, "got \(job.state) — \(job.subtitle)")
-        #expect(job.finishedAt != nil)
-        #expect(rec.audioVerifyStatus.isEmpty, "a cancelled probe is not a verdict")
-        let mine = sink.lines.filter { $0.contains(name) }
-        #expect(mine.contains { $0.hasPrefix("verify audio cancelled:") }, "\(mine)")
-        #expect(!mine.contains { $0.contains("FAILED") }, "no FAILED line for a cancel: \(mine)")
+            #expect(job.state == .cancelled, "got \(job.state) — \(job.subtitle)")
+            #expect(job.finishedAt != nil)
+            #expect(rec.audioVerifyStatus.isEmpty, "a cancelled probe is not a verdict")
+            let mine = sink.lines.filter { $0.contains(name) }
+            #expect(mine.contains { $0.hasPrefix("verify audio cancelled:") }, "\(mine)")
+            #expect(!mine.contains { $0.contains("FAILED") }, "no FAILED line for a cancel: \(mine)")
+        }
     }
 
     // Regression: the same typed error WITHOUT a cancel is a real failure.

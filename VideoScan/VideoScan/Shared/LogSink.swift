@@ -1,17 +1,19 @@
 import Foundation
+import VideoScanCore
 
 // MARK: - LogSink — the DI seam for app-level logging
 //
 // A protocol abstraction over the destination of `appLog` writes. The
 // production implementation (`PersistentLog`) writes to a flat file under
-// ~/Library/Logs/VideoScan/; test doubles in `LogSinks+Test.swift` route
-// writes to /dev/null or an in-memory buffer.
+// ~/Library/Logs/VideoScan/; test doubles in `LogSinks+Test.swift` record
+// into memory.
 //
-// This is the FIRST of several DI seams Rick is introducing. The shape
-// below is the reference: a small protocol that matches the existing
-// production type's external surface, conformed-to by the existing type
-// (no rename, no wrapper), with the global symbol typed as the protocol
-// so test code can swap the instance.
+// The shape: a small protocol that matches the existing production type's
+// external surface, conformed-to by the existing type (no rename, no
+// wrapper), with the global symbol typed as the protocol. A test does not
+// swap the global; it binds a sink for its own task tree (`withAppLog`,
+// VideoScanCore/TaskTreeScope.swift) — which is why LogSink refines
+// Core's `TaskScopedLogSink`, the type that task-local is declared as.
 //
 // Why a protocol (not an `actor` and not a closure):
 //   - The 32 call sites already use synchronous `.write("…")` and no one
@@ -24,7 +26,7 @@ import Foundation
 // Swift's `protocol` here is roughly a C++ pure-virtual abstract base
 // class — the concrete types implement the methods, and `appLog` holds
 // an existential (`LogSink`) that dispatches dynamically.
-protocol LogSink: AnyObject, Sendable {
+protocol LogSink: TaskScopedLogSink {
     /// Human-readable name (used in headers and diagnostics).
     var name: String { get }
 
@@ -70,12 +72,11 @@ extension LogSink {
 
 // MARK: - NullLogSink (production-side)
 //
-// Discards every write. Used as the safe default for the global `appLog`
-// when the binary is being hosted by XCTest / Swift Testing — that way
-// even if a test forgets to inject an explicit sink, nothing leaks to
+// Discards every write. The production sink (`productionAppLog`) is one
+// of these when the binary is hosted by XCTest / Swift Testing — so a line
+// logged outside any test's scope leaks nowhere, least of all to
 // ~/Library/Logs/VideoScan/videoscan.log. Lives in production code (not
-// the test target) because the global `appLog` initializer below has to
-// reference it.
+// the test target) because that initializer has to reference it.
 //
 // `final class … : @unchecked Sendable` matches the existing
 // PersistentLog convention — no mutable state to guard.

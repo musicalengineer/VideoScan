@@ -13,7 +13,7 @@
 //     logging; codex #1429).
 //
 // Everything runs against a temp sandbox; the journal writer and the log
-// sink are injected. Serialized: the tests swap the global `appLog`.
+// sink are injected (the log sink per task tree, `withAppLog`).
 
 import Foundation
 import os
@@ -90,6 +90,7 @@ final class FsyncCounter: @unchecked Sendable {
 
 // MARK: - Suite
 
+// serialized: the 5,000-record test measures a wall-clock main-actor budget (2 s); siblings running beside it would spend it
 @Suite("Backup attestations — journal batching, failure, main-actor budget", .serialized)
 @MainActor
 struct BackupAttestationJournalTests {
@@ -125,54 +126,53 @@ struct BackupAttestationJournalTests {
 
         let counter = CountingAttestationJournalWriter(forward: true)
         let sink = BatchCountingLogSink()
-        let previousLog = appLog
-        appLog = sink
-        defer { appLog = previousLog }
-        let fsyncs = FsyncCounter()
-        let barriers = ArchivePromoteEngine.Barriers(
-            fullFsync: { fd in fsyncs.bump(); return fcntl(fd, F_FULLFSYNC) == 0 ? 0 : Darwin.fsync(fd) },
-            fsync: { fd in fsyncs.bump(); return Darwin.fsync(fd) })
+        try await withAppLog(sink) {
+            let fsyncs = FsyncCounter()
+            let barriers = ArchivePromoteEngine.Barriers(
+                fullFsync: { fd in fsyncs.bump(); return fcntl(fd, F_FULLFSYNC) == 0 ? 0 : Darwin.fsync(fd) },
+                fsync: { fd in fsyncs.bump(); return Darwin.fsync(fd) })
 
-        // The task-local barrier seam is inherited by the `Task {}` the
-        // model spawns, so the fsync count is THIS batch's.
-        let first = await ArchivePromoteEngine.$barriers.withValue(barriers) {
-            let w = model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud",
-                                            at: at.addingTimeInterval(0.25), for: [a.id, b.id, c.id],
-                                            journalWriter: counter.writer)
-            await w.flush?.value
-            return w.records.count
+            // The task-local barrier seam is inherited by the `Task {}` the
+            // model spawns, so the fsync count is THIS batch's.
+            let first = await ArchivePromoteEngine.$barriers.withValue(barriers) {
+                let w = model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud",
+                                                at: at.addingTimeInterval(0.25), for: [a.id, b.id, c.id],
+                                                journalWriter: counter.writer)
+                await w.flush?.value
+                return w.records.count
+            }
+            #expect(first == 3)
+            #expect(counter.batchSizes == [3], "ONE append for three records")
+            #expect(fsyncs.count == 1, "ONE barrier for the batch, not one per line")
+
+            let entries = ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path)
+            #expect(entries.map(\.filename) == ["a.mov", "b.mov", "c.mov"])
+            let raw = try String(contentsOf: ArchiveAttestationJournal.url(rootPath: sb.archiveRoot.path), encoding: .utf8)
+            #expect(raw.split(separator: "\n").count == 3, "JSONL: one physical line per entry")
+            #expect(raw.contains("\"at\":\"2025-09-12T18:00:00.250Z\""), "the journal carries the fractional representation: \(raw)")
+            #expect(entries.first?.at == at.addingTimeInterval(0.25))
+
+            // A second batch is chained after the first — file order = call order.
+            let w2 = model.recordAttestation(kind: .offsite, answer: .no, at: at.addingTimeInterval(1), for: [c.id, a.id],
+                                             journalWriter: counter.writer)
+            let w3 = model.recordAttestation(kind: .drive, answer: .notApplicable, at: at.addingTimeInterval(2), for: [b.id],
+                                             journalWriter: counter.writer)
+            await w2.flush?.value
+            await w3.flush?.value
+            #expect(counter.batchSizes == [3, 2, 1])
+            #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).map(\.kind)
+                    == ["cloud", "cloud", "cloud", "offsite", "offsite", "drive"], "call order preserved across off-main appends")
+            // The console log went through the same ordered worker: three
+            // writeBatch calls, in call order, none on the main thread.
+            #expect(sink.batchCalls == 3 && sink.writeCalls == 0)
+            #expect(sink.attestationLines.map { String($0.dropFirst("attestation: ".count).prefix(5)) }
+                    == ["a.mov", "b.mov", "c.mov", "c.mov", "a.mov", "b.mov"], "console lines in call order: \(sink.lines)")
+            #expect(!sink.sawMainThread, "console batches ran OFF the main thread")
+            // Unknown ids only → nothing to journal, no task.
+            let w4 = model.recordAttestation(kind: .cloud, answer: .no, for: [UUID()], journalWriter: counter.writer)
+            #expect(w4.records.isEmpty && w4.flush == nil)
+            #expect(counter.batchSizes == [3, 2, 1], "an empty batch never touches the writer")
         }
-        #expect(first == 3)
-        #expect(counter.batchSizes == [3], "ONE append for three records")
-        #expect(fsyncs.count == 1, "ONE barrier for the batch, not one per line")
-
-        let entries = ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path)
-        #expect(entries.map(\.filename) == ["a.mov", "b.mov", "c.mov"])
-        let raw = try String(contentsOf: ArchiveAttestationJournal.url(rootPath: sb.archiveRoot.path), encoding: .utf8)
-        #expect(raw.split(separator: "\n").count == 3, "JSONL: one physical line per entry")
-        #expect(raw.contains("\"at\":\"2025-09-12T18:00:00.250Z\""), "the journal carries the fractional representation: \(raw)")
-        #expect(entries.first?.at == at.addingTimeInterval(0.25))
-
-        // A second batch is chained after the first — file order = call order.
-        let w2 = model.recordAttestation(kind: .offsite, answer: .no, at: at.addingTimeInterval(1), for: [c.id, a.id],
-                                         journalWriter: counter.writer)
-        let w3 = model.recordAttestation(kind: .drive, answer: .notApplicable, at: at.addingTimeInterval(2), for: [b.id],
-                                         journalWriter: counter.writer)
-        await w2.flush?.value
-        await w3.flush?.value
-        #expect(counter.batchSizes == [3, 2, 1])
-        #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).map(\.kind)
-                == ["cloud", "cloud", "cloud", "offsite", "offsite", "drive"], "call order preserved across off-main appends")
-        // The console log went through the same ordered worker: three
-        // writeBatch calls, in call order, none on the main thread.
-        #expect(sink.batchCalls == 3 && sink.writeCalls == 0)
-        #expect(sink.attestationLines.map { String($0.dropFirst("attestation: ".count).prefix(5)) }
-                == ["a.mov", "b.mov", "c.mov", "c.mov", "a.mov", "b.mov"], "console lines in call order: \(sink.lines)")
-        #expect(!sink.sawMainThread, "console batches ran OFF the main thread")
-        // Unknown ids only → nothing to journal, no task.
-        let w4 = model.recordAttestation(kind: .cloud, answer: .no, for: [UUID()], journalWriter: counter.writer)
-        #expect(w4.records.isEmpty && w4.flush == nil)
-        #expect(counter.batchSizes == [3, 2, 1], "an empty batch never touches the writer")
     }
 
     @Test("a journal that cannot be written: records updated and announced BEFORE the attempt; the log names the path and the real errno")
@@ -190,30 +190,28 @@ struct BackupAttestationJournalTests {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: indexDir.path) }
 
         let sink = InMemoryLogSink()
-        let previousLog = appLog
-        appLog = sink
-        defer { appLog = previousLog }
+        await withAppLog(sink) {
+            var write: BackupAttestationWrite?
+            let posted = capturingMutations {
+                write = model.recordAttestation(kind: .cloud, answer: .no, at: at, for: [a.id, b.id])
+            }
+            #expect(posted == ["a.mov", "b.mov"], "announced synchronously, before any journal attempt")
+            #expect(a.backupAttestations.map(\.token) == ["cloud=no"] && b.backupAttestations.map(\.token) == ["cloud=no"])
+            #expect(write?.records.count == 2)
+            #expect(write?.flush != nil, "an archive IS designated, so the append was attempted")
 
-        var write: BackupAttestationWrite?
-        let posted = capturingMutations {
-            write = model.recordAttestation(kind: .cloud, answer: .no, at: at, for: [a.id, b.id])
+            await write?.flush?.value
+            #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).isEmpty, "nothing landed")
+            let journalPath = ArchiveAttestationJournal.url(rootPath: sb.archiveRoot.path).path
+            let failure = sink.lines.first { $0.contains("journal line(s) not written") }
+            #expect(failure != nil, "the failure is logged: \(sink.joined)")
+            #expect(failure?.contains("2 journal line(s)") == true)
+            #expect(failure?.contains(journalPath) == true, "names the journal path: \(failure ?? "")")
+            #expect(failure?.contains("errno 13") == true, "the REAL error (EACCES), not a story: \(failure ?? "")")
+            #expect(failure?.contains("archive root unreachable") == false, "the old blanket wording is gone")
+            #expect(failure?.contains("catalog records were updated") == true)
+            #expect(sink.lines.filter { $0.contains("attestation: a.mov") }.count == 1, "the per-record console line still appears once")
         }
-        #expect(posted == ["a.mov", "b.mov"], "announced synchronously, before any journal attempt")
-        #expect(a.backupAttestations.map(\.token) == ["cloud=no"] && b.backupAttestations.map(\.token) == ["cloud=no"])
-        #expect(write?.records.count == 2)
-        #expect(write?.flush != nil, "an archive IS designated, so the append was attempted")
-
-        await write?.flush?.value
-        #expect(ArchiveAttestationJournal.entries(rootPath: sb.archiveRoot.path).isEmpty, "nothing landed")
-        let journalPath = ArchiveAttestationJournal.url(rootPath: sb.archiveRoot.path).path
-        let failure = sink.lines.first { $0.contains("journal line(s) not written") }
-        #expect(failure != nil, "the failure is logged: \(sink.joined)")
-        #expect(failure?.contains("2 journal line(s)") == true)
-        #expect(failure?.contains(journalPath) == true, "names the journal path: \(failure ?? "")")
-        #expect(failure?.contains("errno 13") == true, "the REAL error (EACCES), not a story: \(failure ?? "")")
-        #expect(failure?.contains("archive root unreachable") == false, "the old blanket wording is gone")
-        #expect(failure?.contains("catalog records were updated") == true)
-        #expect(sink.lines.filter { $0.contains("attestation: a.mov") }.count == 1, "the per-record console line still appears once")
     }
 
     @Test("SCALE: 5,000 records return within budget with no main-actor file I/O — zero journal calls and zero log calls before return; afterwards one append and ONE writeBatch, both off the main thread")
@@ -230,32 +228,30 @@ struct BackupAttestationJournalTests {
 
         let counter = CountingAttestationJournalWriter(forward: false)
         let sink = BatchCountingLogSink()
-        let previousLog = appLog
-        appLog = sink
-        defer { appLog = previousLog }
+        await withAppLog(sink) {
+            var write: BackupAttestationWrite?
+            var postedCount = 0
+            let clock = ContinuousClock()
+            let elapsed = clock.measure {
+                postedCount = capturingMutations {
+                    write = model.recordAttestation(kind: .offsite, answer: .yes, label: "Tim's house", at: at, for: ids,
+                                                    journalWriter: counter.writer)
+                }.count
+            }
+            #expect(write?.records.count == 5_000)
+            #expect(postedCount == 5_000, "one record-scoped post per record, all before return")
+            #expect(elapsed < .seconds(2), "recordAttestation for 5,000 records took \(elapsed)")
+            // Nothing has yielded the main actor yet, so the spawned task cannot
+            // have run: neither the journal writer nor the log has been touched.
+            #expect(counter.callCount == 0, "no journal I/O before return")
+            #expect(sink.batchCalls == 0 && sink.writeCalls == 0, "no console I/O before return")
+            #expect(records[4_999].backupAttestations.map(\.token) == ["offsite=yes 'Tim's house'"])
 
-        var write: BackupAttestationWrite?
-        var postedCount = 0
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            postedCount = capturingMutations {
-                write = model.recordAttestation(kind: .offsite, answer: .yes, label: "Tim's house", at: at, for: ids,
-                                                journalWriter: counter.writer)
-            }.count
+            await write?.flush?.value
+            #expect(counter.batchSizes == [5_000], "ONE append carrying every line")
+            #expect(sink.batchCalls == 1 && sink.writeCalls == 0, "console: ONE writeBatch, zero per-record writes")
+            #expect(sink.attestationLines.count == 5_000)
+            #expect(!sink.sawMainThread, "writeBatch ran OFF the main thread")
         }
-        #expect(write?.records.count == 5_000)
-        #expect(postedCount == 5_000, "one record-scoped post per record, all before return")
-        #expect(elapsed < .seconds(2), "recordAttestation for 5,000 records took \(elapsed)")
-        // Nothing has yielded the main actor yet, so the spawned task cannot
-        // have run: neither the journal writer nor the log has been touched.
-        #expect(counter.callCount == 0, "no journal I/O before return")
-        #expect(sink.batchCalls == 0 && sink.writeCalls == 0, "no console I/O before return")
-        #expect(records[4_999].backupAttestations.map(\.token) == ["offsite=yes 'Tim's house'"])
-
-        await write?.flush?.value
-        #expect(counter.batchSizes == [5_000], "ONE append carrying every line")
-        #expect(sink.batchCalls == 1 && sink.writeCalls == 0, "console: ONE writeBatch, zero per-record writes")
-        #expect(sink.attestationLines.count == 5_000)
-        #expect(!sink.sawMainThread, "writeBatch ran OFF the main thread")
     }
 }
