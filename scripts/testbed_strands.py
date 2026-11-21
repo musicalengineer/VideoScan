@@ -172,6 +172,11 @@ class Runner:
         with self._lock:
             self._stopping = True
             live = list(self._live.values())
+        for p in live:                       # TERM every group first: N strands wind down in ONE grace
+            try:                             # period, not N of them (15 test hosts, a 10 s caller)
+                os.killpg(p.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
         for p in live:
             _stop_group(p)
 

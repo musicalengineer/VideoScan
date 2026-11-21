@@ -3,7 +3,7 @@
 #
 #   scripts/run_tests.sh [--smoke | --full] [--unit] [--regression] [--integration] [--perf]
 #                        [--stress] [--python] [--corpus] [--verbose] [--host m4|ultra|m5pro|m1]
-#                        [--ref <rev>] [--filter 'Pos1:Pos2-Neg1'] [--list] [--dry-run] [--yes] [--force]
+#                        [--ref <rev>] [--filter 'Pos1:Pos2-Neg1'] [--jobs N] [--list] [--dry-run] [--yes] [--force]
 #   scripts/run_tests.sh --status       # every live run on this Mac, the slots, the M4 lock holder
 #
 # All the logic is in scripts/run_tests.py (its docstring is the reference), run with Apple's

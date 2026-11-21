@@ -35875,6 +35875,44 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_xctest_shards.py",
+      "stage": "unit",
+      "suites": [
+        "test_xctest_shards.py"
+      ],
+      "tests": [
+        "test_a_count_is_trued_up_from_the_source_helpers_come_off_file_scope_tests_are_named",
+        "test_a_file_holding_a_tail_suite_goes_to_the_tail_whole_and_nothing_else_does",
+        "test_a_file_scope_test_that_did_not_run_is_short_not_silent",
+        "test_a_green_shards_result_bundle_is_removed_and_a_red_shards_is_kept",
+        "test_a_parameterized_tests_seconds_are_the_sum_of_its_arguments",
+        "test_a_run_where_no_test_ran_is_red_and_usage_errors_exit_2",
+        "test_a_shard_past_its_timeout_is_stopped_and_red",
+        "test_a_shard_that_dies_is_red_and_the_others_still_count",
+        "test_a_shard_that_ran_fewer_tests_than_declared_is_red_with_n_of_m",
+        "test_a_suite_named_by_two_files_reaches_one_host_once",
+        "test_a_suite_that_silently_ran_zero_tests_is_red_even_when_the_shards_count_adds_up",
+        "test_every_failure_is_listed_with_its_message_and_its_shards_log",
+        "test_run_tests_app_lane_runs_as_shards_by_default_and_as_one_host_with_jobs_1",
+        "test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebuild",
+        "test_run_tests_shows_the_shard_lines_and_a_red_shard_is_the_lanes_reason",
+        "test_shards_run_at_once_counts_are_summed_and_suite_seconds_are_remembered",
+        "test_sigterm_stops_every_test_host_and_the_run_says_it_is_incomplete",
+        "test_the_count_is_the_result_bundles_when_a_verdict_line_is_glued_into_a_log_line",
+        "test_the_deal_balances_by_recorded_seconds_and_is_deterministic",
+        "test_the_first_deal_goes_by_declared_test_count_and_never_makes_an_empty_shard",
+        "test_the_log_reader_is_run_tests_own_parser_on_real_line_shapes",
+        "test_the_manifest_gives_every_app_file_as_a_group_and_the_command_names_one_host",
+        "test_the_newest_xctestrun_of_the_plan_is_found",
+        "test_the_serial_tail_table_names_real_suites_each_with_a_reason",
+        "test_the_shards_own_lines_are_forwarded_whole_and_ours_are_never_read_as_tests",
+        "test_the_tail_runs_in_one_host_alone_after_the_parallel_shards",
+        "test_the_whole_manifest_deals_into_k_shards_with_every_suite_exactly_once"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_testbed_strands.py",
       "stage": "unit",
       "suites": [
@@ -35888,6 +35926,7 @@
         "test_each_strand_gets_its_own_tmpdir",
         "test_longest_first_from_the_last_run_and_wall_is_near_the_longest_strand",
         "test_serial_strands_run_alone_after_the_parallel_phase",
+        "test_stop_asks_every_strand_to_end_at_once_not_one_grace_period_each",
         "test_strands_run_n_at_a_time_and_results_come_back_in_input_order",
         "test_width_bounds_how_many_run_at_once"
       ]
@@ -40339,6 +40378,10 @@
         },
         {
           "name": "tests/test_pytest_shards.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_xctest_shards.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
