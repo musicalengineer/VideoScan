@@ -36961,6 +36961,61 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DedupeHashReadSeamTests.swift",
+      "stage": "regression",
+      "suites": [
+        "DedupeHashReadSeamTests",
+        "DedupeHashReadSeamSensorTests"
+      ],
+      "tests": [
+        "aPrefixReadIsNeverADigest",
+        "eachFaultAtEachHasher",
+        "everyAssignmentIsTheTaskLocal",
+        "hookNilIsTheReferenceDigest",
+        "nilHookTimeIsComparable",
+        "theCarriersAreInPlace",
+        "theGateConsultsOnce",
+        "theHookIsTaskLocal",
+        "theProofConsultsOnce"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultContentCopyProofTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultContentCopyProofTests"
+      ],
+      "tests": [
+        "p0_aFlippedReadOfTheSurvivingCopyLetsTheLastGoodCopyGo",
+        "shapeA_aLongerCopyIsNeverReadAndNeverProves",
+        "shapeB_theProofStandsOnOneRead",
+        "theAdoptionProofUnderEachFault",
+        "theGuardHoldsOnAnUnprovenRead",
+        "theProvenBackupCountReadsNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultDeleteDuplicatesTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultDeleteDuplicatesTests"
+      ],
+      "tests": [
+        "aFaultedReadNeverReachesTheTrash",
+        "p0_aFlippedKeeperReadTrashesAFileOneBitApart",
+        "p0_aFlippedSingleReadTrashesAFileOneBitApart",
+        "shapeA_aLongerFileIsRefusedBeforeAnyRead",
+        "shapeB_aFlippedSiblingReadCountsAFalseCopy",
+        "shapeB_theQuarantineRereadCatchesAFlippedDuplicateRead",
+        "shapeC_aFalseCachedKeeperFixityIsTrusted",
+        "theJobReadsNoSibling",
+        "theSiblingProofUnderEachFault"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
@@ -42300,7 +42355,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 937,
+      "expected_floor": 961,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42554,7 +42609,11 @@
         "VideoScanTests/AudioTranscriberCommandTests",
         "VideoScanTests/PersistentLogRotationGzipTests",
         "VideoScanTests/RAMDiskNegativeMatrixTests",
-        "VideoScanTests/VolumeRescueRsyncNegativeMatrixTests"
+        "VideoScanTests/VolumeRescueRsyncNegativeMatrixTests",
+        "VideoScanTests/DedupeHashReadSeamTests",
+        "VideoScanTests/DedupeHashReadSeamSensorTests",
+        "VideoScanTests/HashReadFaultContentCopyProofTests",
+        "VideoScanTests/HashReadFaultDeleteDuplicatesTests"
       ]
     },
     {

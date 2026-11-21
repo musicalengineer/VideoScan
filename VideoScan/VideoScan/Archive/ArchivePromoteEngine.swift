@@ -115,6 +115,37 @@ enum ArchivePromoteEngine {
     /// on the parent and passing it as the pthread's start argument.)
     @TaskLocal static var readHook: ReadHook? = nil
 
+    /// The seam for the two SERIAL full-file hashers outside this engine
+    /// (`SignatureVerification.cancellableFullHash` — Delete Duplicates — and
+    /// `ContentCopyProof.sha256`): ask `hook` about the block a read just
+    /// put in `buffer` (`count` > 0 bytes read at `offset`) and apply its
+    /// answer. Returns the count the caller must act on as if read(2) had
+    /// returned it: `count` unchanged (no fault, or one bit flipped in
+    /// `buffer`), fewer bytes (a short read; 0 = the file "ends" here), or
+    /// -1 with `errno` set (a read error). After a short read the
+    /// descriptor's offset is put where a real short read would have left
+    /// it, so the caller's next read continues from there. Called ONLY when
+    /// a hook is bound — never in production.
+    static func applyReadFault(_ hook: ReadHook, fd: Int32, offset: Int64,
+                               buffer: UnsafeMutableRawPointer, count: Int) -> Int {
+        guard count > 0, let fault = hook(fd, offset, count) else { return count }
+        switch fault {
+        case .errno(let e):
+            errno = e
+            return -1
+        case .shortRead(let bytes):
+            let delivered = max(0, min(count, bytes))
+            if delivered < count { _ = lseek(fd, off_t(offset) + off_t(delivered), SEEK_SET) }
+            return delivered
+        case .flip(let i):
+            if i >= 0 && i < count {
+                let byte = buffer.load(fromByteOffset: i, as: UInt8.self)
+                buffer.storeBytes(of: byte ^ 0x01, toByteOffset: i, as: UInt8.self)
+            }
+            return count
+        }
+    }
+
     // MARK: Errors
 
     enum Failure: Error, Equatable, CustomStringConvertible {

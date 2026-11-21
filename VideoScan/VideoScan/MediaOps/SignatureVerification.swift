@@ -222,8 +222,28 @@ enum SignatureVerification {
         /// pair (a look-alike) does not cost the next pair a second read
         /// of the same keeper (codex follow-up P2 #6).
         var didComputeKeeperFixity: ((ContentFixity) -> Void)?
+        /// TEST SEAM, nil in production (DedupeHashReadSeamSensorTests): the
+        /// read-fault hook `cancellableFullHash` consults once per block —
+        /// the SAME `ArchivePromoteEngine.ReadHook` the archive hashers use.
+        /// Nothing in the app assigns it except `carryingReadHook()`, which
+        /// only copies the calling task's task-local value in, so that a
+        /// worker in `Task.detached` (which inherits no task-locals) still
+        /// sees a fault a test bound around the job.
+        var readHook: ArchivePromoteEngine.ReadHook?
 
         static let live = Hooks(shouldCancel: { Task.isCancelled })
+
+        /// These hooks, carrying the read-fault hook bound on the CALLING
+        /// task (if any) by value. In production the task-local is nil and
+        /// this returns `self` unchanged. (For Rick: ≈ reading a
+        /// thread_local on the parent and passing it as the pthread's start
+        /// argument — the same move `pipelinedRead` makes for its reader.)
+        func carryingReadHook() -> Hooks {
+            guard readHook == nil, let bound = ArchivePromoteEngine.readHook else { return self }
+            var copy = self
+            copy.readHook = bound
+            return copy
+        }
     }
 
     enum Failure: Error, Equatable {
@@ -887,7 +907,9 @@ enum SignatureVerification {
     /// Streams in `blockSize` blocks — bounded memory regardless of file
     /// size (worst case: one 1 MiB buffer per concurrent read; the job
     /// runs at most two). Returns "" on any I/O error, cancellation, or a
-    /// size change mid-read.
+    /// size change mid-read. Consults the read-fault test seam
+    /// (`Hooks.readHook`, else the task-local `ArchivePromoteEngine.readHook`)
+    /// once per block; both are nil in production.
     private static func cancellableFullHash(path: String, label: String,
                                             hooks: Hooks,
                                             blockSize: Int = FileHasher.segmentSize,
@@ -909,9 +931,16 @@ enum SignatureVerification {
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: blockSize, alignment: 16)
         defer { buffer.deallocate() }
         var total = 0
+        // Test seam: nil in production, so every block below is exactly what
+        // read(2) returned. Read once, here, on the calling thread.
+        let readHook = hooks.readHook ?? ArchivePromoteEngine.readHook
         while true {
             guard !hooks.shouldCancel() else { return "" }
-            let count = read(fd, buffer, blockSize)
+            var count = read(fd, buffer, blockSize)
+            if let readHook, count > 0 {
+                count = ArchivePromoteEngine.applyReadFault(readHook, fd: fd, offset: Int64(total),
+                                                            buffer: buffer, count: count)
+            }
             if count > 0 {
                 sha.update(bufferPointer: UnsafeRawBufferPointer(start: buffer, count: count))
                 total += count

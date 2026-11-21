@@ -620,6 +620,10 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
 
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
+    /// The read-fault test seam (nil in production), read on the task that
+    /// makes this object — the catalog half — because the disk half runs on
+    /// a detached task, which inherits no task-locals.
+    private let readHook = ArchivePromoteEngine.readHook
 
     func record(_ entry: Entry, for path: String) { lock.withLock { entries[path] = entry } }
 
@@ -640,7 +644,7 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
             let pinned = Set(RemovalReservations.shared.pin(copies.map(\.path), for: path))
             let staying = copies.filter { pinned.contains($0.path) }
             if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
-            return ContentCopyProof.proven(source: source, copies: staying)
+            return ContentCopyProof.proven(source: source, copies: staying, readHook: readHook)
                 ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
         case nil:
             return VideoScanModel.copyNotProvenAtTheMoveNote
