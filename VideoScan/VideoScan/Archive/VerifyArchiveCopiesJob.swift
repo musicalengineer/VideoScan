@@ -185,6 +185,12 @@ struct VerifyArchivePlan: Sendable {
         /// conditional-write guard: a write lands only if the live
         /// record still carries exactly this.
         let recordDigest: String?
+        /// The record's general `contentFixity` digest as observed when the
+        /// plan was built (lowercased), nil when it has none. A fixity write
+        /// (`restoreArchiveFixity`) or clear overwrites it too, so it is a
+        /// stored fingerprint for GH #504 D3b: a read that disagrees with it
+        /// is made a second time before anything is replaced (Codex r2 P1).
+        var contentDigest: String? = nil
         /// Bytes this item contributes to the progress denominator.
         let expectedBytes: Int64
     }
@@ -491,6 +497,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                                manifestSHA: row?.sha256,
                                manifestBytes: row?.sizeBytes,
                                recordDigest: rec.archiveFixity?.digest.lowercased(),
+                               contentDigest: rec.contentFixity?.digest.lowercased(),
                                expectedBytes: max(0, bytes)))
             total += max(0, bytes)
         }
@@ -798,12 +805,13 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         return try await Self.hashPathOffMain(path: item.fullPath, progress: progress)
     }
 
-    /// GH #504 D3b at Verify (Codex r1 P1). The record already carries a
-    /// fingerprint and this read's digest is DIFFERENT — whether it matches
-    /// the manifest (the stored one would be REPLACED) or matches nothing
-    /// (the stored one would be CLEARED as a mismatch). One read is not
-    /// enough for either: the file is read in full a second time (a fresh,
-    /// cancellable read with its own subtitle).
+    /// GH #504 D3b at Verify (Codex r1 P1, r2 P1). The record already
+    /// carries a fingerprint — archiveFixity OR contentFixity, both of which
+    /// a fixity write or clear overwrites — and this read's digest is
+    /// DIFFERENT from either — whether it matches the manifest (the stored
+    /// one would be REPLACED) or matches nothing (it would be CLEARED as a
+    /// mismatch). One read is not enough for either: the file is read in full
+    /// a second time (a fresh, cancellable read with its own subtitle).
     ///   * true — nothing stored disagrees with the read, or the second read
     ///     produced the same digest: go on and judge it (a replacement is
     ///     then SAID, old → new, by `applyMatch`).
@@ -812,7 +820,10 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     ///     own failure), or the run is stopping (nothing recorded).
     private func aSecondReadBacks(_ first: String, against item: VerifyArchivePlan.Item, name: String,
                                   root: String, totalBytes: Int64, model: VideoScanModel) async -> Bool {
-        guard let stored = item.recordDigest?.lowercased(), stored != first else { return true }
+        // The first stored fingerprint this read disagrees with (archive
+        // first: it is the one the row's words name).
+        guard let stored = [item.recordDigest, item.contentDigest]
+            .compactMap({ $0?.lowercased() }).first(where: { $0 != first }) else { return true }
         let why: String
         do {
             let second = try await readInFull(item, root: root, totalBytes: totalBytes, again: true)?.lowercased()

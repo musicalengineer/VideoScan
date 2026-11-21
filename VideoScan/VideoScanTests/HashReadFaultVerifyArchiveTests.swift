@@ -47,6 +47,7 @@
 import Foundation
 import Testing
 @testable import VideoScan
+import VideoScanCore
 
 struct VerifyFaultCase: Sendable, CustomStringConvertible {
     let kind: HashReadFault.Kind
@@ -300,6 +301,67 @@ struct HashReadFaultVerifyArchiveTests {
         #expect(row.kind == .failed && row.detail.contains("could not be read in full") && row.detail.contains("on the second read (stored fingerprint kept)"),
                 "\(kind): \(row.kind): \(row.detail)")
         #expect(c.copy.archiveFixity == before && c.copy.contentFixity == nil)
+    }
+
+    // MARK: Codex r2 P1 (GH #504, D3b at Verify) — contentFixity is a stored fingerprint too
+
+    /// Disk holds B; the manifest names A (one bit apart at 17,000). The
+    /// record's archiveFixity names SHA(A) (stale) or was stripped; its
+    /// contentFixity is valid and current and names SHA(B). `restoreArchiveFixity`
+    /// overwrites contentFixity too, so a read that disagrees with it must be
+    /// confirmed by a second read before anything is replaced.
+    private func contentFixityConflict(_ label: String, archiveFixityKept: Bool) async throws
+        -> (c: (sb: MasterArchiveTestSupport.Sandbox, model: VideoScanModel, copy: VideoRecord, name: String, manifest: String, storedDigest: String),
+            digestB: String) {
+        let flip: (Data) -> Data = { var d = $0; d[17_000] ^= 0x01; return d }
+        let c = try await conflict(label, disk: flip, stored: { $0 })
+        try #require(c.storedDigest == c.manifest, "fixture: archiveFixity names the manifest's SHA(A)")
+        if !archiveFixityKept { c.copy.archiveFixity = nil }
+        let digestB = try #require(MasterArchiveTestSupport.sha256(ofFile: c.copy.fullPath))
+        try #require(digestB != c.manifest)
+        c.copy.contentFixity = ContentFixity.captured(path: c.copy.fullPath, digest: digestB, byteCount: 50_000)
+        try #require(c.copy.contentFixity?.digest == digestB, "fixture: a current contentFixity names SHA(B)")
+        return (c, digestB)
+    }
+
+    @Test("CONFLICT on contentFixity (Codex r2 P1): disk B, manifest and a stale archiveFixity name SHA(A), a current contentFixity names SHA(B); ONE read flips B→A → a second read, 'read twice, disagreed (stored fingerprint kept)', SHA(B) preserved",
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [true, false])
+    func oneReadDoesNotReplaceAStoredContentFixity(archiveFixityKept: Bool) async throws {
+        let (c, digestB) = try await contentFixityConflict("hrf_verify_cf_\(archiveFixityKept)", archiveFixityKept: archiveFixityKept)
+        defer { c.sb.cleanup() }
+        let (archiveBefore, contentBefore) = (c.copy.archiveFixity, c.copy.contentFixity)
+        let fault = HashReadFault(.bitFlip, pathSuffix: c.name, atByte: 17_000, onPass: 1)
+        let job = await fault.run { await run(c.model) }
+        #expect(fault.firedCount == 1)
+        let row = try #require(job.outcomes.first { $0.name.hasSuffix(c.name) })
+        print("[hash-matrix] verify-archive | archiveFixity \(archiveFixityKept ? "SHA(A) stale" : "stripped"), contentFixity SHA(B), manifest SHA(A), one B→A flip | \(row.kind) | \(row.detail) | reads \(fault.passCount)")
+        // Seen RED 2026-11-21 (before the fix): one read; `.verified` (kept)
+        // / `.restored` (stripped); contentFixity replaced with SHA(A).
+        #expect(fault.passCount == 2, "the read that disagreed with contentFixity was not made again — \(fault.passCount)")
+        #expect(row.kind == .failed && row.detail.contains("read twice, disagreed (stored fingerprint kept)"), "\(row.kind): \(row.detail)")
+        #expect(c.copy.contentFixity == contentBefore && c.copy.contentFixity?.digest == digestB,
+                "contentFixity was replaced on one read: \(c.copy.contentFixity?.digest.prefix(12) ?? "nil")…")
+        #expect(c.copy.archiveFixity == archiveBefore, "archiveFixity was written: \(c.copy.archiveFixity?.digest.prefix(12) ?? "nil")…")
+        if case .finished = job.state { Issue.record("the run ended green: \(job.state)") }
+        let console = await hashFaultConsole(c.model, containing: "read twice, disagreed")
+        #expect(console.contains("Verify Archive: FAILED") && console.contains(c.name), "\(console)")
+    }
+
+    @Test("CONFLICT on contentFixity, the other half: archiveFixity stripped, a stale contentFixity names another digest, the file holds the manifest's bytes → two clean reads agree → restored, contentFixity now names the manifest's digest",
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
+    func twoReadsThatAgreeReplaceAStaleContentFixity() async throws {
+        let c = try await conflict("hrf_verify_cf_clean", disk: { $0 }, stored: { $0 }); defer { c.sb.cleanup() }
+        c.copy.archiveFixity = nil
+        let other = String(repeating: "ab", count: 32)
+        c.copy.contentFixity = ContentFixity.captured(path: c.copy.fullPath, digest: other, byteCount: 50_000)
+        try #require(c.copy.contentFixity?.digest == other)
+        let reads = HashReadFault(.eio, pathSuffix: c.name, atByte: 1 << 40, onPass: 0)   // counts, never fires
+        let job = await reads.run { await run(c.model) }
+        let row = try #require(job.outcomes.first { $0.name.hasSuffix(c.name) })
+        #expect(reads.passCount == 2, "a replaced contentFixity costs a second read — \(reads.passCount)")
+        #expect(row.kind == .restored, "\(row.kind): \(row.detail)")
+        #expect(c.copy.archiveFixity?.digest == c.manifest && c.copy.contentFixity?.digest == c.manifest)
+        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
     }
 
     /// A single flipped read of a file whose record AGREES with the manifest
