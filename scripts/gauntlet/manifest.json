@@ -36118,14 +36118,18 @@
       "tests": [
         "test_a_bundle_with_other_executable_lines_is_refused_by_file_and_bundle",
         "test_a_line_is_covered_when_it_ran_in_any_bundle_and_the_denominator_is_the_builds",
+        "test_a_report_file_without_a_path_is_a_refusal_not_a_traceback",
         "test_an_unreadable_bundle_a_missing_target_and_a_file_the_archive_lacks_are_refusals",
         "test_bundles_that_do_not_name_the_same_files_are_refused",
         "test_each_archive_record_becomes_one_int_as_it_is_parsed",
         "test_one_bundle_gives_both_rulers_and_the_cli_prints_one_line",
         "test_real_single_host_bundle_gives_back_xcodes_own_number_and_the_line_number",
         "test_real_sixteen_shards_union_is_at_least_every_shard_in_every_file_and_close_to_one_host",
+        "test_the_dashboard_draws_the_two_rulers_as_two_lines",
         "test_the_logic_filter_is_the_nightlys_awk_pattern",
+        "test_the_morning_digest_does_not_read_a_change_of_ruler_as_a_change_of_coverage",
         "test_the_result_is_checked_not_assumed",
+        "test_the_whole_union_is_bounded_and_running_out_of_time_is_a_refusal",
         "test_usage_errors_exit_2"
       ]
     },

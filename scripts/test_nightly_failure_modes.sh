@@ -2112,7 +2112,7 @@ else
     shard_fixture green '{"shards":[{"passed":3,"skipped":1,"expected":4},{"passed":2,"expected":2},{"passed":1,"expected":1,"serial":"1 suites that must not run beside another test host (timing budget)"}]}' \
         "# strand shard-01: xcodebuild …\n$P1\n$P2\n$SK\n$KI\n$RUNSUM\n" "$P1\n$PX\n" "$P2\n"
     got=$(shard_case green 0)
-    want='ok||6|0|1|1|[]|[]|true|8'
+    want='ok||6|0|1|1|[]|[]|true|2'
     [ "$got" = "$want" ] && pass "green: three shards' logs and bundles sum to one row (6p/0f/1s, 1 known issue), every shard complete" \
         || fail "green sharded run: got '$got' want '$want'"
     args=$(cat "$SH/args.txt" 2>/dev/null)
@@ -2141,7 +2141,7 @@ else
         "$P1\n$P2\n$SK\n2026-11-20 21:15:39.799 VideoScan[1:2] [logging] os_unix.c:52992: (2) open(/private/var/TEST_HOST_HEARTBEAT epoch=1795227328.334 elapsed=40.0s\n$PX\n" "$P1\n$P2\n"
     got=$(shard_case glued 0)
     case "$got" in
-        "ok||6|0|1|0|[]|[]|true|8")
+        "ok||6|0|1|0|[]|[]|true|2")
             grep -q 'App shards: counts trued up from the result bundles: logs said 5 passed / 1 skipped, bundles 6 / 1' "$SH/case.log" \
                 && pass "a verdict line lost from a log: the row's counts are the result bundles' (6 passed, not 5), and the log says so" \
                 || fail "counts were trued up without a word: $(cat "$SH/case.log")" ;;
@@ -2151,14 +2151,14 @@ else
     shard_fixture onered '{"shards":[{"passed":2,"expected":2},{"passed":1,"failed":1,"expected":2,"green":false,"rc":65}],"failures":[{"id":"LedgerTests/ledgerKeepsEveryRow()","name":"ledgerKeepsEveryRow()","shard":"shard-02"}]}' \
         "$P1\n$P2\n" "$P1\n$F1\n"
     got=$(shard_case onered 1)
-    want='failed|failed-tests:1|3|1|0|0|["ledgerKeepsEveryRow()"]|[]|true|8'
+    want='failed|failed-tests:1|3|1|0|0|["ledgerKeepsEveryRow()"]|[]|true|2'
     [ "$got" = "$want" ] && pass "one shard red on a failing test: failed-tests:1, named once as one host names it (the bundle's copy is not a second failure)" \
         || fail "one red shard: got '$got' want '$want'"
 
     shard_fixture bundleonly '{"shards":[{"passed":2,"expected":2},{"passed":1,"failed":1,"expected":2,"green":false,"rc":65}],"failures":[{"id":"LedgerTests/ledgerKeepsEveryRow()","name":"ledgerKeepsEveryRow()","shard":"shard-02"}]}' \
         "$P1\n$P2\n" "$P1\n"
     got=$(shard_case bundleonly 1)
-    want='failed|failed-tests:1|3|1|0|0|["LedgerTests.ledgerKeepsEveryRow()"]|[]|true|8'
+    want='failed|failed-tests:1|3|1|0|0|["LedgerTests.ledgerKeepsEveryRow()"]|[]|true|2'
     [ "$got" = "$want" ] && pass "a failure only a result bundle names (its verdict line lost from the log) is counted and named by its bundle identifier" \
         || fail "bundle-only failure: got '$got' want '$want'"
 
@@ -2167,7 +2167,7 @@ else
     shard_fixture crashed '{"shards":[{"passed":2,"expected":2},{"passed":1,"failed":1,"expected":2,"green":false,"rc":65}],"failures":[{"id":"VitalsTests/theAsideSpeaksTheCorrectedYear()","name":"theAsideSpeaksTheCorrectedYear()","shard":"shard-02"}]}' \
         "$P1\n$P2\n" "$P1\nFailing tests:\n\tVitalsTests.theAsideSpeaksTheCorrectedYear()\n\n** TEST EXECUTE FAILED **\n"
     got=$(shard_case crashed 1)
-    want='failed|crashed-tests:1|3|0|0|0|[]|["VitalsTests.theAsideSpeaksTheCorrectedYear()"]|true|8'
+    want='failed|crashed-tests:1|3|0|0|0|[]|["VitalsTests.theAsideSpeaksTheCorrectedYear()"]|true|2'
     [ "$got" = "$want" ] && pass "a test host that died in one shard: crashed-tests:1 by name, not counted again as a failure" \
         || fail "crashed shard: got '$got' want '$want'"
 
@@ -2175,7 +2175,7 @@ else
     shard_fixture died '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":1,"green":false,"rc":65,"codes":["died"],"bundle_read":false,"problems":["xcodebuild exit 65 with no failed test (a crash, a dead test host or an xcodebuild error)"]}],"counts_from":"mixed","expected_failures":null}' \
         "$P1\n$P2\n" "$P1\n"
     got=$(SHARD_CASE_MERGE=1 shard_case died 1)
-    want='1|null||failed|shard-died:1|3|0|0|0|[]|[]|false|8'
+    want='1|null||failed|shard-died:1|3|0|0|0|[]|[]|false|2'
     if [ "$got" = "$want" ] && grep -q 'App shards: RED shard-02: xcodebuild exit 65 with no failed test' "$SH/case.log" \
         && grep -q 'Coverage NOT published' "$SH/case.log"; then
         pass "a shard that dies with no failed test: shard-died:1, the shard and its log named, and no coverage number from a partial run"
@@ -2186,14 +2186,14 @@ else
     shard_fixture timeout '{"shards":[{"passed":1,"failed":1,"expected":2,"green":false,"rc":65},{"passed":1,"expected":3,"green":false,"rc":-15,"timed_out":true,"codes":["timeout","short"],"bundle_read":false,"problems":["TIMEOUT after 1800s (its process group was stopped)","ran 1 of 3 tests"]}],"counts_from":"mixed","expected_failures":null}' \
         "$P1\n$F1\n" "$P2\n"
     got=$(shard_case timeout 1)
-    want='failed|shard-timeout:1800s|2|1|0|0|["ledgerKeepsEveryRow()"]|[]|false|8'
+    want='failed|shard-timeout:1800s|2|1|0|0|["ledgerKeepsEveryRow()"]|[]|false|2'
     [ "$got" = "$want" ] && pass "a shard that times out: shard-timeout:1800s outranks a failure elsewhere (the run is incomplete); the failure is still counted and named" \
         || fail "timed-out shard: got '$got' want '$want'"
 
     shard_fixture short '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":3,"green":false,"codes":["short"],"problems":["ran 1 of 3 tests"]}]}' \
         "$P1\n$P2\n" "$P1\n"
     got=$(shard_case short 1)
-    want='failed|shard-short:1|3|0|0|0|[]|[]|false|8'
+    want='failed|shard-short:1|3|0|0|0|[]|[]|false|2'
     [ "$got" = "$want" ] && grep -q 'App shards: RED shard-02: ran 1 of 3 tests' "$SH/case.log" \
         && pass "counts short (a shard ran 1 of its 3 tests, every one green): shard-short:1, never ok" \
         || fail "short shard: got '$got' want '$want'"
@@ -2326,7 +2326,7 @@ else
     shard_fixture r1param '{"shards":[{"passed":2,"expected":2},{"passed":1,"failed":1,"expected":2,"green":false,"rc":65}],"failures":[{"id":"GedcomDateTests/parse(_:)","name":"parse(_:)","shard":"shard-02"}]}' \
         "$P1\n$P2\n" "$P1\n$PF\n"
     got=$(shard_case r1param 1)
-    want='failed|failed-tests:1|3|1|0|0|["parse(_:) with 20 test cases"]|[]|true|8'
+    want='failed|failed-tests:1|3|1|0|0|["parse(_:) with 20 test cases"]|[]|true|2'
     [ "$got" = "$want" ] && pass "R1 one failed parameterized test is one failure, named once (as one host names it)" \
         || fail "R1 parameterized failure counted twice: got '$got' want '$want'"
 
@@ -2385,11 +2385,51 @@ PYC
         *) pass "R5 a summary that does not account for every host is not green" ;;
     esac
 
+    # ── review 2026-11-21, round 2: RED-1, RED-2 (each seen red on 77e82ef03) ──
+    # RED-1 — APP_SHARDS_COMPLETE ignored undealable_files.
+    # Two files could not be dealt to any host: their tests ran nowhere. The header promises "NO coverage
+    # number, never a low one" for a run that did not run its whole plan; this one is merged and published.
+    shard_fixture v2undeal '{"undealable_files":2,"verdict":"RED","shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' "$P1\n" "$P2\n"
+    got=$(SHARD_CASE_MERGE=1 shard_case v2undeal 1)
+    case "$got" in
+        "1|null|"*"|failed|shard-undealable:2|"*) pass "RED-1 a run with undealable files publishes no coverage number" ;;
+        *) fail "RED-1 two test files ran in no host and the union is still published as the suite's coverage: got '$got'" ;;
+    esac
+
+    # RED-2 — `union_app_shards_coverage || true` then an unconditional prune_green_shard_bundles.
+    # The union REFUSES (host 1's bundle has other executable lines). That is the one night someone must open
+    # the bundles; every shard is green, so the very next line deletes all of them.
+    shard_fixture v2skew '{"shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' "$P1\n" "$P2\n"
+    left=$(
+        source "$CORE_LIB"; log() { :; }
+        export SHARD_FAKE_FIX="$SH/fix/v2skew" SHARD_FAKE_RC=0 SHARD_FAKE_ARGS="$SH/args.txt" SHARD_FAKE_COV_SKEW=1
+        export NIGHTLY_XCRUN="$SH/bin/xcrun" VIDEOSCAN_NIGHTLY_COVERAGE_UNION="$SCRIPT_DIR/xccov_union.py"
+        NIGHTLY_ON_DEMAND=0; NIGHTLY_TEST_TIMEOUT_SECONDS=60; NIGHTLY_APP_SHARDS_DIR="$SH/run"
+        NIGHTLY_APP_SHARDS_TIMINGS="$SH/timings.json"; NIGHTLY_TEST_LOG="$SH/app-test.log"; NIGHTLY_XCRESULT="$SH/merged.xcresult"
+        HOME="$SH/home"; NIGHTLY_APP_SHARDS_USED=true
+        run_app_tests_sharded "$SH/bin/xctest_shards.py" /dd/Build/Products 8 > /dev/null
+        parse_test_counts "$NIGHTLY_TEST_LOG"; read_app_shards_summary "$NIGHTLY_APP_SHARDS_DIR/summary.json"
+        # collect_optional_post_test_metrics' sharded lines, the very text of the nightly:
+        eval "$(sed -n '/^        if union_app_shards_coverage; then$/,/^        fi$/p' "$NIGHTLY")" > /dev/null
+        printf '%s|%s' "$COV_LOGIC" "$(ls -d "$SH"/run/run/*/shard.xcresult 2>/dev/null | wc -l | tr -d ' ')"
+    )
+    [ "$left" = "null|2" ] && pass "RED-2 a refused union keeps the bundles it refused" \
+        || fail "RED-2 the union refused and the bundles that would say why are gone: coverage|bundles left = '$left' (want null|2)"
+    grep -q "Coverage: the shards' result bundles are kept for a look: " "$NIGHTLY" \
+        && [ "$(grep -c '^        if union_app_shards_coverage; then$' "$NIGHTLY")" = 1 ] \
+        && [ "$(grep -c '^        union_app_shards_coverage || true$' "$NIGHTLY")" = 0 ] \
+        && pass "the nightly prunes green bundles only after a union that returned 0, and says where a refused union's bundles are" \
+        || fail "the prune is not conditional on the union in nightly_local_tests.sh"
+    # app_test_hosts is the hosts that ran at once: 2 parallel shards and a tail here, though 8 were asked for.
+    got=$(shard_case green 0)
+    [ "${got##*|}" = 2 ] && pass "app_test_hosts is the number of hosts that actually ran side by side (2 of the 8 asked for), the tail not counted" \
+        || fail "app_test_hosts: got '${got##*|}' want 2 ($got)"
+
     # A host killed mid-line leaves its log without a newline: the next host's first line must
     # not be glued to it (an XCTest verdict line is anchored at the line start: glued, it is lost).
     shard_fixture nonewline '{"shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' "$P1\n◇ Test cut() star" "$PX\n"
     got=$(shard_case nonewline 0)
-    [ "$got" = 'ok||2|0|0|0|[]|[]|true|8' ] && [ "$(grep -c '^Test Case ' "$SH/run/hosts.log")" = 1 ] \
+    [ "$got" = 'ok||2|0|0|0|[]|[]|true|2' ] && [ "$(grep -c '^Test Case ' "$SH/run/hosts.log")" = 1 ] \
         && ! grep -q 'counts trued up' "$SH/case.log" \
         && pass "a shard log that ends mid-line is closed with a newline in the join: the next host's first verdict line stays a line (the logs alone count both tests)" \
         || fail "log join without a newline guard: got '$got' ($(cat "$SH/case.log"))"
@@ -2505,7 +2545,7 @@ if [ -n "$GATE_LINE" ] && [ -n "$SHARD_CALL_LINE" ] && [ -n "$SINGLE_LINE" ] && 
     && [ "$SINGLE_LINE" -lt "$PARSE_LINE" ] && [ "$PARSE_LINE" -lt "$READ_LINE" ] && [ "$READ_LINE" -lt "$CLASSIFY19_LINE" ] \
     && grep -q '^APP_SHARDS_SCRIPT="\${VIDEOSCAN_NIGHTLY_APP_SHARDS:-\$REPO/scripts/xctest_shards.py}"$' "$NIGHTLY" \
     && grep -q '^if \$NIGHTLY_APP_SHARDS_USED && ! \$TEST_TIMED_OUT; then$' "$NIGHTLY" \
-    && [ "$(grep -A2 '^        union_app_shards_coverage || true$' "$NIGHTLY" | grep -c '^        prune_green_shard_bundles$')" = 1 ] \
+    && [ "$(grep -A2 '^        if union_app_shards_coverage; then$' "$NIGHTLY" | grep -c '^            prune_green_shard_bundles$')" = 1 ] \
     && [ "$(grep -c 'xcresulttool merge' <(grep -v '^ *#' "$NIGHTLY"))" = 0 ] \
     && [ "$(grep -B3 '^    exit 1$' "$NIGHTLY" | grep -c '^    \$NIGHTLY_APP_SHARDS_USED && remove_test_artifacts$')" = 1 ]; then
     pass "wiring: K hosts only past the gate (jobs > 1 and a usable sharder of the checkout under test), else the single host; parse, then the bundles' true-up (never after the watchdog), then the ladder with the shard reason"

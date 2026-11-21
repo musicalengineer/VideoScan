@@ -179,14 +179,43 @@ def test_the_result_is_checked_not_assumed(monkeypatch, tmp_path, xcrun):
             return self
     real = xu.BundleCoverage
 
-    def first_forgets(bundle_path, target, xcrun_):
-        one = real(bundle_path, target, xcrun_)
+    def first_forgets(bundle_path, target, xcrun_, deadline=None):
+        one = real(bundle_path, target, xcrun_, deadline)
         one.covered = {p: Forgetful(s) for p, s in one.covered.items()}
         return one
     monkeypatch.setattr(xu, "BundleCoverage", first_forgets)
     monkeypatch.setattr(xu, "set", lambda s: s, raising=False)       # keep the Forgetful sets as the accumulators
     with pytest.raises(xu.Refused, match="the union covers 1 lines, one bundle alone 2"):
         xu.union([a, b], "VideoScan.app", xcrun)
+
+
+def test_a_report_file_without_a_path_is_a_refusal_not_a_traceback(tmp_path, xcrun):
+    a = bundle(tmp_path, "a.xcresult", {LOGIC: (EX, {2})})
+    rep = json.loads((a / "report.json").read_text())
+    del rep["targets"][0]["files"][0]["path"]
+    (a / "report.json").write_text(json.dumps(rep))
+    p = subprocess.run([sys.executable, str(SCRIPT), "--xcrun", " ".join(xcrun), "--target", "VideoScan.app", str(a)],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1 and "Traceback" not in p.stderr, p.stderr
+    assert f"REFUSED — {a}: 1 file(s) of 'VideoScan.app' in its coverage report have no path" in p.stdout, p.stdout
+
+
+def test_the_whole_union_is_bounded_and_running_out_of_time_is_a_refusal(monkeypatch, tmp_path, xcrun):
+    a = bundle(tmp_path, "a.xcresult", {LOGIC: (EX, {2})})
+    b = bundle(tmp_path, "b.xcresult", {LOGIC: (EX, {3})})
+    assert xu.CALL_SECONDS == 600 and xu.TOTAL_SECONDS == 1200
+    # the budget is spent after the first bundle: the second is never asked
+    clock = iter([0.0, 1.0, 2.0, 5000.0, 5000.0, 5000.0])
+    monkeypatch.setattr(xu.time, "monotonic", lambda: next(clock))
+    with pytest.raises(xu.Refused, match=r"b\.xcresult: out of time before xccov view --report \(the whole union is given 1200 s\)"):
+        xu.union([a, b], "VideoScan.app", xcrun)
+    # one call that hangs is stopped at what is left, and says so
+    slow = tmp_path / "slow_xcrun.py"
+    slow.write_text("import time\ntime.sleep(30)\n")
+    monkeypatch.undo()
+    monkeypatch.setattr(xu, "CALL_SECONDS", 1.0)
+    with pytest.raises(xu.Refused, match=r"xccov view --report did not finish in 1 s"):
+        xu.union([a], "VideoScan.app", [sys.executable, str(slow)])
 
 
 def test_each_archive_record_becomes_one_int_as_it_is_parsed():
@@ -206,6 +235,47 @@ def test_usage_errors_exit_2(xcrun):
     assert p.returncode == 2
     p = subprocess.run([sys.executable, str(SCRIPT), "x.xcresult"], capture_output=True, text=True)
     assert p.returncode == 2
+
+
+# ── the morning digest reads the ruler (scripts/morning_metrics.sh) ──
+
+def morning(current: dict, baseline: dict) -> str:
+    import datetime
+    import re
+    script = (ROOT / "scripts" / "morning_metrics.sh").read_text()
+    code = re.search(r"python3 - <<'PY'\n(.*?)\nPY\s*$", script, re.DOTALL).group(1)
+    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    rows = []
+    for when, extra in ((now - datetime.timedelta(days=1), baseline), (now, current)):
+        rows.append(dict({"ts": when.isoformat().replace("+00:00", "Z"), "source": "nightly-local", "host": "M4",
+                          "branch": "main", "dirty": False, "status": "ok", "passed": 100, "failed": 0, "skipped": 0,
+                          "total": 100}, **extra))
+    env = dict(os.environ, TD_ROWS="\n".join(json.dumps(r) for r in rows), TD_SA="")
+    return subprocess.run([sys.executable, "-c", code], env=env, check=True, capture_output=True, text=True).stdout
+
+
+def test_the_morning_digest_does_not_read_a_change_of_ruler_as_a_change_of_coverage():
+    old, new = {"coverage_logic_pct": 72.238}, {"coverage_logic_pct": 79.017, "coverage_basis": "lines"}
+    out = morning(new, old)                       # the switch night
+    assert out.count("coverage ruler changed to distinct lines: 79.0% (was 72.2% function-summed)") == 1, out
+    assert "+6.8" not in out and "DROPPED" not in out, out
+    out = morning(old, new)                       # a night back on the old ruler (an older checkout)
+    assert "Coverage DROPPED" not in out and "-6.8" not in out, out
+    assert out.count("coverage ruler changed to function-summed: 72.2% (was 79.0% distinct lines)") == 1, out
+    # the same ruler on both nights is compared as before: a rise is a delta, a real drop is flagged
+    out = morning({"coverage_logic_pct": 79.5, "coverage_basis": "lines"}, new)
+    assert "ruler changed" not in out and "Coverage DROPPED" not in out, out
+    out = morning({"coverage_logic_pct": 77.0, "coverage_basis": "lines"}, new)
+    assert "Coverage DROPPED -2.0% (79.0% → 77.0%)" in out and "ruler changed" not in out, out
+    out = morning({"coverage_logic_pct": 70.0}, old)
+    assert "Coverage DROPPED -2.2% (72.2% → 70.0%)" in out, out
+
+
+def test_the_dashboard_draws_the_two_rulers_as_two_lines():
+    page = (ROOT / "docs" / "index.html").read_text()
+    assert 'label: "logic % (2 AM nightly, function-summed)"' in page and 'coverage_basis !== "lines"' in page
+    assert 'label: "logic % (2 AM nightly, distinct lines)"' in page and 'coverage_basis === "lines"' in page
+    assert 'label: "logic % (2 AM nightly)"' not in page
 
 
 # ── the real bundles of the 2026-11-21 measurement (production shape; skipped when they are gone) ──

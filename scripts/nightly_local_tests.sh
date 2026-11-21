@@ -824,6 +824,7 @@ NIGHTLY_APP_SHARD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_APP_SHARD_TIMEOUT_SECONDS
 # runner's own stop (TERM, 10 s shared grace, KILL, 5 s) plus a margin.
 NIGHTLY_APP_SHARDS_STOP_SECONDS="${NIGHTLY_APP_SHARDS_STOP_SECONDS:-20}"
 NIGHTLY_APP_SHARDS_USED=false
+NIGHTLY_APP_SHARDS_KEEP_BUNDLES=false
 NIGHTLY_APP_STREAM_LOG=""
 APP_SHARD_REASON=""
 APP_SHARDS_COMPLETE=false
@@ -969,7 +970,6 @@ except Exception as error:
     notes.append("no shard summary (%s): xctest_shards was stopped or died before its verdict; counts are the logs" % type(error).__name__)
 if d is not None:
     shards = d["shards"]
-    hosts = int(d.get("jobs") or 0)
     try:
         on_disk = len([n for n in os.listdir(e["SHARD_RUN"]) if re.match(r"^\d{4}$", n)])
     except OSError:
@@ -1000,10 +1000,15 @@ if d is not None:
         reason = "shard-undealable:%d" % int(d["undealable_files"])
     elif d.get("verdict") != "GREEN" and not int(d.get("failed") or 0):
         reason = "shard-red"
-    # Whole = every shard ran its whole plan (no code at all: short is as partial
-    # a profile as a timeout) and its bundle was read. Failed tests do not unmake it.
-    complete = accounted and all(
+    # Whole = THE one predicate for "this run is the suite": the summary accounts
+    # for every host, no test file was left undealt (its tests ran in no host),
+    # and every shard ran its whole plan (no code at all: short is as partial a
+    # profile as a timeout) with its bundle read. Failed tests do not unmake it.
+    complete = accounted and not int(d.get("undealable_files") or 0) and all(
         s.get("bundle_read") and not s.get("timed_out") and not (s.get("codes") or []) for s in shards)
+    # Hosts that actually ran side by side: the parallel shards (a small run
+    # deals fewer than the K asked for; the tail is one more host, alone).
+    hosts = len([s for s in shards if not s.get("serial")]) or (1 if shards else 0)
     if d.get("counts_from") == "bundles":
         was = (passed, skipped)
         passed, skipped = int(d["passed"]), int(d["skipped"])
@@ -1043,7 +1048,7 @@ print(json.dumps({"reason": reason, "passed": passed, "failed": failed, "skipped
     SKIPPED=$(field skipped)
     FAILED_NAMES_JSON=$(field failed_names)
     APP_SHARDS_COMPLETE=$(field complete)
-    # (the summary's own job count; without a summary, what the phase was started with)
+    # (the hosts the summary says ran at once; without a summary, what the phase was started with)
     case "$(field hosts)" in
         ''|*[!0-9]*|0) ;;
         *) APP_TEST_HOSTS=$(field hosts) ;;
@@ -1213,9 +1218,16 @@ collect_optional_post_test_metrics() {
     COV_LOGIC_REPORT="null"
     # Sharded: the exact union over the K hosts' bundles, or no number. (There
     # is no /tmp/nightly-results.xcresult then: the block below does not run.)
+    # Green bundles go only once the union has READ them: a refused union keeps
+    # every bundle — they are the evidence of why (the next run's start, or a
+    # green run's cleanup, removes the folder).
     if ${NIGHTLY_APP_SHARDS_USED:-false}; then
-        union_app_shards_coverage || true
-        prune_green_shard_bundles
+        if union_app_shards_coverage; then
+            prune_green_shard_bundles
+        else
+            NIGHTLY_APP_SHARDS_KEEP_BUNDLES=true
+            log "Coverage: the shards' result bundles are kept for a look: $NIGHTLY_APP_SHARDS_DIR/run/*/shard.xcresult"
+        fi
     fi
     if [ -d /tmp/nightly-results.xcresult ]; then
         log "xcresult exists, extracting coverage..."
@@ -1892,7 +1904,9 @@ remove_test_artifacts() {
     # morning; green bundles go, and on the paths that never reached a summary
     # (the watchdog, zero tests) every bundle does — gigabytes of partial
     # bundles nothing will read (the next run removes the folder anyway).
-    if [ "${STATUS:-failed}" = "ok" ]; then
+    if ${NIGHTLY_APP_SHARDS_KEEP_BUNDLES:-false}; then
+        :   # a refused coverage union: its bundles stay, whatever the verdict
+    elif [ "${STATUS:-failed}" = "ok" ]; then
         rm -rf "$NIGHTLY_APP_SHARDS_DIR"
     elif $NIGHTLY_APP_SHARDS_USED; then
         prune_green_shard_bundles all

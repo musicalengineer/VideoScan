@@ -338,7 +338,7 @@ sys.exit(0 if d["verdict"] == "GREEN" else 1)
         self.assertFalse([c for c in calls if ' test-without-building ' in c], 'the single host ran as well')
         self.assertRegex(summary, r'suite: GREEN app 5 passed, 0 failed, 1 skipped; core 4 passed, 0 failed, 0 skipped ')
         row = json.loads((out / 'suite-row.json').read_text())
-        self.assertEqual((row['status'], row['passed'], row['skipped'], row['total'], row['app_test_hosts']), ('ok', 5, 1, 6, 4))
+        self.assertEqual((row['status'], row['passed'], row['skipped'], row['total'], row['app_test_hosts']), ('ok', 5, 1, 6, 2))   # the two hosts that ran, of the 4 asked for
         # The file a reader tails while the phase runs (run_tests --full, `status`) is the sharder's live stream.
         # (The shards' folder is the run's scratch: the testbed's tidy removes it with the result bundles once
         # the run is summarized.) Nothing published, nothing of the scheduled run's touched (its shard folder is

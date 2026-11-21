@@ -46,10 +46,13 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 PREFIX = "coverage-union: "
+CALL_SECONDS = 600.0          # one xccov call
+TOTAL_SECONDS = 1200.0        # the whole union (measured: 39 s for 16 real bundles); past it: refuse
 # The nightly's "logic-only" filter (scripts/nightly_local_tests.sh, the awk over `xccov view --report
 # --files-for-target`): a file whose name ends in one of these is a SwiftUI surface, not logic.
 LOGIC_EXCLUDE = re.compile(r"(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$")
@@ -74,11 +77,18 @@ def _line_code(d: dict):
     return d
 
 
-def _tool_json(xcrun: Sequence[str], args: Sequence[str], bundle: Path, hook=None):
+def _tool_json(xcrun: Sequence[str], args: Sequence[str], bundle: Path, hook=None, deadline: Optional[float] = None):
+    left = CALL_SECONDS if deadline is None else min(CALL_SECONDS, deadline - time.monotonic())
+    if left <= 0:
+        raise Refused(f"{bundle}: out of time before xccov view {' '.join(args)} "
+                      f"(the whole union is given {TOTAL_SECONDS:g} s)")
     try:
         p = subprocess.run(list(xcrun) + ["xccov", "view"] + list(args) + ["--json", str(bundle)],
-                           capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired) as e:
+                           capture_output=True, text=True, timeout=left, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise Refused(f"{bundle}: xccov view {' '.join(args)} did not finish in {left:.0f} s "
+                      f"(one call is given {CALL_SECONDS:g} s, the whole union {TOTAL_SECONDS:g} s)")
+    except OSError as e:
         raise Refused(f"{bundle}: xccov view {' '.join(args)} could not run ({type(e).__name__})")
     if p.returncode != 0:
         raise Refused(f"{bundle}: xccov view {' '.join(args)} failed (exit {p.returncode}: "
@@ -93,17 +103,20 @@ class BundleCoverage:
     """One bundle, one target: per file its executable lines and the ones that ran; and the bundle's
     own report numbers (function-summed) for the same files."""
 
-    def __init__(self, bundle: Path, target: str, xcrun: Sequence[str]) -> None:
-        report = _tool_json(xcrun, ["--report"], bundle)
+    def __init__(self, bundle: Path, target: str, xcrun: Sequence[str], deadline: Optional[float] = None) -> None:
+        report = _tool_json(xcrun, ["--report"], bundle, deadline=deadline)
         found = [t for t in (report.get("targets") or []) if t.get("name") == target] if isinstance(report, dict) else []
         if len(found) != 1:
             raise Refused(f"{bundle}: its coverage report has {len(found)} targets named {target!r}")
+        files = found[0].get("files") or []
+        nameless = [f for f in files if not isinstance(f, dict) or not isinstance(f.get("path"), str) or not f["path"]]
+        if nameless:
+            raise Refused(f"{bundle}: {len(nameless)} file(s) of {target!r} in its coverage report have no path")
         self.report: Dict[str, Tuple[int, int]] = {
-            str(f["path"]): (int(f.get("coveredLines") or 0), int(f.get("executableLines") or 0))
-            for f in found[0].get("files") or []}
+            f["path"]: (int(f.get("coveredLines") or 0), int(f.get("executableLines") or 0)) for f in files}
         if not self.report:
             raise Refused(f"{bundle}: target {target!r} lists no files")
-        archive = _tool_json(xcrun, ["--archive"], bundle, hook=_line_code)
+        archive = _tool_json(xcrun, ["--archive"], bundle, hook=_line_code, deadline=deadline)
         if not isinstance(archive, dict):
             raise Refused(f"{bundle}: its coverage archive is not a path → lines table")
         self.executable: Dict[str, FrozenSet[int]] = {}
@@ -127,8 +140,9 @@ def union(bundles: Sequence[Path], target: str, xcrun: Sequence[str] = ("xcrun",
     best: Dict[str, int] = {}
     report: Dict[str, Tuple[int, int]] = {}
     first: Optional[Path] = None
+    deadline = time.monotonic() + TOTAL_SECONDS
     for bundle in bundles:
-        one = BundleCoverage(Path(bundle), target, xcrun)       # one archive in memory at a time
+        one = BundleCoverage(Path(bundle), target, xcrun, deadline)   # one archive in memory at a time
         if first is None:
             first, executable = Path(bundle), one.executable
             covered = {p: set(s) for p, s in one.covered.items()}
