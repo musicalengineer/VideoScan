@@ -233,8 +233,8 @@ struct AtomicFilePublishSensorTests {
         let justified: Set<String> = [
             // the wrapper itself
             "VideoScan/VideoScanCore/Sources/VideoScanCore/AtomicFilePublish.swift",
-            // publishes a resumed .partial media copy (82f92b46, crash-safe rescue)
-            "VideoScan/VideoScan/MediaOps/RescueFileCopier.swift",
+            // (RescueFileCopier left this list 2026-11-21: its replacing
+            // rename is gone — it publishes only with renamex_np RENAME_EXCL.)
             // rebases a symlink atomically (People #3, codex review 2026-09-13)
             "VideoScan/VideoScan/People/POIStorage.swift",
             // publishes a validated CyberBrain archive (moved out of

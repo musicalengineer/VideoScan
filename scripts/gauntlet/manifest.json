@@ -29227,14 +29227,14 @@
       ],
       "tests": [
         "destinationDirectoryVanishingMidCopyPublishesNothing",
-        "doneSummaryNamesRepairedFiles",
         "doneSummaryReadsHonestlyForAResumedRescue",
+        "doneSummarySaysHowManyWereRefusedBecauseTheNameWasTaken",
         "emptySourceIsCopiedAsAnEmptyFile",
         "failedDataBarrierPublishesNothing",
         "failureMidCopyLeavesNeitherFinalFileNorPartial",
         "freshCopyPublishesCompleteFileAndReportsMeasuredBytes",
         "leftoverPartialIsDiscardedAndNeverCounted",
-        "longerDestinationIsAlsoRecopied",
+        "longerDestinationIsAlsoRefusedAndUntouched",
         "missingSourceIsReportedAsFailure",
         "modificationTimeAndExtendedAttributesSurviveTheCopy",
         "resumedRescueReportsZeroBytesWritten",
@@ -29243,8 +29243,9 @@
         "scale_threeThousandSmallFilesStayWithinBudget",
         "sensor_interruptedCopyNeverLeavesAFinalNamedFile",
         "sensor_shortDestinationIsNeverReportedAsAlreadyCopied",
-        "sensor_shortDestinationIsRepairedNotCountedAsCopied",
-        "shortDestinationIsRecopiedNotCounted",
+        "sensor_shortDestinationIsRefusedNotCountedNotReplaced",
+        "sensor_theCopierPublishesOnlyWithAnExclusiveRename",
+        "shortDestinationIsRefusedNeverReplacedNeverCounted",
         "sourceThatIsNotARegularFileIsRefused",
         "stalePartialBesideCompleteDestinationIsSwept",
         "symlinkAtDestinationIsRefused",
@@ -32531,6 +32532,24 @@
         "spotCheckSamplingIsDeterministicAndBounded",
         "undoFromAJSONSafetyCopyIsRefusedAndChangesNothing",
         "uuidMatchWithZeroCleanSamplesAsksInsteadOfActing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeRescueNeverReplacesTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VolumeRescueNeverReplacesTests"
+      ],
+      "tests": [
+        "aDifferentSizeFileIsNeverReplaced",
+        "aDirectoryAtTheNameIsNeverReplaced",
+        "aFileThatAppearsBeforeRsyncRunsIsNotReplaced",
+        "aFileThatAppearsDuringTheFastCopyIsNotReplaced",
+        "aSameSizeFileIsCountedAndLeftUntouched",
+        "aSymlinkAtTheNameIsNeverReplaced",
+        "theCopiersOwnPartialIsStillResumed",
+        "twoCameraCardsIntoOneFolder"
       ]
     },
     {
@@ -42613,7 +42632,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1011,
+      "expected_floor": 1019,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42875,7 +42894,8 @@
         "VideoScanTests/TranscodePreservationProofMatrixTests",
         "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
         "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
-        "VideoScanTests/EncodeSourceWithoutDurationMatrixTests"
+        "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
+        "VideoScanTests/VolumeRescueNeverReplacesTests"
       ]
     },
     {

@@ -138,8 +138,8 @@ enum RescueCopyMode: String, CaseIterable {
 
     var description: String {
         switch self {
-        case .fast: return "Uses system copy — fastest, no post-copy checksum"
-        case .verified: return "Uses rsync --checksum — slower. A file counts as copied only after its size at the destination is checked against the source (a size check, not a hash)."
+        case .fast: return "Uses system copy — fastest, no post-copy checksum. Nothing already at the destination is ever replaced."
+        case .verified: return "Uses rsync --checksum — slower. A file counts as copied only after its size at the destination is checked against the source (a size check, not a hash). Nothing already at the destination is ever replaced."
         }
     }
 
@@ -175,10 +175,10 @@ final class VolumeRescueOperation: ObservableObject {
     /// reads honestly instead of looking like it re-copied everything.
     @Published var filesAlreadyPresent: Int = 0
     @Published var bytesAlreadyPresent: Int64 = 0
-    /// Destinations found INCOMPLETE (size ≠ source) and re-copied. Before
-    /// 2026-09-13 these were silently counted as good copies — this
-    /// counter is the visible half of that fix.
-    @Published var filesRepaired: Int = 0
+    /// Subset of `filesFailed`: source files NOT copied because a different
+    /// file (another size, a folder, a link) is already at their name under
+    /// the destination. A rescue never replaces what is there (rule 2).
+    @Published private(set) var filesNameTaken: Int = 0
     /// One line per file that is NOT a copy (failed, or in flight at Stop),
     /// each saying why and what is at the destination. Bounded: one line of
     /// at most ~700 characters per such file.
@@ -240,12 +240,16 @@ final class VolumeRescueOperation: ObservableObject {
                                         failed: Int,
                                         bytesWritten: Int64,
                                         alreadyPresent: Int,
-                                        repaired: Int,
+                                        nameTaken: Int = 0,
                                         interrupted: Int = 0,
                                         notAttempted: Int = 0) -> String {
-        var parts = ["\(safe) at the destination (size checked)", "\(failed) failed", humanSize(bytesWritten) + " written"]
+        // "Failed" says how many were refused because the name is taken:
+        // those files are not lost (they are still on the source) and
+        // nothing at the destination was replaced.
+        let failedWords = nameTaken > 0
+            ? "\(failed) failed (\(nameTaken) not replaced: a different file was already there)" : "\(failed) failed"
+        var parts = ["\(safe) at the destination (size checked)", failedWords, humanSize(bytesWritten) + " written"]
         if alreadyPresent > 0 { parts.append("\(alreadyPresent) already there") }
-        if repaired > 0 { parts.append("\(repaired) incomplete re-copied") }
         if interrupted > 0 { parts.append("\(interrupted) interrupted by Stop") }
         if notAttempted > 0 { parts.append("\(notAttempted) not attempted") }
         return parts.joined(separator: " · ")
@@ -295,7 +299,7 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         filesAlreadyPresent = 0
         bytesAlreadyPresent = 0
-        filesRepaired = 0
+        filesNameTaken = 0
         errors = []
         rsyncInFlight = false
         wasStopped = false
@@ -346,11 +350,11 @@ final class VolumeRescueOperation: ObservableObject {
                 // unattempted (the loops break on nothing else).
                 self.filesNotAttempted = max(0, total - self.filesCopied - self.filesFailed - self.filesInterrupted)
                 self.wasStopped = self.stopRequested && (self.filesInterrupted + self.filesNotAttempted) > 0
-                rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) repairedIncomplete=\(self.filesRepaired, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) nameTaken=\(self.filesNameTaken, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
                 appLog.write(Self.outcomeLine(
                     stopped: self.wasStopped, planned: total,
                     summary: Self.doneSummary(safe: self.filesCopied, failed: self.filesFailed, bytesWritten: self.bytesWritten,
-                                              alreadyPresent: self.filesAlreadyPresent, repaired: self.filesRepaired,
+                                              alreadyPresent: self.filesAlreadyPresent, nameTaken: self.filesNameTaken,
                                               interrupted: self.filesInterrupted, notAttempted: self.filesNotAttempted),
                     destination: rescueDir, elapsedSeconds: Int(elapsed)))
                 self.progress = 1.0
@@ -374,7 +378,7 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         filesAlreadyPresent = 0
         bytesAlreadyPresent = 0
-        filesRepaired = 0
+        filesNameTaken = 0
         filesInterrupted = 0
         filesNotAttempted = 0
         filesPlanned = 0
@@ -436,6 +440,15 @@ final class VolumeRescueOperation: ObservableObject {
                 self?.progress = progressFraction
             }
 
+            // Refuse before mutating (rule 2): a name that is taken by a
+            // different file is never touched. (A same-size file goes on
+            // to the copier, which leaves it alone, counts it as already
+            // there and sweeps only its OWN stale `.partial`.)
+            if case .taken(let line) = Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+                await recordFailed(line, nameTaken: true)
+                continue
+            }
+
             do {
                 try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
             } catch {
@@ -464,25 +477,20 @@ final class VolumeRescueOperation: ObservableObject {
                         self?.filesAlreadyPresent += 1
                         self?.bytesAlreadyPresent += bytes
                     }
-                case .recopiedIncomplete(let written, let previousSize):
-                    // The bug this fix exists for: before today this file
-                    // would have been counted as a good copy. Say so loudly.
-                    rescueLog.warning("Incomplete rescue copy REPAIRED: \(relative, privacy: .public) was \(previousSize, privacy: .public) bytes, source is \(written, privacy: .public) — re-copied")
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.filesRepaired += 1
-                        self?.bytesWritten += written
-                    }
                 }
             } catch RescueFileCopier.Failure.cancelled {
                 // In flight at Stop: named, not failed (as the rsync path).
                 await recordInterrupted("\(relative) — stopped during the copy; nothing was published at the final name.")
                 break
             } catch {
-                rescueLog.error("Rescue copy failed: \(relative, privacy: .public) — \(String(describing: error), privacy: .public)")
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("\(relative) — \(error.localizedDescription)")
+                // The copier refused because the name is (or became) taken:
+                // say it in the same words as the check above, from a
+                // fresh look at what is there now.
+                if Self.isNameTaken(error),
+                   case .taken(let line) = Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+                    await recordFailed(line, nameTaken: true)
+                } else {
+                    await recordFailed("\(relative) — \(error.localizedDescription)")
                 }
             }
         }
@@ -506,6 +514,31 @@ final class VolumeRescueOperation: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.currentFile = filename
                 self?.progress = progressFraction
+            }
+
+            // NEVER REPLACE (rule 2, 2026-11-21). THE BUG: nothing asked
+            // what was already at the destination name, and a successful
+            // rsync replaced it — the previous bytes unlinked, not trashed.
+            // Two volumes with the same relative path (two camera cards
+            // with DCIM/100CANON/MVI_0001.MOV) rescued into one folder is
+            // all it took. Decided here, before mkdir and before rsync:
+            // a free name is transferred; a regular file of the source's
+            // size is counted as already there and left alone (content is
+            // NOT compared — a size check); anything else at the name
+            // fails this file and is not touched.
+            switch Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+            case .free:
+                break
+            case .alreadyThere(let bytes):
+                await MainActor.run { [weak self] in
+                    self?.filesCopied += 1
+                    self?.filesAlreadyPresent += 1
+                    self?.bytesAlreadyPresent += bytes
+                }
+                continue
+            case .taken(let line):
+                await recordFailed(line, nameTaken: true)
+                continue
             }
 
             // Create destination directory.
@@ -566,6 +599,7 @@ final class VolumeRescueOperation: ObservableObject {
                 executable: "/usr/bin/rsync",
                 arguments: [
                     "--checksum",       // compare by checksum, not just size/mtime
+                    "--ignore-existing", // second belt: a file that appears at the name after the check is not replaced
                     "--partial-dir=\(Self.partialDirName)",   // an interrupted transfer never sits at the final name
                     "--times",          // preserve modification times
                     srcFile,
@@ -607,6 +641,12 @@ final class VolumeRescueOperation: ObservableObject {
                         self?.filesCopied += 1
                         self?.bytesWritten += size
                     }
+                    // The copy is whole: this file's OWN parked partial from
+                    // an earlier interrupted run has served its purpose.
+                    // (With --ignore-existing the installed rsync leaves it
+                    // behind.) The only file a rescue ever unlinks — its
+                    // own, under `.videoscan-partial`, never a final name.
+                    unlink(Self.partialPath(forDestination: destFile))
                 } else {
                     await recordFailed(Self.notCopiedLine(relative: relative, source: source, final: final, stderr: result.stderr))
                 }
@@ -632,11 +672,12 @@ final class VolumeRescueOperation: ObservableObject {
     /// One file that is NOT a copy: counted, listed, and written to the app
     /// log (the first `failureLogLimit` lines; the OUTCOME line carries the
     /// count of all of them).
-    private nonisolated func recordFailed(_ line: String) async {
+    private nonisolated func recordFailed(_ line: String, nameTaken: Bool = false) async {
         rescueLog.error("Rescue copy failed: \(line, privacy: .public)")
         await MainActor.run { [weak self] in
             guard let self else { return }
             self.filesFailed += 1
+            if nameTaken { self.filesNameTaken += 1 }
             self.errors.append(line)
             if self.filesFailed <= Self.failureLogLimit { appLog.write("rescue FAILED: \(line)") }
         }
@@ -663,6 +704,51 @@ final class VolumeRescueOperation: ObservableObject {
 
     nonisolated static func partialPath(forDestination destFile: String) -> String {
         (partialDirectory(forDestination: destFile) as NSString).appendingPathComponent((destFile as NSString).lastPathComponent)
+    }
+
+    /// What the rescue does with one destination name, decided from a fresh
+    /// lstat of the source and of the name BEFORE anything is written.
+    enum NameCheck: Equatable, Sendable {
+        /// Nothing is there: transfer.
+        case free
+        /// A regular file of the source's size: counted as already at the
+        /// destination, left alone. Content is not compared.
+        case alreadyThere(Int64)
+        /// Anything else is there. The line for the user; nothing is touched.
+        case taken(String)
+    }
+
+    nonisolated static func nameCheck(relative: String, rescueDir: String, sourceFile: String, destFile: String) -> NameCheck {
+        nameCheck(relative: relative, folder: (rescueDir as NSString).lastPathComponent,
+                  source: entry(at: sourceFile), final: entry(at: destFile))
+    }
+
+    /// Pure. `folder` is the rescue folder's name, so the line reads as a
+    /// path under the destination ("Rescued/DCIM/100CANON/MVI_0001.MOV").
+    nonisolated static func nameCheck(relative: String, folder: String, source: DiskEntry, final: DiskEntry) -> NameCheck {
+        let there: String
+        switch (final, source.regularSize) {
+        case (.absent, _):
+            return .free
+        case (.regular(let bytes), .some(let size)) where bytes == size:
+            return .alreadyThere(bytes)
+        case (.regular(let bytes), _):
+            there = "\(bytes) bytes there"
+        case (.notRegular, _):
+            there = "not a regular file there — a folder or a link"
+        }
+        let placed = (folder as NSString).appendingPathComponent(relative)
+        let onSource = source.regularSize.map { "\($0) bytes on the source" } ?? "the source could not be measured"
+        let kept = source.regularSize == nil ? "nothing was touched." : "nothing was touched, and the file is still on the source."
+        return .taken("\(relative) — a different file is already at \(placed) (\(there), \(onSource)) — not replaced; \(kept)")
+    }
+
+    /// The fast copier's refusals that mean "the name is taken".
+    nonisolated static func isNameTaken(_ error: Error) -> Bool {
+        switch error as? RescueFileCopier.Failure {
+        case .differentFileAtDestination, .destinationNotRegularFile, .destinationAppearedDuringCopy: return true
+        default: return false
+        }
     }
 
     /// What one fresh lstat says is at a path. (For Rick: ≈ a tagged union
@@ -739,7 +825,8 @@ final class VolumeRescueOperation: ObservableObject {
         case (.notRegular, _):
             what = "the destination is not a regular file; it was left untouched"
         case (.regular(let bytes), .some(let size)):
-            what = "a file of \(bytes) bytes is at the final name, the source is \(size) bytes — not a complete copy; it was left untouched"
+            what = "a file of \(bytes) bytes is at the final name, the source is \(size) bytes — a different file, or not a complete copy "
+                + "(rsync is told never to replace a file that is there); it was left untouched"
         case (.regular(let bytes), .none):
             what = "a file of \(bytes) bytes is at the final name but the source could not be measured to compare; it was left untouched"
         }
@@ -1398,7 +1485,7 @@ struct VolumeCompareSheet: View {
                                                    failed: rescue.filesFailed,
                                                    bytesWritten: rescue.bytesWritten,
                                                    alreadyPresent: rescue.filesAlreadyPresent,
-                                                   repaired: rescue.filesRepaired,
+                                                   nameTaken: rescue.filesNameTaken,
                                                    interrupted: rescue.filesInterrupted,
                                                    notAttempted: rescue.filesNotAttempted))
                 .font(.caption)

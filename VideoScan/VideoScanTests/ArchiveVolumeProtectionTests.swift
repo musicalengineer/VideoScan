@@ -587,6 +587,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2,   // SignatureVerification 1 → 0: Trash only (codex r1 F1)
+        // Volume rescue 0 → 1 (2026-11-21): unlink of THIS file's own parked
+        // partial under `.videoscan-partial/` once its copy is whole and
+        // size-checked. Never a final name, never a catalog record's file —
+        // a rescue never replaces or removes what is at a destination name.
+        "VideoScan/Volumes/VolumeCompare.swift": 1,
         // GH #143: THE one Trash call. Every media Trash door reaches it —
         // the engine's disk turn (Junk, ⌘⌫, Prune, Discard), Delete
         // Duplicates' quarantine step (DeleteDuplicatesJob.moveToTrash and
@@ -647,8 +652,10 @@ struct ArchiveVolumeProtectionSourceSensor {
             "publishes the ledger's own index mirror from its own partial (dirfd-relative); app data"),
         "VideoScan/People/POIStorage.swift": Reviewed(count: 1, reason:
             "swaps a POI folder symlink to a fresh temp link; the link is app data, the target is untouched"),
-        "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
-            "repairs a KNOWN-INCOMPLETE earlier rescue copy (previousSize != nil) by renaming the verified partial over it; a fresh destination uses RENAME_EXCL"),
+        // RescueFileCopier 1 → 0 (2026-11-21, rule 2): the "repair a
+        // known-incomplete earlier copy" rename is GONE — a wrong-size file at
+        // a destination name may be another volume's file; it is refused,
+        // never replaced. The copier publishes only with RENAME_EXCL.
         "VideoScanCore/AtomicFilePublish.swift": Reviewed(count: 1, reason:
             "the app-wide atomic save for sidecars/stores (never RENAME_SWAP); callers publish app data, not catalogued media"),
         "VideoScanCore/CyberBrainWriter+Persistence.swift": Reviewed(count: 1, reason:
@@ -671,7 +678,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/People/POIStorage.swift": Reviewed(count: 2, reason:
             "POI folder moves under App Support (never media)"),
         "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
-            "a verified rescue partial → a FRESH destination name (the known-incomplete repair case is the clobbering one above)"),
+            "a verified rescue partial → a FREE destination name; its ONLY publish — a taken name is refused, never replaced (2026-11-21)"),
         // NEW (10/7 codex batch: fix/family-writes-n1012 added the helper;
         // fix/p1-relocate-witness-and-rulings had a private copy in
         // FamilyIdentityDecisions, now delegating here — one site, not two).

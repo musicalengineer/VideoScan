@@ -564,10 +564,11 @@ struct RemoteViewerReadOnlySensorTests {
         "People/POIStorage.swift": (1, nil, nil), "People/PersonFinderCompilation.swift": (7, nil, nil),
         "People/RecipeGenderAgeGate.swift": (1, nil, nil),
         "Volumes/ScanCheckpoint.swift": (1, nil, nil), "Volumes/ScanJobsStorage.swift": (2, nil, nil),
-        // Volume rescue (GH #506): rmdir of its own `.videoscan-partial`
-        // folder beside a destination file once rsync has emptied it — rmdir
-        // refuses a non-empty folder, so a parked partial is never removed.
-        "Volumes/VolumeCompare.swift": (1, nil, nil),
+        // Volume rescue (GH #506): its own `.videoscan-partial` folder beside
+        // a destination file — unlink of THIS file's parked partial once the
+        // copy is whole and size-checked, and rmdir of the folder once empty
+        // (rmdir refuses a non-empty one). Never a final name.
+        "Volumes/VolumeCompare.swift": (2, nil, nil),
     ]
 
     private static var appSourceRoot: URL {

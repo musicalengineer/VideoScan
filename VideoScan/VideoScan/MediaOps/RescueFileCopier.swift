@@ -69,10 +69,6 @@ enum RescueFileCopier {
         /// written for, and it is the only case that legitimately skips.
         /// `bytes` is the measured size of the file that is already there.
         case alreadyPresent(bytes: Int64)
-        /// Destination existed with a DIFFERENT size — i.e. it was
-        /// incomplete (or otherwise not this source's file). It was
-        /// re-copied through the `.partial` path and replaced.
-        case recopiedIncomplete(bytesWritten: Int64, previousSize: Int64)
     }
 
     // MARK: - Errors
@@ -83,6 +79,10 @@ enum RescueFileCopier {
         case sourceReadFailed(String, errno: Int32)
         case sourceChangedDuringCopy(String)
         case destinationNotRegularFile(String)
+        /// A regular file of a DIFFERENT size is already at the name. It is
+        /// never replaced (rule 2, 2026-11-21): it may be another volume's
+        /// file with the same relative path, not "our incomplete copy".
+        case differentFileAtDestination(String, thereBytes: Int64, sourceBytes: Int64)
         case destinationUnreadable(String, errno: Int32)
         case partialCreateFailed(String, errno: Int32)
         case partialContended(String)
@@ -99,6 +99,8 @@ enum RescueFileCopier {
             case .sourceReadFailed(let p, let e): return "read failed on source \(p) (errno \(e)) — nothing published"
             case .sourceChangedDuringCopy(let p): return "source changed while it was being copied — nothing published: \(p)"
             case .destinationNotRegularFile(let p): return "destination exists but is not a regular file (symlink?) — refused: \(p)"
+            case .differentFileAtDestination(let p, let there, let source):
+                return "a different file is already at \(p) (\(there) bytes there, \(source) bytes on the source) — not replaced"
             case .destinationUnreadable(let p, let e): return "destination exists but could not be examined \(p) (errno \(e))"
             case .partialCreateFailed(let p, let e): return "could not create \(p) (errno \(e))"
             case .partialContended(let p): return "another copy is writing \(p) right now — skipped"
@@ -139,20 +141,21 @@ enum RescueFileCopier {
     /// Contract:
     ///   - A destination that already exists with the source's size is left
     ///     alone and reported `.alreadyPresent` (resumed rescue).
-    ///   - A destination whose size DIFFERS is incomplete; it is re-copied
-    ///     and replaced, and reported `.recopiedIncomplete` so the caller
-    ///     can say so loudly.
-    ///     SAFETY ASSUMPTION, stated because the whole decision rests on
-    ///     it: `destination` is inside the rescue folder THIS FLOW created
-    ///     under the user's chosen destination (VolumeRescueOperation
-    ///     builds it as destPath/<folderName>/<relative source path>).
-    ///     Nothing but a previous rescue of this same source file can
-    ///     legitimately occupy that name, so replacing it cannot destroy
-    ///     unrelated data. The replacement is not destructive in the
-    ///     interim either: the new bytes land in a `.partial`, and the old
-    ///     file is only unlinked by the atomic rename that publishes the
-    ///     new one. If this function is ever reused for a destination the
-    ///     app did not create, this policy must be revisited.
+    ///   - A destination whose size DIFFERS is REFUSED
+    ///     (`differentFileAtDestination`) and left exactly as it is.
+    ///     THE BUG (fixed 2026-11-21, rule 2): it used to be taken for "an
+    ///     incomplete copy from an earlier run", re-copied and REPLACED by
+    ///     a plain rename, on the stated assumption that "nothing but a
+    ///     previous rescue of this same source file can legitimately occupy
+    ///     that name". That assumption is false: two volumes with the same
+    ///     relative path (two camera cards with DCIM/100CANON/MVI_0001.MOV)
+    ///     rescued into one folder occupy the same name, and the second
+    ///     rescue unlinked the first one's file. This copier's own
+    ///     incomplete work only ever exists as the `.partial` sidecar — a
+    ///     wrong-size file at a FINAL name is never assumed to be ours.
+    ///   - The publish is ALWAYS an exclusive rename (RENAME_EXCL): nothing
+    ///     at the final name is ever replaced, including a file that
+    ///     appears while the copy is being written.
     ///   - A leftover `.partial` from an earlier run is always discarded
     ///     and re-copied from zero; it is never counted as progress.
     ///   - On ANY error or cancellation the `.partial` is removed and the
@@ -184,7 +187,6 @@ enum RescueFileCopier {
         // ---- 2. Does a destination already exist, and is it complete?
         // Answered THROUGH a descriptor (fstat on what we actually opened),
         // not by asking the filesystem a question about a name.
-        var previousSize: Int64?
         let existingFD = openRetryingEINTR(destination, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         if existingFD >= 0 {
             defer { Darwin.close(existingFD) }
@@ -206,8 +208,9 @@ enum RescueFileCopier {
                 unlink(destination + partialSuffix)
                 return .alreadyPresent(bytes: Int64(destStat.st_size))
             }
-            // Short (or long) — incomplete. Fall through and re-copy.
-            previousSize = Int64(destStat.st_size)
+            // A different size: someone's file, or debris we cannot prove
+            // is ours. Refused before anything is written; never replaced.
+            throw Failure.differentFileAtDestination(destination, thereBytes: Int64(destStat.st_size), sourceBytes: sourceSize)
         } else {
             let openErrno = errno
             switch openErrno {
@@ -278,20 +281,13 @@ enum RescueFileCopier {
             throw Failure.durabilityBarrierFailed("fsync on \(partialPath)", errno: errno)
         }
 
-        // ---- 8. Publish atomically. Fresh destination ⇒ RENAME_EXCL, so
-        // we never clobber something that appeared behind our back.
-        // Replacing a known-incomplete file ⇒ plain rename, which is the
-        // atomic swap that makes the repair safe.
-        if previousSize == nil {
-            guard renamex_np(partialPath, destination, UInt32(RENAME_EXCL)) == 0 else {
-                let renameErrno = errno
-                if renameErrno == EEXIST { throw Failure.destinationAppearedDuringCopy(destination) }
-                throw Failure.renameFailed(destination, errno: renameErrno)
-            }
-        } else {
-            guard rename(partialPath, destination) == 0 else {
-                throw Failure.renameFailed(destination, errno: errno)
-            }
+        // ---- 8. Publish atomically, and ONLY with RENAME_EXCL: nothing at
+        // the final name is ever replaced — not a file that appeared behind
+        // our back, and (since 2026-11-21) not a file that was there before.
+        guard renamex_np(partialPath, destination, UInt32(RENAME_EXCL)) == 0 else {
+            let renameErrno = errno
+            if renameErrno == EEXIST { throw Failure.destinationAppearedDuringCopy(destination) }
+            throw Failure.renameFailed(destination, errno: renameErrno)
         }
         published = true
 
@@ -308,9 +304,6 @@ enum RescueFileCopier {
             Darwin.close(pfd)
         }
 
-        if let previousSize {
-            return .recopiedIncomplete(bytesWritten: written, previousSize: previousSize)
-        }
         return .copied(bytesWritten: written)
     }
 

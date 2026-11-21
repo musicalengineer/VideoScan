@@ -87,7 +87,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         }
 
         /// The only commands are mkdir -p <dir under the destination> and
-        /// rsync <three flags> <a source> <its destination>: the source is
+        /// rsync <four flags> <a source> <its destination>: the source is
         /// never written to, the destination never read from.
         func expectOnlyTheTwoCommands(_ mock: ScriptedExecutor, sourceLocation: SourceLocation = #_sourceLocation) {
             for call in mock.calls {
@@ -96,9 +96,9 @@ struct VolumeRescueRsyncNegativeMatrixTests {
                     #expect(call.executable == "/bin/mkdir" && call.arguments.count == 2 && call.arguments[0] == "-p"
                             && call.arguments[1].hasPrefix(rescued.path), "\(call)", sourceLocation: sourceLocation)
                 case "rsync":
-                    let ok = call.executable == "/usr/bin/rsync" && call.arguments.count == 5
-                        && Array(call.arguments.prefix(3)) == ["--checksum", "--partial-dir=.videoscan-partial", "--times"]
-                        && sources.contains { $0.url.path == call.arguments[3] && rescued.appendingPathComponent($0.relative).path == call.arguments[4] }
+                    let ok = call.executable == "/usr/bin/rsync" && call.arguments.count == 6
+                        && Array(call.arguments.prefix(4)) == ["--checksum", "--ignore-existing", "--partial-dir=.videoscan-partial", "--times"]
+                        && sources.contains { $0.url.path == call.arguments[4] && rescued.appendingPathComponent($0.relative).path == call.arguments[5] }
                     #expect(ok, "\(call)", sourceLocation: sourceLocation)
                 default:
                     Issue.record("an unexpected command: \(call)", sourceLocation: sourceLocation)
@@ -166,7 +166,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
     /// (a tool, or a filesystem, that lies).
     static func rsyncLeaving(fraction: Double, stderr: String, exit: Int32, atFinalName: Bool = false) -> ScriptedExecutor.Behaviour {
         .custom { request in
-            let (src, dst) = (request.arguments[3], request.arguments[4])
+            let (src, dst) = (request.arguments[request.arguments.count - 2], request.arguments[request.arguments.count - 1])
             if fraction > 0, let data = try? Data(contentsOf: URL(fileURLWithPath: src)) {
                 var target = URL(fileURLWithPath: dst)
                 if !atFinalName, let flag = request.arguments.first(where: { $0.hasPrefix("--partial-dir=") }) {
@@ -193,7 +193,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let expected: [[String]] = b.sources.flatMap { s -> [[String]] in
             let dst = b.rescued.appendingPathComponent(s.relative).path
             return [["/bin/mkdir", "-p", (dst as NSString).deletingLastPathComponent],
-                    ["/usr/bin/rsync", "--checksum", "--partial-dir=.videoscan-partial", "--times", s.url.path, dst]]
+                    ["/usr/bin/rsync", "--checksum", "--ignore-existing", "--partial-dir=.videoscan-partial", "--times", s.url.path, dst]]
         }
         #expect(mock.calls.map { [$0.executable] + $0.arguments } == expected)
         b.expectOnlyTheTwoCommands(mock)
@@ -525,7 +525,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let said = "rsync: write failed on \"tape 1.mov\": No space left on device (28)"
         let mock = b.mock().on("rsync", shape == "directory"
             ? .custom { request in
-                try? FileManager.default.createDirectory(atPath: request.arguments[4], withIntermediateDirectories: true)
+                try? FileManager.default.createDirectory(atPath: request.arguments[request.arguments.count - 1], withIntermediateDirectories: true)
                 return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
             }
             : Self.rsyncLeaving(fraction: shape == "missing" ? 0 : 0.5, stderr: said + "\n", exit: 0, atFinalName: true))
@@ -538,7 +538,8 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let wanted: String
         switch shape {
         case "missing": wanted = "nothing is at the destination (rsync said: \(said))."
-        case "truncated": wanted = "a file of \(size / 2) bytes is at the final name, the source is \(size) bytes — not a complete copy; it was left untouched (rsync said: \(said))."
+        case "truncated": wanted = "a file of \(size / 2) bytes is at the final name, the source is \(size) bytes — a different file, or not a complete copy "
+            + "(rsync is told never to replace a file that is there); it was left untouched (rsync said: \(said))."
         default: wanted = "the destination is not a regular file; it was left untouched."
         }
         #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exited 0 but the copy is not there: \(wanted)"], "\(b.op.errors)")
@@ -608,19 +609,19 @@ struct VolumeRescueRsyncNegativeMatrixTests {
 
     // MARK: - Nothing at the destination is touched; bounded reporting; the words
 
-    @Test("a file ALREADY at the final name when rsync fails is reported with both sizes, never counted, never touched")
+    @Test("a wrong-size file ALREADY at the final name (old --partial debris, or someone's file): no transfer is started; reported with both sizes, never counted, never touched")
     func aFileAlreadyAtTheFinalNameIsReportedAndLeftAlone() async throws {
         let b = try bench(files: 1)
         defer { b.cleanup() }
-        // What an old `--partial` run (or another tool) left under the final name.
         try FileManager.default.createDirectory(at: b.dest(0).deletingLastPathComponent(), withIntermediateDirectories: true)
         _ = try MasterArchiveTestSupport.writeBlob(at: b.dest(0), bytes: 3000, seed: 5)
         let leftSHA = Self.sha(b.dest(0))
-        let mock = b.mock().on("rsync", Self.rsyncLeaving(fraction: 0, stderr: "rsync: read errors mapping \"tape 1.mov\": Input/output error (5)\n", exit: 23))
+        let mock = ScriptedExecutor(claiming: [b.root.path])     // strict and EMPTY: any command is a failure
         #expect(await run(b, mock))
-        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.bytesWritten == 0)
-        #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exit 23: rsync: read errors mapping \"tape 1.mov\": Input/output error (5). "
-                               + "At the destination: a file of 3000 bytes is at the final name (the source is \(b.sources[0].size) bytes) — it is not counted as a copy and was left untouched."],
+        #expect(mock.calls.isEmpty, "refuse before mutating: \(mock.calls)")
+        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.filesNameTaken == 1 && b.op.bytesWritten == 0)
+        #expect(b.op.errors == ["\(b.sources[0].relative) — a different file is already at Rescued/\(b.sources[0].relative) "
+                               + "(3000 bytes there, \(b.sources[0].size) bytes on the source) — not replaced; nothing was touched, and the file is still on the source."],
                 "\(b.op.errors)")
         #expect(Self.sha(b.dest(0)) == leftSHA, "the file at the destination was changed or removed")
         b.expectSourcesUntouched()
@@ -676,8 +677,24 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(R.notCopiedLine(relative: "a.mov", source: .absent, final: .regular(7), stderr: "")
                 == "a.mov — rsync exited 0 but the copy is not there: a file of 7 bytes is at the final name but the source could not be measured to compare; it was left untouched.")
 
-        #expect(R.doneSummary(safe: 3, failed: 1, bytesWritten: 0, alreadyPresent: 0, repaired: 0, interrupted: 1, notAttempted: 5)
-                == "3 at the destination (size checked) · 1 failed · \(R.doneSummary(safe: 0, failed: 0, bytesWritten: 0, alreadyPresent: 0, repaired: 0).components(separatedBy: " · ")[2]) · 1 interrupted by Stop · 5 not attempted")
+        let written = R.doneSummary(safe: 0, failed: 0, bytesWritten: 0, alreadyPresent: 0).components(separatedBy: " · ")[2]
+        #expect(R.doneSummary(safe: 3, failed: 1, bytesWritten: 0, alreadyPresent: 0, interrupted: 1, notAttempted: 5)
+                == "3 at the destination (size checked) · 1 failed · \(written) · 1 interrupted by Stop · 5 not attempted")
+        #expect(R.doneSummary(safe: 3, failed: 2, bytesWritten: 0, alreadyPresent: 1, nameTaken: 1)
+                == "3 at the destination (size checked) · 2 failed (1 not replaced: a different file was already there) · \(written) · 1 already there")
+        // The name check (pure): free / already there (same size — content is not compared) / taken.
+        #expect(R.nameCheck(relative: "a/b.mov", folder: "Rescued", source: .regular(10), final: .absent) == .free)
+        #expect(R.nameCheck(relative: "a/b.mov", folder: "Rescued", source: .regular(10), final: .regular(10)) == .alreadyThere(10))
+        #expect(R.nameCheck(relative: "a/b.mov", folder: "Rescued", source: .regular(10), final: .regular(7))
+                == .taken("a/b.mov — a different file is already at Rescued/a/b.mov (7 bytes there, 10 bytes on the source) — not replaced; nothing was touched, and the file is still on the source."))
+        #expect(R.nameCheck(relative: "a/b.mov", folder: "Rescued", source: .regular(10), final: .notRegular)
+                == .taken("a/b.mov — a different file is already at Rescued/a/b.mov (not a regular file there — a folder or a link, 10 bytes on the source) — not replaced; nothing was touched, and the file is still on the source."))
+        #expect(R.nameCheck(relative: "a/b.mov", folder: "Rescued", source: .absent, final: .regular(7))
+                == .taken("a/b.mov — a different file is already at Rescued/a/b.mov (7 bytes there, the source could not be measured) — not replaced; nothing was touched."))
+        #expect(R.isNameTaken(RescueFileCopier.Failure.differentFileAtDestination("/x", thereBytes: 1, sourceBytes: 2))
+                && R.isNameTaken(RescueFileCopier.Failure.destinationAppearedDuringCopy("/x"))
+                && R.isNameTaken(RescueFileCopier.Failure.destinationNotRegularFile("/x"))
+                && !R.isNameTaken(RescueFileCopier.Failure.cancelled))
         #expect(R.doneTitle(stopped: false, failed: 0) == "Copy finished")
         #expect(R.doneTitle(stopped: false, failed: 2) == "Copy finished — 2 files failed")
         #expect(R.doneTitle(stopped: true, failed: 2) == "Copy stopped")
@@ -699,43 +716,48 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let end = try #require(source.range(of: "// MARK: - What happened to one file (GH #506)", range: start.upperBound..<source.endIndex))
         let body = String(source[start.upperBound..<end.lowerBound])
         #expect(body.contains("\"--partial-dir=\\(Self.partialDirName)\""))
+        #expect(body.contains("\"--ignore-existing\""), "rsync may replace a file that appears at the name")
+        // The name is checked before mkdir and before rsync (refuse before mutating).
+        let check = try #require(body.range(of: "switch Self.nameCheck("))
+        let mkdir = try #require(body.range(of: "executable: \"/bin/mkdir\""))
+        let rsync = try #require(body.range(of: "executable: \"/usr/bin/rsync\""))
+        #expect(check.lowerBound < mkdir.lowerBound && mkdir.lowerBound < rsync.lowerBound)
+        // …and in the fast loop before its createDirectory.
+        let fastStart = try #require(source.range(of: "private nonisolated func fastCopy("))
+        let fast = String(source[fastStart.upperBound..<start.lowerBound])
+        let fastCheck = try #require(fast.range(of: "Self.nameCheck("))
+        let fastMkdir = try #require(fast.range(of: "fm.createDirectory(atPath: destDir"))
+        #expect(fastCheck.lowerBound < fastMkdir.lowerBound)
+        #expect(!source.contains("recopiedIncomplete") && !source.contains("filesRepaired"), "the replace-an-incomplete-file path is back")
         #expect(!body.contains("\"--partial\""), "a bare --partial leaves a truncated file at the final name")
         #expect(!body.contains("--remove-source-files") && !body.contains("--delete"), "nothing at the source or destination is removed")
-        #expect(body.components(separatedBy: "filesCopied += 1").count == 2, "one place counts a copy")
-        let check = try #require(body.range(of: "if let size = source.regularSize, final == .regular(size) {"))
-        let count = try #require(body.range(of: "filesCopied += 1"))
-        #expect(check.upperBound < count.lowerBound && body.distance(from: check.upperBound, to: count.lowerBound) < 200,
-                "the count is not directly under the size check")
+        #expect(body.components(separatedBy: "filesCopied += 1").count == 3, "exactly two places count a file at the destination")
+        // Two places count: "already there" (under the name check's same-size case) and "copied" (under the fresh-stat size check).
+        let sizeCheck = try #require(body.range(of: "if let size = source.regularSize, final == .regular(size) {"))
+        let count = try #require(body.range(of: "filesCopied += 1", range: sizeCheck.upperBound..<body.endIndex))
+        #expect(body.distance(from: sizeCheck.upperBound, to: count.lowerBound) < 200, "the count is not directly under the size check")
+        let already = try #require(body.range(of: "case .alreadyThere(let bytes):"))
+        let alreadyCount = try #require(body.range(of: "filesCopied += 1", range: already.upperBound..<body.endIndex))
+        #expect(body.distance(from: already.upperBound, to: alreadyCount.lowerBound) < 200 && alreadyCount.lowerBound < sizeCheck.lowerBound)
         #expect(body.contains("let source = Self.entry(at: srcFile)") && body.contains("let final = Self.entry(at: destFile)"), "both are stat'ed fresh")
-        #expect(!body.contains("removeItem") && !body.contains("unlink("), "the rescue never deletes")
+        // The one unlink is of this file's own parked partial, after the copy is whole; nothing else is ever deleted.
+        #expect(body.components(separatedBy: "unlink(").count == 2 && body.contains("unlink(Self.partialPath(forDestination: destFile))"),
+                "the rescue unlinks something other than its own partial")
+        #expect(!body.contains("removeItem") && !body.contains("unlink(destFile") && !body.contains("rename("), "the rescue never deletes or replaces a final name")
     }
 
-    // MARK: - PARKED RED: a different file already at a destination name
+    // MARK: - A different file already at a destination name (was PARKED RED)
 
-    /// PARKED RED (found 2026-11-21 while fixing GH #506; reported, NOT
-    /// fixed — it needs Rick's ruling on what a rescue does with a name
-    /// that is taken). Rule 2: "Trash, never unlink … refuse rather than
-    /// guess."
-    ///
-    /// What happens today. The rescue keys a file by its path RELATIVE to
-    /// the source volume and never asks what is already at that name under
-    /// the destination folder:
-    ///   • rsync mode — no `--ignore-existing`, no check first: a successful
-    ///     rsync REPLACES whatever is there (rename over it). The previous
-    ///     bytes are unlinked — not in the Trash, not kept beside.
-    ///   • fast mode — RescueFileCopier treats ANY file of a different size
-    ///     at the name as "an incomplete copy from an earlier run" and
-    ///     replaces it the same way (a file of the SAME size is left alone
-    ///     and counted as already there, without comparing content).
-    /// How it is reached: rescue two volumes into the same folder when both
-    /// hold the same relative path — two camera cards with
-    /// `DCIM/100CANON/MVI_0001.MOV`, two tapes captured as `Tapes/1994/
-    /// tape 1.mov`. The second rescue silently destroys the first one's
-    /// file, and reports "1 at the destination (size checked)".
-    /// Proposed: a name that is taken by a file that is not a size-equal
-    /// copy is REFUSED for that file ("a different file is already at …"),
-    /// or the new file is published beside it — never a replace.
-    @Test("PARKED RED: a DIFFERENT file already at the destination name is replaced by a successful rescue — its bytes are gone, not in the Trash",
+    /// Was PARKED RED (found 2026-11-21 while fixing GH #506); fixed the
+    /// same day — rule 2: "Trash, never unlink … refuse rather than guess."
+    /// The rescue keyed a file by its path RELATIVE to the source volume and
+    /// never asked what was already at that name: a successful rsync
+    /// replaced it, and the fast copier took any different-size file for
+    /// "an incomplete copy from an earlier run" and replaced it too — the
+    /// previous bytes unlinked, not trashed. The full matrix (same size,
+    /// directory, symlink, a file that appears mid-way, two camera cards)
+    /// is VolumeRescueNeverReplacesTests; this is the original row.
+    @Test("a DIFFERENT file already at the destination name is never replaced by a rescue: its bytes survive, and the source file is reported, not lost",
           arguments: [RescueCopyMode.verified, .fast])
     func aDifferentFileAlreadyAtTheDestinationIsDestroyed(_ mode: RescueCopyMode) async throws {
         let b = try bench(files: 1)
@@ -752,14 +774,9 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         }
         #expect(done)
         b.expectSourcesUntouched()
-        let everywhere = ((try? FileManager.default.subpathsOfDirectory(atPath: b.destVolume.path)) ?? [])
-            .map { b.destVolume.appendingPathComponent($0) }
-            .filter { VolumeRescueOperation.entry(at: $0.path).regularSize != nil }
-        withKnownIssue("a different file already at the destination name is replaced (unlinked) by a successful rescue — rule 2") {
-            #expect(everywhere.contains { Self.sha($0) == earlierSHA },
-                    "the file that was at \(b.dest(0).lastPathComponent) is gone: nothing under the destination has its bytes (\(everywhere.map(\.lastPathComponent)))")
-            #expect(b.op.filesCopied == 0 || everywhere.count == 2, "reported as a copy while the earlier file was destroyed")
-        }
+        #expect(Self.sha(b.dest(0)) == earlierSHA, "the file that was at \(b.dest(0).lastPathComponent) was replaced — its bytes are gone, not in the Trash")
+        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1, "reported as a copy: at destination \(b.op.filesCopied), failed \(b.op.filesFailed)")
+        #expect(b.op.errors.first?.contains("a different file is already at") == true, "\(b.op.errors)")
     }
 
     // MARK: - The log

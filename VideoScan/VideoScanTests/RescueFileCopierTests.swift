@@ -136,40 +136,47 @@ struct RescueFileCopierTests {
                 == .alreadyPresent(bytes: 4096))
     }
 
-    /// THE BUG. A destination that is shorter than the source is an
-    /// interrupted copy; it must be re-copied, never counted.
+    /// A destination of a DIFFERENT size is never replaced (rule 2,
+    /// 2026-11-21). Until then it was taken for "an interrupted copy" and
+    /// re-copied over — which unlinked another volume's file when two
+    /// volumes shared a relative path. It is refused, untouched, never
+    /// counted, and no partial is left.
     @Test(arguments: [0, 1, 4096, RescueFileCopier.chunkSize + 7])
-    func shortDestinationIsRecopiedNotCounted(shortSize: Int) throws {
+    func shortDestinationIsRefusedNeverReplacedNeverCounted(shortSize: Int) throws {
         let sb = try makeSandbox("short")
         defer { try? FileManager.default.removeItem(at: sb) }
         let src = sb.appendingPathComponent("src.mxf")
         let dst = sb.appendingPathComponent("dst.mxf")
         let payload = blob(bytes: RescueFileCopier.chunkSize + 100_000, seed: 4)
         try payload.write(to: src)
-        try payload.prefix(shortSize).write(to: dst)   // the truncated leftover
+        let there = Data(payload.prefix(shortSize))
+        try there.write(to: dst)
 
-        let outcome = try RescueFileCopier.copy(source: src.path, destination: dst.path)
-
-        #expect(outcome == .recopiedIncomplete(bytesWritten: Int64(payload.count),
-                                               previousSize: Int64(shortSize)))
-        #expect(try Data(contentsOf: dst) == payload)
+        #expect(throws: RescueFileCopier.Failure.differentFileAtDestination(dst.path, thereBytes: Int64(shortSize),
+                                                                             sourceBytes: Int64(payload.count))) {
+            try RescueFileCopier.copy(source: src.path, destination: dst.path)
+        }
+        #expect(try Data(contentsOf: dst) == there, "the file at the destination name was changed")
         #expect(!exists(dst.path + RescueFileCopier.partialSuffix))
     }
 
-    /// The other direction of "size doesn't match": a destination LONGER
-    /// than the source is equally not this file.
-    @Test func longerDestinationIsAlsoRecopied() throws {
+    /// The other direction of "size doesn't match": a LONGER file at the
+    /// name is equally not this file, and equally not replaced.
+    @Test func longerDestinationIsAlsoRefusedAndUntouched() throws {
         let sb = try makeSandbox("longer")
         defer { try? FileManager.default.removeItem(at: sb) }
         let src = sb.appendingPathComponent("src.mov")
         let dst = sb.appendingPathComponent("dst.mov")
-        let payload = blob(bytes: 10_000, seed: 5)
-        try payload.write(to: src)
-        try blob(bytes: 20_000, seed: 6).write(to: dst)
+        try blob(bytes: 10_000, seed: 5).write(to: src)
+        let there = blob(bytes: 20_000, seed: 6)
+        try there.write(to: dst)
 
-        #expect(try RescueFileCopier.copy(source: src.path, destination: dst.path)
-                == .recopiedIncomplete(bytesWritten: 10_000, previousSize: 20_000))
-        #expect(try Data(contentsOf: dst) == payload)
+        #expect(throws: RescueFileCopier.Failure.differentFileAtDestination(dst.path, thereBytes: 20_000, sourceBytes: 10_000)) {
+            try RescueFileCopier.copy(source: src.path, destination: dst.path)
+        }
+        #expect(try Data(contentsOf: dst) == there)
+        #expect(RescueFileCopier.Failure.differentFileAtDestination("/d/a.mov", thereBytes: 20_000, sourceBytes: 10_000).description
+                == "a different file is already at /d/a.mov (20000 bytes there, 10000 bytes on the source) — not replaced")
     }
 
     @Test func leftoverPartialIsDiscardedAndNeverCounted() throws {
@@ -342,9 +349,10 @@ struct RescueFileCopierTests {
         #expect(listing.isEmpty)
     }
 
-    /// SENSOR: a short destination is NEVER reported as copied. Stated as
-    /// its own test with an explicit failure message because this is the
-    /// exact claim the old code got wrong.
+    /// SENSOR: a short destination is NEVER reported as copied — and (since
+    /// 2026-11-21) never replaced either. Stated as its own test with an
+    /// explicit failure message because "already present" for a truncated
+    /// file is the exact claim the old code got wrong.
     @Test func sensor_shortDestinationIsNeverReportedAsAlreadyCopied() throws {
         let sb = try makeSandbox("sensor_short")
         defer { try? FileManager.default.removeItem(at: sb) }
@@ -354,11 +362,23 @@ struct RescueFileCopierTests {
         try payload.write(to: src)
         try payload.prefix(120_000).write(to: dst)
 
-        let outcome = try RescueFileCopier.copy(source: src.path, destination: dst.path)
+        let outcome = try? RescueFileCopier.copy(source: src.path, destination: dst.path)
 
-        #expect(outcome != .alreadyPresent(bytes: 120_000),
-                "a truncated rescue copy was reported as already present — silent data loss")
-        #expect(try Data(contentsOf: dst) == payload)
+        #expect(outcome == nil, "a truncated rescue copy was reported as \(String(describing: outcome)) — silent data loss")
+        #expect(try Data(contentsOf: dst) == payload.prefix(120_000), "the file at the destination name was replaced")
+    }
+
+    /// SENSOR (source): the copier has ONE way to give a file its final
+    /// name, and it cannot replace anything.
+    @Test func sensor_theCopierPublishesOnlyWithAnExclusiveRename() throws {
+        let source = try SourceTree.appSource(named: "RescueFileCopier.swift")
+        let code = source.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+        #expect(code.contains("renamex_np(partialPath, destination, UInt32(RENAME_EXCL))"))
+        #expect(!code.contains("rename(partialPath, destination)") || code.components(separatedBy: "rename(partialPath, destination)").count
+                == code.components(separatedBy: "renamex_np(partialPath, destination").count - 0 && !code.contains(" rename(partialPath"),
+                "a replacing rename is back in the rescue copier")
+        #expect(!code.contains("recopiedIncomplete"), "the replace-an-incomplete-file outcome is back")
+        #expect(!code.contains("unlink(destination)"), "the copier unlinks a final name")
     }
 
     // MARK: - 3. Isolation
@@ -520,12 +540,14 @@ struct VolumeRescueOperationFastCopyTests {
         return r
     }
 
-    /// SENSOR: a truncated file left at a final name by an earlier rescue
-    /// is repaired and reported as repaired — not counted as a good copy,
-    /// and its full size is not added to bytesWritten as a claim. This is
-    /// the end-to-end statement of the 2026-09-13 bug.
+    /// SENSOR: a truncated file at a final name is never counted as a good
+    /// copy (the 2026-09-13 bug) — and it is not replaced: the rescue cannot
+    /// prove a wrong-size file at a FINAL name is its own debris (it may be
+    /// another volume's file), so the source file is FAILED with both sizes
+    /// and the file that is there stays exactly as it is (rule 2,
+    /// 2026-11-21). The user decides what to do with it.
     @MainActor
-    @Test func sensor_shortDestinationIsRepairedNotCountedAsCopied() async throws {
+    @Test func sensor_shortDestinationIsRefusedNotCountedNotReplaced() async throws {
         let sb = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("rescueop_short_\(UUID().uuidString)")
         let srcVol = sb.appendingPathComponent("SourceDrive")
@@ -538,7 +560,6 @@ struct VolumeRescueOperationFastCopyTests {
         let srcFile = srcVol.appendingPathComponent("Home Movies/tape1.mxf")
         try payload.write(to: srcFile)
 
-        // Plant the residue of an interrupted rescue at the FINAL name.
         let plantedDir = dstVol.appendingPathComponent("Rescued/Home Movies")
         try FileManager.default.createDirectory(at: plantedDir, withIntermediateDirectories: true)
         let planted = plantedDir.appendingPathComponent("tape1.mxf")
@@ -547,12 +568,13 @@ struct VolumeRescueOperationFastCopyTests {
         let op = try await runRescue(files: [record(path: srcFile.path, size: Int64(payload.count))],
                                      sourcePath: srcVol.path, destPath: dstVol.path, folderName: "Rescued")
 
-        #expect(op.filesCopied == 1)
-        #expect(op.filesFailed == 0)
-        #expect(op.filesRepaired == 1, "an incomplete destination was accepted as a good copy")
-        #expect(op.filesAlreadyPresent == 0)
-        #expect(op.bytesWritten == Int64(payload.count))
-        #expect(try Data(contentsOf: planted) == payload)
+        #expect(op.filesCopied == 0, "an incomplete destination was accepted as a good copy")
+        #expect(op.filesFailed == 1 && op.filesNameTaken == 1)
+        #expect(op.filesAlreadyPresent == 0 && op.bytesWritten == 0)
+        #expect(op.errors == ["Home Movies/tape1.mxf — a different file is already at Rescued/Home Movies/tape1.mxf "
+                              + "(50000 bytes there, 300000 bytes on the source) — not replaced; nothing was touched, and the file is still on the source."],
+                "\(op.errors)")
+        #expect(try Data(contentsOf: planted) == payload.prefix(50_000), "the file at the destination name was replaced")
     }
 
     /// A resumed rescue reports honest numbers: the files are safe, but
@@ -617,17 +639,18 @@ struct VolumeRescueOperationFastCopyTests {
 
     @Test func doneSummaryReadsHonestlyForAResumedRescue() {
         let line = VolumeRescueOperation.doneSummary(safe: 40, failed: 0, bytesWritten: 0,
-                                                     alreadyPresent: 40, repaired: 0)
+                                                     alreadyPresent: 40)
         #expect(line.contains("40 at the destination (size checked)"))
         #expect(!line.contains("safe") && !line.localizedCaseInsensitiveContains("verified"), "a size check is not \"safe\" or \"verified\": \(line)")
         #expect(line.contains("already there"))
         #expect(!line.contains("40 copied"))
     }
 
-    @Test func doneSummaryNamesRepairedFiles() {
-        let line = VolumeRescueOperation.doneSummary(safe: 10, failed: 1, bytesWritten: 2048,
-                                                     alreadyPresent: 3, repaired: 2)
-        #expect(line.contains("2 incomplete re-copied"))
-        #expect(line.contains("1 failed"))
+    @Test func doneSummarySaysHowManyWereRefusedBecauseTheNameWasTaken() {
+        let line = VolumeRescueOperation.doneSummary(safe: 10, failed: 3, bytesWritten: 2048,
+                                                     alreadyPresent: 3, nameTaken: 2)
+        #expect(line.contains("3 failed (2 not replaced: a different file was already there)"), "\(line)")
+        #expect(!line.contains("re-copied"), "nothing at a destination name is ever re-copied over: \(line)")
+        #expect(VolumeRescueOperation.doneSummary(safe: 10, failed: 1, bytesWritten: 0, alreadyPresent: 0).contains("· 1 failed ·"))
     }
 }
