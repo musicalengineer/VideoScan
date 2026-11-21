@@ -118,20 +118,41 @@ struct TranscodeReplaceNegativeMatrixTests {
             .on("ffprobe", containing: ["-show_streams"], .output(stdout: Self.h264ProbeJSON()))
     }
 
+    /// `stopAt` presses Stop from the publish thread: inside the publish's
+    /// FIRST exclusive-rename attempt, before it answers — or right after
+    /// the previous file reached the (fake) Trash. The two sides of the
+    /// commit point.
+    enum StopAt: Sendable { case never, duringFirstRename, afterTrash }
+
     func run(_ b: Bench, _ mock: ScriptedExecutor, preset: TranscodePreset = .archival, replace: Bool = true,
+             stopAt: StopAt = .never,
              whileRunning: (@MainActor (TranscodeJob) async -> Void)? = nil) async -> TranscodeJob {
         let job = TranscodeJob(record: b.source, preset: preset, outputURL: b.target, model: b.model, replaceExisting: replace)
         let trashed = b.trashed, fakeTrash = b.fakeTrash
+        // Stop, pressed from a publish thread: the main actor is suspended
+        // in the publish, so its queue is free to run the press.
+        let stop: @Sendable () -> Void = { DispatchQueue.main.sync { MainActor.assumeIsolated { job.cancel() } } }
+        let renames = Box<Bool>()
+        let realRename = ExclusivePublish.renameExclSyscall
         await mock.scoped {
-            await DerivativeOutputPublish.$trashItem.withValue({ url in
-                trashed.add(url.path)
-                let dest = fakeTrash.appendingPathComponent(url.lastPathComponent)
-                try FileManager.default.moveItem(at: url, to: dest)
-                return dest
+            await ExclusivePublish.$renameExclSyscall.withValue({ source, destination in
+                if stopAt == .duringFirstRename, renames.value == nil {
+                    renames.set(true)
+                    stop()
+                }
+                return realRename(source, destination)
             }) {
-                job.start()   // the job's Task {} inherits both task-locals
-                if let whileRunning { await whileRunning(job) }
-                await job.task?.value
+                await DerivativeOutputPublish.$trashItem.withValue({ url in
+                    trashed.add(url.path)
+                    let dest = fakeTrash.appendingPathComponent(url.lastPathComponent)
+                    try FileManager.default.moveItem(at: url, to: dest)
+                    if stopAt == .afterTrash { stop() }
+                    return dest
+                }) {
+                    job.start()   // the job's Task {} inherits the task-locals
+                    if let whileRunning { await whileRunning(job) }
+                    await job.task?.value
+                }
             }
         }
         return job
@@ -202,6 +223,35 @@ struct TranscodeReplaceNegativeMatrixTests {
             job.handleStall(phase: "transcode encode", silentFor: 300)   // what StallMonitor calls after 5 min of silence
         }
         expectRefused(b, job, catalogBefore: before, reason: ["Stalled", "transcode encode"])
+        expectFailedReplaceSaysWhatHappened(b, job)   // codex r2 F4
+    }
+
+    /// Codex r2 F4: the stall's cleanup result is reported, not assumed.
+    @Test("encode HANGS, the watchdog fires, and the partial cannot be removed: Stalled, and the row says NOT removed with the reason")
+    func aStalledReplaceWhoseCleanupFailsSaysNotRemoved() async throws {
+        let b = try bench("hang_stall_unremovable")
+        let outDir = b.outDir
+        defer {
+            chmod(outDir.path, 0o755)
+            b.sb.cleanup()
+        }
+        let m = try mock(b, encode: .hang())
+        let job = await run(b, m) { job in
+            await Self.waitForEncode(m)
+            chmod(outDir.path, 0o600)   // no search: the partial can be neither stat'ed nor unlinked
+            job.handleStall(phase: "transcode encode", silentFor: 300)
+        }
+        chmod(outDir.path, 0o755)
+        #expect(b.trashed.all.isEmpty)
+        #expect(Self.sha(b.target) == b.priorSHA)
+        let left = b.partials()
+        #expect(left.count == 1, "the bench: the partial is still there: \(left)")
+        guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(message.hasPrefix("Stalled"), "\(message)")
+        #expect(message.contains("The original was not replaced: \(b.target.lastPathComponent) was not moved or changed"), "\(message)")
+        #expect(message.contains("the failed new file was NOT removed: could not remove partial "), "\(message)")
+        #expect(message.contains("Permission denied"), "\(message)")
+        #expect(!message.contains("new file was removed"), "\(message)")
     }
 
     @Test("encode CRASHES (SIGSEGV) after writing part of a file: failed with the signal; nothing trashed")
@@ -505,6 +555,39 @@ struct TranscodeReplaceNegativeMatrixTests {
         }
         expectRefused(b, job, catalogBefore: before, reason: [], cancelled: true)
         #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty)
+    }
+
+    /// Codex r2 F3, before the COMMIT POINT (the Trash move): Stop is
+    /// pressed while the publish's first rename attempt is still out — the
+    /// name is taken, nothing has been replaced yet. It is still a Stop.
+    @Test("r2 F3: Stop inside the publish, before the previous file is trashed, ends Cancelled; zero Trash calls, catalog unchanged")
+    func stopBeforeTheReplaceBeginsCancels() async throws {
+        let b = try bench("stop_before_commit"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)))
+        let job = await run(b, m, stopAt: .duringFirstRename)
+        expectRefused(b, job, catalogBefore: before, reason: [], cancelled: true)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty)
+    }
+
+    /// …and after it: the previous file is already in the Trash when Stop
+    /// arrives. A replace cannot be half-undone, so it completes, the job
+    /// ends Finished (never a Cancelled that hides a replace), and the
+    /// summary says the Stop came too late.
+    @Test("r2 F3: Stop after the previous file was trashed finishes the replace and says the Stop arrived too late")
+    func stopAfterTheReplaceBeganFinishesAndSaysSo() async throws {
+        let b = try bench("stop_after_commit"); defer { b.sb.cleanup() }
+        let m = try mock(b, encode: .writeOutputFile(Data(repeating: 0x5A, count: 20_000)))
+        let job = await run(b, m, stopAt: .afterTrash)
+        guard case .finished(let summary) = job.state else { Issue.record("a completed replace was reported as \(job.state)"); return }
+        #expect(summary.contains("The previous file is in the Trash."), "\(summary)")
+        #expect(summary.contains("Stop arrived after the replace had begun, so it was completed."), "\(summary)")
+        #expect(job.subtitle == summary)
+        #expect(b.trashed.all == [b.target.path])
+        #expect(Self.sha(b.fakeTrash.appendingPathComponent(b.target.lastPathComponent)) == b.priorSHA)
+        #expect(Self.sha(b.target) != b.priorSHA, "the new derivative took the name")
+        #expect(b.model.records.filter { $0.fullPath == b.target.path }.first?.derivedFrom == b.source.id,
+                "the catalog matches the disk: the derivative is recorded")
     }
 
     /// F4 (P2): the cleanup's own result is what the message reports. The

@@ -25595,6 +25595,7 @@
         "aLivePartialSurvivesATranscodeSweep",
         "aLiveTranscodePartialPastTheThresholdSurvivesACombineSweep",
         "aPausedTranscodePartialOlderThanSixHoursSurvivesACombineSweep",
+        "aRefusedSubstituteSurvivesTheStaleSweep",
         "aTranscodeSweepNeverRemovesADirectory",
         "anUnpublishedTranscodeEncodeIsKeptOffThePartialPattern",
         "bothSweepsUseTheOneTwentyFourHourThreshold",
@@ -30822,6 +30823,7 @@
         "aNewFileSwappedDuringVerificationIsNeverPublished",
         "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
         "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
+        "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
         "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
@@ -30834,6 +30836,8 @@
         "encodeTruncated",
         "preservationReplaceProvesLosslessOnlyAfterTheReplace",
         "stopAfterTheProbesAnsweredNeverPublishes",
+        "stopAfterTheReplaceBeganFinishesAndSaysSo",
+        "stopBeforeTheReplaceBeginsCancels",
         "theCauseIsBounded",
         "theDispositionSentenceReportsTheCleanupsOwnResult",
         "thePublishRefusesAFileThatIsNotTheVerifiedOne"
@@ -41728,7 +41732,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 855,
+      "expected_floor": 858,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

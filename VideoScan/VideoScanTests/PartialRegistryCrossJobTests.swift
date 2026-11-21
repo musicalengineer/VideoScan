@@ -282,6 +282,30 @@ struct PartialRegistryCrossJobTests {
         #expect(!PartialFileNaming.isLive(aside), "the refused removal still releases the reservation")
     }
 
+    /// Codex GH #500 r2 F1: the refusal must not strip the substitute of
+    /// all protection — a file refused as "different" is not then deleted
+    /// by the next stale sweep, however old its modification date.
+    @Test func aRefusedSubstituteSurvivesTheStaleSweep() throws {
+        let dir = try Self.makeDir("remove_identity_sweep")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let partial = try PartialFileNaming.reserve(for: dir.appendingPathComponent("test_clip.mov"))
+        let substitute = dir.appendingPathComponent("test_old_family_tape.mov")
+        try Data("an old family tape".utf8).write(to: substitute)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -48 * 3600)],
+                                              ofItemAtPath: substitute.path)
+        try FileManager.default.moveItem(at: partial, to: dir.appendingPathComponent("test_moved_aside.bin"))
+        try FileManager.default.moveItem(at: substitute, to: partial)
+        #expect(throws: PartialFileNaming.Failure.self) { try PartialFileNaming.remove(partial) }
+        let swept = PartialFileNaming.sweepStale(in: dir, job: "test")
+        #expect(swept.removed.isEmpty, "\(swept.removed)")
+        #expect(swept.errors.isEmpty, "\(swept.errors)")
+        #expect((try? Data(contentsOf: partial)) == Data("an old family tape".utf8))
+        // A second removal attempt is refused as well (no reservation left
+        // to compare against must not mean "name rules only").
+        #expect(throws: PartialFileNaming.Failure.self) { try PartialFileNaming.remove(partial) }
+        #expect((try? Data(contentsOf: partial)) == Data("an old family tape".utf8))
+    }
+
     /// The reserved file itself is still removed after ffmpeg-style in-place
     /// writes (same inode, new size), and already-gone stays a success.
     @Test func removeStillRemovesTheReservedFileAndToleratesGone() throws {

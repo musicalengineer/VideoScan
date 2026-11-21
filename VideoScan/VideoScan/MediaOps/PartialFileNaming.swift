@@ -199,6 +199,15 @@ enum PartialFileNaming {
         }
     }
 
+    /// Pinned for the life of the process: this pathname, or this file.
+    static func isPinned(_ url: URL) -> Bool {
+        let key = url.standardizedFileURL.path
+        let id = fileID(url)
+        return live.withLock { set in
+            set.pinnedPaths.contains(key) || (id.map { set.pinnedIDs.contains($0) } ?? false)
+        }
+    }
+
     /// Live if this FILE (dev + ino) was reserved or pinned — under any
     /// spelling of its path — or, for a registration made before the file
     /// existed, if the path matches.
@@ -319,6 +328,12 @@ enum PartialFileNaming {
             throw Failure(message: "refusing to remove \(url.lastPathComponent): it is a finished output VideoScan kept "
                           + "(\(protectionMarkerURL(for: url).lastPathComponent))")
         }
+        // A pathname (or file) pinned for the process is never removed:
+        // a kept output without a marker, or a file refused below as
+        // "different" (codex GH #500 r2 F1).
+        guard !isPinned(url) else {
+            throw Failure(message: "refusing to remove \(url.path): it is not this run's partial — left untouched")
+        }
         defer { unregisterLive(url) }
         let key = url.standardizedFileURL.path
         let reserved: FileID? = live.withLock { $0.byPath[key] ?? nil }
@@ -330,6 +345,14 @@ enum PartialFileNaming {
                 throw couldNotRemove(url, errno: e)
             }
             guard FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino)) == reserved else {
+                // The reservation is released (the defer), but the file
+                // found here stays protected from every later cleanup in
+                // this process — else the next stale sweep, seeing an
+                // unreserved partial name with an old date, would delete
+                // the very file just refused (codex r2 F1). In-process, as
+                // the registry is; after a restart a file still wearing a
+                // partial's name is a leftover like any other.
+                pin(url)
                 let line = "a different file is at \(url.path) — left untouched"
                 partialLog.error("\(line, privacy: .public)")
                 throw Failure(message: line)

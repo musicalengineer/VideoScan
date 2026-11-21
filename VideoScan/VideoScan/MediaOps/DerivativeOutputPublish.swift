@@ -180,6 +180,14 @@ enum DerivativeOutputPublish {
             } else if !fm.fileExists(atPath: partial) {
                 throw Failure(message: "the finished output vanished before it could replace \(final.lastPathComponent)")
             } else {
+                // THE COMMIT POINT (codex GH #500 r2 F3). Everything above
+                // only read, or failed a no-clobber rename; the next step
+                // moves the previous file to the Trash. A Stop (task
+                // cancellation) seen here is still honoured — nothing has
+                // moved, the partial is at its own name for the caller.
+                // From the Trash move on a replace is not undone: it runs
+                // to the end and the caller reports a too-late Stop.
+                try Task.checkCancellation()
                 switch try trashThenTake(partial: partial, final: final, trash: trash) {
                 case .taken(let outcome): return outcome
                 case .keep(let reason): keepReason = reason

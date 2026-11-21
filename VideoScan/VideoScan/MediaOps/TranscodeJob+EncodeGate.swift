@@ -69,7 +69,16 @@ extension TranscodeJob {
     nonisolated static func encodeGate(_ result: ProcessRunner.Result, inputPath: String,
                                        partialPath: String, replace: Bool) async -> EncodeGate {
         let fm = FileManager.default
-        let before = PartialFileNaming.fileStamp(partialPath)   // the file the probes are about to read
+        // The file the probes are about to read. DECLINED (codex r2 F2):
+        // a file swapped in for the length of one probe and swapped BACK
+        // (same inode, size and mtime as before) is not seen by this stamp.
+        // Threat model: the user's own Mac — files moved by Finder, by
+        // other VideoScan jobs, or left by a crashed run — not a local
+        // adversary racing renames inside one probe; the same class as the
+        // two-syscall windows below. Closing it means probing through an
+        // open file descriptor (ffprobe on /dev/fd/N, fstat the same fd,
+        // publish that inode), a ProcessRunner change filed as an issue.
+        let before = PartialFileNaming.fileStamp(partialPath)
         let verification: FFmpegEncodeCheck.Verification? = fm.fileExists(atPath: partialPath)
             ? await FFmpegEncodeCheck.verification(for: result, sourcePath: inputPath, outputPath: partialPath)
             : nil
@@ -116,6 +125,10 @@ extension TranscodeJob {
         archiveCheck: ArchiveRemovalCheck?, trash: @escaping @Sendable (URL) throws -> URL?,
         verified: PartialFileNaming.FileStamp?
     ) async throws -> DerivativeOutputPublish.Outcome {
+        // A Stop that landed during the hop off the main actor: nothing
+        // has been touched yet (codex r2 F3). The publish checks once more
+        // at its commit point, immediately before the Trash move.
+        try Task.checkCancellation()
         if let verified, PartialFileNaming.fileStamp(partial) != verified { throw ChangedSinceVerified() }
         return try DerivativeOutputPublish.publish(partial: partial, as: final, policy: policy,
                                                    archiveCheck: archiveCheck, trash: trash)
@@ -148,7 +161,15 @@ extension TranscodeJob {
     /// failure itself (codex r1 F5).
     nonisolated static func failedReplaceMessage(failure: String, original: String,
                                                  cleanup: PartialCleanup) -> String {
-        "\(failure). The original was not replaced: "
+        (failure.hasSuffix(".") ? failure : failure + ".") + " The original was not replaced: "
             + disposition(original: original, newFile: "failed", cleanup: cleanup)
+    }
+
+    /// Appended to the success summary when Stop was pressed after the
+    /// publish's commit point: the job finished, and says why it did not
+    /// stop — never a "Cancelled" row over a replace that happened.
+    nonisolated static func lateStopNote(replaced: Bool) -> String {
+        replaced ? " Stop arrived after the replace had begun, so it was completed."
+                 : " Stop arrived after the new file had been published, so it was kept."
     }
 }

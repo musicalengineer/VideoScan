@@ -135,6 +135,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// Set-once ledger of the first terminal cause (watchdog stall vs the
     /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
     private var terminalCause = MFOTerminalCause()
+    /// True once the publish moved the previous file to the Trash.
+    private var replacedPrevious = false
     private var stallReason: String? { terminalCause.stallReason }
 
     // Archive-grade telemetry for the preservation summary (videoscan.log).
@@ -320,16 +322,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         encodeMonitor.stop()
         encodeElapsed = Date().timeIntervalSince(encodeStart)
 
-        // Watchdog stall wins over a generic cancel (the watchdog cancels
-        // the Task) — surface the specific cause, not "Cancelled".
-        if let stallReason {
-            discardPartial(partialURL)
-            transcodeLog.error("transcode FAILED (stall, encode): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
-            await finish(failed: stallReason)
-            return
-        }
-
-        // Cancelled mid-run?
+        // Stalled (the watchdog cancels the Task — the specific cause wins
+        // over "Cancelled") or cancelled mid-run?
         if await stoppedBeforePublish(partialURL) { return }
 
         // The gate between the encode and the publish (TranscodeJob+
@@ -444,13 +438,23 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         }
     }
 
-    /// Stop (or the watchdog's cancel) seen before anything is published:
-    /// the partial is discarded and the job ends Cancelled (or with the
-    /// stall that caused it). True = the run is over.
+    /// Stop, or a watchdog stall, seen before anything is published: the
+    /// partial is discarded and the job ends Cancelled — or Failed with the
+    /// stall that caused it, which with Replace also says the original was
+    /// not replaced and what the cleanup did (codex r2 F4). True = the run
+    /// is over.
     private func stoppedBeforePublish(_ partial: URL) async -> Bool {
-        guard Task.isCancelled || state == .cancelling else { return false }
-        discardPartial(partial)
-        await finish(cancelled: true)
+        guard stallReason != nil || Task.isCancelled || state == .cancelling else { return false }
+        let cleanup = discardPartial(partial)
+        guard let stallReason else {
+            await finish(cancelled: true)
+            return true
+        }
+        let message = replaceExisting
+            ? Self.failedReplaceMessage(failure: stallReason, original: outputURL.lastPathComponent, cleanup: cleanup)
+            : stallReason
+        transcodeLog.error("transcode FAILED (stall): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
         return true
     }
 
@@ -485,6 +489,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
                 verified: verified)
             publishedURL = outcome.url
             return logPublishOutcome(outcome)
+        } catch is CancellationError {
+            // Stop (or a stall) before the commit point: nothing moved.
+            _ = await stoppedBeforePublish(partialURL)
+            return nil
         } catch is ChangedSinceVerified {
             // Not the file that was verified: nothing was trashed or renamed.
             await refuseUnverifiedReplace(cause: Self.changedAfterVerification, partial: partialURL)
@@ -528,6 +536,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             let line = "transcode: new \(preset.rawValue) derivative took the name \(url.lastPathComponent); the previous file is at \(whereTo)"
             transcodeLog.notice("\(line, privacy: .public)")
             appLog.write(line)
+            replacedPrevious = true
             return " The previous file is in the Trash."
         }
     }
@@ -909,7 +918,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     // MARK: Finish helpers
 
-    private func finish(success: String) async {
+    private func finish(success base: String) async {
+        // A Stop pressed after the publish's commit point could not stop
+        // it: the job finished, and its one line says so (codex r2 F3).
+        let success = terminalCause.isCancel ? base + Self.lateStopNote(replaced: replacedPrevious) : base
         state = .finished(summary: success)
         subtitleText = success
         fractionValue = 1.0
