@@ -35,8 +35,14 @@
 // "Verified" here is what it always was on the success path: ffmpeg exited
 // 0 and BOTH container lengths were read and agree within max(3 s, 3 %).
 // It is not a decode proof (Preservation's frame-MD5 pass is that).
-// Consequence to know: a source with no container duration at all cannot
-// be transcoded, reformatted or cleaned until its length can be read.
+// THE SOURCE IS DIFFERENT (2026-11-21, same day): a SOURCE with no readable
+// duration is a fact about the file, not a failed check. Its length is
+// asked three ways (FFmpegEncodeCheck+Length.swift); when ffprobe RAN and
+// the file has none, the answer is the fourth case, `.lengthNotCompared`:
+// the new file was measured on its own terms and there was nothing to
+// compare it against. Strict where something destructive rests on it — a
+// caller that would REPLACE a file refuses on it (unless a stronger proof
+// passed: Preservation's frame MD5) — and a plain note where not.
 // (For Rick: `Verification` ≈ a tri-state enum where the old code had a
 // nullable error string; nil could not tell "checked, fine" from "could
 // not check".)
@@ -104,7 +110,16 @@ enum FFmpegEncodeCheck {
         /// ffmpeg exited 0 but a length could not be read: nothing was
         /// proven either way. The reason names the file and the cause.
         case unmeasured(String)
+        /// ffmpeg exited 0 and the NEW file's length was read, but the
+        /// source has no readable duration (ffprobe ran and said so; the
+        /// reason lists the measures tried). Not a comparison: may be
+        /// published beside with a note, never grounds for a Replace.
+        case lengthNotCompared(String)
     }
+
+    /// The note a job's summary carries when it published on
+    /// `.lengthNotCompared`.
+    nonisolated static let lengthNotComparedNote = "Length not compared: the source has no readable duration."
 
     /// The probe's deadline. 60 s: a length read is a header read.
     nonisolated static let probeDeadlineSeconds: Double = 60
@@ -164,18 +179,25 @@ enum FFmpegEncodeCheck {
     /// The length half of the check, for a caller that has already judged
     /// the exit code (Cleanup's engine): both lengths, probed fresh.
     /// `.verified` only when both were read and agree; a length that could
-    /// not be read is `.unmeasured`, never a pass. `output` names the new
-    /// file in the reason ("the new file", "the cleaned copy").
+    /// not be read is `.unmeasured`, never a pass; a source with no
+    /// readable duration is `.lengthNotCompared`. Each length is asked by
+    /// the fallback chain (`measureLength`). `output` names the new file
+    /// in the reason ("the new file", "the cleaned copy").
     nonisolated static func lengthVerification(sourcePath: String, outputPath: String,
                                                output noun: String = "the new file") async -> Verification {
-        async let source = measureDuration(sourcePath)
-        async let output = measureDuration(outputPath)
+        async let source = measureLength(sourcePath)
+        async let output = measureLength(outputPath)
+        // The new file first: it must be measurable in every mode.
         switch (await source, await output) {
         case (_, .unreadable(let why)):
             return .unmeasured("\(noun)'s length could not be read: \(why)")
+        case (_, .noDuration(let why)):
+            return .unmeasured("\(noun)'s length could not be read: it has no readable duration (\(why))")
         case (.unreadable(let why), _):
             return .unmeasured("the source's length could not be read to compare against: \(why)")
-        case (.seconds(let sourceSeconds), .seconds(let outputSeconds)):
+        case (.noDuration(let why), .measured):
+            return .lengthNotCompared(why)
+        case (.measured(let sourceSeconds, _), .measured(let outputSeconds, _)):
             if let shortfall = durationShortfall(sourceSeconds: sourceSeconds, outputSeconds: outputSeconds) {
                 return .failed(shortfall)
             }

@@ -118,8 +118,10 @@ struct FFmpegEncodeCheckLogicTests {
                 == .failed("the output runs 0:02 but the source runs 0:12 — the encode stopped early"))
         #expect(await answers(source: twelve, output: invalid)
                 == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
-        #expect(await answers(source: .output(stdout: "N/A\n"), output: twelve)
-                == .unmeasured("the source's length could not be read to compare against: ffprobe exited 0 but its answer was not a length (“N/A”)"))
+        // A source ffprobe could not READ (the tool failed) is still unmeasured…
+        #expect(await answers(source: invalid, output: twelve)
+                == .unmeasured("the source's length could not be read to compare against: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
+        // …a source that HAS no duration is the fourth answer (EncodeSourceWithoutDurationMatrixTests).
         // Both unreadable: the new file's is the one named.
         #expect(await answers(source: invalid, output: .crash(signal: SIGSEGV))
                 == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 11"))

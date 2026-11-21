@@ -437,16 +437,8 @@ struct TranscodeReplaceNegativeMatrixTests {
                                        file: "the new file's length could not be read", cause: kind.causeWords)
     }
 
-    @Test("the SOURCE's length cannot be read (no container duration): nothing to compare the new file against, so Replace is refused the same way")
-    func anUnmeasurableSourceIsNotAVerifiedReplace() async throws {
-        let b = try bench("unmeasurable_source"); defer { b.sb.cleanup() }
-        let before = b.catalogSnapshot()
-        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .output(stdout: "N/A\n"))
-        let job = await run(b, m)
-        await expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
-                                       file: "the source's length could not be read to compare against",
-                                       cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
-    }
+    // (A SOURCE with no readable duration: EncodeSourceWithoutDurationMatrixTests — a
+    // Replace is still refused, in its own words; without Replace it is a note.)
 
     @Test("the refusal's cause is bounded: a tool that prints pages is quoted for two lines and 240 characters")
     func theCauseIsBounded() async throws {
@@ -804,17 +796,6 @@ struct TranscodeReplaceNegativeMatrixTests {
         let job = await run(b, m, replace: false)
         expectUnverifiedNotPublished(b, job, m, catalogBefore: before,
                                      file: "the new file's length could not be read", cause: kind.causeWords)
-    }
-
-    @Test("plain Transcode (no Replace): the SOURCE's length cannot be read — nothing to compare against, so the output is not adopted")
-    func aPlainTranscodeWithAnUnmeasurableSourceIsNotAdopted() async throws {
-        let b = try bench("plain_unmeasurable_source"); defer { b.sb.cleanup() }
-        let before = b.catalogSnapshot()
-        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .output(stdout: "N/A\n"))
-        let job = await run(b, m, replace: false)
-        expectUnverifiedNotPublished(b, job, m, catalogBefore: before,
-                                     file: "the source's length could not be read to compare against",
-                                     cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
     }
 
     /// GH #502, "related, untested": without Replace a Stop during the

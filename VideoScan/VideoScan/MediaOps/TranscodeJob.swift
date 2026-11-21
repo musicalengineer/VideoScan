@@ -328,28 +328,9 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // over "Cancelled") or cancelled mid-run?
         if await stoppedBeforePublish(partialURL) { return }
 
-        // The gate between the encode and the publish (TranscodeJob+
-        // EncodeGate.swift): exit code, length, a non-trivial file — and
-        // VERIFIED, with or without Replace (GH #500, Rick 2026-11-20:
-        // "verify the temp, only when verified could it replace anything";
-        // GH #502, 2026-11-21: an output nobody could measure is not
-        // published beside anything or catalogued either). It only reads;
-        // nothing has been trashed or renamed yet. A new file that fails
-        // it is removed (discardPartial: this run's own reserved partial,
-        // nothing else) and the file at the output name is never touched.
-        let size: Int64
-        let verified: PartialFileNaming.FileStamp
-        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath) {
-        case .failed(let failure, let stage):
-            await failEncode(failure, stage: stage, partial: partialURL)
-            return
-        case .unverified(let cause):
-            await refuseUnverified(cause: cause, partial: partialURL)
-            return
-        case .passed(let bytes, let stamp):
-            size = bytes
-            verified = stamp
-        }
+        // The gate between the encode and the publish — see passGate.
+        guard let gate = await passGate(encodeResult, inputPath: inputPath, partialURL: partialURL) else { return }
+        let size = gate.size, verified = gate.verified
 
         // A Stop that landed while the gate was out is still a Stop (codex
         // r1 F3): the probes' good answers do not publish over it.
@@ -399,7 +380,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
         await catalogTranscodeOutput()
         transcodeLog.info("transcode DONE: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) encode \(self.encodeElapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Transcoded → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))).\(publishNote)")
+        await finish(success: "Transcoded → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))).\(gate.note)\(publishNote)")
     }
 
     // MARK: Publish (2026-09-22 — never delete first)
@@ -482,6 +463,50 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         let stage = replaceExisting ? "verify, Replace refused" : "verify"
         transcodeLog.error("transcode FAILED (\(stage, privacy: .public)): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
         await finish(failed: message)
+    }
+
+    /// The gate between the encode and the publish (TranscodeJob+
+    /// EncodeGate.swift): exit code, length, a non-trivial file — and
+    /// VERIFIED, with or without Replace (GH #500, Rick 2026-11-20: "verify
+    /// the temp, only when verified could it replace anything"; GH #502,
+    /// 2026-11-21: an output nobody could measure is not published beside
+    /// anything or catalogued either). It only reads; nothing has been
+    /// trashed or renamed yet. A new file that fails it is removed
+    /// (discardPartial: this run's own reserved partial, nothing else) and
+    /// the file at the output name is never touched.
+    ///
+    /// A SOURCE with no readable duration (`.notCompared`): strict where
+    /// something destructive rests on the comparison. A Replace is refused
+    /// — except for Preservation, whose frame-MD5 proof runs next and is a
+    /// stronger check than a length (if it fails, the job fails there).
+    /// Without Replace the new file is published and `note` says the
+    /// length was not compared.
+    ///
+    /// nil = the job has been finished here.
+    private func passGate(_ encodeResult: ProcessRunner.Result, inputPath: String,
+                          partialURL: URL) async -> (size: Int64, verified: PartialFileNaming.FileStamp, note: String)? {
+        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialURL.path) {
+        case .failed(let failure, let stage):
+            await failEncode(failure, stage: stage, partial: partialURL)
+            return nil
+        case .unverified(let cause):
+            await refuseUnverified(cause: cause, partial: partialURL)
+            return nil
+        case .passed(let bytes, let stamp):
+            return (bytes, stamp, "")
+        case .notCompared(let bytes, let stamp, let why):
+            let proofFollows = preset == .preservation
+            if replaceExisting && !proofFollows {
+                let cleanup = discardPartial(partialURL)
+                let message = Self.uncomparedReplaceMessage(why: why, original: outputURL.lastPathComponent, cleanup: cleanup)
+                transcodeLog.error("transcode FAILED (verify, Replace refused): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+                await finish(failed: message)
+                return nil
+            }
+            appLog.write("transcode: \(record.filename) has no readable duration (\(why)) — the new file's length was read but not compared"
+                + (proofFollows ? "; the frame-MD5 proof decides" : ""))
+            return (bytes, stamp, proofFollows ? "" : " " + FFmpegEncodeCheck.lengthNotComparedNote)
+        }
     }
 
     /// The lossless proof failed (GH #501): remove the new master, record

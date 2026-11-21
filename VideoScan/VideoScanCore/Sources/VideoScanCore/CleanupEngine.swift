@@ -82,12 +82,17 @@ public struct CleanupProgress: Sendable {
     public var passIndex: Int
     /// Total passes this engine will run for this recipe.
     public var passCount: Int
+    /// Something the user must be told about the RESULT (e.g. "Length not
+    /// compared: the source has no readable duration."). The job appends
+    /// the last non-nil note to its summary. nil on ordinary beats.
+    public var note: String?
 
-    public init(phase: String, fraction: Double?, passIndex: Int = 1, passCount: Int = 1) {
+    public init(phase: String, fraction: Double?, passIndex: Int = 1, passCount: Int = 1, note: String? = nil) {
         self.phase = phase
         self.fraction = fraction
         self.passIndex = passIndex
         self.passCount = passCount
+        self.note = note
     }
 }
 

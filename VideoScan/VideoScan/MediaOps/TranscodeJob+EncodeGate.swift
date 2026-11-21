@@ -25,6 +25,12 @@
 //      (`publishVerified`). A length read from one file never vouches for
 //      another put at its name. Residual: the re-stat and the publish's
 //      rename are separate syscalls; a swap inside that instant is not seen.
+//   4. the SOURCE has no readable duration (ffprobe ran and said so, by
+//      container, streams and packet count): `.notCompared`. The new file
+//      was measured on its own terms; nothing was compared. Strict where
+//      something destructive rests on it: a Replace is refused (except a
+//      Preservation master whose frame-MD5 proof then passes); otherwise it
+//      is published with the note "Length not compared: …".
 //
 // ONE gate for the verbs that publish an ffmpeg encode through
 // DerivativeOutputPublish: Transcode (every preset) and Reformat call
@@ -52,6 +58,12 @@ extension TranscodeJob {
         /// is the stamp of the file whose lengths were read: the publish
         /// must find exactly that file.
         case passed(sizeBytes: Int64, verified: PartialFileNaming.FileStamp)
+        /// The new file is measurable and non-trivial, but the SOURCE has
+        /// no readable duration, so nothing was compared (2026-11-21). A
+        /// case of its own so every caller must decide: publish beside
+        /// with the note; refuse a Replace — unless a stronger proof
+        /// (Preservation's frame MD5) then passes.
+        case notCompared(sizeBytes: Int64, verified: PartialFileNaming.FileStamp, sourceWhy: String)
     }
 
     /// What the cleanup of this run's partial actually did — the job's
@@ -109,6 +121,7 @@ extension TranscodeJob {
         }
         switch verification {
         case .verified: return .passed(sizeBytes: size, verified: before)
+        case .lengthNotCompared(let why): return .notCompared(sizeBytes: size, verified: before, sourceWhy: why)
         case .unmeasured(let why): return .unverified(cause: why)
         case .failed, nil: return .unverified(cause: "the new file was not there to measure")
         }
@@ -180,6 +193,15 @@ extension TranscodeJob {
         let what = newFileDisposition("unverified", cleanup: cleanup)
         return "Could not verify the new file — nothing was published or added to the catalog. Cause: \(cause). "
             + what.prefix(1).uppercased() + what.dropFirst() + "."
+    }
+
+    /// A Replace refused because the SOURCE has no readable duration: the
+    /// new file is measurable, but there is nothing to verify it against,
+    /// and a Replace rests on that comparison. `why` lists the measures
+    /// tried.
+    nonisolated static func uncomparedReplaceMessage(why: String, original: String, cleanup: PartialCleanup) -> String {
+        "Could not verify the new file against the original: the source has no readable duration — the original was not replaced. "
+            + "Cause: \(why). " + disposition(original: original, newFile: "unverified", cleanup: cleanup)
     }
 
     /// A Replace whose ENCODE failed says the same two things after the

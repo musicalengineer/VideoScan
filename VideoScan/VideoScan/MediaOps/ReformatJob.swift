@@ -252,20 +252,24 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
 
         // Gate, then publish — or the job has been finished as failed /
         // cancelled there and nothing was published.
-        guard let size = await verifyThenPublish(encodeResult, inputPath: inputPath, partialURL: partialURL) else { return }
+        guard let published = await verifyThenPublish(encodeResult, inputPath: inputPath, partialURL: partialURL) else { return }
+        let size = published.size
 
         // Catalog + queue for analyze.
         await catalogAndQueueAnalyze()
 
         reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.\(published.note)")
     }
 
     /// The gate between the finished encode and its publish, then the
-    /// publish itself. Returns the new file's size once it is PUBLISHED;
-    /// nil when the job has been finished here (failed, unverified,
-    /// stopped) — in which case nothing was published.
-    private func verifyThenPublish(_ encodeResult: ProcessRunner.Result, inputPath: String, partialURL: URL) async -> Int64? {
+    /// publish itself. Returns the new file's size once it is PUBLISHED
+    /// (and the note for a source whose length could not be compared —
+    /// Reformat never replaces, so that is a note, not a refusal); nil
+    /// when the job has been finished here (failed, unverified, stopped)
+    /// — in which case nothing was published.
+    private func verifyThenPublish(_ encodeResult: ProcessRunner.Result, inputPath: String,
+                                   partialURL: URL) async -> (size: Int64, note: String)? {
         let partialPath = partialURL.path
         // The ONE gate Transcode uses (TranscodeJob+EncodeGate.swift): exit
         // code, then length, then "something was written" and the 10 KB
@@ -277,6 +281,7 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         // A partial that fails the gate is removed; nothing is published.
         let size: Int64
         let verified: PartialFileNaming.FileStamp
+        var note = ""
         switch await TranscodeJob.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath) {
         case .failed(let failure, let stage):
             discardPartial(partialURL)
@@ -289,6 +294,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         case .passed(let bytes, let stamp):
             size = bytes
             verified = stamp
+        case .notCompared(let bytes, let stamp, let why):
+            size = bytes
+            verified = stamp
+            note = " " + FFmpegEncodeCheck.lengthNotComparedNote
+            appLog.write("reformat: \(record.filename) has no readable duration (\(why)) — the new file's length was read but not compared")
         }
 
         // A Stop (or a stall) that landed while the gate's probes were out
@@ -327,7 +337,7 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
             return nil
         }
-        return size
+        return (size, note)
     }
 
     /// Apple Silicon optimization (Rick 2026-06-14):

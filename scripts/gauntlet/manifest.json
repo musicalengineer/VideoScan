@@ -15907,6 +15907,31 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeSourceWithoutDurationMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EncodeSourceWithoutDurationMatrixTests"
+      ],
+      "tests": [
+        "aCleanupRenderIsReturned",
+        "aFallbackMeasureStillCatchesAShortOutput",
+        "aPacketCountMeasuresTheSource",
+        "aPlainTranscodeIsPublishedWithTheNote",
+        "aProvenMasterStillReplaces",
+        "aReformatIsPublishedWithTheNote",
+        "aReplaceIsRefused",
+        "aStreamDurationMeasuresTheSource",
+        "anAmbiguousFrameRateIsNotALength",
+        "anOutputMeasuredByItsStreamsIsVerified",
+        "anOutputWithNoDurationIsStillFailed",
+        "anUnprovenMasterStillNeverReplaces",
+        "realElementaryStreams",
+        "theChainsParsing",
+        "theFourAnswersAndTheLogLine"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EncodeVerifyReformatCleanupMatrixTests.swift",
       "stage": "regression",
       "suites": [
@@ -15917,8 +15942,6 @@
         "aShortReformatIsStillRefused",
         "anUnmeasurableReformatIsNeverAdopted",
         "anUnmeasurableRenderIsNeverReturned",
-        "anUnmeasurableSourceIsNotAVerifiedReformat",
-        "anUnmeasurableSourceIsNotAVerifiedRender",
         "controlAVerifiedReformatPublishes",
         "controlAVerifiedRenderIsReturned",
         "stopDuringTheProbesNeverPublishes",
@@ -31043,11 +31066,9 @@
         "aNewFileSwappedDuringVerificationIsNeverPublished",
         "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
         "aPlainTranscodeNeverAdoptsAnUnmeasurableOutput",
-        "aPlainTranscodeWithAnUnmeasurableSourceIsNotAdopted",
         "aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre",
         "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
-        "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
         "controlAPlainTranscodePublishesBeside",
         "encodeCrash",
@@ -42591,7 +42612,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 999,
+      "expected_floor": 1010,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42852,7 +42873,8 @@
         "VideoScanTests/HashReadFaultDeleteDuplicatesTests",
         "VideoScanTests/TranscodePreservationProofMatrixTests",
         "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
-        "VideoScanTests/CleanupUnverifiedRenderMatrixTests"
+        "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
+        "VideoScanTests/EncodeSourceWithoutDurationMatrixTests"
       ]
     },
     {

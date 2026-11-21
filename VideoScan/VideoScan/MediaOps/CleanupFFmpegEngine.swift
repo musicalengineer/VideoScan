@@ -145,6 +145,13 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
         switch length {
         case .verified:
             return renderURL
+        case .lengthNotCompared(let why):
+            // The source has no readable duration (ffprobe ran and said
+            // so). Cleanup never replaces the original, so this is a note,
+            // not a refusal: the render was measured on its own terms.
+            appLog.write("cleanup: \((source.path as NSString).lastPathComponent) has no readable duration (\(why)) — the cleaned copy's length was read but not compared")
+            progress(CleanupProgress(phase: "Cleaning up…", fraction: 1.0, note: FFmpegEncodeCheck.lengthNotComparedNote))
+            return renderURL
         case .failed(let shortfall):
             cleanupEngineLog.error("cleanup render FAILED (length): \(source.path, privacy: .public) — \(shortfall, privacy: .public)")
             throw CleanupEngineError.renderFailed(shortfall.prefix(1).uppercased() + shortfall.dropFirst())

@@ -231,8 +231,10 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
                 self?.handleStall(silentFor: silentFor)
             }
         }
+        let resultNote = CleanupResultNote()
         let progressSink: @Sendable (CleanupProgress) -> Void = { [weak self] beat in
             monitor.tick()
+            resultNote.record(beat)
             guard let self, let fraction = beat.fraction else { return }
             Task { @MainActor in
                 self.applyProgressFraction(fraction)
@@ -319,7 +321,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         cleanupLog.info("cleanup DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) render \(renderElapsed, format: .fixed(precision: 1), privacy: .public)s")
         // (The Center's "cleanup done:" OUTCOME line carries this same
         // summary — no separate appLog write here.)
-        finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
+        finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.\(resultNote.suffix)")
     }
 
     /// Shared error terminal for the two long phases: watchdog stall wins
@@ -678,4 +680,21 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
         MediaBytes.display(bytes)
     }
+}
+
+/// The engine's note about the RESULT of a render ("Length not compared:
+/// the source has no readable duration."), carried from a progress beat to
+/// the job's summary. Lock-guarded: beats arrive on pipe-reader threads and
+/// the summary reads it on the main actor after the render has returned.
+/// (For Rick: ≈ a std::mutex-guarded std::optional<std::string>.)
+struct CleanupResultNote: Sendable {
+    private let box = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    /// Keep the beat's note, if it has one (the last one wins).
+    func record(_ beat: CleanupProgress) {
+        if let note = beat.note { box.withLock { $0 = note } }
+    }
+
+    /// " <note>" for the end of the summary, or "".
+    var suffix: String { box.withLock { $0 }.map { " " + $0 } ?? "" }
 }

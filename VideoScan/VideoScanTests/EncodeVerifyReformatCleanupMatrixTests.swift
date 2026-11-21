@@ -135,16 +135,8 @@ struct ReformatUnverifiedOutputMatrixTests {
                                      file: "the new file's length could not be read", cause: kind.causeWords)
     }
 
-    @Test("the SOURCE's length cannot be read: nothing to compare the new file against, so it is not adopted")
-    func anUnmeasurableSourceIsNotAVerifiedReformat() async throws {
-        let b = try bench("unmeasurable_source"); defer { b.sb.cleanup() }
-        let before = b.catalogSnapshot()
-        let m = try mock(b, sourceProbe: .output(stdout: "N/A\n"))
-        let job = await run(b, m)
-        expectUnverifiedNotPublished(b, job, m, catalogBefore: before,
-                                     file: "the source's length could not be read to compare against",
-                                     cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
-    }
+    // (A source with no readable duration is published with a note:
+    // EncodeSourceWithoutDurationMatrixTests.)
 
     @Test("an output shorter than the source is still FAILED as 'stopped early' (the length rule itself is unchanged)")
     func aShortReformatIsStillRefused() async throws {
@@ -257,14 +249,6 @@ struct CleanupUnverifiedRenderMatrixTests {
         let b = try Self.bench("unmeasurable_\(kind.rawValue)"); defer { b.cleanup() }
         await Self.expectUnverified(b, Self.mock(b, renderProbe: kind.probe),
                                     file: "the cleaned copy's length could not be read", cause: kind.causeWords)
-    }
-
-    @Test("the SOURCE's length cannot be read: the render is not verified, so it is never returned")
-    func anUnmeasurableSourceIsNotAVerifiedRender() async throws {
-        let b = try Self.bench("unmeasurable_source"); defer { b.cleanup() }
-        await Self.expectUnverified(b, Self.mock(b, sourceProbe: .output(stdout: "N/A\n")),
-                                    file: "the source's length could not be read to compare against",
-                                    cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
     }
 
     @Test("Stop while the render is being probed: the render throws CancellationError — a good answer does not return a render over a Stop")
