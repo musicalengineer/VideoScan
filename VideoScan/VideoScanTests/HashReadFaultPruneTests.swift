@@ -29,6 +29,19 @@
 //   bit flip         held (mismatch)                  held
 //   read ends early  held "could not be read in full" held "could not be read in full"
 //
+// THE FALSE POSITIVE (Codex r1 P0 on this branch, FIXED — GH #504 D3a at
+// prune): the matrix above starts from identical files, so a flip can only
+// make a mismatch. With a copy ONE BIT apart from the archive, a flip on that
+// bit in the copy's one read made a PruneProof and the copy — unique bytes —
+// went to the Trash. The copy is now read TWICE before a proof is made:
+//   copy one bit apart, flip on that bit in read 1 → held "two reads of
+//   <copy> disagreed — nothing was removed" (verdict and job);
+//   identical copy, fault in read 2 → held (EIO / early end: "could not be
+//   read in full"; flip: "two reads … disagreed").
+// The archive side was already a stored digest confirmed by one fresh read
+// per batch (`readArchiveInFull`) — the rule D4 gives Delete Duplicates'
+// keeper.
+//
 // THE JOB TOO (2026-11-21): `pruneOneCopy` runs both reads inside
 // `Task.detached` (VideoScanModel+PruneApply.swift), and a detached task does
 // not inherit task-locals. The job now reads the hook before each hop and
@@ -239,5 +252,112 @@ struct HashReadFaultPruneTests {
         await clean.task?.value
         #expect(clean.rows.first?.status == .trashed && mover.paths == [f.copy.fullPath],
                 "\(c): the clean run: \(clean.rows.first.map { "\($0.status) — \($0.note)" } ?? "no row") / \(mover.paths)")
+    }
+
+    /// The read that D3a added at prune: a fault in the copy's SECOND read
+    /// (identical files, the first read was clean and matched).
+    @Test("VERDICT + JOB, the copy's SECOND read: EIO or a read that ends early → held 'could not be read in full'; a flipped bit → held 'two reads of <copy> disagreed — nothing was removed'; nothing is handed to the mover",
+          .timeLimit(.minutes(2)), arguments: HashReadFault.Kind.allCases)
+    func aFaultInTheCopysSecondReadHoldsIt(_ kind: HashReadFault.Kind) async throws {
+        let f = try await PruneApplyTests.fixture("hrf_second_\(kind)"); defer { f.sb.cleanup() }
+        let copyBytes = try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath))
+        let expected = kind == .bitFlip ? "two reads of test_prune_a.mov disagreed — nothing was removed" : "could not be read in full"
+        // Verdict.
+        let item = item(f)
+        let hooks = Model.PruneVerifyHooks(shouldCancel: { false })
+        guard case .success(let reading) = Model.readArchiveInFull(id: item.archiveID, path: item.archivePath,
+                                                                   digest: item.archiveDigest, hooks: hooks) else {
+            Issue.record("fixture: the clean archive read failed"); return
+        }
+        let fault = HashReadFault(kind, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000, onPass: 2)
+        let verdict = fault.runSync { Model.pruneCandidateProof(item, archive: reading, hooks: hooks) }
+        #expect(fault.firedCount == 1 && fault.passCount == 2, "\(kind): fired \(fault.firedCount), passes \(fault.passCount)")
+        switch verdict {
+        case .success(let proof): Issue.record("\(kind): a PROOF was made although the second read did not confirm the first: \(proof)")
+        case .failure(let hold): #expect(hold.text == expected, "\(kind): \(hold.text)")
+        }
+        // Job.
+        let shown = await f.model.prunePlan(batch: f.batch).shown()
+        let mover = PruneApplyTests.Mover(trash: f.trashDir)
+        let job = PruneApplyJob(model: f.model, shown: shown, selected: [f.copy.id], batch: f.batch,
+                                batchID: "hrf-job-second", hooks: PruneApplyTests.hooks(mover))
+        let jobFault = HashReadFault(kind, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000, onPass: 2)
+        await jobFault.run {
+            job.start()
+            await job.task?.value
+        }
+        #expect(jobFault.firedCount == 1, "\(kind): the fault never reached the job's second read")
+        let row = try #require(job.rows.first)
+        print("[hash-matrix] prune job | \(kind) in the copy's SECOND read | \(row.status) | \(row.note)")
+        #expect(row.status == .held && row.note == expected && mover.paths.isEmpty, "\(kind): \(row.status) — \(row.note) / \(mover.paths)")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)) == copyBytes)
+        #expect(f.copy.removal == nil)
+    }
+
+    // MARK: Codex r1 P0 (GH #504, D3a at prune) — the FALSE-POSITIVE cell
+
+    /// The copy is B = the archive's bytes with ONE BIT flipped; the catalog's
+    /// digest for it still names the archive's (a single-read first digest can
+    /// leave exactly that — D4's known limit). Returns the fixture with the
+    /// copy rewritten, its record's fixity re-stamped to the file as it is now.
+    private func oneBitApart(_ label: String) async throws -> (f: PruneApplyTests.Fixture, copyBytes: Data, archiveBytes: Data) {
+        let f = try await PruneApplyTests.fixture(label)
+        let archiveBytes = try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath))
+        var b = archiveBytes
+        b[9_000] ^= 0x01
+        try b.write(to: URL(fileURLWithPath: f.copy.fullPath))
+        f.copy.contentFixity = ContentFixity.captured(path: f.copy.fullPath, digest: f.digest, byteCount: Int64(b.count))
+        return (f, b, archiveBytes)
+    }
+
+    @Test("VERDICT, false positive (Codex r1 P0): the copy is ONE BIT apart from the archive and its first read flips that bit → NO PruneProof: the copy's second read disagrees, 'two reads of <copy> disagreed — nothing was removed'")
+    func aFlippedReadOfACopyOneBitApartMakesNoProof() async throws {
+        let (f, copyBytes, _) = try await oneBitApart("hrf_onebit"); defer { f.sb.cleanup() }
+        let item = item(f)
+        let hooks = Model.PruneVerifyHooks(shouldCancel: { false })
+        guard case .success(let reading) = Model.readArchiveInFull(id: item.archiveID, path: item.archivePath,
+                                                                   digest: item.archiveDigest, hooks: hooks) else {
+            Issue.record("fixture: the clean archive read failed"); return
+        }
+        // Control: read clean, the copy is NOT the archive's bytes.
+        guard case .failure(let clean) = Model.pruneCandidateProof(item, archive: reading, hooks: hooks) else {
+            Issue.record("fixture: a clean read of the one-bit-different copy matched the archive"); return
+        }
+        #expect(clean.text == PruneReason.mismatchAtMove.text)
+
+        let fault = HashReadFault(.bitFlip, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000, onPass: 1)
+        let verdict = fault.runSync { Model.pruneCandidateProof(item, archive: reading, hooks: hooks) }
+        #expect(fault.firedCount == 1)
+        print("[hash-matrix] prune | bitFlip on the differing bit, copy one bit apart | \(verdict) | copy reads \(fault.passCount)")
+        switch verdict {
+        case .success(let proof): Issue.record("a PROOF was made from one flipped read of a different file: \(proof)")
+        case .failure(let hold):
+            #expect(hold.text == "two reads of test_prune_a.mov disagreed — nothing was removed", "\(hold.text)")
+            #expect(fault.passCount == 2, "the copy was read a second time — \(fault.passCount)")
+        }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)) == copyBytes)
+    }
+
+    @Test("JOB, false positive (Codex r1 P0): the same one-bit-apart copy through PruneApplyJob → the row is HELD, nothing is handed to the mover, the copy is at its path byte for byte")
+    func aFlippedReadOfACopyOneBitApartMovesNothingInTheJob() async throws {
+        let (f, copyBytes, archiveBytes) = try await oneBitApart("hrfjob_onebit"); defer { f.sb.cleanup() }
+        let shown = await f.model.prunePlan(batch: f.batch).shown()
+        let mover = PruneApplyTests.Mover(trash: f.trashDir)
+        let job = PruneApplyJob(model: f.model, shown: shown, selected: [f.copy.id], batch: f.batch,
+                                batchID: "hrf-job-onebit", hooks: PruneApplyTests.hooks(mover))
+        let fault = HashReadFault(.bitFlip, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000, onPass: 1)
+        await fault.run {
+            job.start()
+            await job.task?.value
+        }
+        try #require(fault.firedCount == 1, "fixture: the job never read the copy (was it offered? rows \(job.rows.map { "\($0.status) \($0.note)" }))")
+        let row = try #require(job.rows.first)
+        print("[hash-matrix] prune job | bitFlip on the differing bit, copy one bit apart | \(row.status) | \(row.note)")
+        #expect(row.status == .held, "\(row.status) — \(row.note)")
+        #expect(mover.paths.isEmpty, "THE COPY WAS HANDED TO THE MOVER on one flipped read: \(mover.paths)")
+        #expect(row.note == "two reads of test_prune_a.mov disagreed — nothing was removed", "\(row.note)")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)) == copyBytes, "the copy is not at its path byte for byte")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath)) == archiveBytes)
+        #expect(f.copy.removal == nil)
     }
 }

@@ -188,7 +188,8 @@ struct PruneApplyTests {
         let out = await apply(f, shown, selected: shown.offeredIDs, hooks: Self.hooks(mover, opens: opens))
         #expect(out.trashed == 2 && out.archiveReads == 1 && out.verified == 2, "\(out)")
         #expect(opens.opens(of: f.archive.fullPath) == 1, "once per batch: \(opens.all)")
-        #expect(opens.opens(of: f.source.fullPath) == 1 && opens.opens(of: f.copy.fullPath) == 1, "\(opens.all)")
+        // GH #504 D3a: each copy that matches is read in full TWICE before it may go.
+        #expect(opens.opens(of: f.source.fullPath) == 2 && opens.opens(of: f.copy.fullPath) == 2, "\(opens.all)")
         // A second batch reads the archive file again.
         let g = try await Self.fixture("i1b"); defer { g.sb.cleanup() }
         let shownG = await plan(g)
@@ -507,7 +508,7 @@ struct PruneApplyTests {
         let opens = OpenCounter()
         let out = await model.applyPrune(shown: shown, selected: [rec.id], batch: [rec.id], batchID: "m",
                                          hooks: Self.hooks(Mover(trash: trash), opens: opens))
-        #expect(out.trashed == 1 && opens.opens(of: a.path) == 1, "\(ext): \(out)")
+        #expect(out.trashed == 1 && opens.opens(of: a.path) == 2, "\(ext): read in full twice (GH #504 D3a) — \(out)")
     }
 
     // MARK: Scale — the plan for 100k records, off the main actor, within budget
