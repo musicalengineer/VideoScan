@@ -11,6 +11,7 @@
 //             synchronous caller's command must not escape to the real tool)
 // Parallel by design: each test has its own scratch directory and mock.
 
+import Darwin
 import Foundation
 import Testing
 @_spi(Testing) @testable import VideoScanCore
@@ -187,10 +188,61 @@ struct EraCanaryCommandTests {
         await mock.scoped {
             let result = ProcessRunner.runProcessBlocking(executable: "/usr/bin/touch", arguments: [marker.path],
                                                           deadlineSeconds: 0.1, killGraceSeconds: 0.1)
-            #expect(result.timedOut && !result.launched)
+            #expect(result.timedOut && !result.launched && result.exitCode == -1,
+                    "the bridge's own timeout, whatever the cancelled work goes on to publish")
             try? await Task.sleep(for: .milliseconds(2200))
         }
         #expect(!FileManager.default.fileExists(atPath: marker.path), "the command launched after the caller had stopped waiting")
+    }
+
+    /// Set once; read from another thread. (C++: std::atomic<bool>.)
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var on = false
+        func set() { lock.lock(); on = true; lock.unlock() }
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return on }
+    }
+
+    @Test("BRIDGE (Codex r2 P2): the result the cancelled work publishes after the wait expired is never the bridge's answer — it is its own timeout")
+    func aCancellationResultPublishedAfterExpiryIsNotTheAnswer() async {
+        // Gated, so the ordering is forced, not hoped for: the command waits
+        // until it is CANCELLED (which only the bridge's expiry does), then
+        // answers at once with the runner's cancellation shape (exit 15,
+        // launched, timedOut == false) and raises `answered`. The probe
+        // holds the bridge on its expiry path until `answered` is up and the
+        // work has had time to publish — so "cancel, THEN look in the box"
+        // is certain to find that result.
+        let answered = Flag()
+        let mock = ScriptedExecutor().on("gated-tool", .custom { _ in
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+            answered.set()
+            return ProcessRunner.Result(stdout: "", stderr: "", exitCode: SIGTERM, timedOut: false, launched: true)
+        })
+        let probe: @Sendable () -> Void = {
+            for _ in 0..<2000 where !answered.isSet { usleep(1_000) }
+            usleep(200_000)                                   // …and published
+        }
+        await mock.scoped {
+            let result = ProcessRunner.$blockingExpiryProbe.withValue(probe) {
+                ProcessRunner.runProcessBlocking(executable: "/nonexistent/gated-tool", arguments: [],
+                                                 deadlineSeconds: 0.1, killGraceSeconds: 0.1)
+            }
+            #expect(answered.isSet, "the gate never opened: the bridge did not cancel the work")
+            #expect(result.timedOut, "the bridge returned the cancelled work's result (exit \(result.exitCode), launched \(result.launched)) instead of its own timeout")
+            #expect(result.exitCode == -1 && !result.launched)
+            #expect(result.stderr.contains("stopped waiting"))
+        }
+        #expect(mock.calls.count == 1)
+    }
+
+    @Test("BRIDGE: a result that lands in time is returned as it is — never turned into a timeout")
+    func aResultInTimeIsReturnedAsIs() async {
+        let mock = ScriptedExecutor().on("quick-tool", .after(.milliseconds(300), then: .output(stdout: "done\n", exit: 3)))
+        await mock.scoped {
+            let result = ProcessRunner.runProcessBlocking(executable: "/nonexistent/quick-tool", arguments: [],
+                                                          deadlineSeconds: 0.1, killGraceSeconds: 0.1)   // bound 0.8 s
+            #expect(!result.timedOut && result.launched && result.exitCode == 3 && result.stdout == "done\n")
+        }
     }
 
     @Test("BRIDGE: outside any mock the blocking form really runs, bounded by its deadline")

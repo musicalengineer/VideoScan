@@ -20,6 +20,12 @@ extension ProcessRunner {
     /// Slack the blocking wait allows past the runner's own worst case.
     static let blockingWaitMarginSeconds: Double = 0.5
 
+    /// Test seam: called on the expiry path right after the work is
+    /// cancelled, before the bridge returns — a test holds the caller there
+    /// until the woken work has published, the ordering Codex r2 P2 is
+    /// about. Nil in production, always (task-local; nothing binds it).
+    @TaskLocal static var blockingExpiryProbe: (@Sendable () -> Void)?
+
     /// `runProcess` for a caller that CANNOT suspend (see the file header
     /// for who that is). It goes through the same executor seam, so a
     /// ScriptedExecutor bound for the calling task tree answers it.
@@ -39,7 +45,9 @@ extension ProcessRunner {
     /// not launched never will; one that has is terminated by the runner's
     /// cancellation handler — and a timed-out Result is returned:
     /// `timedOut == true`, exit -1, `launched == false` (this side has no
-    /// evidence either way; read `timedOut` first).
+    /// evidence either way; read `timedOut` first). A result the work had
+    /// ALREADY published when the wait expired is returned as it is; one
+    /// published after that is dropped.
     ///
     /// No cancellation from the caller: a synchronous caller has no task
     /// to cancel; the two clocks are the only stop.
@@ -54,7 +62,11 @@ extension ProcessRunner {
         deadlineSeconds: Double,
         killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds
     ) -> Result {
-        let box = OSAllocatedUnfairLock<Result?>(initialState: nil)
+        // One slot, three states, one lock: whichever of "the work
+        // published" and "the wait gave up" takes the lock first decides,
+        // and the other sees it. (C++: a mutex-guarded std::variant.)
+        enum Slot { case pending, published(Result), abandoned }
+        let slot = OSAllocatedUnfairLock<Slot>(initialState: .pending)
         let done = DispatchSemaphore(value: 0)
         // Detached (the caller may not be in a task at all) but carrying the
         // caller's scope, so a mocked test's command stays on its mock.
@@ -63,19 +75,28 @@ extension ProcessRunner {
                 executable: executable, arguments: arguments, environment: environment,
                 stdoutLimitBytes: stdoutLimitBytes, stderrLimitBytes: stderrLimitBytes,
                 deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds)
-            box.withLock { $0 = result }
+            // After the wait gave up, a result is nobody's: dropped.
+            slot.withLock { if case .pending = $0 { $0 = .published(result) } }
             done.signal()
         }
         let bound = max(0, deadlineSeconds) + 2 * max(0, killGraceSeconds) + blockingWaitMarginSeconds
-        if done.wait(timeout: .now() + bound) == .timedOut {
-            work.cancel()
-            // The work may have finished in the instant the wait expired.
-            if let late = box.withLock({ $0 }) { return late }
-            return Result(stdout: nil,
-                          stderr: "no answer within \(String(format: "%.1f", bound)) s (deadline \(deadlineSeconds) s) — stopped waiting; the command was cancelled",
-                          exitCode: -1, timedOut: true, launched: false)
+        let expired = done.wait(timeout: .now() + bound) == .timedOut
+        // Decide BEFORE cancelling (Codex r2 P2): a result already published
+        // — in time, or in the instant the wait expired — is returned as it
+        // is. Otherwise the slot is closed first and only THEN is the work
+        // cancelled, so the cancellation result the woken work publishes
+        // next (exit -1 or SIGTERM, timedOut == false) can never be mistaken
+        // for the answer: the caller gets this bridge's own timeout.
+        let landed: Result? = slot.withLock { state in
+            if case .published(let result) = state { return result }
+            state = .abandoned
+            return nil
         }
-        return box.withLock { $0 }
-            ?? Result(stdout: nil, stderr: "runProcessBlocking: no result", exitCode: -1)
+        if let landed { return landed }
+        work.cancel()
+        Self.blockingExpiryProbe?()
+        return Result(stdout: nil,
+                      stderr: "no answer within \(String(format: "%.1f", bound)) s (deadline \(deadlineSeconds) s)\(expired ? "" : " [no result]") — stopped waiting; the command was cancelled",
+                      exitCode: -1, timedOut: true, launched: false)
     }
 }

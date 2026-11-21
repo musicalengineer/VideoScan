@@ -486,6 +486,8 @@
         "EraCanaryCommandTests"
       ],
       "tests": [
+        "aCancellationResultPublishedAfterExpiryIsNotTheAnswer",
+        "aResultInTimeIsReturnedAsIs",
         "blockingFormRunsForReal",
         "blockingWaitIsBoundedIndependently",
         "exitZeroWithoutAStill",
@@ -42300,7 +42302,7 @@
       ],
       "expected_floor": 937,
       "name": "regression",
-      "package_expected_floor": 349,
+      "package_expected_floor": 351,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
