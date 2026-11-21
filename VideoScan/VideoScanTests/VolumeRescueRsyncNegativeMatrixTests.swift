@@ -627,8 +627,12 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         b.expectSourcesUntouched()
     }
 
-    @Test("60 files fail: every one is counted and listed, the app log carries 50 FAILED lines and the OUTCOME carries the count")
-    func manyFailuresAreCountedAndTheLogIsBounded() async throws {
+    /// Codex r1 #10 (P1): the banner says every remaining line is in
+    /// videoscan.log; only the first 50 were logged — and this test pinned
+    /// the contradiction. Every failure line is now logged (up to 10,000,
+    /// then one truthful "and N more" line), and the banner says which.
+    @Test("60 files fail: every one is counted, listed AND in the app log — what the banner says is true")
+    func manyFailuresAreCountedAndEveryLineIsLogged() async throws {
         let b = try bench(files: 60)
         defer { b.cleanup() }
         let sink = InMemoryLogSink()
@@ -636,10 +640,23 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let mock = b.mock().on("rsync", Self.rsyncLeaving(fraction: 0, stderr: flood, exit: 12))
         let done = await withAppLog(sink) { await run(b, mock, limit: .seconds(40)) }
         #expect(done && b.op.filesFailed == 60 && b.op.filesCopied == 0 && b.op.errors.count == 60)
-        #expect(sink.lines.filter { $0.hasPrefix("rescue FAILED: ") }.count == VolumeRescueOperation.failureLogLimit)
+        let logged = sink.lines.filter { $0.hasPrefix("rescue FAILED: ") }
+        #expect(logged.count == 60, "the banner says every line is in videoscan.log; \(logged.count) of 60 are")
+        #expect(Set(logged.map { String($0.dropFirst("rescue FAILED: ".count)) }) == Set(b.op.errors), "a line in the banner's list is not in the log")
         #expect(sink.lines.contains { $0.hasPrefix("rescue OUTCOME: done — 60 planned: 0 at the destination (size checked) · 60 failed") }, "\(sink.lines.last ?? "")")
         #expect(b.op.errors.allSatisfy { $0.count < 700 }, "a line is not bounded: \(b.op.errors.map(\.count).max() ?? 0)")
         #expect(VolumeRescueOperation.doneDetail(errors: b.op.errors)?.hasSuffix("— and 59 more; every line is in videoscan.log (rescue FAILED).") == true)
+    }
+
+    @Test("past 10,000 failure lines the log says how many more were not logged, and the banner says only the first 10,000 are there (pure)")
+    func theFailureLogCapIsSaid() {
+        typealias R = VolumeRescueOperation
+        #expect(R.failureLogLimit == 10_000)
+        #expect(R.failureOverflowLine(failed: 10_000) == nil && R.failureOverflowLine(failed: 3) == nil)
+        #expect(R.failureOverflowLine(failed: 10_007)
+                == "rescue FAILED: … and 7 more failure lines not written here (this log keeps the first 10,000 of a run); the result list holds every one.")
+        let many = (0..<10_003).map { "f\($0)" }
+        #expect(R.doneDetail(errors: many) == "f0 — and 10002 more; the first 10,000 are in videoscan.log (rescue FAILED), then a count of the rest.")
     }
 
     @Test("the words (pure): what a fresh lstat finds, rsync's reason, what is left, the banner — never \"safe\" or \"verified\"")
@@ -744,7 +761,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(body.distance(from: published.upperBound, to: copied.lowerBound) < 40, "copied is not directly under the publish")
         let taken = try #require(body.range(of: "case .nameTaken:"))
         #expect(body.components(separatedBy: "staging.removeStaged()").count == 2
-                && body.range(of: "staging.removeStaged()")!.lowerBound > taken.lowerBound, "the staged copy is removed anywhere but after a taken name")
+                && (body.range(of: "staging.removeStaged()")?.lowerBound ?? body.startIndex) > taken.lowerBound, "the staged copy is removed anywhere but after a taken name")
         #expect(!body.contains("unlink(") && !body.contains("removeItem") && !body.contains("rename("), "the rescue deletes or renames outside the staging type")
         // The staging type: folders opened without following a link; the one publish is RENAME_EXCL; removals relative to the staging fd.
         let typeStart = try #require(source.range(of: "struct RsyncStaging: Sendable {"))

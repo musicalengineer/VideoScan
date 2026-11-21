@@ -266,7 +266,11 @@ final class VolumeRescueOperation: ObservableObject {
     /// such line, and where the rest are. nil when every file was copied.
     nonisolated static func doneDetail(errors: [String]) -> String? {
         guard let first = errors.first else { return nil }
-        return errors.count == 1 ? first : "\(first) — and \(errors.count - 1) more; every line is in videoscan.log (rescue FAILED)."
+        if errors.count == 1 { return first }
+        let whereTheyAre = errors.count <= failureLogLimit
+            ? "every line is in videoscan.log (rescue FAILED)."
+            : "the first \(failureLogLimit.formatted()) are in videoscan.log (rescue FAILED), then a count of the rest."
+        return "\(first) — and \(errors.count - 1) more; \(whereTheyAre)"
     }
 
     /// The one OUTCOME line for the app log.
@@ -351,6 +355,7 @@ final class VolumeRescueOperation: ObservableObject {
                 self.filesNotAttempted = max(0, total - self.filesCopied - self.filesFailed - self.filesInterrupted)
                 self.wasStopped = self.stopRequested && (self.filesInterrupted + self.filesNotAttempted) > 0
                 rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) nameTaken=\(self.filesNameTaken, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                if let overflow = Self.failureOverflowLine(failed: self.filesFailed) { appLog.write(overflow) }
                 appLog.write(Self.outcomeLine(
                     stopped: self.wasStopped, planned: total,
                     summary: Self.doneSummary(safe: self.filesCopied, failed: self.filesFailed, bytesWritten: self.bytesWritten,
@@ -707,8 +712,8 @@ final class VolumeRescueOperation: ObservableObject {
     // MARK: - What happened to one file (GH #506)
 
     /// One file that is NOT a copy: counted, listed, and written to the app
-    /// log (the first `failureLogLimit` lines; the OUTCOME line carries the
-    /// count of all of them).
+    /// log (every line up to `failureLogLimit`; past it one line counts the
+    /// rest, and the OUTCOME line carries the count of all of them).
     private nonisolated func recordFailed(_ line: String, nameTaken: Bool = false) async {
         rescueLog.error("Rescue copy failed: \(line, privacy: .public)")
         await MainActor.run { [weak self] in
@@ -730,7 +735,18 @@ final class VolumeRescueOperation: ObservableObject {
         }
     }
 
-    nonisolated static let failureLogLimit = 50
+    /// Failure lines written to the app log per run (Codex r1 #10: it was
+    /// 50 while the banner said every line was there). Past it, one line
+    /// says how many more there were. Worst case ~10,000 × ~700 B ≈ 7 MB
+    /// of log for a run that fails that often.
+    nonisolated static let failureLogLimit = 10_000
+
+    /// The one line for failures past the log limit, or nil.
+    nonisolated static func failureOverflowLine(failed: Int) -> String? {
+        guard failed > failureLogLimit else { return nil }
+        return "rescue FAILED: … and \(failed - failureLogLimit) more failure lines not written here (this log keeps the first "
+            + "\(failureLogLimit.formatted()) of a run); the result list holds every one."
+    }
     /// Where rsync parks an interrupted transfer, inside the destination
     /// file's own folder.
     nonisolated static let partialDirName = ".videoscan-partial"
