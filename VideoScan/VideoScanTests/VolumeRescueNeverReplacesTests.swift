@@ -300,6 +300,49 @@ struct VolumeRescueNeverReplacesTests {
         #expect(mock.calls(to: "rsync").isEmpty, "a transfer was started into a linked staging folder: \(mock.calls)")
     }
 
+    /// Codex r2 #4 (P0), its reproduction: rsync completes the staged copy,
+    /// then — before the publish — the user drags the rescue folder to the
+    /// Trash. The held descriptors still reach the moved folders, so the
+    /// publish "landed" there and the file was counted at the destination
+    /// while the requested destination held nothing. Now the publish first
+    /// asks whether the requested folder path still names the held folder:
+    /// if not, nothing is published, the line says where the copy is, and
+    /// the files after it are not attempted (a moved destination is never
+    /// silently re-created by the next file's mkdir).
+    @Test("rsync mode: the destination folder is MOVED (to the Trash) before the publish — nothing is published or counted; the line says where the copy now is; the rest are not attempted")
+    func aDestinationMovedDuringTheRescueIsNeverPublishedInto() async throws {
+        let b = try matrix.bench(files: 2); defer { b.cleanup() }
+        let trash = b.root.appendingPathComponent("FakeTrash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let rescued = b.rescued
+        let mock = ScriptedExecutor(claiming: [b.root.path]).on("mkdir", .passThrough).on("rsync", .custom { request in
+            let (src, staged) = (request.arguments[request.arguments.count - 2], request.arguments[request.arguments.count - 1])
+            try? FileManager.default.copyItem(atPath: src, toPath: staged)                          // the staged copy is whole…
+            if FileManager.default.fileExists(atPath: rescued.path) {
+                try? FileManager.default.moveItem(at: rescued, to: trash.appendingPathComponent("Rescued"))   // …and the user trashes the folder
+            }
+            return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
+        })
+        let sink = InMemoryLogSink()
+        let done = await withAppLog(sink) { await run(b, mock, mode: .verified) }
+        #expect(done)
+        let realTrash = try #require(realpath(trash.path, nil).map { p in defer { free(p) }; return String(cString: p) })
+        let movedCopy = "\(realTrash)/Rescued/Tapes/1994/.videoscan-partial/tape 1.mov"
+        let s0 = b.sources[0], s1 = b.sources[1]
+        #expect(b.op.errors == [
+            "\(s0.relative) — the destination folder \(b.rescued.path)/Tapes/1994 was moved while the rescue ran — nothing was published; "
+                + "the copy (size checked) is at \(movedCopy), and the file is still on the source.",
+            "\(s1.relative) — not attempted: a destination folder was moved while the rescue ran (see \(s0.relative)); "
+                + "nothing was copied, and the file is still on the source."], "\(b.op.errors)")
+        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 2 && b.op.bytesWritten == 0 && b.op.filesNameTaken == 0, "counted at a destination that holds nothing")
+        #expect(b.op.filesCopied + b.op.filesFailed + b.op.filesInterrupted + b.op.filesNotAttempted == b.op.filesPlanned)
+        #expect(!FileManager.default.fileExists(atPath: b.rescued.path), "the moved destination was silently re-created")
+        #expect(Self.sha(URL(fileURLWithPath: movedCopy)) == s0.sha, "the staged copy in the moved folder is not kept whole")
+        #expect(mock.calls(to: "rsync").count == 1 && mock.calls(to: "mkdir").count == 1, "a file was attempted after the move: \(mock.calls)")
+        #expect(sink.lines.filter { $0.hasPrefix("rescue FAILED: ") }.count == 2)
+        b.expectSourcesUntouched()
+    }
+
     @Test("fast mode: a file that APPEARS at the name while the copy is being written is not replaced — the publish is an exclusive rename; the partial is removed")
     func aFileThatAppearsDuringTheFastCopyIsNotReplaced() async throws {
         let b = try matrix.bench(files: 1); defer { b.cleanup() }

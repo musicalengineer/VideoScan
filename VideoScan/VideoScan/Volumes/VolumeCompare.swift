@@ -505,6 +505,7 @@ final class VolumeRescueOperation: ObservableObject {
     private nonisolated func rsyncCopy(files: [VideoRecordSnapshot], sourcePath: String, rescueDir: String, total: Int) async {
         // rsync individual files to preserve per-file progress reporting
         // and handle errors per-file rather than aborting the whole batch
+        var movedAt: String?   // the file whose destination folder was moved mid-run (Codex r2 #4)
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
@@ -518,6 +519,16 @@ final class VolumeRescueOperation: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.currentFile = filename
                 self?.progress = progressFraction
+            }
+
+            // A destination folder moved during the run (dragged to the
+            // Trash, say) is the user's doing: the files after it are NOT
+            // attempted — the next mkdir would silently re-create the folder
+            // they moved away. Each is FAILED with the line, so the counts
+            // still add up and every line is logged.
+            if let first = movedAt {
+                await recordFailed(Self.notAttemptedAfterMove(relative: relative, first: first))
+                continue
             }
 
             // NEVER REPLACE (rule 2, 2026-11-21). THE BUG: nothing asked
@@ -630,8 +641,10 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
-            await record(Self.settle(result, staging: staging, relative: relative, srcFile: srcFile, destFile: destFile,
-                                     rescueDir: rescueDir, stopped: Task.isCancelled))
+            let outcome = Self.settle(result, staging: staging, relative: relative, srcFile: srcFile, destFile: destFile,
+                                      rescueDir: rescueDir, stopped: Task.isCancelled)
+            if case .destinationMoved = outcome { movedAt = relative }
+            await record(outcome)
         }
     }
 
@@ -642,6 +655,9 @@ final class VolumeRescueOperation: ObservableObject {
         case alreadyThere(Int64)
         case failed(String, nameTaken: Bool)
         case interrupted(String)
+        /// The requested destination folder no longer names the folder the
+        /// staging holds: nothing published; the run attempts no more files.
+        case destinationMoved(String)
     }
 
     /// After rsync ran: the evidence, then the one publish (Codex r1 #2,
@@ -663,6 +679,17 @@ final class VolumeRescueOperation: ObservableObject {
         }
         guard let size = source.regularSize, staged == .regular(size) else {
             return .failed(notCopiedLine(relative: relative, source: source, staged: staged, stderr: result.stderr), nameTaken: false)
+        }
+        // THE BUG (Codex r2 #4, P0): the publish is relative to HELD
+        // descriptors, so after the user moved the destination folder (to
+        // the Trash, say) it landed in the moved folder and was counted at
+        // the destination, which held nothing. The requested path must
+        // still name the held folder; else nothing is published, and the
+        // size-checked copy stays where it now is, said. (A move inside the
+        // window between this check and the rename is GH #503's class.)
+        if case .moved(let copyNow) = staging.place() {
+            return .destinationMoved("\(relative) — the destination folder \(staging.destPath) was moved while the rescue ran — nothing was published; "
+                + "the copy (size checked) is \(copyNow), and the file is still on the source.")
         }
         switch staging.publish() {
         case .published:
@@ -701,6 +728,8 @@ final class VolumeRescueOperation: ObservableObject {
             }
         case .failed(let line, let nameTaken):
             await recordFailed(line, nameTaken: nameTaken)
+        case .destinationMoved(let line):
+            await recordFailed(line)
         case .interrupted(let line):
             await recordInterrupted(line)
         }
@@ -720,6 +749,12 @@ final class VolumeRescueOperation: ObservableObject {
             self.errors.append(line)
             if self.filesFailed <= Self.failureLogLimit { appLog.write("rescue FAILED: \(line)") }
         }
+    }
+
+    /// A file after the one whose destination folder was moved mid-run.
+    nonisolated static func notAttemptedAfterMove(relative: String, first: String) -> String {
+        "\(relative) — not attempted: a destination folder was moved while the rescue ran (see \(first)); "
+            + "nothing was copied, and the file is still on the source."
     }
 
     /// The file in flight when Stop landed: not copied, not failed.
@@ -935,9 +970,14 @@ struct RsyncStaging: Sendable {
     let name: String
     let stagedPath: String
     let stagingPath: String
+    /// The destination folder's path as requested (`<rescueDir>/<relative folders>`).
+    let destPath: String
 
     enum Opened { case ready(RsyncStaging), refused(String) }
     enum Publish: Equatable { case published, nameTaken, failed(String) }
+    /// Whether the requested destination path still names the held folder;
+    /// when not, where the staged copy is now ("at <path>", or why unknown).
+    enum Place: Equatable { case here, moved(copyNow: String) }
 
     private static let folderFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
 
@@ -979,7 +1019,8 @@ struct RsyncStaging: Sendable {
         }
         let name = (destFile as NSString).lastPathComponent
         let staging = RsyncStaging(destDir: destDir, stagingDir: stagingDir, name: name,
-                                   stagedPath: (stagingPath as NSString).appendingPathComponent(name), stagingPath: stagingPath)
+                                   stagedPath: (stagingPath as NSString).appendingPathComponent(name), stagingPath: stagingPath,
+                                   destPath: reached)
         if case .notRegular = staging.stagedEntry() {
             staging.close()
             return .refused("\(relative) — the staged copy at \(staging.stagedPath) is not a plain file — nothing was touched, and the file is still on the source.")
@@ -992,6 +1033,26 @@ struct RsyncStaging: Sendable {
         var sb = stat()
         guard fstatat(stagingDir, name, &sb, AT_SYMLINK_NOFOLLOW) == 0 else { return errno == ENOENT ? .absent : .notRegular }
         return (sb.st_mode & S_IFMT) == S_IFREG ? .regular(Int64(sb.st_size)) : .notRegular
+    }
+
+    /// Does the requested destination path (followed as the user's path is:
+    /// the volume itself may be reached through a link) still name the
+    /// folder held open — same device and inode (Codex r2 #4)? When it does
+    /// not, `F_GETPATH` on the staging descriptor says where the staged copy
+    /// went with the moved folder. (≈ comparing `stat(path)` with
+    /// `fstat(fd)`, then asking the kernel for the fd's current path.)
+    func place() -> Place {
+        var held = stat(), named = stat()
+        if fstat(destDir, &held) == 0, stat(destPath, &named) == 0, held.st_dev == named.st_dev, held.st_ino == named.st_ino {
+            return .here
+        }
+        var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
+        let got = buffer.withUnsafeMutableBytes { raw in raw.baseAddress.map { fcntl(stagingDir, F_GETPATH, $0) } ?? -1 }
+        guard got != -1 else {
+            return .moved(copyNow: "in the moved folder's \(VolumeRescueOperation.partialDirName) (its new location could not be read: \(Self.errorText(errno)))")
+        }
+        let now = String(bytes: buffer.prefix { $0 != 0 }, encoding: .utf8) ?? "(a path that is not UTF-8)"
+        return .moved(copyNow: "at " + (now as NSString).appendingPathComponent(name))
     }
 
     /// The one publish: staged → final name, never replacing what is there.
