@@ -20,8 +20,9 @@
 // byte, no temp is left, and the write is not recorded or announced as done.
 //
 // Every fault is task-local, so the suites run in parallel; each test counts
-// the fault's hits to prove it was taken. The one exception is suite 5's
-// model-level test, which reads the global app log and is `.serialized`.
+// the fault's hits to prove it was taken. The two tests that read the app
+// log bind their own capture for their own task tree (`withAppLog`), so they
+// are parallel-safe too.
 //
 // Five dimensions: logic (here) · scale n/a (one small file per publish) ·
 // media n/a · isolation (each test owns a scratch folder and its own hooks) ·
@@ -334,7 +335,7 @@ struct CatalogAuditMarkerPublishFaultTests {
 
 // MARK: - 5. Archive audit — archive-audit.json
 
-@Suite("Publish fault — the archive audit's decisions and tags", .serialized)
+@Suite("Publish fault — the archive audit's decisions and tags")
 @MainActor
 struct ArchiveAuditPublishFaultTests {
 
@@ -377,26 +378,24 @@ struct ArchiveAuditPublishFaultTests {
         let model = VideoScanModel()
         model.archiveAuditStore = ArchiveAuditStore(directory: dir)
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
         let hits = FaultHits()
         let item = UUID()
 
-        await AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
-            // The model saves from an unstructured `Task {}`, which inherits
-            // the task-local; wait for the fault, then for the task's tail.
-            model.archiveAuditTag(itemID: item, occasion: .christmas, title: "clip0042")
-            for _ in 0..<400 where !hits.wasHit { try? await Task.sleep(for: .milliseconds(5)) }
-            try? await Task.sleep(for: .milliseconds(150))
+        // The app log is captured for this task tree only, and the model
+        // saves from an unstructured `Task {}`, which inherits both the
+        // capture and the fault; wait for the fault, then for the task's tail.
+        await withAppLog(sink) {
+            await AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
+                model.archiveAuditTag(itemID: item, occasion: .christmas, title: "clip0042")
+                for _ in 0..<400 where !hits.wasHit { try? await Task.sleep(for: .milliseconds(5)) }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
         }
 
         #expect(hits.count == 1, "the fault was never reached")
         #expect(!FileManager.default.fileExists(atPath: model.archiveAuditStore.fileURL.path), "nothing was saved")
         #expect(sink.lines.contains { $0.contains("Audit: tagged") && $0.contains("clip0042") }, "the action was announced")
         withKnownIssue("persistArchiveAudit drops ArchiveAuditStore.save()'s result: the failed save never reaches the app log") {
-            // "audit": the swapped sink is the process-wide one, so another
-            // suite's line (the Events page's "could not be written") can land in it.
             #expect(sink.lines.contains { $0.localizedCaseInsensitiveContains("audit")
                         && ($0.localizedCaseInsensitiveContains("could not") || $0.localizedCaseInsensitiveContains("not saved")) },
                     "the app log must say the tag was not saved; it holds only: \(sink.lines)")
@@ -406,7 +405,7 @@ struct ArchiveAuditPublishFaultTests {
     // PARKED RED (Fill In Full Hashes writes fixity — treated as data-risk,
     // reported, not fixed). `FullHashBackfillResumeMarker.persist` is
     // `try? AtomicFilePublish.write(…)` — the twin of the audit marker fixed
-    // in suite 4. In this suite only because it too reads the global app log.
+    // in suite 4. In this suite because it too reads the app log.
     //
     // Reproduction: a run starts (marker on disk: unfinished), finishes, and
     // the finish cannot be published. In this session the menu says "Fill In
@@ -420,9 +419,6 @@ struct ArchiveAuditPublishFaultTests {
         let dir = try scratch("fullhash_marker"); defer { try? FileManager.default.removeItem(at: dir) }
         let catalogFile = dir.appendingPathComponent("catalog.json").path
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
         let marker = FullHashBackfillResumeMarker()
         marker.attach(catalogFile: catalogFile)
         marker.noteStarted()
@@ -430,8 +426,10 @@ struct ArchiveAuditPublishFaultTests {
         let before = try Data(contentsOf: url)
         let hits = FaultHits()
 
-        AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
-            marker.noteFinished(hashed: 12)
+        withAppLog(sink) {
+            AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
+                marker.noteFinished(hashed: 12)
+            }
         }
 
         // What is on disk, and what each side then claims — pinned as it is today.
