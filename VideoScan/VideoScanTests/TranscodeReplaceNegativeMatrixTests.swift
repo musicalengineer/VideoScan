@@ -27,6 +27,13 @@
 // and says exactly why in the row and the OUTCOME line.
 // A positive control proves the bench can publish and trash at all.
 //
+// The log (2026-11-21): every row starts its job through the production
+// entry, `MediaFileOperationsCenter.startTranscode`, with the bench's
+// InMemoryLogSink bound, so the START and OUTCOME lines asserted here are
+// the ones the Center really WROTE — stated as expectations (`log.verify`,
+// LogSinks+Test.swift; gmock's EXPECT_CALL shape): START once, the exact
+// FAILED line once, in that order, never "Transcoded", and no other OUTCOME.
+//
 // Two rows stay RED under `withKnownIssue`, reported for Rick, not fixed
 // here: plain Transcode (no Replace) adopting an unmeasurable output, and
 // Preservation + Replace running its frame-MD5 proof AFTER the Replace.
@@ -61,6 +68,12 @@ struct TranscodeReplaceNegativeMatrixTests {
         let priorSHA: String
         let fakeTrash: URL
         let trashed = TrashLog()
+        /// The mock log: `appLog` for everything `run` starts.
+        let log = InMemoryLogSink(name: "negmx")
+        /// The production Center the job is started through (it writes the
+        /// START and OUTCOME lines). Held here so it outlives the job: its
+        /// OUTCOME hop holds it weakly.
+        let center: MediaFileOperationsCenter
         var outDir: URL { target.deletingLastPathComponent() }
 
         /// What the catalog says, for "nothing new was recorded".
@@ -92,7 +105,8 @@ struct TranscodeReplaceNegativeMatrixTests {
         model.records = [source, MasterArchiveTestSupport.makeRecord(path: target.path)]
         let fakeTrash = sb.root.appendingPathComponent("FakeTrash", isDirectory: true)
         try FileManager.default.createDirectory(at: fakeTrash, withIntermediateDirectories: true)
-        return Bench(sb: sb, model: model, source: source, target: target, priorSHA: Self.sha(target), fakeTrash: fakeTrash)
+        return Bench(sb: sb, model: model, source: source, target: target, priorSHA: Self.sha(target), fakeTrash: fakeTrash,
+                     center: MediaFileOperationsCenter())
     }
 
     /// ffprobe's answer for a 12 s file (`-show_entries format=duration`, nokey).
@@ -127,15 +141,15 @@ struct TranscodeReplaceNegativeMatrixTests {
     func run(_ b: Bench, _ mock: ScriptedExecutor, preset: TranscodePreset = .archival, replace: Bool = true,
              stopAt: StopAt = .never, renameFailsAfterTrash: Bool = false,
              whileRunning: (@MainActor (TranscodeJob) async -> Void)? = nil) async -> TranscodeJob {
-        let job = TranscodeJob(record: b.source, preset: preset, outputURL: b.target, model: b.model, replaceExisting: replace)
+        let started = Box<TranscodeJob>()
         let trashed = b.trashed, fakeTrash = b.fakeTrash
         // Stop, pressed from a publish thread: the main actor is suspended
         // in the publish, so its queue is free to run the press.
-        let stop: @Sendable () -> Void = { DispatchQueue.main.sync { MainActor.assumeIsolated { job.cancel() } } }
+        let stop: @Sendable () -> Void = { DispatchQueue.main.sync { MainActor.assumeIsolated { started.value?.cancel() } } }
         let renames = Box<Bool>()
         let targetPath = b.target.path
         let realRename = ExclusivePublish.renameExclSyscall
-        await mock.scoped {
+        return await mock.scoped {
             await ExclusivePublish.$renameExclSyscall.withValue({ source, destination in
                 if stopAt == .duringFirstRename, renames.value == nil {
                     renames.set(true)
@@ -153,13 +167,20 @@ struct TranscodeReplaceNegativeMatrixTests {
                     if stopAt == .afterTrash { stop() }
                     return dest
                 }) {
-                    job.start()   // the job's Task {} inherits the task-locals
-                    if let whileRunning { await whileRunning(job) }
-                    await job.task?.value
+                    await withAppLog(b.log) {
+                        // The production entry: the Center writes START, starts the
+                        // job (its Task {} inherits the task-locals) and, when the
+                        // job ends, writes the OUTCOME under the scope bound here.
+                        let job = b.center.startTranscode(record: b.source, preset: preset, outputURL: b.target,
+                                                          model: b.model, replaceExisting: replace)
+                        started.set(job)
+                        if let whileRunning { await whileRunning(job) }
+                        await job.task?.value
+                        return job
+                    }
                 }
             }
         }
-        return job
     }
 
     /// The four invariants every refusal row shares.
@@ -199,6 +220,14 @@ struct TranscodeReplaceNegativeMatrixTests {
         #expect(Self.sha(b.fakeTrash.appendingPathComponent(b.target.lastPathComponent)) == b.priorSHA)
         #expect(Self.sha(b.target) != b.priorSHA, "the new derivative took the name")
         #expect(m.calls(to: "ffprobe", containing: ["format=duration"]).count == 2, "source and output both measured: \(m.calls)")
+        // The log of a good Replace: START, the replace notice, one "done" — in that order, and no failure.
+        let start = Self.startLine(b), tookTheName = LogLineMatcher.contains("derivative took the name \(b.target.lastPathComponent)")
+        let done = LogLineMatcher.hasPrefix("transcode done: \(Self.sourceName) — ")
+        await b.log.verify(
+            .once(start), .once(tookTheName), .once(done),
+            .inOrder(start, tookTheName, done),
+            .noOtherLines(matching: Self.anyOutcome),
+            waitingUpTo: .seconds(30))
     }
 
     // MARK: - The encode fails
@@ -227,7 +256,7 @@ struct TranscodeReplaceNegativeMatrixTests {
             job.handleStall(phase: "transcode encode", silentFor: 300)   // what StallMonitor calls after 5 min of silence
         }
         expectRefused(b, job, catalogBefore: before, reason: ["Stalled", "transcode encode"])
-        expectFailedReplaceSaysWhatHappened(b, job)   // codex r2 F4
+        await expectFailedReplaceSaysWhatHappened(b, job)   // codex r2 F4
     }
 
     /// Codex r2 F4: the stall's cleanup result is reported, not assumed.
@@ -279,7 +308,7 @@ struct TranscodeReplaceNegativeMatrixTests {
                                                      exit: 228))
         let job = await run(b, m)
         expectRefused(b, job, catalogBefore: before, reason: ["exit code 228", "No space left on device"])
-        expectFailedReplaceSaysWhatHappened(b, job)
+        await expectFailedReplaceSaysWhatHappened(b, job)
     }
 
     @Test("ffmpeg cannot be LAUNCHED: failed with the launch error; nothing trashed, nothing probed")
@@ -307,7 +336,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .output(stdout: "2.000000\n"))
         let job = await run(b, m)
         expectRefused(b, job, catalogBefore: before, reason: ["stopped early", "0:02", "0:12"])
-        expectFailedReplaceSaysWhatHappened(b, job)
+        await expectFailedReplaceSaysWhatHappened(b, job)
     }
 
     // MARK: - The new file cannot be verified (GH #500)
@@ -361,7 +390,7 @@ struct TranscodeReplaceNegativeMatrixTests {
     /// was removed; and nothing on disk or in the catalog changed.
     func expectUnverifiedReplaceRefused(_ b: Bench, _ job: TranscodeJob, _ m: ScriptedExecutor, catalogBefore: [String],
                                         file whose: String, cause: [String],
-                                        sourceLocation: SourceLocation = #_sourceLocation) {
+                                        sourceLocation: SourceLocation = #_sourceLocation) async {
         let plain = "Could not verify the new file — the original was not replaced."
         expectRefused(b, job, catalogBefore: catalogBefore, reason: [plain, whose] + cause, sourceLocation: sourceLocation)
         guard case .failed(let message) = job.state else { return }
@@ -378,6 +407,8 @@ struct TranscodeReplaceNegativeMatrixTests {
             #expect(outcome?.contains(words) == true, "OUTCOME lacks “\(words)”: \(outcome ?? "nil")", sourceLocation: sourceLocation)
         }
         #expect((outcome ?? "").count < 900, "the OUTCOME line is bounded", sourceLocation: sourceLocation)
+        // …and that sentence is the line the Center WROTE, once, after START.
+        await expectLoggedFailure(b, outcome: "transcode FAILED: \(Self.sourceName) — \(message)", sourceLocation: sourceLocation)
         // Nothing reached the Trash seam's folder; nothing probed the
         // output for the catalog; the encode ran once and was not retried.
         let inTrash = (try? FileManager.default.contentsOfDirectory(atPath: b.fakeTrash.path)) ?? ["unreadable"]
@@ -400,7 +431,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         let before = b.catalogSnapshot()
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: kind.probe)
         let job = await run(b, m)
-        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+        await expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
                                        file: "the new file's length could not be read", cause: kind.causeWords)
     }
 
@@ -410,7 +441,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         let before = b.catalogSnapshot()
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .output(stdout: "N/A\n"))
         let job = await run(b, m)
-        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+        await expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
                                        file: "the source's length could not be read to compare against",
                                        cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
     }
@@ -422,7 +453,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         let flood = (0..<400).map { "line \($0) " + String(repeating: "x", count: 300) }.joined(separator: "\n")
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .output(stdout: "", stderr: flood, exit: 1))
         let job = await run(b, m)
-        expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
+        await expectUnverifiedReplaceRefused(b, job, m, catalogBefore: before,
                                        file: "the new file's length could not be read", cause: ["ffprobe stopped with exit code 1", "line 0 x"])
         guard case .failed(let message) = job.state else { return }
         #expect(!message.contains("line 2 "), "only the first two lines are quoted")
@@ -466,7 +497,7 @@ struct TranscodeReplaceNegativeMatrixTests {
     /// F5: a Replace whose ENCODE failed also says what became of the
     /// original and of the new file, in the row and in the OUTCOME line.
     func expectFailedReplaceSaysWhatHappened(_ b: Bench, _ job: TranscodeJob,
-                                             sourceLocation: SourceLocation = #_sourceLocation) {
+                                             sourceLocation: SourceLocation = #_sourceLocation) async {
         guard case .failed(let message) = job.state else { return }
         let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title,
                                                                     state: job.state, wasRefused: job.wasRefused) ?? ""
@@ -476,6 +507,7 @@ struct TranscodeReplaceNegativeMatrixTests {
             #expect(outcome.contains(words), "OUTCOME lacks “\(words)”: \(outcome)", sourceLocation: sourceLocation)
         }
         #expect(job.subtitle == message, sourceLocation: sourceLocation)
+        await expectLoggedFailure(b, outcome: outcome, sourceLocation: sourceLocation)
     }
 
     /// F1 (P0): while the output is probed, the reserved partial is moved
@@ -631,6 +663,15 @@ struct TranscodeReplaceNegativeMatrixTests {
                                                                     state: job.state, wasRefused: job.wasRefused)
         #expect(outcome == "transcode FAILED: \(Self.sourceName) — \(message)")
         #expect(job.subtitle == message)
+        // The log of the mixed state: START, the kept-encode notice, then the one FAILED line that says where both files are.
+        let start = Self.startLine(b), notPublished = LogLineMatcher.contains("finished but not published")
+        let failed = LogLineMatcher.equals("transcode FAILED: \(Self.sourceName) — \(message)")
+        await b.log.verify(
+            .once(start), .once(notPublished), .once(failed),
+            .inOrder(start, notPublished, failed),
+            .never(.contains("took the name")),
+            .noOtherLines(matching: Self.anyOutcome),
+            waitingUpTo: .seconds(30))
     }
 
     /// F4 (P2): the cleanup's own result is what the message reports. The
@@ -766,5 +807,35 @@ struct TranscodeReplaceNegativeMatrixTests {
             #expect(b.trashed.all.isEmpty, "trashed before the proof: \(b.trashed.all)")
             #expect(Self.sha(b.target) == b.priorSHA, "the name now holds a master that failed its proof")
         }
+    }
+}
+
+// MARK: - The log half of a row (what the Center wrote)
+
+extension TranscodeReplaceNegativeMatrixTests {
+
+    /// The Center's START line for a row's job.
+    static func startLine(_ b: Bench, preset: TranscodePreset = .archival) -> LogLineMatcher {
+        .equals("transcode: \(sourceName) — \(preset.rawValue) → \(b.target.lastPathComponent)")
+    }
+
+    /// Any OUTCOME-shaped transcode line (for "no OTHER outcome was written").
+    static let anyOutcome = LogLineMatcher.matching(#/^transcode (done|FAILED|refused|cancelled): /#)
+
+    /// The log half of a failed row, as expectations on what the Center
+    /// wrote: START once, exactly `outcome` once and after it, never a
+    /// success claim, and no second OUTCOME. Waits (bounded) for the
+    /// OUTCOME, written one main-actor turn after the job's task ends.
+    func expectLoggedFailure(_ b: Bench, outcome: String, preset: TranscodePreset = .archival,
+                             sourceLocation: SourceLocation = #_sourceLocation) async {
+        let start = Self.startLine(b, preset: preset)
+        await b.log.verify(
+            .once(start),
+            .once(.equals(outcome)),
+            .inOrder(start, .equals(outcome)),
+            .never(.contains("Transcoded")),
+            .never(.contains("took the name")),
+            .noOtherLines(matching: Self.anyOutcome),
+            waitingUpTo: .seconds(30), sourceLocation: sourceLocation)
     }
 }

@@ -392,6 +392,47 @@ production (no tee). Work that leaves the task tree carries both seams with one 
 (`ProcessRunner` does this for its stdout/stderr callbacks). A line that still escapes lands in the NullLogSink and the
 assertion on it fails. Worked example: `AppLogScopeSeamTests`, `LogCaptureSeamTests`.
 
+**Expecting log lines.** Say what the code under test must log, how often and in what order, up front; one issue at
+the call's line names every expectation not met, with the captured lines that show why ("actual: never logged",
+"logged 2 times", "step 2 only BEFORE it, at [1] …"). The layer is `LogExpectations.swift` (VideoScanCore,
+`@_spi(Testing)`; no test framework inside) with a thin `expectingLog` in each test target:
+
+```swift
+let (job, log) = await expectingLog(
+    .once(.hasPrefix("compare: ")),                                       // START
+    .once(.matching(/^compare FAILED: .* no such file/)),                 // OUTCOME
+    .inOrder(.hasPrefix("compare: "), .hasPrefix("compare FAILED: ")),
+    .never(.hasPrefix("compare done: ")),
+    .noOtherLines(matching: .contains(stem))                              // nothing else about my file
+) {
+    let job = center.startCompare(recordA: a, recordB: b)                 // code under test
+    await job.task?.value
+    return job
+}
+```
+
+It returns the body's value and the sink for ad hoc assertions. After the body returns the scope waits, bounded
+(`waitingUpTo:`, 5 s by default, never when the verdict is already final), for lines still to come: the Center writes
+an OUTCOME one main-actor turn after the job's task ends. Checked after instead of up front: `sink.verify(…)` on a
+sink the test bound itself. A test file that writes expectations needs `@_spi(Testing) import VideoScanCore`. Worked
+examples: `MFOCenterOutcomeWatcherTests`, `MFOLogSummaryEndToEndTests`, `TranscodeReplaceNegativeMatrixTests`;
+the layer's own tests are `LogExpectationsTests`.
+
+| C++ / gmock | here |
+|---|---|
+| `EXPECT_CALL(log, Write(HasSubstr("x"))).Times(1)` | `.once(.contains("x"))` |
+| `.Times(n)` / `.Times(AtLeast(n))` / `.Times(AtMost(n))` / `.Times(0)` | `.exactly(n, …)` / `.atLeast(n, …)` / `.atMost(n, …)` / `.never(…)` |
+| `StartsWith` / `EndsWith` / `StrEq` / `ContainsRegex` / `AllOf` / `Truly(pred)` | `.hasPrefix` / `.hasSuffix` / `.equals` / `.matching(/…/)` / `.all(…)` / `.line("…") { pred }` |
+| `InSequence s;` | `.inOrder(first, then, …)` (order only; pair with `.once` to forbid repeats) |
+| `StrictMock<MockLog>` | `.noOtherLines()`, or narrowed: `.noOtherLines(matching: .contains("FAILED"))` |
+| `NiceMock<MockLog>` | a plain capture: `withAppLog(sink) { … }` and `#expect(sink.contains(…))` |
+| `Mock::VerifyAndClearExpectations(&log)` | `sink.verify(…)` / `await sink.verify(…, waitingUpTo:)` |
+| "Actual: never called" / "called twice" | "actual: never logged" / "logged 2 times", with the lines and their numbers |
+
+Two differences from gmock, on purpose: the verdict comes when the scope ends (a line is written from any task, and
+a failure raised there would not be the test's), and the scope waits for an asynchronous line instead of the test
+sleeping.
+
 > C++: `ProcessRunner` is `posix_spawn` plus two reader threads plus `waitpid` in a SIGCHLD handler, with an RAII
 > guard that kills the child if the owning coroutine is destroyed. `RENAME_EXCL` is `link()` + `unlink()` in one
 > atomic syscall.
