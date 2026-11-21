@@ -14495,7 +14495,7 @@
         "removedSiblingDowngradesOrPutsBack",
         "rewrittenArchiveCopyDowngradesPermanentToTrash",
         "rewrittenSiblingDowngradesPermanentToTrash",
-        "unchangedEvidenceKeepsTheTierAndNeverReadsTheKeeper"
+        "unchangedEvidenceKeepsTheTierAndTheKeeperIsReadOnlyToConfirm"
       ]
     },
     {
@@ -14654,7 +14654,7 @@
       "tests": [
         "cancelLeavesTheRestAndFilesTheCancelledPlan",
         "centerRefusesASecondConcurrentRun",
-        "deletesOnlyVerifiedPairsReadsKeeperOnceLedgersAndNamesKeeper",
+        "deletesOnlyVerifiedPairsReadsKeeperOnlyInItsFirstPairLedgersAndNamesKeeper",
         "discardFilesThePlanUnderDoneWithoutTouchingFiles",
         "modelVerbStillReturnsTheTuple",
         "offersOldestUnfinishedPlanFirst",
@@ -14985,6 +14985,8 @@
         "DeleteDuplicatesCodexFollowupTests"
       ],
       "tests": [
+        "aStopBetweenTheHeldFilesTwoReadsPutsItBackUnchanged",
+        "aStoredKeeperFixityAFreshReadContradictsIsUnusableAndNothingMoves",
         "aStrandedQuarantineKeepsThePlanOutOfDone",
         "aTwoCopyGroupsExtraIsTrashedByTheBulkRunKeeperProven",
         "anArchiveCopyHoldingDifferentBytesIsNamedAndTheKeeperAloneSuffices",
@@ -14993,15 +14995,15 @@
         "exactlyArchiveAndKeeperRemainingGoesToTheTrash",
         "finishThisFileThenQuitLandsThePairAndSuspendsThePlan",
         "gatherCountsOnlyCopiesThatHoldTheseBytes",
-        "holdMovesBeforeReadingAndTheKeeperIsNeverRead",
+        "holdConfirmsTheKeeperThenMovesBeforeReadingTheDuplicate",
         "keeperStampChangeBetweenHoldAndCompareIsRefusedAndRestored",
-        "keeperWithoutFixityIsReadOnceThenEveryPairIsSingleRead",
+        "keeperWithoutFixityIsReadByItsFirstPairOnlyThenNeverAgainThisRun",
         "noUsableFixityMovesNothingAndSizeMismatchRefusesBeforeMoving",
         "oldPlansDecodeWithNoTierAndTrashedRowsCountApart",
         "pausedAtABoundaryIsQuietForQuitAndThePlanIsOnDisk",
         "preferTrashSettingRoundTripsThroughInjectedDefaults",
         "rateDividesWallClockByPairsInFlight",
-        "refusedFirstPairStillPublishesTheKeeperFixityForTheNext",
+        "refusedFirstPairPublishesNoKeeperFixityTheNextVerifiedPairDoes",
         "resumePutsAQuarantinedFileBackBeforeDecidingEligibility",
         "rewriteBetweenHashAndUnlinkIsRefusedAndRestored",
         "stopBetweenTheTicketSaveAndPhaseTwoPutsTheFileBack",
@@ -36956,7 +36958,9 @@
       "tests": [
         "backfillStoresAnotherFilesDigest",
         "backfillStoresNothingFromAFailedRead",
+        "bindKeepsTheStoredDigestWhenTheSecondReadFails",
         "bindOverwritesATrueDigestOnOneDisagreeingRead",
+        "bindStoresAChangedDigestOnlyAfterTwoAgreeingReads",
         "bindStoresNothingFromAFailedRead",
         "deletionTierFactsCountTheFalseCopy",
         "promoteBelievesTheFalseDigest"
@@ -36972,6 +36976,7 @@
       "tests": [
         "aFlippedProvingReadAdoptsAnotherFile",
         "nothingIsPromoted",
+        "theConfirmingReadBeforeAnAdoption",
         "theThreeReads"
       ]
     },
@@ -36983,9 +36988,9 @@
         "HashReadFaultPruneTests"
       ],
       "tests": [
+        "aFaultedReadInTheJobMovesNothing",
         "aShortReadOfALongerCopyMakesAFalseProof",
-        "anUnprovenReadMakesNoProof",
-        "theJobsReadsAreOutOfReach"
+        "anUnprovenReadMakesNoProof"
       ]
     },
     {
@@ -37009,6 +37014,7 @@
         "HashReadSeamSensorTests"
       ],
       "tests": [
+        "aCompleteReadOfAShorterFileIsNotAReadFailure",
         "bitFlipChangesTheDigest",
         "containedReadIsSeamed",
         "copyVerifyPublishRefuses",
@@ -37043,7 +37049,8 @@
         "theCarriersAreInPlace",
         "theGateConsultsOnce",
         "theHookIsTaskLocal",
-        "theProofConsultsOnce"
+        "theProofConsultsOnce",
+        "theSecondReadsAreInOnePlaceEach"
       ]
     },
     {
@@ -37059,6 +37066,7 @@
         "shapeB_theProofStandsOnOneRead",
         "theAdoptionProofUnderEachFault",
         "theGuardHoldsOnAnUnprovenRead",
+        "theGuardHoldsWhenTheSecondReadDoesNotConfirm",
         "theProvenBackupCountReadsNothing"
       ]
     },
@@ -42534,7 +42542,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 963,
+      "expected_floor": 969,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
