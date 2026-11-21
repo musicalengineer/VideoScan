@@ -517,7 +517,7 @@ struct GedcomParserPropertyTests {
         return (0..<3).map { _ in clock.measure(body) }.min() ?? .zero
     }
 
-    @Test("G2 at scale: a 1 MB NOTE in ~80k CONC/CONT lines reads back exactly, in linear time")
+    @Test("G2 at scale: a 1 MB NOTE in ~80k CONC/CONT lines reads back exactly, in linear time", .tags(.quietMachine))
     func hugeNote() {
         let big = Self.noteFile(bytes: 1_000_000, seed: 0x1D0C)
         let small = Self.noteFile(bytes: 62_500, seed: 0x1D0C)

@@ -3,7 +3,7 @@ import XCTest
 
 /// Codec round-trip + corruption handling + Release timings for the
 /// compiled artifact (GedcomCompiledTree). Timings print as COMPILED[…].
-final class GedcomCompiledTreeTests: XCTestCase {
+final class GedcomCompiledTreeTests: QuietMachineXCTestCase {
 
     /// Exhaustive-verify budget (Debug `swift test`; Release is several×
     /// faster). 100k people + ~50k families + index compare.

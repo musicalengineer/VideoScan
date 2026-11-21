@@ -46,6 +46,10 @@ private func requireQuietMachineTag(_ sourceLocation: SourceLocation) {
     if let problem = quietMachineTagProblem(for: Test.current) {
         Issue.record(Comment(rawValue: problem), sourceLocation: sourceLocation)
     }
+    // Whatever the tag says: a budget judged in the lane's parallel phase is an issue.
+    if let problem = QuietMachinePhase.problem() {
+        Issue.record(Comment(rawValue: problem), sourceLocation: sourceLocation)
+    }
 }
 
 /// GH #385: an absolute budget for a test whose machine-independent check

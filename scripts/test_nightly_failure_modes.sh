@@ -1246,7 +1246,8 @@ core-lane: phase B (serial, quiet machine, VIDEOSCAN_TIMING_STRICT=1): 3 tests p
 core-lane: phase A (parallel, timing not strict): 3 passed / 0 failed / 0 skipped — 3 of 3 planned, 0 with known issues, 1 s, largest test process so far 1800 MB
 core-lane: phase B (serial, quiet machine, strict): 0 passed / 0 failed / 0 skipped — 0 of 3 planned, 0 with known issues, 0 s
 core-lane: total 3 passed / 0 failed / 0 skipped — 3 of 6 planned, 1 s → RED
-core-lane: RED — phase B (serial, quiet machine): ran ZERO of its 3 tests
+core-lane: RED — phase B (serial, quiet machine): XCTest ran ZERO of its 1 tests
+core-lane: RED — phase B (serial, quiet machine): Swift Testing ran ZERO of its 2 tests
 CPL
 cat > "$SANDBOX/core-red.log" <<CRL
 Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
@@ -1327,7 +1328,7 @@ else
     got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; run_core_case "$SANDBOX/core-phase-short.log" 2 ok "")
     case "$got" in
         "failed|core-phase-count-mismatch|7|7|failed|phase-count-mismatch|3|0|0|3|"*)
-            grep -q 'core-lane: RED — phase B (serial, quiet machine): ran ZERO of its 3 tests' "$SANDBOX/core-case.log" \
+            grep -q 'core-lane: RED — phase B (serial, quiet machine): Swift Testing ran ZERO of its 2 tests' "$SANDBOX/core-case.log" \
                 && pass "a phase that ran zero of its plan is red (phase-count-mismatch) and the log names the phase" \
                 || fail "phase-count red did not log which phase: $(cat "$SANDBOX/core-case.log")" ;;
         *) fail "a serial phase that ran nothing: got '$got'" ;;

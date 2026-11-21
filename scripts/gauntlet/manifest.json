@@ -5142,8 +5142,10 @@
         "aTaggedTestMayJudge",
         "aTestInATaggedSuiteMayJudge",
         "anUntaggedTestIsToldToTagItself",
+        "onlyTheLanesParallelPhaseIsAProblem",
         "outsideATestNothingIsClaimed",
-        "testASubclassRunsAsAnOrdinaryTestCase"
+        "testASubclassRunsAsAnOrdinaryTestCase",
+        "theKeyIsTheOneTheLaneSets"
       ]
     },
     {
@@ -36123,6 +36125,26 @@
         "test_core_lane.py"
       ],
       "tests": [
+        "test_F1_a_listing_that_lost_a_whole_framework_is_not_green",
+        "test_F1_the_listing_is_cross_checked_against_the_source_count",
+        "test_F1_the_refusal_names_the_framework_and_runs_nothing",
+        "test_F2_a_full_run_with_no_quiet_machine_test_is_refused",
+        "test_F2_marks_the_build_lost_are_refused_by_number",
+        "test_F2_the_real_run_always_has_a_witness_and_no_source_is_red",
+        "test_F2b_a_test_process_can_tell_the_parallel_phase_from_the_serial_one",
+        "test_F2b_each_phase_names_itself_to_its_test_processes",
+        "test_F3_a_list_that_cannot_be_written_stops_the_listing",
+        "test_F3_a_quiet_xctest_class_the_tree_does_not_name_is_refused_not_dropped",
+        "test_F4_a_bare_wall_time_assertion_needs_the_mark_too",
+        "test_F4_a_mark_in_a_comment_is_not_a_mark",
+        "test_F4_an_opt_out_is_one_line_and_removing_it_is_red",
+        "test_F4_real_tree_the_one_unmarked_wall_time_ratio",
+        "test_F4_the_bare_rule_flags_orderings_of_a_clock_reading_and_nothing_else",
+        "test_F4_the_pure_rules_are_not_judging_helpers_and_their_tests_are_not_marked",
+        "test_F5_each_framework_is_held_to_its_own_plan",
+        "test_F5_the_short_framework_is_named",
+        "test_F6_a_glued_xctest_verdict_line_still_counts",
+        "test_F6_the_glued_line_is_written_as_two_and_both_counters_agree",
         "test_a_child_that_dies_without_a_failed_test_is_red_by_phase",
         "test_a_failure_names_its_phase_and_the_lane_is_red",
         "test_a_filter_narrows_both_phases_and_a_part_class_is_named_by_method",
@@ -36135,6 +36157,7 @@
         "test_an_id_with_regex_characters_is_matched_literally",
         "test_counts_are_one_per_terminal_line_and_an_issue_line_or_run_summary_is_not_a_test",
         "test_green_both_phases_ran_their_plan_and_the_total_is_their_sum",
+        "test_ids_are_escaped_for_both_regex_dialects",
         "test_no_bundle_and_an_empty_bundle_are_red",
         "test_phase_a_is_never_strict_and_phase_b_keeps_the_callers_strictness",
         "test_phase_a_runs_both_frameworks_at_once_skipping_the_quiet_ids_and_phase_b_serializes",

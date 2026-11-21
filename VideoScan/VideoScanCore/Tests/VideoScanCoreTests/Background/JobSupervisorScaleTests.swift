@@ -52,6 +52,7 @@ struct JobSupervisorScaleTests {
         let pushes = await supervisor.progressPushCount
         print("[background-scale] 10k units in \(elapsed): \(pushes) progress pushes")
         // 4 per second of run time, plus the forced START and OUTCOME pushes.
+        // quiet-machine: not a budget — the allowed count GROWS with the measured time; a slow run only loosens it
         #expect(pushes <= Int(seconds * 4) + 3, "pushes \(pushes) over \(seconds) s")
         #expect(counter.lines.last == "10000", "the final state is always pushed")
         #expect(pushes >= 2)

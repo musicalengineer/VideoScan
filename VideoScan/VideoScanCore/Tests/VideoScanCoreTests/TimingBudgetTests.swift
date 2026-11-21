@@ -12,7 +12,7 @@ import Testing
 @Suite("TimingBudget — shared test-budget rule")
 struct TimingBudgetTests {
 
-    @Test("off GitHub the ceiling is exactly the budget; CI=1 alone does not widen it", .tags(.quietMachine))
+    @Test("off GitHub the ceiling is exactly the budget; CI=1 alone does not widen it")
     func localCeilingIsTheBudget() {
         for budget in [Duration.milliseconds(50), .seconds(2), .seconds(20)] {
             #expect(TimingBudget.debugCeiling(budget, environment: [:]) == budget)
@@ -21,7 +21,7 @@ struct TimingBudgetTests {
         }
     }
 
-    @Test("GITHUB_ACTIONS=true triples it", .tags(.quietMachine))
+    @Test("GITHUB_ACTIONS=true triples it")
     func hostedIsTripled() {
         #expect(TimingBudget.debugCeiling(.seconds(3), environment: ["GITHUB_ACTIONS": "true"]) == .seconds(9))
     }
@@ -339,7 +339,7 @@ struct TimingBudgetSanitizerTests {
         #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "bogus"]) == 1)
     }
 
-    @Test(.tags(.quietMachine)) func debugCeilingWidensOnlyUnderASanitizer() {
+    @Test func debugCeilingWidensOnlyUnderASanitizer() {
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: [:]) == .milliseconds(100))
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: ["VIDEOSCAN_SANITIZER": "address"])
                 == .milliseconds(800))
@@ -372,7 +372,7 @@ struct TimingBudgetSanitizerTests {
 @Suite("TimingBudget — relative budgets: the algorithm, not the host")
 struct TimingBudgetRatioTests {
 
-    @Test(.tags(.quietMachine)) func growthPassesUpToTheLimitAndFailsBeyondIt() {
+    @Test func growthPassesUpToTheLimitAndFailsBeyondIt() {
         let linear = TimingBudget.judgeGrowth("g", small: .milliseconds(10), large: .milliseconds(40),
                                               sizeRatio: 4, limit: 8)
         #expect(linear.passed && linear.ratio == 4)
@@ -384,7 +384,7 @@ struct TimingBudgetRatioTests {
         #expect(quadratic.logLine.contains("1/4-size input") && quadratic.logLine.hasSuffix("fail"))
     }
 
-    @Test(.tags(.quietMachine)) func relativePassesUnderTheLimitAndAZeroReferenceNeverPasses() {
+    @Test func relativePassesUnderTheLimitAndAZeroReferenceNeverPasses() {
         #expect(TimingBudget.judgeRelative("r", measured: .milliseconds(20), reference: .milliseconds(100),
                                            referenceName: "a full pass", limit: 0.5).passed)
         #expect(!TimingBudget.judgeRelative("r", measured: .milliseconds(60), reference: .milliseconds(100),

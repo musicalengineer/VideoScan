@@ -461,13 +461,19 @@ print(json.dumps(base, separators=(",", ":")))
 # whole lane therefore ran `swift test --no-parallel` (16-19 min). Now
 # scripts/core_lane.py builds the bundle and runs it in two phases:
 #   A: every test NOT marked quiet-machine, in parallel, with
-#      VIDEOSCAN_TIMING_STRICT removed (no test there judges a budget:
-#      `core_lane.py check` in the sensor lane pins it);
+#      VIDEOSCAN_TIMING_STRICT removed. That no test there judges a budget is
+#      pinned as far as a source scan can: `core_lane.py check` (sensor lane)
+#      is red for an unmarked test that reaches a TimingBudget / resident-size
+#      helper or orders a clock reading in an assertion (a heuristic, with a
+#      per-line opt-out); and the helpers record an issue if they ever run
+#      under VIDEOSCAN_CORE_PHASE=parallel, which core_lane.py sets here;
 #   B: only the marked tests (`.tags(.quietMachine)` / QuietMachineXCTestCase,
 #      Tests/VideoScanCoreTests/QuietMachine.swift), `--no-parallel`, with the
 #      VIDEOSCAN_TIMING_STRICT=1 the top of this script exports — as before.
-# core_lane.py checks each phase's count against its plan (a phase that ran
-# zero or fewer is RED, exit 2) and names the phase of every failure; its
+# core_lane.py refuses a listing that lost a framework or the marks, or that
+# disagrees with the test source's own count; checks each phase's count
+# against its plan per framework (zero, fewer or more is RED, exit 2) and
+# names the phase of every failure; its
 # per-test lines are the ones parse_test_counts counts, so the row's core_*
 # counts are the sum of the two phases. GitHub CI keeps `swift test`.
 NIGHTLY_CORE_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS:-3600}"
