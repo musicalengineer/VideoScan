@@ -710,6 +710,58 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(!body.contains("removeItem") && !body.contains("unlink("), "the rescue never deletes")
     }
 
+    // MARK: - PARKED RED: a different file already at a destination name
+
+    /// PARKED RED (found 2026-11-21 while fixing GH #506; reported, NOT
+    /// fixed — it needs Rick's ruling on what a rescue does with a name
+    /// that is taken). Rule 2: "Trash, never unlink … refuse rather than
+    /// guess."
+    ///
+    /// What happens today. The rescue keys a file by its path RELATIVE to
+    /// the source volume and never asks what is already at that name under
+    /// the destination folder:
+    ///   • rsync mode — no `--ignore-existing`, no check first: a successful
+    ///     rsync REPLACES whatever is there (rename over it). The previous
+    ///     bytes are unlinked — not in the Trash, not kept beside.
+    ///   • fast mode — RescueFileCopier treats ANY file of a different size
+    ///     at the name as "an incomplete copy from an earlier run" and
+    ///     replaces it the same way (a file of the SAME size is left alone
+    ///     and counted as already there, without comparing content).
+    /// How it is reached: rescue two volumes into the same folder when both
+    /// hold the same relative path — two camera cards with
+    /// `DCIM/100CANON/MVI_0001.MOV`, two tapes captured as `Tapes/1994/
+    /// tape 1.mov`. The second rescue silently destroys the first one's
+    /// file, and reports "1 at the destination (size checked)".
+    /// Proposed: a name that is taken by a file that is not a size-equal
+    /// copy is REFUSED for that file ("a different file is already at …"),
+    /// or the new file is published beside it — never a replace.
+    @Test("PARKED RED: a DIFFERENT file already at the destination name is replaced by a successful rescue — its bytes are gone, not in the Trash",
+          arguments: [RescueCopyMode.verified, .fast])
+    func aDifferentFileAlreadyAtTheDestinationIsDestroyed(_ mode: RescueCopyMode) async throws {
+        let b = try bench(files: 1)
+        defer { b.cleanup() }
+        // Another volume's file, rescued earlier under the same relative path.
+        try FileManager.default.createDirectory(at: b.dest(0).deletingLastPathComponent(), withIntermediateDirectories: true)
+        _ = try MasterArchiveTestSupport.writeBlob(at: b.dest(0), bytes: 30_000, seed: 404)
+        let earlierSHA = Self.sha(b.dest(0))
+        #expect(earlierSHA != b.sources[0].sha, "the bench: two different files")
+        let mock = b.mock().on("rsync", .passThrough)
+        let done = await mock.scoped {
+            b.op.start(files: b.sources.map(\.record), sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: mode)
+            return await waitUntilDone(b)
+        }
+        #expect(done)
+        b.expectSourcesUntouched()
+        let everywhere = ((try? FileManager.default.subpathsOfDirectory(atPath: b.destVolume.path)) ?? [])
+            .map { b.destVolume.appendingPathComponent($0) }
+            .filter { VolumeRescueOperation.entry(at: $0.path).regularSize != nil }
+        withKnownIssue("a different file already at the destination name is replaced (unlinked) by a successful rescue — rule 2") {
+            #expect(everywhere.contains { Self.sha($0) == earlierSHA },
+                    "the file that was at \(b.dest(0).lastPathComponent) is gone: nothing under the destination has its bytes (\(everywhere.map(\.lastPathComponent)))")
+            #expect(b.op.filesCopied == 0 || everywhere.count == 2, "reported as a copy while the earlier file was destroyed")
+        }
+    }
+
     // MARK: - The log
 
     /// GH #506 item 5 (was parked RED). The rescue is still not an MFO job

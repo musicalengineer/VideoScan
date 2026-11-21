@@ -38542,6 +38542,7 @@
         "VolumeRescueRsyncNegativeMatrixTests"
       ],
       "tests": [
+        "aDifferentFileAlreadyAtTheDestinationIsDestroyed",
         "aFileAlreadyAtTheFinalNameIsReportedAndLeftAlone",
         "aRealInterruptedTransferNeverLeavesATruncatedFileAtTheFinalName",
         "aSourceTheRealRsyncSkipsIsNotCountedCopied",
@@ -42612,7 +42613,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1010,
+      "expected_floor": 1011,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
