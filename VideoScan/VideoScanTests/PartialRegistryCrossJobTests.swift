@@ -261,6 +261,42 @@ struct PartialRegistryCrossJobTests {
         #expect(Self.exists(inner))
     }
 
+    /// Codex GH #500 r1 F1: remove() unlinks the file it RESERVED (device +
+    /// inode, as the registry recorded), never whatever now has its name.
+    @Test func removeRefusesADifferentFileAtAReservedPartialsName() throws {
+        let dir = try Self.makeDir("remove_identity")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let partial = try PartialFileNaming.reserve(for: dir.appendingPathComponent("test_clip.mov"))
+        defer { PartialFileNaming.unregisterLive(partial) }
+        let aside = dir.appendingPathComponent("test_moved_aside.bin")
+        try FileManager.default.moveItem(at: partial, to: aside)
+        try Data("someone else's file".utf8).write(to: partial)
+        do {
+            try PartialFileNaming.remove(partial)
+            Issue.record("a different file at the reserved name was removed")
+        } catch let failure as PartialFileNaming.Failure {
+            #expect(failure.message == "a different file is at \(partial.path) — left untouched", "\(failure.message)")
+        }
+        #expect((try? Data(contentsOf: partial)) == Data("someone else's file".utf8))
+        #expect(Self.exists(aside))
+        #expect(!PartialFileNaming.isLive(aside), "the refused removal still releases the reservation")
+    }
+
+    /// The reserved file itself is still removed after ffmpeg-style in-place
+    /// writes (same inode, new size), and already-gone stays a success.
+    @Test func removeStillRemovesTheReservedFileAndToleratesGone() throws {
+        let dir = try Self.makeDir("remove_same")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let partial = try PartialFileNaming.reserve(for: dir.appendingPathComponent("test_clip.mov"))
+        let handle = try FileHandle(forWritingTo: partial)
+        try handle.write(contentsOf: Data(count: 50_000))
+        try handle.close()
+        try PartialFileNaming.remove(partial)
+        #expect(!Self.exists(partial))
+        try PartialFileNaming.remove(partial)   // gone: success
+        #expect(!PartialFileNaming.isLive(partial))
+    }
+
     /// QA 4: the exit-failure branch removes the (reserved) partial too.
     @Test func transcodeExitFailureDiscardsItsPartialAndPublishFailureKeepsTheEncode() throws {
         let text = try SourceTree.appSource(named: "TranscodeJob.swift")
@@ -273,10 +309,10 @@ struct PartialRegistryCrossJobTests {
         let exitBranch = try #require(gate.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
         let gateReturn = try #require(gate.range(of: "return", range: exitBranch.upperBound..<gate.endIndex))
         #expect(gate[gateReturn.upperBound...].hasPrefix(" .failed("), "an ffmpeg exit failure with no output is a failed gate")
-        for refusing in ["case .failed(let message, let stage):", "case .unverified(let cause):"] {
+        for refusing in ["private func failEncode(", "private func refuseUnverifiedReplace(", "private func stoppedBeforePublish("] {
             let branch = try #require(text.range(of: refusing), "\(refusing)")
-            let nextReturn = try #require(text.range(of: "return", range: branch.upperBound..<text.endIndex))
-            #expect(text[branch.upperBound..<nextReturn.lowerBound].contains("discardPartial(partialURL)"), "\(refusing)")
+            let finish = try #require(text.range(of: "await finish(", range: branch.upperBound..<text.endIndex))
+            #expect(text[branch.upperBound..<finish.lowerBound].contains("discardPartial(partial)"), "\(refusing)")
         }
         #expect(text.contains("await Self.keepUnpublishedOffMain(partialURL)")
                 && text.contains("DerivativeOutputPublish.keepUnpublished(partial)"),

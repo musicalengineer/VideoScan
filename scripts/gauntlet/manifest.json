@@ -25601,7 +25601,9 @@
         "keepingNeverOverwritesAnExistingKeptFile",
         "livePartialSurvivesASweepThroughAnAliasedPath",
         "publishReleasesTheReservation",
+        "removeRefusesADifferentFileAtAReservedPartialsName",
         "removeRefusesADirectoryWearingAPartialName",
+        "removeStillRemovesTheReservedFileAndToleratesGone",
         "stagingDirIsRemovedWhenBufferingTheAudioThrowsAfterTheVideoCopied",
         "stagingDirIsRemovedWhenBufferingTheVideoThrows",
         "stagingDirSurvivesASuccessfulBuffer",
@@ -30816,6 +30818,9 @@
         "TranscodeReplaceNegativeMatrixTests"
       ],
       "tests": [
+        "aFileSubstitutedAtTheNewFilesNameIsNeverRemovedByTheCleanup",
+        "aNewFileSwappedDuringVerificationIsNeverPublished",
+        "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
         "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
         "anUnmeasurableSourceIsNotAVerifiedReplace",
@@ -30828,7 +30833,10 @@
         "encodeNonzeroExit",
         "encodeTruncated",
         "preservationReplaceProvesLosslessOnlyAfterTheReplace",
-        "theCauseIsBounded"
+        "stopAfterTheProbesAnsweredNeverPublishes",
+        "theCauseIsBounded",
+        "theDispositionSentenceReportsTheCleanupsOwnResult",
+        "thePublishRefusesAFileThatIsNotTheVerifiedOne"
       ]
     },
     {
@@ -41720,7 +41728,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 849,
+      "expected_floor": 855,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

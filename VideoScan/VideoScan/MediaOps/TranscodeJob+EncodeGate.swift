@@ -16,6 +16,12 @@
 //      ("not failed") was read as leave to Trash the file at the output
 //      name, so an output ffprobe could not read replaced a good file and
 //      was catalogued as "Transcoded".
+//      Verified means THIS file (codex r1 F2): the partial's stamp (device,
+//      inode, size, mtime) is taken before the probes and must be the same
+//      after them, and again immediately before the publish
+//      (`publishVerified`). A length read from one file never vouches for
+//      another put at its name. Residual: the re-stat and the publish's
+//      rename are separate syscalls; a swap inside that instant is not seen.
 // Without Replace nothing can be removed, and an unmeasured output is still
 // published beside whatever is there, as before.
 //
@@ -38,15 +44,32 @@ extension TranscodeJob {
         /// Replace was chosen and the new file could not be verified.
         /// `cause` names the file, the tool, its exit code and its words.
         case unverified(cause: String)
-        /// May be published. `sizeBytes` is the new file's size.
-        case passed(sizeBytes: Int64)
+        /// May be published. `sizeBytes` is the new file's size. `verified`
+        /// (Replace only) is the stamp of the file whose lengths were read:
+        /// the publish must find exactly that file.
+        case passed(sizeBytes: Int64, verified: PartialFileNaming.FileStamp?)
     }
+
+    /// What the cleanup of this run's partial actually did — the job's
+    /// message reports this, never an inference from "nothing is there"
+    /// (codex r1 F4: a folder that lost its search permission looks empty).
+    enum PartialCleanup: Sendable, Equatable {
+        case removed
+        case alreadyGone
+        /// The reason, which names the path.
+        case notRemoved(String)
+    }
+
+    /// The new file at the partial's name is not the file that was verified.
+    struct ChangedSinceVerified: Error {}
+    static let changedAfterVerification = "the new file changed after it was verified"
 
     /// Reads only. Disk and probes run off the main actor.
     @concurrent
     nonisolated static func encodeGate(_ result: ProcessRunner.Result, inputPath: String,
                                        partialPath: String, replace: Bool) async -> EncodeGate {
         let fm = FileManager.default
+        let before = PartialFileNaming.fileStamp(partialPath)   // the file the probes are about to read
         let verification: FFmpegEncodeCheck.Verification? = fm.fileExists(atPath: partialPath)
             ? await FFmpegEncodeCheck.verification(for: result, sourcePath: inputPath, outputPath: partialPath)
             : nil
@@ -68,9 +91,12 @@ extension TranscodeJob {
         guard size >= 10_000 else {
             return .failed("ffmpeg output too small (\(size) bytes) — likely a codec failure", stage: "output too small")
         }
-        guard replace else { return .passed(sizeBytes: size) }
+        guard replace else { return .passed(sizeBytes: size, verified: nil) }
+        guard let before, PartialFileNaming.fileStamp(partialPath) == before else {
+            return .unverified(cause: "the new file changed while it was being verified")
+        }
         switch verification {
-        case .verified: return .passed(sizeBytes: size)
+        case .verified: return .passed(sizeBytes: size, verified: before)
         case .unmeasured(let why): return .unverified(cause: why)
         case .failed, nil: return .unverified(cause: "the new file was not there to measure")
         }
@@ -80,23 +106,49 @@ extension TranscodeJob {
         reason.prefix(1).uppercased() + reason.dropFirst()
     }
 
-    /// `path` when something is still there, else nil (after the discard:
-    /// what the message may truthfully say about the new file).
-    nonisolated static func pathIfPresent(_ path: String) -> String? {
-        FileManager.default.fileExists(atPath: path) ? path : nil
+    /// The disk half of the publish, off the main thread. With Replace
+    /// (`verified` non-nil) the partial must still be exactly the verified
+    /// file — checked here, immediately before the publish that may Trash
+    /// the previous file — else `ChangedSinceVerified` and nothing is touched.
+    @concurrent
+    nonisolated static func publishVerified(
+        partial: String, final: URL, policy: DerivativeOutputPublish.ExistingFilePolicy,
+        archiveCheck: ArchiveRemovalCheck?, trash: @escaping @Sendable (URL) throws -> URL?,
+        verified: PartialFileNaming.FileStamp?
+    ) async throws -> DerivativeOutputPublish.Outcome {
+        if let verified, PartialFileNaming.fileStamp(partial) != verified { throw ChangedSinceVerified() }
+        return try DerivativeOutputPublish.publish(partial: partial, as: final, policy: policy,
+                                                   archiveCheck: archiveCheck, trash: trash)
+    }
+
+    /// What became of the original and of the new file — said on every
+    /// failed Replace. "removed" only when the cleanup said so.
+    nonisolated static func disposition(original: String, newFile: String, cleanup: PartialCleanup) -> String {
+        let what: String
+        switch cleanup {
+        case .removed: what = "the \(newFile) new file was removed"
+        case .alreadyGone: what = "the \(newFile) new file was no longer there to remove"
+        case .notRemoved(let why): what = "the \(newFile) new file was NOT removed: \(why)"
+        }
+        return "\(original) was not moved or changed; \(what)."
     }
 
     /// The one sentence for a Replace refused because the new file could
     /// not be verified. The MFO row, its detail and the Center's OUTCOME
     /// line ("transcode FAILED: <source> — …") all show exactly this: the
     /// plain words first, then the specific cause, then what happened to
-    /// the original and to the new file (`partialStillAt` is non-nil only
-    /// when the new file could not be removed).
+    /// the original and to the new file.
     nonisolated static func unverifiedReplaceMessage(cause: String, original: String,
-                                                     partialStillAt: String?) -> String {
-        let newFile = partialStillAt.map { "the unverified new file could not be removed and is at \($0)" }
-            ?? "the unverified new file was removed"
-        return "Could not verify the new file — the original was not replaced. Cause: \(cause). "
-            + "\(original) was not moved or changed; \(newFile)."
+                                                     cleanup: PartialCleanup) -> String {
+        "Could not verify the new file — the original was not replaced. Cause: \(cause). "
+            + disposition(original: original, newFile: "unverified", cleanup: cleanup)
+    }
+
+    /// A Replace whose ENCODE failed says the same two things after the
+    /// failure itself (codex r1 F5).
+    nonisolated static func failedReplaceMessage(failure: String, original: String,
+                                                 cleanup: PartialCleanup) -> String {
+        "\(failure). The original was not replaced: "
+            + disposition(original: original, newFile: "failed", cleanup: cleanup)
     }
 }

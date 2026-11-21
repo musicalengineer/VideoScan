@@ -225,6 +225,7 @@ struct TranscodeReplaceNegativeMatrixTests {
                                                      exit: 228))
         let job = await run(b, m)
         expectRefused(b, job, catalogBefore: before, reason: ["exit code 228", "No space left on device"])
+        expectFailedReplaceSaysWhatHappened(b, job)
     }
 
     @Test("ffmpeg cannot be LAUNCHED: failed with the launch error; nothing trashed, nothing probed")
@@ -252,6 +253,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .output(stdout: "2.000000\n"))
         let job = await run(b, m)
         expectRefused(b, job, catalogBefore: before, reason: ["stopped early", "0:02", "0:12"])
+        expectFailedReplaceSaysWhatHappened(b, job)
     }
 
     // MARK: - The new file cannot be verified (GH #500)
@@ -371,6 +373,221 @@ struct TranscodeReplaceNegativeMatrixTests {
         guard case .failed(let message) = job.state else { return }
         #expect(!message.contains("line 2 "), "only the first two lines are quoted")
         #expect(message.count < 800, "\(message.count)")
+    }
+
+    // MARK: - Codex GH #500 round 1 (five findings, each red first)
+
+    /// A set-once value two tasks share (the probes' barrier).
+    final class Box<Value: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Value?
+        func set(_ value: Value) { lock.lock(); stored = value; lock.unlock() }
+        var value: Value? { lock.lock(); defer { lock.unlock() }; return stored }
+        /// Poll (10 s at most); ignores cancellation on purpose — a probe
+        /// that already has its answer returns it whatever the task says.
+        func wait() async -> Value? {
+            for _ in 0..<2000 {
+                if let value { return value }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                if Task.isCancelled { await Task.yield() }
+            }
+            return value
+        }
+    }
+
+    nonisolated static let twelveSecondsResult = ProcessRunner.Result(stdout: "12.000000\n", stderr: "", exitCode: 0, launched: true)
+    nonisolated static let invalidDataResult = ProcessRunner.Result(stdout: "", stderr: "Invalid data found when processing input\n",
+                                                        exitCode: 1, launched: true)
+
+    /// Rules 2 and 1 for a row that leaves something at the partial's name
+    /// on purpose: nothing trashed, the prior file intact, catalog unchanged.
+    func expectOriginalUntouched(_ b: Bench, _ m: ScriptedExecutor, catalogBefore: [String],
+                                 sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(b.trashed.all.isEmpty, "trashed: \(b.trashed.all)", sourceLocation: sourceLocation)
+        #expect(Self.sha(b.target) == b.priorSHA, "the prior file changed", sourceLocation: sourceLocation)
+        #expect(b.catalogSnapshot() == catalogBefore, "the catalog changed", sourceLocation: sourceLocation)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty, sourceLocation: sourceLocation)
+    }
+
+    /// F5: a Replace whose ENCODE failed also says what became of the
+    /// original and of the new file, in the row and in the OUTCOME line.
+    func expectFailedReplaceSaysWhatHappened(_ b: Bench, _ job: TranscodeJob,
+                                             sourceLocation: SourceLocation = #_sourceLocation) {
+        guard case .failed(let message) = job.state else { return }
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title,
+                                                                    state: job.state, wasRefused: job.wasRefused) ?? ""
+        for words in ["The original was not replaced", "\(b.target.lastPathComponent) was not moved or changed",
+                      "the failed new file was removed"] {
+            #expect(message.contains(words), "the row lacks “\(words)”: \(message)", sourceLocation: sourceLocation)
+            #expect(outcome.contains(words), "OUTCOME lacks “\(words)”: \(outcome)", sourceLocation: sourceLocation)
+        }
+        #expect(job.subtitle == message, sourceLocation: sourceLocation)
+    }
+
+    /// F1 (P0): while the output is probed, the reserved partial is moved
+    /// aside and ANOTHER file is renamed onto its pathname. The refusal's
+    /// cleanup must remove only the file this run reserved (device + inode)
+    /// — never whatever has its name — and must say so, with the path.
+    @Test("F1: a different file put at the new file's name during verification is never removed by the cleanup")
+    func aFileSubstitutedAtTheNewFilesNameIsNeverRemovedByTheCleanup() async throws {
+        let b = try bench("substituted"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let other = b.sb.sources.appendingPathComponent("test_other_family_tape.mov")
+        _ = try MasterArchiveTestSupport.writeBlob(at: other, bytes: 30_000, seed: 77)
+        let otherSHA = Self.sha(other)
+        let aside = b.sb.root.appendingPathComponent("test_moved_aside.bin")
+        let partialAt = Box<URL>()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .custom { request in
+            let partial = URL(fileURLWithPath: request.arguments.last ?? "")
+            try? FileManager.default.moveItem(at: partial, to: aside)
+            try? FileManager.default.moveItem(at: other, to: partial)
+            partialAt.set(partial)
+            return Self.invalidDataResult
+        })
+        let job = await run(b, m)
+        let partial = try #require(partialAt.value)
+        #expect(Self.sha(partial) == otherSHA, "the substituted file was deleted or changed")
+        expectOriginalUntouched(b, m, catalogBefore: before)
+        guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(message.hasPrefix("Could not verify the new file — the original was not replaced."), "\(message)")
+        #expect(message.contains("the unverified new file was NOT removed: a different file is at \(partial.path) — left untouched"), "\(message)")
+        #expect(!message.contains("new file was removed"), "\(message)")
+    }
+
+    /// F2 (P0): the output probe measures file A; while the source probe is
+    /// still out, B (over 10 KB, never measured) is put at A's pathname.
+    /// A's length must not vouch for B: nothing trashed, nothing published.
+    @Test("F2: a new file swapped while it was being verified is never published — the lengths read belong to another file")
+    func aNewFileSwappedDuringVerificationIsNeverPublished() async throws {
+        let b = try bench("swapped"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let measured = Box<URL>()
+        let swapped = Data(repeating: 0x42, count: 20_000)
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)),
+                         sourceProbe: .custom { _ in
+                             // Barrier: only after the output was measured.
+                             if let partial = await measured.wait() {
+                                 try? swapped.write(to: partial, options: .atomic)   // a NEW file (new inode) at the name
+                             }
+                             return Self.twelveSecondsResult
+                         },
+                         outputProbe: .custom { request in
+                             measured.set(URL(fileURLWithPath: request.arguments.last ?? ""))
+                             return Self.twelveSecondsResult
+                         })
+        let job = await run(b, m)
+        let partial = try #require(measured.value)
+        expectOriginalUntouched(b, m, catalogBefore: before)
+        guard case .failed(let message) = job.state else { Issue.record("an unverified file was published: \(job.state)"); return }
+        #expect(message.hasPrefix("Could not verify the new file — the original was not replaced."), "\(message)")
+        #expect(message.contains("Cause: the new file changed while it was being verified"), "\(message)")
+        // B is not the file this run reserved: left where it is, and said.
+        #expect((try? Data(contentsOf: partial)) == swapped)
+        #expect(message.contains("NOT removed: a different file is at \(partial.path) — left untouched"), "\(message)")
+    }
+
+    /// F3 (P1): both probes answer, and Stop lands before the job resumes
+    /// from them. A Stop is a Stop: cancelled, nothing trashed or published.
+    @Test("F3: Stop after the probes answered but before the publish ends Cancelled; nothing trashed, nothing catalogued")
+    func stopAfterTheProbesAnsweredNeverPublishes() async throws {
+        let b = try bench("stop_after_gate"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let probing = Box<Bool>(), release = Box<Bool>()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .custom { _ in
+            probing.set(true)
+            _ = await release.wait()
+            return Self.twelveSecondsResult   // a good answer, already in hand when Stop was pressed
+        })
+        let job = await run(b, m) { job in
+            _ = await probing.wait()
+            job.cancel()
+            release.set(true)
+        }
+        expectRefused(b, job, catalogBefore: before, reason: [], cancelled: true)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty)
+    }
+
+    /// F4 (P2): the cleanup's own result is what the message reports. The
+    /// folder loses its search permission while the output is probed, so
+    /// the partial can be neither removed nor even seen — "not there" must
+    /// not be read as "removed".
+    @Test("F4: a new file the cleanup could not remove is never reported as removed; the message gives the reason and the path")
+    func aNewFileThatCannotBeRemovedIsNeverReportedRemoved() async throws {
+        let b = try bench("unremovable")
+        let outDir = b.outDir
+        defer {
+            chmod(outDir.path, 0o755)
+            b.sb.cleanup()
+        }
+        let partialAt = Box<URL>()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .custom { request in
+            partialAt.set(URL(fileURLWithPath: request.arguments.last ?? ""))
+            chmod(outDir.path, 0o600)   // no search: lstat and unlink both fail with EACCES
+            return Self.invalidDataResult
+        })
+        let job = await run(b, m)
+        chmod(outDir.path, 0o755)
+        let partial = try #require(partialAt.value)
+        #expect(FileManager.default.fileExists(atPath: partial.path), "the bench: the partial is still there")
+        #expect(b.trashed.all.isEmpty)
+        #expect(Self.sha(b.target) == b.priorSHA)
+        guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(message.contains("new file was NOT removed: could not remove partial \(partial.path): Permission denied"), "\(message)")
+        #expect(!message.contains("new file was removed"), "\(message)")
+        #expect(message.localizedCaseInsensitiveContains("the original was not replaced"), "\(message)")
+    }
+
+    /// F4, the sentence itself: removed / already gone / not removed.
+    @Test("F4: the disposition sentence says removed only when the cleanup said so")
+    func theDispositionSentenceReportsTheCleanupsOwnResult() {
+        typealias J = TranscodeJob
+        #expect(J.unverifiedReplaceMessage(cause: "c", original: "a.mov", cleanup: .removed)
+                == "Could not verify the new file — the original was not replaced. Cause: c. a.mov was not moved or changed; the unverified new file was removed.")
+        #expect(J.unverifiedReplaceMessage(cause: "c", original: "a.mov", cleanup: .alreadyGone)
+                == "Could not verify the new file — the original was not replaced. Cause: c. a.mov was not moved or changed; the unverified new file was no longer there to remove.")
+        #expect(J.unverifiedReplaceMessage(cause: "c", original: "a.mov", cleanup: .notRemoved("could not remove partial /x/p: Permission denied (errno 13)"))
+                == "Could not verify the new file — the original was not replaced. Cause: c. a.mov was not moved or changed; the unverified new file was NOT removed: could not remove partial /x/p: Permission denied (errno 13).")
+        #expect(J.failedReplaceMessage(failure: "Ffmpeg stopped with exit code 1", original: "a.mov", cleanup: .removed)
+                == "Ffmpeg stopped with exit code 1. The original was not replaced: a.mov was not moved or changed; the failed new file was removed.")
+    }
+
+    /// F2, the second check: the stamp the gate verified must still be the
+    /// file at the partial's name IMMEDIATELY before the publish. Driven on
+    /// the real publish function: a swap after the gate throws, and the
+    /// Trash step is never called; the unswapped file publishes.
+    @Test("F2: the publish refuses a new file that is no longer the verified one — nothing trashed")
+    func thePublishRefusesAFileThatIsNotTheVerifiedOne() async throws {
+        let b = try bench("publish_identity"); defer { b.sb.cleanup() }
+        let partial = try DerivativeOutputPublish.reservePartial(for: b.target)
+        defer { PartialFileNaming.unregisterLive(partial) }
+        try Data(repeating: 0x5A, count: 20_000).write(to: partial)
+        let verified = try #require(PartialFileNaming.fileStamp(partial.path))
+        let trashed = b.trashed
+        let trash: @Sendable (URL) throws -> URL? = { url in trashed.add(url.path); return nil }
+
+        // Same inode, different bytes (size) → not the verified state.
+        let handle = try FileHandle(forWritingTo: partial)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(count: 10))
+        try handle.close()
+        await #expect(throws: TranscodeJob.ChangedSinceVerified.self) {
+            _ = try await TranscodeJob.publishVerified(partial: partial.path, final: b.target, policy: .replaceViaTrash,
+                                                       archiveCheck: nil, trash: trash, verified: verified)
+        }
+        // A different file (new inode) of the SAME size.
+        try Data(repeating: 0x42, count: 20_000).write(to: partial, options: .atomic)
+        await #expect(throws: TranscodeJob.ChangedSinceVerified.self) {
+            _ = try await TranscodeJob.publishVerified(partial: partial.path, final: b.target, policy: .replaceViaTrash,
+                                                       archiveCheck: nil, trash: trash, verified: verified)
+        }
+        #expect(b.trashed.all.isEmpty, "\(b.trashed.all)")
+        #expect(Self.sha(b.target) == b.priorSHA)
+        #expect(FileManager.default.fileExists(atPath: partial.path), "the unverified file is left for the caller")
+        // And the job hands the gate's stamp to exactly this function.
+        let source = try SourceTree.appSource(named: "TranscodeJob.swift")
+        #expect(source.contains("guard let publishNote = await publish(partialURL, verified: verified) else { return }"))
+        #expect(source.contains("try await Self.publishVerified("))
+        #expect(!source.contains("DerivativeOutputPublish.publish("), "the job publishes only through publishVerified")
     }
 
     // MARK: - Reported for Rick, not fixed here (RED under withKnownIssue)
