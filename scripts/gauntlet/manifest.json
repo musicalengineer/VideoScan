@@ -38205,6 +38205,23 @@
         "stallMonitorKeepsItsStartersScope",
         "unboundIsTheProductionSink"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieWebFfmpegCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HallieWebFfmpegCommandTests"
+      ],
+      "tests": [
+        "posterCacheEndToEnd",
+        "posterCommandLine",
+        "posterFailures",
+        "proxyCacheEndToEnd",
+        "proxyCommandLine",
+        "proxyLaunchFailure",
+        "proxyNonzeroExit"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42193,7 +42210,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 887,
+      "expected_floor": 894,
       "name": "regression",
       "package_expected_floor": 346,
       "package_selectors": [
@@ -42442,7 +42459,8 @@
         "VideoScanTests/HashReadFaultPruneTests",
         "VideoScanTests/HashReadFaultVerifyArchiveTests",
         "VideoScanTests/HashReadSeamTests",
-        "VideoScanTests/HashReadSeamSensorTests"
+        "VideoScanTests/HashReadSeamSensorTests",
+        "VideoScanTests/HallieWebFfmpegCommandTests"
       ]
     },
     {

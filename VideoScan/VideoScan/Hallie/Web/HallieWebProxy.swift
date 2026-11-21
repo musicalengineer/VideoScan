@@ -169,25 +169,23 @@ actor HallieWebProxyCache {
             throw NSError(domain: "HallieWebProxy", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "ffmpeg not found (install via Homebrew or set VS_FFMPEG_PATH)"])
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: ffmpegPath)
-            process.arguments = plan.arguments
-            let stderr = Pipe()
-            process.standardError = stderr
-            process.standardOutput = FileHandle.nullDevice
-            process.terminationHandler = { proc in
-                let text = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let reason = text.split(separator: "\n").last.map(String.init) ?? "exit \(proc.terminationStatus)"
-                    continuation.resume(throwing: NSError(
-                        domain: "HallieWebProxy", code: Int(proc.terminationStatus),
-                        userInfo: [NSLocalizedDescriptionKey: reason]))
-                }
-            }
-            do { try process.run() } catch { continuation.resume(throwing: error) }
+        // Through ProcessRunner (2026-11-21; this was a hand-rolled
+        // `Process()` that read stderr only after exit): same executable and
+        // argv, stdout still discarded. Gained: stderr is drained as it is
+        // written (an encode that prints more than the 64 KB pipe buffer no
+        // longer blocks forever), a cancelled task stops ffmpeg, and a test
+        // can answer the command with a ScriptedExecutor.
+        // Memory: at most 256 KB of stderr (`-loglevel error`).
+        let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: plan.arguments,
+                                                    stdoutLimitBytes: 0)
+        guard result.launched else {
+            throw NSError(domain: "HallieWebProxy", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "ffmpeg could not be started: \(result.stderr)"])
+        }
+        guard result.exitCode == 0 else {
+            let reason = result.stderr.split(separator: "\n").last.map(String.init) ?? "exit \(result.exitCode)"
+            throw NSError(domain: "HallieWebProxy", code: Int(result.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: reason])
         }
     }
 }
