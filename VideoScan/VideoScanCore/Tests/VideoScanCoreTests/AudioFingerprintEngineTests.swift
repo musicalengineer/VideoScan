@@ -193,7 +193,7 @@ struct AudioFingerprintEngineTests {
         let elapsed = clock.now - start
         #expect(hour.takeSamples().count == fed / 2)
         print("[audio-fp] sink: an hour of 64 KB chunks in \(elapsed)")
-        #expect(elapsed < .seconds(1), "\(elapsed)")
+        expectBudget(elapsed, under: .seconds(1), "\(elapsed)")
     }
 
     // MARK: Fingerprint — logic
@@ -468,7 +468,7 @@ struct AudioFingerprintEngineTests {
         let m = AudioFingerprintIndex(master: f).match(f)
         let elapsed = clock.now - start
         print("[audio-fp] repeated hash 100k × 100k: \(elapsed), \(m.verdict)")
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        expectBudget(elapsed, under: .seconds(2), "\(elapsed)")
         #expect(m.verdict == .different)
     }
 
@@ -487,7 +487,7 @@ struct AudioFingerprintEngineTests {
         print("[audio-fp] metronome 30 s vs 10 min: \(elapsed); master \(master.landmarkCount) landmarks, "
               + "query \(query.landmarkCount); \(m.verdict)")
         #expect(master.landmarkCount > 1_000, "clicks do produce landmarks (so the cap is what bounds this)")
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        expectBudget(elapsed, under: .seconds(2), "\(elapsed)")
         #expect(m.verdict == .different, "\(m.verdict)")
     }
 
@@ -609,7 +609,7 @@ struct AudioFingerprintEngineTests {
         let clicks = index.match(AudioFingerprint.compute(AudioPCM(sampleRate: sampleRate, samples: metronome(seconds: 60))))
         print(audioMatchLine("metronome 60 s vs 60-min (\(clock.now - metronomeStart))", clicks))
         #expect(clicks.verdict == .different)
-        #expect(clock.now - metronomeStart < .seconds(2))
+        expectBudget(clock.now - metronomeStart, under: .seconds(2))
         expectWithinTimingBudget("60-min fingerprint + index + match", measured: elapsed, budget: budget,
                                  loadBefore: loadBefore)
     }

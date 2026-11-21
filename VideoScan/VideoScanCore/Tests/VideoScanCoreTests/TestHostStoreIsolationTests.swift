@@ -168,6 +168,6 @@ struct TestHostDetectionClassifierTests {
             _ = TestHostDetection.loadedImageSignal()
             _ = TestHostDetection.isTestHost
         }
-        #expect(Date().timeIntervalSince(start) < 2.0)
+        expectBudget(Date().timeIntervalSince(start), under: 2.0)
     }
 }

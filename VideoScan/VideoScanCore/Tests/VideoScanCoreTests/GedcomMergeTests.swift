@@ -933,7 +933,7 @@ struct GedcomMergeTests {
         // guard only (the TreeWalkScaleTests pattern), on the unchanged
         // load-aware ceiling.
         let totalCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(20))
-        #expect(wall < totalCeiling * 5, "pipeline hang guard: \(s(wall)) s wall (\(TimingBudget.loadDescription()))")
+        expectBudget(wall, under: totalCeiling * 5, "pipeline hang guard: \(s(wall)) s wall (\(TimingBudget.loadDescription()))")
     }
 
     // MARK: Provenance union is identity-aware (codex #810)

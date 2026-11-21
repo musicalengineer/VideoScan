@@ -269,7 +269,7 @@ struct LogScopeCostTests {
         let ns = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(iterations)
         print(String(format: "LogScope.current (unbound): %.1f ns per read over %d reads", ns, iterations))
         #expect(hits == 0)
-        #expect(ns < 2_000, "\(ns) ns per read")
+        expectBudget(ns, under: 2_000, "\(ns) ns per read")
     }
 }
 
@@ -351,7 +351,11 @@ struct LogScopeSensorTests {
         for dir in ["VideoScan", "VideoScanBackground", "VideoScanCore/Sources"] {
             let root = Self.videoScanDir.appendingPathComponent(dir, isDirectory: true)
             let walk = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
-            for case let url as URL in walk where url.pathExtension == "swift" && url.lastPathComponent != "TaskTreeScope.swift" {
+            // The two files that DEFINE the testing SPI: the seam itself, and the
+            // expectation layer over LogCapture (LogExpectations.swift — every
+            // declaration it exports is `@_spi(Testing)`: LogExpectationsSensorTests).
+            for case let url as URL in walk where url.pathExtension == "swift"
+                && !["TaskTreeScope.swift", "LogExpectations.swift"].contains(url.lastPathComponent) {
                 read += 1
                 let code = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
                     .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }

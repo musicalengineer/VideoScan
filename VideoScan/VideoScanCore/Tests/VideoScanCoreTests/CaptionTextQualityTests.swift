@@ -236,6 +236,6 @@ struct CaptionTextQualityTests {
         let elapsed = clock.now - start
         #expect(refused == 25_000)
         #expect(kept.count == 75_000)
-        #expect(elapsed < .seconds(5), "100k verdicts took \(elapsed)")
+        expectBudget(elapsed, under: .seconds(5), "100k verdicts took \(elapsed)")
     }
 }

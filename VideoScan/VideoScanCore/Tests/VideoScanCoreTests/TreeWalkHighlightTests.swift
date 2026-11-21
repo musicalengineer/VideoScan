@@ -76,6 +76,6 @@ struct TreeWalkHighlightTests {
             #expect(m.count == n)
         }
         // Debug build, loaded CI machine: generous; typical is ~0.2 s.
-        #expect(t < .seconds(2), "\(t)")
+        expectBudget(t, under: .seconds(2), "\(t)")
     }
 }

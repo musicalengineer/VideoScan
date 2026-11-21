@@ -455,7 +455,7 @@ struct PersonFactOverlayApplyTests {
         #expect(!report.indexDropped)
         #expect(graph.people.count == count)
         #expect(graph.index.lifeYears[Int(graph.index.ordinal(of: "@I800@")!)] == "b. 1801")
-        #expect(elapsed < .seconds(3), "overlay apply over \(count) people took \(elapsed)")
+        expectBudget(elapsed, under: .seconds(3), "overlay apply over \(count) people took \(elapsed)")
     }
 }
 

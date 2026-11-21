@@ -452,7 +452,7 @@ struct CatalogCornerCases2026_10_25Tests {
         print("[corner-2026-10-25] commit under a 300 ms lock: \(outcome) after \(waited)")
         #expect(outcome == .committed(generation: 3), "the commit did not wait for the lock: \(outcome)")
         #expect(waited >= .milliseconds(holdMilliseconds - 50), "the commit landed while the other writer held the lock")
-        #expect(waited < .seconds(GRDBCatalogRepository.busyTimeoutSeconds), "the commit waited the whole busy timeout although the lock was released")
+        expectBudget(waited, under: .seconds(GRDBCatalogRepository.busyTimeoutSeconds), "the commit waited the whole busy timeout although the lock was released")
         #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 4))
         await repository.close()
         #expect(try Self.storedGeneration(fixture.url) == 4)

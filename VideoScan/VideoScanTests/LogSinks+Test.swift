@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 @_spi(Testing) import VideoScanCore   // SPI: LogCapture.init and LogScope.with — the binders production cannot see
 @testable import VideoScan
 
@@ -96,4 +97,81 @@ func withAppLog<R>(
     _ body: () async throws -> R
 ) async rethrows -> R {
     try await LogScope.with(sink, isolation: isolation, body)
+}
+
+// MARK: - Expecting log lines (gmock-style)
+//
+// The EXPECT_CALL half of the mock log (Core: LogExpectations.swift, which
+// has the full C++ mapping). Say up front which lines the code under test
+// must write, how often and in what order; ONE issue at this call's line
+// names everything unmet, with the captured lines that show why:
+//
+//     let (job, log) = await expectingLog(
+//         .once(.hasPrefix("compare: ")),                       // START     EXPECT_CALL(...).Times(1)
+//         .once(.hasPrefix("compare FAILED: ")),                // OUTCOME
+//         .inOrder(.hasPrefix("compare: "), .hasPrefix("compare FAILED: ")),   // InSequence
+//         .never(.hasPrefix("compare done: ")),                 //           .Times(0)
+//         .noOtherLines(matching: .contains(stem))              // StrictMock, for this test's file
+//     ) {
+//         let job = center.startCompare(recordA: a, recordB: b)
+//         await job.task?.value
+//         return job
+//     }
+//
+// A test file that writes expectations needs
+// `@_spi(Testing) import VideoScanCore` (the project builds with
+// MemberImportVisibility, and `.once(…)` is a Core member).
+
+/// Run `body` with `sink` bound as `appLog`, then verify `expectations`.
+/// After `body` returns it waits up to `waitingUpTo` for lines still to
+/// come (the Center writes an OUTCOME one main-actor turn after the job's
+/// task ends); a met or already-final verdict never waits. `settling`
+/// (default none) is a fixed beat after that, then judged again — for a
+/// `.never` / `.once` / `.noOtherLines` a LATE line would break. Returns
+/// the body's value and the sink, for ad hoc assertions.
+@discardableResult
+func expectingLog<R>(
+    _ expectations: LogExpectation...,
+    waitingUpTo timeout: Duration = .seconds(5),
+    settling: Duration = .zero,
+    sink: InMemoryLogSink = InMemoryLogSink(name: "expecting"),
+    isolation: isolated (any Actor)? = #isolation,
+    sourceLocation: SourceLocation = #_sourceLocation,
+    _ body: () async throws -> R
+) async rethrows -> (value: R, log: InMemoryLogSink) {
+    // Bound through the sink (a LogSink), judged on its capture: one buffer.
+    let value = try await LogExpectations.run(expectations, capture: sink.capture, binding: sink, waitingUpTo: timeout,
+                                              settling: settling, isolation: isolation,
+                                              report: { Issue.record(Comment(rawValue: $0), sourceLocation: sourceLocation) },
+                                              body)
+    return (value, sink)
+}
+
+extension InMemoryLogSink {
+    /// Checked after: verify expectations on a sink the test already
+    /// bound, now. One issue names everything unmet. True when all are met.
+    /// (C++: Mock::VerifyAndClearExpectations.)
+    @discardableResult
+    func verify(_ expectations: LogExpectation..., sourceLocation: SourceLocation = #_sourceLocation) -> Bool {
+        let report = capture.check(expectations)
+        if let message = report.message { Issue.record(Comment(rawValue: message), sourceLocation: sourceLocation) }
+        return report.isMet
+    }
+
+    /// The same, first waiting (bounded) for lines still to come.
+    @discardableResult
+    func verify(_ expectations: LogExpectation..., waitingUpTo timeout: Duration, settling: Duration = .zero,
+                isolation: isolated (any Actor)? = #isolation,
+                sourceLocation: SourceLocation = #_sourceLocation) async -> Bool {
+        await verify(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation, sourceLocation: sourceLocation)
+    }
+
+    @discardableResult
+    func verify(_ expectations: [LogExpectation], waitingUpTo timeout: Duration, settling: Duration = .zero,
+                isolation: isolated (any Actor)? = #isolation,
+                sourceLocation: SourceLocation = #_sourceLocation) async -> Bool {
+        let report = await capture.check(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation)
+        if let message = report.message { Issue.record(Comment(rawValue: message), sourceLocation: sourceLocation) }
+        return report.isMet
+    }
 }

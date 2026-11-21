@@ -302,6 +302,6 @@ final class PrunePlanTests: QuietMachineXCTestCase {
         let plan = PrunePlan.build(snaps).confirmingOnDisk(isMissing: { _ in false }, isNetwork: { _ in false }).shown()
         let elapsed = Date().timeIntervalSince(started)
         XCTAssertEqual(plan.rowCount, PrunePlan.maxRows)
-        XCTAssertLessThan(elapsed, 5.0, "100k snapshots took \(elapsed)s")
+        XCTAssertBudget(elapsed, under: 5.0, "100k snapshots took \(elapsed)s")
     }
 }

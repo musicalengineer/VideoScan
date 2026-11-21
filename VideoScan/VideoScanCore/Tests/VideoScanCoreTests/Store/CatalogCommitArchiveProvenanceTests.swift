@@ -188,6 +188,6 @@ struct CatalogCommitArchiveProvenanceTests {
                AND ac.promoted_by = 'import' AND ac.source_file_id IS NULL
             """)
         #expect(imported == count)
-        #expect(elapsed < .seconds(30))
+        expectBudget(elapsed, under: .seconds(30))
     }
 }

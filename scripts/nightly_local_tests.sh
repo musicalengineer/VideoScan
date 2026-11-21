@@ -582,8 +582,10 @@ run_core_package_tests() {
         log "Core lane STALLED: no output for ${NIGHTLY_CORE_STALL_SECONDS}s; last test started: $(grep -E "started\.?$" "$NIGHTLY_CORE_LOG" 2>/dev/null | tail -n 1)"
     fi
     # One line per phase (counts against the plan, seconds), every RED reason
-    # with its phase, and what was still running at a stop.
-    grep -E '^core-lane: (phase [AB] \(.*planned, |total |RED |stopped )' "$NIGHTLY_CORE_LOG" 2>/dev/null \
+    # with its phase, what was still running at a stop, and (2026-11-21, phase
+    # B in strands) every AMBER: a test that failed beside the other strands
+    # and passed when run again alone. Green, and never silent.
+    grep -E '^core-lane: (phase [AB] \(.*planned, |total |RED |AMBER |stopped )' "$NIGHTLY_CORE_LOG" 2>/dev/null \
         | while IFS= read -r line; do log "$line"; done
     if $timed_out && [ -s "$NIGHTLY_CORE_SAMPLE_FILE" ]; then
         log "Core lane stacks at the stop: $NIGHTLY_CORE_SAMPLE_FILE"
@@ -591,13 +593,24 @@ run_core_package_tests() {
     CORE_TEST_JSON=$(CORE_STATUS="$CORE_STATUS" CORE_REASON="$CORE_REASON" \
         CORE_PASSED="$PASSED" CORE_FAILED="$FAILED" CORE_SKIPPED="$SKIPPED" \
         CORE_TOTAL="$total" CORE_KNOWN="$KNOWN_ISSUE_TESTS" CORE_ELAPSED="$elapsed" \
-        CORE_RC="$rc" CORE_NAMES="$FAILED_NAMES_JSON" CORE_CFG="$swift_configuration" python3 -c '
+        CORE_RC="$rc" CORE_NAMES="$FAILED_NAMES_JSON" CORE_CFG="$swift_configuration" \
+        CORE_LOG_PATH="$NIGHTLY_CORE_LOG" python3 -c '
 import json, os
 e = os.environ
 try:
     names = json.loads(e["CORE_NAMES"])
 except Exception:
     names = []
+# 2026-11-21: the quiet-machine tests that passed only when run again alone
+# (core_lane.py AMBER lines). Green tonight; the list is here so a test that
+# is AMBER night after night can be seen in the rows.
+amber = []
+try:
+    with open(e["CORE_LOG_PATH"], errors="replace") as fh:
+        amber = sorted({l.rstrip("\n").rsplit(": ", 1)[1] for l in fh
+                        if l.startswith("core-lane: AMBER ") and ": passed alone after " in l})
+except Exception:
+    amber = []
 print(json.dumps({
     "core_status": e["CORE_STATUS"], "core_reason": e["CORE_REASON"],
     "core_passed": int(e["CORE_PASSED"]), "core_failed": int(e["CORE_FAILED"]),
@@ -605,6 +618,7 @@ print(json.dumps({
     "core_known_issue_tests": int(e["CORE_KNOWN"]), "core_elapsed_s": int(e["CORE_ELAPSED"]),
     "core_rc": int(e["CORE_RC"]), "core_configuration": e["CORE_CFG"],
     "core_failed_names": names,
+    "core_amber_count": len(amber), "core_amber_names": amber,
 }, separators=(",", ":")))
 ' 2>/dev/null)
     if [ -z "$CORE_TEST_JSON" ]; then

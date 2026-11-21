@@ -17,12 +17,36 @@ func assertTimingJudgements(_ judgements: [TimingBudget.Judgement],
     var anyFail = false
     for j in judgements where j.verdict == .fail {
         anyFail = true
-        XCTFail(j.logLine, file: file, line: line)
+        XCTFail("\(quietBudgetMarker) \(j.logLine)", file: file, line: line)
     }
     guard !anyFail else { return }
     let known = judgements.filter { $0.verdict == .knownIssue }
     if !known.isEmpty {
         throw XCTSkip("GH #208 busy machine, timing miss within \(Int(TimingBudget.busyMissLimit))× budget: "
                       + known.map(\.logLine).joined(separator: "; "))
+    }
+}
+
+/// The XCTest form of `expectBudget`: `measured` under `limit`, reported with
+/// `quietBudgetMarker` so the lane knows the failure is a budget and nothing
+/// else. Use it instead of XCTAssertLessThan on a time or a resident size.
+func XCTAssertBudget<T: Comparable>(_ measured: T, under limit: T, _ what: @autoclosure () -> String = "",
+                                    file: StaticString = #filePath, line: UInt = #line) {
+    if let problem = QuietMachinePhase.problem() { XCTFail(problem, file: file, line: line) }
+    if !(measured < limit) {
+        let about = what()
+        XCTFail("\(quietBudgetMarker) measured \(measured), budget: under \(limit)" + (about.isEmpty ? "" : " — \(about)"),
+                file: file, line: line)
+    }
+}
+
+/// The same with `<=`.
+func XCTAssertBudget<T: Comparable>(_ measured: T, atMost limit: T, _ what: @autoclosure () -> String = "",
+                                    file: StaticString = #filePath, line: UInt = #line) {
+    if let problem = QuietMachinePhase.problem() { XCTFail(problem, file: file, line: line) }
+    if !(measured <= limit) {
+        let about = what()
+        XCTFail("\(quietBudgetMarker) measured \(measured), budget: at most \(limit)" + (about.isEmpty ? "" : " — \(about)"),
+                file: file, line: line)
     }
 }

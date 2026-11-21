@@ -59,8 +59,8 @@ struct TreeWalkScaleTests {
         if hosted {
             let workMs = r.summary.walkMilliseconds + r.summary.checksMilliseconds
             let workCeilingMs = TimingBudget.seconds(ceiling) * 1_000
-            #expect(workMs < workCeilingMs, "100k walk+checks work \(workMs) ms, ceiling \(workCeilingMs) ms")
-            #expect(elapsed < ceiling * 5, "100k walk hang guard: \(elapsed) (\(TimingBudget.loadDescription()))")
+            expectBudget(workMs, under: workCeilingMs, "100k walk+checks work \(workMs) ms, ceiling \(workCeilingMs) ms")
+            expectBudget(elapsed, under: ceiling * 5, "100k walk hang guard: \(elapsed) (\(TimingBudget.loadDescription()))")
         } else {
             expectWithinTimingBudget("100k tree walk", measured: elapsed, budget: Self.budget,
                                      loadBefore: loadBefore)

@@ -293,6 +293,6 @@ struct TreeStatisticsScaleTests {
         #expect(grouped.rows.count == 4)
         // Generous on purpose: this runs beside builds and a model host, and
         // a budget that fails on a busy machine teaches people to ignore it.
-        #expect(elapsed < 10.0, Comment(rawValue: "three full passes took \(elapsed)s"))
+        expectBudget(elapsed, under: 10.0, "three full passes took \(elapsed)s")
     }
 }

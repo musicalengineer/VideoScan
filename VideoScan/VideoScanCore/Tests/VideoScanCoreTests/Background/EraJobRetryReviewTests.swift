@@ -166,6 +166,6 @@ struct EraJobRetryReviewTests {
             for i in 0..<100 { try loaded.record(digest: EraFixture.hex(i), signer: "s", reason: "frames would not decode", at: 1) }
         }
         print("EraAttemptStore: 100 records on an empty store \(small); on 20,000 entries \(large)")
-        #expect(large < small * 4, "a try's cost grows with the number of files waiting: \(small) → \(large)")
+        expectBudget(large, under: small * 4, "a try's cost grows with the number of files waiting: \(small) → \(large)")
     }
 }

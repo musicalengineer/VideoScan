@@ -210,9 +210,9 @@ struct CatalogWriteCornerDiskTests {
             Issue.record("100k commit on a full disk was not refused: \(refused.brief)"); return
         }
         #expect(CatalogDiskFullTests.namesTheDisk(words), Comment(rawValue: words))
-        #expect(refusal < Self.refusalCeiling, "SENSOR: the 100k refusal took \(refusal)")
+        expectBudget(refusal, under: Self.refusalCeiling, "SENSOR: the 100k refusal took \(refusal)")
         withKnownIssue("pending (draft issue): a full disk is found only at phase 1, after the whole 100k-row body ran — on the main actor in the app (writeBlocking)") {
-            #expect(refusal < Self.failFastRefusalBudget, "a full-disk refusal of 100k rows took \(refusal)")
+            expectBudget(refusal, under: Self.failFastRefusalBudget, "a full-disk refusal of 100k rows took \(refusal)")
         }
         #expect(try CatalogDiskFullTests.storedGeneration(database) == before)
         #expect(try CatalogHardKillTests.integrityCheck(database) == ["ok"])

@@ -649,7 +649,7 @@ struct CyberBrainCorrectionScaleTests {
             rootURL: root)
         let elapsed = ContinuousClock.now - start
         #expect(receipt.toPersonID == "person.p3")
-        #expect(elapsed < Self.budget, "one correction over 10k items took \(elapsed)")
+        expectBudget(elapsed, under: Self.budget, "one correction over 10k items took \(elapsed)")
         print("[cyberbrain-correction scale] 10k items, one move: \(elapsed)")
     }
 }

@@ -5,6 +5,13 @@
 //   phase A — every test NOT marked here, in parallel, timing not strict;
 //   phase B — only the marked tests, one at a time (`--no-parallel`), with
 //             VIDEOSCAN_TIMING_STRICT as the lane set it (the nightly: 1).
+//             Since 2026-11-21 as K serial strands side by side (each a
+//             process running its share one test at a time; `--quiet-jobs`).
+//             A marked test that fails beside the other strands is run again
+//             ALONE before it is judged: red only if it fails alone too, and
+//             named on an AMBER line when it passed alone. So the mark still
+//             means "judge me on a quiet machine" — do not loosen a budget
+//             because a strand was noisy; read the AMBER list instead.
 // The split is read from the BUILT test bundle (Swift Testing's test listing
 // carries each test's tags; the XCTest base class below names its subclasses),
 // so it is declared here, at the test, and nowhere else: there is no list in a
@@ -55,6 +62,19 @@
 import Foundation
 import Testing
 import XCTest
+
+/// What a BUDGET judgement writes at the front of the issue it records: a
+/// measured time or resident size over its bound, and nothing else. The Core
+/// lane reads it (scripts/core_lane.py BUDGET_MARKER): when the quiet-machine
+/// phase runs as strands, a test whose EVERY issue carries this marker is run
+/// again alone before it is judged; a failure without it (a wrong value, a
+/// bare `#expect(elapsed < …)`) is red at once. So a budget is asserted with
+/// a helper that writes it — expectWithinTimingBudget, recordTimingJudgement,
+/// expectRatio, expectBudget (Swift Testing); assertTimingJudgements,
+/// XCTAssertBudget (XCTest) — never with a bare comparison.
+/// (C++: a tag in the failure message that the test runner's retry policy
+/// keys on, like gtest's --gtest_flaky_test_attempts limited to one category.)
+let quietBudgetMarker = "[quiet-budget]"
 
 extension Tag {
     /// The test's verdict needs a quiet machine: it runs in the Core lane's

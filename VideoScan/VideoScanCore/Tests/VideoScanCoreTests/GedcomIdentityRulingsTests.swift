@@ -382,7 +382,7 @@ struct GedcomIdentityRulingsTests {
         #expect(topology.parents.count <= raw.index.parents.count)
         // Debug build on the M4 measured well under this; the point is
         // "no full index rebuild" (~1.5–3 s Debug at this size).
-        #expect(elapsed < .milliseconds(1_000), "applying 25 rulings to 100k people took \(elapsed)")
+        expectBudget(elapsed, under: .milliseconds(1_000), "applying 25 rulings to 100k people took \(elapsed)")
         let a0 = ruled.people["@A0@"]!
         #expect(ruled.relatives(.mother, of: a0).map(\.id) == ["@M0@"])
     }
