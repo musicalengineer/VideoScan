@@ -362,7 +362,7 @@ struct DedupeHashReadSeamSensorTests {
         let allowed: Set<String> = [
             "let readHook = hooks.readHook ?? ArchivePromoteEngine.readHook",   // cancellableFullHash
             "copy.readHook = bound",                                            // carryingReadHook()
-            "let readHook = ArchivePromoteEngine.readHook",                     // Relocate ×2
+            "let readHook = ArchivePromoteEngine.readHook",                     // Relocate ×2, the prune job ×2
             "private let readHook = ArchivePromoteEngine.readHook",             // CatalogTrashMoveProofs
         ]
         var seen: [String: Int] = [:]
@@ -379,7 +379,7 @@ struct DedupeHashReadSeamSensorTests {
         }
         #expect(seen["let readHook = hooks.readHook ?? ArchivePromoteEngine.readHook"] == 1)
         #expect(seen["copy.readHook = bound"] == 1)
-        #expect(seen["let readHook = ArchivePromoteEngine.readHook"] == 2)
+        #expect(seen["let readHook = ArchivePromoteEngine.readHook"] == 4)
         #expect(seen["private let readHook = ArchivePromoteEngine.readHook"] == 1)
     }
 

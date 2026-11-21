@@ -296,13 +296,19 @@ enum ArchivePromoteEngine {
     /// byte order, digest, progress and error surfaces are identical to
     /// the old serial loop (lseek guard kept as the same fd-validity
     /// check and error even though pread no longer needs the offset).
+    ///
+    /// `readHook`: the read-fault TEST seam, defaulting to the calling task's
+    /// task-local (nil in production). A caller that hops to `Task.detached`
+    /// — which inherits no task-locals — reads it before the hop and passes
+    /// it in (the prune job, like Relocate's proofs).
     static func sha256(fd: Int32, shouldCancel: () -> Bool = { false },
-                       progress: (Int64) -> Void = { _ in }) throws -> String? {
+                       progress: (Int64) -> Void = { _ in },
+                       readHook: ReadHook? = readHook) throws -> String? {
         guard lseek(fd, 0, SEEK_SET) == 0 else { throw Failure.writeFailed("lseek") }
         var hasher = SHA256()
         var seen: Int64 = 0
         do {
-            _ = try pipelinedRead(fd: fd,
+            _ = try pipelinedRead(fd: fd, hook: readHook,
                                   shouldCancel: shouldCancel) { buf, n in
                 hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
                 seen += Int64(n)
@@ -315,10 +321,11 @@ enum ArchivePromoteEngine {
     }
 
     /// Streamed SHA-256 of a path (O_NOFOLLOW, regular file only).
-    static func sha256(path: String, shouldCancel: () -> Bool = { false }) throws -> String? {
+    static func sha256(path: String, shouldCancel: () -> Bool = { false },
+                       readHook: ReadHook? = readHook) throws -> String? {
         let h = try openSource(path: path)
         defer { h.close() }
-        return try sha256(fd: h.fd, shouldCancel: shouldCancel)
+        return try sha256(fd: h.fd, shouldCancel: shouldCancel, readHook: readHook)
     }
 
     // MARK: Descriptor-relative tree walk
@@ -669,7 +676,7 @@ enum ArchivePromoteEngine {
         var copied: Int64 = 0
         // A read error or a read that ends early throws `.readFailed` (D1):
         // the file opened; what failed was a read.
-        _ = try pipelinedRead(fd: source.fd,
+        _ = try pipelinedRead(fd: source.fd, hook: readHook,
                               shouldCancel: shouldCancel) { buf, n in
             hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
             try writeAll(dfd, buf, n, label: partialPath)
@@ -810,13 +817,15 @@ enum ArchivePromoteEngine {
     /// fstat calls per pass.
     /// F_RDAHEAD is a best-effort hint; failure is ignored.
     private static func pipelinedRead(fd: Int32,
+                                      hook: ReadHook?,
                                       shouldCancel: () -> Bool,
                                       consume: (UnsafeRawPointer, Int) throws -> Void) throws -> Int64 {
         _ = fcntl(fd, F_RDAHEAD, 1)
         let sizeBefore = FileIdentity.of(fd: fd)?.0.size
         let ring = ChunkRing(depth: pipelineDepth, slotSize: pipelineChunkSize)
-        // Read on the calling task: the reader thread cannot see task-locals.
-        ring.startReader(fd: fd, hook: readHook)
+        // `hook` was read on the calling task (or handed in by a caller that
+        // hopped to a detached task): the reader thread cannot see task-locals.
+        ring.startReader(fd: fd, hook: hook)
         defer { ring.shutdown() }
         var total: Int64 = 0
         var slot = 0

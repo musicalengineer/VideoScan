@@ -389,16 +389,23 @@ struct HashReadSeamSensorTests {
             if text.contains("readHook") { namers.append((entry.relative as NSString).lastPathComponent) }
         }
         #expect(namers.sorted() == ["ArchivePromoteEngine.swift", "ContentCopyProof.swift", "SignatureVerification.swift",
+                                    "VideoScanModel+PruneApply.swift", "VideoScanModel+PruneVerification.swift",
                                     "VideoScanModel+Relocate.swift", "VideoScanModel+TrashSelection.swift"], "\(namers)")
     }
 
-    @Test("in the engine the hook is read once, on the calling task, and handed to the reader thread by value")
+    /// 2026-11-21: the two `sha256` entry points take the hook as a
+    /// parameter that DEFAULTS to the calling task's task-local, so a caller
+    /// that hops to `Task.detached` (the prune job) can hand it in by value.
+    @Test("in the engine the hook is read on the calling task — the task-local in the copy pass, the default argument of the two sha256 entry points — and handed to the one reader thread by value")
     func theEngineReadsItOnce() throws {
         let code = try SourceTree.appCode(named: "ArchivePromoteEngine.swift")
-        #expect(code.components(separatedBy: "@TaskLocal static var readHook: ReadHook? = nil").count - 1 == 1)
-        #expect(code.components(separatedBy: "ring.startReader(fd: fd, hook: readHook)").count - 1 == 1)
-        #expect(code.components(separatedBy: "readHook").count - 1 == 2, "declared once, read once")
-        #expect(code.components(separatedBy: "startReader(").count - 1 == 2, "one reader, one start")
+        func count(_ needle: String) -> Int { code.components(separatedBy: needle).count - 1 }
+        #expect(count("@TaskLocal static var readHook: ReadHook? = nil") == 1)
+        #expect(count("ring.startReader(fd: fd, hook: hook)") == 1, "the reader gets what pipelinedRead was handed")
+        #expect(count("readHook: ReadHook? = readHook") == 2, "sha256(fd:) and sha256(path:) default to the task-local")
+        #expect(count("pipelinedRead(fd: fd, hook: readHook,") == 1 && count("pipelinedRead(fd: source.fd, hook: readHook,") == 1,
+                "the hash pass and the copy pass are the two callers of the one reader")
+        #expect(count("startReader(") == 2, "one reader, one start")
     }
 
     @Test("Promote never copies without the digest it read first (the only defence against a flip in the copy pass; it does not cover adoption)")

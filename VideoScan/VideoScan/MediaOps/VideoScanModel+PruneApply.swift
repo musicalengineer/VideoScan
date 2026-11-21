@@ -242,8 +242,11 @@ extension VideoScanModel {
         guard case .success(let reading) = archive.result else {
             return .held(archive.result.holdText, archiveReadInFull: archiveRead)
         }
+        // The read-fault test seam (nil in production), read on this task
+        // and handed to the detached worker by value.
+        let readHook = ArchivePromoteEngine.readHook
         let verdict = await Task.detached(priority: .userInitiated) {
-            Self.pruneCandidateProof(item, archive: reading, hooks: hooks)
+            Self.pruneCandidateProof(item, archive: reading, hooks: hooks, readHook: readHook)
         }.value
         guard case .success(let proof) = verdict else {
             return .held(verdict.holdText, archiveReadInFull: archiveRead)
@@ -298,8 +301,11 @@ extension VideoScanModel {
         if let done = batch.archiveReadings[item.archiveID] { return (.success(done), false) }
         if let why = batch.archiveProblem[item.archiveID] { return (.failure(PruneHold(why)), false) }
         log("Archived — what next?: reading \(item.archiveFilename) (archive copy) in full…")
+        // The read-fault test seam (nil in production), as in `pruneOneCopy`.
+        let readHook = ArchivePromoteEngine.readHook
         let result = await Task.detached(priority: .userInitiated) {
-            Self.readArchiveInFull(id: item.archiveID, path: item.archivePath, digest: item.archiveDigest, hooks: hooks)
+            Self.readArchiveInFull(id: item.archiveID, path: item.archivePath, digest: item.archiveDigest, hooks: hooks,
+                                   readHook: readHook)
         }.value
         switch result {
         case .success(let reading): batch.archiveReadings[item.archiveID] = reading

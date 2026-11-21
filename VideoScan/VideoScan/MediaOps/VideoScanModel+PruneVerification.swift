@@ -59,11 +59,15 @@ extension VideoScanModel {
 
     /// Read `path` end to end; the digest is bound to the stat taken before
     /// the read, which the stat after it must reproduce. Never on main.
-    private nonisolated static func pruneFullRead(_ path: String, hooks: PruneVerifyHooks) -> Result<ContentFixity, PruneHold> {
+    /// `readHook`: the read-fault TEST seam (nil in production) — the
+    /// calling task's task-local by default; the job reads it before its
+    /// `Task.detached` hop and passes it in.
+    private nonisolated static func pruneFullRead(_ path: String, hooks: PruneVerifyHooks,
+                                                  readHook: ArchivePromoteEngine.ReadHook?) -> Result<ContentFixity, PruneHold> {
         guard !hooks.shouldCancel() else { return .failure(PruneHold("the check was cancelled")) }
         guard let before = FileIdentityStamp.capture(path: path) else { return .failure(PruneHold(PruneReason.missing.text)) }
         hooks.didOpen?(path)
-        let digest = try? ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel)
+        let digest = try? ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel, readHook: readHook)
         guard let digest, !digest.isEmpty else {
             return .failure(PruneHold(hooks.shouldCancel() ? "the check was cancelled" : "could not be read in full"))
         }
@@ -91,8 +95,10 @@ extension VideoScanModel {
         + "nothing in this family may go until Verify Archive Copies has looked at it"
 
     nonisolated static func readArchiveInFull(id: UUID, path: String, digest: String,
-                                              hooks: PruneVerifyHooks) -> Result<PruneArchiveReading, PruneHold> {
-        switch pruneFullRead(path, hooks: hooks) {
+                                              hooks: PruneVerifyHooks,
+                                              readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook)
+        -> Result<PruneArchiveReading, PruneHold> {
+        switch pruneFullRead(path, hooks: hooks, readHook: readHook) {
         case .failure(let hold):
             return .failure(PruneHold("its archive copy: \(hold.text)"))
         case .success(let fixity):
@@ -119,8 +125,10 @@ extension VideoScanModel {
     /// Read the candidate in full; it must be a different file from the
     /// archive and carry the archive's digest. The ONLY place a proof is made.
     nonisolated static func pruneCandidateProof(_ item: PruneItem, archive: PruneArchiveReading,
-                                                hooks: PruneVerifyHooks) -> Result<PruneProof, PruneHold> {
-        switch pruneFullRead(item.path, hooks: hooks) {
+                                                hooks: PruneVerifyHooks,
+                                                readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook)
+        -> Result<PruneProof, PruneHold> {
+        switch pruneFullRead(item.path, hooks: hooks, readHook: readHook) {
         case .failure(let hold):
             return .failure(hold)
         case .success(let fixity):

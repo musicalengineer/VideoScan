@@ -29,12 +29,12 @@
 //   bit flip         held (mismatch)                  held
 //   read ends early  held "could not be read in full" held "could not be read in full"
 //
-// WHY THE VERDICT AND NOT THE JOB: `pruneOneCopy` runs both reads inside
+// THE JOB TOO (2026-11-21): `pruneOneCopy` runs both reads inside
 // `Task.detached` (VideoScanModel+PruneApply.swift), and a detached task does
-// not inherit task-locals — a fault bound around the job never reaches its
-// reads. That is pinned (and parked) by `theJobsReadsAreOutOfReach` below;
-// changing that hop is a change to a delete path and is Rick's and Codex's
-// call (rule 10).
+// not inherit task-locals. The job now reads the hook before each hop and
+// passes it by value, so `aFaultedReadInTheJobMovesNothing` runs the same
+// matrix end to end through `PruneApplyJob` (was parked:
+// `theJobsReadsAreOutOfReach`). Nothing in the app binds the hook.
 //
 // Fixture: PruneApplyTests.fixture (a real sandbox Promote + one
 // byte-identical copy). Parallel-safe: sandbox per test, task-local hook.
@@ -181,26 +181,63 @@ struct HashReadFaultPruneTests {
         #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)).suffix(tail.count) == tail)
     }
 
-    /// The seam's reach, pinned: the prune JOB reads inside `Task.detached`,
-    /// so a fault bound around it never fires and both copies go (correctly —
-    /// their reads were clean). When those two hops stay in the task tree
-    /// (a `@concurrent` function instead of `Task.detached`) this known issue will report "unexpectedly passed" —
-    /// promote the matrix above to the job then.
-    @Test("REACH (parked): a fault bound around PruneApplyJob does not reach its reads — they run in Task.detached")
-    func theJobsReadsAreOutOfReach() async throws {
-        let f = try await PruneApplyTests.fixture("hrf_reach"); defer { f.sb.cleanup() }
-        let shown = await f.model.prunePlan(batch: f.batch).shown()
+    /// GH #504 (2026-11-21): the prune JOB reads inside `Task.detached`, which
+    /// inherits no task-locals; the job now reads the hook before each hop and
+    /// passes it in by value (as Delete Duplicates and Relocate do), so the
+    /// matrix runs END TO END: `PruneApplyJob` → `pruneOneCopy` → the two full
+    /// reads → the mover. Was parked as `theJobsReadsAreOutOfReach` (seen RED:
+    /// the fault never fired and the copy went to the Trash on clean reads).
+    @Test("MATRIX at the JOB: each fault in the copy's read or the archive's read → the row is HELD and named, nothing is handed to the mover, both files and the catalog are untouched; the same job, clean, moves the copy",
+          .timeLimit(.minutes(2)), arguments: PruneFaultCase.all)
+    func aFaultedReadInTheJobMovesNothing(_ c: PruneFaultCase) async throws {
+        let f = try await PruneApplyTests.fixture("hrfjob_\(c.kind)_\(c.inArchiveRead ? "arch" : "copy")")
+        defer { f.sb.cleanup() }
+        let archiveBytes = try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath))
+        let copyBytes = try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath))
+        let copyFixityBefore = f.copy.contentFixity
+        let archiveFixityBefore = f.archive.archiveFixity
+        let archiveName = (f.archive.fullPath as NSString).lastPathComponent
         let mover = PruneApplyTests.Mover(trash: f.trashDir)
-        let job = PruneApplyJob(model: f.model, shown: shown, selected: [f.copy.id], batch: f.batch,
-                                batchID: "hrf-reach", hooks: PruneApplyTests.hooks(mover))
-        let fault = HashReadFault(.eio, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000, onPass: 0)
+        func job(_ id: String) async -> PruneApplyJob {
+            let shown = await f.model.prunePlan(batch: f.batch).shown()
+            return PruneApplyJob(model: f.model, shown: shown, selected: [f.copy.id], batch: f.batch,
+                                 batchID: id, hooks: PruneApplyTests.hooks(mover))
+        }
+
+        let fault = c.inArchiveRead
+            ? HashReadFault(c.kind, pathSuffix: archiveName, atByte: 9_000)
+            : HashReadFault(c.kind, pathSuffix: "copies/test_prune_a.mov", atByte: 9_000)
+        let faulted = await job("hrf-job-fault")
         await fault.run {
-            job.start()
-            await job.task?.value
+            faulted.start()
+            await faulted.task?.value
         }
-        withKnownIssue("PARKED 2026-11-20 (test reach, no product defect): pruneOneCopy / pruneArchiveReading hash inside Task.detached (VideoScanModel+PruneApply.swift), which drops the task-local read hook. Proposed (2 sites): hop off the main actor with a `@concurrent nonisolated static` function, as Promote / Verify / Bind Fixity do — it stays in the task tree, so the hook (and cancellation) reach the read, and nothing in the app has to bind the hook.") {
-            #expect(fault.firedCount == 1)
-            #expect(job.rows.first?.status == .held && mover.paths.isEmpty)
+        #expect(fault.firedCount == 1, "\(c): the fault never reached the job's read — is the hop to Task.detached still carrying the hook?")
+        let row = try #require(faulted.rows.first { $0.id == f.copy.id } ?? faulted.rows.first)
+        print("[hash-matrix] prune job | \(c) | \(row.status) | \(row.note)")
+
+        // --- Nothing moved; never a success.
+        #expect(row.status == .held, "\(c): \(row.status) — \(row.note)")
+        #expect(mover.paths.isEmpty, "\(c): something was handed to the mover: \(mover.paths)")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath)) == archiveBytes)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)) == copyBytes, "\(c): the copy is not at its path byte for byte")
+        #expect(f.copy.removal == nil && f.copy.contentFixity == copyFixityBefore && f.archive.archiveFixity == archiveFixityBefore)
+
+        // --- Truthful words on the row.
+        switch c.kind {
+        case .eio, .shortRead:
+            #expect(row.note.contains("could not be read in full"), "\(c): \(row.note)")
+            if c.inArchiveRead { #expect(row.note.hasPrefix("its archive copy: "), "\(c): \(row.note)") }
+        case .bitFlip:
+            #expect(c.inArchiveRead ? row.note.contains("archive copy changed") : row.note == PruneReason.mismatchAtMove.text,
+                    "\(c): \(row.note)")
         }
+
+        // --- The hold was the fault's: the same job, clean, moves the copy.
+        let clean = await job("hrf-job-clean")
+        clean.start()
+        await clean.task?.value
+        #expect(clean.rows.first?.status == .trashed && mover.paths == [f.copy.fullPath],
+                "\(c): the clean run: \(clean.rows.first.map { "\($0.status) — \($0.note)" } ?? "no row") / \(mover.paths)")
     }
 }
