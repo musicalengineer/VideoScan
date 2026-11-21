@@ -365,14 +365,14 @@ struct ArchiveAuditPublishFaultTests {
         #expect(reloaded.tag(for: tagged) == nil)
     }
 
-    // PARKED RED (Archive/ is a data-risk path, CLAUDE.md rule 10 — reported,
-    // not fixed here). `VideoScanModel.persistArchiveAudit` writes the action
-    // to the app log as done ("Audit: tagged …") BEFORE the save, then drops
-    // the save's Bool. When the publish fails the card keeps its tag for the
-    // session, the app log holds only the success line, and the next launch
-    // shows the card untagged with nothing to say why. (The store does write
-    // to os.Logger; that is not the log Rick reads.)
-    @Test("the model: a tag whose save failed is not left announced as done with no word of the failure (parked RED)")
+    // Was PARKED RED; fixed 2026-11-21 (Rick: "we must fail but fail and
+    // record the error clearly and log it clearly"). `persistArchiveAudit`
+    // wrote the action to the app log as done ("Audit: tagged …") BEFORE the
+    // save, then dropped the save's Bool: when the publish failed the card
+    // kept its tag for the session, the app log held only the success line,
+    // and the next launch showed the card untagged with nothing to say why.
+    // The line is now written from the save's RESULT.
+    @Test("the model: a tag whose save failed is never announced as saved — the app log says NOT SAVED, names the action and what happens at the next launch")
     func aFailedTagSaveIsSaidInTheAppLog() async throws {
         let dir = try scratch("archaudit_model"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = VideoScanModel()
@@ -383,38 +383,59 @@ struct ArchiveAuditPublishFaultTests {
 
         // The app log is captured for this task tree only, and the model
         // saves from an unstructured `Task {}`, which inherits both the
-        // capture and the fault; wait for the fault, then for the task's tail.
+        // capture and the fault; wait for the fault, then for the line.
         await withAppLog(sink) {
             await AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
                 model.archiveAuditTag(itemID: item, occasion: .christmas, title: "clip0042")
                 for _ in 0..<400 where !hits.wasHit { try? await Task.sleep(for: .milliseconds(5)) }
-                try? await Task.sleep(for: .milliseconds(150))
+                for _ in 0..<400 where sink.lines.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
             }
         }
 
         #expect(hits.count == 1, "the fault was never reached")
         #expect(!FileManager.default.fileExists(atPath: model.archiveAuditStore.fileURL.path), "nothing was saved")
-        #expect(sink.lines.contains { $0.contains("Audit: tagged") && $0.contains("clip0042") }, "the action was announced")
-        withKnownIssue("persistArchiveAudit drops ArchiveAuditStore.save()'s result: the failed save never reaches the app log") {
-            #expect(sink.lines.contains { $0.localizedCaseInsensitiveContains("audit")
-                        && ($0.localizedCaseInsensitiveContains("could not") || $0.localizedCaseInsensitiveContains("not saved")) },
-                    "the app log must say the tag was not saved; it holds only: \(sink.lines)")
-        }
+        let audit = sink.lines.filter { $0.localizedCaseInsensitiveContains("audit") }
+        #expect(audit.count == 1, "one line for one action: \(sink.lines)")
+        let line = audit.first ?? ""
+        #expect(line.contains("NOT SAVED") && line.contains("could not be written"), "the app log must say the tag was not saved: \(sink.lines)")
+        #expect(line.contains("tagged “clip0042”"), "the line names the action: \(line)")
+        #expect(line.contains("next launch"), "the line says the tag will be gone at the next launch: \(line)")
+        #expect(!sink.lines.contains { $0.hasPrefix("Audit: tagged") }, "a tag that was not saved was announced as done: \(sink.lines)")
     }
 
-    // PARKED RED (Fill In Full Hashes writes fixity — treated as data-risk,
-    // reported, not fixed). `FullHashBackfillResumeMarker.persist` is
-    // `try? AtomicFilePublish.write(…)` — the twin of the audit marker fixed
-    // in suite 4. In this suite because it too reads the app log.
+    @Test("the model: a tag whose save landed is announced once, after the save, in the same words as before")
+    func aSavedTagIsAnnouncedAfterTheSave() async throws {
+        let dir = try scratch("archaudit_model_ok"); defer { try? FileManager.default.removeItem(at: dir) }
+        let model = VideoScanModel()
+        model.archiveAuditStore = ArchiveAuditStore(directory: dir)
+        let sink = InMemoryLogSink()
+        let item = UUID()
+        await withAppLog(sink) {
+            model.archiveAuditTag(itemID: item, occasion: .christmas, title: "clip0042")
+            for _ in 0..<400 where sink.lines.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
+        }
+        #expect(sink.lines.filter { $0.localizedCaseInsensitiveContains("audit") } == ["Audit: tagged “clip0042” as \(ArchiveOccasion.christmas.word)"],
+                "\(sink.lines)")
+        // The line was written from the result: the file is on disk and a reload sees the tag.
+        let reloaded = ArchiveAuditStore(directory: dir)
+        await reloaded.loadIfNeeded()
+        #expect(reloaded.tag(for: item) != nil)
+    }
+
+    // Was PARKED RED; fixed 2026-11-21. `FullHashBackfillResumeMarker.persist`
+    // was `try? AtomicFilePublish.write(…)` — the twin of the audit marker
+    // fixed in suite 4. In this suite because it too reads the app log.
     //
     // Reproduction: a run starts (marker on disk: unfinished), finishes, and
     // the finish cannot be published. In this session the menu says "Fill In
     // Full Hashes…" (nothing to resume). On disk the marker still says
-    // unfinished, so the NEXT launch offers "Resume…" and writes "the run
-    // started … did not finish" for a run that finished — and nothing,
-    // anywhere, said the marker could not be written. (Resume itself is
-    // harmless: saved hashes are skipped. The claim is what is wrong.)
-    @Test("Fill In Full Hashes: a finish that cannot be published leaves a false Resume offer for the next launch, with no word of the failure (parked RED)")
+    // unfinished, so the NEXT launch offers "Resume…" — it cannot know
+    // better: the file is all it has. What changed: the failed write is SAID
+    // (once per outage), and the launch line no longer CLAIMS the run "did
+    // not finish"; it says no finish is on record and that Resume will find
+    // out. (Resume itself is harmless: saved hashes are skipped, and a run
+    // with nothing left says so and stamps the marker finished.)
+    @Test("Fill In Full Hashes: a finish that cannot be published is said in the app log, and the next launch's offer does not claim the run did not finish")
     func aFailedBackfillFinishLeavesAFalseResumeOffer() throws {
         let dir = try scratch("fullhash_marker"); defer { try? FileManager.default.removeItem(at: dir) }
         let catalogFile = dir.appendingPathComponent("catalog.json").path
@@ -428,24 +449,54 @@ struct ArchiveAuditPublishFaultTests {
 
         withAppLog(sink) {
             AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
+                marker.noteSaved(hashedSoFar: 4)
+                marker.noteSaved(hashedSoFar: 8)
                 marker.noteFinished(hashed: 12)
             }
         }
 
-        // What is on disk, and what each side then claims — pinned as it is today.
-        #expect(hits.count == 1, "the fault was never reached")
+        #expect(hits.count == 3, "the fault was never reached")
         #expect(try Data(contentsOf: url) == before, "the marker on disk is the one from the start of the run")
         #expect(temps(under: dir).isEmpty)
         #expect(marker.unfinished == nil && marker.menuTitle == "Fill In Full Hashes…", "this session: nothing to resume")
+        // Said: once for the outage, and again that the FINISH is what was lost.
+        let said = sink.lines.filter { $0.contains(FullHashBackfillResumeMarker.fileName) && $0.localizedCaseInsensitiveContains("could not") }
+        #expect(said.count == 2, "once for the outage, once for the lost finish — not at every checkpoint: \(sink.lines)")
+        #expect(said.last?.contains("could not record that the run finished") == true, "\(said)")
+        #expect(said.last?.contains("12") == true, "the line carries what the run did: \(said)")
+        // The next launch reads the stale marker: it offers Resume, and says only what the file shows.
         let relaunch = FullHashBackfillResumeMarker()
         let offered = try #require(relaunch.attach(catalogFile: catalogFile), "the next launch reads the stale marker")
         #expect(relaunch.menuTitle == "Resume Filling In Full Hashes…")
-        #expect(FullHashBackfillResumeMarker.launchLine(offered).contains("did not finish (0 hashes saved)"),
-                "the next launch's line, for a run that finished with 12")
-        withKnownIssue("FullHashBackfillResumeMarker.persist is try?: a marker that could not be written is said nowhere") {
-            #expect(sink.lines.contains { $0.contains(FullHashBackfillResumeMarker.fileName) && $0.localizedCaseInsensitiveContains("could not") },
-                    "the app log must say fullhash-backfill.json could not be written; it holds: \(sink.lines)")
+        let launch = FullHashBackfillResumeMarker.launchLine(offered)
+        #expect(!launch.contains("did not finish"), "the launch line claims an unfinished run for a run that finished: \(launch)")
+        #expect(launch.contains("has no finish on record (0 hashes saved)"), "\(launch)")
+        #expect(launch.contains("or its finish could not be written"), "\(launch)")
+    }
+
+    @Test("Fill In Full Hashes: a healthy run says nothing; after an outage ends, the next failure is said again")
+    func theBackfillMarkerSaysAFailureOncePerOutage() throws {
+        let dir = try scratch("fullhash_marker2"); defer { try? FileManager.default.removeItem(at: dir) }
+        let sink = InMemoryLogSink()
+        let marker = FullHashBackfillResumeMarker()
+        marker.attach(catalogFile: dir.appendingPathComponent("catalog.json").path)
+        withAppLog(sink) {
+            marker.noteStarted()
+            marker.noteSaved(hashedSoFar: 1)
+            #expect(sink.lines.isEmpty, "\(sink.lines)")
+            AtomicFilePublish.$hooks.withValue(.failing(.writeFast, errno: EIO)) {
+                marker.noteSaved(hashedSoFar: 2)
+                marker.noteSaved(hashedSoFar: 3)
+            }
+            #expect(sink.lines.count == 1, "\(sink.lines)")
+            marker.noteSaved(hashedSoFar: 4)            // the disk answers again
+            AtomicFilePublish.$hooks.withValue(.failing(.writeFast, errno: EIO)) { marker.noteSaved(hashedSoFar: 5) }
+            #expect(sink.lines.count == 2, "\(sink.lines)")
+            marker.noteFinished(hashed: 6)
+            #expect(sink.lines.count == 2, "a finish that landed says nothing: \(sink.lines)")
         }
+        let relaunch = FullHashBackfillResumeMarker()
+        #expect(relaunch.attach(catalogFile: dir.appendingPathComponent("catalog.json").path) == nil, "the finish is on disk")
     }
 }
 

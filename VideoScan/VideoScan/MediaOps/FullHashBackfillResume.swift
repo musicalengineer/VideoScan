@@ -38,10 +38,17 @@ final class FullHashBackfillResumeMarker: ObservableObject {
 
     static let fileName = "fullhash-backfill.json"
 
-    /// Non-nil when the last run started and did not finish.
+    /// Non-nil when the last run started and has no finish on record.
     @Published private(set) var unfinished: FullHashBackfillRunRecord?
     private var current: FullHashBackfillRunRecord?
     private(set) var fileURL: URL?
+    /// Where a marker that could not be written is said (the app's one log
+    /// sink). An instance property so a test reads the line without
+    /// swapping the global sink — as CatalogAuditRunMarker does.
+    var log: (String) -> Void = { appLog.write($0) }
+    /// True from a failed publish until the next one that lands — the
+    /// failure is said once, not at every checkpoint of a run on a full disk.
+    private var publishFailing = false
 
     init() {}
 
@@ -76,11 +83,17 @@ final class FullHashBackfillResumeMarker: ObservableObject {
     }
 
     /// The run reached its end (stopped or failed runs stay unfinished).
+    /// When the finish cannot be written the file still says "started", so
+    /// the next launch will offer Resume for a run that finished: that is
+    /// SAID here (the launch cannot know it), with what Resume will do.
     func noteFinished(hashed: Int, at date: Date = Date()) {
         guard current != nil else { return }
         current?.hashedSoFar = hashed
         current?.finishedAt = date
-        persist()
+        if !persist() {
+            log("Fill in full hashes: \(Self.fileName) could not record that the run finished (\(hashed.formatted()) hashes are saved in the catalog). "
+                + "The next launch will offer Resume Filling In Full Hashes…; it will find nothing left to hash, say so, and record the finish.")
+        }
         unfinished = nil
     }
 
@@ -89,16 +102,36 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         if let current { unfinished = current }
     }
 
-    /// The launch line for an unfinished run.
+    /// The launch line for a run with no finish on record. It says what the
+    /// FILE shows and no more (2026-11-21: it said "did not finish", which
+    /// is false for a run that finished and whose finish could not be
+    /// written — the file cannot tell the two apart).
     nonisolated static func launchLine(_ r: FullHashBackfillRunRecord) -> String {
         let started = r.startedAt.formatted(date: .abbreviated, time: .shortened)
-        return "Fill in full hashes: the run started \(started) did not finish (\(r.hashedSoFar.formatted()) hashes saved). "
-            + "Catalog ▸ Resume Filling In Full Hashes… continues where it stopped; nothing was started."
+        return "Fill in full hashes: the run started \(started) has no finish on record (\(r.hashedSoFar.formatted()) hashes saved) — "
+            + "it stopped early, or its finish could not be written. Catalog ▸ Resume Filling In Full Hashes… continues where it stopped, "
+            + "or confirms there is nothing left to hash; nothing was started."
     }
 
-    private func persist() {
-        guard let fileURL, let current, let data = try? Self.encoder.encode(current) else { return }
-        try? AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+    /// Publish the marker; false when it could not be written. A failure is
+    /// SAID (it used to be `try?`), once per outage: the file then still
+    /// holds the last publish that landed.
+    @discardableResult
+    private func persist() -> Bool {
+        guard let fileURL, let current else { return true }
+        do {
+            let data = try Self.encoder.encode(current)
+            try AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+            publishFailing = false
+            return true
+        } catch {
+            if !publishFailing {
+                publishFailing = true
+                log("Fill in full hashes: \(Self.fileName) could not be written (\(error.localizedDescription)) — the file keeps what was last "
+                    + "saved. The hashes themselves are saved in the catalog, not in this file.")
+            }
+            return false
+        }
     }
 
     private static let encoder: JSONEncoder = {

@@ -132,11 +132,30 @@ extension VideoScanModel {
     }
 
     /// One revision bump (the timeline memo re-keys), one off-main atomic
-    /// save, one log line.
+    /// save, one log line — written from the save's RESULT.
+    ///
+    /// THE BUG (fixed 2026-11-21): the line was written BEFORE the save and
+    /// the save's Bool was dropped, so a publish that failed (disk full,
+    /// folder not writable) left "Audit: tagged …" in the log as done, the
+    /// card showing its tag for the session, and nothing anywhere to say
+    /// the tag would be gone at the next launch. A change that was not
+    /// saved is now never announced as saved: the log says NOT SAVED, what
+    /// the change was, and what happens next.
     private func persistArchiveAudit(_ line: String) {
         archiveAuditRevision &+= 1
-        appLog.write(line)
         let store = archiveAuditStore
-        Task { @MainActor in await store.save() }
+        Task { @MainActor in
+            appLog.write(await store.save() ? line : Self.archiveAuditNotSavedLine(line))
+        }
+    }
+
+    /// The log line for an audit change whose save failed. `action` is the
+    /// line a successful save writes ("Audit: tagged “x” as Christmas").
+    /// The store saves its whole file each time, so a later change that
+    /// saves carries this one with it — said, because it is the way out.
+    nonisolated static func archiveAuditNotSavedLine(_ action: String) -> String {
+        let what = action.hasPrefix("Audit: ") ? String(action.dropFirst("Audit: ".count)) : action
+        return "Audit: NOT SAVED — \(what): \(ArchiveAuditStore.filename) could not be written. The change shows until VideoScan quits "
+            + "and will be gone at the next launch unless a later Audit change is saved."
     }
 }
