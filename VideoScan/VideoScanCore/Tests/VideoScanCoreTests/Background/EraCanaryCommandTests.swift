@@ -158,7 +158,8 @@ struct EraCanaryCommandTests {
                                                      && $0.environment == b.environment })
     }
 
-    @Test("BRIDGE (Codex r1 P2): the blocking wait has its own bound — a child whose descendant holds the pipes open cannot hold the caller")
+    @Test("BRIDGE (Codex r1 P2): the blocking wait has its own bound — a child whose descendant holds the pipes open cannot hold the caller",
+          .tags(.quietMachine))   // it judges elapsed time (0.8 s bound vs 4 s of held pipes): serial phase
     func blockingWaitIsBoundedIndependently() {
         // The shell exits at once; its background sleep keeps the pipes open
         // for 4 s, so the runner drains for 4 s and its deadline callbacks
@@ -168,7 +169,7 @@ struct EraCanaryCommandTests {
         let result = ProcessRunner.runProcessBlocking(executable: "/bin/sh", arguments: ["-c", "/bin/sleep 4 & exit 0"],
                                                       deadlineSeconds: 0.1, killGraceSeconds: 0.1)
         let waited = clock.now - started
-        // quiet-machine: not a budget — 0.8 s bound vs the 4 s the pipes stay open; 3 s leaves 3.7x slack
+        // 0.8 s bound vs the 4 s the pipes stay open; 3 s leaves 3.7x slack.
         #expect(waited < .seconds(3), "the caller was held \(waited) — until the descendant closed the pipes")
         #expect(result.timedOut && result.exitCode == -1 && !result.launched)
         #expect(result.stderr.contains("stopped waiting"), "\(result.stderr)")
