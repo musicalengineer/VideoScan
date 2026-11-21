@@ -38299,12 +38299,15 @@
         "hangThenStop",
         "killedBySignal",
         "launchFailure",
+        "launchFailureThenStop",
         "mkdirCannotStart",
         "mkdirExitsNonzero",
+        "mkdirLaunchFailureThenStop",
         "noStartOutcomeInTheLog",
         "oneOfThreeFails",
         "partialTransferExit",
         "stopBeforeTheFirstFile",
+        "stopThenNoLaunch",
         "theCommandLinesAndARealCopy"
       ]
     }
@@ -42295,7 +42298,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 934,
+      "expected_floor": 937,
       "name": "regression",
       "package_expected_floor": 349,
       "package_selectors": [

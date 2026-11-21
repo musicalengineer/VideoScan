@@ -26,8 +26,9 @@
 // three fails · mkdir cannot start · mkdir exits nonzero · the log.
 //
 // PARKED RED (withKnownIssue), highest first:
-//   P1  exit 0 is believed without evidence: a missing or short destination
-//       is counted "safe"
+//   P0  exit 0 is believed without evidence: a missing or short destination
+//       is counted "safe" (rule 1; Codex r1: the REAL rsync skipped a
+//       directory, exited 0 and created no destination)
 //   P1  a failed transfer's truncated file stays at the FINAL name and the
 //       report does not say so (--partial; known since 2026-09-13)
 //   P2  a child killed by a signal with no stderr is reported with no reason
@@ -215,6 +216,11 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         // `--partial-dir=.videoscan-partial` so an interrupted transfer never
         // sits at the final name, AND the error line says what is at the
         // destination ("nothing left" / "N of M bytes in .videoscan-partial").
+        // VALIDATION NOTE (Codex r1): this bench's rsync is a mock that
+        // writes the truncated file at the final name whatever flags it is
+        // given, so this row can go green only on the report half; the
+        // `--partial-dir` half must be proven with an ACTUAL interrupted
+        // transfer by the real rsync.
         withKnownIssue("P1: a failed rsync leaves a truncated file at the FINAL name and the report does not say so") {
             #expect(left == nil, "a truncated \(left ?? 0)-byte file is at the final name \(b.dest(0).lastPathComponent)")
             #expect(b.op.errors.first?.localizedCaseInsensitiveContains("destination") == true,
@@ -252,7 +258,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let b = try bench(files: 3)
         defer { b.cleanup() }
         // rsync's own answer to SIGTERM: a line on stderr, exit 20.
-        let mock = b.mock().on("rsync", .hang(stderr: "rsync error: received SIGINT, SIGTERM, or SIGHUP (code 20)", exitOnTERM: 20))
+        let mock = b.mock().on("rsync", .hang(stderr: "rsync error: received SIGINT, SIGTERM, or SIGHUP (code 20)", exitOnTERM: 20, maxSeconds: 30))
         let started = ContinuousClock.now
         let done = await mock.scoped {
             b.op.start(files: b.sources.map(\.record), sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: .verified)
@@ -304,6 +310,72 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         b.expectSourcesUntouched()
     }
 
+    // MARK: - Stop and a launch failure, in both orders (Codex r1 P2)
+
+    /// A launch failure (`Process.run()` threw) that is reported only after
+    /// `gate` has run — the test's handle on "what else happened first".
+    static func launchFailure(after gate: @escaping @Sendable () async -> Void) -> ScriptedExecutor.Behaviour {
+        .custom { request in
+            await gate()
+            return ProcessRunner.Result(stdout: nil, stderr: "The file “\(request.tool)” doesn’t exist.", exitCode: -1)
+        }
+    }
+
+    @Test("rsync genuinely cannot start and THEN Stop lands: the failure is still counted and named — Stop does not erase it")
+    func launchFailureThenStop() async throws {
+        let b = try bench(files: 2)
+        defer { b.cleanup() }
+        let op = b.op
+        // The launch fails; before the result is read, the user presses Stop.
+        let mock = b.mock().on("rsync", Self.launchFailure(after: { await MainActor.run { op.cancel() } }))
+        #expect(await run(b, mock))
+
+        #expect(b.op.filesFailed == 1, "a genuine launch failure vanished because Stop arrived after it")
+        #expect(b.op.errors == ["\(b.sources[0].relative) — The file “rsync” doesn’t exist."])
+        #expect(b.op.filesCopied == 0 && b.op.bytesWritten == 0)
+        #expect(mock.calls(to: "rsync").count == 1, "the second file was started after Stop")
+        b.expectSourcesUntouched()
+    }
+
+    @Test("mkdir genuinely cannot start and THEN Stop lands: \"mkdir failed\" is still counted and named")
+    func mkdirLaunchFailureThenStop() async throws {
+        let b = try bench(files: 2)
+        defer { b.cleanup() }
+        let op = b.op
+        let mock = ScriptedExecutor(claiming: [b.root.path])
+            .on("mkdir", Self.launchFailure(after: { await MainActor.run { op.cancel() } }))
+            .on("rsync", .passThrough)
+        #expect(await run(b, mock))
+
+        #expect(b.op.filesFailed == 1, "a genuine mkdir launch failure vanished because Stop arrived after it")
+        #expect(b.op.errors == ["mkdir failed: \(b.sources[0].relative) — The file “mkdir” doesn’t exist."])
+        #expect(mock.calls(to: "rsync").isEmpty && mock.calls(to: "mkdir").count == 1)
+        b.expectSourcesUntouched()
+    }
+
+    @Test("Stop lands FIRST (between mkdir and rsync): rsync is never launched, and the file is not counted failed — it was not attempted")
+    func stopThenNoLaunch() async throws {
+        let b = try bench(files: 2)
+        defer { b.cleanup() }
+        let op = b.op
+        // mkdir succeeds for real, and Stop is pressed before it returns:
+        // the runner then refuses to launch rsync (cancelledBeforeLaunch).
+        let mock = ScriptedExecutor(claiming: [b.root.path])
+            .on("mkdir", .custom { request in
+                try? FileManager.default.createDirectory(atPath: request.arguments[1], withIntermediateDirectories: true)
+                await MainActor.run { op.cancel() }
+                return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
+            })
+            .on("rsync", .passThrough)
+        #expect(await run(b, mock))
+
+        #expect(mock.calls(to: "rsync").count == 1, "the mock records the refused command once")
+        #expect(b.op.filesFailed == 0 && b.op.errors.isEmpty, "a file that was never attempted is reported as failed: \(b.op.errors)")
+        #expect(b.op.filesCopied == 0 && b.op.bytesWritten == 0)
+        for i in 0..<2 { #expect(VolumeRescueOperation.measuredSize(ofFileAt: b.dest(i).path) == nil) }
+        b.expectSourcesUntouched()
+    }
+
     // MARK: - rsync cannot be started
 
     @Test("rsync cannot be started: every file is FAILED with the launch error, nothing counted copied, the run still ends")
@@ -342,15 +414,21 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(b.op.bytesWritten == (left ?? 0))
         b.expectOnlyTheTwoCommands(mock)
         b.expectSourcesUntouched()
-        // P1 — rule 1: "safe" is shown from an exit status, not from
-        // evidence. The code measures the destination for the BYTES and
+        // P0 — rule 1: "safe" is shown from an exit status, not from
+        // evidence. (Re-ranked from P1 by Codex r1, 2026-11-21: this is not
+        // only a mock's story — the installed rsync, given a directory,
+        // skipped it, exited 0 and created no destination. The
+        // ENOSPC-with-exit-0 line this row prints is synthetic.) The code measures the destination for the BYTES and
         // still counts the file copied when there is nothing (or half a
         // file) there, and rsync's stderr is dropped on exit 0. Proposed
         // fix: after exit 0, require the destination's measured size to
         // equal the source's (fstat both); otherwise FAILED — "rsync exited
         // 0 but the destination is missing / N of M bytes" — and keep
-        // stderr in the line.
-        withKnownIssue("P1: rsync's exit 0 is believed without evidence — a \(shape) destination is counted as a safe copy") {
+        // stderr in the line. NOTE (Codex): a fresh regular-file + size
+        // check closes the missing and short cases only; size equality is
+        // NOT content verification (that is what --checksum, or a hash of
+        // the destination, is for).
+        withKnownIssue("P0: rsync's exit 0 is believed without evidence — a \(shape) destination is counted as a safe copy") {
             #expect(b.op.filesCopied == 0, "\(b.op.filesCopied) file reported safe with \(left.map { "\($0) of \(b.sources[0].size) bytes" } ?? "nothing") at the destination")
             #expect(b.op.filesFailed == 1)
             #expect(!b.op.errors.isEmpty, "rsync's own error line was dropped")

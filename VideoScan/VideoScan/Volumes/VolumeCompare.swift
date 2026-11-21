@@ -435,8 +435,10 @@ final class VolumeRescueOperation: ObservableObject {
                                                        stdoutLimitBytes: 0, stderrLimitBytes: 0)
             if !mkdir.launched {
                 // The runner does not launch a child for a cancelled task:
-                // that is the user's Stop, not a failed file.
-                if Task.isCancelled { break }
+                // that is the user's Stop, not a failed file. Asked of the
+                // RESULT, not of the task: a Stop that lands after a genuine
+                // launch failure must not erase that failure (Codex r1 P2).
+                if mkdir.cancelledBeforeLaunch { break }
                 await MainActor.run { [weak self] in
                     self?.filesFailed += 1
                     self?.errors.append("mkdir failed: \(relative) — \(mkdir.stderr)")
@@ -491,9 +493,12 @@ final class VolumeRescueOperation: ObservableObject {
             }
 
             if !result.launched {
-                // Not launched in a cancelled task = the user's Stop landed
-                // before this file started: it was not attempted.
-                if Task.isCancelled { break }
+                // The runner refused to launch because the task was already
+                // cancelled = the user's Stop landed before this file
+                // started: it was not attempted. Asked of the RESULT, not of
+                // the task — a Stop arriving after a genuine launch failure
+                // leaves that failure counted and named (Codex r1 P2).
+                if result.cancelledBeforeLaunch { break }
                 await MainActor.run { [weak self] in
                     self?.filesFailed += 1
                     self?.errors.append("\(relative) — \(result.stderr)")
