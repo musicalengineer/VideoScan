@@ -357,7 +357,9 @@ struct TranscodePreservationProofMatrixTests {
             try? await Task.sleep(nanoseconds: 100_000_000)
             job.cancel()
         }
-        #expect(ContinuousClock.now - started < .seconds(15), "Stop did not stop the hung proof")
+        // The hang is 60 s: well under that is "Stop stopped it". 15 s was
+        // missed at 16.1 s in a ×5 parallel run (load, not a hang).
+        #expect(ContinuousClock.now - started < .seconds(30), "Stop did not stop the hung proof")
         mx.expectRefused(b, job, catalogBefore: before, reason: [], cancelled: true)
         #expect(beside(b) == [b.target.lastPathComponent], "\(beside(b))")
         #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty)

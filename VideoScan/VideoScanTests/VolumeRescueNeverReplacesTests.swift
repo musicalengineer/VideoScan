@@ -219,25 +219,35 @@ struct VolumeRescueNeverReplacesTests {
         let dest = b.dest(0), destDir = dest.deletingLastPathComponent()
         let staging = destDir.appendingPathComponent(VolumeRescueOperation.partialDirName)
         let arriving = Data(repeating: 0x77, count: 30_000)
+        let sawTheTransfer = TranscodeReplaceNegativeMatrixTests.Box<Bool>()
+        // The arrival is made INSIDE the rsync call, off the main actor: a
+        // poll from this @MainActor test was starved by other main-actor
+        // tests under parallel load, missed the transfer, and wrote the
+        // "arriving" file after the publish (seen in a ×5 parallel run).
         let slow = ScriptedExecutor(claiming: [b.root.path]).on("mkdir", .passThrough).on("rsync", .custom { request in
             var throttled = request
-            throttled.arguments.insert("--bwlimit=256", at: 0)     // KB/s: ~3 s for 768 KB
-            return await ScriptedExecutor().on("*", .passThrough).run(throttled)
-        })
-        let done = await slow.scoped {
-            b.op.start(files: [record], sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: .verified)
+            throttled.arguments.insert("--bwlimit=128", at: 0)     // KB/s: ~6 s for 768 KB
+            async let finished = ScriptedExecutor().on("*", .passThrough).run(throttled)
             // rsync's temporary file — in the destination folder (old shape) or the staging folder.
-            let deadline = ContinuousClock.now + .seconds(15)
             func underWay() -> Bool {
                 [destDir, staging].contains { dir in
                     ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasPrefix(".tape 1.mov.") }
                 }
             }
-            while ContinuousClock.now < deadline, !underWay() { try? await Task.sleep(for: .milliseconds(10)) }
+            let deadline = ContinuousClock.now + .seconds(20)
+            while ContinuousClock.now < deadline {
+                if underWay() { sawTheTransfer.set(true); break }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
             try? arriving.write(to: dest)                             // another job's file arrives at the final name
-            return await matrix.waitUntilDone(b, limit: .seconds(30))
+            return await finished
+        })
+        let done = await slow.scoped {
+            b.op.start(files: [record], sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: .verified)
+            return await matrix.waitUntilDone(b, limit: .seconds(40))
         }
         #expect(done)
+        #expect(sawTheTransfer.value == true, "the bench: the file did not arrive DURING the transfer")
         #expect((try? Data(contentsOf: dest)) == arriving, "the file that arrived during the transfer was replaced")
         #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.bytesWritten == 0, "\(b.op.errors)")
         #expect(b.op.errors.first?.contains("a different file is already at Rescued/\(big.relative) (30000 bytes there") == true, "\(b.op.errors)")
