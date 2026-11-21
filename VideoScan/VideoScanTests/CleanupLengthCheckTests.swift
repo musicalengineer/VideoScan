@@ -77,7 +77,7 @@ struct CleanupLengthCheckTests {
         let url = try await mock.scoped {
             try await CleanupFFmpegEngine().render(
                 recipe: CleanupRecipeRegistry.vhsQuickClean, source: bench.source,
-                scratchDirectory: bench.scratch, progress: { _ in })
+                scratchDirectory: bench.scratch, progress: { _ in }).url
         }
         #expect(mock.calls(to: "ffmpeg", containing: ["cleanup-render"]).count == 1, "\(mock.calls)")
         #expect(mock.calls(to: "ffprobe").count == 2, "source and render are both probed fresh: \(mock.calls)")

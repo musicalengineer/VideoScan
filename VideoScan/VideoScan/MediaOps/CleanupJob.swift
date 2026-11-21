@@ -244,7 +244,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // ---- Render (fully off-main — see renderOffMain).
         let renderStart = Date()
         monitor.start()
-        let rendered: URL
+        let rendered: CleanupRender
         do {
             rendered = try await Self.renderOffMain(engine: engine,
                                                     recipe: recipe,
@@ -286,7 +286,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         }
         let published: URL
         do {
-            published = try await Self.publishOffMain(renderedPath: rendered.path,
+            published = try await Self.publishOffMain(render: rendered,
                                                       sourcePath: inputPath,
                                                       preferredOutput: outputURL,
                                                       progress: copyProgress)
@@ -370,7 +370,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         source: CleanupSource,
         scratchDirectory: URL,
         progress: @escaping @Sendable (CleanupProgress) -> Void
-    ) async throws -> URL {
+    ) async throws -> CleanupRender {
         try await engine.render(recipe: recipe,
                                 source: source,
                                 scratchDirectory: scratchDirectory,
@@ -403,7 +403,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
     @concurrent
     #endif
     private static func publishOffMain(
-        renderedPath: String,
+        render: CleanupRender,
         sourcePath: String,
         preferredOutput: URL,
         progress: @escaping @Sendable (Double) -> Void
@@ -420,10 +420,16 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
             candidate = cleanedOutputURL(forSourcePath: sourcePath, fileExists: taken)
         }
 
-        // 2. Chunked copy to the candidate's partial sibling.
+        // 2. Chunked copy to the candidate's partial sibling — of the
+        // render the engine VERIFIED, and only while it still is that file
+        // (Codex r1 #4): its stamp is checked before the copy and again
+        // after it, before the rename. A changed render is never published;
+        // our own partial copy of it is removed.
+        guard render.isUnchanged else { throw changedSinceVerified }
         let partialPath = ReformatJob.partialURL(for: candidate).path
         do {
-            try await chunkedCopy(from: renderedPath, to: partialPath, progress: progress)
+            try await chunkedCopy(from: render.url.path, to: partialPath, progress: progress)
+            guard render.isUnchanged else { throw changedSinceVerified }
         } catch {
             try? fm.removeItem(atPath: partialPath)
             throw error
@@ -449,6 +455,10 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
             }
         }
     }
+
+    /// The failure when the render is no longer the file the engine verified.
+    nonisolated static let changedSinceVerified = CleanupEngineError.renderFailed(
+        CleanupFFmpegEngine.unverifiedRenderMessage(cause: CleanupFFmpegEngine.changedWhileVerifiedCause))
 
     /// Streaming file copy: 8 MB chunks, cancellation checked per chunk,
     /// byte-fraction progress, and a per-chunk `Task.yield()` so a

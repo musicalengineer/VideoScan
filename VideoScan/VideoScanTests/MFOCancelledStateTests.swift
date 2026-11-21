@@ -281,7 +281,7 @@ struct MFOStoredStateCancelTests {
         let engineID = "blocking-test-engine"
         func canExecute(_ recipe: CleanupRecipe) -> Bool { true }
         func render(recipe: CleanupRecipe, source: CleanupSource, scratchDirectory: URL,
-                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
             progress(CleanupProgress(phase: "Blocking render", fraction: 0.1))
             try await blockUntilCancelledThenThrow(GenericRenderError())
         }
@@ -609,7 +609,7 @@ struct MFOStallBeforeStopTests {
         let engineID = "blocking-test-engine"
         func canExecute(_ recipe: CleanupRecipe) -> Bool { true }
         func render(recipe: CleanupRecipe, source: CleanupSource, scratchDirectory: URL,
-                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
             progress(CleanupProgress(phase: "Blocking render", fraction: 0.1))
             try await blockUntilCancelledThenThrow(GenericRenderError())
         }

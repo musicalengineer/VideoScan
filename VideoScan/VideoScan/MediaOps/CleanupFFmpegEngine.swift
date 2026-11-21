@@ -72,7 +72,7 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
     func render(recipe: CleanupRecipe,
                 source: CleanupSource,
                 scratchDirectory: URL,
-                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
         guard canExecute(recipe) else {
             let unsupported = recipe.steps.first {
                 $0.enabled && !Self.supportedKinds.contains($0.kind)
@@ -137,21 +137,29 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
         // hung to its deadline — skipped the rule, so a render nobody could
         // measure was returned and published as the cleaned copy. The three
         // answers are now all handled: only `.verified` returns the render.
+        //
+        // THIS file (Codex r1 #4, P0 — as #500 did for Transcode): the
+        // render's stamp is taken before the probes and must be the same
+        // after them; it travels with the render to the publish, which
+        // copies the file only while it still has it. Residual (declined,
+        // GH #503): a swap and swap-back inside one probe.
+        let before = FileIdentityStamp.capture(path: renderURL.path)
         let length = await FFmpegEncodeCheck.lengthVerification(sourcePath: source.path, outputPath: renderURL.path,
                                                                 output: "the cleaned copy")
         // A Stop that landed while the probes were out is still a Stop: a
         // good answer does not hand back a render over it.
         try Task.checkCancellation()
         switch length {
-        case .verified:
-            return renderURL
-        case .lengthNotCompared(let why):
-            // The source has no readable duration (ffprobe ran and said
-            // so). Cleanup never replaces the original, so this is a note,
-            // not a refusal: the render was measured on its own terms.
-            appLog.write("cleanup: \((source.path as NSString).lastPathComponent) has no readable duration (\(why)) — the cleaned copy's length was read but not compared")
-            progress(CleanupProgress(phase: "Cleaning up…", fraction: 1.0, note: FFmpegEncodeCheck.lengthNotComparedNote))
-            return renderURL
+        case .verified, .lengthNotCompared:
+            guard let before, FileIdentityStamp.capture(path: renderURL.path) == before else { throw Self.changedWhileVerified(source) }
+            if case .lengthNotCompared(let why) = length {
+                // The source has no readable duration (ffprobe ran and said
+                // so). Cleanup never replaces the original, so this is a
+                // note, not a refusal: the render was measured on its own terms.
+                appLog.write("cleanup: \((source.path as NSString).lastPathComponent) has no readable duration (\(why)) — the cleaned copy's length was read but not compared")
+                progress(CleanupProgress(phase: "Cleaning up…", fraction: 1.0, note: FFmpegEncodeCheck.lengthNotComparedNote))
+            }
+            return CleanupRender(url: renderURL, verified: before)
         case .failed(let shortfall):
             cleanupEngineLog.error("cleanup render FAILED (length): \(source.path, privacy: .public) — \(shortfall, privacy: .public)")
             throw CleanupEngineError.renderFailed(shortfall.prefix(1).uppercased() + shortfall.dropFirst())
@@ -160,6 +168,15 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
             cleanupEngineLog.error("cleanup render FAILED (verify): \(source.path, privacy: .public) — \(message, privacy: .public)")
             throw CleanupEngineError.renderFailed(message)
         }
+    }
+
+    /// The cause when the render measured is not the render at the name now.
+    nonisolated static let changedWhileVerifiedCause = "the new file changed while it was being verified"
+
+    private static func changedWhileVerified(_ source: CleanupSource) -> CleanupEngineError {
+        let message = unverifiedRenderMessage(cause: changedWhileVerifiedCause)
+        cleanupEngineLog.error("cleanup render FAILED (verify): \(source.path, privacy: .public) — \(message, privacy: .public)")
+        return .renderFailed(message)
     }
 
     /// The row's sentence for a render that could not be verified — the

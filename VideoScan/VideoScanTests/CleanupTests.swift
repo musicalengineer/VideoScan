@@ -378,7 +378,7 @@ struct CleanupTests {
             recipe: recipe,
             source: source,
             scratchDirectory: scratch,
-            progress: { _ in })
+            progress: { _ in }).url
 
         // probe() throwing == unreadable output, so a clean probe IS the
         // "file plays" check; the codec pins the modernize branch.

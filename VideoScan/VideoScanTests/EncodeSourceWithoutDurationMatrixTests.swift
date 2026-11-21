@@ -131,13 +131,13 @@ struct EncodeSourceWithoutDurationMatrixTests {
         let notes = MX.Box<String>()
         let sink = InMemoryLogSink()
         do {
-            let url = try await withAppLog(sink) {
+            let render = try await withAppLog(sink) {
                 try await m.scoped {
                     try await CleanupFFmpegEngine().render(recipe: CleanupRecipeRegistry.vhsQuickClean, source: b.source, scratchDirectory: b.scratch,
                                                            progress: { beat in if let note = beat.note { notes.set(note) } })
                 }
             }
-            #expect(FileManager.default.fileExists(atPath: url.path))
+            #expect(FileManager.default.fileExists(atPath: render.url.path))
         } catch {
             Issue.record("a source with no duration could not be cleaned at all: \(error)")
         }

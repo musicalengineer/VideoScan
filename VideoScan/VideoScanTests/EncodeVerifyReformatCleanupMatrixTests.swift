@@ -207,7 +207,7 @@ struct CleanupUnverifiedRenderMatrixTests {
             .on("ffprobe", containing: ["format=duration", sourceName], sourceProbe)
     }
 
-    static func render(_ b: Bench, _ mock: ScriptedExecutor) async throws -> URL {
+    static func render(_ b: Bench, _ mock: ScriptedExecutor) async throws -> CleanupRender {
         try await mock.scoped {
             try await CleanupFFmpegEngine().render(recipe: CleanupRecipeRegistry.vhsQuickClean, source: b.source,
                                                    scratchDirectory: b.scratch, progress: { _ in })
@@ -217,8 +217,8 @@ struct CleanupUnverifiedRenderMatrixTests {
     static func expectUnverified(_ b: Bench, _ mock: ScriptedExecutor, file whose: String, cause: [String],
                                  sourceLocation: SourceLocation = #_sourceLocation) async {
         do {
-            let url = try await render(b, mock)
-            Issue.record("a render nobody could measure was returned for publishing: \(url.lastPathComponent)", sourceLocation: sourceLocation)
+            let render = try await render(b, mock)
+            Issue.record("a render nobody could measure was returned for publishing: \(render.url.lastPathComponent)", sourceLocation: sourceLocation)
         } catch CleanupEngineError.renderFailed(let detail) {
             #expect(detail.hasPrefix("Could not verify the cleaned copy — nothing was published or added to the catalog."),
                     "\(detail)", sourceLocation: sourceLocation)
@@ -238,8 +238,9 @@ struct CleanupUnverifiedRenderMatrixTests {
     func controlAVerifiedRenderIsReturned() async throws {
         let b = try Self.bench("ok"); defer { b.cleanup() }
         let m = Self.mock(b)
-        let url = try await Self.render(b, m)
-        #expect(FileManager.default.fileExists(atPath: url.path))
+        let render = try await Self.render(b, m)
+        #expect(FileManager.default.fileExists(atPath: render.url.path))
+        #expect(render.isUnchanged, "the stamp returned is the render's")
         #expect(m.calls(to: "ffprobe").count == 2, "source and render both measured: \(m.calls)")
     }
 
@@ -265,13 +266,61 @@ struct CleanupUnverifiedRenderMatrixTests {
         task.cancel()
         release.set(true)
         do {
-            let url = try await task.value
-            Issue.record("a render was returned over a Stop: \(url.lastPathComponent)")
+            let render = try await task.value
+            Issue.record("a render was returned over a Stop: \(render.url.lastPathComponent)")
         } catch is CancellationError {
             // the job's failOrCancel turns this into a Cancelled row
         } catch {
             Issue.record("expected CancellationError, got \(error)")
         }
+    }
+
+    /// Codex r1 #4 (P0), as the Transcode swap test (GH #500 F2): the render
+    /// probe measures render A; while the source probe is still out, B (a
+    /// new inode, over 10 KB, never measured) is put at the render's name.
+    /// A's length must not vouch for B: renderFailed, nothing returned.
+    @Test("a render swapped while it was being verified is never returned — the length read belongs to another file")
+    func aRenderSwappedDuringVerificationIsNeverReturned() async throws {
+        let b = try Self.bench("swapped"); defer { b.cleanup() }
+        let measured = MX.Box<URL>()
+        let swapped = Data(repeating: 0x42, count: 20_000)
+        let m = Self.mock(b,
+                          sourceProbe: .custom { _ in
+                              // Barrier: only after the render was measured.
+                              if let render = await measured.wait() { try? swapped.write(to: render, options: .atomic) }
+                              return ProcessRunner.Result(stdout: "60.000000\n", stderr: "", exitCode: 0, launched: true)
+                          },
+                          renderProbe: .custom { request in
+                              measured.set(URL(fileURLWithPath: request.arguments.last ?? ""))
+                              return ProcessRunner.Result(stdout: "60.000000\n", stderr: "", exitCode: 0, launched: true)
+                          })
+        await Self.expectUnverified(b, m, file: "the new file changed while it was being verified", cause: [])
+        let render = try #require(measured.value)
+        #expect((try? Data(contentsOf: render)) == swapped, "B is left where it is (the job's scratch removal takes it)")
+    }
+
+    /// Codex r1 #4, the handoff: the engine verified render A and returned
+    /// A's stamp; B is put at the render's name before the publish. The job
+    /// copies only the verified file: FAILED, nothing beside the original.
+    @Test("CleanupJob: a render changed after the engine verified it is never published — FAILED, nothing beside the original")
+    @MainActor
+    func aRenderChangedAfterVerificationIsNeverPublished() async throws {
+        let b = try Self.bench("changed_after"); defer { b.cleanup() }
+        let model = VideoScanModel()
+        // Duration 0: the scratch is the system temp folder, never a RAM disk.
+        let record = makeCleanupSourceRecord(path: b.source.path, durationSeconds: 0, fieldOrder: "progressive")
+        model.records = [record]
+        var stub = StubCleanupEngine()
+        stub.afterVerify = { render in try Data(repeating: 0x42, count: 20_000).write(to: render, options: .atomic) }
+        let job = CleanupJob(record: record, recipe: CleanupRecipeRegistry.vhsQuickClean, model: model, engine: stub)
+        job.start()
+        await job.task?.value
+        guard case .failed(let message) = job.state else { Issue.record("a changed render was published: \(job.state)"); return }
+        #expect(message.hasPrefix("Could not verify the cleaned copy — nothing was published or added to the catalog."), "\(message)")
+        #expect(message.contains("Cause: the new file changed while it was being verified"), "\(message)")
+        let beside = try FileManager.default.contentsOfDirectory(atPath: b.dir.path).sorted()
+        #expect(beside == ["scratch", Self.sourceName], "\(beside)")
+        #expect(model.records.count == 1, "nothing was catalogued")
     }
 
     /// Sensor: why an engine throw is enough. CleanupJob publishes and
@@ -282,7 +331,7 @@ struct CleanupUnverifiedRenderMatrixTests {
         let job = try SourceTree.appSource(named: "CleanupJob.swift")
         let render = try #require(job.range(of: "rendered = try await Self.renderOffMain("))
         let failed = try #require(job.range(of: "failOrCancel(error, phase: \"render\")\n            return", range: render.upperBound..<job.endIndex))
-        let publish = try #require(job.range(of: "try await Self.publishOffMain(renderedPath: rendered.path", range: failed.upperBound..<job.endIndex))
+        let publish = try #require(job.range(of: "try await Self.publishOffMain(render: rendered", range: failed.upperBound..<job.endIndex))
         let catalog = try #require(job.range(of: "await catalogCleanupOutput(publishedURL: published)", range: publish.upperBound..<job.endIndex))
         #expect(catalog.lowerBound > publish.lowerBound)
         let engine = try SourceTree.appSource(named: "CleanupFFmpegEngine.swift")

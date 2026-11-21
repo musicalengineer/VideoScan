@@ -23,20 +23,25 @@ import Testing
 struct StubCleanupEngine: CleanupRecipeEngine {
     let engineID = "stub-test-engine"
     var onRender: (@Sendable (_ scratchDirectory: URL, _ source: CleanupSource) throws -> Void)? = nil
+    /// Runs after the render's stamp is taken, before it is returned —
+    /// a test can change the verified file here (Codex r1 #4).
+    var afterVerify: (@Sendable (_ render: URL) throws -> Void)? = nil
 
     func canExecute(_ recipe: CleanupRecipe) -> Bool { true }
 
     func render(recipe: CleanupRecipe,
                 source: CleanupSource,
                 scratchDirectory: URL,
-                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
         try onRender?(scratchDirectory, source)
         let out = scratchDirectory.appendingPathComponent("cleanup-render.mov")
         // Copy the (real, playable) source so probeFile can catalog the
         // published output honestly.
         try FileManager.default.copyItem(atPath: source.path, toPath: out.path)
         progress(CleanupProgress(phase: "Stub render", fraction: 1.0))
-        return out
+        guard let stamp = FileIdentityStamp.capture(path: out.path) else { throw CleanupEngineError.renderFailed("stub: no stamp") }
+        try afterVerify?(out)
+        return CleanupRender(url: out, verified: stamp)
     }
 }
 
