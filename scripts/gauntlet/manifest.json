@@ -36644,6 +36644,90 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultArchiveUpdateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultArchiveUpdateTests"
+      ],
+      "tests": [
+        "aFaultedReadNeverUpdates"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultFixityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultFixityTests"
+      ],
+      "tests": [
+        "backfillCannotSeeAFlip",
+        "backfillStoresNothingFromAFailedRead",
+        "bindOverwritesATrueDigestOnOneDisagreeingRead",
+        "bindStoresNothingFromAFailedRead"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultPromoteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultPromoteTests"
+      ],
+      "tests": [
+        "nothingIsPromoted",
+        "theThreeReads"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultPruneTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultPruneTests"
+      ],
+      "tests": [
+        "anUnprovenReadMakesNoProof",
+        "theJobsReadsAreOutOfReach"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadFaultVerifyArchiveTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadFaultVerifyArchiveTests"
+      ],
+      "tests": [
+        "aFaultedReadNeverVerifies"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HashReadSeamTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HashReadSeamTests",
+        "HashReadSeamSensorTests"
+      ],
+      "tests": [
+        "bitFlipChangesTheDigest",
+        "containedReadIsSeamed",
+        "copyVerifyPublishRefuses",
+        "eioThrows",
+        "nilAndSilentHookHashTheSameBytes",
+        "nilHookTimeIsComparable",
+        "onlyTheEngineNamesTheHook",
+        "partialReadIsHarmless",
+        "prematureEOFYieldsAPrefixDigest",
+        "promoteAlwaysPassesTheExpectedDigest",
+        "theEngineReadsItOnce",
+        "theHookIsTaskLocal",
+        "withoutAReferenceASourceFlipIsInvisible"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPublicMarksTests.swift",
@@ -41795,7 +41879,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 859,
+      "expected_floor": 882,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -42036,7 +42120,14 @@
         "VideoScanTests/CatalogTrashGroupTurnsWordsTests",
         "VideoScanTests/MediaTrashTestHostRaceTests",
         "VideoScanTests/TranscodeReplaceNegativeMatrixTests",
-        "VideoScanTests/TranscodeReplaceVerifiedMatrixTests"
+        "VideoScanTests/TranscodeReplaceVerifiedMatrixTests",
+        "VideoScanTests/HashReadFaultArchiveUpdateTests",
+        "VideoScanTests/HashReadFaultFixityTests",
+        "VideoScanTests/HashReadFaultPromoteTests",
+        "VideoScanTests/HashReadFaultPruneTests",
+        "VideoScanTests/HashReadFaultVerifyArchiveTests",
+        "VideoScanTests/HashReadSeamTests",
+        "VideoScanTests/HashReadSeamSensorTests"
       ]
     },
     {
