@@ -278,6 +278,43 @@ struct EncodeSourceWithoutDurationMatrixTests {
         #expect(b.trashed.all == [b.target.path])
     }
 
+    // MARK: - Codex r1 #5: a malformed reply is "could not be read", never a length, never "no duration"
+
+    /// One malformed answer, on one side. `source` = the source's probes are
+    /// malformed (the output measures 12 s); otherwise the output's are.
+    struct Malformed: Sendable, CustomTestStringConvertible {
+        let label: String
+        let probes: Probes
+        let source: Bool
+        var testDescription: String { label }
+    }
+
+    nonisolated static let malformedReplies: [Malformed] = [
+        // THE BUG, reproduction 1: `broken` was discarded and 12 accepted.
+        Malformed(label: "output streams `12\\nbroken`", probes: Probes(format: noDuration, streams: .output(stdout: "12\nbroken\n")), source: false),
+        Malformed(label: "source streams `12\\nbroken`", probes: Probes(format: noDuration, streams: .output(stdout: "12\nbroken\n")), source: true),
+        // An empty container answer was "no duration": only "N/A" is absence.
+        Malformed(label: "source container empty, streams N/A", probes: Probes(format: nothing), source: true),
+        Malformed(label: "source container N/A, streams empty", probes: Probes(format: noDuration, streams: nothing), source: true),
+        Malformed(label: "source streams `N/A\\n-3`", probes: Probes(format: noDuration, streams: .output(stdout: "N/A\n-3\n")), source: true),
+        Malformed(label: "source streams `garbage`", probes: Probes(format: noDuration, streams: .output(stdout: "garbage\n")), source: true),
+        Malformed(label: "output container `12\\nbroken`", probes: Probes(format: .output(stdout: "12\nbroken\n")), source: false),
+    ]
+
+    @Test("a malformed probe reply (container or streams, source or output) is 'could not be read' — a FAILED job with or without Replace",
+          arguments: malformedReplies, [true, false])
+    func aMalformedReplyIsUnreadable(_ bad: Malformed, _ replace: Bool) async throws {
+        let b = try mx.bench("nodur_malformed_\(replace)"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try bad.source ? transcodeMock(b, source: bad.probes, output: .twelveSeconds)
+                               : transcodeMock(b, source: .twelveSeconds, output: bad.probes)
+        let job = await mx.run(b, m, replace: replace)
+        mx.expectRefused(b, job, catalogBefore: before,
+                         reason: [bad.source ? "the source's length could not be read" : "the new file's length could not be read"])
+        guard case .failed(let message) = job.state else { return }
+        #expect(!message.contains("no readable duration") && !message.contains(Self.note), "a malformed reply was called a fact: \(message)")
+    }
+
     // MARK: - The chain itself: pure parsing, the log line, and REAL elementary streams
 
     @Test("the chain's parsing (pure): what counts as 'no duration', the longest stream")
@@ -285,14 +322,26 @@ struct EncodeSourceWithoutDurationMatrixTests {
         typealias C = FFmpegEncodeCheck
         typealias R = ProcessRunner.Result
         #expect(C.saysNoDuration(R(stdout: "N/A\n", stderr: "", exitCode: 0, launched: true)))
-        #expect(C.saysNoDuration(R(stdout: "", stderr: "", exitCode: 0, launched: true)))
+        #expect(!C.saysNoDuration(R(stdout: "", stderr: "", exitCode: 0, launched: true)), "nothing is not absence (Codex r1 #5)")
+        #expect(!C.saysNoDuration(R(stdout: "N/A\n12\n", stderr: "", exitCode: 0, launched: true)))
         #expect(C.saysNoDuration(R(stdout: "N/A\nN/A\n", stderr: "", exitCode: 0, launched: true)))
         #expect(!C.saysNoDuration(R(stdout: "N/A\n", stderr: "Invalid data", exitCode: 1, launched: true)), "a failed tool is not an answer")
         #expect(!C.saysNoDuration(R(stdout: nil, stderr: "x", exitCode: -1)), "a tool that never ran is not an answer")
         #expect(!C.saysNoDuration(R(stdout: "\u{7B}\"format\"", stderr: "", exitCode: 0, launched: true)), "garbage is not an answer")
 
-        #expect(C.longestStreamSeconds("N/A\n11.5\n12.25\n") == 12.25)
-        #expect(C.longestStreamSeconds("N/A\n0.000000\n-3\ninf\n") == nil)
+        #expect(C.streamDurations("N/A\n11.5\n12.25\n") == .longest(12.25))
+        #expect(C.streamDurations("N/A\nN/A\n") == .absent)
+        #expect(C.streamDurations("") == .malformed(""))
+        #expect(C.streamDurations("12\nbroken\n") == .malformed("12 · broken"), "a line that is not a length is not dropped")
+        for bad in ["0.000000", "-3", "inf", "nan", "0x1p3", "1e3", "1.2.3", "12 s"] {
+            #expect(C.streamDurations("N/A\n\(bad)\n") == .malformed("N/A · \(bad)"), "accepted: \(bad)")
+            #expect(C.decimalSeconds(bad) == nil, "accepted: \(bad)")
+        }
+        #expect(C.decimalSeconds("12.000000") == 12 && C.decimalSeconds("7") == 7 && C.decimalSeconds(".5") == 0.5)
+        // The container reply is held to the same shape.
+        #expect(C.measurement(from: R(stdout: "12\nbroken\n", stderr: "", exitCode: 0, launched: true)) != .seconds(12))
+        #expect(C.measurement(from: R(stdout: "0x1p3\n", stderr: "", exitCode: 0, launched: true)) != .seconds(8))
+        #expect(C.measurement(from: R(stdout: "12.500000\n", stderr: "", exitCode: 0, launched: true)) == .seconds(12.5))
     }
 
     @Test("the four answers of the length check, and the log says which fallback measure was used")

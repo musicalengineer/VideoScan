@@ -151,7 +151,7 @@ enum FFmpegEncodeCheck {
             return .unreadable("ffprobe stopped with exit code \(result.exitCode)\(said)")
         }
         let answer = (result.stdout ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Double(answer), value.isFinite, value > 0 else {
+        guard let value = decimalSeconds(answer) else {
             let shown = answer.count > 80 ? String(answer.prefix(80)) + "…" : answer
             return .unreadable(answer.isEmpty
                 ? "ffprobe exited 0 but reported no length\(said)"

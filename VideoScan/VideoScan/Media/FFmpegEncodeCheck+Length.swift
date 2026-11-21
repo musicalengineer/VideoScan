@@ -52,12 +52,19 @@ extension FFmpegEncodeCheck {
         }
     }
 
-    /// True when ffprobe ran, exited 0, and said there is nothing to
-    /// report: no lines, or only "N/A". (A crash, a nonzero exit, a
-    /// deadline or any other words are NOT this.) Pure.
+    /// True when ffprobe ran, exited 0, and said there is no duration: at
+    /// least one line, and every line "N/A" — ffprobe's well-formed
+    /// absence. Nothing at all is NOT absence (Codex r1 #5: an empty answer
+    /// was called "no duration"); nor is a crash, a nonzero exit, a deadline
+    /// or any other words. Pure.
     nonisolated static func saysNoDuration(_ result: ProcessRunner.Result) -> Bool {
         guard result.launched, result.exitCode == 0 else { return false }
-        return lines(result.stdout).allSatisfy { $0.caseInsensitiveCompare("N/A") == .orderedSame }
+        let answer = lines(result.stdout)
+        return !answer.isEmpty && answer.allSatisfy(isAbsent)
+    }
+
+    nonisolated private static func isAbsent(_ line: String) -> Bool {
+        line.caseInsensitiveCompare("N/A") == .orderedSame
     }
 
     nonisolated private static func lines(_ text: String?) -> [String] {
@@ -66,10 +73,43 @@ extension FFmpegEncodeCheck {
             .filter { !$0.isEmpty }
     }
 
-    /// The longest positive finite duration among `stream=duration` lines
-    /// (one per stream; "N/A" for a stream that has none). Pure.
-    nonisolated static func longestStreamSeconds(_ stdout: String?) -> Double? {
-        lines(stdout).compactMap { Double($0) }.filter { $0.isFinite && $0 > 0 }.max()
+    /// What a `stream=duration` answer says: one line per stream, each
+    /// "N/A" (that stream has none) or a positive finite number of seconds.
+    enum StreamDurations: Sendable, Equatable {
+        case longest(Double)
+        /// Every line was "N/A" (and there was at least one).
+        case absent
+        /// Not that shape: nothing, or a line that is neither — the answer
+        /// as shown in the failure (clipped).
+        case malformed(String)
+    }
+
+    /// A positive finite number of seconds written as ffprobe writes one —
+    /// decimal digits and at most one point ("12.000000") — or nil.
+    /// (`Double()` alone also takes "0x1p3", "1e3", "inf".) Pure.
+    nonisolated static func decimalSeconds(_ text: String) -> Double? {
+        guard !text.isEmpty, text.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || $0 == 46 }),
+              text.utf8.filter({ $0 == 46 }).count <= 1,
+              let value = Double(text), value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    /// Reads a `stream=duration` answer strictly. THE BUG (Codex r1 #5,
+    /// P0): `12\nbroken` was read as 12 — the line that was not a number
+    /// was dropped. A reply is well-formed absence, or well-formed numbers,
+    /// or it is not an answer. Pure.
+    nonisolated static func streamDurations(_ stdout: String?) -> StreamDurations {
+        let answer = lines(stdout)
+        var longest: Double?
+        for line in answer where !isAbsent(line) {
+            guard let value = decimalSeconds(line) else {
+                let shown = answer.prefix(3).joined(separator: " · ")
+                return .malformed(shown.count > 80 ? String(shown.prefix(80)) + "…" : shown)
+            }
+            longest = max(longest ?? 0, value)
+        }
+        if let longest { return .longest(longest) }
+        return answer.isEmpty ? .malformed("") : .absent
     }
 
     /// Why a finished ffprobe run is not an answer (it did not launch,
@@ -110,11 +150,15 @@ extension FFmpegEncodeCheck {
         let streams = await probe(path, ["-show_entries", "stream=duration", "-of", "default=noprint_wrappers=1:nokey=1"],
                                   deadline: probeDeadlineSeconds)
         if let failure = toolFailure(streams, deadline: probeDeadlineSeconds) { return .unreadable(failure) }
-        if let value = longestStreamSeconds(streams.stdout) { return said(path, value, by: .streams) }
-        guard saysNoDuration(streams) else {
-            return .unreadable("ffprobe exited 0 but its stream durations were not lengths (“\(lines(streams.stdout).prefix(3).joined(separator: " · ").prefix(80))”)")
+        switch streamDurations(streams.stdout) {
+        case .longest(let value):
+            return said(path, value, by: .streams)
+        case .absent:
+            return .noDuration(noDurationReason)
+        case .malformed(let shown):
+            return .unreadable(shown.isEmpty ? "ffprobe exited 0 but reported no stream durations"
+                                             : "ffprobe exited 0 but its stream durations were not lengths (“\(shown)”)")
         }
-        return .noDuration(noDurationReason)
     }
 
     /// Why a file has no readable duration (both measures asked).
