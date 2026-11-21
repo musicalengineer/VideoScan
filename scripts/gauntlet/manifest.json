@@ -98,6 +98,25 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AtomicFilePublishFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AtomicFilePublishFaultTests"
+      ],
+      "tests": [
+        "aDirectoryFsyncFailureStillReportsTheLandedSave",
+        "aFailedLowLevelPublishTouchesNeitherFile",
+        "aFailedStepPublishesNothing",
+        "aFaultIsScopedToItsTask",
+        "aStalledPublishIsVisibleToAnotherThread",
+        "fastDurabilityNeverSyncs",
+        "interruptedAndShortWritesStillWriteEverything",
+        "theSeamIsInternalAndComplete",
+        "unboundIsTheLivePublish"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AtomicFilePublishModeTests.swift",
@@ -4614,6 +4633,18 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHighWaterPublishFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogHighWaterPublishFaultTests"
+      ],
+      "tests": [
+        "aFailedMarkRefusesTheCommit",
+        "theWriterItselfThrows"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
       "suites": [
@@ -9082,6 +9113,31 @@
         "writeCreatesMissingDirectories",
         "writeLeavesNoTempBehindOnFailure",
         "writeLeavesNoTempBehindOnSuccess"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AtomicPublishCallerFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesPlanPublishFaultTests",
+        "LedgerRewritePublishFaultTests",
+        "IntegrityReportPublishFaultTests",
+        "CatalogAuditMarkerPublishFaultTests",
+        "ArchiveAuditPublishFaultTests"
+      ],
+      "tests": [
+        "aFailedBackupPublishLeavesTheLedgerAlone",
+        "aFailedFinishIsSaid",
+        "aFailedFirstReportLeavesNothing",
+        "aFailedLatestKeepsThePreviousReport",
+        "aFailedLedgerPublishKeepsTheOldLedger",
+        "aFailedSaveIsNotRecordedAsWritten",
+        "aFailedSaveReturnsFalseAndKeepsTheFile",
+        "aFailedTagSaveIsSaidInTheAppLog",
+        "aHealthyRunSaysNothing",
+        "theFailureIsSaidOncePerOutage",
+        "theSameRenameLandsOnceTheDiskAnswers"
       ]
     },
     {
@@ -40838,9 +40894,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3928,
+      "expected_floor": 3939,
       "name": "unit",
-      "package_expected_floor": 971,
+      "package_expected_floor": 982,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40955,7 +41011,9 @@
         "VideoScanCoreTests.CommandExecutorSeamReviewTests",
         "VideoScanCoreTests.LogCaptureSeamTests",
         "VideoScanCoreTests.LogScopeCostTests",
-        "VideoScanCoreTests.LogScopeSensorTests"
+        "VideoScanCoreTests.LogScopeSensorTests",
+        "VideoScanCoreTests.AtomicFilePublishFaultTests",
+        "VideoScanCoreTests.CatalogHighWaterPublishFaultTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -41593,7 +41651,12 @@
         "VideoScanTests/MFOVerbsParallelInventorySensorTests",
         "VideoScanTests/AppLogScopeIsolationTests",
         "VideoScanTests/AppLogProductionDefaultTests",
-        "VideoScanTests/AppLogScopeEscapeTests"
+        "VideoScanTests/AppLogScopeEscapeTests",
+        "VideoScanTests/ArchiveAuditPublishFaultTests",
+        "VideoScanTests/CatalogAuditMarkerPublishFaultTests",
+        "VideoScanTests/DeleteDuplicatesPlanPublishFaultTests",
+        "VideoScanTests/IntegrityReportPublishFaultTests",
+        "VideoScanTests/LedgerRewritePublishFaultTests"
       ]
     },
     {
