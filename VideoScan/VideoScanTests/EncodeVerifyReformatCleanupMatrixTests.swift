@@ -231,6 +231,10 @@ struct CleanupUnverifiedRenderMatrixTests {
             #expect(detail.hasPrefix("Could not verify the cleaned copy — nothing was published or added to the catalog."),
                     "\(detail)", sourceLocation: sourceLocation)
             for words in [whose] + cause { #expect(detail.contains(words), "lacks “\(words)”: \(detail)", sourceLocation: sourceLocation) }
+            #expect(detail.hasSuffix("The unverified render is only in the job's scratch folder, which is removed when the job ends; the original is untouched."),
+                    "\(detail)", sourceLocation: sourceLocation)
+            #expect(!detail.contains("discarded") && !detail.contains("was removed"), "the engine removes nothing and must not say it did: \(detail)",
+                    sourceLocation: sourceLocation)
             #expect(detail.count < 800, "bounded: \(detail.count)", sourceLocation: sourceLocation)
         } catch {
             Issue.record("expected renderFailed, got \(error)", sourceLocation: sourceLocation)

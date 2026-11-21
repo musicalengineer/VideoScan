@@ -158,10 +158,12 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
     /// The row's sentence for a render that could not be verified — the
     /// #500 family, minus the original (Cleanup never replaces it). The
     /// render sits in the job's scratch folder, which the job removes on
-    /// every exit; nothing was copied beside the original.
+    /// every exit; nothing was copied beside the original. The sentence
+    /// says where the render IS, not that it is already gone: the engine
+    /// does not remove it, and cannot vouch for a removal it does not do.
     nonisolated static func unverifiedRenderMessage(cause: String) -> String {
         "Could not verify the cleaned copy — nothing was published or added to the catalog. Cause: \(cause). "
-            + "The unverified render was discarded with the job's scratch folder; the original is untouched."
+            + "The unverified render is only in the job's scratch folder, which is removed when the job ends; the original is untouched."
     }
 
     // MARK: - Pure builders (unit-tested, no I/O)
