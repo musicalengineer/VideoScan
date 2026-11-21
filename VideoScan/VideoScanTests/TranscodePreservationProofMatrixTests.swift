@@ -219,12 +219,22 @@ struct TranscodePreservationProofMatrixTests {
     func theEvidenceIsBounded() async throws {
         let b = try mx.bench("proof_flood", preset: .preservation); defer { b.sb.cleanup() }
         let before = b.catalogSnapshot()
-        let garbageToken = String(repeating: "z", count: 500)
         let m = try mock(b, sourceVideo: Self.video(Array(repeating: Self.hashA, count: 5_000)),
-                         masterVideo: Self.video(Array(repeating: garbageToken, count: 5_000)))
+                         masterVideo: Self.video(Array(repeating: Self.hashB, count: 5_000)))
         let job = await mx.run(b, m, preset: .preservation)
         expectProofFailed(b, job, m, catalogBefore: before,
                           evidence: ["video frame 0 (0-based) is the first of 5000 that differ in 5000 compared"])
+    }
+
+    @Test("a 5,000-line stream of 500-character garbage tokens is one bounded 'could not be computed' line, never quoted whole")
+    func garbageIsBoundedToo() async throws {
+        let b = try mx.bench("proof_flood_garbage", preset: .preservation); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let garbageToken = String(repeating: "z", count: 500)
+        let m = try mock(b, masterVideo: Self.video(Array(repeating: garbageToken, count: 5_000)))
+        let job = await mx.run(b, m, preset: .preservation)
+        expectProofFailed(b, job, m, catalogBefore: before,
+                          evidence: ["the new master's video frame MD5 could not be computed: record 1", "is not a frame MD5 record"])
         guard case .failed(let message) = job.state else { return }
         #expect(!message.contains(garbageToken), "a 500-character token was quoted whole")
     }
@@ -251,7 +261,7 @@ struct TranscodePreservationProofMatrixTests {
             switch self {
             case .crash: ["\(side) video frame MD5 could not be computed: ffmpeg stopped with exit code \(SIGSEGV)"]
             case .launchFailure: ["\(side) video frame MD5 could not be computed: ffmpeg could not be started (exit code -1)", "doesn’t exist"]
-            case .garbage: ["video frame"]          // one garbled token is a frame that differs
+            case .garbage: ["\(side) video frame MD5 could not be computed: record 1", "is not a frame MD5 record"]
             case .nothing: ["the video frame MD5s could not be compared", "had no frame hashes"]
             case .nonzero: ["\(side) video frame MD5 could not be computed: ffmpeg stopped with exit code 183",
                             "Invalid data found when processing input"]
@@ -288,7 +298,34 @@ struct TranscodePreservationProofMatrixTests {
         let job = await mx.run(b, m, preset: .preservation)
         expectProofFailed(b, job, m, catalogBefore: before,
                           evidence: fault == .crash ? ["the new master's audio MD5 could not be computed: ffmpeg stopped with exit code \(SIGSEGV)"]
-                                                    : ["the audio whole-stream MD5s differ", "new master (no hash)"])
+                                                    : ["the new master's audio MD5 could not be computed: ffmpeg's answer was not an MD5 (it printed none)"])
+    }
+
+    // MARK: - Codex r1 #3: identical garbage is not a match
+
+    /// Codex r1 #3 (P0). Both proof commands exit 0 and print the SAME
+    /// thing that is not a proof — `garbage`. The comparison took each for
+    /// one frame hash, found them equal, and the job reported "Verified
+    /// bit-exact" and replaced the prior master. A hash stream must BE a
+    /// hash stream before two of them can agree.
+    @Test("identical GARBAGE from both video proof decodes is not a match: FAILED 'could not be computed', nothing trashed",
+          arguments: ["garbage\n", "0, 0, 0, 1, 115200, nothexnothexnothexnothexnothex00\n", "0, 0, 0, 1, 115200\n", "0, 0, 0, 1, 115200, aaaa\n"])
+    func identicalGarbageVideoProofsAreNotAMatch(_ reply: String) async throws {
+        let b = try mx.bench("proof_same_garbage_v", preset: .preservation); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, sourceVideo: .output(stdout: reply), masterVideo: .output(stdout: reply))
+        let job = await mx.run(b, m, preset: .preservation)
+        expectProofFailed(b, job, m, catalogBefore: before, evidence: ["the source's video frame MD5 could not be computed", "is not a frame MD5 record"])
+    }
+
+    @Test("identical GARBAGE from both audio proof decodes (`MD5=garbage`) is not a match: FAILED 'could not be computed', nothing trashed",
+          arguments: ["MD5=garbage\n", "MD5=\n", "MD5=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "md5 unavailable\n"])
+    func identicalGarbageAudioProofsAreNotAMatch(_ reply: String) async throws {
+        let b = try mx.bench("proof_same_garbage_a", preset: .preservation); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, sourceAudio: .output(stdout: reply), masterAudio: .output(stdout: reply))
+        let job = await mx.run(b, m, preset: .preservation)
+        expectProofFailed(b, job, m, catalogBefore: before, evidence: ["the source's audio MD5 could not be computed", "not an MD5"])
     }
 
     // MARK: - The proof hangs; Stop
@@ -415,7 +452,21 @@ struct TranscodePreservationProofMatrixTests {
         #expect(J.audioMD5Evidence(source: a, output: a, pcmCodec: "pcm_s24le") == nil)
         #expect(J.audioMD5Evidence(source: a, output: b, pcmCodec: "pcm_s16le")
                 == "the audio whole-stream MD5s differ, both decoded as pcm_s16le (source \(a), new master \(b))")
-        #expect(J.audioMD5Evidence(source: "", output: "", pcmCodec: "pcm_s24le") != nil, "two empty hashes are not a match")
+        #expect(J.audioMD5Evidence(source: "", output: "", pcmCodec: "pcm_s24le")
+                == "the source's audio MD5 could not be computed: ffmpeg's answer was not an MD5 (it printed none)", "two empty hashes are not a match")
+        #expect(J.audioMD5Evidence(source: "garbage", output: "garbage", pcmCodec: "pcm_s24le")
+                == "the source's audio MD5 could not be computed: ffmpeg's answer was not an MD5 (“garbage”)", "two identical non-hashes are not a match")
+        #expect(J.audioMD5Evidence(source: a, output: "garbage", pcmCodec: "pcm_s24le")?.hasPrefix("the new master's audio MD5 could not be computed") == true)
+        // A frame MD5 record: six fields, integers, stream 0, a 32-hex MD5.
+        #expect(J.frameMD5Malformed(Self.frames([a, b])) == nil && J.frameMD5Malformed("") == nil && J.frameMD5Malformed("#tb 0: 1/25\n") == nil)
+        #expect(J.frameMD5Malformed("0,          0,          0,        1,   115200, \(a)\n") == nil, "ffmpeg's own column padding")
+        #expect(J.frameMD5Malformed("0, -3, 0, 1, 115200, \(a.uppercased())\n") == nil, "a negative dts and upper-case hex are still a record")
+        for bad in ["garbage", "0, 0, 0, 1, 115200", "0, 0, 0, 1, 115200, zz", "1, 0, 0, 1, 115200, \(a)", "0, x, 0, 1, 115200, \(a)", "0, 0, 0, 1, 115200, \(a), 9"] {
+            #expect(J.frameMD5Malformed(Self.frames([a]) + bad + "\n")?.hasPrefix("record 2 of ffmpeg's answer") == true, "accepted: \(bad)")
+        }
+        #expect(J.frameMD5Evidence(source: "garbage\n", output: "garbage\n")
+                == "the source's video frame MD5 could not be computed: record 1 of ffmpeg's answer (“garbage”) is not a frame MD5 record")
+        #expect(J.isMD5(a) && !J.isMD5(String(a.dropLast())) && !J.isMD5(a + "0") && !J.isMD5(String(repeating: "g", count: 32)))
 
         let ok = ProcessRunner.Result(stdout: "", stderr: "frame=  1\n", exitCode: 0, launched: true)
         #expect(J.proofToolFailure(ok, what: "x") == nil)

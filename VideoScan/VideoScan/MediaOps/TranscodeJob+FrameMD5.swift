@@ -135,6 +135,10 @@ extension TranscodeJob {
     /// both hashes, how many of the frames compared differ, and both frame
     /// counts when they disagree. O(frames), no I/O.
     nonisolated static func frameMD5Evidence(source: String, output: String) -> String? {
+        // A hash stream must BE a hash stream before two of them can agree
+        // (Codex r1 #3: both decodes printing the same `garbage` "matched").
+        if let bad = frameMD5Malformed(source) { return "the source's video frame MD5 could not be computed: \(bad)" }
+        if let bad = frameMD5Malformed(output) { return "the new master's video frame MD5 could not be computed: \(bad)" }
         switch compareFrameMD5(source: source, output: output) {
         case .match:
             return nil
@@ -152,10 +156,56 @@ extension TranscodeJob {
         }
     }
 
-    /// Why two whole-stream audio MD5s are not proof, or nil when they are
-    /// equal and non-empty. An empty hash means ffmpeg printed no `MD5=`.
+    /// True for exactly 32 hexadecimal digits — what an MD5 is.
+    nonisolated static func isMD5(_ text: String) -> Bool {
+        text.utf8.count == 32 && text.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) || ($0 >= 65 && $0 <= 70) }
+    }
+
+    /// Why `stream` is not ffmpeg `-f framemd5` output, or nil when every
+    /// record is well formed (or there are none — the comparison reports an
+    /// empty stream in its own words). A record is six comma-separated
+    /// fields: stream index (0 — one stream is mapped), dts, pts, duration,
+    /// size — all integers — and a 32-hex-digit MD5. THE BUG (Codex r1 #3,
+    /// P0): the parser took the last token of ANY line for a hash, so two
+    /// decodes that printed the same garbage were "bit-exact". O(lines).
+    nonisolated static func frameMD5Malformed(_ stream: String) -> String? {
+        // One ICU regex search (compiled C, fast in a Debug build too) for
+        // the first line that is neither blank, a `#` header, nor a record.
+        // Worst case: a 4-hour tape is 432,000 records (~30 MB) per stream;
+        // ICU reads it as UTF-16, a transient ~60 MB copy, released on return.
+        guard let notARecord, let recordLine else { return "the frame MD5 record check could not be built" }   // fail closed
+        let text = stream as NSString
+        guard let bad = notARecord.firstMatch(in: stream, range: NSRange(location: 0, length: text.length)) else { return nil }
+        let number = recordLine.numberOfMatches(in: stream, range: NSRange(location: 0, length: bad.range.location)) + 1
+        let line = text.substring(with: bad.range).trimmingCharacters(in: .whitespaces)
+        let shown = line.count > 60 ? String(line.prefix(60)) + "…" : line
+        return "record \(number) of ffmpeg's answer (“\(shown)”) is not a frame MD5 record"
+    }
+
+    /// A line that is not blank, not a `#` header, and not
+    /// `0, <int>, <int>, <int>, <int>, <32 hex>`. `[ \t]`, never `\s`, so a
+    /// field can never span a line break.
+    nonisolated private static let notARecord = try? NSRegularExpression(   // a constant pattern: a typo fails every proof, closed
+        pattern: #"^(?![ \t]*(?:#.*)?$)(?![ \t]*0[ \t]*(?:,[ \t]*-?[0-9]+[ \t]*){4},[ \t]*[0-9a-fA-F]{32}[ \t]*$).*$"#,
+        options: [.anchorsMatchLines])
+
+    /// The start of a line that counts as a record for numbering (not blank, not `#`).
+    nonisolated private static let recordLine = try? NSRegularExpression(
+        pattern: #"^[ \t]*[^#\s]"#, options: [.anchorsMatchLines])
+
+    /// Why one side's whole-stream audio MD5 is not an MD5, or nil.
+    nonisolated private static func audioMD5Malformed(_ hash: String, whose: String) -> String? {
+        guard !isMD5(hash) else { return nil }
+        return "\(whose) audio MD5 could not be computed: ffmpeg's answer was not an MD5 "
+            + (hash.isEmpty ? "(it printed none)" : "(“\(evidenceHash(hash))”)")
+    }
+
+    /// Why two whole-stream audio MD5s are not proof, or nil when both ARE
+    /// MD5s (32 hex digits) and equal. Two identical non-hashes are not a
+    /// match (Codex r1 #3).
     nonisolated static func audioMD5Evidence(source: String, output: String, pcmCodec: String) -> String? {
-        guard source.isEmpty || output.isEmpty || source != output else { return nil }
+        if let bad = audioMD5Malformed(source, whose: "the source's") ?? audioMD5Malformed(output, whose: "the new master's") { return bad }
+        guard source != output else { return nil }
         return "the audio whole-stream MD5s differ, both decoded as \(pcmCodec)"
             + " (source \(evidenceHash(source)), new master \(evidenceHash(output)))"
     }
