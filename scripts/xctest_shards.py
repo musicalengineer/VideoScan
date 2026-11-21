@@ -19,7 +19,9 @@ adds only what is particular to xcodebuild:
     ≈ C++: a std::priority_queue of bins, push the next-heaviest item onto top()). A group's weight is
     the sum of its suites' recorded seconds (the cache below); a suite never measured counts
     DEFAULT_TEST_SECONDS per declared test. Static bins, not the strand runner's dynamic queue: every
-    host costs seconds to launch, so K hosts are started once, not one per suite.
+    host costs seconds to launch, so K hosts are started once, not one per suite. A file heavier than
+    one shard's fair share is dealt suite by suite when its source gives each suite an exact count
+    (split_heavy), so one long file does not set the wall time.
   * SERIAL TAIL. A suite that touches state shared ACROSS PROCESSES (every host is the same user:
     the real ~/Library/Application Support/VideoScan, the app's UserDefaults domain, the real catalog
     lock, the GPU) or that asserts a wall-clock budget is named in SERIAL_TAIL with its reason. Those
@@ -28,8 +30,10 @@ adds only what is particular to xcodebuild:
     so the counts are the ones a single host would have produced. A shard is RED when a test failed,
     when it timed out or never ran, when xcodebuild exited non-zero without a failing test line (a
     crash or a host that died), when it ran FEWER tests than its groups declare ("ran N of M" — exact,
-    per shard), or when a suite it was dealt ran zero tests (read from the shard's own result bundle
-    with xcresulttool, which names each test's suite TYPE; the log only has display names). Every
+    per shard), when a suite it was dealt ran zero tests (read from the shard's own result bundle
+    with xcresulttool, which names each test's suite TYPE; the log only has display names), or when
+    it exited 0 and that bundle cannot be read (nothing then proves each suite ran). A file none of
+    whose suites can be named to xcodebuild is RED by name. Every
     failure is printed with its shard's log path. Per-suite seconds from the result bundles are
     remembered for the next deal.
 
@@ -39,8 +43,10 @@ The LAST line is the verdict: "xctest-shards: GREEN|RED: P passed, F failed, S s
 Exit: 0 every shard green · 1 a red shard, or no test ran · 2 usage · 130 interrupted.
 
 usage:
-  xctest_shards.py (--xctestrun FILE | --products DIR) [--jobs K] (--all | --plan FILE | Suite…)
+  xctest_shards.py (--xctestrun FILE | --products DIR) [--jobs K] (--all [--stages A,B|all] | --plan FILE | Suite…)
                    [--run-dir DIR] [--timeout S] [--timings FILE] [--stream] [--dry-run] [--no-serial-tail]
+  --all leaves the performance and stress stages out (as run_tests' default does); `--stages all` runs
+  every stage, those two in the serial tail.
 
 Memory: logs are read a line at a time; held are the failures (one ≤300-char message each), one
 result bundle's test list at a time (≤ ~15 MB of JSON for the whole 14k-test suite in one shard) and
@@ -65,7 +71,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import testbed_strands as strands  # noqa: E402
@@ -128,6 +134,8 @@ SERIAL_TAIL: Dict[str, str] = {
     "ArchiveOffMainTests": TIMING_SEEN + " (100k records, main-actor work under 400 ms: 416 ms; 2026-11-20 run 3)",
     "FamilyTreeReadOnlyInFlightTests": TIMING_SEEN + " (a 5 s waitUntil deadline on a 20 ms poller; the same shard "
                                                     "run alone passed; 2026-11-20 run 4)",
+    "FamilyTreeScaleTests": TIMING_SEEN + " (a 5,000-person pedigree laid out under 500 ms, load-aware ceiling; "
+                            "2026-11-20 run 6, load average 50)",
     # not a budget: a race the load exposes, parked here until the test waits for a FRESH snapshot
     "CleanupTrashRunTests": "load race: its forced archive-volume snapshot was superseded while awaited (any volume "
                             "mount/rename on the Mac invalidates it), so the next line saw a provisional one and the "
@@ -142,37 +150,74 @@ SERIAL_STAGES: Dict[str, str] = {
 
 # ───────────────────────────────────────────────────────────── groups and the deal
 
+# A suite is a Swift TYPE. The manifest's inventory also lists words it met after "class"/"struct" inside
+# a @Suite display name ("… effective class and the live-group pick …" → a suite called `and`; also
+# `filter`, `rules`): no test belongs to them, and `-only-testing:Target/and` would be a suite that ran
+# zero tests. A name that is not UpperCamelCase is REJECTED, never passed to xcodebuild: beside real
+# suites its file comes up short if it ever was a real type ("ran N of M"), and a file left with
+# nothing but rejected names is RED by name (undealable) — never dropped without a word.
+SWIFT_TYPE_NAME = re.compile(r"^[A-Z_][A-Za-z_0-9]*$")
+
+
+class Sel(NamedTuple):
+    """What a selector string IS — decoded here and nowhere else (≈ C++: a tagged union).
+    suite `Type` · case `Type/test` or `Type/f(x:)` · loose `f()` (a file-scope test, no type) · rejected."""
+    kind: str
+    text: str
+
+    @property
+    def suite(self) -> str:
+        return self.text.split("/", 1)[0] if self.kind in ("suite", "case") else ""
+
+
+def sel(text: str) -> Sel:
+    if "/" in text:
+        return Sel("case" if text.split("/", 1)[0] else "rejected", text)
+    if text.endswith(")"):
+        return Sel("loose", text)
+    return Sel("suite" if SWIFT_TYPE_NAME.match(text) else "rejected", text)
+
+
+def real_selector(s: str) -> bool:
+    return sel(s).kind != "rejected"
+
+
 @dataclass
 class Group:
-    """One dealing unit: a test file's suites. selectors: `Suite` (whole) or `Suite/test`."""
+    """One dealing unit: a test file's suites. selectors: only what xcodebuild can be given (see Sel);
+    rejected: the names that were not (kept so a file left with none is reported, not lost)."""
     name: str
     selectors: List[str]
     tests: int = 0                         # declared tests (0: unknown)
     exact: bool = True                     # tests is an exact floor: fewer ran = RED
     stage: str = ""
     path: str = ""                         # the test file, relative to the repo (for true_up)
+    rejected: List[str] = field(default_factory=list)
 
     @property
     def suites(self) -> List[str]:
         """The suite TYPES named (a file-scope test `f()` is not one: it has no type)."""
-        return sorted({s.split("/", 1)[0] for s in self.selectors if "/" in s or not s.endswith(")")})
+        return sorted({sel(s).suite for s in self.selectors} - {""})
 
     @property
     def loose(self) -> List[str]:
         """The file-scope tests named by themselves (`f()`, `g(x:)`)."""
-        return sorted(s for s in self.selectors if "/" not in s and s.endswith(")"))
+        return sorted(s for s in self.selectors if sel(s).kind == "loose")
+
+    @property
+    def by_case(self) -> bool:
+        return any(sel(s).kind == "case" for s in self.selectors)
+
+    @property
+    def undealable(self) -> bool:
+        """Declares tests, and not one of its names can be given to xcodebuild."""
+        return not self.selectors and bool(self.rejected) and self.tests > 0
 
 
-# A suite is a Swift TYPE. The manifest's inventory also lists words it met after "class"/"struct" inside
-# a @Suite display name ("… effective class and the live-group pick …" → a suite called `and`; also
-# `filter`, `rules`): no test belongs to them, and `-only-testing:Target/and` would be a suite that ran
-# zero tests. A name that is not UpperCamelCase is not dealt; if it ever were a real type, its file
-# would come up short ("ran N of M") — red, never silent.
-SWIFT_TYPE_NAME = re.compile(r"^[A-Z_][A-Za-z_0-9]*$")
-
-
-def real_selector(s: str) -> bool:
-    return bool(s) and ("/" in s or s.endswith(")") or bool(SWIFT_TYPE_NAME.match(s)))
+def make_group(name: str, raw: Iterable[str], tests: int, exact: bool = True, stage: str = "", path: str = "") -> Group:
+    raw = sorted({str(x) for x in raw if x})
+    return Group(name, [x for x in raw if real_selector(x)], tests, exact, stage, path,
+                 [x for x in raw if not real_selector(x)])
 
 
 FILE_SCOPE_TEST_FUNC = re.compile(r"^(?:(?:private|fileprivate|internal|public|nonisolated)\s+|@\w+\s+)*func\s+test\w*\s*[(<]", re.M)
@@ -187,14 +232,14 @@ def true_up(g: Group, text: str, add_loose: bool) -> Group:
         runs it (FamilySearchPullTests.swift is 42 of them). With add_loose it is named itself
         (`-only-testing:Target/f()`), so "every test of the manifest" really is every test.
     A group picked by case (`Suite/test`) is left as it is: its count is the picker's."""
-    if any("/" in s for s in g.selectors):
+    if g.by_case:
         return g
     cases = rt.swift_cases(text)
     helpers = sum(1 for c in cases if not c[0] and c[2] == c[1])
     loose = sorted({c[2] for c in cases if not c[0] and c[2] != c[1]})
     selectors = sorted(set(g.selectors) | set(loose)) if add_loose else list(g.selectors)
     tests = max(g.tests - helpers - (0 if add_loose else len(loose)), 0)
-    return Group(g.name, selectors, tests, g.exact, g.stage, g.path)
+    return Group(g.name, selectors, tests, g.exact, g.stage, g.path, g.rejected)
 
 
 def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool) -> List[Group]:
@@ -209,7 +254,7 @@ def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool) 
                 text = ""
             if text and (not g.selectors or FILE_SCOPE_TEST_FUNC.search(text)):
                 g = true_up(g, text, add_loose)
-        if g.selectors:
+        if g.selectors or g.undealable:
             out.append(g)
     return out
 
@@ -222,26 +267,28 @@ def groups_from_manifest(manifest: dict, only: Optional[Set[str]] = None, root: 
     for e in manifest.get("assignments", []):
         if e.get("kind") != "xcode":
             continue
-        suites = sorted({s for s in (e.get("suites") or []) if real_selector(s)})
-        if only is not None and not (set(suites) & only):
+        g = make_group(Path(e["path"]).stem, e.get("suites") or [], len(e.get("tests") or []), True,
+                       e.get("stage") or "", e["path"])
+        if only is not None and not (set(g.selectors) & only):
             continue
-        out.append(Group(Path(e["path"]).stem, suites, len(e.get("tests") or []), True, e.get("stage") or "", e["path"]))
+        out.append(g)
     return true_up_all(out, root, add_loose=True)
 
 
 def groups_from_plan(plan: dict, root: Optional[Path] = None) -> List[Group]:
     """run_tests' picks. Their selectors are what the single host would be given (so the two run the
     same tests); only the count is trued up."""
-    groups = [Group(str(g["name"]), [str(s) for s in g.get("selectors") or [] if real_selector(str(s))], int(g.get("tests") or 0),
-                    bool(g.get("exact", True)), str(g.get("stage") or ""), str(g.get("path") or ""))
+    groups = [make_group(str(g["name"]), g.get("selectors") or [], int(g.get("tests") or 0),
+                         bool(g.get("exact", True)), str(g.get("stage") or ""), str(g.get("path") or ""))
               for g in plan.get("groups", [])]
-    return true_up_all([g for g in groups if g.selectors], root, add_loose=False)
+    return true_up_all([g for g in groups if g.selectors or g.undealable], root, add_loose=False)
 
 
 def merge_shared(groups: Sequence[Group]) -> List[Group]:
-    """Groups that name the same suite become one (a suite extended in a second file, or picked whole
-    by one file and by case in another): a suite must reach exactly one host. A suite taken whole
-    drops its own `Suite/test` selectors. Order kept by first appearance."""
+    """Groups that name the same suite — or the same file-scope test — become one (a suite extended in
+    a second file, or picked whole by one file and by case in another; `smoke()` at file scope in two
+    files is ONE selector): each must reach exactly one host. A suite taken whole drops its own
+    `Suite/test` selectors. Order kept by first appearance."""
     parent = list(range(len(groups)))
 
     def find(i: int) -> int:
@@ -251,7 +298,7 @@ def merge_shared(groups: Sequence[Group]) -> List[Group]:
         return i
     owner: Dict[str, int] = {}
     for i, g in enumerate(groups):
-        for s in g.suites:
+        for s in g.suites + g.loose:
             if s in owner:
                 a, b = find(owner[s]), find(i)
                 if a != b:
@@ -267,11 +314,12 @@ def merge_shared(groups: Sequence[Group]) -> List[Group]:
         if len(gs) == 1:
             out.append(gs[0])
             continue
-        sel = {s for g in gs for s in g.selectors}
-        whole = {s for s in sel if "/" not in s}
-        sel = {s for s in sel if "/" not in s or s.split("/", 1)[0] not in whole}
-        out.append(Group("+".join(g.name for g in gs), sorted(sel), sum(g.tests for g in gs),
-                         all(g.exact for g in gs), gs[0].stage if len({g.stage for g in gs}) == 1 else ""))
+        names = {x for g in gs for x in g.selectors}
+        whole = {x for x in names if sel(x).kind == "suite"}
+        names = {x for x in names if sel(x).kind != "case" or sel(x).suite not in whole}
+        out.append(Group("+".join(g.name for g in gs), sorted(names), sum(g.tests for g in gs),
+                         all(g.exact for g in gs), gs[0].stage if len({g.stage for g in gs}) == 1 else "",
+                         "", sorted({x for g in gs for x in g.rejected})))
     return out
 
 
@@ -295,6 +343,33 @@ def weight(g: Group, timings: Dict[str, float]) -> float:
     unknown = len(suites) - len(known)
     guess = max(g.tests, len(suites)) * DEFAULT_TEST_SECONDS * (unknown / len(suites)) if unknown else 0.0
     return max(sum(known) + guess, 0.01)
+
+
+def split_heavy(groups: Sequence[Group], k: int, timings: Dict[str, float], root: Optional[Path]) -> List[Group]:
+    """A file heavier than one shard's fair share (total / k) is dealt suite by suite, so its suites can
+    go to different hosts (PictureFaultMatrixTests.swift: five suites, ~240 s). Only when the split is
+    exact: the file's source (run_tests' swift_cases) credits every one of its suites with tests and
+    the per-suite counts add up to the file's — otherwise the file stays whole. No file is read
+    unless it is over the share."""
+    if root is None or k < 2 or not groups:
+        return list(groups)
+    share = sum(weight(g, timings) for g in groups) / k
+    out: List[Group] = []
+    for g in groups:
+        if weight(g, timings) <= share or len(g.suites) < 2 or g.loose or g.by_case or not g.path or not g.exact:
+            out.append(g)
+            continue
+        try:
+            cases = rt.swift_cases((root / g.path).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            out.append(g)
+            continue
+        count = {x: sum(1 for c in cases if c[0] == x) for x in g.suites}
+        if min(count.values()) < 1 or sum(count.values()) != g.tests:
+            out.append(g)
+            continue
+        out += [Group(f"{g.name}:{x}", [x], n, True, g.stage, g.path) for x, n in sorted(count.items())]
+    return out
 
 
 def deal(groups: Sequence[Group], k: int, timings: Dict[str, float]) -> List[List[Group]]:
@@ -424,6 +499,7 @@ class ShardReport:
     failures: List[rt.Event] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)     # why RED beyond a failed test
     notes: List[str] = field(default_factory=list)
+    short: Set[str] = field(default_factory=set)          # the groups (files) that ran fewer tests than declared
     launch: Optional[float] = None                        # strand start → the test host is up
     stats: Optional[SuiteStats] = None
     serial: Optional[str] = None
@@ -504,15 +580,23 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
     if rep.total < rep.expected:
         rep.problems.append(f"ran {rep.total} of {rep.expected} tests")
     if ran:
-        if rep.stats is None:
+        if rep.stats is None and result.rc == 0:
+            # Exit 0 and no readable bundle: the log alone cannot say that every suite ran (a silent suite
+            # hides behind another's surplus, and glued lines make its count soft). Not provable = RED.
+            rep.problems.append("its result bundle could not be read, so no suite's count is proven "
+                                "(xcresulttool failed) — the log's count alone is not a green")
+        elif rep.stats is None:
             rep.notes.append("no per-suite counts (its result bundle could not be read)")
         else:
             silent = [s for g in groups for s in g.suites if not rep.stats.saw(s)]
             if silent:
                 rep.problems.append(f"{len(silent)} suite(s) ran zero tests: {', '.join(silent[:8])}"
                                     + (" …" if len(silent) > 8 else ""))
+            # A suite at zero is named above; a file of file-scope tests has no suite to name, so its
+            # zero is "short" here.
             short = [(g.name, rep.stats.ran_group(g), g.tests) for g in groups
-                     if g.exact and 0 < rep.stats.ran_group(g) < g.tests]
+                     if g.exact and rep.stats.ran_group(g) < g.tests and (rep.stats.ran_group(g) > 0 or not g.suites)]
+            rep.short = {g.name for g in groups if g.exact and rep.stats.ran_group(g) < g.tests}
             if short:
                 rep.problems.append("short: " + ", ".join(f"{n} ran {a} of {b}" for n, a, b in short[:8])
                                     + (" …" if len(short) > 8 else ""))
@@ -572,22 +656,33 @@ def say(text: str) -> None:
     sys.stdout.flush()
 
 
-def plan_shards(groups: Sequence[Group], jobs: int, timings: Dict[str, float], tail: bool = True
-                ) -> Tuple[List[List[Group]], List[Tuple[Group, str]]]:
-    """(the parallel shards, the serial tail as (group, reason))."""
-    groups = merge_shared(groups)
+def plan_shards(groups: Sequence[Group], jobs: int, timings: Dict[str, float], tail: bool = True,
+                root: Optional[Path] = None) -> Tuple[List[List[Group]], List[Tuple[Group, str]]]:
+    """(the parallel shards, the serial tail as (group, reason)). Undealable groups are in neither:
+    the caller reports them (run: RED)."""
+    groups = merge_shared([g for g in groups if not g.undealable])
     serial = [(g, serial_reason(g)) for g in groups] if tail else []
     held = [(g, r) for g, r in serial if r]
     names = {id(g) for g, _ in held}
-    return deal([g for g in groups if id(g) not in names], jobs, timings), held
+    parallel = split_heavy([g for g in groups if id(g) not in names], jobs, timings, root)
+    return deal(parallel, jobs, timings), held
+
+
+def say_undealable(groups: Sequence[Group]) -> int:
+    lost = [g for g in groups if g.undealable]
+    for g in lost:
+        say(f"RED: {g.name}: declares {g.tests} tests and none of its suites can be named to xcodebuild "
+            f"({', '.join(g.rejected)}: not a Swift type name) — nothing of it would run")
+    return len(lost)
 
 
 def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path = DEFAULT_TIMINGS,
         timeout: float = SHARD_TIMEOUT, xcodebuild: Sequence[str] = ("xcodebuild",),
         xcresulttool: Sequence[str] = ("xcrun", "xcresulttool"), stream: bool = False, tail: bool = True,
-        target: str = TARGET, keep_results: bool = False) -> int:
+        target: str = TARGET, keep_results: bool = False, root: Optional[Path] = None) -> int:
     timings = strands.load_timings(timings_path)
-    shards, held = plan_shards(groups, jobs, timings, tail)
+    shards, held = plan_shards(groups, jobs, timings, tail, root)
+    lost = say_undealable(groups)
     run_dir.mkdir(parents=True, exist_ok=True)
     work: List[strands.Strand] = []
     dealt: List[List[Group]] = []
@@ -664,6 +759,8 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
     for rep in reports:
         if rep.stats is not None:
             for g in rep.groups:
+                if g.name in rep.short:
+                    continue               # a file that came up short: its seconds are not the suite's weight
                 for s in g.suites:
                     if rep.stats.saw(s):
                         fresh[f"suite:{s}"] = round(rep.stats.seconds(s), 3)
@@ -681,12 +778,14 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
     bounds = (f"{len(par)} hosts at once" + (f", longest {longest.name} {longest.seconds:.1f}s" if longest else "")
               + (f", serial tail {tail_s:.1f}s" if held else "")
               + (f", host launch {sum(launches) / len(launches):.1f}s avg" if launches else ""))
-    word = "RED" if red or passed + failed + skipped == 0 else "GREEN"
+    word = "RED" if red or lost or passed + failed + skipped == 0 else "GREEN"
     why = ""
     if red:
         why = f" · {len(red)} red shard(s): {', '.join(r.name for r in red)}"
-    elif word == "RED":
+    elif passed + failed + skipped == 0:
         why = " · ZERO tests ran"
+    if lost:
+        why += f" · {lost} file(s) could not be dealt (named above)"
     say(f"{word}: {passed} passed, {failed} failed, {skipped} skipped (ran {passed + failed + skipped} of {expected}) "
         f"in {wall:.1f}s — {bounds}{why}")
     return 0 if word == "GREEN" else 1
@@ -709,7 +808,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     src.add_argument("--products", type=Path, help="<DerivedData>/Build/Products (its newest xctestrun of --test-plan)")
     ap.add_argument("--test-plan", default=None, help="with --products (default: the manifest's test_plan)")
     ap.add_argument("--jobs", type=int, default=strands.default_jobs(), help="test hosts at once (default: half the cores)")
-    ap.add_argument("--all", action="store_true", help="every app suite the manifest lists")
+    ap.add_argument("--all", action="store_true",
+                    help="every app suite the manifest lists, in the stages of --stages")
+    ap.add_argument("--stages", default=None, metavar="A,B",
+                    help="with --all: manifest stages to run (default: every stage but performance and stress — "
+                         "run_tests leaves them out the same way; 'all' = every stage, those two in the serial tail)")
     ap.add_argument("--plan", type=Path, help='JSON {"groups": [{"name", "selectors", "tests", "exact", "stage"}]}')
     ap.add_argument("--manifest", type=Path, default=SELF.parent / "gauntlet" / "manifest.json")
     ap.add_argument("--root", type=Path, default=SELF.parent.parent,
@@ -745,11 +848,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ap.error(f"cannot read the plan {a.plan}: {e}")
     elif a.all:
         groups = groups_from_manifest(manifest, root=a.root)
+        if a.stages != "all":
+            want = set(a.stages.split(",")) if a.stages else None
+            groups = [g for g in groups if (g.stage in want if want is not None else g.stage not in SERIAL_STAGES)]
     else:
         groups = groups_from_manifest(manifest, set(a.suites), a.root)
         known = {s for g in groups for s in g.suites}
         # A suite the manifest does not list still runs (its count unknown), in a group of its own.
         groups += [Group(s, [s], 0, False) for s in a.suites if s not in known]
+    if a.stages and not a.all:
+        ap.error("--stages goes with --all (a plan or suite names already say what to run)")
     if not groups:
         ap.error("nothing to run: no app suite matched")
     try:
@@ -759,7 +867,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if a.dry_run:
         timings = strands.load_timings(a.timings)
-        shards, held = plan_shards(groups, a.jobs, timings, not a.no_serial_tail)
+        shards, held = plan_shards(groups, a.jobs, timings, not a.no_serial_tail, a.root)
+        say_undealable(groups)
         for i, gs in enumerate(shards):
             say(f"shard-{i + 1:02d}: {sum(len(g.suites) for g in gs)} suites, {sum(g.tests for g in gs)} tests, "
                 f"~{sum(weight(g, timings) for g in gs):.0f}s")
@@ -779,7 +888,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         signal.signal(sig, interrupt)
     try:
         return run(groups, xctestrun, a.jobs, run_dir, a.timings, a.timeout, shlex.split(a.xcodebuild),
-                   shlex.split(a.xcresulttool), a.stream, not a.no_serial_tail, keep_results=a.keep_results)
+                   shlex.split(a.xcresulttool), a.stream, not a.no_serial_tail, keep_results=a.keep_results,
+                   root=a.root)
     except KeyboardInterrupt:
         say("RED: interrupted — the run is incomplete")
         return 130

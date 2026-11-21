@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import textwrap
@@ -666,3 +667,157 @@ def test_sigterm_stops_every_test_host_and_the_run_says_it_is_incomplete(bench):
     for pid in pids:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+# R1 — scripts/testbed_strands.py:165-167 (+ xctest_shards.py:638)
+def test_sigterm_during_the_serial_tail_stops_its_test_host_too(bench):
+    scenario = {"T": {"tests": ["a()"], "hang": True}}
+    (bench.tmp / "scenario.json").write_text(json.dumps(scenario))
+    (bench.tmp / "plan.json").write_text(json.dumps({"groups": [grp("T", 1, stage="performance")]}))
+    env = dict(os.environ, FAKE_SCENARIO=str(bench.tmp / "scenario.json"), FAKE_STAMPS=str(bench.tmp / "stamps"))
+    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", "x", "--plan", str(bench.tmp / "plan.json"),
+                          "--jobs", "3", "--run-dir", str(bench.run_dir), "--timings", str(bench.timings),
+                          "--xcodebuild", f"{sys.executable} {bench.tmp / 'fake_xcodebuild.py'}"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
+    pids, deadline = [], time.monotonic() + 30
+    while time.monotonic() < deadline and not pids:
+        time.sleep(0.1)
+        pids = [int(m.group(1)) for log in bench.run_dir.glob("*/strand.log")
+                for m in [re.search(r"TEST_HOST_STARTED epoch=\S+ pid=(\d+)", log.read_text())] if m]
+    assert pids, "the serial-tail host never started"
+    os.kill(p.pid, signal.SIGTERM)
+    out, _ = p.communicate(timeout=40)
+    try:
+        assert p.returncode == 130 and "every shard's process group was stopped" in out, out
+        with pytest.raises(ProcessLookupError):      # RED: the tail's host is still running, orphaned
+            os.kill(pids[0], 0)
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+# R2 — scripts/xctest_shards.py:486-508 (the zero-test-suite guard is a NOTE when the bundle cannot be read)
+def test_a_suite_at_zero_tests_is_red_even_when_the_result_bundle_cannot_be_read(bench):
+    scenario = {"Loud": {"tests": ["a()", "b()", "c()", "d()"]}, "Quiet": {"tests": ["x()", "y()"], "silent": True}}
+    code, out = bench.go(scenario, [{"name": "OneFile", "selectors": ["Loud", "Quiet"], "tests": 4}], jobs=2,
+                         extra=["--xcresulttool", "/usr/bin/false"])
+    assert code == 1 and "GREEN" not in last(out), out      # RED: exit 0, "GREEN: 4 passed … (ran 4 of 4)"
+
+
+# R3 — scripts/xctest_shards.py:514-515 (`0 < ran_group(g)`: a file of file-scope tests that ran NONE is not "short")
+def test_a_file_whose_file_scope_tests_all_did_not_run_is_red(bench):
+    scenario = {"looseOne()": {"tests": ["looseOne()"], "silent": True}, "looseTwo()": {"tests": ["looseTwo()"], "silent": True},
+                "S": {"tests": ["a()", "b()", "c()"]}}           # S runs more than declared (a floor)
+    code, out = bench.go(scenario, [{"name": "LooseFile", "selectors": ["looseOne()", "looseTwo()"], "tests": 2},
+                                    {"name": "SFile", "selectors": ["S"], "tests": 1}], jobs=1)
+    assert code == 1 and "LooseFile" in out, out               # RED: "GREEN: 3 passed (ran 3 of 3)"
+
+
+# R4 — scripts/xctest_shards.py:212 and :238 (a group left with no selector is dropped without a word)
+def test_a_file_whose_only_suite_name_is_not_uppercamelcase_is_not_dropped_silently(bench):
+    assert xs.groups_from_manifest({"assignments": [
+        {"kind": "xcode", "path": "VideoScan/VideoScanTests/lower.swift", "stage": "unit",
+         "suites": ["lowerSuite"], "tests": ["a", "b", "c"]}]}) != [], "3 declared tests vanished from the deal"
+
+
+def test_a_plan_group_whose_selectors_are_all_rejected_is_red_not_dropped(bench):
+    scenario = {"A": {"tests": ["a()"]}, "lowerSuite": {"tests": ["x()", "y()", "z()"]}}
+    code, out = bench.go(scenario, [grp("A", 1), grp("lowerSuite", 3)], jobs=2)
+    assert "lowerSuite" in out and (code == 1 or "4 passed" in last(out)), out   # RED: "GREEN: 1 passed (ran 1 of 1)"
+
+
+# R5 — scripts/testbed_strands.py:175-181 (TERM-all first, but then one FULL grace period per strand)
+def test_stop_is_one_grace_period_even_when_the_strands_ignore_term(tmp_path):
+    import threading
+    ts = xs.strands
+    code = "import signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN); print('up', flush=True); time.sleep(120)"
+    work = [ts.Strand(name=f"s{i}", cmd=[sys.executable, "-c", code]) for i in range(3)]
+    runner = ts.Runner(tmp_path / "run", jobs=3, timings_path=tmp_path / "t.json")
+    th = threading.Thread(target=lambda: runner.run(work), daemon=True)
+    th.start()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and sum("up" in l.read_text() for l in (tmp_path / "run").glob("*/strand.log")) < 3:
+        time.sleep(0.05)
+    t0 = time.monotonic()
+    runner.stop()
+    took = time.monotonic() - t0
+    th.join(10)
+    assert took < ts.TERM_GRACE_S + 5.0, f"3 strands that ignore TERM took {took:.0f}s to stop: one grace period EACH"
+
+
+# R6 — scripts/xctest_shards.py:253-254 (merge_shared keys on g.suites only: a file-scope test named in two files)
+def test_a_file_scope_test_named_by_two_files_reaches_one_host_once():
+    shards, _ = xs.plan_shards([G("One", ["smoke()"], 1), G("Two", ["smoke()"], 1)], 4, {}, tail=False)
+    sel = [s for sh in shards for g in sh for s in g.selectors]
+    assert len(sel) == len(set(sel)), f"-only-testing:VideoScanTests/smoke() goes to two hosts: {sel}"
+
+
+# R7 — scripts/xctest_shards.py:664-669 (a RED shard's partial seconds are remembered as the suite's weight)
+def test_a_suite_that_came_up_short_does_not_record_its_seconds(bench):
+    code, out = bench.go({"A": {"tests": ["a()", "b()"]}}, [grp("A", 50)], jobs=1)
+    assert code == 1 and "ran 2 of 50" in out, out
+    known = json.loads(bench.timings.read_text()) if bench.timings.exists() else {}
+    assert "suite:A" not in known, f"2 of 50 tests ran and the next deal weighs the suite at {known['suite:A']}s"
+
+
+# ───────────────────────────── a file heavier than a shard's share; the stages of --all
+
+def test_a_file_heavier_than_a_shards_share_is_dealt_suite_by_suite_only_when_the_split_is_exact(tmp_path):
+    src = "\n".join(["import Testing",
+                     "@Suite struct HeavyTests {\n @Test func healthy() {}\n @Test func table() {}\n}",
+                     "@Suite struct HeavyPartATests {\n @Test(arguments: [1, 2]) func partA(_ n: Int) {}\n}",
+                     "@Suite struct HeavyPartBTests {\n @Test(arguments: [3, 4]) func partB(_ n: Int) {}\n}", ""])
+    (tmp_path / "HeavyTests.swift").write_text(src)
+    heavy = G("HeavyTests", ["HeavyPartATests", "HeavyPartBTests", "HeavyTests"], 4, True, "integration", "HeavyTests.swift")
+    light = [G(f"L{i}", [f"L{i}"], 10) for i in range(6)]
+    timings = {"suite:HeavyTests": 14.0, "suite:HeavyPartATests": 110.0, "suite:HeavyPartBTests": 110.0,
+               **{f"suite:L{i}": 20.0 for i in range(6)}}
+    shards, _ = xs.plan_shards([heavy] + light, 3, timings, tail=False, root=tmp_path)
+    loads = sorted(round(sum(xs.weight(g, timings) for g in sh)) for sh in shards)
+    assert loads == [110, 120, 124], f"the 234 s file was not spread: {loads}"
+    parts = {g.name: (g.selectors, g.tests) for sh in shards for g in sh if g.name.startswith("HeavyTests")}
+    assert parts == {"HeavyTests:HeavyTests": (["HeavyTests"], 2), "HeavyTests:HeavyPartATests": (["HeavyPartATests"], 1),
+                     "HeavyTests:HeavyPartBTests": (["HeavyPartBTests"], 1)}, parts
+    # without the source, or when the per-suite counts do not add up to the file's, the file stays whole
+    whole, _ = xs.plan_shards([heavy] + light, 3, timings, tail=False)
+    assert max(sum(xs.weight(g, timings) for g in sh) for sh in whole) == 234.0
+    off = G("HeavyTests", heavy.selectors, 5, True, "integration", "HeavyTests.swift")
+    kept, _ = xs.plan_shards([off] + light, 3, timings, tail=False, root=tmp_path)
+    assert any(g.name == "HeavyTests" for sh in kept for g in sh), "an inexact split was dealt"
+    # a file under the share is never read (a path that does not exist is fine)
+    xs.plan_shards([G("Small", ["A", "B"], 2, True, "", "missing.swift")] + light, 2, timings, tail=False, root=tmp_path)
+
+
+def test_the_picture_fault_matrix_is_four_slices_that_can_go_to_four_hosts():
+    """It was one parameterized test of 226 s that set the wall time of the whole sharded lane."""
+    manifest = json.loads((ROOT / "scripts" / "gauntlet" / "manifest.json").read_text())
+    [g] = [g for g in xs.groups_from_manifest(manifest, root=ROOT) if g.name == "PictureFaultMatrixTests"]
+    assert len(g.suites) == 5 and g.tests == 7
+    timings = {f"suite:{s}": 56.0 for s in g.suites}
+    parts = xs.split_heavy([g] + [G(f"L{i}", [f"L{i}"], 1) for i in range(20)], 15, timings, ROOT)
+    assert sorted(p.tests for p in parts if p.name.startswith("PictureFaultMatrixTests:")) == [1, 1, 1, 1, 3]
+
+
+def test_all_leaves_the_performance_and_stress_stages_out_unless_asked(tmp_path):
+    manifest = {"test_plan": "P", "assignments": [
+        {"kind": "xcode", "path": "T/UTests.swift", "stage": "unit", "suites": ["U"], "tests": ["a"]},
+        {"kind": "xcode", "path": "T/HTests.swift", "stage": "hallie", "suites": ["H"], "tests": ["a"]},
+        {"kind": "xcode", "path": "T/PTests.swift", "stage": "performance", "suites": ["P"], "tests": ["a"]},
+        {"kind": "xcode", "path": "T/STests.swift", "stage": "stress", "suites": ["S"], "tests": ["a"]}]}
+    (tmp_path / "m.json").write_text(json.dumps(manifest))
+
+    def dry(*extra):
+        p = subprocess.run([sys.executable, str(SCRIPT), "--xctestrun", "x", "--manifest", str(tmp_path / "m.json"),
+                            "--root", str(tmp_path), "--timings", str(tmp_path / "t.json"), "--jobs", "4", "--dry-run", *extra],
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout + p.stderr
+    code, out = dry("--all")
+    assert code == 0 and len(re.findall(r"shard-\d\d:", out)) == 2 and "serial tail" not in out, out
+    code, out = dry("--all", "--stages", "all")
+    assert code == 0 and "serial tail: P — timing budget" in out and "serial tail: S — timing budget" in out, out
+    code, out = dry("--all", "--stages", "performance")
+    assert code == 0 and "shard-" not in out and "serial tail: P" in out, out
+    code, out = dry("--stages", "unit", "U")
+    assert code == 2 and "--stages goes with --all" in out, out
