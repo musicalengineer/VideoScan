@@ -848,12 +848,20 @@ enum SignatureVerification {
                                        quarantineDirectory: quarantineDirectory,
                                        reason: "cancelled after quarantine", cancelled: true)
             }
-            guard !rehash.isEmpty, rehash == proof.fullHash else {
+            // A re-read that FAILED (I/O error, ended early) is not a changed
+            // file: it is put back and named unreadable (GH #504, the P3
+            // wording item). A re-read that completed with another digest is
+            // "changed during verification", as before.
+            guard !rehash.isEmpty else {
                 return restoreOrRetain(quarantined: quarantined, original: original,
                                        quarantineDirectory: quarantineDirectory,
-                                       reason: rehash.isEmpty
-                                           ? "quarantined file could not be re-read before removal"
-                                           : "quarantined file content no longer matches what was verified")
+                                       reason: "quarantined file could not be re-read before removal",
+                                       failure: .unreadable(ticket.originalPath))
+            }
+            guard rehash == proof.fullHash else {
+                return restoreOrRetain(quarantined: quarantined, original: original,
+                                       quarantineDirectory: quarantineDirectory,
+                                       reason: "quarantined file content no longer matches what was verified")
             }
         }
 

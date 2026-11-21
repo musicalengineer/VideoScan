@@ -36,9 +36,8 @@
 //                                                                        (D2, fixed 2026-11-21)
 //   DUPLICATE at path    refused "could not      refused "could not      refused "content differs —   trashed
 //                        read <dup>"             read <dup>"             NOT a duplicate"
-//   quarantine RE-HASH   put back; P3: named     put back; P3: named     put back "<dup> changed      trashed
-//                        "<dup> changed during   "<dup> changed during   during verification"
-//                        verification"           verification"
+//   quarantine RE-HASH   put back "could not     put back "could not     put back "<dup> changed      trashed
+//                        read <dup>"             read <dup>"             during verification"
 //   quarantine SINGLE    put back "could not     put back "could not     put back "content differs —  trashed
 //   READ (cached keeper) read <dup>"             read <dup>"             NOT a duplicate"
 //   KEEPER 2nd read      refused "could not      refused "could not      refused "two reads of        trashed
@@ -403,10 +402,10 @@ struct HashReadFaultDeleteDuplicatesTests {
             // The held file's two reads disagree (D3a).
             #expect(note == "two reads of \(rig.dupName) disagreed — nothing was removed", "\(c): \(note)")
         case (.quarantineRehash, .eio), (.quarantineRehash, .prematureEOF):
-            #expect(!note.isEmpty)
-            withKnownIssue("PARKED 2026-11-21 (P3, wording): the quarantine RE-READ that fails or ends early is reported as \"<file> changed during verification\" — the file did not change, it could not be read. deleteQuarantined passes restoreOrRetain the true reason (\"quarantined file could not be re-read before removal\") but the refusal it returns is .changedSinceVerification, and that is what the row, the log and the receipt say. Nothing moves: the file is put back. Proposed: return .unreadable(original) for an empty re-hash.") {
-                #expect(note.contains("could not") && note.contains("read"), "\(c): \(note)")
-            }
+            // GH #504 (was P3, wording; seen RED 2026-11-21: "<dup> changed during
+            // verification"): a re-read that FAILED is named unreadable — the
+            // file did not change, it could not be read. It is put back.
+            #expect(note == "could not read \(rig.dupName) to verify", "\(c): \(note)")
         case (.quarantineRehash, .bitFlip):
             // Two reads of one file disagree: "changed during verification" is
             // the honest inference from inside the gate.
