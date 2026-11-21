@@ -9183,6 +9183,10 @@
         "aFailedTagSaveIsSaidInTheAppLog",
         "aFailedWriteReturnsFalse",
         "aHealthyRunSaysNothing",
+        "aLostFinishWithAnUnreadableMarkerPredictsNothing",
+        "aLostFinishWithNoMarkerOnDiskPromisesNoResume",
+        "aSavedTagIsAnnouncedAfterTheSave",
+        "theBackfillMarkerSaysAFailureOncePerOutage",
         "theFailureIsSaidOncePerOutage",
         "theSameRenameLandsOnceTheDiskAnswers"
       ]
@@ -15915,13 +15919,14 @@
       "tests": [
         "aCleanupRenderIsReturned",
         "aFallbackMeasureStillCatchesAShortOutput",
-        "aPacketCountMeasuresTheSource",
+        "aMalformedReplyIsUnreadable",
+        "aMixedRateStreamIsNotGivenALength",
         "aPlainTranscodeIsPublishedWithTheNote",
+        "aProvenMasterStillCarriesTheNote",
         "aProvenMasterStillReplaces",
         "aReformatIsPublishedWithTheNote",
         "aReplaceIsRefused",
         "aStreamDurationMeasuresTheSource",
-        "anAmbiguousFrameRateIsNotALength",
         "anOutputMeasuredByItsStreamsIsVerified",
         "anOutputWithNoDurationIsStillFailed",
         "anUnprovenMasterStillNeverReplaces",
@@ -15939,6 +15944,9 @@
         "CleanupUnverifiedRenderMatrixTests"
       ],
       "tests": [
+        "aRenderChangedAfterVerificationIsNeverPublished",
+        "aRenderSwappedDuringVerificationIsNeverReturned",
+        "aScratchRemovalIsRemovedOnlyWhenConfirmedAbsent",
         "aShortReformatIsStillRefused",
         "anUnmeasurableReformatIsNeverAdopted",
         "anUnmeasurableRenderIsNeverReturned",
@@ -15946,7 +15954,8 @@
         "controlAVerifiedRenderIsReturned",
         "stopDuringTheProbesNeverPublishes",
         "stopDuringTheProbesNeverReturnsARender",
-        "theJobPublishesOnlyAReturnedRender"
+        "theJobPublishesOnlyAReturnedRender",
+        "theScratchFoldersFateIsSaid"
       ]
     },
     {
@@ -31047,6 +31056,10 @@
         "aVideoMismatchNeverReplaces",
         "anAudioDecodeThatMisbehavesIsNeverAPass",
         "anAudioMismatchNeverReplaces",
+        "carriageReturnSeparatedRecordsAreComparedOneByOne",
+        "garbageIsBoundedToo",
+        "identicalGarbageAudioProofsAreNotAMatch",
+        "identicalGarbageVideoProofsAreNotAMatch",
         "stopAfterTheProofAnsweredNeverPublishes",
         "stopDuringTheProofNeverPublishes",
         "theEvidenceForALongTapeIsComputedInBudget",
@@ -32542,12 +32555,16 @@
         "VolumeRescueNeverReplacesTests"
       ],
       "tests": [
+        "aDestinationMovedDuringTheRescueIsNeverPublishedInto",
         "aDifferentSizeFileIsNeverReplaced",
         "aDirectoryAtTheNameIsNeverReplaced",
+        "aFileArrivingDuringTheRealTransferSurvives",
         "aFileThatAppearsBeforeRsyncRunsIsNotReplaced",
         "aFileThatAppearsDuringTheFastCopyIsNotReplaced",
         "aSameSizeFileIsCountedAndLeftUntouched",
+        "aSameSizeFileThatAppearsIsAlreadyThereNotWritten",
         "aSymlinkAtTheNameIsNeverReplaced",
+        "aSymlinkedStagingFolderIsNeverFollowed",
         "theCopiersOwnPartialIsStillResumed",
         "twoCameraCardsIntoOneFolder"
       ]
@@ -38565,12 +38582,13 @@
         "aFileAlreadyAtTheFinalNameIsReportedAndLeftAlone",
         "aRealInterruptedTransferNeverLeavesATruncatedFileAtTheFinalName",
         "aSourceTheRealRsyncSkipsIsNotCountedCopied",
+        "everyMkdirFailureIsLogged",
         "exitZeroWithoutTheFile",
         "hangThenStop",
         "killedBySignal",
         "launchFailure",
         "launchFailureThenStop",
-        "manyFailuresAreCountedAndTheLogIsBounded",
+        "manyFailuresAreCountedAndEveryLineIsLogged",
         "mkdirCannotStart",
         "mkdirExitsNonzero",
         "mkdirLaunchFailureThenStop",
@@ -38580,6 +38598,7 @@
         "stopBeforeTheFirstFileInFastMode",
         "stopThenNoLaunch",
         "theCommandLinesAndARealCopy",
+        "theFailureLogCapIsSaid",
         "theRescueWritesStartAndOutcome",
         "theShapeInTheSource",
         "theWords"
@@ -41409,7 +41428,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3974,
+      "expected_floor": 3978,
       "name": "unit",
       "package_expected_floor": 1018,
       "package_selectors": [
@@ -42632,7 +42651,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1019,
+      "expected_floor": 1034,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
