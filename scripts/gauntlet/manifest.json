@@ -15906,6 +15906,27 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeVerifyReformatCleanupMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ReformatUnverifiedOutputMatrixTests",
+        "CleanupUnverifiedRenderMatrixTests"
+      ],
+      "tests": [
+        "aShortReformatIsStillRefused",
+        "anUnmeasurableReformatIsNeverAdopted",
+        "anUnmeasurableRenderIsNeverReturned",
+        "anUnmeasurableSourceIsNotAVerifiedReformat",
+        "anUnmeasurableSourceIsNotAVerifiedRender",
+        "controlAVerifiedReformatPublishes",
+        "controlAVerifiedRenderIsReturned",
+        "stopDuringTheProbesNeverPublishes",
+        "stopDuringTheProbesNeverReturnsARender",
+        "theJobPublishesOnlyAReturnedRender"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EngineSmokTests.swift",
@@ -16314,7 +16335,7 @@
         "anUnmeasurableLengthIsNeverAVerdict",
         "nonZeroExitNamesFfmpegsLastWordsNotItsProgress",
         "shortOutputFailsLongEnoughPasses",
-        "verificationHasThreeAnswersAndVerdictKeepsItsMeaning",
+        "verificationHasThreeAnswersAndNoNilMeansPassForm",
         "zeroExitIsNotAFailure"
       ]
     },
@@ -31021,12 +31042,14 @@
         "aFileSubstitutedAtTheNewFilesNameIsNeverRemovedByTheCleanup",
         "aNewFileSwappedDuringVerificationIsNeverPublished",
         "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
-        "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
+        "aPlainTranscodeNeverAdoptsAnUnmeasurableOutput",
+        "aPlainTranscodeWithAnUnmeasurableSourceIsNotAdopted",
         "aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre",
         "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
         "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
+        "controlAPlainTranscodePublishesBeside",
         "encodeCrash",
         "encodeHangThenStop",
         "encodeHangThenWatchdog",
@@ -31038,6 +31061,7 @@
         "stopAfterTheProbesAnsweredNeverPublishes",
         "stopAfterTheReplaceBeganFinishesAndSaysSo",
         "stopBeforeTheReplaceBeginsCancels",
+        "stopDuringTheProbesOfAPlainTranscodeNeverPublishes",
         "theCauseIsBounded",
         "theDispositionSentenceReportsTheCleanupsOwnResult",
         "thePublishRefusesAFileThatIsNotTheVerifiedOne"
@@ -42560,7 +42584,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 979,
+      "expected_floor": 992,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42819,7 +42843,9 @@
         "VideoScanTests/DedupeHashReadSeamSensorTests",
         "VideoScanTests/HashReadFaultContentCopyProofTests",
         "VideoScanTests/HashReadFaultDeleteDuplicatesTests",
-        "VideoScanTests/TranscodePreservationProofMatrixTests"
+        "VideoScanTests/TranscodePreservationProofMatrixTests",
+        "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
+        "VideoScanTests/CleanupUnverifiedRenderMatrixTests"
       ]
     },
     {

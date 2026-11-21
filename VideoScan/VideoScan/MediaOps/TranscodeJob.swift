@@ -329,22 +329,22 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         if await stoppedBeforePublish(partialURL) { return }
 
         // The gate between the encode and the publish (TranscodeJob+
-        // EncodeGate.swift): exit code, length, a non-trivial file — and,
-        // with Replace, VERIFIED (GH #500, Rick 2026-11-20: "verify the
-        // temp, only when verified could it replace anything"). It only
-        // reads; nothing has been trashed or renamed yet. A new file that
-        // fails it is removed (discardPartial: this run's own reserved
-        // partial, nothing else) and the file at the output name is never
-        // touched.
+        // EncodeGate.swift): exit code, length, a non-trivial file — and
+        // VERIFIED, with or without Replace (GH #500, Rick 2026-11-20:
+        // "verify the temp, only when verified could it replace anything";
+        // GH #502, 2026-11-21: an output nobody could measure is not
+        // published beside anything or catalogued either). It only reads;
+        // nothing has been trashed or renamed yet. A new file that fails
+        // it is removed (discardPartial: this run's own reserved partial,
+        // nothing else) and the file at the output name is never touched.
         let size: Int64
-        let verified: PartialFileNaming.FileStamp?
-        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath,
-                                     replace: replaceExisting) {
+        let verified: PartialFileNaming.FileStamp
+        switch await Self.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath) {
         case .failed(let failure, let stage):
             await failEncode(failure, stage: stage, partial: partialURL)
             return
         case .unverified(let cause):
-            await refuseUnverifiedReplace(cause: cause, partial: partialURL)
+            await refuseUnverified(cause: cause, partial: partialURL)
             return
         case .passed(let bytes, let stamp):
             size = bytes
@@ -470,12 +470,17 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         await finish(failed: message)
     }
 
-    /// Replace refused: the new file is not verified. Removed through the
-    /// failed-encode path; the message reports the cleanup's own result.
-    private func refuseUnverifiedReplace(cause: String, partial: URL) async {
+    /// The new file is not verified: the job FAILS, with or without
+    /// Replace (GH #500, #502). The new file is removed through the
+    /// failed-encode path; the message reports the cleanup's own result —
+    /// and, when a Replace was asked, that the original was not replaced.
+    private func refuseUnverified(cause: String, partial: URL) async {
         let cleanup = discardPartial(partial)
-        let message = Self.unverifiedReplaceMessage(cause: cause, original: outputURL.lastPathComponent, cleanup: cleanup)
-        transcodeLog.error("transcode FAILED (verify, Replace refused): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        let message = replaceExisting
+            ? Self.unverifiedReplaceMessage(cause: cause, original: outputURL.lastPathComponent, cleanup: cleanup)
+            : Self.unverifiedMessage(cause: cause, cleanup: cleanup)
+        let stage = replaceExisting ? "verify, Replace refused" : "verify"
+        transcodeLog.error("transcode FAILED (\(stage, privacy: .public)): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
         await finish(failed: message)
     }
 
@@ -496,7 +501,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     /// Publish the partial; returns the summary's note, or nil when the
     /// job has been finished as failed here.
-    private func publish(_ partialURL: URL, verified: PartialFileNaming.FileStamp?) async -> String? {
+    private func publish(_ partialURL: URL, verified: PartialFileNaming.FileStamp) async -> String? {
         do {
             let outcome = try await Self.publishVerified(
                 partial: partialURL.path, final: outputURL, policy: existingFilePolicy(),
@@ -510,7 +515,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             return nil
         } catch is ChangedSinceVerified {
             // Not the file that was verified: nothing was trashed or renamed.
-            await refuseUnverifiedReplace(cause: Self.changedAfterVerification, partial: partialURL)
+            await refuseUnverified(cause: Self.changedAfterVerification, partial: partialURL)
             return nil
         } catch {
             // The partial is our own complete encode: kept, named, so the

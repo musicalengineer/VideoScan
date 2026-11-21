@@ -34,10 +34,10 @@
 // LogSinks+Test.swift; gmock's EXPECT_CALL shape): START once, the exact
 // FAILED line once, in that order, never "Transcoded", and no other OUTCOME.
 //
-// One row stays RED under `withKnownIssue`, reported for Rick, not fixed
-// here: plain Transcode (no Replace) adopting an unmeasurable output
-// (GH #502). Preservation + Replace now runs its frame-MD5 proof BEFORE the
-// Replace (GH #501, fixed 2026-11-21; the full proof matrix is
+// The two rows that were parked RED under `withKnownIssue` are fixed and
+// green (Rick 2026-11-21): plain Transcode (no Replace) no longer adopts an
+// unmeasurable output (GH #502), and Preservation + Replace runs its
+// frame-MD5 proof BEFORE the Replace (GH #501; the full proof matrix is
 // TranscodePreservationProofMatrixTests).
 //
 // Parallel by design (each test binds its own mock and Trash seam).
@@ -764,26 +764,95 @@ struct TranscodeReplaceNegativeMatrixTests {
         #expect(!source.contains("DerivativeOutputPublish.publish("), "the job publishes only through publishVerified")
     }
 
-    // MARK: - Reported for Rick, not fixed here (RED under withKnownIssue)
+    // MARK: - GH #502: without Replace, an unverified output is not adopted either
 
-    /// RED (2026-11-20, reported, NOT changed — the #500 ruling is about
-    /// Replace). Plain Transcode, no Replace: an output ffprobe cannot read
-    /// is still published (beside the existing file — nothing is removed,
-    /// rule 2 holds) and the job says "Transcoded" and adopts it into the
-    /// catalog as a derivative: a success claim nobody verified (rule 1).
-    @Test("RED: plain Transcode (no Replace) reports an unmeasurable output as Transcoded and catalogues it", arguments: [Unmeasurable.emptyOutput, .crash])
-    func aPlainTranscodeStillAdoptsAnUnmeasurableOutput(_ kind: Unmeasurable) async throws {
+    /// What a plain Transcode (no Replace) whose new file could not be
+    /// verified must show: FAILED, never "Transcoded"; the same sentence
+    /// family as #500 minus "the original was not replaced" (nothing was
+    /// going to be replaced); the new file removed; nothing published
+    /// beside the existing file; nothing adopted into the catalog.
+    func expectUnverifiedNotPublished(_ b: Bench, _ job: TranscodeJob, _ m: ScriptedExecutor, catalogBefore: [String],
+                                      file whose: String, cause: [String],
+                                      sourceLocation: SourceLocation = #_sourceLocation) {
+        let plain = "Could not verify the new file — nothing was published or added to the catalog."
+        expectRefused(b, job, catalogBefore: catalogBefore, reason: [plain, whose] + cause, sourceLocation: sourceLocation)
+        guard case .failed(let message) = job.state else { return }
+        #expect(message.hasPrefix(plain), "the row must open with the plain words: \(message)", sourceLocation: sourceLocation)
+        #expect(message.hasSuffix("The unverified new file was removed."), "\(message)", sourceLocation: sourceLocation)
+        #expect(!message.contains("not replaced") && !message.contains("Transcoded"), "\(message)", sourceLocation: sourceLocation)
+        #expect(job.subtitle == message, sourceLocation: sourceLocation)
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title,
+                                                                    state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome == "transcode FAILED: \(Self.sourceName) — \(message)", "OUTCOME: \(outcome ?? "nil")", sourceLocation: sourceLocation)
+        #expect((outcome ?? "").count < 900, "the OUTCOME line is bounded", sourceLocation: sourceLocation)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty, "the unverified output was probed for the catalog", sourceLocation: sourceLocation)
+        #expect(m.calls(to: "ffmpeg").count == 1, "\(m.calls)", sourceLocation: sourceLocation)
+        let beside = ((try? FileManager.default.contentsOfDirectory(atPath: b.outDir.path)) ?? []).sorted()
+        #expect(beside == [b.target.lastPathComponent], "published or left beside the existing file: \(beside)", sourceLocation: sourceLocation)
+    }
+
+    /// GH #502 (was RED on main under `withKnownIssue` as
+    /// `aPlainTranscodeStillAdoptsAnUnmeasurableOutput`): without Replace an
+    /// output ffprobe could not read was published beside the existing
+    /// file, reported "Transcoded" and adopted into the catalog.
+    @Test("plain Transcode (no Replace): an output whose length probe crashes / cannot launch / returns garbage / says Invalid data / hangs is FAILED, removed, never catalogued",
+          arguments: Unmeasurable.allCases)
+    func aPlainTranscodeNeverAdoptsAnUnmeasurableOutput(_ kind: Unmeasurable) async throws {
         let b = try bench("plain_unmeasurable_\(kind.rawValue)"); defer { b.sb.cleanup() }
         let before = b.catalogSnapshot()
         let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: kind.probe)
         let job = await run(b, m, replace: false)
-        // Rule 2 holds today and must keep holding: nothing is removed.
-        #expect(b.trashed.all.isEmpty)
-        #expect(Self.sha(b.target) == b.priorSHA)
-        withKnownIssue("RED: without Replace an unmeasurable output is published as “Transcoded” and adopted into the catalog") {
-            if case .finished(let summary) = job.state { Issue.record("an unmeasured output was reported as: \(summary)") }
-            #expect(b.catalogSnapshot() == before, "an unmeasured output was adopted into the catalog")
+        expectUnverifiedNotPublished(b, job, m, catalogBefore: before,
+                                     file: "the new file's length could not be read", cause: kind.causeWords)
+    }
+
+    @Test("plain Transcode (no Replace): the SOURCE's length cannot be read — nothing to compare against, so the output is not adopted")
+    func aPlainTranscodeWithAnUnmeasurableSourceIsNotAdopted() async throws {
+        let b = try bench("plain_unmeasurable_source"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), sourceProbe: .output(stdout: "N/A\n"))
+        let job = await run(b, m, replace: false)
+        expectUnverifiedNotPublished(b, job, m, catalogBefore: before,
+                                     file: "the source's length could not be read to compare against",
+                                     cause: ["ffprobe exited 0 but its answer was not a length", "“N/A”"])
+    }
+
+    /// GH #502, "related, untested": without Replace a Stop during the
+    /// output probes could still publish (a cancelled probe read as
+    /// "unmeasured", which was a pass).
+    @Test("plain Transcode (no Replace): Stop while the output is being probed ends Cancelled; nothing published, nothing catalogued")
+    func stopDuringTheProbesOfAPlainTranscodeNeverPublishes() async throws {
+        let b = try bench("plain_stop_probes"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let probing = Box<Bool>(), release = Box<Bool>()
+        let m = try mock(b, encode: .writeOutputFile(Data(count: 20_000)), outputProbe: .custom { _ in
+            probing.set(true)
+            _ = await release.wait()
+            return Self.twelveSecondsResult   // a good answer, in hand when Stop was pressed
+        })
+        let job = await run(b, m, replace: false) { job in
+            _ = await probing.wait()
+            job.cancel()
+            release.set(true)
         }
+        expectRefused(b, job, catalogBefore: before, reason: [], cancelled: true)
+        #expect(m.calls(to: "ffprobe", containing: ["-show_streams"]).isEmpty)
+        let beside = ((try? FileManager.default.contentsOfDirectory(atPath: b.outDir.path)) ?? []).sorted()
+        #expect(beside == [b.target.lastPathComponent], "\(beside)")
+    }
+
+    @Test("control (no Replace): a verified output is published BESIDE the existing file, which is untouched, and is catalogued")
+    func controlAPlainTranscodePublishesBeside() async throws {
+        let b = try bench("plain_ok"); defer { b.sb.cleanup() }
+        let m = try mock(b, encode: .writeOutputFile(Data(repeating: 0x5A, count: 20_000)))
+        let job = await run(b, m, replace: false)
+        guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(summary.hasPrefix("Transcoded → "), "\(summary)")
+        #expect(summary.contains("Kept the existing \(b.target.lastPathComponent)"), "\(summary)")
+        #expect(b.trashed.all.isEmpty && Self.sha(b.target) == b.priorSHA)
+        #expect(job.publishedURL != b.target && FileManager.default.fileExists(atPath: job.publishedURL.path))
+        #expect(b.model.records.first { $0.fullPath == job.publishedURL.path }?.derivedFrom == b.source.id)
+        #expect(b.partials().isEmpty)
     }
 
     // MARK: - GH #501: Preservation proves lossless BEFORE the Replace
