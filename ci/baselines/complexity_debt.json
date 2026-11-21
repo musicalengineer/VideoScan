@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 351,
+ "entry_count": 350,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -819,8 +819,8 @@
    "nloc": 88
   },
   "VideoScan/VideoScan/Media/AudioTranscriber.swift::PythonSubprocessAudioTranscriber.transcribe": {
-   "ccn": 10,
-   "nloc": 108
+   "ccn": 9,
+   "nloc": 81
   },
   "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift::CaptionOrchestrator.startAnalyzing": {
    "ccn": 12,
@@ -955,8 +955,8 @@
    "nloc": 54
   },
   "VideoScan/VideoScan/MediaOps/TranscodeJob.swift::TranscodeJob.runTranscode": {
-   "ccn": 23,
-   "nloc": 151
+   "ccn": 20,
+   "nloc": 117
   },
   "VideoScan/VideoScan/MediaOps/TranscodeSheet.swift::TranscodeSheet.body": {
    "ccn": 4,
@@ -1353,10 +1353,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewSweepEngine.swift::PreviewSweepEngine.run": {
    "ccn": 20,
    "nloc": 106
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess": {
-   "ccn": 8,
-   "nloc": 90
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/RecordDateResolver.swift::RecordDateResolver.resolve": {
    "ccn": 17,
