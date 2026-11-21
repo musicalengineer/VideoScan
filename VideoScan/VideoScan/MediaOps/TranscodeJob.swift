@@ -505,7 +505,19 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             let kept = await Self.keepUnpublishedOffMain(partialURL)
             transcodeLog.error("transcode FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
             appLog.write("transcode: \(self.record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
+            // MIXED STATE (codex r3): the previous file is already in the
+            // Trash. Say where both files are and how to restore.
+            let mixed = (error as? DerivativeOutputPublish.Failure).flatMap { failure in
+                failure.previousFileTrashedAt.map {
+                    Self.replaceNotCompletedMessage(cause: failure.cause ?? failure.message, original: outputURL,
+                                                    trashedAt: $0, keptAt: kept.path)
+                }
+            }
+            // A failed publish leaves a finished encode on disk (and maybe
+            // the original in the Trash): it is a FAILURE that must be
+            // read, never a "Cancelled" row over it, whenever Stop came.
+            await finish(failed: mixed ?? "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)",
+                         evenIfStopped: true)
             return nil
         }
     }
@@ -928,13 +940,15 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         isIndeterminateValue = false
     }
 
-    private func finish(failed: String) async {
+    private func finish(failed: String, evenIfStopped: Bool = false) async {
         // Rick 2026-08-26: a job whose cancel was the FIRST terminal cause
         // NEVER ends .failed — the SIGTERM'd child's non-zero exit, or any
         // typed error thrown while the Task unwinds, is the user's Stop,
         // not a failure. A stall recorded before the Stop is not diverted
         // (codex gate 2026-08-26) — see MFOTerminalCause.
-        if terminalCause.isCancel { await finish(cancelled: true); return }
+        // `evenIfStopped`: the publish failed after the encode was done —
+        // files were left that the row must name (codex r3).
+        if terminalCause.isCancel, !evenIfStopped { await finish(cancelled: true); return }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false

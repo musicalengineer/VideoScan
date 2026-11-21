@@ -165,11 +165,20 @@ extension TranscodeJob {
             + disposition(original: original, newFile: "failed", cleanup: cleanup)
     }
 
+    /// The MIXED STATE (codex r3): the previous file is in the Trash and
+    /// the new file could not take its name. Says where both are and how
+    /// to put the original back.
+    nonisolated static func replaceNotCompletedMessage(cause: String, original: URL, trashedAt: String,
+                                                       keptAt: String) -> String {
+        "The replace was NOT completed: \(cause). The original \(original.lastPathComponent) is in the Trash at \(trashedAt)"
+            + " — move it back to \(original.deletingLastPathComponent().path) to restore it. The new file is kept at \(keptAt)."
+    }
+
     /// Appended to the success summary when Stop was pressed after the
     /// publish's commit point: the job finished, and says why it did not
     /// stop — never a "Cancelled" row over a replace that happened.
     nonisolated static func lateStopNote(replaced: Bool) -> String {
         replaced ? " Stop arrived after the replace had begun, so it was completed."
-                 : " Stop arrived after the new file had been published, so it was kept."
+                 : " Stop was pressed too late to cancel: the new file was published and kept."
     }
 }

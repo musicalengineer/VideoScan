@@ -125,7 +125,7 @@ struct TranscodeReplaceNegativeMatrixTests {
     enum StopAt: Sendable { case never, duringFirstRename, afterTrash }
 
     func run(_ b: Bench, _ mock: ScriptedExecutor, preset: TranscodePreset = .archival, replace: Bool = true,
-             stopAt: StopAt = .never,
+             stopAt: StopAt = .never, renameFailsAfterTrash: Bool = false,
              whileRunning: (@MainActor (TranscodeJob) async -> Void)? = nil) async -> TranscodeJob {
         let job = TranscodeJob(record: b.source, preset: preset, outputURL: b.target, model: b.model, replaceExisting: replace)
         let trashed = b.trashed, fakeTrash = b.fakeTrash
@@ -133,6 +133,7 @@ struct TranscodeReplaceNegativeMatrixTests {
         // in the publish, so its queue is free to run the press.
         let stop: @Sendable () -> Void = { DispatchQueue.main.sync { MainActor.assumeIsolated { job.cancel() } } }
         let renames = Box<Bool>()
+        let targetPath = b.target.path
         let realRename = ExclusivePublish.renameExclSyscall
         await mock.scoped {
             await ExclusivePublish.$renameExclSyscall.withValue({ source, destination in
@@ -140,6 +141,9 @@ struct TranscodeReplaceNegativeMatrixTests {
                     renames.set(true)
                     stop()
                 }
+                // The disk fails (EIO) exactly when the new file should
+                // take the name the previous file just left.
+                if renameFailsAfterTrash, !trashed.all.isEmpty, destination == targetPath { return EIO }
                 return realRename(source, destination)
             }) {
                 await DerivativeOutputPublish.$trashItem.withValue({ url in
@@ -590,6 +594,45 @@ struct TranscodeReplaceNegativeMatrixTests {
                 "the catalog matches the disk: the derivative is recorded")
     }
 
+    /// Codex r3 (P1) — the MIXED STATE: the previous file is in the Trash
+    /// and then the new file cannot take its name (EIO). The job is FAILED
+    /// and says where both files are and how to put the original back —
+    /// and a Stop pressed after the commit point must not turn that into a
+    /// bare "Cancelled" that hides it.
+    @Test("r3: the rename fails after the previous file was trashed: FAILED, naming the Trash location and the kept new file — with or without a late Stop",
+          arguments: [StopAt.never, .afterTrash])
+    func aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre(_ stopAt: StopAt) async throws {
+        let b = try bench("mixed_\(stopAt)"); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
+        let encoded = Data(repeating: 0x5A, count: 20_000)
+        let m = try mock(b, encode: .writeOutputFile(encoded))
+        let job = await run(b, m, stopAt: stopAt, renameFailsAfterTrash: true)
+
+        // On disk: the original in the (fake) Trash, the encode kept, the name empty.
+        let inTrash = b.fakeTrash.appendingPathComponent(b.target.lastPathComponent)
+        #expect(b.trashed.all == [b.target.path])
+        #expect(Self.sha(inTrash) == b.priorSHA, "the original must survive in the Trash")
+        let kept = ((try? FileManager.default.contentsOfDirectory(atPath: b.outDir.path)) ?? []).filter { $0.contains(".vs-kept.") }
+        #expect(kept.count == 1, "\(kept)")
+        let keptURL = b.outDir.appendingPathComponent(kept.first ?? "missing")
+        #expect((try? Data(contentsOf: keptURL)) == encoded, "the encode must survive")
+        #expect(!FileManager.default.fileExists(atPath: b.target.path))
+        #expect(b.partials().isEmpty)
+        #expect(b.catalogSnapshot() == before, "nothing was catalogued for a replace that did not finish")
+
+        guard case .failed(let message) = job.state else { Issue.record("a half-done replace was reported as \(job.state)"); return }
+        #expect(message.hasPrefix("The replace was NOT completed"), "\(message)")
+        #expect(message.contains("Input/output error"), "the cause: \(message)")
+        #expect(message.contains("The original \(b.target.lastPathComponent) is in the Trash at \(inTrash.path)"), "\(message)")
+        #expect(message.contains("move it back to \(b.outDir.path) to restore it"), "\(message)")
+        #expect(message.contains("The new file is kept at \(keptURL.path)"), "\(message)")
+        #expect(!message.contains(".vs-partial."), "no stale location: \(message)")
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title,
+                                                                    state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome == "transcode FAILED: \(Self.sourceName) — \(message)")
+        #expect(job.subtitle == message)
+    }
+
     /// F4 (P2): the cleanup's own result is what the message reports. The
     /// folder loses its search permission while the output is probed, so
     /// the partial can be neither removed nor even seen — "not there" must
@@ -630,6 +673,11 @@ struct TranscodeReplaceNegativeMatrixTests {
                 == "Could not verify the new file — the original was not replaced. Cause: c. a.mov was not moved or changed; the unverified new file was no longer there to remove.")
         #expect(J.unverifiedReplaceMessage(cause: "c", original: "a.mov", cleanup: .notRemoved("could not remove partial /x/p: Permission denied (errno 13)"))
                 == "Could not verify the new file — the original was not replaced. Cause: c. a.mov was not moved or changed; the unverified new file was NOT removed: could not remove partial /x/p: Permission denied (errno 13).")
+        // The too-late Stop: "after the replace had begun" only when a
+        // replace happened; otherwise no claim about when Stop arrived
+        // (codex r3 residual: it may have landed before a publish beside).
+        #expect(J.lateStopNote(replaced: true) == " Stop arrived after the replace had begun, so it was completed.")
+        #expect(J.lateStopNote(replaced: false) == " Stop was pressed too late to cancel: the new file was published and kept.")
         #expect(J.failedReplaceMessage(failure: "Ffmpeg stopped with exit code 1", original: "a.mov", cleanup: .removed)
                 == "Ffmpeg stopped with exit code 1. The original was not replaced: a.mov was not moved or changed; the failed new file was removed.")
     }

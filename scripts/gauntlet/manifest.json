@@ -30823,6 +30823,7 @@
         "aNewFileSwappedDuringVerificationIsNeverPublished",
         "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
         "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
+        "aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre",
         "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
         "anUnmeasurableSourceIsNotAVerifiedReplace",
@@ -41732,7 +41733,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 858,
+      "expected_floor": 859,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
