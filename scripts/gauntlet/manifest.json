@@ -36970,10 +36970,12 @@
       ],
       "tests": [
         "aPrefixReadIsNeverADigest",
+        "anInterruptedReadIsRetried",
         "eachFaultAtEachHasher",
         "everyAssignmentIsTheTaskLocal",
         "hookNilIsTheReferenceDigest",
         "nilHookTimeIsComparable",
+        "theArchiveReaderDoesNotRetryAnInjectedInterrupt",
         "theCarriersAreInPlace",
         "theGateConsultsOnce",
         "theHookIsTaskLocal",
@@ -42355,7 +42357,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 961,
+      "expected_floor": 963,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [

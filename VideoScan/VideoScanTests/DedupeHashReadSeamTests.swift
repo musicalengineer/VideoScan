@@ -26,6 +26,8 @@
 //                         consumed with the size; the archive engine's
 //                         sha256(fd:) does not, GH #504 root cause A)
 //       partial read     the file's digest ✔          the file's digest ✔
+//       EINTR (once)     retried: the file's digest ✔ retried: the file's digest ✔
+//                        (Codex r1 P2: the simulated interrupt consumes nothing)
 //       bit flip         the digest of the FLIPPED    the digest of the
 //                        bytes, bound to the file's   FLIPPED bytes
 //                        stamp as its fixity          (one read is taken as
@@ -244,6 +246,72 @@ struct DedupeHashReadSeamTests {
         #expect(digest == nil)
         // Asked for the KEEPER's size, the longer file is refused before any read.
         #expect(ContentCopyProof.sha256(path: url.path, expectedBytes: Int64(keeperSize)) == nil)
+    }
+
+    // MARK: EINTR (Codex r1 P2)
+
+    /// A hook that answers `.errno(EINTR)` ONCE, for the block at `atOffset`.
+    private final class InterruptOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        let atOffset: Int64
+        init(atOffset: Int64) { self.atOffset = atOffset }
+        var fired: Bool { lock.withLock { done } }
+        var hook: ArchivePromoteEngine.ReadHook {
+            { [self] _, offset, _ in
+                lock.withLock {
+                    guard !done, offset == atOffset else { return nil }
+                    done = true
+                    return .errno(EINTR)
+                }
+            }
+        }
+    }
+
+    /// Codex r1 P2. A real EINTR means the read was interrupted BEFORE any
+    /// data arrived: nothing was consumed, and both hashers retry it
+    /// (`cancellableFullHash`: `else if errno != EINTR { return "" }` loops;
+    /// `ContentCopyProof.sha256`: FileHandle retries inside the read, so a
+    /// real EINTR never surfaces). The simulated one must be the same event —
+    /// "this read returned -1/EINTR and consumed nothing" — or a retrying
+    /// hasher skips the block and reports the file unreadable.
+    @Test("EINTR once (at offset 0, and mid-file): both serial hashers retry and return the TRUE digest — the simulated interrupt consumes nothing",
+          arguments: [Int64(0), Int64(1 << 20)])
+    func anInterruptedReadIsRetried(_ atOffset: Int64) throws {
+        let dir = dedupeSeamTempDir("eintr"); defer { try? FileManager.default.removeItem(at: dir) }
+        let size = 2 * Self.block + 40_000
+        let (url, data) = try file(dir, "test_eintr.bin", bytes: size, seed: 17)
+        let expected = hashSeamReference(data)
+
+        let gate = InterruptOnce(atOffset: atOffset)
+        let counter = GateCounter()
+        let digest = ArchivePromoteEngine.$readHook.withValue(gate.hook) { gateDigest(url, hooks: counter.hooks) }
+        #expect(gate.fired, "the interrupt never reached cancellableFullHash")
+        #expect(digest == expected, "cancellableFullHash after one EINTR: \(digest ?? "no digest")")
+        #expect(counter.blockCount == 3, "every block is hashed exactly once")
+
+        let proof = InterruptOnce(atOffset: atOffset)
+        let proofDigest = ContentCopyProof.sha256(path: url.path, expectedBytes: Int64(size), readHook: proof.hook)
+        #expect(proof.fired, "the interrupt never reached ContentCopyProof.sha256")
+        #expect(proofDigest == expected, "ContentCopyProof.sha256 after one EINTR: \(proofDigest ?? "nil")")
+    }
+
+    /// The ARCHIVE reader (`pipelinedRead`, merged 2026-11-20) does not share
+    /// the applier: it applies `.errno` after its own EINTR-retry loop, so an
+    /// injected EINTR is posted as a hard read error although a real one is
+    /// retried. pread never moves the descriptor's offset, so nothing is
+    /// skipped — the only infidelity is that the simulated interrupt is not
+    /// retried. Pinned, parked; not changed here (yesterday's reviewed seam).
+    @Test("EINTR in the archive reader (pinned, parked): an injected EINTR is reported as a read error — a real one is retried")
+    func theArchiveReaderDoesNotRetryAnInjectedInterrupt() throws {
+        let dir = dedupeSeamTempDir("eintr_engine"); defer { try? FileManager.default.removeItem(at: dir) }
+        let (url, data) = try file(dir, "test_eintr_engine.bin", bytes: 70_000, seed: 18)
+        let once = InterruptOnce(atOffset: 0)
+        let digest = try? ArchivePromoteEngine.$readHook.withValue(once.hook) { try ArchivePromoteEngine.sha256(path: url.path) }
+        #expect(once.fired)
+        withKnownIssue("PARKED 2026-11-21 (P3, seam fidelity only — no product defect): ArchivePromoteEngine's reader applies an injected .errno(EINTR) AFTER its EINTR-retry loop, so a test cannot simulate an interrupted archive read (it gets Failure.writeFailed \"read errno 4\"). Proposed: in ChunkRing.startReader, an injected EINTR re-issues the pread (as applyReadFault does for the serial hashers).") {
+            #expect(digest == hashSeamReference(data))
+        }
     }
 
     // MARK: Isolation

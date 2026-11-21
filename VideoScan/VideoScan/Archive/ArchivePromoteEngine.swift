@@ -122,7 +122,9 @@ enum ArchivePromoteEngine {
     /// answer. Returns the count the caller must act on as if read(2) had
     /// returned it: `count` unchanged (no fault, or one bit flipped in
     /// `buffer`), fewer bytes (a short read; 0 = the file "ends" here), or
-    /// -1 with `errno` set (a read error). After a short read the
+    /// -1 with `errno` set (a read error; for EINTR the descriptor is put
+    /// back at `offset` — an interrupted read consumed nothing — so the
+    /// caller's retry reads the same block). After a short read the
     /// descriptor's offset is put where a real short read would have left
     /// it, so the caller's next read continues from there. Called ONLY when
     /// a hook is bound — never in production.
@@ -131,6 +133,10 @@ enum ArchivePromoteEngine {
         guard count > 0, let fault = hook(fd, offset, count) else { return count }
         switch fault {
         case .errno(let e):
+            // A real EINTR interrupts the read BEFORE any data arrives:
+            // nothing was consumed. Put the descriptor back, so a hasher
+            // that retries reads this same block again (Codex r1 P2).
+            if e == EINTR { _ = lseek(fd, off_t(offset), SEEK_SET) }
             errno = e
             return -1
         case .shortRead(let bytes):

@@ -50,8 +50,12 @@
 //        in the KEEPER's read (uncached)       → 🔴 P0: THE DUPLICATE IS TRASHED
 //        in the duplicate's read at its path   → held: the quarantine re-read disagrees
 //        in the SINGLE quarantine read (cached)→ 🔴 P0: THE DUPLICATE IS TRASHED
-//   C  a stale/false but stamp-valid CACHED keeper fixity → P1: the keeper is
-//      NOT re-read; a file holding the cached digest's bytes is trashed.
+//   C  a stale/false but stamp-valid CACHED keeper fixity → 🔴 P0 (Codex r1:
+//      "persistent removal authority, not merely bad metadata"): the keeper is
+//      NOT re-read; a file holding the cached digest's bytes is trashed with
+//      every read clean. The poisoned cache is SUPPLIED by the P1 in the
+//      matrix's keeper/bit-flip cell: a refused pair still publishes the
+//      flipped keeper fixity (DeleteDuplicatesJob.swift ~:1556).
 //
 // Every misbehaviour is parked under `withKnownIssue` with severity, what
 // happens, where the media ends up and a proposed fix. NOTHING IS FIXED HERE
@@ -386,7 +390,7 @@ struct HashReadFaultDeleteDuplicatesTests {
         switch c.site {
         case .keeper:
             if c.kind == .bitFlip {
-                withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B): a bit flipped in the keeper's one full read is STORED as the keeper's whole-file fixity — `verify` calls didComputeKeeperFixity before the pair's verdict and the job stores it (`learnedKeeperFixity`), stamp-bound, although the pair it came from was refused as a mismatch. Every later stamp-trusting reader believes it without a read: Delete Duplicates' single-read path then refuses the keeper's TRUE duplicates as 'NOT a duplicate' and would trash a file that holds the flipped bytes (shape C); ContentCopyProof vouches by it. No media moves in this cell. Proposed: store a keeper fixity only from a pair that verified (two files' reads agreed), or after a second read of the keeper agrees.") {
+                withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B — and the SUPPLIER of shape C's P0 poisoned cache): a bit flipped in the keeper's one full read is STORED as the keeper's whole-file fixity — `verify` calls didComputeKeeperFixity before the pair's verdict and the job stores it (`learnedKeeperFixity`), stamp-bound, although the pair it came from was refused as a mismatch. Every later stamp-trusting reader believes it without a read: Delete Duplicates' single-read path then refuses the keeper's TRUE duplicates as 'NOT a duplicate' and would trash a file that holds the flipped bytes (shape C); ContentCopyProof vouches by it. No media moves in this cell. Proposed: store a keeper fixity only from a pair that verified (two files' reads agreed), or after a second read of the keeper agrees.") {
                     #expect(rig.keeper.contentFixity == nil || rig.keeper.contentFixity?.digest == trueDigest,
                             "\(c): the keeper's stored fixity is a digest no clean read ever produced")
                 }
@@ -458,7 +462,16 @@ struct HashReadFaultDeleteDuplicatesTests {
     /// stamp describes the file now (the cached-keeper contract, the same one
     /// VerifyArchiveCopiesJob's stamp-bound fixity relies on), reads the
     /// duplicate once, and trashes it.
-    @Test("Codex shape C (P1, parked): a FALSE but stamp-valid cached keeper fixity is trusted — the keeper is not re-read, and a file that matches the false digest (not the keeper) is sent to the Trash")
+    /// 🔴 P0 (re-ranked from P1, Codex r1): this is persistent REMOVAL
+    /// AUTHORITY, not merely bad metadata — a keeper holding bytes A with a
+    /// current stamp saying digest B lets ANY file holding B be trashed, on
+    /// every later run, with all reads clean and A never read. What supplies
+    /// the poisoned cache: the P1 "a refused pair still publishes the
+    /// corrupted keeper fixity" (the matrix's keeper/bit-flip cell;
+    /// `learnedKeeperFixity` stored at DeleteDuplicatesJob.swift ~:1556), and
+    /// GH #504's Bind Fixity overwrite.
+    /// WHERE THE MEDIA IS: in the Trash, intact, recoverable; keeper untouched.
+    @Test("🔴 P0 (parked) Codex shape C: a FALSE but stamp-valid cached keeper fixity is trusted — the keeper is not re-read, and a file that matches the false digest (not the keeper) is sent to the Trash")
     func shapeC_aFalseCachedKeeperFixityIsTrusted() async throws {
         let rig = try makeRig("shapeC", cachedKeeper: false) { var d = $0; d[Int(faultByte)] ^= 0x01; return d }
         defer { rig.cleanup() }
@@ -471,7 +484,7 @@ struct HashReadFaultDeleteDuplicatesTests {
         // PINNED: what it does today.
         #expect(keeperReads.passCount == 0, "the keeper was re-read — the contract changed; promote the parked assertion below")
         #expect(ran.row.keeperMatchedByStoredFixity == true)
-        withKnownIssue("PARKED 2026-11-21 (P1, design — Rick + Codex): Delete Duplicates trusts a stamp-valid stored keeper fixity and never re-reads the keeper (holdForSingleRead / verifyHeld; Rick 2026-09-20 'single read'). With a FALSE stored digest — which GH #504's Bind Fixity overwrite and this suite's keeper-flip P1 can both write — a file that is NOT the keeper's bytes is moved to the Trash (recoverable; keeper untouched) and logged 'verified identical … keeper matched by stored fixity'. The trust is only as good as every writer of contentFixity. Proposed: fix the writers first (never store a digest from one unconfirmed read); then decide whether the first use of a cached keeper digest in a run earns one keeper re-read.") {
+        withKnownIssue("🔴 P0 PARKED 2026-11-21 (re-ranked from P1 by Codex r1: persistent removal authority, not merely bad metadata; design — Rick + Codex): Delete Duplicates trusts a stamp-valid stored keeper fixity and never re-reads the keeper (holdForSingleRead / verifyHeld; Rick 2026-09-20 'single read'). With a FALSE stored digest — which GH #504's Bind Fixity overwrite and this suite's keeper-flip P1 (a refused pair still publishes the flipped keeper fixity, DeleteDuplicatesJob.swift ~:1556) can both write — a file that is NOT the keeper's bytes is moved to the Trash (recoverable; keeper untouched) and logged 'verified identical … keeper matched by stored fixity'. The trust is only as good as every writer of contentFixity. Proposed: fix the writers first (never store a digest from one unconfirmed read); then decide whether the first use of a cached keeper digest in a run earns one keeper re-read.") {
             #expect(!rig.inTrash, "a file that is not the keeper's bytes is in the Trash: \(rig.trashURL.path)")
             #expect(ran.row.status == .refused, "\(ran.row.status)")
         }

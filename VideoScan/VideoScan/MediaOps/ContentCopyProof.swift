@@ -65,10 +65,16 @@ enum ContentCopyProof {
             do { chunk = try handle.read(upToCount: 1 << 20) ?? Data() } catch { return nil }
             if let readHook, !chunk.isEmpty {
                 let fd = handle.fileDescriptor
+                var interrupted = false
                 let delivered = chunk.withUnsafeMutableBytes { raw in
-                    ArchivePromoteEngine.applyReadFault(readHook, fd: fd, offset: total,
-                                                        buffer: raw.baseAddress!, count: raw.count)
+                    let n = ArchivePromoteEngine.applyReadFault(readHook, fd: fd, offset: total,
+                                                                buffer: raw.baseAddress!, count: raw.count)
+                    interrupted = n < 0 && errno == EINTR
+                    return n
                 }
+                // An injected EINTR: the handle retries a real one inside its
+                // read, so retry here (the applier rewound the descriptor).
+                if interrupted { continue }
                 if delivered < 0 { return nil }           // the injected read error
                 chunk = chunk.prefix(delivered)           // an injected short read (0 = EOF)
             }
