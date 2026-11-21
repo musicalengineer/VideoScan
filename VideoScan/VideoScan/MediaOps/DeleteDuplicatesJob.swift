@@ -1532,7 +1532,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
         // Phase 1: hold + hash once (or verify twice on the first pair of
         // a keeper without a fixity) + the tier facts.
-        let phaseOne = await runDetached(entryID: entry.id) { [hooks] in
+        // `carryingReadHook()`: the tests' read-fault seam, by value into the
+        // detached worker; `hooks` itself in production (task-local nil).
+        let phaseOne = await runDetached(entryID: entry.id) { [hooks = hooks.carryingReadHook()] in
             DeleteDuplicatesDiskWorker.verifyAndQuarantine(item, hooks: hooks)
         }
         var outcome = phaseOne.outcome
@@ -1610,7 +1612,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // to the Trash.
                 let archiveCheck = item.archiveCheck
                 let boundary = item.boundary
-                let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
+                let phaseTwo = await runDetached(entryID: entry.id) { [hooks = hooks.carryingReadHook()] in
                     DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
                                                                  keeperFilename: keeperName, hooks: hooks,
                                                                  archiveCheck: archiveCheck, boundary: boundary)

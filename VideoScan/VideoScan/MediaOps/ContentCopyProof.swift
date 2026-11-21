@@ -44,7 +44,14 @@ enum ContentCopyProof {
     /// Whole-file SHA-256 (lowercase hex) of the regular file at `path`,
     /// streamed in 1 MiB reads (memory: one 1 MiB buffer); nil when it is
     /// not a regular file, cannot be read, or is not `expectedBytes` long.
-    nonisolated static func sha256(path: String, expectedBytes: Int64) -> String? {
+    /// `readHook` is the read-fault TEST seam (the same hook the archive
+    /// hashers consult), asked once per 1 MiB read; nil in production, and
+    /// then each chunk is exactly what the handle returned. The default is
+    /// the CALLING task's task-local: a caller that hops to `Task.detached`
+    /// reads it before the hop and passes it in (a detached task inherits
+    /// no task-locals).
+    nonisolated static func sha256(path: String, expectedBytes: Int64,
+                                   readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> String? {
         var info = stat()
         guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
               Int64(info.st_size) == expectedBytes,
@@ -54,8 +61,23 @@ enum ContentCopyProof {
         var total: Int64 = 0
         while true {
             // read(upToCount:) answers nil OR empty at end of file; a throw is a read error.
-            let chunk: Data
+            var chunk: Data
             do { chunk = try handle.read(upToCount: 1 << 20) ?? Data() } catch { return nil }
+            if let readHook, !chunk.isEmpty {
+                let fd = handle.fileDescriptor
+                var interrupted = false
+                let delivered = chunk.withUnsafeMutableBytes { raw in
+                    let n = ArchivePromoteEngine.applyReadFault(readHook, fd: fd, offset: total,
+                                                                buffer: raw.baseAddress!, count: raw.count)
+                    interrupted = n < 0 && errno == EINTR
+                    return n
+                }
+                // An injected EINTR: the handle retries a real one inside its
+                // read, so retry here (the applier rewound the descriptor).
+                if interrupted { continue }
+                if delivered < 0 { return nil }           // the injected read error
+                chunk = chunk.prefix(delivered)           // an injected short read (0 = EOF)
+            }
             if chunk.isEmpty { break }
             total += Int64(chunk.count)
             hasher.update(data: chunk)
@@ -103,21 +125,23 @@ enum ContentCopyProof {
         /// stamp to trust, so it is HASHED IN FULL here, now (Codex closing
         /// pass F3, rule 2) — a same-size replacement fails. Off the main
         /// actor; cost = one full read of that copy.
-        nonisolated func holdsNow() -> Bool {
+        nonisolated func holdsNow(readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Bool {
             if let fixity { return ContentCopyProof.describesFileNow(fixity, path: path) }
-            return ContentCopyProof.sha256(path: path, expectedBytes: byteCount) == digest
+            return ContentCopyProof.sha256(path: path, expectedBytes: byteCount, readHook: readHook) == digest
         }
     }
 
     /// `source` and at least one of `copies` hold the same bytes NOW: same
     /// SHA-256 and size on record (a conflicting digest never vouches), the
     /// source's stamp still describes it, and a copy still holds now.
-    nonisolated static func proven(source: Claim, copies: [Claim]) -> Bool {
+    /// `readHook`: the read-fault test seam, see `sha256(path:expectedBytes:readHook:)`.
+    nonisolated static func proven(source: Claim, copies: [Claim],
+                                   readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook) -> Bool {
         let candidates = copies.filter {
             $0.digest == source.digest && $0.byteCount == source.byteCount && $0.path != source.path
         }
-        guard !candidates.isEmpty, source.fixity != nil, source.holdsNow() else { return false }
-        return candidates.contains { $0.holdsNow() }
+        guard !candidates.isEmpty, source.fixity != nil, source.holdsNow(readHook: readHook) else { return false }
+        return candidates.contains { $0.holdsNow(readHook: readHook) }
     }
 }
 

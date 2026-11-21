@@ -653,8 +653,13 @@ extension VideoScanModel {
                                     copies: copies)
         }
         guard !claims.isEmpty else { return 0 }
+        // The read-fault test seam (nil in production), read on this task
+        // and handed to the detached worker by value.
+        let readHook = ArchivePromoteEngine.readHook
         return await Task.detached(priority: .userInitiated) {
-            claims.reduce(0) { $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies) ? 1 : 0) }
+            claims.reduce(0) {
+                $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies, readHook: readHook) ? 1 : 0)
+            }
         }.value
     }
 
@@ -676,8 +681,12 @@ extension VideoScanModel {
                                                                     byteCount: source.byteCount)])
         }
         guard !pairs.isEmpty else { return 0 }
+        // The read-fault test seam (nil in production), as above.
+        let readHook = ArchivePromoteEngine.readHook
         return await Task.detached(priority: .userInitiated) {
-            pairs.reduce(0) { $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies) ? 1 : 0) }
+            pairs.reduce(0) {
+                $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies, readHook: readHook) ? 1 : 0)
+            }
         }.value
     }
 

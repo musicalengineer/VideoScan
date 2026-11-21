@@ -14,7 +14,8 @@
 //   ISOLATION — the hook is task-local: a sibling task hashing the same
 //               file at the same moment is not touched; a detached task
 //               does not inherit it; the file on disk never changes.
-//   SENSOR    — nothing in the app binds the hook (HashReadSeamSensorTests).
+//   SENSOR    — nothing in the app binds the hook (HashReadSeamSensorTests;
+//               the serial hashers' consult: DedupeHashReadSeamSensorTests).
 //
 // Parallel-safe: temp sandboxes, task-local hook, no shared state.
 
@@ -346,7 +347,13 @@ struct HashReadSeamTests {
 @Suite("Hash read seam — nothing in the app binds the hook (source sensor)")
 struct HashReadSeamSensorTests {
 
-    @Test("the app never binds or assigns readHook: it is declared and read in ArchivePromoteEngine.swift and named nowhere else")
+    /// 2026-11-21: the two serial hashers outside the engine consult the same
+    /// hook (Delete Duplicates' `SignatureVerification.cancellableFullHash`,
+    /// `ContentCopyProof.sha256`), and their detached callers carry it by
+    /// value. The exact shape of each of those files is pinned by
+    /// DedupeHashReadSeamSensorTests; here: the list is closed, and nothing
+    /// binds the task-local.
+    @Test("the app never BINDS readHook ($readHook appears nowhere), and it is named only in the engine and the four files that consult or carry it")
     func onlyTheEngineNamesTheHook() throws {
         var namers: [String] = []
         #expect(SourceTree.appSources.count > 500, "the sensor read the app tree")
@@ -355,7 +362,8 @@ struct HashReadSeamSensorTests {
             #expect(!text.contains("$readHook"), "\(entry.relative) binds the hash read hook — tests only")
             if text.contains("readHook") { namers.append((entry.relative as NSString).lastPathComponent) }
         }
-        #expect(namers == ["ArchivePromoteEngine.swift"], "\(namers)")
+        #expect(namers.sorted() == ["ArchivePromoteEngine.swift", "ContentCopyProof.swift", "SignatureVerification.swift",
+                                    "VideoScanModel+Relocate.swift", "VideoScanModel+TrashSelection.swift"], "\(namers)")
     }
 
     @Test("in the engine the hook is read once, on the calling task, and handed to the reader thread by value")
