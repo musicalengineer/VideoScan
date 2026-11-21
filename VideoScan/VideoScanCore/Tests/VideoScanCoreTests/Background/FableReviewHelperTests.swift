@@ -52,7 +52,7 @@ struct VaryingTailFactory: JobFactory {
     func makeJob(for request: JobRequest) throws -> any BackgroundJob { VaryingTailJob(spawn: spawns.next()) }
 }
 
-@Suite("Fable review — helper owns its schedule", .serialized)
+@Suite("Fable review — helper owns its schedule", .serialized, .tags(.quietMachine))
 struct FableReviewHelperTests {
 
     static func schedule(kind: JobKind, probe: ScheduleProbe, root: URL,
@@ -228,7 +228,7 @@ struct FableReviewHelperTests {
     }
 }
 
-@Suite("Fable review — pause, clean exit, build", .serialized)
+@Suite("Fable review — pause, clean exit, build", .serialized, .tags(.quietMachine))
 struct FableReviewHelperFollowUpTests {
 
     @Test("PAUSE survives a restart: the relaunched supervisor adopts the job paused and runs no unit until Resume")
@@ -300,7 +300,7 @@ struct FableReviewHelperFollowUpTests {
     }
 }
 
-@Suite("Fable review — no back-to-back reruns", .serialized)
+@Suite("Fable review — no back-to-back reruns", .serialized, .tags(.quietMachine))
 struct FableReviewHelperLoopTests {
     @Test("a finished job whose plan did not shrink is re-measured, never re-queued at once (no tight loop)")
     func finishedJobIsNotRequeuedAtOnce() async throws {
@@ -327,7 +327,7 @@ struct CountingRefusalFactory: JobFactory {
     }
 }
 
-@Suite("Codex #241 — the Fable delta's reds", .serialized)
+@Suite("Codex #241 — the Fable delta's reds", .serialized, .tags(.quietMachine))
 struct Codex241Tests {
     typealias F = FableReviewHelperTests
 

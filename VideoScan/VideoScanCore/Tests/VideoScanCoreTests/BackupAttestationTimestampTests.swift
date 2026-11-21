@@ -10,7 +10,7 @@
 import XCTest
 @testable import VideoScanCore
 
-final class BackupAttestationTimestampTests: XCTestCase {
+final class BackupAttestationTimestampTests: QuietMachineXCTestCase {
 
     /// 2025-09-12T18:00:00Z — the epoch the sibling suite uses.
     private let t: TimeInterval = 1_757_700_000

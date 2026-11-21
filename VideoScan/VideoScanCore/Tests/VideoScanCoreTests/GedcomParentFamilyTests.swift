@@ -353,7 +353,7 @@ struct GedcomParentFamilyTests {
     /// through the ruling in well under 2 s; the compiled parent table
     /// carries one mother per person; the fold note is produced for every
     /// duplicated child. Generation of the fixture is outside the clock.
-    @Test func hundredThousandPeopleWithFivePercentDuplicateMothers() throws {
+    @Test(.tags(.quietMachine)) func hundredThousandPeopleWithFivePercentDuplicateMothers() throws {
         let base = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         // Every 20th person who has a mother gets a second, wife-only
         // family whose wife is a fresh record of the same woman: same

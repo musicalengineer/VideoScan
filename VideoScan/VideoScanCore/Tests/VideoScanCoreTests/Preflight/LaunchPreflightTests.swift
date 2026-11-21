@@ -557,7 +557,7 @@ struct LaunchPreflightTests {
 
     // MARK: Scale / time budget
 
-    @Test func thousandFakeRunsFitInOneSecond() async throws {
+    @Test(.tags(.quietMachine)) func thousandFakeRunsFitInOneSecond() async throws {
         let probe = FakePreflightProbe.healthy().disk(free: 60, of: 1_000)
         let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
@@ -572,7 +572,7 @@ struct LaunchPreflightTests {
                                  loadBefore: loadBefore)
     }
 
-    @Test func realProbeFastPhaseFitsIn200ms() async throws {
+    @Test(.tags(.quietMachine)) func realProbeFastPhaseFitsIn200ms() async throws {
         // The real machine, pointed at an empty scratch folder (no catalog —
         // the catalog checks report its absence, quickly).
         let scratch = FileManager.default.temporaryDirectory

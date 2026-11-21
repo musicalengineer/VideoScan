@@ -162,7 +162,7 @@ struct TestHostDetectionClassifierTests {
     /// Scale/cost sensor: the live getter runs at dozens of call sites and
     /// a production (negative) answer always reaches the dyld walk; with
     /// the walk memoised on image count, 10k calls must stay cheap.
-    @Test func imageWalkAndLiveGetterAreCheapWhenRepeated() {
+    @Test(.tags(.quietMachine)) func imageWalkAndLiveGetterAreCheapWhenRepeated() {
         let start = Date()
         for _ in 0..<10_000 {
             _ = TestHostDetection.loadedImageSignal()

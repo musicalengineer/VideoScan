@@ -261,7 +261,7 @@ struct FamilyMapTallyTests {
     /// Debug) is asserted on the reference nightly only; it failed at
     /// 114.9 ms on a quiet M5 Pro and at 345 ms on the M4's efficiency cores
     /// with no change to the code.
-    @Test func fortyThousandPeopleUnderBudget() throws {
+    @Test(.tags(.quietMachine)) func fortyThousandPeopleUnderBudget() throws {
         let n = 40_000
         let big = Self.scalePeople(n)
         let small = Self.scalePeople(n / 4)

@@ -455,7 +455,7 @@ struct CatalogFreshnessTests {
     /// Measured 2026-10-16, M4 Max, Debug, quiet: 4.5 ms wall = 4.5 ms
     /// thread CPU (~4.5 µs a row, mostly the one Calendar call behind
     /// "today at 10:42"). Budget 10 ms, judged load-aware (GH #208).
-    @Test func thousandRowSummaryIsCheap() {
+    @Test(.tags(.quietMachine)) func thousandRowSummaryIsCheap() {
         // A quarter each: uncovered (yellow), overdue (yellow, a calendar
         // call for the words), needing a decision (red), current (green,
         // a calendar call too).

@@ -5131,6 +5131,24 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QuietMachineTagTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QuietMachineTagTests",
+        "TaggedSuite",
+        "QuietMachineXCTestCaseTests"
+      ],
+      "tests": [
+        "aTaggedTestMayJudge",
+        "aTestInATaggedSuiteMayJudge",
+        "anUntaggedTestIsToldToTagItself",
+        "outsideATestNothingIsClaimed",
+        "testASubclassRunsAsAnOrdinaryTestCase"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeIntegrityCheckTests.swift",
       "stage": "unit",
       "suites": [
@@ -34837,6 +34855,7 @@
         "test_a_held_lock_refuses_with_exit_3_and_starts_nothing",
         "test_a_run_whose_shell_is_stopped_ends_the_wait_with_exit_2_not_a_six_hour_poll",
         "test_a_runner_that_leaves_no_row_is_red",
+        "test_a_worktree_that_has_the_two_phase_core_lane_runs_its_own_copy_of_it",
         "test_cli_exits_0_green_1_red_4_norun_and_caps_the_names",
         "test_dry_run_prints_the_plan_and_touches_nothing",
         "test_failures_build_timeout_and_no_row_are_red",
@@ -36093,6 +36112,41 @@
         "test_the_lane_is_a_slice_not_the_suite",
         "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane",
         "test_this_checkouts_manifest_is_current"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_core_lane.py",
+      "stage": "unit",
+      "suites": [
+        "test_core_lane.py"
+      ],
+      "tests": [
+        "test_a_child_that_dies_without_a_failed_test_is_red_by_phase",
+        "test_a_failure_names_its_phase_and_the_lane_is_red",
+        "test_a_filter_narrows_both_phases_and_a_part_class_is_named_by_method",
+        "test_a_filter_that_selects_only_loud_xctest_runs_no_other_process_and_is_green",
+        "test_a_listing_without_tags_is_refused_never_read_as_nothing_is_quiet",
+        "test_a_phase_that_ran_fewer_or_more_than_its_plan_is_red",
+        "test_a_phase_that_ran_zero_tests_is_red_even_when_every_child_exited_zero",
+        "test_a_test_is_quiet_by_its_own_tag_or_a_suite_above_it_and_by_nothing_else",
+        "test_a_test_that_started_and_never_ended_is_named_at_a_stop",
+        "test_an_id_with_regex_characters_is_matched_literally",
+        "test_counts_are_one_per_terminal_line_and_an_issue_line_or_run_summary_is_not_a_test",
+        "test_green_both_phases_ran_their_plan_and_the_total_is_their_sum",
+        "test_no_bundle_and_an_empty_bundle_are_red",
+        "test_phase_a_is_never_strict_and_phase_b_keeps_the_callers_strictness",
+        "test_phase_a_runs_both_frameworks_at_once_skipping_the_quiet_ids_and_phase_b_serializes",
+        "test_release_builds_get_enable_testing_and_debug_does_not",
+        "test_scale_a_hundred_thousand_tests_plan_and_count_inside_a_budget",
+        "test_sensor_an_unmarked_test_is_named_directly_through_a_helper_and_in_xctest",
+        "test_sensor_every_core_test_that_judges_time_or_resident_size_is_marked_quiet_machine",
+        "test_sensor_the_cli_is_red_with_the_names_and_green_on_the_real_tree",
+        "test_the_mark_is_declared_once_and_names_what_the_lane_reads",
+        "test_the_sensor_lane_runs_the_check_and_the_nightly_and_run_tests_run_this_lane",
+        "test_the_two_plans_are_disjoint_and_together_are_every_test",
+        "test_truth_the_lane_and_the_nightly_count_the_same_log_the_same"
       ]
     },
     {
@@ -38425,6 +38479,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QuietMachineTagTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TreeIntegrityCheckTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -40562,6 +40620,10 @@
         },
         {
           "name": "tests/test_sensor_lane.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_core_lane.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

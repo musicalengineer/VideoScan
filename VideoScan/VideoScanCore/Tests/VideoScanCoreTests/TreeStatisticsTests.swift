@@ -268,7 +268,7 @@ struct TreeStatisticsTests {
 /// stated budget. Rick's real tree is 16,383 people; Donna's is 58,464.
 @Suite("Tree statistics — 100k scale")
 struct TreeStatisticsScaleTests {
-    @Test func oneHundredThousandPeopleStayUnderBudget() throws {
+    @Test(.tags(.quietMachine)) func oneHundredThousandPeopleStayUnderBudget() throws {
         var text = "0 HEAD\n"
         let countries = ["Ireland", "England", "United States", "France"]
         for i in 0..<100_000 {

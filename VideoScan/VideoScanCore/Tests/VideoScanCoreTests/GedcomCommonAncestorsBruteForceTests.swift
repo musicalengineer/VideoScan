@@ -20,7 +20,7 @@
 import XCTest
 @testable import VideoScanCore
 
-final class GedcomCommonAncestorsBruteForceTests: XCTestCase {
+final class GedcomCommonAncestorsBruteForceTests: QuietMachineXCTestCase {
     #if DEBUG
     static let slack = 8.0
     #else

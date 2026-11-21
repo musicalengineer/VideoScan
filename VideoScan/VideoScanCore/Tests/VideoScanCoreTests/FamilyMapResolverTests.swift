@@ -375,7 +375,7 @@ struct FamilyMapResolverTests {
 
     /// 40k places from the table, cycled, with the raw string varied so
     /// nothing is memoised. Budget 150 ms (Debug, load-aware).
-    @Test func fortyThousandPlacesUnderBudget() {
+    @Test(.tags(.quietMachine)) func fortyThousandPlacesUnderBudget() {
         let places = Self.table.map(\.place) + ["Warsaw, Poland", "Ipswich, Suffolk", "", "Somewhere"]
         let n = 40_000
         let inputs: [String] = (0..<n).map { i in

@@ -364,7 +364,7 @@ struct ObservationJournalTests {
 
     // MARK: - Scale
 
-    @Test(.timeLimit(.minutes(3)))
+    @Test(.timeLimit(.minutes(3)), .tags(.quietMachine))
     func oneHundredThousandLinesWriteAndPageInsideABudget() throws {
         let (journal, dir) = try Self.journal()
         defer { try? FileManager.default.removeItem(at: dir) }

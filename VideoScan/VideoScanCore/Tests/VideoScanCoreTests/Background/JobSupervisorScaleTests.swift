@@ -15,7 +15,7 @@ struct JobSupervisorScaleTests {
 
     static let planBudget: Duration = .seconds(2)
 
-    @Test("100k queued single-unit requests are planned (scanned and registered) within budget")
+    @Test("100k queued single-unit requests are planned (scanned and registered) within budget", .tags(.quietMachine))
     func plan100k() async throws {
         let requests = (0..<100_000).map { i in
             JobRequest(id: JobID(rawValue: String(format: "%06d", i)), kind: .noop, lane: "lane\(i % 4)",

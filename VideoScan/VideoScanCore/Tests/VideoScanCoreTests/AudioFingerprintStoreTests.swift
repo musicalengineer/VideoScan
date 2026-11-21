@@ -278,7 +278,7 @@ struct AudioFingerprintStoreScaleTests {
 
     /// 2,000 rows in 80 batches of 25 (the job's checkpoint size), then
     /// 2,000 summary lookups. Budget (Debug, M4 Max, ×3 headroom): 3 s.
-    @Test func twoThousandRows() throws {
+    @Test(.tags(.quietMachine)) func twoThousandRows() throws {
         let dir = try scratch("scale"); defer { try? FileManager.default.removeItem(at: dir) }
         let store = try AudioFingerprintStore(directory: dir)
         let clock = ContinuousClock()

@@ -374,7 +374,7 @@ struct ProvenanceResolverScaleTests {
     /// qualify — and, below, 5,000 unrelated names in ONE folder (each its
     /// own tape; the sorted-stem walk never compares unrelated files).
     /// Budget 2 s (Debug, M4 Max; measured ≈ 0.5 s) — O(n²) would be minutes.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)), .tags(.quietMachine))
     func hundredThousandFacts() {
         var facts: [ProvenanceFact] = []
         facts.reserveCapacity(100_000)
@@ -399,7 +399,7 @@ struct ProvenanceResolverScaleTests {
                                  budget: .seconds(2), loadBefore: load)
     }
 
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)), .tags(.quietMachine))
     func fiveThousandUnrelatedNamesInOneFolder() {
         let facts = (1...5_000).map { fact($0, path: "\(vhsFolder)/test_\(String(format: "%05d", $0))_tape.mkv") }
         let load = TimingBudget.sampleLoad()
@@ -411,7 +411,7 @@ struct ProvenanceResolverScaleTests {
     }
 
     /// 100,000 assertion rows (one content's worth at a time) reduced to what stands.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)), .tags(.quietMachine))
     func hundredThousandRowsReduceToEstimates() {
         let rows = inferred()
         let load = TimingBudget.sampleLoad()

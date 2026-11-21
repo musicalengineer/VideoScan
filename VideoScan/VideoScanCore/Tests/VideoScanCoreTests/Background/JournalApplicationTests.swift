@@ -130,7 +130,7 @@ struct JournalApplicationTests {
         await repository.close()
     }
 
-    @Test(.timeLimit(.minutes(5)))
+    @Test(.timeLimit(.minutes(5)), .tags(.quietMachine))
     func oneHundredThousandLinesInBatchesOf256WithinTheMainActorBudget() async throws {
         let (fixture, repository) = try await Self.scene(contents: 10_000)
         defer { fixture.remove() }

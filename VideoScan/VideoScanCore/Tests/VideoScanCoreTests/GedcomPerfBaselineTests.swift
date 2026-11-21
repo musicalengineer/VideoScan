@@ -3,7 +3,7 @@ import XCTest
 
 /// Perf baseline (2026-08-28). Prints timings; asserts nothing beyond
 /// sanity so the numbers can be read from `swift test -c release`.
-final class GedcomPerfBaselineTests: XCTestCase {
+final class GedcomPerfBaselineTests: QuietMachineXCTestCase {
 
     func ms(_ body: () -> Void) -> Double {
         let t0 = DispatchTime.now().uptimeNanoseconds

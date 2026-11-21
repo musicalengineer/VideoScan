@@ -21,7 +21,7 @@ struct TreeWalkScaleTests {
     /// ~0.8 s). Budget ≈ 3×.
     static let budget: Duration = .seconds(8)
 
-    @Test func hundredThousandPeopleWalkAndCheckOffMain() async throws {
+    @Test(.tags(.quietMachine)) func hundredThousandPeopleWalkAndCheckOffMain() async throws {
         let graph = GedcomFamilyGraph(gedcomText: GedcomSyntheticPedigree.gedcom(people: 100_000))
         _ = graph.index   // the compiled index arrives prebuilt in production
         let root = try #require(graph.rootPersonID)

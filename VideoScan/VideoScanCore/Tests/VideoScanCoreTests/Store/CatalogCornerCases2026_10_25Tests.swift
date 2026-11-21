@@ -436,7 +436,7 @@ struct CatalogCornerCases2026_10_25Tests {
     // MARK: - 6. Another writer holds the lock while a commit runs
 
     @Test("another connection holds the write lock for 300 ms while our commit starts — the commit waits it out (busy timeout honoured) and lands; nothing is refused, nothing lost",
-          .timeLimit(.minutes(1)))
+          .timeLimit(.minutes(1)), .tags(.quietMachine))
     func aCommitWaitsOutAShortLockAndLands() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 2)
         defer { fixture.remove() }

@@ -345,7 +345,7 @@ struct GedcomIdentityRulingsTests {
 
     // MARK: SCALE
 
-    @Test func applyingRulingsTo100kPeopleWithAnIndexStaysInBudget() {
+    @Test(.tags(.quietMachine)) func applyingRulingsTo100kPeopleWithAnIndexStaysInBudget() {
         // 25k four-person families (father, mother, two children); every
         // 1000th mother is recorded twice and ruled a duplicate.
         var lines = ["0 HEAD"]

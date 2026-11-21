@@ -224,7 +224,7 @@ struct CatalogDatabaseInfoReaderTests {
     /// 9.1 ms. Budget ≈ 27× that, load-aware (TimingBudget).
     static let readBudget: Duration = .milliseconds(250)
 
-    @Test func hundredThousandRowsCountExactlyWithinBudget() async throws {
+    @Test(.tags(.quietMachine)) func hundredThousandRowsCountExactlyWithinBudget() async throws {
         let fixture = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
         defer { fixture.remove() }
         let repository = GRDBCatalogRepository(host: "scale-host", durability: .volatileForTests)

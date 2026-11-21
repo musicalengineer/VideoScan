@@ -167,7 +167,7 @@ struct RollCallScaleTests {
     /// (dedupe + priority sort + 36 rows). Budget ≈ 4×.
     static let budget: Duration = .milliseconds(1_500)
 
-    @Test func hundredThousandWalkedPeopleWithinBudget() {
+    @Test(.tags(.quietMachine)) func hundredThousandWalkedPeopleWithinBudget() {
         let lines: [TreeWalk.Line] = [.first, .second, .both, .none]
         let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()

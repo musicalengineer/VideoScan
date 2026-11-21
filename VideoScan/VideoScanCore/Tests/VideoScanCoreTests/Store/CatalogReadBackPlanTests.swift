@@ -30,7 +30,7 @@ struct CatalogReadBackPlanTests {
         }
     }
 
-    @Test("the one-row SELECT (files ⋈ its single-valued tables ⋈ import_items) searches every table by key")
+    @Test("the one-row SELECT (files ⋈ its single-valued tables ⋈ import_items) searches every table by key", .tags(.quietMachine))
     func oneRowIsIndexed() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let scans = try Self.scans(s, LoadSQL.oneRow, PoisonedCatalogFixture.id(.healthy))

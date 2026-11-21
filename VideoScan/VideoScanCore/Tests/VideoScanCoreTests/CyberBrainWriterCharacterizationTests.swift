@@ -129,7 +129,7 @@ struct CyberBrainWriterCharacterizationTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func appendAtOneHundredThousandItemsPreservesHistoryWithinBudget() throws {
         let source = CyberBrainSource(id: "source.original", type: .familyWitness, title: "Synthetic witness")
         let instant = date

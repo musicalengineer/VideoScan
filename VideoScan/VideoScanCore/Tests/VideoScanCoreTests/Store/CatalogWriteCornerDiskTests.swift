@@ -184,7 +184,7 @@ struct CatalogWriteCornerDiskTests {
     static let landBudget: Duration = .seconds(120)
 
     @Test("SCALE: 100k rows — on a full disk the commit is refused (fail-fast within 10 s: pending; today < 300 s), integrity ok; once space returns the same 100k edits land within 120 s",
-          .timeLimit(.minutes(10)))
+          .timeLimit(.minutes(10)), .tags(.quietMachine))
     func hundredThousandUnderPressure() async throws {
         let scene = try ImporterScene.make(healthyRows: 100_000)
         defer { scene.remove() }

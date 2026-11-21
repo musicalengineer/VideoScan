@@ -8,7 +8,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("JobSupervisor — lifecycle")
+@Suite("JobSupervisor — lifecycle", .tags(.quietMachine))
 struct JobSupervisorTests {
 
     private func make(queue: any JobQueueStore = InMemoryJobQueueStore(),

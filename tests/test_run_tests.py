@@ -1253,9 +1253,18 @@ def test_cat_files_reads_each_path_at_the_commit(repo):
 
 
 def test_the_core_test_phase_runs_the_built_bundle_not_swift_test(tmp_path):
-    cmd = rt.core_test_cmd(Path("/wt"), "(\\.|/)(A)/")
+    cmd = rt.core_test_cmd(Path("/wt"), "(\\.|/)(A)/")           # a commit from before scripts/core_lane.py
     assert cmd[1:3] == [str(rt.SELF), "--core-exec"] and cmd[3].endswith("VideoScanCore/.build/debug")
     assert "swift" not in cmd[0] and "test" not in cmd
+    # 2026-11-20: a checkout that has scripts/core_lane.py runs ITS two-phase lane on the built bundle
+    # (the quiet-machine tests serial, the rest parallel) — the same engine as the nightly's Core lane.
+    (tmp_path / "wt" / "scripts").mkdir(parents=True)
+    (tmp_path / "wt" / "scripts" / "core_lane.py").write_text("")
+    cmd = rt.core_test_cmd(tmp_path / "wt", "(\\.|/)(A)/")
+    assert cmd[1:4] == ["-u", str(tmp_path / "wt" / "scripts" / "core_lane.py"), "run"]
+    assert cmd[4:] == ["--products", str(tmp_path / "wt" / "VideoScan" / "VideoScanCore" / ".build" / "debug"),
+                       "--filter", "(\\.|/)(A)/"]
+    assert "swift" not in cmd[0] and "test" not in cmd and "--no-parallel" not in cmd
     assert rt.core_build_cmd(Path("/wt"))[:3] == ["swift", "build", "--build-tests"]
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_tests.py"), "--core-exec", str(tmp_path), "x"],
                        capture_output=True, text=True, timeout=60)

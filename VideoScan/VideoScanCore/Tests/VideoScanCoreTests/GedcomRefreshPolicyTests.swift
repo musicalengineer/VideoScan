@@ -152,7 +152,7 @@ struct GedcomRefreshPolicyTests {
 
     // MARK: - 2. Scale
 
-    @Test func aTenThousandPersonRefreshStaysInsideABudget() {
+    @Test(.tags(.quietMachine)) func aTenThousandPersonRefreshStaysInsideABudget() {
         func tree(_ nameSuffix: String) -> GedcomFamilyGraph {
             var text = "0 HEAD\n"
             for i in 0..<10_000 {

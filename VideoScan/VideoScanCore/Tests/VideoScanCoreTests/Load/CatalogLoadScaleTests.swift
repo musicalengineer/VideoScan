@@ -21,7 +21,7 @@ struct CatalogLoadScaleTests {
     /// with the machine's load.
     static let hundredThousandBudget: Duration = .seconds(5)
 
-    @Test func oneHundredThousandRowsLoadWithinBudget() async throws {
+    @Test(.tags(.quietMachine)) func oneHundredThousandRowsLoadWithinBudget() async throws {
         let rows = 100_000
         let scene = try ImporterScene.make(healthyRows: rows)
         defer { scene.remove() }

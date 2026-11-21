@@ -61,7 +61,7 @@ struct TreeWalkHighlightTests {
                                            surnameKeys: keys, regions: regions))
     }
 
-    @Test func scaleHundredThousandPeopleWellUnderBudget() {
+    @Test(.tags(.quietMachine)) func scaleHundredThousandPeopleWellUnderBudget() {
         let n = 100_000
         let names = (0..<n).map { "Surname\($0 % 3_000)" }
         let regs: [R] = (0..<n).map { R.allCases[$0 % R.allCases.count] }

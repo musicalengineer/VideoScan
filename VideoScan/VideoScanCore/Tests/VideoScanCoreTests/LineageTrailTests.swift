@@ -441,7 +441,7 @@ struct LineageTrailTests {
     /// born in Ireland, so an all-ancestors Europe walk from the root
     /// visits every record. Budget: 5 s Debug (measured well under 1 s on
     /// the M4 Max, 2026-09-02); the GEDCOM parse is outside the clock.
-    @Test func allAncestorsWalksA131kPersonPedigreeUnderBudget() {
+    @Test(.tags(.quietMachine)) func allAncestorsWalksA131kPersonPedigreeUnderBudget() {
         let generations = 17
         let n = (1 << generations) - 1
         let topStart = 1 << (generations - 1)

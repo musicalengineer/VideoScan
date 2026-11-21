@@ -452,13 +452,24 @@ print(json.dumps(base, separators=(",", ":")))
 # core_* keys; the top-level passed/failed/total stay the app suite's, so the
 # dashboard's series do not step. A Core failure, timeout or not-run turns a
 # green app verdict red via apply_core_package_verdict (reason "core-<why>").
-# Strict timing (GH #208): `swift test` reads VIDEOSCAN_TIMING_STRICT, which
-# the top of this script exports. Strict means "a quiet machine", so the lane
-# runs `--no-parallel` (Swift Testing honours it): with suites in parallel in
-# one process, a scale test's wall time and resident-size growth include its
-# neighbours' (first real run, 2026-10-18: AudioFingerprintEngineTests saw
-# 2.4 GB "growth" while the 100k import ran beside it, and a 10 ms freshness
-# budget read 12.9 ms). GitHub CI keeps parallel + non-strict.
+# Strict timing (GH #208) and the two phases (2026-11-20, Rick: "we do not
+# want to serialize when we can parallelize"). Strict means "a quiet machine":
+# with suites in parallel in one process, a scale test's wall time and
+# resident-size growth include its neighbours' (first real run, 2026-10-18:
+# AudioFingerprintEngineTests saw 2.4 GB "growth" while the 100k import ran
+# beside it, and a 10 ms freshness budget read 12.9 ms). Until 2026-11-20 the
+# whole lane therefore ran `swift test --no-parallel` (16-19 min). Now
+# scripts/core_lane.py builds the bundle and runs it in two phases:
+#   A: every test NOT marked quiet-machine, in parallel, with
+#      VIDEOSCAN_TIMING_STRICT removed (no test there judges a budget:
+#      `core_lane.py check` in the sensor lane pins it);
+#   B: only the marked tests (`.tags(.quietMachine)` / QuietMachineXCTestCase,
+#      Tests/VideoScanCoreTests/QuietMachine.swift), `--no-parallel`, with the
+#      VIDEOSCAN_TIMING_STRICT=1 the top of this script exports — as before.
+# core_lane.py checks each phase's count against its plan (a phase that ran
+# zero or fewer is RED, exit 2) and names the phase of every failure; its
+# per-test lines are the ones parse_test_counts counts, so the row's core_*
+# counts are the sum of the two phases. GitHub CI keeps `swift test`.
 NIGHTLY_CORE_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS:-3600}"
 NIGHTLY_CORE_LOG="${VIDEOSCAN_NIGHTLY_CORE_LOG:-/tmp/nightly-core-test-output.log}"
 NIGHTLY_CORE_STALL_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_STALL_SECONDS:-900}"
@@ -493,7 +504,22 @@ run_core_package_tests() {
     local scratch_path="$2"
     local swift_configuration rc timed_out start end elapsed total
     swift_configuration=$(printf '%s' "${NIGHTLY_CONFIGURATION:-Release}" | tr '[:upper:]' '[:lower:]')
-    log "Core package tests: swift test -c $swift_configuration --package-path $package_path (watchdog ${NIGHTLY_CORE_TIMEOUT_SECONDS}s)"
+    # The lane script beside this one (the package is <repo>/VideoScan/VideoScanCore).
+    # It is the checkout UNDER TEST's script (an on-demand run tests another
+    # worktree with this file copied beside it: scripts/m4_run.sh), because the
+    # quiet-machine marks it reads are that commit's. A commit from before
+    # core_lane.py has no marks either: it gets the old single serial pass.
+    local core_lane="${VIDEOSCAN_NIGHTLY_CORE_LANE:-$package_path/../../scripts/core_lane.py}"
+    local -a core_command
+    if [ -f "$core_lane" ]; then
+        core_command=(python3 -u "$core_lane" run --package-path "$package_path"
+                      -c "$swift_configuration" --scratch-path "$scratch_path")
+        log "Core package tests: core_lane.py run -c $swift_configuration --package-path $package_path (two phases; watchdog ${NIGHTLY_CORE_TIMEOUT_SECONDS}s)"
+    else
+        core_command=(swift test --package-path "$package_path"
+                      -c "$swift_configuration" --scratch-path "$scratch_path" --no-parallel)
+        log "Core package tests: swift test -c $swift_configuration --package-path $package_path --no-parallel (no scripts/core_lane.py in this checkout: one serial pass; watchdog ${NIGHTLY_CORE_TIMEOUT_SECONDS}s)"
+    fi
     start=$(date +%s)
     # 10/22: the M4 core lane ran ~20x slow and the watchdog's kill lost a
     # 16 KB stdout block, so the log ended at a buffer boundary, not at the
@@ -507,6 +533,11 @@ run_core_package_tests() {
     # (default 900 s, ~9x that) means a hang: stop there, name the test that
     # was running, and leave `sample` stacks of the test process beside the
     # nightly log so the next hang is diagnosable from the morning.
+    # 2026-11-20: core_lane.py (python3 -u) writes whole lines as its test
+    # processes print them, in the watchdog's process group, so the stall
+    # rule and the sampler see the same thing as before. In the parallel
+    # phase the last "started" line is not the hung test: on the watchdog's
+    # TERM core_lane.py prints every test that started and never finished.
     # 9>&-: the sampler (and its `sleep 300` nap) must not inherit the
     # testbed lock on fd 9 (scripts/testbed_lock.py): belt and braces with the
     # sampler's TERM trap, which now ends the nap with it.
@@ -520,11 +551,7 @@ run_core_package_tests() {
         "$NIGHTLY_CORE_TIMEOUT_SECONDS" \
         "${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10}" \
         "$NIGHTLY_CORE_LOG" \
-        swift test \
-        --package-path "$package_path" \
-        -c "$swift_configuration" \
-        --scratch-path "$scratch_path" \
-        --no-parallel
+        "${core_command[@]}"
     rc=$?
     kill "$sampler_pid" 2>/dev/null || true
     wait "$sampler_pid" 2>/dev/null || true
@@ -538,10 +565,20 @@ run_core_package_tests() {
         "$total" "$FAILED" false "$rc" "${CRASHED:-0}"
     CORE_STATUS="$STATUS"
     CORE_REASON="$REASON"
+    # core_lane.py exit 2 with no failed test: a phase did not run its plan
+    # (zero, fewer or more tests than the bundle lists for it). Say so; the
+    # "core-lane: RED" lines below name the phase and the numbers.
+    if ! $timed_out && [ "$CORE_STATUS" != "ok" ] && [ "$rc" -eq 2 ] && [ "$FAILED" -eq 0 ] && [ "$total" -gt 0 ]; then
+        CORE_REASON="phase-count-mismatch"
+    fi
     if $NIGHTLY_WATCHDOG_STALLED; then
         CORE_REASON="test-stall:${NIGHTLY_CORE_STALL_SECONDS}s"
         log "Core lane STALLED: no output for ${NIGHTLY_CORE_STALL_SECONDS}s; last test started: $(grep -E "started\.?$" "$NIGHTLY_CORE_LOG" 2>/dev/null | tail -n 1)"
     fi
+    # One line per phase (counts against the plan, seconds), every RED reason
+    # with its phase, and what was still running at a stop.
+    grep -E '^core-lane: (phase [AB] \(.*planned, |total |RED |stopped )' "$NIGHTLY_CORE_LOG" 2>/dev/null \
+        | while IFS= read -r line; do log "$line"; done
     if $timed_out && [ -s "$NIGHTLY_CORE_SAMPLE_FILE" ]; then
         log "Core lane stacks at the stop: $NIGHTLY_CORE_SAMPLE_FILE"
     fi

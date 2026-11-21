@@ -50,7 +50,7 @@ struct AudioCatalogIndexScaleTests {
         AudioFingerprintStore.Key(contentDigest: "sha256:" + String(format: "%064x", d), sizeBytes: Int64(d + 1))
     }
 
-    @Test("25 M landmarks: build < 15 s, resident growth < 400 MB; 1,000 queries < 60 s")
+    @Test("25 M landmarks: build < 15 s, resident growth < 400 MB; 1,000 queries < 60 s", .tags(.quietMachine))
     func twentyFiveMillionLandmarks() throws {
         // The full index lives only inside `fullBuildAndQueries`: released
         // before the ¼ build below.

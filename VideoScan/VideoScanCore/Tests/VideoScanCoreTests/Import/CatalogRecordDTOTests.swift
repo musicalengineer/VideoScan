@@ -334,7 +334,7 @@ struct CatalogRecordDTOScaleTests {
     /// 20 s leaves a wide margin. Re-baseline on the M4 and tighten.
     static let budget: Duration = .seconds(20)
 
-    @Test func hundredThousandRowsMapWithinBudget() throws {
+    @Test(.tags(.quietMachine)) func hundredThousandRowsMapWithinBudget() throws {
         let row = try #require(try ImportTestSupport.catalog(ImportGoldenFixtures.full129).records.first)
         let rows = Array(repeating: row, count: 100_000)
         let loadBefore = TimingBudget.sampleLoad()

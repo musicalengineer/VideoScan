@@ -50,7 +50,7 @@ struct CatalogRepositoryScaleTests {
     static let tenThousandBudget: Duration = .seconds(20)
     static let hundredThousandBudget: Duration = .seconds(150)
 
-    @Test func tenThousandAdvances() async throws {
+    @Test(.tags(.quietMachine)) func tenThousandAdvances() async throws {
         let run = try await advance(10_000, durability: .volatileForTests)
         defer { run.fixture.remove() }
         print("[store-scale] 10k advances: \(run.elapsed) (\(TimingBudget.loadDescription()))")
@@ -58,7 +58,7 @@ struct CatalogRepositoryScaleTests {
                                  budget: Self.tenThousandBudget, loadBefore: run.loadBefore)
     }
 
-    @Test func hundredThousandAdvances() async throws {
+    @Test(.tags(.quietMachine)) func hundredThousandAdvances() async throws {
         let run = try await advance(100_000, durability: .volatileForTests)
         defer { run.fixture.remove() }
         print("[store-scale] 100k advances: \(run.elapsed) (\(TimingBudget.loadDescription()))")
@@ -73,7 +73,7 @@ struct CatalogRepositoryScaleTests {
     /// printed line (a few µs per commit).
     static let hundredThousandChecksBudget: Duration = .seconds(10)
 
-    @Test("100k commits' worth of file-identity checks (GH #359) cost well under 1 ms a commit; none is a false refusal")
+    @Test("100k commits' worth of file-identity checks (GH #359) cost well under 1 ms a commit; none is a false refusal", .tags(.quietMachine))
     func hundredThousandCommitsOfIdentityChecks() throws {
         let fixture = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
         defer { fixture.remove() }

@@ -9,7 +9,7 @@
 import XCTest
 @testable import VideoScanCore
 
-final class BackupAttestationTests: XCTestCase {
+final class BackupAttestationTests: QuietMachineXCTestCase {
 
     private func t(_ s: TimeInterval) -> Date { Date(timeIntervalSince1970: s) }
     private func a(_ kind: BackupAttestation.Kind, _ answer: BackupAttestation.Answer,

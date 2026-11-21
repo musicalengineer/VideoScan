@@ -868,7 +868,7 @@ struct GedcomMergeTests {
     /// counts, roots, edges (every 97th person's parents and spouses), and
     /// sample queries. Budget 20 s Debug for the whole pipeline; each
     /// stage's time is printed so a regression is visible.
-    @Test func fullPipelineAtTwoHundredThousandStaysWithinBudget() throws {
+    @Test(.tags(.quietMachine)) func fullPipelineAtTwoHundredThousandStaysWithinBudget() throws {
         let n = 100_000
         var a = Self.synthetic(offset: 0, count: n); a.sourceFileName = "a.ged"
         var b = Self.synthetic(offset: n / 2, count: n); b.sourceFileName = "b.ged"

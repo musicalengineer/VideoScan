@@ -45,7 +45,7 @@ struct GedcomParseContentionSensorTests {
         return out.withLock { $0 }
     }
 
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(2)), .tags(.quietMachine))
     func parsesOnEightThreadsEachCostAboutWhatOneCostsAlone() {
         let text = GedcomMergeTests.synthetic(offset: 0, count: 20_000).gedcomText(provenance: "sensor")
         // Distinct storage per thread, so the only thing shared is process

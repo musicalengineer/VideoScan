@@ -339,7 +339,7 @@ struct PreflightGateTests {
 
     // MARK: Cost of each real probe question (Rick: "if it is expensive, tell me")
 
-    @Test func eachRealProbeQuestionIsCheap() throws {
+    @Test(.tags(.quietMachine)) func eachRealProbeQuestionIsCheap() throws {
         let probe = SystemPreflightProbe()
         let loadBefore = TimingBudget.sampleLoad()
         let home = FileManager.default.homeDirectoryForCurrentUser

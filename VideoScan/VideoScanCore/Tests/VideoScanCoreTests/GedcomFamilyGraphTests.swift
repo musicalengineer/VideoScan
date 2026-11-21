@@ -527,7 +527,7 @@ struct GedcomFamilyGraphTests {
         #expect(names("children") == ["A Daughter Breen", "A Son Breen"])
     }
 
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.timeLimit(.minutes(1)), .tags(.quietMachine))
     func nameLookupHasExplicitHundredThousandPersonBudget() {
         var lines = ["0 HEAD"]
         lines.reserveCapacity(200_002)

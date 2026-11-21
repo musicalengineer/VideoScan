@@ -32,7 +32,7 @@ struct CatalogCommitScaleTests {
         return (clock.now - start, prints.count)
     }
 
-    @Test("14k rich records (every key set): detection recorded (worst case; budget catches a collapse)")
+    @Test("14k rich records (every key set): detection recorded (worst case; budget catches a collapse)", .tags(.quietMachine))
     func richDetection() {
         let other = UUID()
         let records = (0..<14_000).map { i in
@@ -47,12 +47,12 @@ struct CatalogCommitScaleTests {
         expectWithinTimingBudget("14k rich detection", measured: elapsed, budget: Self.worstCaseBudget, loadBefore: load)
     }
 
-    @Test("a 14k-row catalog.sqlite: detection and a one-row commit, each within 150 ms")
+    @Test("a 14k-row catalog.sqlite: detection and a one-row commit, each within 150 ms", .tags(.quietMachine))
     func fourteenThousand() async throws {
         try await Self.oneRow(rows: 14_000, detectionBudget: Self.detectionBudget, commitBudget: Self.oneRowCommitBudget)
     }
 
-    @Test("a 100k-row catalog.sqlite: detection and a one-row commit (recorded)")
+    @Test("a 100k-row catalog.sqlite: detection and a one-row commit (recorded)", .tags(.quietMachine))
     func hundredThousand() async throws {
         try await Self.oneRow(rows: 100_000, detectionBudget: Self.hundredThousandBudget, commitBudget: Self.hundredThousandBudget)
     }
@@ -66,12 +66,12 @@ struct CatalogCommitScaleTests {
     static let syncOneRowBudget: Duration = .milliseconds(150)
     static let syncThousandRowsBudget: Duration = .milliseconds(1_500)
 
-    @Test("B2.2: a synchronous commit of 1 changed row in a 14k-row catalog.sqlite (detection included) < 150 ms")
+    @Test("B2.2: a synchronous commit of 1 changed row in a 14k-row catalog.sqlite (detection included) < 150 ms", .tags(.quietMachine))
     func syncCommitOneRow() async throws {
         try await Self.syncCommit(rows: 14_000, changed: 1, budget: Self.syncOneRowBudget)
     }
 
-    @Test("B2.2: a synchronous commit of 1,000 changed rows in a 14k-row catalog.sqlite (detection included) < 1.5 s")
+    @Test("B2.2: a synchronous commit of 1,000 changed rows in a 14k-row catalog.sqlite (detection included) < 1.5 s", .tags(.quietMachine))
     func syncCommitThousandRows() async throws {
         try await Self.syncCommit(rows: 14_000, changed: 1_000, budget: Self.syncThousandRowsBudget)
     }

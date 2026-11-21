@@ -12,7 +12,7 @@ import Testing
 @Suite("TimingBudget — shared test-budget rule")
 struct TimingBudgetTests {
 
-    @Test("off GitHub the ceiling is exactly the budget; CI=1 alone does not widen it")
+    @Test("off GitHub the ceiling is exactly the budget; CI=1 alone does not widen it", .tags(.quietMachine))
     func localCeilingIsTheBudget() {
         for budget in [Duration.milliseconds(50), .seconds(2), .seconds(20)] {
             #expect(TimingBudget.debugCeiling(budget, environment: [:]) == budget)
@@ -21,7 +21,7 @@ struct TimingBudgetTests {
         }
     }
 
-    @Test("GITHUB_ACTIONS=true triples it")
+    @Test("GITHUB_ACTIONS=true triples it", .tags(.quietMachine))
     func hostedIsTripled() {
         #expect(TimingBudget.debugCeiling(.seconds(3), environment: ["GITHUB_ACTIONS": "true"]) == .seconds(9))
     }
@@ -179,7 +179,7 @@ struct TimingBudgetTests {
         #expect(Self.judge(150, before: Self.busy, after: Self.busy, env: [TimingBudget.strictEnvironmentKey: "1"]).verdict == .fail)
     }
 
-    @Test("RED 2026-10-31 (Codex P2): the reference-only wrapper still records a HANG (> 3×) off the reference run")
+    @Test("RED 2026-10-31 (Codex P2): the reference-only wrapper still records a HANG (> 3×) off the reference run", .tags(.quietMachine))
     func referenceOnlyWrapperStillFailsAHang() {
         // Off the reference run the wrapper logs instead of asserting (GH #385) — but a
         // measurement beyond 3× the budget is a hang or a regression no host explains, and
@@ -263,7 +263,7 @@ struct TimingBudgetTests {
     //   - knownIssue recorded as a hard issue → this test fails;
     //   - fail recorded as known (or not at all) → the outer withKnownIssue
     //     sees no issue and fails the test.
-    @Test("mapping: pass records nothing, known issue stays green, fail records an issue")
+    @Test("mapping: pass records nothing, known issue stays green, fail records an issue", .tags(.quietMachine))
     func swiftTestingMapping() {
         recordTimingJudgement(Self.judge(99))
         recordTimingJudgement(Self.judge(150, before: Self.busy))
@@ -286,7 +286,7 @@ struct TimingBudgetTests {
     // are pinned — a clock that returned wall time would fail the sleep
     // case; one that returned zero (or another thread's time) would fail
     // the spin case.
-    @Test("thread CPU time: a sleep costs ~nothing, a spin costs about its length")
+    @Test("thread CPU time: a sleep costs ~nothing, a spin costs about its length", .tags(.quietMachine))
     func threadCPUTimeCountsWorkNotWaiting() {
         let wall = ContinuousClock()
         var slept = Duration.zero
@@ -307,7 +307,7 @@ struct TimingBudgetTests {
         #expect(spinCPU <= .milliseconds(260), "thread CPU \(spinCPU) exceeds the 200 ms spin — not per-thread?")
     }
 
-    @Test("thread CPU time ignores other threads' work")
+    @Test("thread CPU time ignores other threads' work", .tags(.quietMachine))
     func threadCPUTimeIsPerThread() {
         let done = DispatchSemaphore(value: 0)
         let cpu = TimingBudget.measureThreadCPUTime {
@@ -339,7 +339,7 @@ struct TimingBudgetSanitizerTests {
         #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "bogus"]) == 1)
     }
 
-    @Test func debugCeilingWidensOnlyUnderASanitizer() {
+    @Test(.tags(.quietMachine)) func debugCeilingWidensOnlyUnderASanitizer() {
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: [:]) == .milliseconds(100))
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: ["VIDEOSCAN_SANITIZER": "address"])
                 == .milliseconds(800))
@@ -372,7 +372,7 @@ struct TimingBudgetSanitizerTests {
 @Suite("TimingBudget — relative budgets: the algorithm, not the host")
 struct TimingBudgetRatioTests {
 
-    @Test func growthPassesUpToTheLimitAndFailsBeyondIt() {
+    @Test(.tags(.quietMachine)) func growthPassesUpToTheLimitAndFailsBeyondIt() {
         let linear = TimingBudget.judgeGrowth("g", small: .milliseconds(10), large: .milliseconds(40),
                                               sizeRatio: 4, limit: 8)
         #expect(linear.passed && linear.ratio == 4)
@@ -384,7 +384,7 @@ struct TimingBudgetRatioTests {
         #expect(quadratic.logLine.contains("1/4-size input") && quadratic.logLine.hasSuffix("fail"))
     }
 
-    @Test func relativePassesUnderTheLimitAndAZeroReferenceNeverPasses() {
+    @Test(.tags(.quietMachine)) func relativePassesUnderTheLimitAndAZeroReferenceNeverPasses() {
         #expect(TimingBudget.judgeRelative("r", measured: .milliseconds(20), reference: .milliseconds(100),
                                            referenceName: "a full pass", limit: 0.5).passed)
         #expect(!TimingBudget.judgeRelative("r", measured: .milliseconds(60), reference: .milliseconds(100),
@@ -404,7 +404,7 @@ struct TimingBudgetRatioTests {
     /// The detector on real work, on this host whatever its speed: a linear
     /// loop grows ≈ 4× for a 4× input and passes ×8; a quadratic one grows
     /// ≈ 16× and fails it.
-    @Test func aQuadraticLoopFailsTheGrowthLimitALinearOnePasses() {
+    @Test(.tags(.quietMachine)) func aQuadraticLoopFailsTheGrowthLimitALinearOnePasses() {
         // A dependent LCG chain per step: no optimizer can fold it into a
         // closed form, so Release measures the loop as written.
         var sink: UInt64 = 1

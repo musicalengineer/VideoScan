@@ -610,6 +610,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     manifest_errors, el = manifest_check(REPO)
     print(f"  gauntlet manifest (inventory --validate): {len(manifest_errors)} error(s), {el:.0f}s", flush=True)
     red += [f"gauntlet manifest: {e}" for e in manifest_errors]
+    # Quiet-machine mark (2026-11-20): the Core lane runs every unmarked test in
+    # parallel, so a test that judges a wall-time budget or its process's
+    # resident size without `.tags(.quietMachine)` / QuietMachineXCTestCase is
+    # RED here (scripts/core_lane.py check_tags; source scan, < 2 s, no build).
+    import core_lane                                          # late: core_lane imports this module's lexer
+    quiet_errors = core_lane.check_tags(CORE_TESTS)
+    print(f"  quiet-machine mark (core_lane.py check): {len(quiet_errors)} unmarked test(s)", flush=True)
+    red += [f"quiet-machine mark: {e}" for e in quiet_errors]
     produced: List[Path] = []          # this run's logs, for the warning ratchet
     if not a.core_only:
         p, f, names, rc, el = run_app(app, log_dir, dd)

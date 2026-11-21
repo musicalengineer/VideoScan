@@ -16,7 +16,7 @@
 import XCTest
 @testable import VideoScanCore
 
-final class PrunePlanTests: XCTestCase {
+final class PrunePlanTests: QuietMachineXCTestCase {
 
     private let digest = String(repeating: "a", count: 64)
     private let other = String(repeating: "b", count: 64)
