@@ -16,10 +16,10 @@
 // path into one folder — two camera cards with DCIM/100CANON/MVI_0001.MOV.
 //
 // The rule, per file, decided BEFORE any transfer (refuse before mutating):
-//   • nothing at the name → transfer. rsync also runs with
-//     `--ignore-existing`, and the fast copier publishes only with
-//     RENAME_EXCL, so a file that appears between the check and the
-//     transfer is still not replaced;
+//   • nothing at the name → transfer. rsync writes only the app's staged
+//     copy in `.videoscan-partial` and the app publishes it with RENAME_EXCL
+//     (Codex r1 #2), as the fast copier does, so a file that appears between
+//     the check and the publish is still not replaced;
 //   • a regular file of the SAME size → counted "at the destination (size
 //     checked)", untouched. CONTENT IS NOT COMPARED: a different file that
 //     happens to be the same size is counted as already there. That is the
@@ -176,7 +176,7 @@ struct VolumeRescueNeverReplacesTests {
 
     // MARK: - A file appears between the check and the transfer
 
-    @Test("rsync mode: a file that APPEARS at the name after the check and before the transfer is not replaced — the REAL rsync runs with --ignore-existing")
+    @Test("rsync mode: a file that APPEARS at the name after the check and before the transfer is not replaced — the REAL rsync writes only the staged copy; the publish is exclusive")
     func aFileThatAppearsBeforeRsyncRunsIsNotReplaced() async throws {
         let b = try matrix.bench(files: 1); defer { b.cleanup() }
         let dest = b.dest(0)
@@ -192,10 +192,80 @@ struct VolumeRescueNeverReplacesTests {
             })
             .on("rsync", .passThrough)
         #expect(await run(b, mock, mode: .verified))
-        #expect(mock.calls(to: "rsync").first?.arguments.contains("--ignore-existing") == true, "\(mock.calls)")
+        #expect(mock.calls(to: "rsync").first?.arguments.last == Matrix.partial(of: dest).path, "rsync was given the final name: \(mock.calls)")
         #expect(Self.sha(dest) == appeared.value, "the file that appeared was replaced by the transfer")
         #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.bytesWritten == 0, "\(b.op.errors)")
-        #expect(b.op.errors.first?.contains("30000 bytes") == true && b.op.errors.first?.contains("left untouched") == true, "\(b.op.errors)")
+        #expect(b.op.errors == ["\(b.sources[0].relative) — a different file is already at Rescued/\(b.sources[0].relative) (30000 bytes there, \(b.sources[0].size) bytes on the source) "
+                               + "— not replaced; nothing was touched, and the file is still on the source. The copy VideoScan staged in .videoscan-partial was removed (it was its own)."],
+                "\(b.op.errors)")
+        #expect(files(under: b.destVolume).map(\.lastPathComponent) == ["tape 1.mov"], "staging debris: \(files(under: b.destVolume))")
+        b.expectSourcesUntouched()
+    }
+
+    /// Codex r1 #2 (P0), its reproduction with the REAL rsync:
+    /// `--ignore-existing` is checked when the transfer starts, and rsync's
+    /// final rename is an ordinary rename — a file that arrives at the final
+    /// name DURING the transfer was overwritten. The transfer is throttled
+    /// (`--bwlimit`, added in front of the production arguments), the test
+    /// waits for rsync's temporary file, puts different media at the final
+    /// name, and lets rsync finish: the arriving file survives byte for byte.
+    @Test("rsync mode, REAL rsync: a file that ARRIVES at the final name during the transfer survives byte for byte; the source file is FAILED 'a different file is already at …'")
+    func aFileArrivingDuringTheRealTransferSurvives() async throws {
+        let b = try matrix.bench(files: 1); defer { b.cleanup() }
+        let big = b.sources[0]
+        _ = try MasterArchiveTestSupport.writeBlob(at: big.url, bytes: 768 * 1024, seed: 98)
+        let bigSHA = Self.sha(big.url)
+        let record = MasterArchiveTestSupport.makeRecord(path: big.url.path)
+        let dest = b.dest(0), destDir = dest.deletingLastPathComponent()
+        let staging = destDir.appendingPathComponent(VolumeRescueOperation.partialDirName)
+        let arriving = Data(repeating: 0x77, count: 30_000)
+        let slow = ScriptedExecutor(claiming: [b.root.path]).on("mkdir", .passThrough).on("rsync", .custom { request in
+            var throttled = request
+            throttled.arguments.insert("--bwlimit=256", at: 0)     // KB/s: ~3 s for 768 KB
+            return await ScriptedExecutor().on("*", .passThrough).run(throttled)
+        })
+        let done = await slow.scoped {
+            b.op.start(files: [record], sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: .verified)
+            // rsync's temporary file — in the destination folder (old shape) or the staging folder.
+            let deadline = ContinuousClock.now + .seconds(15)
+            func underWay() -> Bool {
+                [destDir, staging].contains { dir in
+                    ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasPrefix(".tape 1.mov.") }
+                }
+            }
+            while ContinuousClock.now < deadline, !underWay() { try? await Task.sleep(for: .milliseconds(10)) }
+            try? arriving.write(to: dest)                             // another job's file arrives at the final name
+            return await matrix.waitUntilDone(b, limit: .seconds(30))
+        }
+        #expect(done)
+        #expect((try? Data(contentsOf: dest)) == arriving, "the file that arrived during the transfer was replaced")
+        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.bytesWritten == 0, "\(b.op.errors)")
+        #expect(b.op.errors.first?.contains("a different file is already at Rescued/\(big.relative) (30000 bytes there") == true, "\(b.op.errors)")
+        #expect(Self.sha(big.url) == bigSHA, "the source changed")
+    }
+
+    /// Codex r1 #7 (P1), its reproduction: the file that appears before the
+    /// transfer has the SOURCE's size. Nothing of this run is at the name:
+    /// it is counted as already there, with zero bytes written — not as a
+    /// completed transfer of the source's size.
+    @Test("rsync mode: a SAME-SIZE file that appears at the name after the check is counted 'already there' with 0 bytes written, and left untouched")
+    func aSameSizeFileThatAppearsIsAlreadyThereNotWritten() async throws {
+        let b = try matrix.bench(files: 1); defer { b.cleanup() }
+        let dest = b.dest(0)
+        let size = Int(b.sources[0].size)
+        let mock = ScriptedExecutor(claiming: [b.root.path])
+            .on("mkdir", .custom { request in
+                try? FileManager.default.createDirectory(atPath: request.arguments[1], withIntermediateDirectories: true)
+                try? Data(repeating: 0x66, count: size).write(to: dest)
+                return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
+            })
+            .on("rsync", .passThrough)
+        #expect(await run(b, mock, mode: .verified))
+        #expect((try? Data(contentsOf: dest)) == Data(repeating: 0x66, count: size), "the file that appeared was replaced")
+        #expect(b.op.filesCopied == 1 && b.op.filesAlreadyPresent == 1 && b.op.bytesAlreadyPresent == Int64(size), "\(b.op.errors)")
+        #expect(b.op.bytesWritten == 0, "a transfer that delivered nothing was reported as \(b.op.bytesWritten) bytes written")
+        #expect(b.op.filesFailed == 0 && b.op.errors.isEmpty, "\(b.op.errors)")
+        #expect(files(under: b.destVolume).map(\.lastPathComponent) == ["tape 1.mov"], "staging debris: \(files(under: b.destVolume))")
         b.expectSourcesUntouched()
     }
 

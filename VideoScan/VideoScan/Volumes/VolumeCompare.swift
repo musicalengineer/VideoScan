@@ -530,14 +530,10 @@ final class VolumeRescueOperation: ObservableObject {
             case .free:
                 break
             case .alreadyThere(let bytes):
-                await MainActor.run { [weak self] in
-                    self?.filesCopied += 1
-                    self?.filesAlreadyPresent += 1
-                    self?.bytesAlreadyPresent += bytes
-                }
+                await record(.alreadyThere(bytes))
                 continue
             case .taken(let line):
-                await recordFailed(line, nameTaken: true)
+                await record(.failed(line, nameTaken: true))
                 continue
             }
 
@@ -564,29 +560,30 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
-            // The staging folder must be a PLAIN folder, or absent (Codex r1
-            // #1, P0). THE BUG: a `.videoscan-partial` that was a symlink —
-            // to the source folder, say — was used and cleaned through: the
-            // "own partial" unlinked below was the SOURCE file. lstat, never
-            // followed; anything else fails this file, nothing touched.
-            if let refusal = Self.stagingRefusal(relative: relative, destFile: destFile) {
-                await recordFailed(refusal)
+            // STAGE, THEN PUBLISH EXCLUSIVELY (Codex r1 #2, P0). THE BUG:
+            // rsync wrote to the FINAL name; `--ignore-existing` is checked
+            // when the transfer starts and rsync's last step is an ordinary
+            // rename, so a file that arrived at the name during a long
+            // transfer was overwritten. Now rsync's destination is the
+            // app's own staged copy, `<folder>/.videoscan-partial/<name>`
+            // (resumable there: `--partial` keeps an interrupted transfer AT
+            // THE STAGED NAME, never a final one); the app size-checks it
+            // and publishes it with ONE no-clobber rename (RENAME_EXCL),
+            // like the fast copier. Every folder the rescue creates is
+            // opened without following a link, and the staging folder must
+            // be a plain folder (Codex r1 #1: a linked one was cleaned
+            // through, unlinking the SOURCE).
+            let staging: RsyncStaging
+            switch RsyncStaging.open(relative: relative, rescueDir: rescueDir, destFile: destFile) {
+            case .refused(let line):
+                await recordFailed(line)
                 continue
+            case .ready(let opened):
+                staging = opened
             }
+            defer { staging.close() }   // each iteration: closes both folders, removes the staging folder if empty
 
-            // rsync with --checksum.
-            //
-            // `--partial-dir=.videoscan-partial` (GH #506, 2026-11-21; it was
-            // a bare `--partial`). THE BUG: `--partial` keeps an interrupted
-            // transfer AT THE FINAL NAME, so a failed or stopped copy left a
-            // truncated file named like a good one, and a catalog scan of
-            // the destination recorded it as a file. With `--partial-dir`
-            // rsync parks the partial in `<destination folder>/
-            // .videoscan-partial/<name>`, resumes from it on the next run
-            // and removes the folder when it is done; nothing truncated is
-            // ever at a final name because of this run. (Measured on the
-            // installed /usr/bin/rsync — openrsync, protocol 29 — with a
-            // real interrupted transfer: VolumeRescueRsyncNegativeMatrixTests.)
+            // rsync with --checksum, into the staged copy.
             //
             // Through ProcessRunner (2026-11-21; it was a hand-rolled
             // `Process()` + `waitUntilExit()`): the app's environment and
@@ -609,11 +606,10 @@ final class VolumeRescueOperation: ObservableObject {
                 executable: "/usr/bin/rsync",
                 arguments: [
                     "--checksum",       // compare by checksum, not just size/mtime
-                    "--ignore-existing", // second belt: a file that appears at the name after the check is not replaced
-                    "--partial-dir=\(Self.partialDirName)",   // an interrupted transfer never sits at the final name
+                    "--partial",        // an interrupted transfer stays at the STAGED name, for the next run
                     "--times",          // preserve modification times
                     srcFile,
-                    destFile
+                    staging.stagedPath
                 ],
                 stdoutLimitBytes: 0,
                 stderrLimitBytes: 64 * 1024)
@@ -632,50 +628,79 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
-            // EVIDENCE, NOT AN EXIT STATUS (GH #506 item 1, P0). THE BUG:
-            // exit 0 was believed — a destination that was missing (the
-            // installed rsync SKIPS a source it will not copy, e.g. a
-            // directory, exits 0 and creates nothing) or short was counted
-            // "safe". A file now counts as copied only when a FRESH lstat of
-            // both shows a regular file at the destination whose size equals
-            // the source's. That is a size check, NOT content verification
-            // (rsync's own whole-file checksum is the tool's claim; a hash
-            // of the destination is the follow-up) — and it is said as
-            // "size checked", never "verified".
-            let source = Self.entry(at: srcFile)
-            let final = Self.entry(at: destFile)
-            let parked = Self.entry(at: Self.partialPath(forDestination: destFile)).regularSize
-            if result.exitCode == 0 {
-                if let size = source.regularSize, final == .regular(size) {
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.bytesWritten += size
-                    }
-                    // The copy is whole: this file's OWN parked partial from
-                    // an earlier interrupted run has served its purpose.
-                    // (With --ignore-existing the installed rsync leaves it
-                    // behind.) The only file a rescue ever unlinks — its
-                    // own, under `.videoscan-partial`, never a final name —
-                    // bound to that folder (opened without following a link)
-                    // and only if what is there is a regular file.
-                    Self.removeOwnPartial(forDestination: destFile)
-                } else {
-                    await recordFailed(Self.notCopiedLine(relative: relative, source: source, final: final, stderr: result.stderr))
-                }
-            } else {
-                let reason = Self.rsyncReason(exitCode: result.exitCode, stderr: result.stderr)
-                let left = Self.leftAtDestination(final: final, partialBytes: parked, sourceSize: source.regularSize)
-                if Task.isCancelled {
-                    // The user's Stop killed this transfer: it is not a
-                    // failed copy (GH #506 item 4), and it is named.
-                    await recordInterrupted("\(relative) — stopped during the transfer (\(reason)). At the destination: \(left)")
-                } else {
-                    await recordFailed("\(relative) — \(reason). At the destination: \(left)")
-                }
+            await record(Self.settle(result, staging: staging, relative: relative, srcFile: srcFile, destFile: destFile,
+                                     rescueDir: rescueDir, stopped: Task.isCancelled))
+        }
+    }
+
+    /// What became of one file the rsync rescue attempted. (For Rick: a
+    /// tagged union — the counters and lines follow from it in one place.)
+    enum FileOutcome: Equatable, Sendable {
+        case copied(Int64)
+        case alreadyThere(Int64)
+        case failed(String, nameTaken: Bool)
+        case interrupted(String)
+    }
+
+    /// After rsync ran: the evidence, then the one publish (Codex r1 #2,
+    /// #7). EVIDENCE, NOT AN EXIT STATUS (GH #506 item 1, P0): the staged
+    /// copy is published only when a FRESH lstat shows a regular file whose
+    /// size equals the source's — a size check, NOT content verification,
+    /// said as "size checked", never "verified".
+    nonisolated static func settle(_ result: ProcessRunner.Result, staging: RsyncStaging, relative: String, srcFile: String,
+                                   destFile: String, rescueDir: String, stopped: Bool) -> FileOutcome {
+        let source = entry(at: srcFile)
+        let staged = staging.stagedEntry()
+        guard result.exitCode == 0 else {
+            let reason = rsyncReason(exitCode: result.exitCode, stderr: result.stderr)
+            let left = leftAtDestination(final: entry(at: destFile), partialBytes: staged.regularSize, sourceSize: source.regularSize)
+            // The user's Stop killed this transfer: it is not a failed copy
+            // (GH #506 item 4), and it is named.
+            return stopped ? .interrupted("\(relative) — stopped during the transfer (\(reason)). At the destination: \(left)")
+                           : .failed("\(relative) — \(reason). At the destination: \(left)", nameTaken: false)
+        }
+        guard let size = source.regularSize, staged == .regular(size) else {
+            return .failed(notCopiedLine(relative: relative, source: source, staged: staged, stderr: result.stderr), nameTaken: false)
+        }
+        switch staging.publish() {
+        case .published:
+            return .copied(size)
+        case .nameTaken:
+            // Something arrived at the final name during the transfer. It is
+            // not ours and is not touched; our staged copy is removed (it is
+            // ours). A same-size file is "already there" with nothing
+            // written (Codex r1 #7); anything else fails.
+            let fate = stagedCopyFate(removed: staging.removeStaged())
+            switch nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+            case .alreadyThere(let bytes): return .alreadyThere(bytes)
+            case .taken(let line): return .failed(line + " " + fate, nameTaken: true)
+            case .free: return .failed("\(relative) — the final name was taken at the publish and is free again; nothing was replaced. \(fate)", nameTaken: false)
             }
-            // An emptied partial folder is removed (rmdir refuses a
-            // non-empty one: a parked partial is never deleted here).
-            rmdir(Self.partialDirectory(forDestination: destFile))
+        case .failed(let why):
+            return .failed("\(relative) — the staged copy could not be published at the final name (\(why)); "
+                + "it is kept in \(partialDirName) for the next run, and nothing at the final name was touched.", nameTaken: false)
+        }
+    }
+
+    /// The counters and lines for one file's outcome — the only place the
+    /// rsync rescue counts a file.
+    private nonisolated func record(_ outcome: FileOutcome) async {
+        switch outcome {
+        case .copied(let size):
+            await MainActor.run { [weak self] in
+                self?.filesCopied += 1
+                self?.bytesWritten += size
+            }
+        case .alreadyThere(let bytes):
+            await MainActor.run { [weak self] in
+                self?.filesCopied += 1
+                self?.filesAlreadyPresent += 1
+                self?.bytesAlreadyPresent += bytes
+            }
+        case .failed(let line, let nameTaken):
+            await recordFailed(line, nameTaken: nameTaken)
+        case .interrupted(let line):
+            await recordInterrupted(line)
         }
     }
 
@@ -714,30 +739,11 @@ final class VolumeRescueOperation: ObservableObject {
         ((destFile as NSString).deletingLastPathComponent as NSString).appendingPathComponent(partialDirName)
     }
 
-    /// Why this file's staging folder cannot be used, or nil: absent, or a
-    /// plain directory (lstat — a symlink is never followed).
-    nonisolated static func stagingRefusal(relative: String, destFile: String) -> String? {
-        let staging = partialDirectory(forDestination: destFile)
-        var sb = stat()
-        if lstat(staging, &sb) != 0 { return errno == ENOENT ? nil : "\(relative) — the staging folder at \(staging) could not be read (\(String(cString: strerror(errno)))) — nothing was touched." }
-        guard (sb.st_mode & S_IFMT) == S_IFDIR else {
-            return "\(relative) — the staging folder at \(staging) is not a plain folder — nothing was touched, and the file is still on the source."
-        }
-        return nil
-    }
-
-    /// Unlink this file's own parked partial: relative to the staging
-    /// folder opened with O_NOFOLLOW (a link in its place is refused), and
-    /// only when the entry there is a regular file. Residual (GH #503): a
-    /// swap inside the instant between that fstatat and the unlinkat.
-    nonisolated static func removeOwnPartial(forDestination destFile: String) {
-        let dir = Darwin.open(partialDirectory(forDestination: destFile), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard dir >= 0 else { return }
-        defer { Darwin.close(dir) }
-        let name = (destFile as NSString).lastPathComponent
-        var sb = stat()
-        guard fstatat(dir, name, &sb, AT_SYMLINK_NOFOLLOW) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return }
-        unlinkat(dir, name, 0)
+    /// What became of the app's own staged copy after the final name was
+    /// found taken at the publish.
+    nonisolated static func stagedCopyFate(removed: Bool) -> String {
+        removed ? "The copy VideoScan staged in \(partialDirName) was removed (it was its own)."
+                : "The copy VideoScan staged in \(partialDirName) could not be removed and is still there."
     }
 
     nonisolated static func partialPath(forDestination destFile: String) -> String {
@@ -851,25 +857,26 @@ final class VolumeRescueOperation: ObservableObject {
         }
     }
 
-    /// The line for a file rsync said it copied (exit 0) that the fresh
-    /// stat does not find as a regular file of the source's size.
-    nonisolated static func notCopiedLine(relative: String, source: DiskEntry, final: DiskEntry, stderr: String) -> String {
+    /// The line for a file rsync said it copied (exit 0) whose STAGED copy
+    /// the fresh lstat does not find as a regular file of the source's
+    /// size. Nothing is published; what is staged stays for the next run.
+    nonisolated static func notCopiedLine(relative: String, source: DiskEntry, staged: DiskEntry, stderr: String) -> String {
         let what: String
-        switch (final, source.regularSize) {
+        switch (staged, source.regularSize) {
         case (.absent, .some):
-            what = "nothing is at the destination"
+            what = "nothing was staged"
         case (.absent, .none):
-            what = "nothing is at the destination, and the source is not a regular file rsync would copy"
+            what = "nothing was staged, and the source is not a regular file rsync would copy"
         case (.notRegular, _):
-            what = "the destination is not a regular file; it was left untouched"
+            what = "the staged copy is not a regular file; it was left in \(partialDirName)"
         case (.regular(let bytes), .some(let size)):
-            what = "a file of \(bytes) bytes is at the final name, the source is \(size) bytes — a different file, or not a complete copy "
-                + "(rsync is told never to replace a file that is there); it was left untouched"
+            what = "the staged copy is \(bytes) bytes, the source is \(size) bytes; it is kept in \(partialDirName) for the next run"
         case (.regular(let bytes), .none):
-            what = "a file of \(bytes) bytes is at the final name but the source could not be measured to compare; it was left untouched"
+            what = "the staged copy is \(bytes) bytes but the source could not be measured to compare; it is kept in \(partialDirName)"
         }
         let said = flat(stderr)
-        return "\(relative) — rsync exited 0 but the copy is not there: \(what)" + (said.isEmpty ? "." : " (rsync said: \(said)).")
+        return "\(relative) — rsync exited 0 but the copy is not whole: \(what); nothing was published at the final name"
+            + (said.isEmpty ? "." : " (rsync said: \(said)).")
     }
 
     // MARK: - Helpers
@@ -892,6 +899,107 @@ final class VolumeRescueOperation: ObservableObject {
             return String(fullPath[start...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         }
         return fallback
+    }
+}
+
+// MARK: - The rsync rescue's staging (Codex GH #501 r1 #1, #2)
+
+/// One file's staging for the rsync rescue: its destination folder and that
+/// folder's `.videoscan-partial`, both OPEN, every folder the rescue creates
+/// reached without following a link. rsync writes the staged copy; the app
+/// publishes it with one RENAME_EXCL relative to these descriptors, and
+/// removes only its own staged copy, relative to the staging descriptor and
+/// only while it is the same file (device + inode) rsync left.
+/// Residual, declared (GH #503): a swap inside one syscall window, and the
+/// staged PATH rsync is given (a component swapped for a link between the
+/// open here and rsync's own open is not seen).
+/// Memory: two descriptors per file in flight, closed at the end of its
+/// iteration. (For Rick: ≈ a pair of RAII dirfds without the destructor —
+/// `close()` is called from a `defer`.)
+struct RsyncStaging: Sendable {
+    let destDir: Int32
+    let stagingDir: Int32
+    let name: String
+    let stagedPath: String
+    let stagingPath: String
+
+    enum Opened { case ready(RsyncStaging), refused(String) }
+    enum Publish: Equatable { case published, nameTaken, failed(String) }
+
+    private static let folderFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+
+    private static func errorText(_ code: Int32) -> String { String(cString: strerror(code)) }
+
+    /// Open `<rescueDir>/<relative folders>` component by component without
+    /// following a link (the user's destination volume itself may be
+    /// reached through one), then make/open `.videoscan-partial` in it.
+    /// Refuses, with the line for the user, before anything is written.
+    static func open(relative: String, rescueDir: String, destFile: String) -> Opened {
+        let base = (rescueDir as NSString).deletingLastPathComponent
+        let folders = [(rescueDir as NSString).lastPathComponent]
+            + (relative as NSString).deletingLastPathComponent.split(separator: "/").map(String.init)
+        var fd = Darwin.open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else { return .refused("\(relative) — the destination \(base) could not be opened (\(errorText(errno))) — nothing was touched.") }
+        var reached = base
+        for folder in folders {
+            reached = (reached as NSString).appendingPathComponent(folder)
+            let next = openat(fd, folder, folderFlags)
+            let code = errno
+            Darwin.close(fd)
+            guard next >= 0 else {
+                let why = code == ELOOP || code == ENOTDIR ? "is not a plain folder" : "could not be opened (\(errorText(code)))"
+                return .refused("\(relative) — the destination folder at \(reached) \(why) — nothing was touched, and the file is still on the source.")
+            }
+            fd = next
+        }
+        let destDir = fd
+        let stagingPath = (reached as NSString).appendingPathComponent(VolumeRescueOperation.partialDirName)
+        if mkdirat(destDir, VolumeRescueOperation.partialDirName, 0o755) != 0, errno != EEXIST {
+            let why = errorText(errno)
+            Darwin.close(destDir)
+            return .refused("\(relative) — the staging folder at \(stagingPath) could not be made (\(why)) — nothing was touched, and the file is still on the source.")
+        }
+        let stagingDir = openat(destDir, VolumeRescueOperation.partialDirName, folderFlags)
+        guard stagingDir >= 0 else {
+            Darwin.close(destDir)
+            return .refused("\(relative) — the staging folder at \(stagingPath) is not a plain folder — nothing was touched, and the file is still on the source.")
+        }
+        let name = (destFile as NSString).lastPathComponent
+        let staging = RsyncStaging(destDir: destDir, stagingDir: stagingDir, name: name,
+                                   stagedPath: (stagingPath as NSString).appendingPathComponent(name), stagingPath: stagingPath)
+        if case .notRegular = staging.stagedEntry() {
+            staging.close()
+            return .refused("\(relative) — the staged copy at \(staging.stagedPath) is not a plain file — nothing was touched, and the file is still on the source.")
+        }
+        return .ready(staging)
+    }
+
+    /// A fresh lstat of the staged copy, relative to the staging folder.
+    func stagedEntry() -> VolumeRescueOperation.DiskEntry {
+        var sb = stat()
+        guard fstatat(stagingDir, name, &sb, AT_SYMLINK_NOFOLLOW) == 0 else { return errno == ENOENT ? .absent : .notRegular }
+        return (sb.st_mode & S_IFMT) == S_IFREG ? .regular(Int64(sb.st_size)) : .notRegular
+    }
+
+    /// The one publish: staged → final name, never replacing what is there.
+    func publish() -> Publish {
+        if renameatx_np(stagingDir, name, destDir, name, UInt32(RENAME_EXCL)) == 0 { return .published }
+        return errno == EEXIST ? .nameTaken : .failed(Self.errorText(errno))
+    }
+
+    /// Remove the app's OWN staged copy: a regular file in the staging
+    /// folder (reached through its descriptor). true when it is gone.
+    func removeStaged() -> Bool {
+        guard case .regular = stagedEntry() else { return stagedEntry() == .absent }
+        return unlinkat(stagingDir, name, 0) == 0 || errno == ENOENT
+    }
+
+    /// Close both folders; the staging folder is removed when empty (the
+    /// kernel refuses a non-empty one: a parked partial is never deleted).
+    func close() {
+        unlinkat(destDir, VolumeRescueOperation.partialDirName, AT_REMOVEDIR)
+        Darwin.close(stagingDir)
+        Darwin.close(destDir)
     }
 }
 

@@ -15,8 +15,9 @@
 //       destination whose size equals the source's ("copied (size
 //       checked)" — size equality is not content verification)
 //   P1  a failed transfer left a truncated file at the FINAL name
-//       (`--partial`) → `--partial-dir=.videoscan-partial`, and every
-//       failure line says what is at the destination
+//       (`--partial`) → rsync writes only a staged copy in
+//       `.videoscan-partial` (Codex r1 #2: published by the app with
+//       RENAME_EXCL), and every failure line says what is at the destination
 //   P2  a child killed by a signal with no stderr named no reason → "rsync
 //       exit N"
 //   P2  a Stop was reported as "done, 1 failed" → stopped, the file in
@@ -87,8 +88,8 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         }
 
         /// The only commands are mkdir -p <dir under the destination> and
-        /// rsync <four flags> <a source> <its destination>: the source is
-        /// never written to, the destination never read from.
+        /// rsync <three flags> <a source> <its STAGED copy>: the source is
+        /// never written to, and rsync never writes a final name (Codex r1 #2).
         func expectOnlyTheTwoCommands(_ mock: ScriptedExecutor, sourceLocation: SourceLocation = #_sourceLocation) {
             for call in mock.calls {
                 switch call.tool {
@@ -96,9 +97,10 @@ struct VolumeRescueRsyncNegativeMatrixTests {
                     #expect(call.executable == "/bin/mkdir" && call.arguments.count == 2 && call.arguments[0] == "-p"
                             && call.arguments[1].hasPrefix(rescued.path), "\(call)", sourceLocation: sourceLocation)
                 case "rsync":
-                    let ok = call.executable == "/usr/bin/rsync" && call.arguments.count == 6
-                        && Array(call.arguments.prefix(4)) == ["--checksum", "--ignore-existing", "--partial-dir=.videoscan-partial", "--times"]
-                        && sources.contains { $0.url.path == call.arguments[4] && rescued.appendingPathComponent($0.relative).path == call.arguments[5] }
+                    let ok = call.executable == "/usr/bin/rsync" && call.arguments.count == 5
+                        && Array(call.arguments.prefix(3)) == ["--checksum", "--partial", "--times"]
+                        && sources.contains { $0.url.path == call.arguments[3]
+                            && VolumeRescueRsyncNegativeMatrixTests.partial(of: rescued.appendingPathComponent($0.relative)).path == call.arguments[4] }
                     #expect(ok, "\(call)", sourceLocation: sourceLocation)
                 default:
                     Issue.record("an unexpected command: \(call)", sourceLocation: sourceLocation)
@@ -160,20 +162,16 @@ struct VolumeRescueRsyncNegativeMatrixTests {
 
     /// An rsync that leaves `fraction` of the source behind, prints
     /// `stderr`, and exits `exit`. WHERE it leaves it is what the real tool
-    /// does with the flags it was given: under `--partial-dir=DIR` in
-    /// `<destination folder>/DIR/<name>`; under a bare `--partial` at the
-    /// FINAL name. `atFinalName` forces the final name whatever the flags
-    /// (a tool, or a filesystem, that lies).
+    /// does with `--partial`: at its destination argument — the app's
+    /// STAGED copy in `.videoscan-partial` (Codex r1 #2). `atFinalName`
+    /// writes the FINAL name instead (a tool, or a filesystem, that lies).
     static func rsyncLeaving(fraction: Double, stderr: String, exit: Int32, atFinalName: Bool = false) -> ScriptedExecutor.Behaviour {
         .custom { request in
             let (src, dst) = (request.arguments[request.arguments.count - 2], request.arguments[request.arguments.count - 1])
             if fraction > 0, let data = try? Data(contentsOf: URL(fileURLWithPath: src)) {
-                var target = URL(fileURLWithPath: dst)
-                if !atFinalName, let flag = request.arguments.first(where: { $0.hasPrefix("--partial-dir=") }) {
-                    let dir = target.deletingLastPathComponent().appendingPathComponent(String(flag.dropFirst("--partial-dir=".count)), isDirectory: true)
-                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    target = dir.appendingPathComponent(target.lastPathComponent)
-                }
+                let staged = URL(fileURLWithPath: dst)
+                let target = atFinalName
+                    ? staged.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(staged.lastPathComponent) : staged
                 try? data.prefix(Int(Double(data.count) * fraction)).write(to: target)
             }
             for line in stderr.split(separator: "\n") { request.stderrLine?(String(line)) }
@@ -193,7 +191,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let expected: [[String]] = b.sources.flatMap { s -> [[String]] in
             let dst = b.rescued.appendingPathComponent(s.relative).path
             return [["/bin/mkdir", "-p", (dst as NSString).deletingLastPathComponent],
-                    ["/usr/bin/rsync", "--checksum", "--ignore-existing", "--partial-dir=.videoscan-partial", "--times", s.url.path, dst]]
+                    ["/usr/bin/rsync", "--checksum", "--partial", "--times", s.url.path, Self.partial(of: URL(fileURLWithPath: dst)).path]]
         }
         #expect(mock.calls.map { [$0.executable] + $0.arguments } == expected)
         b.expectOnlyTheTwoCommands(mock)
@@ -236,11 +234,11 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         })
         let stopped = await slow.scoped {
             b.op.start(files: [record], sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: .verified)
-            // Wait until rsync's temporary file exists in the destination
+            // Wait until rsync's temporary file exists in the staging
             // folder (the transfer is under way), then press Stop.
             let deadline = ContinuousClock.now + .seconds(15)
             while ContinuousClock.now < deadline {
-                let names = (try? FileManager.default.contentsOfDirectory(atPath: destDir.path)) ?? []
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: destDir.appendingPathComponent(Self.partialDirName).path)) ?? []
                 if names.contains(where: { $0.hasPrefix(".tape 1.mov.") }) { break }
                 try? await Task.sleep(for: .milliseconds(10))
             }
@@ -293,11 +291,12 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(b.op.filesCopied == 0, "a file was reported copied on rsync's exit 0 alone")
         #expect(b.op.filesFailed == 1 && b.op.bytesWritten == 0)
         let at = VolumeRescueOperation.entry(at: b.dest(0).path)
-        #expect(at.regularSize == nil, "a regular file appeared at the destination: \(at)")
-        let said = at == .absent
-            ? "nothing is at the destination, and the source is not a regular file rsync would copy."
-            : "the destination is not a regular file; it was left untouched."
-        #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exited 0 but the copy is not there: \(said)"], "\(b.op.errors)")
+        #expect(at == .absent, "something appeared at the final name: \(at)")
+        let staged = VolumeRescueOperation.entry(at: Self.partial(of: b.dest(0)).path)
+        let said = staged == .absent
+            ? "nothing was staged, and the source is not a regular file rsync would copy"
+            : "the staged copy is not a regular file; it was left in .videoscan-partial"
+        #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exited 0 but the copy is not whole: \(said); nothing was published at the final name."], "\(b.op.errors)")
     }
 
     // MARK: - rsync exits nonzero
@@ -517,7 +516,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
     /// from a fresh stat of the destination, never from an exit status.
     /// NOTE (Codex): a regular file of equal size closes the missing and
     /// short cases only; size equality is NOT content verification.
-    @Test("rsync exits 0 but the destination is missing / short / a directory: the file is FAILED with what is there, nothing counted copied or written",
+    @Test("rsync exits 0 but the staged copy is missing / short / a directory: the file is FAILED with what is there, nothing published, counted or written",
           arguments: ["missing", "truncated", "directory"])
     func exitZeroWithoutTheFile(_ shape: String) async throws {
         let b = try bench(files: 1)
@@ -528,7 +527,7 @@ struct VolumeRescueRsyncNegativeMatrixTests {
                 try? FileManager.default.createDirectory(atPath: request.arguments[request.arguments.count - 1], withIntermediateDirectories: true)
                 return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
             }
-            : Self.rsyncLeaving(fraction: shape == "missing" ? 0 : 0.5, stderr: said + "\n", exit: 0, atFinalName: true))
+            : Self.rsyncLeaving(fraction: shape == "missing" ? 0 : 0.5, stderr: said + "\n", exit: 0))
         #expect(await run(b, mock))
 
         #expect(b.op.filesCopied == 0, "a file was reported copied on rsync's exit 0 alone")
@@ -537,14 +536,15 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let size = b.sources[0].size
         let wanted: String
         switch shape {
-        case "missing": wanted = "nothing is at the destination (rsync said: \(said))."
-        case "truncated": wanted = "a file of \(size / 2) bytes is at the final name, the source is \(size) bytes — a different file, or not a complete copy "
-            + "(rsync is told never to replace a file that is there); it was left untouched (rsync said: \(said))."
-        default: wanted = "the destination is not a regular file; it was left untouched."
+        case "missing": wanted = "nothing was staged; nothing was published at the final name (rsync said: \(said))."
+        case "truncated": wanted = "the staged copy is \(size / 2) bytes, the source is \(size) bytes; it is kept in .videoscan-partial for the next run; "
+            + "nothing was published at the final name (rsync said: \(said))."
+        default: wanted = "the staged copy is not a regular file; it was left in .videoscan-partial; nothing was published at the final name."
         }
-        #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exited 0 but the copy is not there: \(wanted)"], "\(b.op.errors)")
-        // Nothing at the destination is moved or removed by the check.
-        if shape == "truncated" { #expect(VolumeRescueOperation.measuredSize(ofFileAt: b.dest(0).path) == size / 2) }
+        #expect(b.op.errors == ["\(b.sources[0].relative) — rsync exited 0 but the copy is not whole: \(wanted)"], "\(b.op.errors)")
+        // Nothing reaches the final name; a short staged copy stays for the next run.
+        #expect(VolumeRescueOperation.entry(at: b.dest(0).path) == .absent)
+        if shape == "truncated" { #expect(VolumeRescueOperation.measuredSize(ofFileAt: Self.partial(of: b.dest(0)).path) == size / 2) }
         b.expectOnlyTheTwoCommands(mock)
         b.expectSourcesUntouched()
     }
@@ -590,19 +590,19 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         b.expectSourcesUntouched()
     }
 
-    @Test("mkdir exits nonzero: its status is not read (as before) — rsync runs, fails on the missing directory, and names it")
+    @Test("mkdir exits nonzero: its status is not read — the folder it did not make cannot be opened, so the file FAILS naming it; rsync is never run")
     func mkdirExitsNonzero() async throws {
         let b = try bench(files: 1)
         defer { b.cleanup() }
         let mock = ScriptedExecutor(claiming: [b.root.path])
             .on("mkdir", .output(stderr: "mkdir: \(b.rescued.path)/Tapes: Permission denied\n", exit: 1))
-            .on("rsync", .passThrough)                       // the REAL rsync, into a directory that was never made
+            .on("rsync", .passThrough)
         #expect(await run(b, mock))
 
-        #expect(mock.calls(to: "rsync").count == 1)
+        #expect(mock.calls(to: "rsync").isEmpty, "refuse before mutating: \(mock.calls)")
         #expect(b.op.filesFailed == 1 && b.op.filesCopied == 0 && b.op.bytesWritten == 0)
-        #expect(b.op.errors.first?.hasPrefix("\(b.sources[0].relative) — rsync exit ") == true, "\(b.op.errors)")
-        #expect(b.op.errors.first?.contains("No such file or directory") == true, "\(b.op.errors)")
+        #expect(b.op.errors == ["\(b.sources[0].relative) — the destination folder at \(b.rescued.path)/Tapes could not be opened (No such file or directory) — "
+                               + "nothing was touched, and the file is still on the source."], "\(b.op.errors)")
         #expect(VolumeRescueOperation.measuredSize(ofFileAt: b.dest(0).path) == nil)
         b.expectSourcesUntouched()
     }
@@ -672,10 +672,12 @@ struct VolumeRescueRsyncNegativeMatrixTests {
                 == "the final name is not a regular file; it was left untouched.")
         #expect(R.leftAtDestination(final: .regular(10), partialBytes: 4, sourceSize: 10)
                 == "a file of 10 bytes is at the final name (the source is 10 bytes) — it is not counted as a copy and was left untouched; 4 of 10 bytes kept in .videoscan-partial for the next run.")
-        #expect(R.notCopiedLine(relative: "a.mov", source: .notRegular, final: .absent, stderr: "")
-                == "a.mov — rsync exited 0 but the copy is not there: nothing is at the destination, and the source is not a regular file rsync would copy.")
-        #expect(R.notCopiedLine(relative: "a.mov", source: .absent, final: .regular(7), stderr: "")
-                == "a.mov — rsync exited 0 but the copy is not there: a file of 7 bytes is at the final name but the source could not be measured to compare; it was left untouched.")
+        #expect(R.notCopiedLine(relative: "a.mov", source: .notRegular, staged: .absent, stderr: "")
+                == "a.mov — rsync exited 0 but the copy is not whole: nothing was staged, and the source is not a regular file rsync would copy; nothing was published at the final name.")
+        #expect(R.notCopiedLine(relative: "a.mov", source: .absent, staged: .regular(7), stderr: "")
+                == "a.mov — rsync exited 0 but the copy is not whole: the staged copy is 7 bytes but the source could not be measured to compare; it is kept in .videoscan-partial; nothing was published at the final name.")
+        #expect(R.stagedCopyFate(removed: true) == "The copy VideoScan staged in .videoscan-partial was removed (it was its own).")
+        #expect(R.stagedCopyFate(removed: false) == "The copy VideoScan staged in .videoscan-partial could not be removed and is still there.")
 
         let written = R.doneSummary(safe: 0, failed: 0, bytesWritten: 0, alreadyPresent: 0).components(separatedBy: " · ")[2]
         #expect(R.doneSummary(safe: 3, failed: 1, bytesWritten: 0, alreadyPresent: 0, interrupted: 1, notAttempted: 5)
@@ -708,20 +710,24 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         #expect(RescueCopyMode.verified.rawValue == "rsync --checksum (size checked)")
     }
 
-    /// Sensor: the shape of the fix in the source.
-    @Test("sensor: rsync runs with --partial-dir (never a bare --partial), and a file is counted copied only inside the fresh-stat size check")
+    /// Sensor: the shape of the fix in the source (Codex r1 #1, #2, #7).
+    @Test("sensor: rsync writes only the STAGED copy; the one publish is an exclusive rename after the fresh size check; only the own staged copy is ever removed")
     func theShapeInTheSource() throws {
         let source = try SourceTree.appSource(named: "VolumeCompare.swift")
         let start = try #require(source.range(of: "private nonisolated func rsyncCopy("))
         let end = try #require(source.range(of: "// MARK: - What happened to one file (GH #506)", range: start.upperBound..<source.endIndex))
         let body = String(source[start.upperBound..<end.lowerBound])
-        #expect(body.contains("\"--partial-dir=\\(Self.partialDirName)\""))
-        #expect(body.contains("\"--ignore-existing\""), "rsync may replace a file that appears at the name")
-        // The name is checked before mkdir and before rsync (refuse before mutating).
+        #expect(body.contains("\"--partial\",") && body.contains("staging.stagedPath\n"), "rsync's destination is the staged copy, kept on interruption")
+        #expect(!body.contains("--partial-dir") && !body.contains("destFile\n                ],"), "rsync is given a final name")
+        // Refuse before mutating: the name check, mkdir, the staging (no link followed), rsync, the publish — in that order.
         let check = try #require(body.range(of: "switch Self.nameCheck("))
         let mkdir = try #require(body.range(of: "executable: \"/bin/mkdir\""))
+        let staged = try #require(body.range(of: "RsyncStaging.open(relative: relative, rescueDir: rescueDir, destFile: destFile)"))
         let rsync = try #require(body.range(of: "executable: \"/usr/bin/rsync\""))
-        #expect(check.lowerBound < mkdir.lowerBound && mkdir.lowerBound < rsync.lowerBound)
+        let sizeCheck = try #require(body.range(of: "guard let size = source.regularSize, staged == .regular(size) else {"))
+        let publish = try #require(body.range(of: "switch staging.publish() {"))
+        #expect(check.lowerBound < mkdir.lowerBound && mkdir.lowerBound < staged.lowerBound && staged.lowerBound < rsync.lowerBound
+                && rsync.lowerBound < sizeCheck.lowerBound && sizeCheck.lowerBound < publish.lowerBound)
         // …and in the fast loop before its createDirectory.
         let fastStart = try #require(source.range(of: "private nonisolated func fastCopy("))
         let fast = String(source[fastStart.upperBound..<start.lowerBound])
@@ -729,24 +735,23 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let fastMkdir = try #require(fast.range(of: "fm.createDirectory(atPath: destDir"))
         #expect(fastCheck.lowerBound < fastMkdir.lowerBound)
         #expect(!source.contains("recopiedIncomplete") && !source.contains("filesRepaired"), "the replace-an-incomplete-file path is back")
-        #expect(!body.contains("\"--partial\""), "a bare --partial leaves a truncated file at the final name")
         #expect(!body.contains("--remove-source-files") && !body.contains("--delete"), "nothing at the source or destination is removed")
-        #expect(body.components(separatedBy: "filesCopied += 1").count == 3, "exactly two places count a file at the destination")
-        // Two places count: "already there" (under the name check's same-size case) and "copied" (under the fresh-stat size check).
-        let sizeCheck = try #require(body.range(of: "if let size = source.regularSize, final == .regular(size) {"))
-        let count = try #require(body.range(of: "filesCopied += 1", range: sizeCheck.upperBound..<body.endIndex))
-        #expect(body.distance(from: sizeCheck.upperBound, to: count.lowerBound) < 200, "the count is not directly under the size check")
-        let already = try #require(body.range(of: "case .alreadyThere(let bytes):"))
-        let alreadyCount = try #require(body.range(of: "filesCopied += 1", range: already.upperBound..<body.endIndex))
-        #expect(body.distance(from: already.upperBound, to: alreadyCount.lowerBound) < 200 && alreadyCount.lowerBound < sizeCheck.lowerBound)
-        #expect(body.contains("let source = Self.entry(at: srcFile)") && body.contains("let final = Self.entry(at: destFile)"), "both are stat'ed fresh")
-        // The one removal is of this file's own parked partial, after the copy is whole, bound to a staging
-        // folder opened without following a link (Codex r1 #1); nothing else is ever deleted.
-        #expect(!body.contains("unlink(") && body.components(separatedBy: "Self.removeOwnPartial(forDestination: destFile)").count == 2,
-                "the rescue unlinks something other than its own partial")
-        let staged = try #require(body.range(of: "Self.stagingRefusal(relative: relative, destFile: destFile)"))
-        #expect(staged.lowerBound < rsync.lowerBound, "the staging folder is checked before the transfer")
-        #expect(!body.contains("removeItem") && !body.contains("unlink(destFile") && !body.contains("rename("), "the rescue never deletes or replaces a final name")
+        // One place counts (record): .copied only from a publish that landed, .alreadyThere from a same-size file at the name.
+        #expect(body.components(separatedBy: "filesCopied += 1").count == 3, "a new place counts a file at the destination")
+        #expect(body.components(separatedBy: "return .copied(").count == 2, "copied is returned anywhere but after the publish")
+        let published = try #require(body.range(of: "case .published:"))
+        let copied = try #require(body.range(of: "return .copied(size)", range: published.upperBound..<body.endIndex))
+        #expect(body.distance(from: published.upperBound, to: copied.lowerBound) < 40, "copied is not directly under the publish")
+        let taken = try #require(body.range(of: "case .nameTaken:"))
+        #expect(body.components(separatedBy: "staging.removeStaged()").count == 2
+                && body.range(of: "staging.removeStaged()")!.lowerBound > taken.lowerBound, "the staged copy is removed anywhere but after a taken name")
+        #expect(!body.contains("unlink(") && !body.contains("removeItem") && !body.contains("rename("), "the rescue deletes or renames outside the staging type")
+        // The staging type: folders opened without following a link; the one publish is RENAME_EXCL; removals relative to the staging fd.
+        let typeStart = try #require(source.range(of: "struct RsyncStaging: Sendable {"))
+        let type = String(source[typeStart.lowerBound...])
+        #expect(type.contains("O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC"))
+        #expect(type.contains("renameatx_np(stagingDir, name, destDir, name, UInt32(RENAME_EXCL))"))
+        #expect(type.contains("unlinkat(stagingDir, name, 0)") && type.contains("unlinkat(destDir, VolumeRescueOperation.partialDirName, AT_REMOVEDIR)"))
     }
 
     // MARK: - A different file already at a destination name (was PARKED RED)
