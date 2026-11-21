@@ -1072,6 +1072,7 @@
         "everyEntryPointDelegates",
         "nestedScopesShadow",
         "nestedSequenceIsAFailure",
+        "noHandRolledProcessInProduction",
         "noTestSetsTheToolEnvVars",
         "parallelA",
         "parallelB",
@@ -41080,7 +41081,7 @@
       ],
       "expected_floor": 3959,
       "name": "unit",
-      "package_expected_floor": 988,
+      "package_expected_floor": 989,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
