@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import VideoScanCore
 import os
 
 // MARK: - Media File Operations (phase 1)
@@ -983,6 +984,17 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// above can't be reused — its throttling could sample state
     /// mid-transition, and OUTCOME logging must be exactly-once).
     private var terminalWatchers: [UUID: AnyCancellable] = [:]
+    /// The task-tree scope (log capture + command executor) each job was
+    /// ADDED under. The OUTCOME hop below starts from the job's change
+    /// publisher, i.e. from whatever task published the terminal state —
+    /// a detached helper, a GCD callback — which carries no task-locals;
+    /// the line is written under the adder's scope instead, so a test that
+    /// captures the log gets its job's OUTCOME wherever the state change
+    /// came from. In production every scope is "no capture" and this is a
+    /// no-op. Pruned with the job (same bound as the collections above).
+    /// (C++: the thread_local snapshot stored beside the job, re-installed
+    /// around the log call.)
+    private var logScopes: [UUID: TaskTreeScope] = [:]
     /// Jobs whose OUTCOME line has been written — the exactly-once guard.
     private var terminalLogged: Set<UUID> = []
     /// Told exactly once per job, at its terminal transition, right after
@@ -1089,6 +1101,7 @@ final class MediaFileOperationsCenter: ObservableObject {
     func add(_ job: any MediaFileOperationJob) -> Bool {
         if ViewerWriteGuard.refuse("MediaFileOperationsCenter.add(\(type(of: job)))") { return false }
         jobs.insert(job, at: 0)
+        logScopes[job.id] = TaskTreeScope.current
         jobForwarders[job.id] = job.objectWillChange
             .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] _ in
@@ -1220,6 +1233,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         logTerminalIfNeeded(job)
         jobForwarders[job.id] = nil
         terminalWatchers[job.id] = nil
+        logScopes[job.id] = nil
         // Prune the exactly-once marker ONLY when no deferred check is
         // still in flight — a pending check re-reading a pruned id
         // would double-write the OUTCOME line. (The unpruned entry in
@@ -1253,16 +1267,20 @@ final class MediaFileOperationsCenter: ObservableObject {
         guard !job.state.isActive, !terminalLogged.contains(job.id) else { return }
         terminalLogged.insert(job.id)
         terminalWatchers[job.id] = nil
-        for observer in onJobTerminal { observer(job) }
-        // Delete Duplicates writes its own final line ("delete duplicates
-        // done: <volume> — deleted N (X) · trashed …", 2026-09-22): one
-        // line per run, not two.
-        if (job as? DeleteDuplicatesJob)?.wroteOwnTerminalLine == true { return }
-        if let line = Self.terminalSummaryLine(verb: job.kind.logVerb,
-                                              title: job.title,
-                                              state: job.state,
-                                              wasRefused: job.wasRefused) {
-            appLog.write(line)
+        // Observers and the line run under the scope the job was added in
+        // (see `logScopes`); with none recorded, the caller's own.
+        (logScopes[job.id] ?? TaskTreeScope.current).run {
+            for observer in onJobTerminal { observer(job) }
+            // Delete Duplicates writes its own final line ("delete duplicates
+            // done: <volume> — deleted N (X) · trashed …", 2026-09-22): one
+            // line per run, not two.
+            if (job as? DeleteDuplicatesJob)?.wroteOwnTerminalLine == true { return }
+            if let line = Self.terminalSummaryLine(verb: job.kind.logVerb,
+                                                  title: job.title,
+                                                  state: job.state,
+                                                  wasRefused: job.wasRefused) {
+                appLog.write(line)
+            }
         }
     }
 

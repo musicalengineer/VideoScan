@@ -169,8 +169,7 @@ struct VerifyVideoJobLogicTests {
 
 // MARK: - Center
 
-// serialized: its tests swap the process-global `appLog` (a sibling's restore would drop this test's lines)
-@Suite("VerifyVideo — MFO center", .serialized)
+@Suite("VerifyVideo — MFO center")
 @MainActor
 struct VerifyVideoCenterTests {
 
@@ -183,29 +182,27 @@ struct VerifyVideoCenterTests {
 
     @Test func duplicateDispatchIsRefusedAndLogged() async throws {
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-
-        let model = VideoScanModel()
-        let rec = makeRecord(name: "dup-\(UUID().uuidString).mp4")
-        model.records = [rec]
-        let center = MediaFileOperationsCenter()
-        let first = center.startVerifyVideo(record: rec, model: model, diagnoseOverride: { _ in
-            try await Task.sleep(nanoseconds: 300_000_000)
-            return okDiagnosis()
-        })
-        #expect(first != nil)
-        let second = center.startVerifyVideo(record: rec, model: model, diagnoseOverride: { _ in okDiagnosis() })
-        #expect(second == nil)
-        #expect(sink.lines.contains { $0.hasPrefix("verify video refused: \(rec.filename)") })
-        #expect(sink.lines.contains { $0 == "verify video: \(rec.filename) — check the picture (header, timestamps, full decode)" })
-        await first?.task?.value
-        // OUTCOME line from the Center's terminal watcher.
-        for _ in 0..<50 where !sink.lines.contains(where: { $0.hasPrefix("verify video done: \(rec.filename)") }) {
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await withAppLog(sink) {
+            let model = VideoScanModel()
+            let rec = makeRecord(name: "dup-\(UUID().uuidString).mp4")
+            model.records = [rec]
+            let center = MediaFileOperationsCenter()
+            let first = center.startVerifyVideo(record: rec, model: model, diagnoseOverride: { _ in
+                try await Task.sleep(nanoseconds: 300_000_000)
+                return okDiagnosis()
+            })
+            #expect(first != nil)
+            let second = center.startVerifyVideo(record: rec, model: model, diagnoseOverride: { _ in okDiagnosis() })
+            #expect(second == nil)
+            #expect(sink.lines.contains { $0.hasPrefix("verify video refused: \(rec.filename)") })
+            #expect(sink.lines.contains { $0 == "verify video: \(rec.filename) — check the picture (header, timestamps, full decode)" })
+            await first?.task?.value
+            // OUTCOME line from the Center's terminal watcher.
+            for _ in 0..<50 where !sink.lines.contains(where: { $0.hasPrefix("verify video done: \(rec.filename)") }) {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            #expect(sink.lines.contains { $0 == "verify video done: \(rec.filename) — OK — the picture checked out." })
         }
-        #expect(sink.lines.contains { $0 == "verify video done: \(rec.filename) — OK — the picture checked out." })
     }
 }
 

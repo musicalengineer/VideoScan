@@ -222,7 +222,7 @@ struct HallieEventShapeFallbackTests {
 }
 
 @MainActor
-@Suite("Hallie event shape: tree-mode gate switches to the catalog", .serialized)
+@Suite("Hallie event shape: tree-mode gate switches to the catalog")
 struct HallieEventShapeModeGateTests {
     typealias Exec = HallieTurnExecutor
 
@@ -272,10 +272,9 @@ struct HallieEventShapeModeGateTests {
 
     private func withLogCapture<T>(_ body: (InMemoryLogSink) async throws -> T) async rethrows -> T {
         let sink = InMemoryLogSink(name: "hallie-event-gate")
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        return try await body(sink)
+        return try await withAppLog(sink) {
+            return try await body(sink)
+        }
     }
 
     /// Rick's turn as it happened: tree mode, translator says event. It

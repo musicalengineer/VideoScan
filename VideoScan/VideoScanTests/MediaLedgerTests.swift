@@ -17,8 +17,8 @@
 //             scratch folder, never App Support; the real path is untouched.
 //   SENSOR    the first successful write logs the ledger path once.
 //
-// Everything runs against temp directories; the log sink is swapped
-// (serialized suite).
+// Everything runs against temp directories; each test binds its own log
+// sink for its task tree (`withAppLog`).
 
 import Foundation
 import Testing
@@ -58,7 +58,7 @@ final class BufferingLedgerLogSink: LogSink, @unchecked Sendable {
     func writeBatch(_ lines: [String]) { lock.lock(); buffer.append(contentsOf: lines); lock.unlock() }
 }
 
-@Suite("Media Ledger — file contract", .serialized)
+@Suite("Media Ledger — file contract")
 struct MediaLedgerTests {
 
     private let at = Date(timeIntervalSince1970: 1_757_700_000)
@@ -135,20 +135,19 @@ struct MediaLedgerTests {
         let dir = tempDir("refuse")
         defer { try? FileManager.default.removeItem(at: dir) }
         let sink = BufferingLedgerLogSink()
-        let saved = appLog
-        appLog = sink
-        defer { appLog = saved }
-        let seam = ThreadRecordingLedgerWriter()
-        let ledger = MediaLedger(directory: dir, writer: seam.writer)
-        seam.refuse = true
-        await ledger.append([event(.restored)])?.value
-        seam.refuse = false
-        await ledger.append([event(.restored, at: 1)])?.value
-        let failure = sink.lines.first { $0.hasPrefix("ledger: 1 line(s) not written to ") }
-        #expect(failure != nil, "\(sink.lines)")
-        #expect(failure?.contains(ledger.fileURL.path) == true)
-        #expect(failure?.contains("errno 13") == true, "the REAL errno, never a generic message: \(failure ?? "")")
-        #expect(ledger.allEvents().count == 1, "the refused batch is gone; the next one landed")
+        await withAppLog(sink) {
+            let seam = ThreadRecordingLedgerWriter()
+            let ledger = MediaLedger(directory: dir, writer: seam.writer)
+            seam.refuse = true
+            await ledger.append([event(.restored)])?.value
+            seam.refuse = false
+            await ledger.append([event(.restored, at: 1)])?.value
+            let failure = sink.lines.first { $0.hasPrefix("ledger: 1 line(s) not written to ") }
+            #expect(failure != nil, "\(sink.lines)")
+            #expect(failure?.contains(ledger.fileURL.path) == true)
+            #expect(failure?.contains("errno 13") == true, "the REAL errno, never a generic message: \(failure ?? "")")
+            #expect(ledger.allEvents().count == 1, "the refused batch is gone; the next one landed")
+        }
     }
 
     @Test("SENSOR: the first successful write logs the ledger path once")
@@ -156,14 +155,13 @@ struct MediaLedgerTests {
         let dir = tempDir("announce")
         defer { try? FileManager.default.removeItem(at: dir) }
         let sink = BufferingLedgerLogSink()
-        let saved = appLog
-        appLog = sink
-        defer { appLog = saved }
-        let ledger = MediaLedger(directory: dir)
-        await ledger.append([event(.dateSet)])?.value
-        await ledger.append([event(.dateSet, at: 1)])?.value
-        let announcements = sink.lines.filter { $0 == "ledger: media ledger at \(ledger.fileURL.path)" }
-        #expect(announcements.count == 1, "\(sink.lines)")
+        await withAppLog(sink) {
+            let ledger = MediaLedger(directory: dir)
+            await ledger.append([event(.dateSet)])?.value
+            await ledger.append([event(.dateSet, at: 1)])?.value
+            let announcements = sink.lines.filter { $0 == "ledger: media ledger at \(ledger.fileURL.path)" }
+            #expect(announcements.count == 1, "\(sink.lines)")
+        }
     }
 
     @Test("narrated sentences are newest first, cached per record until the next append, and the cache is bounded")
@@ -222,12 +220,11 @@ struct MediaLedgerTests {
 
         // Missing 00_Index (an unscaffolded root): logged, not thrown.
         let sink = BufferingLedgerLogSink()
-        let saved = appLog
-        appLog = sink
-        defer { appLog = saved }
-        let bogus = dir.appendingPathComponent("not-an-archive", isDirectory: true).path
-        await ledger.mirror(intoArchiveRoot: bogus).value
-        #expect(sink.lines.contains { $0.hasPrefix("ledger: mirror into \(bogus)/") }, "\(sink.lines)")
+        await withAppLog(sink) {
+            let bogus = dir.appendingPathComponent("not-an-archive", isDirectory: true).path
+            await ledger.mirror(intoArchiveRoot: bogus).value
+            #expect(sink.lines.contains { $0.hasPrefix("ledger: mirror into \(bogus)/") }, "\(sink.lines)")
+        }
     }
 
     @Test("ISOLATION: the default directory under a test host is a per-process scratch folder, never App Support")

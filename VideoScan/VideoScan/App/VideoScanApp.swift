@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import os
+import VideoScanCore
 
 /// Quit-path diagnostics — `log stream --predicate 'subsystem ==
 /// "Rick-Breen.VideoScan" && category == "shutdown"'` to watch a quit.
@@ -20,28 +21,69 @@ private let shutdownLogger = Logger(subsystem: "Rick-Breen.VideoScan", category:
 // by `tail` or Console.app. Distinct from per-scan PersistentLog instances
 // (which truncate per job) and from the macOS unified log (`log show`).
 //
-// `appLog` is typed as `LogSink` (a protocol — see LogSink.swift) so test
-// code can swap in NullLogSink / InMemoryLogSink without touching the 30+
-// production call sites. In production this is a `PersistentLog` writing
-// to videoscan.log. Under a test host this defaults to `NullLogSink` so
-// even forgotten test-side injection can't pollute the user's real log.
+// `appLog` is typed as `LogSink` (a protocol — see LogSink.swift). In
+// production it is always `productionAppLog`: a `PersistentLog` writing to
+// videoscan.log. Under a test host that default is a `NullLogSink`, so a
+// test that binds nothing cannot pollute the user's real log.
 //
-// Why `var` and not `let`: tests need to overwrite this from
-// `LogSinks+Test.swift` to inject an InMemoryLogSink for content
-// assertions. The production code never mutates it after init.
+// THE TEST SEAM (2026-11-20; VideoScanCore/TaskTreeScope.swift). `appLog`
+// is a GET-ONLY computed global. A test that wants to assert on log lines
+// binds a sink for its own task tree — `withAppLog(sink) { … }` — and while
+// that scope is live, lines logged from that tree go to the bound sink
+// INSTEAD of the production one. Nothing can assign `appLog`: the old
+// process-global swap (one global ⇒ `.serialized` suites, and still
+// cross-suite races) no longer compiles, and a sensor keeps it out.
 //
-// Swift's top-level `var` is roughly a C++ namespace-scope variable
-// with a lazy initializer — first access runs the closure, then
-// caches the result.
-nonisolated(unsafe) var appLog: LogSink = makeDefaultAppLog()
+// Cost in production: one task-local read per log line and a nil check —
+// no lock, no allocation (LogCaptureSeamTests measures it; the write that
+// follows is a DateFormatter + write(2) + fsync).
+//
+// (C++: `appLog` used to be a namespace-scope `ILogSink*` that tests
+// overwrote. It is now an inline function `ILogSink& appLog()` returning
+// `tls_scoped ? *tls_scoped : production` — where the "thread_local"
+// follows the coroutine and its children rather than the OS thread.)
+var appLog: LogSink {
+    AppLogRouting.resolve(scoped: LogScope.current, production: productionAppLog)
+}
 
-/// Builds the default sink for the global `appLog`. Returns a
+/// The one production sink. A `let`: nothing reassigns it, ever.
+/// (Swift's global `let` is a lazily, thread-safely initialised constant —
+/// a function-local `static const` in C++ terms.)
+let productionAppLog: LogSink = makeDefaultAppLog()
+
+/// The routing rule, as a pure function so a test can pin it against a
+/// real file sink: nothing bound → the production sink ITSELF (no wrapper,
+/// no tee); a sink bound → that sink, and nothing reaches production.
+enum AppLogRouting {
+    @inline(__always)
+    static func resolve(scoped: (any TaskScopedLogSink)?, production: LogSink) -> LogSink {
+        guard let scoped else { return production }      // production: always this line
+        // Test scopes only from here. Every sink bound through
+        // `withAppLog` IS a LogSink, so the cast succeeds; the adapter
+        // covers a bare Core sink.
+        // (C++: a dynamic_cast across two interfaces of the same object.)
+        return (scoped as? any LogSink) ?? ScopedLogSinkAdapter(scoped)
+    }
+}
+
+/// Gives a Core-only `TaskScopedLogSink` the app's `LogSink` shape.
+final class ScopedLogSinkAdapter: LogSink {
+    let base: any TaskScopedLogSink
+    init(_ base: any TaskScopedLogSink) { self.base = base }
+    var name: String { "scoped" }
+    var fileURL: URL? { nil }
+    func start(append: Bool) {}
+    func write(_ line: String) { base.write(line) }
+    func flush() {}
+    func close() {}
+}
+
+/// Builds `productionAppLog`. Returns a
 /// production `PersistentLog` opened on videoscan.log, OR a discarding
 /// `NullLogSink` if we detect we're being hosted by XCTest / Swift
-/// Testing. Test code is still expected to inject an `InMemoryLogSink`
-/// when it wants to assert on output — the NullLogSink is just the
-/// safe-by-default fallback so a forgotten injection can't write to
-/// the user's real videoscan.log.
+/// Testing. Test code binds its own sink (`withAppLog`) when it wants to
+/// assert on output — the NullLogSink is the safe default so an unscoped
+/// line can't write to the user's real videoscan.log.
 private func makeDefaultAppLog() -> LogSink {
     if appLogIsRunningUnderTests {
         return NullLogSink(name: "videoscan-null")
@@ -140,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Skipped when appLog isn't file-backed (e.g. NullLogSink under tests)
         // — there's nowhere to write and AppDelegate already guards against
         // running under tests anyway.
-        if let logPath = appLog.fileURL?.path {
+        if let logPath = productionAppLog.fileURL?.path {
             logPath.withCString { VSInstallCrashGuard($0) }
         }
 

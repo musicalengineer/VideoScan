@@ -1,5 +1,6 @@
 import Foundation
 import os
+import VideoScanCore
 
 // MARK: - StallMonitor
 //
@@ -239,7 +240,15 @@ final class StallMonitor: @unchecked Sendable {
         // stall check, not for the loop's whole lifetime.
         let interval = pollIntervalSeconds
         loopsSpawned += 1
-        pollTask = Task.detached(priority: .utility) { [weak self] in
+        // `TaskTreeScope.detached`, not a bare `Task.detached`: the poll
+        // task calls `onStall`, and every job's handler logs its
+        // "watchdog:" line from there. A detached task inherits no
+        // task-locals, so under a test's log capture (or command mock)
+        // that line went to the default sink instead of the test's. In
+        // production the scope is "real executor, no capture" and this is
+        // exactly `Task.detached`.
+        // (C++: the thread_locals are copied into the std::thread lambda.)
+        pollTask = TaskTreeScope.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 if Task.isCancelled { return }

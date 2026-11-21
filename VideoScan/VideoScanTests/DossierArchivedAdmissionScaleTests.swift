@@ -279,28 +279,27 @@ struct DossierArchivedAdmissionScaleTests {
         let shaBefore = [tape, wedding, improved].map { MasterArchiveTestSupport.sha256(ofFile: $0.fullPath) }
 
         let sink = InMemoryLogSink()
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let stub = StubDossierRunner(modelID: "stub-sensor")
-        let orch = CaptionOrchestrator(runnerFactory: { stub })
-        await orch.startCatalogWideDossier(model: sb.model)
+        await withAppLog(sink) {
+            let stub = StubDossierRunner(modelID: "stub-sensor")
+            let orch = CaptionOrchestrator(runnerFactory: { stub })
+            await orch.startCatalogWideDossier(model: sb.model)
 
-        let eligible = pfDossierCandidates(records: sb.model.records, reachableVolumePaths: [sb.dir.path])
-        let withoutText = eligible.filter { $0.sceneCaptions.isEmpty && ($0.audioTranscript ?? "").isEmpty }
-        #expect(withoutText.isEmpty, "eligible videos with no text after a full pass: \(withoutText.map(\.filename))")
-        #expect(await stub.countCalled() == 2, "one decode per footage group (tape + wedding)")
-        #expect(trashed.dossierProcessedAt == nil && offline.dossierProcessedAt == nil)
-        #expect([tape, wedding, improved].map { MasterArchiveTestSupport.sha256(ofFile: $0.fullPath) } == shaBefore)
+            let eligible = pfDossierCandidates(records: sb.model.records, reachableVolumePaths: [sb.dir.path])
+            let withoutText = eligible.filter { $0.sceneCaptions.isEmpty && ($0.audioTranscript ?? "").isEmpty }
+            #expect(withoutText.isEmpty, "eligible videos with no text after a full pass: \(withoutText.map(\.filename))")
+            #expect(await stub.countCalled() == 2, "one decode per footage group (tape + wedding)")
+            #expect(trashed.dossierProcessedAt == nil && offline.dossierProcessedAt == nil)
+            #expect([tape, wedding, improved].map { MasterArchiveTestSupport.sha256(ofFile: $0.fullPath) } == shaBefore)
 
-        let coverage = sink.lines.first { $0.contains("Dossier: coverage —") } ?? ""
-        #expect(coverage.contains("2 carried over from same-footage copies"), "\(coverage)")
-        #expect(coverage.contains("admitted 3 Archived + 1 In Triage"), "\(coverage)")
-        #expect(coverage.contains("1 eligible on offline volumes"), "\(coverage)")
-        #expect(coverage.contains("1 not eligible (stage"), "OUTCOME must carry the stage-exclusion count: \(coverage)")
-        #expect(sink.lines.contains { $0.contains("Dossier: admitted 3 Archived + 1 In Triage") }, "START names the admission")
-        // Log privacy: no transcript / caption text in any line.
-        #expect(!sink.lines.contains { $0.contains("stub scene") })
+            let coverage = sink.lines.first { $0.contains("Dossier: coverage —") } ?? ""
+            #expect(coverage.contains("2 carried over from same-footage copies"), "\(coverage)")
+            #expect(coverage.contains("admitted 3 Archived + 1 In Triage"), "\(coverage)")
+            #expect(coverage.contains("1 eligible on offline volumes"), "\(coverage)")
+            #expect(coverage.contains("1 not eligible (stage"), "OUTCOME must carry the stage-exclusion count: \(coverage)")
+            #expect(sink.lines.contains { $0.contains("Dossier: admitted 3 Archived + 1 In Triage") }, "START names the admission")
+            // Log privacy: no transcript / caption text in any line.
+            #expect(!sink.lines.contains { $0.contains("stub scene") })
+        }
     }
 
     // MARK: - Media matrix: a real read of a locked archived file

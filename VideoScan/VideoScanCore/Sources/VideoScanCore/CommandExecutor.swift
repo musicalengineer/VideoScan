@@ -111,22 +111,21 @@ extension ProcessRunner {
     /// swap the executor production commands go through.
     @TaskLocal static var executor: any CommandExecutor = RealCommandExecutor()
 
-    /// `Task.detached` that carries THIS task's executor into the detached
-    /// task (a detached task inherits no task-locals). Same priority, same
-    /// isolation (none), same cancellation as `Task.detached` — in
-    /// production it re-binds the real executor to itself, so behaviour is
-    /// unchanged; under a test it keeps the mock instead of escaping to
-    /// the real tool. Use it for any detached work that shells out.
+    /// `Task.detached` that carries THIS task's scope — the executor AND
+    /// the log capture — into the detached task (a detached task inherits
+    /// no task-locals). It is `TaskTreeScope.detached` under the name the
+    /// shell-out call sites already use: one mechanism for both seams.
+    /// Same priority, same isolation (none), same cancellation as
+    /// `Task.detached` — in production it re-binds the real executor and
+    /// no capture, so behaviour is unchanged; under a test it keeps the
+    /// mock instead of escaping to the real tool.
     /// (C++: capturing the thread_local by value into the lambda you hand
     /// to std::thread.)
     public static func detachedKeepingExecutor<Success: Sendable>(
         priority: TaskPriority? = nil,
         operation: sending @escaping () async -> Success
     ) -> Task<Success, Never> {
-        let current = executor
-        return Task.detached(priority: priority) {
-            await $executor.withValue(current) { await operation() }
-        }
+        TaskTreeScope.detached(priority: priority, operation: operation)
     }
 }
 

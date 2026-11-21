@@ -61,6 +61,7 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
+import VideoScanCore
 
 // MARK: - Origin + decision (pure)
 
@@ -490,8 +491,13 @@ final class MainQueueForwardScheduler: MediaFileOperationsForwardScheduling {
     func schedule(after seconds: TimeInterval, _ work: @escaping @MainActor () -> Void) {
         // asyncAfter(.now()) still waits for the NEXT run-loop turn — the
         // point of the 0 s attempt: the button action + dismiss() return first.
+        // The scope (log capture / command mock) of whoever scheduled the
+        // work rides along: a GCD block inherits no task-locals, and `work`
+        // writes the "window forward" line to appLog. Production's scope
+        // is the default, so this is a plain asyncAfter there.
+        let scope = TaskTreeScope.current
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            MainActor.assumeIsolated { work() }
+            scope.run { MainActor.assumeIsolated { work() } }
         }
     }
 }

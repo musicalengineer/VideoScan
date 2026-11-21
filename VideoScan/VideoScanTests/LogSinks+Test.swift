@@ -1,111 +1,99 @@
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
-// MARK: - Test-only LogSink doubles
+// MARK: - Capturing `appLog` in a test
 //
-// `NullLogSink` lives in production (LogSink.swift) because the global
-// `appLog` initializer falls back to it under test hosts. This file
-// provides the *inspectable* test double — `InMemoryLogSink` — plus
-// helpers tests use to swap `appLog` for the duration of a single test.
+// `appLog` is a get-only global: the sink bound for the CURRENT TASK TREE,
+// else the production sink (a NullLogSink under a test host). A test that
+// asserts on log lines binds its own sink for the duration of a closure:
 //
-// Worst-case memory footprint: O(number of writes × line length).
-// Tests should be short-lived enough that this stays trivial; if you
-// write a stress test that loops millions of times, prefer NullLogSink
-// or call `clear()` periodically.
+//     @Test func myThing() async throws {
+//         let sink = InMemoryLogSink()
+//         try await withAppLog(sink) {
+//             try await SomeJob().run()
+//         }
+//         #expect(sink.contains("did thing"))
+//     }
+//
+// The binding is a task-local (VideoScanCore/TaskTreeScope.swift): it is
+// visible to this test's task and every child task it starts, and to no
+// other test. So a suite that captures the log does NOT need `.serialized`
+// for that reason, and two tests running at once never see each other's
+// lines. (Before 2026-11-20 this helper assigned a process-global, and its
+// comment said `.serialized` made that safe. It did not: `.serialized`
+// orders one suite's own tests; every other suite still ran beside it and
+// could write into, or restore over, this test's sink.)
+//
+// What does NOT inherit the binding: `Task.detached`, GCD blocks, timers,
+// NotificationCenter and Combine deliveries on a queue. Production code
+// that logs from such a place carries the scope across with
+// `TaskTreeScope.current` / `TaskTreeScope.detached`; a line that still
+// escapes lands in the NullLogSink and the assertion on it fails loudly.
+//
+// (C++: this is gtest's "install the mock for this test" done with a
+// thread_local that follows the coroutine, plus RAII for the uninstall.)
+//
+// Worst-case memory: LogCapture keeps at most 200 000 lines (~40 MB at
+// 200 bytes a line) and counts, without storing, anything past that.
 
-/// Captures every `write(_:)` call into an in-memory array so tests can
-/// assert on logged content without touching disk. Thread-safe — wraps
-/// the buffer in an NSLock the same way PersistentLog does.
-final class InMemoryLogSink: LogSink, @unchecked Sendable {
-    let name: String
-
-    /// In-memory buffers — read via `lines` / `joined` accessors which
-    /// take the lock. Mutated only behind `lock`.
-    private var buffer: [String] = []
-    private var closed: Bool = false
-    private let lock = NSLock()
-
+/// The inspectable test double. A thin shell over Core's `LogCapture`
+/// (which owns the lock, the bound and the wait loop): the members are
+/// re-declared HERE so the ~40 test files that use them need no
+/// `import VideoScanCore` (the project builds with MemberImportVisibility).
+final class InMemoryLogSink: LogSink {
+    let capture: LogCapture
+    var name: String { capture.name }
     var fileURL: URL? { nil }
 
-    init(name: String = "in-memory") {
-        self.name = name
-    }
+    init(name: String = "in-memory") { capture = LogCapture(name: name) }
 
-    /// Returns a snapshot copy of all lines written so far. Safe to call
-    /// from test code without worrying about concurrent writes mutating
-    /// the array under iteration.
-    var lines: [String] {
-        lock.lock(); defer { lock.unlock() }
-        return buffer
-    }
-
+    /// Snapshot copy of every line written so far, in order.
+    var lines: [String] { capture.lines }
     /// Convenience for `#expect(sink.joined.contains("…"))`.
-    var joined: String {
-        lines.joined(separator: "\n")
+    var joined: String { capture.joined }
+    var count: Int { capture.count }
+    /// Empty the buffer (between phases of a multi-step test).
+    func clear() { capture.clear() }
+
+    /// True when any line contains `text`.
+    func contains(_ text: String) -> Bool { capture.contains(text) }
+    func lines(containing text: String) -> [String] { capture.lines(containing: text) }
+    func lines(matching predicate: (String) -> Bool) -> [String] { capture.lines(matching: predicate) }
+
+    /// The first line containing `text`, waiting up to `timeout` for it;
+    /// nil on timeout. Each poll suspends, so main-actor work (the MFO
+    /// Center's OUTCOME hop) runs in between.
+    func waitForLine(containing text: String, timeout: Duration = .seconds(5),
+                     isolation: isolated (any Actor)? = #isolation) async -> String? {
+        await capture.waitForLine(containing: text, timeout: timeout, isolation: isolation)
     }
 
-    /// Number of lines currently buffered.
-    var count: Int {
-        lock.lock(); defer { lock.unlock() }
-        return buffer.count
-    }
-
-    /// Empty the buffer (useful between phases of a multi-step test).
-    func clear() {
-        lock.lock(); defer { lock.unlock() }
-        buffer.removeAll(keepingCapacity: true)
+    func waitForLine(timeout: Duration = .seconds(5),
+                     isolation: isolated (any Actor)? = #isolation,
+                     where predicate: (String) -> Bool) async -> String? {
+        await capture.waitForLine(timeout: timeout, isolation: isolation, where: predicate)
     }
 
     // MARK: LogSink
-
-    func start(append: Bool) {
-        lock.lock(); defer { lock.unlock() }
-        if !append {
-            buffer.removeAll(keepingCapacity: true)
-        }
-        closed = false
-    }
-
-    func write(_ line: String) {
-        lock.lock(); defer { lock.unlock() }
-        guard !closed else { return }
-        buffer.append(line)
-    }
-
-    func flush() { /* no-op — already in memory */ }
-
-    func close() {
-        lock.lock(); defer { lock.unlock() }
-        closed = true
-    }
+    func start(append: Bool) { capture.start(append: append) }
+    func write(_ line: String) { capture.write(line) }
+    func flush() {}
+    func close() { capture.close() }
 }
 
-// MARK: - appLog swap helpers
-//
-// Tests that want to assert on what was logged should use
-// `withAppLog(_:body:)` to swap in their own sink for the duration of
-// the test, then restore the previous sink in `defer`. This pattern is
-// the test-side equivalent of RAII / scope guards in C++.
+/// Bind `sink` as `appLog` for `body` and every child task it starts.
+/// Any `LogSink` works (a counting or thread-recording double too).
+func withAppLog<R>(_ sink: any LogSink, _ body: () throws -> R) rethrows -> R {
+    try LogScope.with(sink, body)
+}
 
-/// Replace the global `appLog` with `sink` for the duration of `body`,
-/// then restore whatever was there before. Use this in Swift Testing
-/// `@Test` functions:
-///
-///     @Test func myThing() throws {
-///         let sink = InMemoryLogSink()
-///         try withAppLog(sink) {
-///             SomeProductionCode().doThing()
-///             #expect(sink.joined.contains("did thing"))
-///         }
-///     }
-///
-/// The swap is not thread-safe across concurrent tests — Swift Testing
-/// parallelizes by default, so any test that uses this MUST either run
-/// in a `@Suite(.serialized)` suite or hold an external mutex. Single
-/// tests within a serialized suite are fine.
-func withAppLog<R>(_ sink: LogSink, _ body: () throws -> R) rethrows -> R {
-    let previous = appLog
-    appLog = sink
-    defer { appLog = previous }
-    return try body()
+/// Async form. `isolation` keeps `body` on the caller's actor, so a
+/// `@MainActor` test's closure can touch its non-Sendable locals.
+func withAppLog<R>(
+    _ sink: any LogSink,
+    isolation: isolated (any Actor)? = #isolation,
+    _ body: () async throws -> R
+) async rethrows -> R {
+    try await LogScope.with(sink, isolation: isolation, body)
 }

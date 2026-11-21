@@ -364,7 +364,7 @@ struct HallieTypoRoutingTests {
 let hallieLiveMissAST = ArchivistQueryAST.presence(.init(keywords: ["hi", "how are you"]))
 let hallieLiveMissSentence = "Hi Hallie how areyou?"
 
-@Suite("Hallie typo live miss: coordinator", .serialized)
+@Suite("Hallie typo live miss: coordinator")
 struct HallieTypoLiveMissCoordinatorTests {
     typealias Exec = HallieTurnExecutor
 
@@ -398,15 +398,14 @@ struct HallieTypoLiveMissCoordinatorTests {
     private func run(_ question: String, _ recorder: Recorder, ast: ArchivistQueryAST = hallieLiveMissAST)
         async throws -> (HallieAppTurnCoordinator.Response, [String]) {
         let sink = InMemoryLogSink(name: "hallie-typo")
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        let response = try await HallieAppTurnCoordinator.execute(
-            question: question, records: [],
-            referent: .init(recordID: nil, temporalDate: nil),
-            hosts: ["fixture.invalid"], modelName: "fixture-model",
-            dependencies: dependencies(recorder, ast: ast))
-        return (response, sink.lines)
+        return try await withAppLog(sink) {
+            let response = try await HallieAppTurnCoordinator.execute(
+                question: question, records: [],
+                referent: .init(recordID: nil, temporalDate: nil),
+                hosts: ["fixture.invalid"], modelName: "fixture-model",
+                dependencies: dependencies(recorder, ast: ast))
+            return (response, sink.lines)
+        }
     }
 
     /// THE SENSOR: the live-miss sentence is small talk, answered before

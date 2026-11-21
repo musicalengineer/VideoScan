@@ -382,6 +382,16 @@ call that escaped the tree (a bare `Task.detached`) is refused and reported. Det
 > C++: `CommandExecutor` is the gtest-mocked interface; `@TaskLocal` is a `thread_local` that follows the coroutine
 > and its children, so parallel tests never see each other's mock.
 
+Log assertions use the same seam, never a swap of the global. `appLog` is get-only: the sink bound for the current
+task tree, else the production sink (a `NullLogSink` under a test host). A test binds its own with
+`withAppLog(sink) { … }` (sync or async; `InMemoryLogSink` has `contains`, `lines(containing:)`, `waitForLine`), so a
+suite that captures the log is not `.serialized` for that reason. While a sink is bound its lines go there INSTEAD of
+production (no tee). Work that leaves the task tree carries both seams with one helper, `TaskTreeScope`
+(VideoScanCore): `TaskTreeScope.detached { … }` in place of `Task.detached`, `let scope = TaskTreeScope.current` then
+`scope.run { … }` inside a GCD block or timer, `scope.carrying(callback)` for a callback another thread calls
+(`ProcessRunner` does this for its stdout/stderr callbacks). A line that still escapes lands in the NullLogSink and the
+assertion on it fails. Worked example: `AppLogScopeSeamTests`, `LogCaptureSeamTests`.
+
 > C++: `ProcessRunner` is `posix_spawn` plus two reader threads plus `waitpid` in a SIGCHLD handler, with an RAII
 > guard that kills the child if the owning coroutine is destroyed. `RENAME_EXCL` is `link()` + `unlink()` in one
 > atomic syscall.

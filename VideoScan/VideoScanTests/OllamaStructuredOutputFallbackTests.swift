@@ -542,21 +542,19 @@ private actor FakeBodies {
     func record(_ body: Data) { all.append(body) }
 }
 
-// MARK: - Log volume (serialized: swaps the global appLog)
+// MARK: - Log volume
 
-@Suite("Hallie — structured-output capability is logged once per host", .serialized)
+@Suite("Hallie — structured-output capability is logged once per host")
 struct OllamaStructuredOutputLoggingTests {
 
-    /// Replace `appLog` around an ASYNC body. The shared `withAppLog` is
-    /// synchronous; this suite is `.serialized` for the same reason that
-    /// one is — the global swap is not concurrency-safe.
+    /// Bind `sink` as `appLog` for an async body (the shared `withAppLog`;
+    /// kept under this name so the call sites below read as they did).
     private func withAppLogAsync<R>(
         _ sink: LogSink, _ body: () async throws -> R
     ) async rethrows -> R {
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        return try await body()
+        return try await withAppLog(sink) {
+            return try await body()
+        }
     }
 
     /// One clear line per host per run. Per-turn would bury the rest of

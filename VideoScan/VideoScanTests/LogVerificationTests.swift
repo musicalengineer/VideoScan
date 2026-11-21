@@ -134,9 +134,8 @@ import OSLog
 
     // ── Integrated: search + log round-trip (via InMemoryLogSink) ──
     //
-    // Post-refactor this no longer writes a fixture file. We swap the
-    // global `appLog` for an InMemoryLogSink for the duration of the
-    // test, exercise production code that writes via `appLog`, and
+    // No fixture file: the test binds an InMemoryLogSink as `appLog` for
+    // its own task tree (`withAppLog`), exercises code that writes via `appLog`, and
     // assert on the captured lines. This is the pattern future
     // app-logging tests should follow.
 

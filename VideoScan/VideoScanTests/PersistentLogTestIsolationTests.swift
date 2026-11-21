@@ -10,13 +10,13 @@ import Foundation
 // VideoScanApp.makeDefaultAppLog (intentionally or via a bad merge)
 // and tests start silently leaking log lines into production.
 //
-// Mechanism (post-refactor): the global `appLog` is a `var: LogSink`,
-// initialized to `NullLogSink` when the binary is launched under
-// XCTest / Swift Testing. The previous narrow gate inside
+// Mechanism: the global `appLog` is get-only — the sink a test bound for
+// its task tree (`withAppLog`), else `productionAppLog`, which is a
+// `NullLogSink` when the binary is launched under XCTest / Swift Testing. The previous narrow gate inside
 // PersistentLog.init has been removed — now the gate is "the default
 // sink is a discarder" instead of "the file sink skips start()".
 //
-// IMPORTANT: only the global `appLog` is replaced. Other PersistentLog
+// IMPORTANT: only the global `appLog` is diverted. Other PersistentLog
 // instances (per-job facedetect_*.log, LogVerificationTests fixtures
 // like test_search_*.log) keep working under tests — they're scoped
 // to whatever creates them. The InMemoryLogSink test double (see
@@ -101,9 +101,8 @@ struct PersistentLogTestIsolationTests {
         #expect(contents.contains("SHOULD be written"))
     }
 
-    /// withAppLog must restore the previous sink even if `body` throws.
-    /// Tests that crash mid-flight should not leave the global appLog
-    /// pointing at a freed InMemoryLogSink.
+    /// withAppLog's binding must end even if `body` throws: afterwards
+    /// `appLog` is the production (test-host: discarding) sink again.
     @Test func withAppLogRestoresPreviousSinkOnThrow() {
         let originalIsFileBacked = appLog.fileURL != nil
         let inMemory = InMemoryLogSink()
@@ -118,7 +117,7 @@ struct PersistentLogTestIsolationTests {
 
         // After throw, appLog must be back to whatever it was before.
         #expect((appLog.fileURL != nil) == originalIsFileBacked,
-                "withAppLog failed to restore the previous sink after a throw")
+                "withAppLog left its sink bound after a throw")
         // And the in-memory sink should have captured the line that
         // ran before the throw — proves the swap took effect.
         #expect(inMemory.lines.contains("captured"))

@@ -172,7 +172,7 @@ private let conversationalRoutes: Set<HallieTurnExecutor.Route> = [
     .conversation, .smalltalk, .capability, .help, .followUp,
 ]
 
-@Suite("Hallie social shape: the coordinator keeps social turns out of the catalog", .serialized)
+@Suite("Hallie social shape: the coordinator keeps social turns out of the catalog")
 struct HallieSocialShapeCoordinatorTests {
     typealias Exec = HallieTurnExecutor
 
@@ -231,10 +231,9 @@ struct HallieSocialShapeCoordinatorTests {
 
     private func withLogCapture<T>(_ body: (InMemoryLogSink) async throws -> T) async rethrows -> T {
         let sink = InMemoryLogSink(name: "hallie-social-shape")
-        let previous = appLog
-        appLog = sink
-        defer { appLog = previous }
-        return try await body(sink)
+        return try await withAppLog(sink) {
+            return try await body(sink)
+        }
     }
 
     private func run(_ row: HallieSocialReplayRow) async throws

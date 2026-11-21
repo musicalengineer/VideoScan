@@ -23618,6 +23618,7 @@
         "failedLineFormat",
         "finishedJobWritesExactlyOneDoneLine",
         "logVerbMapping",
+        "outcomeFromADetachedPublisherReachesTheAddersCapture",
         "refusedFlagFlipsWordingToRefused",
         "refusedLineFormat",
         "sameTurnClearFinishedStillWritesExactlyOneLine",
@@ -37925,6 +37926,62 @@
       "tests": [
         "concurrentSameNameMovesAllLand"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/LogCaptureSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LogCaptureSeamTests",
+        "LogScopeCostTests",
+        "LogScopeSensorTests"
+      ],
+      "tests": [
+        "appLogIsGetOnly",
+        "auditedEscapesCarryTheScope",
+        "bareDetachedLosesTheScope",
+        "boundedBuffer",
+        "concurrentScopesNeverMix",
+        "concurrentWriters",
+        "detachedHelperCarriesBothSeams",
+        "executorHelperCarriesTheLogSink",
+        "lifecycle",
+        "nestedScopesRestore",
+        "noTestAssignsAppLog",
+        "processCallbacksRunUnderTheCallersScope",
+        "productionCallbacksAreNotWrapped",
+        "productionNeverBindsAScope",
+        "productionSnapshotIsInert",
+        "readHelpers",
+        "snapshotReentersAcrossGCD",
+        "theRuleCatchesItsOwnMutation",
+        "throwingBodyEndsTheScope",
+        "unboundReadIsCheap",
+        "waitForLine"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AppLogScopeSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AppLogScopeIsolationTests",
+        "AppLogProductionDefaultTests",
+        "AppLogScopeEscapeTests"
+      ],
+      "tests": [
+        "bareCoreSinkIsAdapted",
+        "boundRoutingBypassesProduction",
+        "captureA",
+        "captureB",
+        "concurrentCapturesNeverMix",
+        "customDoubleIsBoundAsItself",
+        "detachedThroughTheGlobal",
+        "productionBytesArePinned",
+        "scopeEndsAndNests",
+        "stallMonitorKeepsItsStartersScope",
+        "unboundIsTheProductionSink"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -40693,9 +40750,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3916,
+      "expected_floor": 3927,
       "name": "unit",
-      "package_expected_floor": 948,
+      "package_expected_floor": 969,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40807,7 +40864,10 @@
         "VideoScanCoreTests.ProbeFixtureMatrixTests",
         "VideoScanCoreTests.ScriptedExecutorFidelityTests",
         "VideoScanCoreTests.CommandExecutorSensorTests",
-        "VideoScanCoreTests.CommandExecutorSeamReviewTests"
+        "VideoScanCoreTests.CommandExecutorSeamReviewTests",
+        "VideoScanCoreTests.LogCaptureSeamTests",
+        "VideoScanCoreTests.LogScopeCostTests",
+        "VideoScanCoreTests.LogScopeSensorTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -41442,7 +41502,10 @@
         "VideoScanTests/OneFolderViewIsolationTests",
         "VideoScanTests/OneFolderViewSensorTests",
         "VideoScanTests/MFOVerbsParallelTests",
-        "VideoScanTests/MFOVerbsParallelInventorySensorTests"
+        "VideoScanTests/MFOVerbsParallelInventorySensorTests",
+        "VideoScanTests/AppLogScopeIsolationTests",
+        "VideoScanTests/AppLogProductionDefaultTests",
+        "VideoScanTests/AppLogScopeEscapeTests"
       ]
     },
     {
