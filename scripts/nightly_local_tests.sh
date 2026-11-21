@@ -151,6 +151,15 @@
 #     for up to five minutes after the lane returned (the failure-modes
 #     self-test waited 291 s for it under pytest). Test: failure modes 14.
 
+#
+#   2026-11-21 (app-shards-r1): the APP test phase runs as K concurrent test
+#     hosts (K = half the cores; Rick 2026-11-20: "we do not want to serialize
+#     when we can parallelize") through scripts/xctest_shards.py of the
+#     checkout under test — see "App test phase as K test hosts" below. The
+#     single host is the fallback, the same command as before: NIGHTLY_APP_JOBS=1,
+#     or a checkout whose xctest_shards.py is missing or older than this wiring.
+#     Tests: failure modes 19; tests/test_xctest_shards.py.
+
 set -u
 
 NIGHTLY_ON_DEMAND=0
@@ -175,7 +184,7 @@ elif [ -n "$NIGHTLY_ON_DEMAND_REPO$NIGHTLY_ON_DEMAND_DD" ]; then
     nightly_usage
 fi
 
-NIGHTLY_SCRIPT_VERSION="2026-11-10-summary-r1"
+NIGHTLY_SCRIPT_VERSION="2026-11-21-app-shards-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -229,6 +238,10 @@ NIGHTLY_TEST_LOG="/tmp/nightly-test-output.log"
 NIGHTLY_XCRESULT="/tmp/nightly-results.xcresult"
 NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
 NIGHTLY_CORE_SCRATCH="$HOME/Library/Caches/videoscan-nightly-core-build"
+# The sharded app phase: its run folder (K logs, K result bundles, each host's
+# TMPDIR) and the per-suite seconds its next deal balances on.
+NIGHTLY_APP_SHARDS_DIR="/tmp/nightly-app-shards"
+NIGHTLY_APP_SHARDS_TIMINGS="$HOME/Library/Caches/videoscan-nightly-xctest-timings.json"
 if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
     REPO="$NIGHTLY_ON_DEMAND_REPO"
     LOGFILE="$NIGHTLY_ON_DEMAND_OUT/suite.log"
@@ -238,6 +251,13 @@ if [ "$NIGHTLY_ON_DEMAND" = 1 ]; then
     VIDEOSCAN_NIGHTLY_CORE_LOG="$NIGHTLY_ON_DEMAND_OUT/suite-core-test.log"
     NIGHTLY_DD="$NIGHTLY_ON_DEMAND_DD/app"
     NIGHTLY_CORE_SCRATCH="$NIGHTLY_ON_DEMAND_DD/core"
+    NIGHTLY_APP_SHARDS_DIR="$NIGHTLY_ON_DEMAND_OUT/suite-app-shards"
+    # Beside the cache root, not inside it: the testbed removes the build caches
+    # whenever the disk is at its floor (the M4, 2026-11-21: 13 GB after every
+    # run), and a deal with no recorded seconds goes by test count (that run:
+    # shards of 204 to 483 s). A few kilobytes; its own file, never the
+    # scheduled run's.
+    NIGHTLY_APP_SHARDS_TIMINGS="${NIGHTLY_ON_DEMAND_DD%/}-xctest-timings.json"
     # Never used on demand (publish_row returns before them). Pointed into the
     # run's own directory anyway, so that no fault in that gate can reach the
     # scheduled run's metrics worktree (publish_row resets it, commits into it
@@ -278,7 +298,24 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/process_group_watchdog
 #       text scrapers are best-effort; the exit code is the contract.
 #   A runner-hang marker is incomplete execution, not a waiver for nonzero rc.
 #   Keep the existing reason key for consumers, but never publish it as green.
-# Args: timed_out timeout_seconds total failed ui_runner_hung test_rc [crashed]
+#
+# 2026-11-21 (app-shards-r1): `shard_reason` — what the sharded app phase says
+#   beyond its tests (read_app_shards_summary; empty for a single host, and for
+#   a sharded run whose every shard ran its whole plan). With no shard reason
+#   the ladder is exactly the single host's. A shard reason means the run is
+#   INCOMPLETE or unproven, and an incomplete run is red by that name:
+#     * "shard-timeout:<s>s" (a shard hit its own deadline) is a TIMEOUT: like
+#       the watchdog's it outranks zero tests and everything below;
+#     * every other shard reason (shard-died, shard-short, shard-unproven,
+#       shard-no-verdict, shard-summary-mismatch, …) sits below zero tests (so
+#       "every host hung" stays the machine-setup diagnosis) and ABOVE failed
+#       and crashed tests. Review 2026-11-21 (R3): with failed-tests:1 on top,
+#       a run where another shard's host died after 1 of 900 tests published
+#       the plain "failed-tests:1", which the page reads as "the suite ran to
+#       the end" and paints yellow (tools/publish_metrics.py WATCH). The
+#       failed names are in the row either way; the reason says the worst
+#       thing that is true.
+# Args: timed_out timeout_seconds total failed ui_runner_hung test_rc [crashed] [shard_reason]
 classify_nightly_test_result() {
     local timed_out="$1"
     local timeout_seconds="$2"
@@ -287,14 +324,21 @@ classify_nightly_test_result() {
     local ui_runner_hung="$5"
     local test_rc="$6"
     local crashed="${7:-0}"
+    local shard_reason="${8:-}"
     STATUS="ok"
     REASON=""
     if $timed_out; then
         STATUS="failed"
         REASON=$(nightly_timeout_reason test "$timeout_seconds")
+    elif [ "${shard_reason%%:*}" = "shard-timeout" ]; then
+        STATUS="failed"
+        REASON="$shard_reason"
     elif [ "$total" -eq 0 ]; then
         STATUS="failed"
         REASON="zero-tests-ran:test-rc=$test_rc"
+    elif [ -n "$shard_reason" ]; then
+        STATUS="failed"
+        REASON="$shard_reason"
     elif [ "$failed" -gt 0 ]; then
         STATUS="failed"
         REASON="failed-tests:$failed"
@@ -718,26 +762,427 @@ apply_model_smoke_verdict() {
     fi
 }
 
+# ── App test phase as K test hosts (2026-11-21, app-shards-r1) ───────
+# Until now the app suite ran in ONE test host, every test after the last
+# (VideoScan-CI.xctestplan: "parallelizable": false — in-process parallelism
+# starves the main actor): 32 min on the M4, 34 on the M5 Ultra. Now
+# scripts/xctest_shards.py of the checkout under test deals the manifest's
+# test files to K hosts (K = half the cores: M4 8, Ultra 15), each its own
+# `xcodebuild test-without-building -xctestrun …` with its own log, TMPDIR and
+# result bundle, then runs the SERIAL TAIL (its table, a reason each: the
+# performance and stress stages and every suite that needs a quiet machine or
+# state all hosts share) in one host, alone. What the nightly promises, kept:
+#   * the LOG the parsers read is the K hosts' own logs, whole, one after the
+#     other (hosts.log in the run folder; $NIGHTLY_TEST_LOG names it once the
+#     phase has ended) — the same lines one host prints, so parse_test_counts,
+#     parse_crashed_tests, the runner-hang grep and the test-host diagnosis
+#     are the same code on the same grammar, and xcodebuild's "Failing tests:"
+#     block is never cut by another host's lines. WHILE the phase runs, the
+#     file a reader tails (scripts/run_tests.py --full, m4_run.sh status:
+#     suite-app-test.log) is the sharder's live stream of all hosts' lines;
+#   * the COUNTS are then trued up from the hosts' result bundles
+#     (read_app_shards_summary): a verdict line glued into the middle of an
+#     app log line is lost to any log parser (4 of 14,244 on 2026-11-20), the
+#     bundle is the host's own record: PASSED and SKIPPED become the bundles'
+#     sums (which may be more OR fewer than the logs counted). A failed test
+#     the logs did not name is added by its bundle name, and no failure a log
+#     counted is ever dropped;
+#   * a shard that TIMES OUT, DIES, runs FEWER tests than its files declare or
+#     cannot prove its count is red by name (APP_SHARD_REASON → the ladder in
+#     classify_nightly_test_result), and that reason OUTRANKS failed tests: an
+#     incomplete run must never read as "ran to the end with N failures" (the
+#     failed names ride in the row regardless). With every shard whole, a
+#     failing test is failed-tests:N as before;
+#   * the WATCHDOG is the same one with the same deadline. xctest_shards puts
+#     every host in a process group of its own and stops them all on TERM (one
+#     shared 10 s grace, then KILL: ≤ 15 s), so the watchdog's own grace is
+#     20 s longer here — its KILL must never land while hosts are still alive;
+#   * STRICT TIMING: the hosts inherit TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1.
+#     A suite whose budget cannot hold beside K-1 other hosts is in
+#     xctest_shards' SERIAL_TAIL ("timing budget"), where it runs alone;
+#   * COVERAGE: every host records into its own bundle (--coverage) and
+#     scripts/xccov_union.py computes the exact union over them: a line is
+#     covered when it ran in ANY host; the denominator is the build's
+#     executable lines; it refuses unless every bundle has the same executable
+#     lines per file and the union is at least the best single bundle's, per
+#     file. (NOT `xcresulttool merge`: measured 2026-11-21, it inflates the
+#     denominator and reports fewer covered lines than one shard alone has —
+#     half a point low, silently.) A run with a shard that did not run its
+#     whole plan publishes NO coverage number, never a low one. See
+#     union_coverage for the ruler (distinct lines) and why the single host
+#     uses it too.
+# Fallback, the single host, the same command as ever: NIGHTLY_APP_JOBS=1, or a
+# checkout without scripts/xctest_shards.py, or with one from before this
+# wiring (no NIGHTLY_SUMMARY_VERSION line: it has no --summary / --coverage).
+# Worst-case memory here: the summary JSON (K+1 shards, the failed tests) —
+# kilobytes; the logs are streamed by cat/grep, never held. Disk: the hosts'
+# logs exist three times while the phase is parsed (the live stream, each
+# shard's own, hosts.log: ~50 MB each); hosts.log and the hosts' TMPDIRs go
+# when the run ends (remove_test_artifacts).
+NIGHTLY_APP_SHARD_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_APP_SHARD_TIMEOUT_SECONDS:-1800}"
+# What the watchdog adds to its TERM grace for the sharded phase: the strand
+# runner's own stop (TERM, 10 s shared grace, KILL, 5 s) plus a margin.
+NIGHTLY_APP_SHARDS_STOP_SECONDS="${NIGHTLY_APP_SHARDS_STOP_SECONDS:-20}"
+NIGHTLY_APP_SHARDS_USED=false
+NIGHTLY_APP_SHARDS_KEEP_BUNDLES=false
+NIGHTLY_APP_STREAM_LOG=""
+APP_SHARD_REASON=""
+APP_SHARDS_COMPLETE=false
+APP_TEST_HOSTS=1
+
+# How many test hosts: NIGHTLY_APP_JOBS when it is a number (1 = the single
+# host), else half the cores.
+nightly_app_jobs() {
+    local n="${NIGHTLY_APP_JOBS:-}"
+    case "$n" in
+        ''|*[!0-9]*) n=$(( $(sysctl -n hw.ncpu 2>/dev/null || echo 2) / 2 )) ;;
+    esac
+    [ "$n" -ge 1 ] 2>/dev/null || n=1
+    echo "$n"
+}
+
+# 0 when this xctest_shards.py speaks the summary this script reads.
+# Args: script
+app_shards_usable() {
+    [ -f "$1" ] && grep -q '^NIGHTLY_SUMMARY_VERSION = 1$' "$1" 2>/dev/null
+}
+
+# Run the app suite as `jobs` hosts under the watchdog, their lines streamed
+# live into $NIGHTLY_TEST_LOG; then join the hosts' own logs into hosts.log and
+# point $NIGHTLY_TEST_LOG at it for everything that parses (the live file is
+# kept as $NIGHTLY_APP_STREAM_LOG). Returns xctest_shards' exit code (0 every
+# shard green · 1 red · 2 it could not start · 124 the watchdog).
+# Args: shards_script products_dir jobs
+run_app_tests_sharded() {
+    local script="$1" products="$2" jobs="$3"
+    local dir="$NIGHTLY_APP_SHARDS_DIR" rc f seed="$HOME/Library/Caches/videoscan-xctest-timings.json"
+    local -a coverage=()
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    # On demand: the verdict only (collect_optional_post_test_metrics), so no
+    # profile is recorded and a green shard's bundle is not kept.
+    [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ] || coverage=(--coverage)
+    # First night on this Mac: start from the day lane's per-suite seconds
+    # (run_tests, Debug) rather than from test counts — read, never written.
+    if [ ! -s "$NIGHTLY_APP_SHARDS_TIMINGS" ] && [ -s "$seed" ]; then
+        mkdir -p "$(dirname "$NIGHTLY_APP_SHARDS_TIMINGS")" && cp "$seed" "$NIGHTLY_APP_SHARDS_TIMINGS"
+    fi
+    run_with_process_group_watchdog \
+        "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
+        "$(( ${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10} + NIGHTLY_APP_SHARDS_STOP_SECONDS ))" \
+        "$NIGHTLY_TEST_LOG" \
+        python3 -u "$script" --products "$products" --all --stages all \
+        --jobs "$jobs" --run-dir "$dir/run" --stream \
+        --timeout "$NIGHTLY_APP_SHARD_TIMEOUT_SECONDS" \
+        --timings "$NIGHTLY_APP_SHARDS_TIMINGS" \
+        --summary "$dir/summary.json" \
+        ${coverage[@]+"${coverage[@]}"}
+    rc=$?
+    NIGHTLY_APP_STREAM_LOG="$NIGHTLY_TEST_LOG"
+    NIGHTLY_TEST_LOG="$dir/hosts.log"
+    : > "$NIGHTLY_TEST_LOG"
+    for f in "$dir"/run/[0-9][0-9][0-9][0-9]/strand.log; do
+        [ -f "$f" ] || continue
+        cat "$f" >> "$NIGHTLY_TEST_LOG"
+        # A host killed mid-line leaves no newline: the next host's first line
+        # must not be glued onto it (a verdict line would be lost, or forged).
+        [ -n "$(tail -c 1 "$f")" ] && echo >> "$NIGHTLY_TEST_LOG"
+    done
+    if $NIGHTLY_WATCHDOG_DID_TIMEOUT; then
+        # The watchdog stopped the phase: say which hosts had not finished and
+        # what each was running (xcodebuild ends a finished host's log with
+        # "** TEST EXECUTE SUCCEEDED|FAILED **").
+        for f in "$dir"/run/[0-9][0-9][0-9][0-9]/strand.log; do
+            [ -f "$f" ] || continue
+            grep -q '^\*\* TEST EXECUTE ' "$f" 2>/dev/null && continue
+            log "App shards at the watchdog stop: $(sed -n '1s/^# strand \([^:]*\):.*/\1/p' "$f") had not finished ($f); last test started: $(grep -E 'started\.?$' "$f" 2>/dev/null | tail -n 1 | cut -c1-200)"
+        done
+    fi
+    # The deal, the tail with its reasons, each shard's verdict and every
+    # failure with its shard's log: xctest_shards' own lines, into the nightly log.
+    grep '^xctest-shards: ' "$NIGHTLY_APP_STREAM_LOG" 2>/dev/null \
+        | while IFS= read -r f; do log "$f"; done
+    if [ ! -s "$NIGHTLY_TEST_LOG" ]; then
+        # No host wrote a line: say what the sharder itself said (a usage
+        # error, no .xctestrun, a Python traceback).
+        log "App shards: no test host wrote a log; the sharder's last lines:"
+        tail -n 5 "$NIGHTLY_APP_STREAM_LOG" 2>/dev/null | while IFS= read -r f; do log "  $f"; done
+    fi
+    return "$rc"
+}
+
+# True up the parsed counts from the shards' result bundles and name what a
+# shard did beyond its tests. Reads PASSED FAILED SKIPPED KNOWN_ISSUE_TESTS
+# FAILED_NAMES_JSON CRASHED_NAMES_JSON (parse_test_counts, over the shards'
+# logs) and rewrites PASSED FAILED SKIPPED FAILED_NAMES_JSON; sets
+# APP_SHARD_REASON ("" when every shard ran its whole plan), APP_SHARDS_COMPLETE
+# (every shard ran its whole plan and its bundle was read: the coverage union
+# is the suite's) and APP_TEST_HOSTS.
+#   PASSED, SKIPPED         the bundles' sums, when every bundle was read;
+#   KNOWN_ISSUE_TESTS       the logs' count, untouched: a bundle marks fewer
+#                           tests (measured 2026-11-21: 18 "Expected Failure"
+#                           results where one host's log, and the shards'
+#                           logs, both say 23 — a parameterized test that
+#                           passed with known issues is plain "Passed" there);
+#   FAILED                  the logs' count, plus every bundle failure the logs
+#                           neither counted nor listed as crashed (named by its
+#                           bundle identifier), and never fewer than the
+#                           bundles' own failures less the crashed ones — a
+#                           crashed test stays "crashed", as with one host.
+#                           Names are matched through nightly_name_token_py,
+#                           the one rule parse_crashed_tests uses too;
+#   the summary is CHECKED against the run: it must list at least one shard,
+#                           as many as it planned and as many as there are
+#                           host folders on disk — else shard-summary-mismatch
+#                           (a summary that does not account for every host
+#                           proves nothing about the ones it leaves out);
+#   no summary at all       xctest_shards was stopped or died before its
+#                           verdict: the logs' counts stand, reason
+#                           shard-no-verdict (never green).
+# The reader prints ONE JSON object; a reader that fails is shard-no-verdict.
+# Args: summary_json
+read_app_shards_summary() {
+    local summary="$1" parsed field
+    parsed=$(SHARD_SUMMARY="$summary" SHARD_RUN="$(dirname "$summary")/run" \
+        SHARD_TIMEOUT="$NIGHTLY_APP_SHARD_TIMEOUT_SECONDS" \
+        LOG_PASSED="$PASSED" LOG_FAILED="$FAILED" LOG_SKIPPED="$SKIPPED" \
+        LOG_NAMES="$FAILED_NAMES_JSON" LOG_CRASHED="${CRASHED_NAMES_JSON:-[]}" python3 -c "$(nightly_name_token_py)"'
+import json, os, re, sys
+e = os.environ
+
+def names(key):
+    try:
+        return [str(x) for x in json.loads(e[key])]
+    except Exception:
+        return []
+
+passed, failed, skipped = (int(e[k]) for k in ("LOG_PASSED", "LOG_FAILED", "LOG_SKIPPED"))
+counted, crashed = names("LOG_NAMES"), names("LOG_CRASHED")
+notes, reason, complete, hosts = [], "", False, 0
+try:
+    with open(e["SHARD_SUMMARY"]) as fh:
+        d = json.load(fh)
+    if d.get("version") != 1 or not isinstance(d.get("shards"), list):
+        raise ValueError("not a version 1 summary")
+except Exception as error:
+    d = None
+    reason = "shard-no-verdict"
+    notes.append("no shard summary (%s): xctest_shards was stopped or died before its verdict; counts are the logs" % type(error).__name__)
+if d is not None:
+    shards = d["shards"]
+    try:
+        on_disk = len([n for n in os.listdir(e["SHARD_RUN"]) if re.match(r"^\d{4}$", n)])
+    except OSError:
+        on_disk = 0
+    planned = d.get("planned_shards")
+    accounted = bool(shards) and len(shards) == on_disk and (planned is None or planned == len(shards))
+    by_code = {}
+    for s in shards:
+        for c in s.get("codes") or []:
+            by_code.setdefault(c, []).append(str(s.get("name")))
+        if not s.get("green"):
+            notes.append("RED %s: %s (log %s)" % (s.get("name"), "; ".join(s.get("problems") or ["a failed test"]), s.get("log")))
+    # The most telling first. A dead host is coded died AND short (it always ran
+    # fewer tests than declared): died is asked first, or it could never be said.
+    if not accounted:
+        reason = "shard-summary-mismatch"
+        notes.append("the summary lists %d shard(s), planned %s, and the run folder holds %d host folder(s): it does not account for the run"
+                     % (len(shards), "?" if planned is None else planned, on_disk))
+    elif "timeout" in by_code:
+        reason = "shard-timeout:%ss" % e["SHARD_TIMEOUT"]
+    elif "died" in by_code or "never-ran" in by_code:
+        reason = "shard-died:%d" % len(set(by_code.get("died", []) + by_code.get("never-ran", [])))
+    elif "short" in by_code:
+        reason = "shard-short:%d" % len(by_code["short"])
+    elif "unproven" in by_code:
+        reason = "shard-unproven:%d" % len(by_code["unproven"])
+    elif int(d.get("undealable_files") or 0):
+        reason = "shard-undealable:%d" % int(d["undealable_files"])
+    elif d.get("verdict") != "GREEN" and not int(d.get("failed") or 0):
+        reason = "shard-red"
+    # Whole = THE one predicate for "this run is the suite": the summary accounts
+    # for every host, no test file was left undealt (its tests ran in no host),
+    # and every shard ran its whole plan (no code at all: short is as partial a
+    # profile as a timeout) with its bundle read. Failed tests do not unmake it.
+    complete = accounted and not int(d.get("undealable_files") or 0) and all(
+        s.get("bundle_read") and not s.get("timed_out") and not (s.get("codes") or []) for s in shards)
+    # Hosts that actually ran side by side: the parallel shards (a small run
+    # deals fewer than the K asked for; the tail is one more host, alone).
+    hosts = len([s for s in shards if not s.get("serial")]) or (1 if shards else 0)
+    if d.get("counts_from") == "bundles":
+        was = (passed, skipped)
+        passed, skipped = int(d["passed"]), int(d["skipped"])
+        if was != (passed, skipped):
+            notes.append("counts trued up from the result bundles: logs said %d passed / %d skipped, bundles %d / %d"
+                         % (was[0], was[1], passed, skipped))
+        seen = set(counted) | set(crashed) | {token(n) for n in counted + crashed}
+        extra = []
+        for f in d.get("failures") or []:
+            ident, shown = str(f.get("id") or ""), str(f.get("name") or "")
+            dotted = ident.replace("/", ".")
+            if {shown, "\"%s\"" % shown, dotted, token(dotted), token(shown), token("\"%s\"" % shown)} & seen:
+                continue
+            extra.append(dotted or shown)
+        extra = sorted(set(extra))
+        if extra:
+            notes.append("failed in a result bundle with no verdict line in any log: " + ", ".join(extra))
+        counted = sorted(set(counted) | set(extra))
+        failed = max(failed + len(extra), int(d.get("failed") or 0) - len(crashed))
+    else:
+        notes.append("counts are the logs (not every result bundle could be read: %s)" % d.get("counts_from"))
+print(json.dumps({"reason": reason, "passed": passed, "failed": failed, "skipped": skipped,
+                  "failed_names": json.dumps(counted), "complete": "true" if complete else "false",
+                  "hosts": hosts, "notes": "\n".join(notes)}))
+' 2>/dev/null)
+    field() { printf '%s' "$parsed" | python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1" 2>/dev/null; }
+    if [ -z "$parsed" ] || [ -z "$(field passed)" ]; then
+        # The reader itself failed: the logs' counts stand, and the run is not green.
+        APP_SHARD_REASON="shard-no-verdict"
+        APP_SHARDS_COMPLETE=false
+        log "App shards: the summary reader failed; counts are the logs"
+        return 0
+    fi
+    APP_SHARD_REASON=$(field reason)
+    PASSED=$(field passed)
+    FAILED=$(field failed)
+    SKIPPED=$(field skipped)
+    FAILED_NAMES_JSON=$(field failed_names)
+    APP_SHARDS_COMPLETE=$(field complete)
+    # (the hosts the summary says ran at once; without a summary, what the phase was started with)
+    case "$(field hosts)" in
+        ''|*[!0-9]*|0) ;;
+        *) APP_TEST_HOSTS=$(field hosts) ;;
+    esac
+    field notes | while IFS= read -r parsed; do [ -n "$parsed" ] && log "App shards: $parsed"; done
+    return 0
+}
+
+# ── Coverage: one ruler, the exact union (2026-11-21) ────────────────
+# scripts/xccov_union.py over the run's result bundle(s) — K+1 of them for a
+# sharded run, the one for a single host — sets COV_LOGIC to the logic-only
+# line coverage of VideoScan.app, or leaves it "null" with a line saying why.
+# THE RULER IS DISTINCT LINES: a line is covered when it ran in any bundle; the
+# denominator is the build's executable lines; the file filter is the awk's.
+# Until now the number was Xcode's report, which adds up each FUNCTION's lines
+# (a closure's lines count again in the function around it). That ruler cannot
+# be merged across hosts exactly (Xcode's own merge is wrong, see the header),
+# so the single host is measured with the union tool too: one definition,
+# whatever K is. THE SERIES STEPS ONCE on the switch night — same bundle, same
+# commit, 2026-11-21: 72.238% function-summed (189,023/261,667) is 79.017%
+# distinct lines (157,494/199,317). A single-host row also carries the old
+# ruler's number as coverage_logic_report_pct, so the step can be read off.
+# COV_BASIS="lines" marks a number on the new ruler (row: coverage_basis).
+# A checkout without the tool keeps the old number, unmarked.
+# Args: bundle…
+union_coverage() {
+    local tool="${VIDEOSCAN_NIGHTLY_COVERAGE_UNION:-$REPO/scripts/xccov_union.py}"
+    local out="${NIGHTLY_COVERAGE_JSON:-${NIGHTLY_XCRESULT}.coverage.json}" line pct
+    [ -f "$tool" ] || { log "Coverage: no scripts/xccov_union.py in this checkout"; return 2; }
+    rm -f "$out"
+    line=$(python3 "$tool" --target VideoScan.app --logic --json "$out" \
+        --xcrun "${NIGHTLY_XCRUN:-xcrun}" "$@" 2>&1 | tail -n 1)
+    pct=$(python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+print("%.3f" % d["pct"] if d.get("ok") is True and isinstance(d.get("pct"), (int, float)) else "")' "$out" 2>/dev/null)
+    rm -f "$out"
+    if [ -z "$pct" ]; then
+        COV_LOGIC="null"
+        log "Coverage NOT published: ${line:-xccov_union.py printed nothing}"
+        return 1
+    fi
+    COV_LOGIC="$pct"
+    COV_BASIS="lines"
+    log "Coverage: $line"
+    return 0
+}
+
+# The sharded run's number: the union over every shard's bundle — or none.
+# Refuses (COV_LOGIC stays "null") when a shard did not run its whole plan.
+union_app_shards_coverage() {
+    local dir="$NIGHTLY_APP_SHARDS_DIR/run" f
+    local -a bundles=()
+    COV_LOGIC="null"
+    if ! ${APP_SHARDS_COMPLETE:-false}; then
+        log "Coverage NOT published: a shard did not run its whole plan or its bundle could not be read (a partial profile is not the suite's coverage)"
+        return 1
+    fi
+    for f in "$dir"/[0-9][0-9][0-9][0-9]/shard.xcresult; do
+        [ -d "$f" ] && bundles+=("$f")
+    done
+    if [ "${#bundles[@]}" -eq 0 ] || [ "${#bundles[@]}" -ne "$(ls -d "$dir"/[0-9][0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ')" ]; then
+        log "Coverage NOT published: ${#bundles[@]} result bundle(s) for $(ls -d "$dir"/[0-9][0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ') shard(s) in $dir"
+        return 1
+    fi
+    union_coverage "${bundles[@]}"
+}
+
+# A GREEN shard's result bundle is evidence of nothing once its coverage has
+# been read; a red shard's stays beside its log. Measured 2026-11-21, Release
+# with coverage: up to ~620 MB a bundle, 4-9 GB for 15 hosts and the tail (the
+# peak on disk until this runs). Without a readable summary NO shard is known
+# green: with `all` every bundle goes (the timeout and zero-test paths, where
+# the logs are the evidence), otherwise none. Only paths inside the run folder.
+# Args: [all]
+prune_green_shard_bundles() {
+    SHARD_SUMMARY="$NIGHTLY_APP_SHARDS_DIR/summary.json" SHARD_RUN="$NIGHTLY_APP_SHARDS_DIR/run" \
+        SHARD_ALL="${1:-}" python3 -c '
+import json, os, re, shutil
+run = os.path.realpath(os.environ["SHARD_RUN"])
+try:
+    with open(os.environ["SHARD_SUMMARY"]) as fh:
+        shards = json.load(fh).get("shards")
+    green = {"%04d" % i for i, s in enumerate(shards) if s.get("green") is True}
+except Exception:
+    shards, green = None, set()
+try:
+    folders = [n for n in os.listdir(run) if re.match(r"^\d{4}$", n)]
+except OSError:
+    folders = []
+for n in folders:
+    bundle = os.path.join(run, n, "shard.xcresult")
+    if (n in green or (shards is None and os.environ["SHARD_ALL"] == "all")) \
+            and os.path.isdir(bundle) and not os.path.islink(bundle):
+        shutil.rmtree(bundle, ignore_errors=True)
+' 2>/dev/null
+    return 0
+}
+
 # Build and publish the current parsed test result. COV_LOGIC="null" omits the
 # coverage field. Keeping this path callable before any optional post-test work
 # is what lets a watchdog timeout durably record partial counts immediately.
 make_current_test_result_row() {
-    local ts cov_field="" crashed_field=""
+    local ts cov_field="" crashed_field="" hosts_field=""
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
     if [ "$COV_LOGIC" != "null" ]; then
         cov_field=",\"coverage_logic_pct\":$COV_LOGIC"
+        # Additive (2026-11-21): which ruler the number is on ("lines" = distinct
+        # lines, union_coverage; absent = Xcode's function-summed report, as
+        # every row before), and on a single-host row the old ruler's number.
+        if [ "${COV_BASIS:-}" = "lines" ]; then
+            cov_field="$cov_field,\"coverage_basis\":\"lines\""
+            case "${COV_LOGIC_REPORT:-null}" in
+                null|'') ;;
+                *) cov_field="$cov_field,\"coverage_logic_report_pct\":$COV_LOGIC_REPORT" ;;
+            esac
+        fi
     fi
     # Additive, and present ONLY when tests actually died — a green row keeps
     # the exact shape every existing dashboard consumer already parses.
     if [ "${CRASHED_NAMES_JSON:-[]}" != "[]" ]; then
         crashed_field=",\"crashed_names\":${CRASHED_NAMES_JSON}"
     fi
+    # Additive, and present ONLY when the app phase ran as several test hosts
+    # (2026-11-21): it is why elapsed_s stepped down; a single-host row keeps
+    # its exact shape.
+    if ${NIGHTLY_APP_SHARDS_USED:-false}; then
+        hosts_field=",\"app_test_hosts\":${APP_TEST_HOSTS:-1}"
+    fi
     printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"known_issue_tests":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s","failed_names":%s%s}' \
         "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
         "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" "${KNOWN_ISSUE_TESTS:-0}" \
         "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
         "${NIGHTLY_CONFIGURATION:-unknown}" \
-        "$FAILED_NAMES_JSON" "${cov_field}${crashed_field}"
+        "$FAILED_NAMES_JSON" "${cov_field}${crashed_field}${hosts_field}"
 }
 
 publish_current_test_result() {
@@ -769,6 +1214,21 @@ collect_optional_post_test_metrics() {
     # On demand: the verdict only. Coverage, the person evaluator and the
     # Hallie lanes are the scheduled run's.
     [ "${NIGHTLY_ON_DEMAND:-0}" = 1 ] && return 0
+    COV_BASIS=""
+    COV_LOGIC_REPORT="null"
+    # Sharded: the exact union over the K hosts' bundles, or no number. (There
+    # is no /tmp/nightly-results.xcresult then: the block below does not run.)
+    # Green bundles go only once the union has READ them: a refused union keeps
+    # every bundle — they are the evidence of why (the next run's start, or a
+    # green run's cleanup, removes the folder).
+    if ${NIGHTLY_APP_SHARDS_USED:-false}; then
+        if union_app_shards_coverage; then
+            prune_green_shard_bundles
+        else
+            NIGHTLY_APP_SHARDS_KEEP_BUNDLES=true
+            log "Coverage: the shards' result bundles are kept for a look: $NIGHTLY_APP_SHARDS_DIR/run/*/shard.xcresult"
+        fi
+    fi
     if [ -d /tmp/nightly-results.xcresult ]; then
         log "xcresult exists, extracting coverage..."
         xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 \
@@ -795,6 +1255,17 @@ collect_optional_post_test_metrics() {
                     else         printf "null"
                 }')
         COV_LOGIC="${LOGIC_NUMS:-null}"
+        # One ruler whatever K is (union_coverage): the single host's bundle is
+        # measured in distinct lines too, and the report's number above rides
+        # along as coverage_logic_report_pct. A refusal publishes no number
+        # (never the other ruler's under this name); only a checkout without
+        # the tool keeps the report's.
+        COV_LOGIC_REPORT="$COV_LOGIC"
+        union_coverage /tmp/nightly-results.xcresult
+        case $? in
+            0) log "Logic-only coverage, Xcode's function-summed report (the ruler before 2026-11-21): ${COV_LOGIC_REPORT}%" ;;
+            2) COV_LOGIC="$COV_LOGIC_REPORT"; COV_LOGIC_REPORT="null" ;;
+        esac
     fi
     log "Logic-only coverage: ${COV_LOGIC}%"
 
@@ -969,6 +1440,31 @@ parse_test_counts() {
     parse_crashed_tests "$out"
 }
 
+# THE one rule for "are these two the same test" across the shapes a name comes
+# in: a Swift Testing log line (`method()`, `"display name"`, and for a
+# parameterized test `parse(_:) with 20 test cases`), an XCTest log line
+# (`-[Suite method]`), xcodebuild's "Failing tests:" block (`Suite.method()`)
+# and a result bundle's identifier (`Suite/method()`, given here with dots).
+# Python source defining token(name); prepended to the two readers that match
+# names — parse_crashed_tests (the log's own block) and read_app_shards_summary
+# (the bundles) — so they cannot disagree. Review 2026-11-21 (R1): the bundle
+# reader had no " with N test cases" rule (scripts/run_tests.py has had it since
+# its LineParser), and one failed parameterized test was published as two.
+nightly_name_token_py() {
+    cat <<'NAME_TOKEN_PY'
+import re
+
+def token(name):
+    """A test name down to its bare method token, whatever shape it came in."""
+    n = re.sub(r" with \d+ test cases?$", "", name.strip()).rstrip(".")
+    if n.startswith("-[") or n.startswith("+["):
+        n = n[2:].rstrip("]").split()[-1]        # -[Suite method] -> method
+    elif "." in n and not n.startswith("\""):
+        n = n.rsplit(".", 1)[-1]                  # Suite.method() -> method()
+    return n.rstrip("()")
+NAME_TOKEN_PY
+}
+
 # Tests that DIED rather than failed. A trap takes the host down before any
 # per-test terminal line is printed, so the only place these names ever appear
 # is xcodebuild's own trailing block:
@@ -987,17 +1483,8 @@ parse_test_counts() {
 parse_crashed_tests() {
     local out="$1"
     local parsed
-    parsed=$(NIGHTLY_LOG="$out" COUNTED_NAMES="$FAILED_NAMES_JSON" python3 -c '
+    parsed=$(NIGHTLY_LOG="$out" COUNTED_NAMES="$FAILED_NAMES_JSON" python3 -c "$(nightly_name_token_py)"'
 import json, os, sys
-
-def token(name):
-    """Reduce a test name to its bare method token for cross-shape matching."""
-    n = name.strip().rstrip(".")
-    if n.startswith("-[") or n.startswith("+["):
-        n = n[2:].rstrip("]").split()[-1]        # -[Suite method] -> method
-    elif "." in n:
-        n = n.rsplit(".", 1)[-1]                  # Suite.method() -> method()
-    return n.rstrip("()")
 
 try:
     counted = {token(n) for n in json.loads(os.environ["COUNTED_NAMES"])}
@@ -1405,9 +1892,43 @@ TEST_START=$(date +%s)
 # The scheduled run removes its /tmp test log and xcresult when it ends (the log
 # is already in $LOGFILE); an on-demand run keeps its own as evidence.
 remove_test_artifacts() {
+    # Sharded: what is never evidence goes on every Mac — each host's TMPDIR and
+    # the joined copy of the hosts' logs (each shard's own log stays).
+    if $NIGHTLY_APP_SHARDS_USED; then
+        rm -rf "$NIGHTLY_APP_SHARDS_DIR"/run/*/tmp "$NIGHTLY_APP_SHARDS_DIR/hosts.log"
+    fi
     [ "$NIGHTLY_ON_DEMAND" = 1 ] && return 0
-    rm -rf "$NIGHTLY_XCRESULT" "$NIGHTLY_TEST_LOG"
+    rm -rf "$NIGHTLY_XCRESULT" "$NIGHTLY_TEST_LOG" ${NIGHTLY_APP_STREAM_LOG:+"$NIGHTLY_APP_STREAM_LOG"}
+    # The hosts' lines are already in $LOGFILE. A green run's folder goes. A red
+    # run keeps every shard's log and the RED shards' result bundles for the
+    # morning; green bundles go, and on the paths that never reached a summary
+    # (the watchdog, zero tests) every bundle does — gigabytes of partial
+    # bundles nothing will read (the next run removes the folder anyway).
+    if ${NIGHTLY_APP_SHARDS_KEEP_BUNDLES:-false}; then
+        :   # a refused coverage union: its bundles stay, whatever the verdict
+    elif [ "${STATUS:-failed}" = "ok" ]; then
+        rm -rf "$NIGHTLY_APP_SHARDS_DIR"
+    elif $NIGHTLY_APP_SHARDS_USED; then
+        prune_green_shard_bundles all
+    fi
 }
+# K test hosts at once (see "App test phase as K test hosts"), or the single
+# host below: NIGHTLY_APP_JOBS=1, or a checkout whose xctest_shards.py is
+# missing or older than this wiring.
+APP_JOBS=$(nightly_app_jobs)
+APP_SHARDS_SCRIPT="${VIDEOSCAN_NIGHTLY_APP_SHARDS:-$REPO/scripts/xctest_shards.py}"
+if [ "$APP_JOBS" -gt 1 ] && app_shards_usable "$APP_SHARDS_SCRIPT"; then
+    NIGHTLY_APP_SHARDS_USED=true
+    APP_TEST_HOSTS="$APP_JOBS"
+    log "  $APP_JOBS test hosts at once, then the serial tail (xctest_shards.py; each shard ${NIGHTLY_APP_SHARD_TIMEOUT_SECONDS}s, watchdog ${NIGHTLY_TEST_TIMEOUT_SECONDS}s; NIGHTLY_APP_JOBS=1 is the single host)"
+    run_app_tests_sharded "$APP_SHARDS_SCRIPT" "$NIGHTLY_DD/Build/Products" "$APP_JOBS"
+    TEST_RC=$?
+else
+if [ "$APP_JOBS" -gt 1 ]; then
+    log "  one test host: this checkout has no scripts/xctest_shards.py that writes the nightly summary"
+else
+    log "  one test host (NIGHTLY_APP_JOBS=1)"
+fi
 # A private-process-group watchdog guarantees this call returns to the
 # publication path even if xcodebuild or a test blocks in a kernel read.
 run_with_process_group_watchdog \
@@ -1426,6 +1947,7 @@ run_with_process_group_watchdog \
     ENABLE_TESTABILITY=YES \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=
 TEST_RC=$?
+fi
 TEST_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
 cat "$NIGHTLY_TEST_LOG" 2>/dev/null || true
 TEST_END=$(date +%s)
@@ -1440,10 +1962,24 @@ fi
 # parse_test_counts / parse_crashed_tests are defined above the run (the
 # VideoScanCore lane needs them before the app build; 2026-10-18).
 parse_test_counts "$NIGHTLY_TEST_LOG"
+# Sharded: true the counts up from the result bundles and read what a shard
+# did beyond its tests. Not after the watchdog: there is no summary then, and
+# the timeout row carries the logs' partial counts as it always has.
+if $NIGHTLY_APP_SHARDS_USED && ! $TEST_TIMED_OUT; then
+    read_app_shards_summary "$NIGHTLY_APP_SHARDS_DIR/summary.json"
+fi
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISSUE_TESTS} passed with known issues)"
 [ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
 [ "${CRASHED:-0}" -gt 0 ] && log "Crashed tests (host died, no failure line): $CRASHED_NAMES_JSON"
+# What each failure SAID, here at the end of the log (at most 60 lines): the
+# hosts' own lines are megabytes further up, and the testbed keeps only a
+# log's last 200 lines once a run is summarized (the M4, 2026-11-21: a timing
+# budget failed and the measured figure was gone with the shard's log).
+if [ "$FAILED" -gt 0 ]; then
+    grep -a -A3 -E '(✘ Test .* recorded an issue|: error: -\[)' "$NIGHTLY_TEST_LOG" 2>/dev/null | grep -av '^--$' \
+        | head -n 60 | cut -c1-400 | while IFS= read -r detail; do log "  failure detail: $detail"; done
+fi
 
 # Look for the UI test runner timeout/hang marker — the unit-test pass
 # count is still honest, but we want the row to flag this so a sudden
@@ -1456,7 +1992,7 @@ fi
 
 classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
-    "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}"
+    "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}" "$APP_SHARD_REASON"
 apply_core_package_verdict
 apply_model_smoke_verdict
 
@@ -1472,6 +2008,8 @@ if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     apply_test_host_start_diagnosis "$NIGHTLY_TEST_LOG" "$TOTAL"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
+    # (after the row: nothing optional runs before a row is published)
+    $NIGHTLY_APP_SHARDS_USED && remove_test_artifacts
     exit 1
 fi
 

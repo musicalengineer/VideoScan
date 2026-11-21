@@ -44,6 +44,8 @@ GROUPS: Dict[str, Group] = {
     "lanes": Group("14 14b", 20, "Core package lane and model lane"),
     # ~2.5 s: pure row builders, parsers, classifiers, watchdog and machine-setup checks.
     "rows": Group("7 7b 8 9 9b 10 11 12 12b 13 15", 55, "row builders, parsers, watchdog, verdict ladder"),
+    # ~25 s: the app phase as K test hosts (its two watchdog cases are ~8 s and ~5 s: a stop that must be waited for).
+    "shards": Group("19", 47, "the sharded app phase: counts, shard reasons, watchdog, coverage merge, fallback"),
 }
 
 SUMMARY = re.compile(r"Tests passed: (\d+)\s+Tests failed: (\d+)")

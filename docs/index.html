@@ -1724,7 +1724,11 @@ const BODIES = {
     chartOrNote("c-cov-trend", "line", days.map(dd => dateLabels([{ date: dd }])[0]), [
       { label: "logic % (4 AM per-folder run)", data: days.map(dd => covByDay.has(dd) ? covByDay.get(dd).total.logic_pct : null), spanGaps: true, ...lineStyle(C.green) },
       { label: "all % (4 AM per-folder run)", data: days.map(dd => covByDay.has(dd) ? covByDay.get(dd).total.pct : null), spanGaps: true, ...lineStyle(C.blue) },
-      { label: "logic % (2 AM nightly)", data: days.map(dd => nightlyByDay.has(dd) ? nightlyByDay.get(dd).coverage_logic_pct : null), spanGaps: true, ...lineStyle(C.purple) },
+      // The nightly's number changed ruler on 2026-11-21 (coverage_basis "lines": distinct lines, the exact union
+      // over the test hosts; before: Xcode's function-summed report, ~7 points lower for the same tests). Two lines,
+      // so the step is not read as a change in the code.
+      { label: "logic % (2 AM nightly, function-summed)", data: days.map(dd => nightlyByDay.has(dd) && nightlyByDay.get(dd).coverage_basis !== "lines" ? nightlyByDay.get(dd).coverage_logic_pct : null), spanGaps: true, ...lineStyle(C.purple) },
+      { label: "logic % (2 AM nightly, distinct lines)", data: days.map(dd => nightlyByDay.has(dd) && nightlyByDay.get(dd).coverage_basis === "lines" ? nightlyByDay.get(dd).coverage_logic_pct : null), spanGaps: true, ...lineStyle(C.orange || C.purple) },
     ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
   },
 

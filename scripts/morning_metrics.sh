@@ -285,12 +285,25 @@ for h in order:
 if current and int(current.get("failed") or 0) > 0:
     flags.append(f"{current.get('failed')} TEST(S) FAILING in newest green run ({current['_host']} {current['_date']}).")
 
+# The nightly's coverage number changed RULER on 2026-11-21: rows with
+# coverage_basis "lines" count distinct lines (the exact union over the test
+# hosts); rows without it are Xcode's function-summed report, ~7 points lower
+# for the same tests. Two rows on different rulers are not compared — not as a
+# rise, not as a DROP; the change of ruler is said once instead.
+RULER = {"lines": "distinct lines"}
+def ruler(row):
+    return RULER.get(row.get("coverage_basis"), "function-summed")
+cov_note = ruler_note = ""
 if current and baseline:
     cc = current.get("coverage_logic_pct"); bc = baseline.get("coverage_logic_pct")
     if isinstance(cc,(int,float)) and isinstance(bc,(int,float)):
         d = cc - bc
-        if d <= -1.0:
-            flags.append(f"Coverage DROPPED {d:+.1f}% ({bc:.1f}% → {cc:.1f}%) vs {baseline['_date']}.")
+        if ruler(current) != ruler(baseline):
+            ruler_note = f"coverage ruler changed to {ruler(current)}: {cc:.1f}% (was {bc:.1f}% {ruler(baseline)})"
+        else:
+            cov_note = f"  (coverage {d:+.1f}% vs {baseline['_date']})"
+            if d <= -1.0:
+                flags.append(f"Coverage DROPPED {d:+.1f}% ({bc:.1f}% → {cc:.1f}%) vs {baseline['_date']}.")
     ct = int(current.get("total") or 0); bt = int(baseline.get("total") or 0)
     if bt and ct - bt <= -20:
         flags.append(f"Test count DROPPED {ct-bt:+d} ({bt} → {ct}) vs {baseline['_date']} — tests removed or not compiled?")
@@ -313,10 +326,7 @@ if flags:
     for f in flags:
         print(f"   • {f}")
 else:
-    delta = ""
-    if current and baseline:
-        cc = current.get("coverage_logic_pct"); bc = baseline.get("coverage_logic_pct")
-        if isinstance(cc,(int,float)) and isinstance(bc,(int,float)):
-            delta = f"  (coverage {cc-bc:+.1f}% vs {baseline['_date']})"
-    print(f"✅ No major change vs previous day.{delta}")
+    print(f"✅ No major change vs previous day.{cov_note}")
+if ruler_note:
+    print(f"   ℹ {ruler_note}")
 PY

@@ -51,8 +51,11 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     table, a reason each), and is RED for a shard that dies, times out, runs fewer tests than its
     files declare or leaves a suite at zero tests. Its lines are parsed here as they come, so the
     display and the counts are the single host's. `--jobs 1` is the single host, as before; so is a
-    commit whose worktree has no xctest_shards.py. --full is not sharded: its app lane is inside
-    scripts/nightly_local_tests.sh (one script: Core, the Release build, the app suite, the row).
+    commit whose worktree has no xctest_shards.py. --full's app lane is inside
+    scripts/nightly_local_tests.sh (one script: Core, the Release build, the app suite, the row), which
+    since 2026-11-21 runs it through the same xctest_shards.py (half the cores; every stage, the
+    performance and stress stages in the serial tail). --full --jobs N is passed to it as
+    NIGHTLY_APP_JOBS=N (1 = its single host).
   * --status — every live run_tests on this Mac (pid, filter, commit, slot, lane, n/N, since), the
     three slots (commit, in use or idle, DerivedData size) and, when reachable, who holds the M4
     testbed lock with an estimated finish (that lane's last finished run, else its planned length;
@@ -224,7 +227,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                     help="gtest-style: 'Pos1:Pos2-Neg1:Neg2', globs on Suite.test (a pattern without '.' names "
                          "suites); picks from every runnable test file, not the smoke's few")
     ap.add_argument("--jobs", type=int, default=None, metavar="N",
-                    help="app test hosts at once (default: half the cores; 1 = the single host). Not --full")
+                    help="app test hosts at once (default: half the cores; 1 = the single host). With --full: "
+                         "the nightly runner's NIGHTLY_APP_JOBS")
     ap.add_argument("--status", action="store_true", help="what run_tests is running on this Mac (and the M4 lock), then stop")
     ap.add_argument("--on-host", action="store_true", help=argparse.SUPPRESS)   # set by the ssh caller
     a = ap.parse_args(list(argv))                    # exits 2 on a usage error
@@ -2646,6 +2650,9 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
     swift_missing = list(dict.fromkeys(missing.get("app", []) + missing.get("core", [])))
     env = dict(os.environ)
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin")
+    if getattr(a, "jobs", None):
+        # The nightly runner shards its app phase itself (half the cores); --jobs is its override (1: one host).
+        env["NIGHTLY_APP_JOBS"] = str(a.jobs)
     r = Runner(out, run_dir, env)
     lanes: List[LaneResult] = []
     out.line("==========", f"full · nightly_local_tests.sh --on-demand + run_python_tests.sh")
