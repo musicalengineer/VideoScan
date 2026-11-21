@@ -10,6 +10,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
+// serialized: reserves and releases in the process-global RemovalReservations.shared table; kept serial as shared state, not seen red in parallel 2026-11-21
 @Suite("Catalog Delete Selected Files — pair groups: isolation and Codex #191/#194", .serialized)
 @MainActor
 struct CatalogTrashPairGroupIsolationTests: PairGroupFixtures {

@@ -34,7 +34,7 @@ import VideoScanCore
 @testable import VideoScan
 
 @MainActor
-@Suite("Hallie vital-date precedence — the People profile wins", .serialized)
+@Suite("Hallie vital-date precedence — the People profile wins")
 struct HallieVitalDatesTests {
 
     // MARK: - Fixtures

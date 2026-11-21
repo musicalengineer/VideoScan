@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("One photo per person — tree card ↔ People tab", .serialized)
+@Suite("One photo per person — tree card ↔ People tab")
 struct PersonPhotoOnePerPersonTests {
     private var fileManager: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
 

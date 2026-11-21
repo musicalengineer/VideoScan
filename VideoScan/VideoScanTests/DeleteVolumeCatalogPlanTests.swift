@@ -37,7 +37,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite(.serialized) @MainActor
+@Suite @MainActor
 struct DeleteVolumeCatalogPlanTests {
 
     private func makeRecord(_ fullPath: String) -> VideoRecord {

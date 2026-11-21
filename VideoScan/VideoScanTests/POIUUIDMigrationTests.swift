@@ -12,6 +12,7 @@ import Testing
 // cleans up after itself. Backups land beside each temp root, never in
 // Application Support.
 
+// serialized: tests share POIStorage's per-process migration bookkeeping and the process POI store, and park threads on semaphores for up to 30 s (red 4 of 5 parallel runs 2026-11-21)
 @Suite("People uuid migration", .serialized)
 struct POIUUIDMigrationTests {
 

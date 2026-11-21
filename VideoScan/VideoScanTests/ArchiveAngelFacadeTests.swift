@@ -8,6 +8,7 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
+// serialized: one test reads the real UserDefaults footage stamp before and after to prove a test host never writes it; kept serial as shared state, not seen red in parallel 2026-11-21
 @Suite("Archive Angel façade — forwards, never re-derives", .serialized)
 @MainActor
 struct ArchiveAngelFacadeTests {

@@ -9,7 +9,7 @@ import VideoScanCore
 /// exhausted), the drill's bare "no", an unmappable hint, shell parity by
 /// number, and persistence through the lexicon file and the drill store.
 @MainActor
-@Suite("Hallie pronunciation picker", .serialized)
+@Suite("Hallie pronunciation picker")
 struct HalliePronunciationPickerTests {
 
     // MARK: - Fixtures

@@ -3,7 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
-@Suite("Family Archivist deterministic temporal executor", .serialized)
+@Suite("Family Archivist deterministic temporal executor")
 struct ArchivistTemporalExecutorTests {
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         var calendar = Calendar(identifier: .gregorian)

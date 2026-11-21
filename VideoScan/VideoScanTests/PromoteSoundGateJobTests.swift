@@ -21,7 +21,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Promote sound gate — the job refuses before anything is written", .serialized)
+@Suite("Promote sound gate — the job refuses before anything is written")
 @MainActor
 struct PromoteSoundGateJobTests {
 

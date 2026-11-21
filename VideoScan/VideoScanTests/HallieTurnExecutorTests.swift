@@ -3,6 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
+// serialized: one test writes UserDefaults.standard (the Ollama hosts key) and restores it; the 100k-record budget and cancel-promptly tests are wall-clock (red 4 of 5 parallel runs 2026-11-21)
 @Suite("Hallie shared turn executor", .serialized)
 struct HallieTurnExecutorTests {
     private let confirmedAt = Date(timeIntervalSince1970: 1_700_000_000)

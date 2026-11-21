@@ -56,6 +56,7 @@ private let treeGedcom = """
 0 TRLR
 """
 
+// serialized: anOversizedFileIsRefusedWithoutBeingRead asserts under 2 s of wall clock (red 3 of 5 parallel runs 2026-11-21: 2.75 s)
 @Suite("Record Finder — I found a record (filing)", .serialized)
 struct RecordFinderFilingTests {
     private var fm: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable

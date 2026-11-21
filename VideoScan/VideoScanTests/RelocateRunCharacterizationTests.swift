@@ -26,7 +26,7 @@ import os
 import Testing
 @testable import VideoScan
 
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor
+@Suite(.timeLimit(.minutes(2))) @MainActor
 struct RelocateRunCharacterizationTests {
 
     private struct Workspace {

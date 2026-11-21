@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Family asset store", .serialized)
+@Suite("Family asset store")
 struct FamilyAssetStoreTests {
     private let fileManager = FileManager.default
 
