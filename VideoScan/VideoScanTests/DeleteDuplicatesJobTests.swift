@@ -98,9 +98,23 @@ private final class Probe: @unchecked Sendable {
 private let blockSize = FileHasher.segmentSize
 private let fileSize = blockSize * 3     // three read blocks per file
 
+/// The console after its flush. `expecting`: a line the caller is about to
+/// assert on — waited for (up to 10 s) instead of trusting the fixed sleep.
+/// The flush is its own main-actor task (DashboardState.log: sleep 150 ms,
+/// then append); when this suite's tests run in parallel on the one main
+/// actor, both sleeps can be overdue at once and this reader can be resumed
+/// FIRST (Thread Sanitizer + in-process parallel, 2026-11-21:
+/// offersOldestUnfinishedPlanFirst red 5 of 5 on the fixed sleep alone).
+/// (C++: poll a condition with a deadline, not sleep-and-hope.)
 @MainActor
-private func consoleText(_ model: VideoScanModel) async -> String {
+private func consoleText(_ model: VideoScanModel, expecting text: String? = nil) async -> String {
     try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce (150 ms)
+    if let text {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline, !model.dashboard.consoleLines.contains(where: { $0.contains(text) }) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
     return model.dashboard.consoleLines.joined(separator: "\n")
 }
 
@@ -575,7 +589,7 @@ struct DeleteDuplicatesJobTests {
         model.discardPendingDeleteDuplicatesPlan(root: root)
         model.checkForUnfinishedDeleteDuplicatesPlans(root: root)
         #expect(model.pendingDeleteDuplicatesResume?.id == newer.id, "the next one is offered after the first is settled")
-        let console = await consoleText(model)
+        let console = await consoleText(model, expecting: "1 more unfinished run will be offered after it, oldest first")
         #expect(console.contains("1 more unfinished run will be offered after it, oldest first"))
     }
 
