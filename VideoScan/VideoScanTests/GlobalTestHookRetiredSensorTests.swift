@@ -46,6 +46,8 @@ struct GlobalTestHookRetiredSensorTests {
         Hook(file: "ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift", name: "diskProbe",
              oldSpelling: "VideoScanModel.clearDiskProbe"),
         Hook(file: "People/PersonNameGuard.swift", name: "roster", oldSpelling: "PersonNameGuard.roster"),
+        Hook(file: "People/AdaFaceEngine.swift", name: "modelsDirOverride",
+             oldSpelling: "AdaFaceModelLoader.modelsDirOverride"),
     ]
 
     /// Every test source: (file name, text).

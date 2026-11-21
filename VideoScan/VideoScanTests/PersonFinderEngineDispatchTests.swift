@@ -14,7 +14,8 @@ import Foundation
 // None of these tests load a real CoreML model (expensive and unreliable
 // in unit tests, by design — same rule as the original ArcFace cache
 // tests). The missing-model path is exercised through the
-// AdaFaceModelLoader.modelsDirOverride test seam.
+// AdaFaceModelLoader.modelsDirOverride test seam, bound per test
+// (task-local): `$modelsDirOverride.withValue(dir) { … }`.
 
 /// Sendable log sink — actor-isolated array so the @Sendable closures
 /// we hand to dispatch can append without data races. Mirrors the way
@@ -35,11 +36,12 @@ actor DispatchLogActor {
     func joined() -> String { lines.joined(separator: "\n") }
 }
 
-// .serialized: several tests mutate the process-global
-// AdaFaceModelLoader.modelsDirOverride test seam. Interleaved siblings
-// could nil the override mid-flight and resolve the REAL
-// ~/dev/VideoScan/models (settings-pollution class).
-@Suite(.serialized)
+// Parallel since 2026-11-21: the models-dir seam is a task-local each test
+// binds for itself (it was a process-global a sibling could nil mid-flight,
+// resolving the REAL ~/dev/VideoScan/models), and the loader's cached URL is
+// keyed by the directory it was resolved for, so no test resets the shared
+// loader either.
+@Suite
 @MainActor
 struct PersonFinderEngineDispatchTests {
 
@@ -53,28 +55,26 @@ struct PersonFinderEngineDispatchTests {
         let emptyDir = NSTemporaryDirectory() + "adaface_missing_\(UUID().uuidString)"
         try? FileManager.default.createDirectory(
             atPath: emptyDir, withIntermediateDirectories: true)
-        defer {
-            AdaFaceModelLoader.modelsDirOverride = nil
-            try? FileManager.default.removeItem(atPath: emptyDir)
-        }
-        AdaFaceModelLoader.modelsDirOverride = emptyDir
-        await AdaFaceModelLoader.shared.reset()
+        defer { try? FileManager.default.removeItem(atPath: emptyDir) }
 
         let sink = DispatchLogActor()
         let job = ScanJob(searchPath: "/tmp")
         var settings = PersonFinderSettings()
         settings.recognitionEngine = .adaface
         settings.referencePath = "/tmp"
+        let runSettings = settings
 
-        let result = await pfRunAdaFaceEngine(
-            filePath: "/tmp/never_opened.mov",
-            idx1: 1, total: 1,
-            settings: settings, job: job, dash: nil,
-            progressState: ThrottledMainActorUpdate(intervalSecs: 0.25),
-            logFn: { line in await sink.append(line) },
-            progressFn: { _ in },
-            distFn: { _ in }
-        )
+        let result = await AdaFaceModelLoader.$modelsDirOverride.withValue(emptyDir) {
+            await pfRunAdaFaceEngine(
+                filePath: "/tmp/never_opened.mov",
+                idx1: 1, total: 1,
+                settings: runSettings, job: job, dash: nil,
+                progressState: ThrottledMainActorUpdate(intervalSecs: 0.25),
+                logFn: { line in await sink.append(line) },
+                progressFn: { _ in },
+                distFn: { _ in }
+            )
+        }
 
         #expect(result == nil)
         let log = await sink.joined()
@@ -84,34 +84,27 @@ struct PersonFinderEngineDispatchTests {
                 "Error must name the expected model file (actionable); got: \(log)")
         #expect(await sink.contains(emptyDir),
                 "Error must name the directory searched (actionable); got: \(log)")
-        // Reset again so a subsequent test never inherits a cached URL
-        // resolved against the temp override.
-        await AdaFaceModelLoader.shared.reset()
     }
 
-    /// A compiled-model directory can exist yet still be unusable. Keep this
-    /// beside every other modelsDirOverride test so the process-global seam is
-    /// serialized across suspension points and never races another suite.
+    /// A compiled-model directory can exist yet still be unusable.
     @Test func corruptCompiledAdaFaceAssetReturnsActionableFailure() async throws {
         let modelsDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("adaface-corrupt-\(UUID().uuidString)", isDirectory: true)
         let corrupt = modelsDir
             .appendingPathComponent(AdaFaceModelLoader.modelBaseName + ".mlmodelc", isDirectory: true)
         try FileManager.default.createDirectory(at: corrupt, withIntermediateDirectories: true)
-        defer {
-            AdaFaceModelLoader.modelsDirOverride = nil
-            try? FileManager.default.removeItem(at: modelsDir)
+        defer { try? FileManager.default.removeItem(at: modelsDir) }
+
+        // Only the message leaves the scope (an MLModel is not Sendable).
+        let outcome: (loaded: Bool, error: String?) = await AdaFaceModelLoader.$modelsDirOverride.withValue(modelsDir.path) {
+            let (model, error) = await AdaFaceModelLoader.shared.getModel()
+            return (model != nil, error)
         }
 
-        AdaFaceModelLoader.modelsDirOverride = modelsDir.path
-        await AdaFaceModelLoader.shared.reset()
-        let (model, error) = await AdaFaceModelLoader.shared.getModel()
-
-        #expect(model == nil)
-        let message = try #require(error)
+        #expect(!outcome.loaded)
+        let message = try #require(outcome.error)
         #expect(message.contains("found but failed to load"))
         #expect(message.contains(corrupt.path))
-        await AdaFaceModelLoader.shared.reset()
     }
 
     // MARK: - Pre-start cancellation does NO engine work (codex adversarial #42)
@@ -126,12 +119,7 @@ struct PersonFinderEngineDispatchTests {
         let emptyDir = NSTemporaryDirectory() + "adaface_cancel_\(UUID().uuidString)"
         try? FileManager.default.createDirectory(
             atPath: emptyDir, withIntermediateDirectories: true)
-        defer {
-            AdaFaceModelLoader.modelsDirOverride = nil
-            try? FileManager.default.removeItem(atPath: emptyDir)
-        }
-        AdaFaceModelLoader.modelsDirOverride = emptyDir
-        await AdaFaceModelLoader.shared.reset()
+        defer { try? FileManager.default.removeItem(atPath: emptyDir) }
 
         let sink = DispatchLogActor()
         let job = ScanJob(searchPath: "/tmp")
@@ -139,7 +127,9 @@ struct PersonFinderEngineDispatchTests {
         settings.recognitionEngine = .adaface
         settings.referencePath = "/tmp"
 
-        let task = Task { () -> pfVideoResult? in
+        // The Task is created INSIDE the binding: a Task copies the
+        // task-locals it is born under, so the arm sees the empty dir.
+        let task = AdaFaceModelLoader.$modelsDirOverride.withValue(emptyDir) { Task { () -> pfVideoResult? in
             // Deterministically PRE-cancelled: park until the cancel() below
             // has landed, so the arm is guaranteed to be entered with
             // Task.isCancelled == true (plain create-then-cancel races the
@@ -154,7 +144,7 @@ struct PersonFinderEngineDispatchTests {
                 progressFn: { _ in },
                 distFn: { _ in }
             )
-        }
+        } }
         task.cancel()
         let result = await task.value
         #expect(result == nil, "Cancelled task should return nil from AdaFace dispatch")
@@ -163,7 +153,6 @@ struct PersonFinderEngineDispatchTests {
                 "Pre-cancelled dispatch must not log or resolve the model; got: \(lines)")
         #expect(job.assignedRefEmbeddings.isEmpty,
                 "Pre-cancelled dispatch must not compute reference embeddings")
-        await AdaFaceModelLoader.shared.reset()
     }
 
     /// Same contract for the ArcFace arm — it was equally missing the
@@ -205,24 +194,19 @@ struct PersonFinderEngineDispatchTests {
     // Synchronous direct path (nil profile → startJobAfterLoad immediately),
     // same shape as the lifecycle empty-faces bail test. The model check
     // runs BEFORE the faces guard, so no reference faces are needed here.
-    // Lives in this suite because it mutates modelsDirOverride — only this
-    // .serialized suite may touch that seam.
+    // The models dir is bound for this test's own task tree.
     @Test func startJobBailsOnceWhenAdaFaceModelMissing() {
         let emptyDir = NSTemporaryDirectory() + "adaface_lifecycle_\(UUID().uuidString)"
         try? FileManager.default.createDirectory(
             atPath: emptyDir, withIntermediateDirectories: true)
-        defer {
-            AdaFaceModelLoader.modelsDirOverride = nil
-            try? FileManager.default.removeItem(atPath: emptyDir)
-        }
-        AdaFaceModelLoader.modelsDirOverride = emptyDir
+        defer { try? FileManager.default.removeItem(atPath: emptyDir) }
 
         let model = PersonFinderModel()
         model.settings.recognitionEngine = .adaface
         let job = ScanJob(searchPath: "/tmp")   // reachable
         model.jobs.append(job)
 
-        model.startJob(job)
+        AdaFaceModelLoader.$modelsDirOverride.withValue(emptyDir) { model.startJob(job) }
 
         job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")

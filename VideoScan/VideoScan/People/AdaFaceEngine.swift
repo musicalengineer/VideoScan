@@ -61,13 +61,25 @@ actor AdaFaceModelLoader {
     static let modelBaseName = "adaface_ir50_webface4m"
 
     /// Cached URL of the compiled .mlmodelc — resolved on first successful
-    /// load and reused across all subsequent getModel() calls.
-    private var compiledURL: URL?
+    /// load and reused across all subsequent getModel() calls — together
+    /// with the models directory it was resolved FOR. In production that
+    /// directory never changes (the environment is fixed for the process),
+    /// so the key always matches and this is the cache it was. A test that
+    /// binds its own directory can neither be handed a URL resolved for
+    /// another directory nor leave one behind for the next caller.
+    /// (C++: a one-entry cache keyed by its input, not a bare cached value.)
+    private var compiled: (modelsDir: String, url: URL)?
 
     /// Test seam: checked before the env var. Foundation snapshots the
     /// process environment, so tests can't reliably setenv() mid-run —
-    /// they set this instead (and call `reset()` between cases).
-    nonisolated(unsafe) static var modelsDirOverride: String?
+    /// they bind this for their own task tree instead:
+    ///   await AdaFaceModelLoader.$modelsDirOverride.withValue(dir) { … }
+    /// Task-local since 2026-11-21 (it was a process-global `static var`:
+    /// a sibling could nil it mid-flight and the loader resolved the REAL
+    /// ~/dev/VideoScan/models). Nil in production, always — a sensor holds
+    /// that no app source binds it.
+    /// (C++: a thread_local that follows the coroutine and its children.)
+    @TaskLocal static var modelsDirOverride: String? = nil
 
     /// Models directory. Same convention as ArcFace (~/dev/VideoScan/models),
     /// overridable via VIDEOSCAN_MODELS_DIR for tests/worktrees so a test
@@ -105,19 +117,22 @@ actor AdaFaceModelLoader {
         let config = MLModelConfiguration()
         config.computeUnits = .all
 
-        if let url = compiledURL {
+        // Read once: every path below and both messages name the same directory.
+        let modelsDir = Self.modelsDir
+
+        if let cached = compiled, cached.modelsDir == modelsDir {
             // Fast path: URL already resolved — just rebuild the MLModel.
             do {
-                return (try MLModel(contentsOf: url, configuration: config), nil)
+                return (try MLModel(contentsOf: cached.url, configuration: config), nil)
             } catch {
                 // Cached URL no longer valid (file moved/deleted/corrupted)
                 // — log and re-resolve from scratch below.
                 adafaceLogger.error("AdaFace cached model URL failed to load, re-resolving: \(error.localizedDescription, privacy: .public)")
-                compiledURL = nil
+                compiled = nil
             }
         }
 
-        let base = Self.modelsDir + "/" + Self.modelBaseName
+        let base = modelsDir + "/" + Self.modelBaseName
         let compiledPath = base + ".mlmodelc"
         let packagePath = base + ".mlpackage"
         let fm = FileManager.default
@@ -131,7 +146,7 @@ actor AdaFaceModelLoader {
             do {
                 let url = URL(fileURLWithPath: compiledPath)
                 let loaded = try MLModel(contentsOf: url, configuration: config)
-                compiledURL = url
+                compiled = (modelsDir, url)
                 return (loaded, nil)
             } catch {
                 // Corrupt/incompatible compile — record, then try rebuilding
@@ -152,7 +167,7 @@ actor AdaFaceModelLoader {
                 }
                 try fm.moveItem(at: tempURL, to: destURL)
                 let loaded = try MLModel(contentsOf: destURL, configuration: config)
-                compiledURL = destURL
+                compiled = (modelsDir, destURL)
                 return (loaded, nil)
             } catch {
                 let detail = "package at \(packagePath) failed to compile/load: \(error.localizedDescription)"
@@ -166,7 +181,7 @@ actor AdaFaceModelLoader {
             do {
                 let url = URL(fileURLWithPath: bundlePath)
                 let loaded = try MLModel(contentsOf: url, configuration: config)
-                compiledURL = url
+                compiled = (modelsDir, url)
                 return (loaded, nil)
             } catch {
                 let detail = "bundled model failed to load: \(error.localizedDescription)"
@@ -183,8 +198,8 @@ actor AdaFaceModelLoader {
                 + loadFailures.joined(separator: "; ")
                 + ". Delete the .mlmodelc to force a recompile, or rebuild the package with tools/adaface/convert_adaface_coreml.py.")
         }
-        return (nil, "AdaFace model not found. Place \(Self.modelBaseName).mlpackage in \(Self.modelsDir)/ and restart. (Build it with tools/adaface/convert_adaface_coreml.py — see docs/design/adaface-plugin.md.)")
+        return (nil, "AdaFace model not found. Place \(Self.modelBaseName).mlpackage in \(modelsDir)/ and restart. (Build it with tools/adaface/convert_adaface_coreml.py — see docs/design/adaface-plugin.md.)")
     }
 
-    func reset() { compiledURL = nil }
+    func reset() { compiled = nil }
 }
