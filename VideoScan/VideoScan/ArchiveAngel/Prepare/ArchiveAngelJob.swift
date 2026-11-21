@@ -298,9 +298,10 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
             let snapshot = plan
             let entry = plan.entries[idx]
             let generation = nextSaveGeneration()
+            let fault = ArchiveAngelPlanWriter.injectedFailure   // test seam, read on the tree (nil in production)
             cleanupTask = TaskTreeScope.detached(priority: .utility) { [weak self] in
                 ArchiveAngelPlanStore.removeEntryFolder(snapshot, entry: entry)
-                do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
+                do { try await Self.savePlanOffMain(snapshot, generation: generation, injecting: fault) } catch {
                     appLog.write("Archive Angel: could not save the skip of \(entry.filename) — \(error.localizedDescription)")
                 }
                 await MainActor.run {
@@ -357,8 +358,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         model?.ledgerAngelAttention(.angelSkipped, recordIDs: [id], batchID: fresh.batchID, reason: "skip", at: now)
         let generation = nextSaveGeneration()
         let snapshot = fresh
+        let fault = ArchiveAngelPlanWriter.injectedFailure   // test seam, read on the tree (nil in production)
         cleanupTask = TaskTreeScope.detached(priority: .utility) {
-            do { try await Self.savePlanOffMain(snapshot, generation: generation) } catch {
+            do { try await Self.savePlanOffMain(snapshot, generation: generation, injecting: fault) } catch {
                 appLog.write("Archive Angel: could not save the skip of \(filename) — \(error.localizedDescription)")
             }
         }
@@ -1124,7 +1126,8 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     private func savePlan() async -> Bool {
         do {
-            try await Self.savePlanOffMain(plan, generation: nextSaveGeneration())
+            try await Self.savePlanOffMain(plan, generation: nextSaveGeneration(),
+                                           injecting: ArchiveAngelPlanWriter.injectedFailure)
             return true
         } catch {
             // Audit #5: every later step used to ignore this, keep
@@ -1179,8 +1182,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         let root = bufferRoot   // the delete guard: only <root>/batch-… may go
         // The files below go; their catalog records go AFTER them, and
         // only for files confirmed gone (codex #1572; review 2026-09-20 #4).
+        let fault = ArchiveAngelPlanWriter.injectedFailure   // test seam, read on the tree (nil in production)
         cleanupTask = TaskTreeScope.detached(priority: .utility) { [weak self] in
-            do { try await Self.savePlanOffMain(settled, generation: generation) } catch {
+            do { try await Self.savePlanOffMain(settled, generation: generation, injecting: fault) } catch {
                 appLog.write("Archive Angel: could not save the cancelled batch — \(error.localizedDescription)")
             }
             if kept { ArchiveAngelPlanStore.reclaimUnfinished(settled, unfinished: unfinished) }
@@ -1224,11 +1228,15 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         return out
     }
 
+    /// `fault` is the plan writer's test seam, read by the caller ON its
+    /// task tree and handed in — three of the four callers run this inside
+    /// a detached task, which inherits no task-locals. Nil in production.
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func savePlanOffMain(_ plan: ArchiveAngelPlan, generation: UInt64) async throws {
-        try await ArchiveAngelPlanWriter.shared.write(plan, generation: generation)
+    nonisolated static func savePlanOffMain(_ plan: ArchiveAngelPlan, generation: UInt64,
+                                            injecting fault: ArchiveAngelPlanWriter.InjectedFailure?) async throws {
+        try await ArchiveAngelPlanWriter.shared.write(plan, generation: generation, injecting: fault)
     }
 
     #if compiler(>=6.2)

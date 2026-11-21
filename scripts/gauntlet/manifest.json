@@ -38369,6 +38369,34 @@
         "stopThenNoLaunch",
         "theCommandLinesAndARealCopy"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelSeamScopeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAngelSeamScopeTests"
+      ],
+      "tests": [
+        "planWriterFaultIsPerTaskTree",
+        "theFaultReachesChildTasksAndIsHandedAcrossADetach",
+        "theJobsDetachedSettleSaveStillSeesTheFault",
+        "unboundTheSameSettleSaves"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/GlobalTestHookRetiredSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GlobalTestHookRetiredSensorTests"
+      ],
+      "tests": [
+        "declaredTaskLocal",
+        "noAppSourceBinds",
+        "noTestAssignsTheGlobal",
+        "theAngelJobHandsTheFaultToEveryDetachedSave"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -41145,7 +41173,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3959,
+      "expected_floor": 3967,
       "name": "unit",
       "package_expected_floor": 990,
       "package_selectors": [
@@ -41915,7 +41943,9 @@
         "VideoScanTests/CatalogOutOfRangeStarCommitTests",
         "VideoScanTests/EventsStatsPublishFaultTests",
         "VideoScanTests/CatalogDebounceClampTests",
-        "VideoScanTests/PersistentLogWriteFailureTests"
+        "VideoScanTests/PersistentLogWriteFailureTests",
+        "VideoScanTests/ArchiveAngelSeamScopeTests",
+        "VideoScanTests/GlobalTestHookRetiredSensorTests"
       ]
     },
     {
