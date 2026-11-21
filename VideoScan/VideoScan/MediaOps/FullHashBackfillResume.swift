@@ -59,7 +59,7 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         let url = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
             .appendingPathComponent(Self.fileName)
         fileURL = url
-        let record = Self.read(url)
+        let record = Self.read(url).record
         unfinished = record?.isFinished == false ? record : nil
         return unfinished
     }
@@ -93,26 +93,52 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         current?.hashedSoFar = hashed
         current?.finishedAt = date
         if !persist() {
-            let onDisk = fileURL.flatMap(Self.read)
-            log(Self.lostFinishLine(hashed: hashed, onDisk: onDisk))
+            log(Self.lostFinishLine(hashed: hashed, onDisk: fileURL.map(Self.read) ?? .absent))
         }
         unfinished = nil
     }
 
     /// The line for a finish that could not be written, from what is on
-    /// disk now: an unfinished record → Resume will be offered; anything
-    /// else (no file, an unreadable one, an earlier finished run) → nothing.
-    nonisolated static func lostFinishLine(hashed: Int, onDisk: FullHashBackfillRunRecord?) -> String {
+    /// disk now: an unfinished record → Resume will be offered; no file or
+    /// an earlier finished run → nothing; a file that could not be read
+    /// back → NO prediction. THE BUG (Codex r2 #7, P1): a failed read was
+    /// taken for "no unfinished run" and promised nothing would be offered —
+    /// once the file read again, the next launch offered Resume.
+    nonisolated static func lostFinishLine(hashed: Int, onDisk: OnDisk) -> String {
         let head = "Fill in full hashes: \(fileName) could not record that the run finished (\(hashed.formatted()) hashes are saved in the catalog). "
-        guard onDisk?.isFinished == false else {
+        if case .unreadable(let why) = onDisk {
+            return head + "VideoScan could not read back \(fileName) (\(why)), so the next launch may or may not offer Resume Filling In Full Hashes…; "
+                + "if it does, it will find nothing left to hash, say so, and record the finish."
+        }
+        guard onDisk.record?.isFinished == false else {
             return head + "The file holds no unfinished run, so the next launch will offer nothing; Fill In Full Hashes… would find nothing left to hash."
         }
         return head + "The file still shows a run with no finish, so the next launch will offer Resume Filling In Full Hashes…; "
             + "it will find nothing left to hash, say so, and record the finish."
     }
 
-    nonisolated private static func read(_ url: URL) -> FullHashBackfillRunRecord? {
-        (try? Data(contentsOf: url)).flatMap { try? decoder.decode(FullHashBackfillRunRecord.self, from: $0) }
+    /// What a read of the marker file found.
+    enum OnDisk: Equatable, Sendable {
+        case absent
+        case decoded(FullHashBackfillRunRecord)
+        /// The file is there (or may be) but could not be read or decoded: why.
+        case unreadable(String)
+
+        var record: FullHashBackfillRunRecord? {
+            if case .decoded(let record) = self { return record }
+            return nil
+        }
+    }
+
+    nonisolated private static func read(_ url: URL) -> OnDisk {
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch {
+            let code = (error as NSError).code
+            return code == NSFileReadNoSuchFileError || code == NSFileNoSuchFileError ? .absent : .unreadable(error.localizedDescription)
+        }
+        do { return .decoded(try decoder.decode(FullHashBackfillRunRecord.self, from: data)) } catch {
+            return .unreadable("it could not be decoded: \(error.localizedDescription)")
+        }
     }
 
     /// The run ended without finishing: offer Resume from now on.

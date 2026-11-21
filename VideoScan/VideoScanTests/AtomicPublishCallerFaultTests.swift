@@ -508,6 +508,41 @@ struct ArchiveAuditPublishFaultTests {
         #expect(relaunch.attach(catalogFile: catalogFile) == nil && relaunch.menuTitle == "Fill In Full Hashes…")
     }
 
+    /// Codex r2 #7 (P1), its reproduction: START lands, FINISH cannot be
+    /// written, and the read-back of the marker fails (here: the file is
+    /// unreadable for a moment). The read failure was taken for "no
+    /// unfinished run" and the line promised nothing would be offered; once
+    /// the file reads again, the next launch offers Resume. A read that
+    /// failed predicts nothing.
+    @Test("Fill In Full Hashes: when the marker cannot be read back after a lost finish, the line makes no prediction — and the next launch may indeed offer Resume")
+    func aLostFinishWithAnUnreadableMarkerPredictsNothing() throws {
+        let dir = try scratch("fullhash_marker_unreadable"); defer { try? FileManager.default.removeItem(at: dir) }
+        let catalogFile = dir.appendingPathComponent("catalog.json").path
+        let sink = InMemoryLogSink()
+        let marker = FullHashBackfillResumeMarker()
+        marker.attach(catalogFile: catalogFile)
+        marker.noteStarted()                                         // START lands: the file shows an unfinished run
+        let url = try #require(marker.fileURL)
+        #expect(chmod(url.path, 0o000) == 0)                         // the read-back will fail (EACCES)
+        withAppLog(sink) {
+            AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: EIO)) { marker.noteFinished(hashed: 12) }
+        }
+        #expect(chmod(url.path, 0o644) == 0)                         // the file reads again
+        let lost = try #require(sink.lines.last { $0.contains("could not record that the run finished") }, "\(sink.lines)")
+        #expect(!lost.contains("will offer nothing") && !lost.contains("will offer Resume"), "a prediction from a read that failed: \(lost)")
+        #expect(lost.contains("could not read back \(FullHashBackfillResumeMarker.fileName)"), "\(lost)")
+        #expect(lost.contains("the next launch may or may not offer Resume Filling In Full Hashes…"), "\(lost)")
+        #expect(lost.contains("12 hashes are saved in the catalog"), "\(lost)")
+        let relaunch = FullHashBackfillResumeMarker()
+        #expect(relaunch.attach(catalogFile: catalogFile) != nil && relaunch.menuTitle == "Resume Filling In Full Hashes…",
+                "the bench: once readable, the unfinished marker is offered")
+        // The three states, pure: absent → nothing offered; an unfinished record → Resume; unreadable → no prediction.
+        typealias M = FullHashBackfillResumeMarker
+        #expect(M.lostFinishLine(hashed: 1, onDisk: .absent).contains("the next launch will offer nothing"))
+        #expect(M.lostFinishLine(hashed: 1, onDisk: .decoded(FullHashBackfillRunRecord(startedAt: Date()))).contains("will offer Resume"))
+        #expect(M.lostFinishLine(hashed: 1, onDisk: .unreadable("Permission denied")).contains("(Permission denied)"))
+    }
+
     @Test("Fill In Full Hashes: a healthy run says nothing; after an outage ends, the next failure is said again")
     func theBackfillMarkerSaysAFailureOncePerOutage() throws {
         let dir = try scratch("fullhash_marker2"); defer { try? FileManager.default.removeItem(at: dir) }
