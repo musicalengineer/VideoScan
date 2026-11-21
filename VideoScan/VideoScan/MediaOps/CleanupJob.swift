@@ -108,6 +108,8 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
     /// Set-once ledger of the first terminal cause (watchdog stall vs the
     /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
     private var terminalCause = MFOTerminalCause()
+    /// The scratch folder this run made and has not yet removed.
+    private var scratchHeld: URL?
     private var stallReason: String? { terminalCause.stallReason }
 
     var title: String { record.filename }
@@ -212,8 +214,11 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         cleanupLog.info("cleanup scratch: \(scratchDir.path, privacy: .public) (ramDisk=\(usedRAMDisk, privacy: .public), estimate=\(estimate, privacy: .public) bytes)")
 
         // Everything from here on must release the scratch dir + RAM disk.
+        // A failed job says what the removal did (finish(failed:)); any
+        // other exit logs a removal that failed (Codex r1 #8).
+        scratchHeld = scratchDir
         defer {
-            try? FileManager.default.removeItem(at: scratchDir)
+            releaseScratchSayingIfLeft()
             if usedRAMDisk {
                 let disk = model?.ramDisk
                 Task { await disk?.unmount() }
@@ -657,10 +662,39 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // not a failure. A stall recorded before the Stop is not diverted
         // (codex gate 2026-08-26) — see MFOTerminalCause.
         if terminalCause.isCancel { finishCancelled(); return }
+        // The failure says what became of the job's scratch folder (where an
+        // unverified render sits) — the removal's own result, now.
+        var failed = failed
+        if scratchHeld != nil {
+            failed += " " + (releaseScratch() ?? "The job's scratch folder was removed.")
+        }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false
         cleanupLog.warning("cleanup failed: \(failed, privacy: .public)")
+    }
+
+    /// Remove the job's scratch folder once. nil when it is gone (or was
+    /// never made); otherwise the sentence that says it is still there.
+    /// Memory: none; one removeItem of a folder holding one render.
+    private func releaseScratch() -> String? {
+        guard let dir = scratchHeld else { return nil }
+        scratchHeld = nil
+        do {
+            try FileManager.default.removeItem(at: dir)
+            return nil
+        } catch {
+            guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
+            return "The job's scratch folder \(dir.path) was NOT removed: \(error.localizedDescription)."
+        }
+    }
+
+    /// Every exit: remove the scratch folder if still held; a removal that
+    /// failed is said in the logs (a failed job has already said it).
+    private func releaseScratchSayingIfLeft() {
+        guard let left = releaseScratch() else { return }
+        cleanupLog.error("cleanup: \(left, privacy: .public)")
+        appLog.write("cleanup: \(left)")
     }
 
     private func finishCancelled() {

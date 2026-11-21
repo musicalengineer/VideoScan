@@ -223,7 +223,7 @@ struct CleanupUnverifiedRenderMatrixTests {
             #expect(detail.hasPrefix("Could not verify the cleaned copy — nothing was published or added to the catalog."),
                     "\(detail)", sourceLocation: sourceLocation)
             for words in [whose] + cause { #expect(detail.contains(words), "lacks “\(words)”: \(detail)", sourceLocation: sourceLocation) }
-            #expect(detail.hasSuffix("The unverified render is only in the job's scratch folder, which is removed when the job ends; the original is untouched."),
+            #expect(detail.hasSuffix("The unverified render is only in the job's scratch folder; the original is untouched."),
                     "\(detail)", sourceLocation: sourceLocation)
             #expect(!detail.contains("discarded") && !detail.contains("was removed"), "the engine removes nothing and must not say it did: \(detail)",
                     sourceLocation: sourceLocation)
@@ -321,6 +321,54 @@ struct CleanupUnverifiedRenderMatrixTests {
         let beside = try FileManager.default.contentsOfDirectory(atPath: b.dir.path).sorted()
         #expect(beside == ["scratch", Self.sourceName], "\(beside)")
         #expect(model.records.count == 1, "nothing was catalogued")
+    }
+
+    /// An engine that leaves a render in the scratch folder and then says it
+    /// could not be verified; `lockScratch` makes the folder unremovable
+    /// (no write permission), as a disk returning EIO would.
+    struct UnverifiedRenderEngine: CleanupRecipeEngine {
+        let engineID = "unverified-test-engine"
+        let lockScratch: Bool
+        let seen: TranscodeReplaceNegativeMatrixTests.Box<URL>
+        func canExecute(_ recipe: CleanupRecipe) -> Bool { true }
+        func render(recipe: CleanupRecipe, source: CleanupSource, scratchDirectory: URL,
+                    progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
+            try Data(repeating: 0x5A, count: 20_000).write(to: scratchDirectory.appendingPathComponent("cleanup-render.mov"))
+            seen.set(scratchDirectory)
+            if lockScratch { chmod(scratchDirectory.path, 0o500) }
+            throw CleanupEngineError.renderFailed(CleanupFFmpegEngine.unverifiedRenderMessage(cause: "ffprobe stopped with exit code 1"))
+        }
+    }
+
+    /// Codex r1 #8 (P1): the row promised the scratch folder "is removed when
+    /// the job ends" while the job discarded the removal's error. The job now
+    /// says what its own removal did: removed, or NOT removed with the path.
+    @Test("CleanupJob: an unverified render's row says whether the job's scratch folder was removed — or NOT, with its path",
+          arguments: [false, true])
+    @MainActor
+    func theScratchFoldersFateIsSaid(_ lockScratch: Bool) async throws {
+        let b = try Self.bench("scratch_\(lockScratch)"); defer { b.cleanup() }
+        let seen = MX.Box<URL>()
+        defer { if let dir = seen.value { chmod(dir.path, 0o700); try? FileManager.default.removeItem(at: dir) } }
+        let model = VideoScanModel()
+        let record = makeCleanupSourceRecord(path: b.source.path, durationSeconds: 0, fieldOrder: "progressive")
+        model.records = [record]
+        let job = CleanupJob(record: record, recipe: CleanupRecipeRegistry.vhsQuickClean, model: model,
+                             engine: UnverifiedRenderEngine(lockScratch: lockScratch, seen: seen))
+        job.start()
+        await job.task?.value
+        guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); return }
+        let scratch = try #require(seen.value)
+        #expect(!message.contains("removed when the job ends"), "a promise, not a result: \(message)")
+        if lockScratch {
+            #expect(FileManager.default.fileExists(atPath: scratch.path))
+            #expect(message.contains("The job's scratch folder \(scratch.path) was NOT removed: "), "\(message)")
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: scratch.path))
+            #expect(message.hasSuffix("the original is untouched. The job's scratch folder was removed."), "\(message)")
+        }
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title, state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome?.contains(lockScratch ? "was NOT removed" : "scratch folder was removed") == true, "OUTCOME: \(outcome ?? "nil")")
     }
 
     /// Sensor: why an engine throw is enough. CleanupJob publishes and
