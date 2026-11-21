@@ -43,6 +43,8 @@ struct GlobalTestHookRetiredSensorTests {
     static let hooks: [Hook] = [
         Hook(file: "ArchiveAngel/Prepare/ArchiveAngelPlan.swift", name: "injectedFailure",
              oldSpelling: "ArchiveAngelPlanWriter.injectedFailure"),
+        Hook(file: "ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift", name: "diskProbe",
+             oldSpelling: "VideoScanModel.clearDiskProbe"),
     ]
 
     /// Every test source: (file name, text).

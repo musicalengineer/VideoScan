@@ -159,4 +159,46 @@ struct ArchiveAngelSeamScopeTests {
         guard case .cancelled = job.state else { Issue.record("fixture: the job ended \(job.state)"); return }
         #expect(!sink.contains(Self.cancelledSaveLine), "\(sink.lines.suffix(6))")
     }
+
+    // MARK: Clear's disk probe
+
+    /// 12 Clears at once, each on its own model and batch. Even cases bind
+    /// a probe; odd ones bind none. A bound probe hears exactly its own
+    /// batch's two phases — with the global, every probe heard every Clear.
+    @Test("12 concurrent Clears: a bound probe hears only its own batch; unbound Clears are heard by nobody",
+          arguments: 0..<12)
+    @MainActor
+    func clearProbeIsPerTaskTree(_ id: Int) async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("seam_clear_\(id)"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.scanTargets = []
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        let batchDir = sb.root.appendingPathComponent("buffer/batch-seam-\(id)").path
+        try FileManager.default.createDirectory(atPath: batchDir, withIntermediateDirectories: true)
+        var plan = ArchiveAngelPlan(batchDir: batchDir, requestedCount: 1, makeLossless: false, entries: [])
+        plan.status = .ready
+        try ArchiveAngelPlanStore.save(plan)
+
+        let heard = OSAllocatedUnfairLock(initialState: [String]())
+        let probe: @Sendable (String, String) -> Void = { phase, dir in
+            heard.withLock { $0.append("\(phase) \(dir)") }
+            Thread.sleep(forTimeInterval: 0.02)   // hold the phase open so the cases overlap
+        }
+        let out: ArchiveAngelBatchClearOutcome
+        if id.isMultiple(of: 2) {
+            out = await ArchiveAngelClearSeam.$diskProbe.withValue(probe) {
+                await model.clearArchiveAngelBatch(plan, reason: "seam scope \(id)")
+            }
+            #expect(heard.withLock { $0 } == ["path \(batchDir)", "plan \(batchDir)"], "\(heard.withLock { $0 })")
+        } else {
+            #expect(ArchiveAngelClearSeam.diskProbe == nil, "another case's probe is visible here")
+            out = await model.clearArchiveAngelBatch(plan, reason: "seam scope \(id)")
+            #expect(heard.withLock { $0 }.isEmpty)
+        }
+        #expect(out.cleared, "bound or not, the Clear itself is unchanged: \(String(describing: out.refusal)) \(out.error ?? "")")
+        #expect(await out.removal?.value.removed == true)
+        #expect(ArchiveAngelClearSeam.diskProbe == nil, "the binding outlived its scope")
+    }
 }
