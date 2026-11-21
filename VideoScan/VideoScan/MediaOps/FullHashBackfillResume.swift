@@ -36,7 +36,7 @@ struct FullHashBackfillRunRecord: Codable, Equatable, Sendable {
 @MainActor
 final class FullHashBackfillResumeMarker: ObservableObject {
 
-    static let fileName = "fullhash-backfill.json"
+    nonisolated static let fileName = "fullhash-backfill.json"
 
     /// Non-nil when the last run started and has no finish on record.
     @Published private(set) var unfinished: FullHashBackfillRunRecord?
@@ -59,7 +59,7 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         let url = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
             .appendingPathComponent(Self.fileName)
         fileURL = url
-        let record = (try? Data(contentsOf: url)).flatMap { try? Self.decoder.decode(FullHashBackfillRunRecord.self, from: $0) }
+        let record = Self.read(url)
         unfinished = record?.isFinished == false ? record : nil
         return unfinished
     }
@@ -83,18 +83,36 @@ final class FullHashBackfillResumeMarker: ObservableObject {
     }
 
     /// The run reached its end (stopped or failed runs stay unfinished).
-    /// When the finish cannot be written the file still says "started", so
-    /// the next launch will offer Resume for a run that finished: that is
-    /// SAID here (the launch cannot know it), with what Resume will do.
+    /// When the finish cannot be written, what the next launch offers is
+    /// whatever the FILE still says — read back now and SAID (the launch
+    /// cannot know the run finished). THE BUG (Codex r1 #9): the line always
+    /// promised Resume, also when no marker of this run had ever landed and
+    /// the file held nothing unfinished, so nothing would be offered.
     func noteFinished(hashed: Int, at date: Date = Date()) {
         guard current != nil else { return }
         current?.hashedSoFar = hashed
         current?.finishedAt = date
         if !persist() {
-            log("Fill in full hashes: \(Self.fileName) could not record that the run finished (\(hashed.formatted()) hashes are saved in the catalog). "
-                + "The next launch will offer Resume Filling In Full Hashes…; it will find nothing left to hash, say so, and record the finish.")
+            let onDisk = fileURL.flatMap(Self.read)
+            log(Self.lostFinishLine(hashed: hashed, onDisk: onDisk))
         }
         unfinished = nil
+    }
+
+    /// The line for a finish that could not be written, from what is on
+    /// disk now: an unfinished record → Resume will be offered; anything
+    /// else (no file, an unreadable one, an earlier finished run) → nothing.
+    nonisolated static func lostFinishLine(hashed: Int, onDisk: FullHashBackfillRunRecord?) -> String {
+        let head = "Fill in full hashes: \(fileName) could not record that the run finished (\(hashed.formatted()) hashes are saved in the catalog). "
+        guard onDisk?.isFinished == false else {
+            return head + "The file holds no unfinished run, so the next launch will offer nothing; Fill In Full Hashes… would find nothing left to hash."
+        }
+        return head + "The file still shows a run with no finish, so the next launch will offer Resume Filling In Full Hashes…; "
+            + "it will find nothing left to hash, say so, and record the finish."
+    }
+
+    nonisolated private static func read(_ url: URL) -> FullHashBackfillRunRecord? {
+        (try? Data(contentsOf: url)).flatMap { try? decoder.decode(FullHashBackfillRunRecord.self, from: $0) }
     }
 
     /// The run ended without finishing: offer Resume from now on.
@@ -134,14 +152,14 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         }
     }
 
-    private static let encoder: JSONEncoder = {
+    nonisolated private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
     }()
 
-    private static let decoder: JSONDecoder = {
+    nonisolated private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d

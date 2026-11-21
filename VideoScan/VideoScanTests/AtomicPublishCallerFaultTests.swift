@@ -474,6 +474,40 @@ struct ArchiveAuditPublishFaultTests {
         #expect(launch.contains("or its finish could not be written"), "\(launch)")
     }
 
+    /// Codex r1 #9 (P1): no marker of THIS run ever landed (START failed
+    /// too), so the file holds nothing unfinished — no marker at all, or an
+    /// earlier run's finished one. The lost-finish line promised "the next
+    /// launch will offer Resume"; the next launch offers nothing. What it
+    /// says must follow from what is on disk.
+    @Test("Fill In Full Hashes: when no marker of the run ever landed, the lost-finish line says nothing will be offered — and nothing is",
+          arguments: [false, true])
+    func aLostFinishWithNoMarkerOnDiskPromisesNoResume(_ earlierFinishedRun: Bool) throws {
+        let dir = try scratch("fullhash_marker_none_\(earlierFinishedRun)"); defer { try? FileManager.default.removeItem(at: dir) }
+        let catalogFile = dir.appendingPathComponent("catalog.json").path
+        if earlierFinishedRun {
+            let earlier = FullHashBackfillResumeMarker()
+            earlier.attach(catalogFile: catalogFile)
+            earlier.noteStarted()
+            earlier.noteFinished(hashed: 3)
+        }
+        let sink = InMemoryLogSink()
+        let marker = FullHashBackfillResumeMarker()
+        marker.attach(catalogFile: catalogFile)
+        withAppLog(sink) {
+            AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: EIO)) {
+                marker.noteStarted()
+                marker.noteSaved(hashedSoFar: 4)
+                marker.noteFinished(hashed: 12)
+            }
+        }
+        let lost = try #require(sink.lines.last { $0.contains("could not record that the run finished") }, "\(sink.lines)")
+        #expect(!lost.contains("will offer Resume"), "a promise the file cannot keep: \(lost)")
+        #expect(lost.contains("the next launch will offer nothing"), "\(lost)")
+        #expect(lost.contains("12"), "\(lost)")
+        let relaunch = FullHashBackfillResumeMarker()
+        #expect(relaunch.attach(catalogFile: catalogFile) == nil && relaunch.menuTitle == "Fill In Full Hashes…")
+    }
+
     @Test("Fill In Full Hashes: a healthy run says nothing; after an outage ends, the next failure is said again")
     func theBackfillMarkerSaysAFailureOncePerOutage() throws {
         let dir = try scratch("fullhash_marker2"); defer { try? FileManager.default.removeItem(at: dir) }
