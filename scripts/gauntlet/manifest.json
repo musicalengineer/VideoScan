@@ -38252,6 +38252,35 @@
         "gzipFailureIsContained",
         "theCommandLine"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RAMDiskNegativeMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RAMDiskNegativeMatrixTests"
+      ],
+      "tests": [
+        "attachCannotStart",
+        "attachFails",
+        "attachHangs",
+        "attachPrintsGarbage",
+        "cancelledMidFormat",
+        "eraseCannotStart",
+        "eraseFails",
+        "eraseFailsThenDetachFails",
+        "eraseHangs",
+        "ownMountNames",
+        "ownedDeviceParser",
+        "refCount",
+        "sweepDetachFails",
+        "sweepDetachesOnlyOwnNames",
+        "sweepTrustsTheName",
+        "sweepWithNothing",
+        "theCommandLines",
+        "unmountDetachFails",
+        "unmountWithoutMount"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42240,7 +42269,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 904,
+      "expected_floor": 923,
       "name": "regression",
       "package_expected_floor": 346,
       "package_selectors": [
@@ -42492,7 +42521,8 @@
         "VideoScanTests/HashReadSeamSensorTests",
         "VideoScanTests/HallieWebFfmpegCommandTests",
         "VideoScanTests/AudioTranscriberCommandTests",
-        "VideoScanTests/PersistentLogRotationGzipTests"
+        "VideoScanTests/PersistentLogRotationGzipTests",
+        "VideoScanTests/RAMDiskNegativeMatrixTests"
       ]
     },
     {
