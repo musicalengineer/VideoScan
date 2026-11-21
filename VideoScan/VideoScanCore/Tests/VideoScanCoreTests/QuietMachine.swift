@@ -5,6 +5,13 @@
 //   phase A — every test NOT marked here, in parallel, timing not strict;
 //   phase B — only the marked tests, one at a time (`--no-parallel`), with
 //             VIDEOSCAN_TIMING_STRICT as the lane set it (the nightly: 1).
+//             Since 2026-11-21 as K serial strands side by side (each a
+//             process running its share one test at a time; `--quiet-jobs`).
+//             A marked test that fails beside the other strands is run again
+//             ALONE before it is judged: red only if it fails alone too, and
+//             named on an AMBER line when it passed alone. So the mark still
+//             means "judge me on a quiet machine" — do not loosen a budget
+//             because a strand was noisy; read the AMBER list instead.
 // The split is read from the BUILT test bundle (Swift Testing's test listing
 // carries each test's tags; the XCTest base class below names its subclasses),
 // so it is declared here, at the test, and nowhere else: there is no list in a

@@ -582,8 +582,10 @@ run_core_package_tests() {
         log "Core lane STALLED: no output for ${NIGHTLY_CORE_STALL_SECONDS}s; last test started: $(grep -E "started\.?$" "$NIGHTLY_CORE_LOG" 2>/dev/null | tail -n 1)"
     fi
     # One line per phase (counts against the plan, seconds), every RED reason
-    # with its phase, and what was still running at a stop.
-    grep -E '^core-lane: (phase [AB] \(.*planned, |total |RED |stopped )' "$NIGHTLY_CORE_LOG" 2>/dev/null \
+    # with its phase, what was still running at a stop, and (2026-11-21, phase
+    # B in strands) every AMBER: a test that failed beside the other strands
+    # and passed when run again alone. Green, and never silent.
+    grep -E '^core-lane: (phase [AB] \(.*planned, |total |RED |AMBER |stopped )' "$NIGHTLY_CORE_LOG" 2>/dev/null \
         | while IFS= read -r line; do log "$line"; done
     if $timed_out && [ -s "$NIGHTLY_CORE_SAMPLE_FILE" ]; then
         log "Core lane stacks at the stop: $NIGHTLY_CORE_SAMPLE_FILE"

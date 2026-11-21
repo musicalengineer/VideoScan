@@ -10,7 +10,10 @@ machine (GH #208). Now:
             in-process parallelism; the XCTest classes in their own process
             beside it), VIDEOSCAN_TIMING_STRICT removed from the environment;
   phase B — only the marked tests, one at a time (`--no-parallel`), with
-            VIDEOSCAN_TIMING_STRICT exactly as the caller set it.
+            VIDEOSCAN_TIMING_STRICT exactly as the caller set it. Since
+            2026-11-21 as K serial STRANDS (`--quiet-jobs K`, default
+            min(4, cores/4); 1 = the single serial pass): see "Phase B in
+            strands" below.
 
 The mark is declared AT THE TEST (Tests/VideoScanCoreTests/QuietMachine.swift:
 `.tags(.quietMachine)`, or the XCTest base class QuietMachineXCTestCase) and
@@ -46,9 +49,37 @@ The listing is not trusted alone (review 2026-11-21). On an unfiltered run:
 Each test process is told its phase (VIDEOSCAN_CORE_PHASE=parallel|serial);
 the judging helpers record an issue when they run under `parallel`.
 
+Phase B in strands (2026-11-21; DECISIONS, same date). The single serial pass was
+the lane's floor (~735–790 s on the Ultra against 38 s for phase A). A STRAND is
+one share of the quiet tests run one at a time in its own processes (XCTest,
+then Swift Testing `--no-parallel`): K strands run side by side, each test still
+never beside another test of its own process, strict timing kept, the phase
+marker still `serial`. The quiet tests are dealt to the strands by their last
+recorded seconds, longest first, each to the strand with the least so far
+(scripts/testbed_strands.py's timing cache, its own file).
+  * A test that FAILS in a strand is not judged there. Its failing line is
+    replaced by a `core-lane: strand N: failed beside …` note (so no reader
+    counts a verdict twice) and, when every strand has ended and nothing else of
+    the lane is running, it is RUN AGAIN ALONE — the single serial pass, on those
+    tests only. RED only if it fails alone too.
+  * A test that failed beside the others and passed alone is GREEN and is named:
+    `core-lane: AMBER — phase B (…): passed alone after failing beside K-1 other
+    strands: <test>`, and counted on the phase's summary line. Drift is visible.
+  * A strand whose process dies leaves its unfinished tests to the same alone
+    pass: never lost, never counted twice. A test that kills its process alone
+    is RED by name and the rest of the list still runs.
+  * Which Swift Testing tests failed or never finished is read from the strand's
+    event stream (`--event-stream-output-path`: test ids, not display names);
+    XCTest names its tests on its own lines. When the stream and the console
+    disagree about how many failed, nothing is guessed: those failures stand.
+  * The exact-plan rule is unchanged: every planned test has exactly ONE verdict
+    line in the output, per framework, and the nightly counts those lines.
+`--quiet-jobs 1` runs the commands of the single serial pass, argument for argument.
+
 Usage:
   core_lane.py run --package-path <VideoScanCore> [-c debug|release]
                    [--scratch-path <dir>] [--skip-build] [--filter <regex>]
+                   [--quiet-jobs K]
   core_lane.py run --products <dir with VideoScanCoreTests.xctest> [--filter <regex>]
   core_lane.py list --products <dir>        # the quiet-machine tests, from the bundle
   core_lane.py check [--tests <dir>]        # source pin: a test that reaches a timing /
@@ -62,8 +93,12 @@ one output line at a time; test output is streamed, never held. The test
 processes: phase A's Swift Testing process runs ~2,400 tests on every core at
 once — its peak resident size is printed on the total line (ru_maxrss of the
 children; 2026-11-20, Release, the Ultra: see the commit); phase B is one test
-at a time in one process, as the serial lane always was (its 100k import is
+at a time per process, as the serial lane always was (its 100k import is
 the largest: ~3.4 GB resident at its peak; a build that ran first is not counted).
+With K strands the worst case is K of the largest quiet tests at once: K × ~3.4 GB
+(K=4: ~14 GB), which is why K stops at 4 and is cores/4 on a small Mac. Per strand
+this script also holds its event stream's verdicts (one short record per test) and
+the failing lines it withheld.
 """
 from __future__ import annotations
 
@@ -212,6 +247,7 @@ class PhasePlan:
     xctest_count: int
     swift: List[str]                     # function ids (phase B runs exactly these; phase A: for the count)
     swift_skip: List[str]                # phase A: the quiet ids its `--skip` names
+    xctest_tests: List[Tuple[str, str]] = field(default_factory=list)    # (bare class, method), every planned one
 
     @property
     def expected(self) -> int:
@@ -242,6 +278,7 @@ def plan_phases(listing: Listing, regex: Optional[str]) -> Tuple[PhasePlan, Phas
     keep = (lambda name: bool(rx.search(name))) if rx else (lambda name: True)
     sel: Dict[bool, List[str]] = {False: [], True: []}
     n: Dict[bool, int] = {False: 0, True: 0}
+    each: Dict[bool, List[Tuple[str, str]]] = {False: [], True: []}
     for cls, methods in listing.xctest.items():
         hit = [m for m in methods if keep(f"{cls}/{m}")]
         quiet = cls in listing.xctest_quiet
@@ -251,12 +288,13 @@ def plan_phases(listing: Listing, regex: Optional[str]) -> Tuple[PhasePlan, Phas
         bare = cls.split(".", 1)[-1]
         sel[quiet] += [bare] if hit and len(hit) == len(methods) else [f"{bare}/{m}" for m in hit]
         n[quiet] += len(hit)
+        each[quiet].extend(zip([bare] * len(hit), hit))
     swift = [i for i in listing.swift if keep(i)]
     loud = [i for i in swift if i not in listing.swift_quiet]
     quiet_ids = [i for i in swift if i in listing.swift_quiet]
     a = PhasePlan("A", "parallel, timing not strict", sel[False], n[False], loud,
-                  sorted(listing.swift_quiet))
-    b = PhasePlan("B", "serial, quiet machine", sel[True], n[True], quiet_ids, [])
+                  sorted(listing.swift_quiet), each[False])
+    b = PhasePlan("B", "serial, quiet machine", sel[True], n[True], quiet_ids, [], each[True])
     return a, b
 
 
@@ -424,6 +462,10 @@ class PhaseResult:
     seconds: float
     strict: bool
     peak_mb: float = 0.0                 # the largest test process so far (this phase or an earlier one)
+    strands: int = 0                     # phase B: how many strands ran side by side (0: the single serial pass)
+    passed_alone: List[Tuple[str, str]] = field(default_factory=list)    # (test, why it was run alone): green, AMBER
+    extra: List[str] = field(default_factory=list)                       # strand-mode RED reasons that are not a count or an exit
+    unjudged: bool = False               # a strand's failures could not be identified, so they stand without an alone run
 
     @property
     def problems(self) -> List[str]:
@@ -431,9 +473,11 @@ class PhaseResult:
         c, p, out = self.counts, self.plan, []
         label = f"phase {p.key} ({p.title})"
         for name in c.failed_names:
-            out.append(f"{label}: FAILED {name}")
+            # In strand mode a failing line is only ever printed by the alone pass (or stands unjudged: `extra` says so).
+            out.append(f"{label}: FAILED {name}" + (" — failed when run ALONE too" if self.strands and not self.unjudged else ""))
+        out += [f"{label}: {e}" for e in self.extra]
         for what, rc in self.rcs:
-            if rc != 0 and not (rc == NO_TEST_MATCHED and what == "Swift Testing" and c.swift_total >= len(p.swift)):
+            if rc != 0 and not (rc == NO_TEST_MATCHED and what.startswith("Swift Testing") and c.swift_total >= len(p.swift)):
                 out.append(f"{label}: {what} exited {rc}" + ("" if c.failed else " with no failed test (a crash, or a child that died)"))
         for what, ran, planned in (("XCTest", c.xctest_total, p.xctest_count), ("Swift Testing", c.swift_total, len(p.swift))):
             if planned > 0 and ran == 0:
@@ -448,7 +492,10 @@ def _children_peak_mb() -> float:
 
 
 def run_phase(b: Bundle, plan: PhasePlan, regex: Optional[str], out: Output, spawn: Spawn = _spawn,
-              live: Optional[List["PhaseLive"]] = None, floor_mb: float = 0.0) -> PhaseResult:
+              live: Optional[List["PhaseLive"]] = None, floor_mb: float = 0.0,
+              quiet_jobs: int = 1, timings: Optional[Path] = None) -> PhaseResult:
+    if plan.key == "B" and quiet_jobs > 1 and len(quiet_units(plan)) > 1:
+        return run_quiet_strands(b, plan, out, spawn, live, floor_mb, quiet_jobs, timings)
     env = dict(b.env, **{PHASE_KEY: PHASE_VALUE[plan.key]})      # the test process knows its phase (review F2)
     if plan.key == "A":
         env.pop(STRICT_KEY, None)        # a parallel phase is not a quiet machine: never strict (2026-10-31 ruling)
@@ -483,6 +530,377 @@ def run_phase(b: Bundle, plan: PhasePlan, regex: Optional[str], out: Output, spa
     return PhaseResult(plan, counts, sorted(rcs), time.monotonic() - t0, strict, peak if peak > floor_mb else 0.0)
 
 
+# ───────────────────────────────────────────────────────────── phase B in strands (2026-11-21)
+
+QUIET_TIMINGS_KEY = "VIDEOSCAN_CORE_QUIET_TIMINGS"      # overrides the cache path (tests; a second checkout)
+DEFAULT_QUIET_TIMINGS = Path.home() / "Library" / "Caches" / "videoscan-core-quiet-timings.json"
+XC_SECONDS_RE = re.compile(r"\((\d+(?:\.\d+)?) seconds\)")
+XC_NAME_RE = re.compile(r"-\[(?:[^\s.]+\.)?(\S+) ([^\]\s]+)\]")
+
+
+def strand_count(text: str) -> int:
+    """argparse type for --quiet-jobs: a whole number, 1 or more."""
+    n = int(text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("--quiet-jobs must be 1 or more")
+    return n
+
+
+def strand_options(asked: Optional[int], environ: Optional[Dict[str, str]] = None) -> Tuple[int, Path]:
+    """(K, the timing cache) for a real run: --quiet-jobs or this machine's default; the cache where
+    VIDEOSCAN_CORE_QUIET_TIMINGS says, else under ~/Library/Caches."""
+    environ = os.environ if environ is None else environ
+    return asked or default_quiet_jobs(), Path(environ.get(QUIET_TIMINGS_KEY) or DEFAULT_QUIET_TIMINGS)
+
+
+def default_quiet_jobs(cpus: Optional[int] = None) -> int:
+    """min(4, cores/4), at least 1 (Ultra 30 → 4, M4 Max 16 → 4, M1 Max 10 → 2). Not half the cores as
+    for ordinary strands (testbed_strands.default_jobs): these tests judge time, so each strand keeps
+    several cores to itself, and K of the largest at once must fit in memory (module header)."""
+    return max(1, min(4, (cpus if cpus is not None else (os.cpu_count() or 4)) // 4))
+
+
+@dataclass(frozen=True)
+class QuietUnit:
+    """What is dealt to a strand whole: one XCTest class's planned tests, or one Swift Testing test."""
+    kind: str                                    # "xctest" | "swift"
+    key: str                                     # the timing-cache key (no line numbers: they move with every edit)
+    selectors: Tuple[str, ...]                   # xctest: -XCTest selectors; swift: the one test id
+    tests: Tuple[Tuple[str, str], ...] = ()      # xctest: (bare class, method)
+
+    @property
+    def count(self) -> int:
+        return len(self.tests) if self.kind == "xctest" else 1
+
+
+def swift_name(ident: str) -> str:
+    """A Swift Testing id without its File.swift:line:column — how the lane names a test in its own lines."""
+    return ident.rsplit("/", 1)[0] if re.search(r"/[^/]+\.swift:\d+:\d+$", ident) else ident
+
+
+def quiet_units(plan: PhasePlan) -> List[QuietUnit]:
+    """Phase B's plan as units, in plan order. Every planned test is in exactly one unit."""
+    by_class: Dict[str, List[str]] = {}
+    for cls, method in plan.xctest_tests:
+        by_class.setdefault(cls, []).append(method)
+    whole = {s for s in plan.xctest if "/" not in s}
+    units = [QuietUnit("xctest", f"xctest:{cls}", (cls,) if cls in whole else tuple(f"{cls}/{m}" for m in methods),
+                       tuple((cls, m) for m in methods)) for cls, methods in by_class.items()]
+    return units + [QuietUnit("swift", f"swift:{swift_name(i)}", (i,)) for i in plan.swift]
+
+
+def deal(units: Sequence[QuietUnit], jobs: int, seconds: Dict[str, float]) -> List[List[QuietUnit]]:
+    """Longest first by recorded seconds, each unit to the strand with the least so far (LPT: the greedy
+    4/3-approximation of the shortest longest strand). A unit with no record weighs the median of those
+    that have one (1 s when none has), so a first run deals by count. Deterministic: ties by key, then
+    by strand number. Never more strands than units; every unit in exactly one strand."""
+    known = sorted(seconds[u.key] for u in units if u.key in seconds)
+    typical = known[len(known) // 2] if known else 1.0
+    weight = lambda u: seconds.get(u.key, typical * u.count)
+    strands: List[List[QuietUnit]] = [[] for _ in range(max(1, min(jobs, len(units))))]
+    load = [0.0] * len(strands)
+    for u in sorted(units, key=lambda u: (-weight(u), u.key)):
+        n = min(range(len(strands)), key=lambda i: (load[i], i))
+        strands[n].append(u)
+        load[n] += weight(u)
+    return strands
+
+
+@dataclass
+class StreamVerdicts:
+    """What a Swift Testing event stream says about the test FUNCTIONS it was asked about, by test id.
+    Failed: an issue that is a failure (not a known issue) was recorded against the test."""
+    started: Set[str] = field(default_factory=set)
+    ended: Set[str] = field(default_factory=set)
+    failed: Set[str] = field(default_factory=set)
+    seconds: Dict[str, float] = field(default_factory=dict)
+    began: Dict[str, float] = field(default_factory=dict)
+
+    def note(self, payload: Dict[str, object]) -> None:
+        """One event record's payload."""
+        ident, kind = str(payload["testID"]), payload.get("kind")
+        instant = payload.get("instant")
+        at = instant.get("absolute") if isinstance(instant, dict) else None
+        if kind == "testStarted":
+            self.started.add(ident)
+            if isinstance(at, (int, float)):
+                self.began[ident] = float(at)
+        elif kind in ("testEnded", "testSkipped"):
+            self.ended.add(ident)
+            if isinstance(at, (int, float)) and ident in self.began:
+                self.seconds[ident] = max(0.0, float(at) - self.began[ident])
+        elif kind == "issueRecorded":
+            issue = payload.get("issue")
+            issue = issue if isinstance(issue, dict) else {}
+            if issue.get("isFailure", not issue.get("isKnown", False)):
+                self.failed.add(ident)
+
+
+def stream_events(path: Path, ids: Set[str]) -> List[Dict[str, object]]:
+    """The event payloads about `ids` in a Swift Testing event stream, in order. A line that is not
+    JSON (the torn last line of a process that died mid-write) is skipped: what it would have said
+    did not happen. A stream that cannot be read is no events."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    found = []
+    for raw in lines:
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        payload = record.get("payload") if isinstance(record, dict) else None
+        if isinstance(payload, dict) and record.get("kind") == "event" and payload.get("testID") in ids:
+            found.append(payload)
+    return found
+
+
+def parse_event_stream(path: Path, ids: Set[str]) -> Tuple[Set[str], Set[str], Set[str], Dict[str, float]]:
+    """(started, ended, failed, seconds) for the test functions in `ids`."""
+    v = StreamVerdicts()
+    for payload in stream_events(path, ids):
+        v.note(payload)
+    return v.started, v.ended, v.failed, v.seconds
+
+
+@dataclass
+class _Proc:
+    """One test process of a strand or of the alone pass, and what it reported, by test KEY
+    (XCTest: (bare class, method); Swift Testing: the test id)."""
+    what: str
+    rc: int = 0
+    started: Set[object] = field(default_factory=set)
+    finished: Set[object] = field(default_factory=set)
+    failed: List[object] = field(default_factory=list)
+    seconds: Dict[object, float] = field(default_factory=dict)
+    held: List[str] = field(default_factory=list)        # Swift Testing failing lines withheld from the output
+    unidentified: Optional[str] = None                   # why its failures could not be told apart (they then stand)
+
+    def split(self, pending: Sequence[object]) -> Tuple[List[object], List[object], List[object]]:
+        """`pending` as (passed, left without a verdict, of those: started and never ended)."""
+        passed = [t for t in pending if t in self.finished and t not in self.failed]
+        left = [t for t in pending if t not in self.finished]
+        return passed, left, [t for t in left if t in self.started]
+
+
+class _QuietRun:
+    """The shared state of phase B's processes: one Counts (what was PRINTED, so the summary is what
+    the nightly counts), one lock, the spawn function."""
+
+    def __init__(self, b: Bundle, env: Dict[str, str], out: Output, spawn: Spawn, counts: Counts,
+                 lock: threading.Lock, tmp: Path) -> None:
+        self.b, self.env, self.out, self.spawn, self.counts, self.lock, self.tmp = b, env, out, spawn, counts, lock, tmp
+        self.serial = 0
+
+    def _lines(self, proc: subprocess.Popen, on_line: Callable[[str], None]) -> int:
+        assert proc.stdout is not None
+        for raw in iter(proc.stdout.readline, b""):
+            for line in unglue(raw.decode("utf-8", errors="replace").rstrip("\n")):
+                on_line(line)
+        return proc.wait()
+
+    def _say(self, line: str) -> None:
+        with self.lock:
+            self.counts.feed(line)
+        self.out.line(line)
+
+    def _withhold(self, name: str, hold: str) -> None:
+        """A strand's failing line is not a verdict: say what it was, in a line no counter reads as a test."""
+        with self.lock:
+            self.counts._end(name)
+        self.out.line(f"core-lane: {hold}: failed beside the other strands — to be run again alone: {name}")
+
+    def _xctest_line(self, p: _Proc, line: str, hold: Optional[str]) -> None:
+        x = xctest_line(line)
+        named = XC_NAME_RE.match(x.group(1)) if x else None
+        if not (x and named):
+            return self._say(line)
+        key, verdict = (named.group(1), named.group(2)), x.group(2)
+        if verdict is None:
+            p.started.add(key)
+            return self._say(line)
+        p.finished.add(key)
+        took = XC_SECONDS_RE.search(line)
+        if took:
+            p.seconds[key] = float(took.group(1))
+        if verdict != "failed":
+            return self._say(line)
+        p.failed.append(key)
+        return self._withhold(x.group(1), hold) if hold else self._say(line)
+
+    def xctest(self, selectors: Sequence[str], hold: Optional[str], what: str) -> _Proc:
+        """One XCTest process on `selectors`. `hold` (a strand's name): a failing verdict is withheld."""
+        p = _Proc(what)
+        cmd = ["xcrun", "xctest", "-XCTest", ",".join(selectors), str(self.b.bundle)]
+        p.rc = self._lines(self.spawn(cmd, self.env), lambda line: self._xctest_line(p, line, hold))
+        return p
+
+    def _swift_line(self, p: _Proc, line: str, hold: Optional[str]) -> None:
+        f = ST_FAIL_RE.search(line)
+        verdict = f and " recorded an issue " not in line and " recorded a known issue " not in line and not RUN_SUMMARY_RE.search(line)
+        if not (hold and verdict):
+            return self._say(line)
+        p.held.append(line)
+        self._withhold(f.group(1), hold)
+
+    def swift(self, ids: Sequence[str], hold: Optional[str], what: str) -> _Proc:
+        """One Swift Testing process, `--no-parallel`, on exactly `ids`, with an event stream that says
+        which test ids started, ended and failed. When the console and the stream disagree about the
+        failures, `unidentified` says so and the withheld lines are printed after all: they stand."""
+        p = _Proc(what)
+        with self.lock:
+            self.serial += 1
+            stream = self.tmp / f"events-{self.serial}.jsonl"
+        cmd = [str(self.b.pm / "swiftpm-testing-helper"), "--test-bundle-path", str(self.b.exe), str(self.b.exe),
+               "--testing-library", "swift-testing", "--no-parallel", "--filter", swift_id_regex(ids),
+               "--event-stream-output-path", str(stream), "--event-stream-version", EVENT_STREAM_VERSION]
+        p.rc = self._lines(self.spawn(cmd, self.env), lambda line: self._swift_line(p, line, hold))
+        started, ended, failed, seconds = parse_event_stream(stream, set(ids))
+        p.started, p.finished, p.seconds = set(started), set(ended), dict(seconds)
+        p.failed = [i for i in ids if i in failed and i in ended]
+        if hold and len(p.failed) != len(p.held):
+            # Which tests failed cannot be told from names alone (a display name is not an id). Refuse to
+            # guess: the withheld lines are printed after all, and count as the failures they are.
+            for line in p.held:
+                self._say(line)
+            p.unidentified = (f"{what} printed {len(p.held)} failed test(s) but its event stream names {len(p.failed)}: "
+                              "they could not be run again alone and stand as failed")
+            p.failed, p.held = [], []
+        return p
+
+
+class _QuietStrands:
+    """Phase B's bookkeeping across its strands: which tests are owed a run alone and why, what was
+    measured, and every RED reason that is not a count. Strand threads share it under `guard`."""
+
+    def __init__(self, run: _QuietRun, plan: PhasePlan, strands: List[List[QuietUnit]]) -> None:
+        self.run, self.plan, self.strands = run, plan, strands
+        self.retry_x: Dict[object, str] = {}          # test → why it is run alone
+        self.retry_s: Dict[object, str] = {}
+        self.measured: Dict[str, float] = {}
+        self.extra: List[str] = []
+        self.rcs: List[Tuple[str, int]] = []
+        self.guard = threading.Lock()
+        others = len(strands) - 1
+        self.beside = f"failing beside {others} other strand{'s' if others != 1 else ''}"
+
+    def run_strands(self) -> None:
+        """Every strand side by side, each on its own worker thread (as in run_phase: the main thread
+        holds no lock, so the stop handler can always say what was running)."""
+        threads = [threading.Thread(target=self._strand, args=(n, units), daemon=True) for n, units in enumerate(self.strands)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    def _strand(self, n: int, units: List[QuietUnit]) -> None:
+        name = f"strand {n + 1}"
+        try:
+            xc = [u for u in units if u.kind == "xctest"]
+            ids = [u.selectors[0] for u in units if u.kind == "swift"]
+            if xc:
+                self._strand_xctest(name, xc)
+            if ids:
+                self._strand_swift(name, ids)
+        except Exception as exc:                            # a bug here must not read as "that strand had nothing to say"
+            with self.guard:
+                self.extra.append(f"{name} was not run to its end by the lane itself ({exc!r}); its tests have no verdict")
+
+    def _strand_xctest(self, name: str, units: List[QuietUnit]) -> None:
+        p = self.run.xctest([s for u in units for s in u.selectors], name, f"{name} XCTest")
+        self._hand_over(p, [t for u in units for t in u.tests], self.retry_x, f"{name}'s XCTest", (0,))
+        with self.guard:
+            for u in units:
+                if all(t in p.seconds for t in u.tests):
+                    self.measured[u.key] = sum(p.seconds[t] for t in u.tests)
+
+    def _strand_swift(self, name: str, ids: List[str]) -> None:
+        p = self.run.swift(ids, name, f"{name} Swift Testing")
+        self._hand_over(p, ids, self.retry_s, f"{name}'s Swift Testing", (0, NO_TEST_MATCHED))
+        with self.guard:
+            for ident, took in p.seconds.items():
+                self.measured[f"swift:{swift_name(str(ident))}"] = took
+
+    def _hand_over(self, p: _Proc, planned: Sequence[object], retry: Dict[object, str], whose: str,
+                   clean: Tuple[int, ...]) -> None:
+        """After a strand's process: its failed tests and the ones it never finished are owed a run
+        alone. An exit that neither explains is RED, as it is in the single pass."""
+        _, left, _ = p.split(planned)
+        with self.guard:
+            retry.update({t: self.beside for t in p.failed})
+            retry.update({t: f"{whose} process ended (exit {p.rc}) before it finished" for t in left})
+            if p.unidentified:
+                self.extra.append(p.unidentified)
+            unexplained = p.rc not in clean and not p.failed and not left
+            if unexplained or (p.unidentified and p.rc != 0):
+                self.rcs.append((p.what, p.rc))
+
+    def alone(self) -> List[Tuple[str, str]]:
+        """The alone pass: every strand has ended, nothing else of the lane is running. One process per
+        framework, one test at a time — the single serial pass, on these tests only. Returns
+        (test, why it was run alone) for each that passed."""
+        if self.retry_x or self.retry_s:
+            self.run.out.line(f"core-lane: phase {self.plan.key}: every strand has ended; running "
+                              f"{len(self.retry_x) + len(self.retry_s)} test(s) again ALONE (one at a time, nothing else of the lane running)")
+        xc = self._alone([t for t in self.plan.xctest_tests if t in self.retry_x], self.retry_x, "XCTest (alone)",
+                         lambda tests: self.run.xctest([f"{c}/{m}" for c, m in tests], None, "XCTest (alone)"),
+                         lambda t: f"{t[0]}/{t[1]}")
+        st = self._alone([i for i in self.plan.swift if i in self.retry_s], self.retry_s, "Swift Testing (alone)",
+                         lambda ids: self.run.swift(ids, None, "Swift Testing (alone)"), lambda i: swift_name(str(i)))
+        return xc + st
+
+    def _alone(self, pending: List[object], why: Dict[object, str], what: str,
+               start: Callable[[List[object]], _Proc], show: Callable[[object], str]) -> List[Tuple[str, str]]:
+        """Run `pending` alone. A test that kills its process here is RED by name, and the rest of the
+        list still gets its turn (each round judges or removes at least one test)."""
+        passed_alone: List[Tuple[str, str]] = []
+        while pending:
+            p = start(pending)
+            self.rcs.append((p.what, p.rc))
+            passed, left, running = p.split(pending)
+            passed_alone += [(show(t), why[t]) for t in passed]
+            if not left or p.rc == 0 or (not running and len(left) == len(pending)):
+                break                                       # all judged; or nothing a rerun could change (the count says what is missing)
+            self.extra += [f"{what} died (exit {p.rc}) while running {show(t)} — it was run alone after {why[t]}" for t in running]
+            pending = [t for t in left if t not in running]
+        return passed_alone
+
+
+def run_quiet_strands(b: Bundle, plan: PhasePlan, out: Output, spawn: Spawn, live: Optional[List["PhaseLive"]],
+                      floor_mb: float, jobs: int, timings_path: Optional[Path]) -> PhaseResult:
+    """Phase B as `jobs` serial strands, then the alone pass (module header). The returned counts are
+    the verdict lines that were printed: one per planned test when nothing was lost."""
+    import testbed_strands as ts                  # the timing-cache pattern (scripts/testbed_strands.py)
+    env = dict(b.env, **{PHASE_KEY: PHASE_VALUE["B"]})           # a strand IS the serial phase to its tests
+    strict = env.get(STRICT_KEY) == "1"
+    counts, lock = Counts(), threading.Lock()
+    if live is not None:
+        live.append(PhaseLive(plan, counts, lock))
+    cached = ts.load_timings(timings_path) if timings_path else {}
+    flavour = b.products.name.lower() + "|"       # debug and release times differ several-fold
+    seconds = {k[len(flavour):]: v for k, v in cached.items() if k.startswith(flavour)}
+    strands = deal(quiet_units(plan), jobs, seconds)
+    out.line(f"core-lane: phase {plan.key} ({plan.title}{', ' + STRICT_KEY + '=1' if strict else ''}): "
+             f"{plan.expected} tests planned ({plan.xctest_count} XCTest + {len(plan.swift)} Swift Testing)")
+    out.line(f"core-lane: phase {plan.key} runs as {len(strands)} serial strands (--quiet-jobs {jobs}); a test that fails beside "
+             "the others is run again alone before it is judged — "
+             + "; ".join(f"strand {n + 1}: {sum(u.count for u in units)} tests, ~{sum(seconds.get(u.key, 0.0) for u in units):.0f} s recorded"
+                         for n, units in enumerate(strands)))
+    t0 = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="core-lane-strands-") as tmp:
+        q = _QuietStrands(_QuietRun(b, env, out, spawn, counts, lock, Path(tmp)), plan, strands)
+        q.run_strands()
+        passed_alone = q.alone()
+    if timings_path:
+        cached.update({flavour + k: round(v, 2) for k, v in q.measured.items()})
+        ts.save_timings(timings_path, cached)
+    peak = _children_peak_mb()
+    return PhaseResult(plan, counts, sorted(q.rcs), time.monotonic() - t0, strict, peak if peak > floor_mb else 0.0,
+                       strands=len(strands), passed_alone=passed_alone, extra=q.extra,
+                       unjudged=any("stand as failed" in e for e in q.extra))
+
+
 @dataclass
 class PhaseLive:
     plan: PhasePlan
@@ -495,7 +913,19 @@ def summary_line(r: PhaseResult) -> str:
     return (f"core-lane: phase {r.plan.key} ({r.plan.title}{', strict' if r.strict else ''}): "
             f"{c.passed} passed / {c.failed} failed / {c.skipped} skipped — {c.total} of {r.plan.expected} planned, "
             f"{c.known} with known issues, {r.seconds:.0f} s"
+            + (f", {r.strands} strands, {len(r.passed_alone)} passed alone after failing beside the others" if r.strands else "")
             + (f", largest test process so far {r.peak_mb:.0f} MB" if r.peak_mb else ""))
+
+
+def amber_lines(r: PhaseResult) -> List[str]:
+    """One line per test that is green only because it was run again alone: drift, said out loud."""
+    return [f"core-lane: AMBER — phase {r.plan.key} ({r.plan.title}): passed alone after {why}: {name}"
+            for name, why in r.passed_alone]
+
+
+def report_lines(results: Sequence[PhaseResult]) -> List[str]:
+    """What the lane says of its phases once they have run: each one's summary line, then every AMBER."""
+    return [summary_line(r) for r in results] + [line for r in results for line in amber_lines(r)]
 
 
 @dataclass(frozen=True)
@@ -538,9 +968,12 @@ def listing_problems(listing: Listing, witness: Optional[SourceCounts]) -> List[
 
 def run_lane(products: str, regex: Optional[str] = None, out: Optional[Output] = None, spawn: Spawn = _spawn,
              lister: Callable[[Bundle], Listing] = list_bundle, live: Optional[List[PhaseLive]] = None,
-             witness: Optional[Callable[[], SourceCounts]] = None) -> int:
+             witness: Optional[Callable[[], SourceCounts]] = None,
+             quiet_jobs: int = 1, timings: Optional[Path] = None) -> int:
     """List, split, run phase A then phase B, print one summary line per phase and the verdict.
-    `witness` (main always passes it) is the source count an unfiltered listing is cross-checked against."""
+    `witness` (main always passes it) is the source count an unfiltered listing is cross-checked against.
+    `quiet_jobs`: phase B's strands (1: the single serial pass; main passes --quiet-jobs or the default);
+    `timings`: the cache the deal reads and writes (None: no cache, every test weighs the same)."""
     out = out or Output()
     b = open_bundle(products)
     if b is None:
@@ -565,11 +998,11 @@ def run_lane(products: str, regex: Optional[str] = None, out: Optional[Output] =
         if refused:
             return EXIT_COUNT
     before_tests = _children_peak_mb()            # the build and the listings, if they were children of this process
-    results = [run_phase(b, plan, regex, out, spawn, live, before_tests) if plan.expected else
+    results = [run_phase(b, plan, regex, out, spawn, live, before_tests, quiet_jobs, timings) if plan.expected else
                PhaseResult(plan, Counts(), [], 0.0, False) for plan in (a, bq)]
     problems = [p for r in results for p in r.problems]
-    for r in results:
-        out.line(summary_line(r))
+    for line in report_lines(results):
+        out.line(line)
     total = sum(r.counts.total for r in results)
     expected = sum(r.plan.expected for r in results)
     tot = lambda f: sum(getattr(r.counts, f) for r in results)
@@ -868,6 +1301,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     rn.add_argument("--filter", dest="regex", help="only tests the regex is found in (run_tests.py's Core filter)")
     rn.add_argument("--tests", help="the test SOURCE the listing is cross-checked against on an unfiltered run "
                                     "(default: <package>/Tests/VideoScanCoreTests, else this checkout's)")
+    rn.add_argument("--quiet-jobs", type=strand_count, default=None, metavar="K",
+                    help="phase B as K serial strands side by side (default min(4, cores/4); 1 = one serial pass). "
+                         "A test that fails beside the others is run again alone before it is judged")
     ls = sub.add_parser("list", help="the quiet-machine tests, read from the built bundle")
     ls.add_argument("--products", required=True)
     ck = sub.add_parser("check", help="source pin: every test that reaches a timing / resident-size helper is marked")
@@ -934,7 +1370,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not a.regex and not tests_root.is_dir():
         out.line(f"core-lane: RED — no test source at {tests_root} to cross-check the bundle's listing against; no test was run")
         return EXIT_COUNT
-    return run_lane(products, a.regex, out, live=live, witness=witness)
+    jobs, cache = strand_options(a.quiet_jobs)
+    return run_lane(products, a.regex, out, live=live, witness=witness, quiet_jobs=jobs, timings=cache)
 
 
 if __name__ == "__main__":
