@@ -9,10 +9,10 @@
 // derivative of them was a capability regression.
 //
 // The rule, row by row:
-//   1. The source is MEASURED by a fallback chain when the container has no
-//      duration: the longest stream duration, then a packet count ÷ frame
-//      rate (only when ffprobe's two frame rates agree — refuse rather than
-//      guess). A length found that way is compared exactly as before.
+//   1. The source is MEASURED by its longest stream duration when the
+//      container has none, and compared exactly as before. Nothing else is
+//      tried: a packet count ÷ frame rate was removed (Codex r1 #6 — a
+//      mixed-rate stream reads 6 s for 4 s); refuse rather than guess.
 //   2. The source has NO measurable length:
 //      • without Replace (plain Transcode, Reformat, Cleanup): the output is
 //        verified on its own terms (measurable, ≥ 10 KB), published, and the
@@ -29,7 +29,7 @@
 // "could not be read" and still fails (those rows are in the #500/#502
 // matrices).
 //
-// ffmpeg and ffprobe are answered by a strict ScriptedExecutor; two rows at
+// ffmpeg and ffprobe are answered by a strict ScriptedExecutor; the rows at
 // the end measure REAL elementary streams made with ffmpeg. Parallel by
 // design. Memory: blobs of tens of KB; two 2 s clips.
 
@@ -51,18 +51,14 @@ struct EncodeSourceWithoutDurationMatrixTests {
     /// What ffprobe answers when there is no such stream.
     nonisolated static let nothing = Behaviour.output(stdout: "")
     nonisolated static let twelve = Behaviour.output(stdout: "12.000000\n")
-    nonisolated static func packets(_ count: Int, r: String = "25/1", avg: String = "25/1") -> Behaviour {
-        .output(stdout: "r_frame_rate=\(r)\navg_frame_rate=\(avg)\nnb_read_packets=\(count)\n")
-    }
 
     static let note = "Length not compared: the source has no readable duration."
     static let refusal = "Could not verify the new file against the original: the source has no readable duration — the original was not replaced."
 
-    /// One probe chain: container, streams, packets.
+    /// One probe chain: container, streams.
     struct Probes: Sendable {
         var format: Behaviour
         var streams: Behaviour = EncodeSourceWithoutDurationMatrixTests.noDuration
-        var packets: Behaviour = EncodeSourceWithoutDurationMatrixTests.nothing
         static let none = Probes(format: EncodeSourceWithoutDurationMatrixTests.noDuration)
         static let twelveSeconds = Probes(format: EncodeSourceWithoutDurationMatrixTests.twelve)
     }
@@ -71,7 +67,6 @@ struct EncodeSourceWithoutDurationMatrixTests {
     static func probeRules(_ mock: ScriptedExecutor, file name: String, _ p: Probes) -> ScriptedExecutor {
         mock.on("ffprobe", containing: ["format=duration", name], p.format)
             .on("ffprobe", containing: ["stream=duration", name], p.streams)
-            .on("ffprobe", containing: ["nb_read_packets", name], p.packets)
     }
 
     func transcodeMock(_ b: MX.Bench, source: Probes = .none, output: Probes = .twelveSeconds) throws -> ScriptedExecutor {
@@ -101,10 +96,10 @@ struct EncodeSourceWithoutDurationMatrixTests {
         #expect(b.trashed.all.isEmpty && MX.sha(b.target) == b.priorSHA, "the existing file was touched")
         #expect(b.model.records.first { $0.fullPath == job.publishedURL.path }?.derivedFrom == b.source.id)
         #expect(b.partials().isEmpty)
-        // The output WAS measured (its own terms), and the source was asked all three ways.
+        // The output WAS measured (its own terms), and the source was asked both ways — and no third.
         #expect(m.calls(to: "ffprobe", containing: ["format=duration", ".vs-partial."]).count == 1)
         #expect(m.calls(to: "ffprobe", containing: ["stream=duration", MX.sourceName]).count == 1, "\(m.calls)")
-        #expect(m.calls(to: "ffprobe", containing: ["nb_read_packets", MX.sourceName]).count == 1, "\(m.calls)")
+        #expect(m.calls(to: "ffprobe", containing: ["-count_packets"]).isEmpty, "\(m.calls)")
     }
 
     @Test("Reformat of a source with no readable duration: published, catalogued, with the note")
@@ -245,41 +240,17 @@ struct EncodeSourceWithoutDurationMatrixTests {
         guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
         #expect(summary.contains("The previous file is in the Trash.") && !summary.contains("not compared"), "\(summary)")
         #expect(b.trashed.all == [b.target.path])
-        #expect(m.calls(to: "ffprobe", containing: ["nb_read_packets"]).isEmpty, "the chain stops at the first measure: \(m.calls)")
+        #expect(m.calls(to: "ffprobe", containing: ["-count_packets"]).isEmpty, "\(m.calls)")
     }
 
-    @Test("no container or stream duration but a PACKET COUNT with one agreed frame rate: 300 packets at 25/1 is 12 s, and a Replace proceeds")
-    func aPacketCountMeasuresTheSource() async throws {
-        let b = try mx.bench("nodur_packets"); defer { b.sb.cleanup() }
-        let m = try transcodeMock(b, source: Probes(format: Self.noDuration, packets: Self.packets(300)))
-        let job = await mx.run(b, m)
-        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
-        #expect(b.trashed.all == [b.target.path])
-    }
-
-    @Test("a source measured by fallback still catches a truncated encode: 300 packets (12 s) against a 2 s output is 'stopped early'")
+    @Test("a source measured by its streams still catches a truncated encode: 12 s against a 2 s output is 'stopped early'")
     func aFallbackMeasureStillCatchesAShortOutput() async throws {
         let b = try mx.bench("nodur_short"); defer { b.sb.cleanup() }
         let before = b.catalogSnapshot()
-        let m = try transcodeMock(b, source: Probes(format: Self.noDuration, packets: Self.packets(300)),
+        let m = try transcodeMock(b, source: Probes(format: Self.noDuration, streams: Self.twelve),
                                   output: Probes(format: .output(stdout: "2.000000\n")))
         let job = await mx.run(b, m)
         mx.expectRefused(b, job, catalogBefore: before, reason: ["stopped early", "0:02", "0:12"])
-    }
-
-    @Test("a packet count whose two frame rates DISAGREE (50/1 vs 25/1) is not a length — refuse rather than guess: a Replace is refused, a plain Transcode gets the note",
-          arguments: [true, false])
-    func anAmbiguousFrameRateIsNotALength(_ replace: Bool) async throws {
-        let b = try mx.bench("nodur_ambiguous_\(replace)"); defer { b.sb.cleanup() }
-        let before = b.catalogSnapshot()
-        let m = try transcodeMock(b, source: Probes(format: Self.noDuration, packets: Self.packets(300, r: "50/1", avg: "25/1")))
-        let job = await mx.run(b, m, replace: replace)
-        if replace {
-            mx.expectRefused(b, job, catalogBefore: before, reason: [Self.refusal, "50/1", "25/1"])
-        } else {
-            guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
-            #expect(summary.contains(Self.note), "\(summary)")
-        }
     }
 
     // MARK: - Rule 3: the OUTPUT must be measurable, in every mode
@@ -309,7 +280,7 @@ struct EncodeSourceWithoutDurationMatrixTests {
 
     // MARK: - The chain itself: pure parsing, the log line, and REAL elementary streams
 
-    @Test("the chain's parsing (pure): what counts as 'no duration', the longest stream, packets ÷ an agreed rate")
+    @Test("the chain's parsing (pure): what counts as 'no duration', the longest stream")
     func theChainsParsing() {
         typealias C = FFmpegEncodeCheck
         typealias R = ProcessRunner.Result
@@ -322,18 +293,6 @@ struct EncodeSourceWithoutDurationMatrixTests {
 
         #expect(C.longestStreamSeconds("N/A\n11.5\n12.25\n") == 12.25)
         #expect(C.longestStreamSeconds("N/A\n0.000000\n-3\ninf\n") == nil)
-        #expect(C.rate("30000/1001").map { abs($0 - 29.97) < 0.001 } == true)
-        #expect(C.rate("0/0") == nil && C.rate("N/A") == nil && C.rate(nil) == nil)
-
-        #expect(C.packetSeconds("r_frame_rate=25/1\navg_frame_rate=25/1\nnb_read_packets=300\n").seconds == 12)
-        #expect(C.packetSeconds("r_frame_rate=30000/1001\navg_frame_rate=30000/1001\nnb_read_packets=60\n").seconds.map { abs($0 - 2.002) < 0.001 } == true)
-        #expect(C.packetSeconds("r_frame_rate=30000/1001\navg_frame_rate=0/0\nnb_read_packets=60\n")
-                == (nil, "only one of its two frame rates is known (r_frame_rate 30000/1001, avg_frame_rate 0/0), so a packet count is not a length"))
-        #expect(C.packetSeconds("") == (nil, "no video stream to count packets in"))
-        #expect(C.packetSeconds("r_frame_rate=25/1\navg_frame_rate=25/1\nnb_read_packets=N/A\n") == (nil, "no packets were counted"))
-        #expect(C.packetSeconds("r_frame_rate=0/0\navg_frame_rate=0/0\nnb_read_packets=9\n").why.hasPrefix("no frame rate to divide the packet count by"))
-        #expect(C.packetSeconds("r_frame_rate=50/1\navg_frame_rate=25/1\nnb_read_packets=50\n")
-                == (nil, "its frame rate is ambiguous (r_frame_rate 50/1, avg_frame_rate 25/1), so a packet count is not a length"))
     }
 
     @Test("the four answers of the length check, and the log says which fallback measure was used")
@@ -352,32 +311,48 @@ struct EncodeSourceWithoutDurationMatrixTests {
         var (answer, log) = await verify(source: .twelveSeconds, output: .twelveSeconds)
         #expect(answer == .verified && log.isEmpty, "the ordinary case says nothing: \(log)")
 
-        (answer, log) = await verify(source: Probes(format: Self.noDuration, packets: Self.packets(300)), output: .twelveSeconds)
-        #expect(answer == .verified)
-        #expect(log == ["length: source.m2v has no container duration — measured 0:12 (12.000 s) by its video packet count ÷ frame rate"], "\(log)")
-
         (answer, log) = await verify(source: Probes(format: Self.noDuration, streams: .output(stdout: "12.5\n")), output: .twelveSeconds)
         #expect(answer == .verified)
         #expect(log == ["length: source.m2v has no container duration — measured 0:13 (12.500 s) by its longest stream duration"], "\(log)")
 
         (answer, log) = await verify(source: .none, output: .twelveSeconds)
-        #expect(answer == .lengthNotCompared("no container duration, no stream duration, and no video stream to count packets in"))
+        #expect(answer == .lengthNotCompared("no container duration and no stream duration"))
 
         (answer, log) = await verify(source: .twelveSeconds, output: .none)
-        #expect(answer == .unmeasured("the new file's length could not be read: it has no readable duration (no container duration, no stream duration, and no video stream to count packets in)"))
+        #expect(answer == .unmeasured("the new file's length could not be read: it has no readable duration (no container duration and no stream duration)"))
 
         // A fallback probe that FAILS is "could not be read", never "no duration".
         (answer, log) = await verify(source: Probes(format: Self.noDuration, streams: .crash(signal: SIGSEGV)), output: .twelveSeconds)
         #expect(answer == .unmeasured("the source's length could not be read to compare against: ffprobe stopped with exit code \(SIGSEGV)"))
-        (answer, log) = await verify(source: Probes(format: Self.noDuration, packets: .launchFailure), output: .twelveSeconds)
+        (answer, log) = await verify(source: Probes(format: Self.noDuration, streams: .launchFailure), output: .twelveSeconds)
         if case .unmeasured(let why) = answer { #expect(why.contains("ffprobe could not be started"), "\(why)") } else { Issue.record("\(answer)") }
     }
 
+    /// Codex r1 #6 (P1), reproduced with REAL media: 2 s of MPEG-2 at 25 fps
+    /// then 2 s at 50 fps, one elementary stream (4 s). ffprobe answers both
+    /// frame rates 25/1 and 150 packets, so packets ÷ rate said 6 s — a
+    /// complete 4 s output would have been refused as truncated. Agreeing
+    /// header fields do not prove constant timing: no length is guessed.
+    @Test("REAL 25 fps + 50 fps MPEG-2 concatenation (4 s, both rates read 25/1): no length is guessed — 'no readable duration', never 6 s")
+    func aMixedRateStreamIsNotGivenALength() async throws {
+        try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
+        let dir = try CleanupTestMedia.makeScratchDir("nodur_mixed_rate"); defer { try? FileManager.default.removeItem(at: dir) }
+        let parts = try [25, 50].map { rate -> Data in
+            let part = dir.appendingPathComponent("test_part_\(rate).m2v")
+            try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "testsrc=size=64x48:rate=\(rate):duration=2", "-c:v", "mpeg2video", "-f", "mpeg2video"], output: part.path)
+            return try Data(contentsOf: part)
+        }
+        let mixed = dir.appendingPathComponent("test_mixed.m2v")
+        try (parts[0] + parts[1]).write(to: mixed)
+        let length = await FFmpegEncodeCheck.measureLength(mixed.path)
+        #expect(length == .noDuration("no container duration and no stream duration"), "\(length)")
+    }
+
     /// REAL sources with no container duration, made with ffmpeg: an
-    /// MPEG-2 elementary stream (both frame rates 25/1 → measured by its
-    /// packet count) and a raw H.264 stream (r_frame_rate 50/1 against
-    /// avg_frame_rate 25/1 → no readable duration; refuse rather than guess).
-    @Test("REAL elementary streams: an .m2v is measured by its packet count (2 s); a raw .h264 has no readable duration and says why")
+    /// MPEG-2 elementary stream (the `.m2v` control — it once had a length
+    /// by packet count; Codex r1 #6 removed that measure) and a raw H.264
+    /// stream. Both have no readable duration, and nothing logs a measure.
+    @Test("REAL elementary streams: an .m2v and a raw .h264 have no readable duration and say why; a .mov is one probe, by its container")
     func realElementaryStreams() async throws {
         try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
         let dir = try CleanupTestMedia.makeScratchDir("nodur_real"); defer { try? FileManager.default.removeItem(at: dir) }
@@ -395,11 +370,9 @@ struct EncodeSourceWithoutDurationMatrixTests {
         let (first, second) = await withAppLog(sink) {
             (await FFmpegEncodeCheck.measureLength(m2v.path), await FFmpegEncodeCheck.measureLength(h264.path))
         }
-        guard case .measured(let seconds, by: .packets) = first else { Issue.record("m2v: \(first)"); return }
-        #expect(abs(seconds - 2) < 0.1, "\(seconds)")
-        #expect(sink.lines.contains { $0.hasPrefix("length: test_nodur.m2v has no container duration — measured 0:02") && $0.hasSuffix("by its video packet count ÷ frame rate") }, "\(sink.lines)")
-        guard case .noDuration(let why) = second else { Issue.record("h264: \(second)"); return }
-        #expect(why.hasPrefix("no container duration, no stream duration, and its frame rate is ambiguous"), "\(why)")
+        #expect(first == .noDuration("no container duration and no stream duration"), "m2v: \(first)")
+        #expect(second == .noDuration("no container duration and no stream duration"), "h264: \(second)")
+        #expect(sink.lines.isEmpty, "no measure was used, so none is said: \(sink.lines)")
         // …and a real file with a container duration is still one probe, by the container.
         let mov = dir.appendingPathComponent("test_nodur.mov")
         try CleanupTestMedia.runFFmpeg(lavfi + ["-c:v", "mpeg4"], output: mov.path)

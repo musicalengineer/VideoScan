@@ -37,7 +37,7 @@
 // It is not a decode proof (Preservation's frame-MD5 pass is that).
 // THE SOURCE IS DIFFERENT (2026-11-21, same day): a SOURCE with no readable
 // duration is a fact about the file, not a failed check. Its length is
-// asked three ways (FFmpegEncodeCheck+Length.swift); when ffprobe RAN and
+// asked two ways, container then streams (FFmpegEncodeCheck+Length.swift); when ffprobe RAN and
 // the file has none, the answer is the fourth case, `.lengthNotCompared`:
 // the new file was measured on its own terms and there was nothing to
 // compare it against. Strict where something destructive rests on it — a

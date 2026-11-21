@@ -26,7 +26,7 @@
 //      another put at its name. Residual: the re-stat and the publish's
 //      rename are separate syscalls; a swap inside that instant is not seen.
 //   4. the SOURCE has no readable duration (ffprobe ran and said so, by
-//      container, streams and packet count): `.notCompared`. The new file
+//      container and streams): `.notCompared`. The new file
 //      was measured on its own terms; nothing was compared. Strict where
 //      something destructive rests on it: a Replace is refused (except a
 //      Preservation master whose frame-MD5 proof then passes); otherwise it
