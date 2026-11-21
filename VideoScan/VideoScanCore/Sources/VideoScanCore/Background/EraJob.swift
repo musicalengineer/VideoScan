@@ -274,7 +274,7 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
             if answered == 0 { try await proveTheModel(before: unit) }
             return .model
         }
-        if EraRecordMapper.framesRipped(data) == 0, let why = canary.toolWorks(environment: workerEnvironment) {
+        if EraRecordMapper.framesRipped(data) == 0, let why = await canary.toolWorks(environment: workerEnvironment) {
             throw await systemic("ffmpeg can no longer rip a still from the synthetic clip (\(why)) — the tool, not \(unit.path); "
                                  + "nothing counted against any file, the job stops")
         }

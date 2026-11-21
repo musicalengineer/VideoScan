@@ -94,18 +94,19 @@ actor HallieWebPosterCache {
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             throw NSError(domain: "HallieWebPoster", code: 2)
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: ffmpegPath)
-            process.arguments = plan.arguments
-            process.standardError = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice
-            process.terminationHandler = { proc in
-                proc.terminationStatus == 0
-                    ? continuation.resume()
-                    : continuation.resume(throwing: NSError(domain: "HallieWebPoster", code: Int(proc.terminationStatus)))
-            }
-            do { try process.run() } catch { continuation.resume(throwing: error) }
+        // Through ProcessRunner (2026-11-21; this was a hand-rolled
+        // `Process()`): same executable and argv, both outputs still
+        // discarded (limit 0 — nothing is collected). Gained: the pipes are
+        // drained, a cancelled task stops ffmpeg, and a test can answer the
+        // command with a ScriptedExecutor.
+        let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: plan.arguments,
+                                                    stdoutLimitBytes: 0, stderrLimitBytes: 0)
+        guard result.launched else {
+            throw NSError(domain: "HallieWebPoster", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "ffmpeg could not be started: \(result.stderr)"])
+        }
+        guard result.exitCode == 0 else {
+            throw NSError(domain: "HallieWebPoster", code: Int(result.exitCode))
         }
     }
 }

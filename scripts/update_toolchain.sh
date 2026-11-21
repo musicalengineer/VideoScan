@@ -24,6 +24,14 @@ SUMMARY="$LOGDIR/toolchain_update_latest.json"
 HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 BREW="${TOOLCHAIN_BREW:-/opt/homebrew/bin/brew}"
 MAS="${TOOLCHAIN_MAS:-/opt/homebrew/bin/mas}"
+# GH #499: the Xcode tools and sudo are overridable like brew and mas. PATH is
+# reset below, so a self-test's fakes on PATH are never reached — without
+# these the self-test ran the real xcodebuild/xcrun and could have run the
+# real `sudo -n xcodebuild -runFirstLaunch` or a MetalToolchain download. The
+# defaults are the bare names the reset PATH resolves, exactly as before.
+XCODEBUILD="${TOOLCHAIN_XCODEBUILD:-xcodebuild}"
+XCRUN="${TOOLCHAIN_XCRUN:-xcrun}"
+SUDO="${TOOLCHAIN_SUDO:-sudo}"
 XCODE_APP_ID=497799835
 
 export NONINTERACTIVE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
@@ -45,7 +53,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 T0=$(date +%s)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/toolchain-update.XXXXXX")"
-xcode_version() { xcodebuild -version 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'; }
+xcode_version() { "$XCODEBUILD" -version 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'; }
 XCODE_BEFORE="$(xcode_version)"
 log "START brew + Xcode update (Xcode: ${XCODE_BEFORE:-none})"
 
@@ -90,16 +98,17 @@ if [ -x "$MAS" ]; then
 else
     XCODE_NOTE="mas not installed; Xcode not checked (brew install mas)"
 fi
-if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
-    if sudo -n /usr/bin/xcodebuild -runFirstLaunch >> "$LOG" 2>&1; then
+if ! "$XCODEBUILD" -checkFirstLaunchStatus >/dev/null 2>&1; then
+    # The path sudo is given stays /usr/bin/xcodebuild: the sudoers rule names it.
+    if "$SUDO" -n /usr/bin/xcodebuild -runFirstLaunch >> "$LOG" 2>&1; then
         log "  Xcode first launch done"
     else
         FAILED="$FAILED xcode-first-launch"
         XCODE_NOTE="Xcode needs first launch: sudo xcodebuild -runFirstLaunch (or add the sudoers rule)"
     fi
 fi
-if ! xcrun -f metal >/dev/null 2>&1; then
-    xcodebuild -downloadComponent MetalToolchain >> "$LOG" 2>&1 || FAILED="$FAILED metal-toolchain"
+if ! "$XCRUN" -f metal >/dev/null 2>&1; then
+    "$XCODEBUILD" -downloadComponent MetalToolchain >> "$LOG" 2>&1 || FAILED="$FAILED metal-toolchain"
 fi
 XCODE_AFTER="$(xcode_version)"
 [ "$XCODE_BEFORE" != "$XCODE_AFTER" ] && log "  upgraded: Xcode $XCODE_BEFORE -> $XCODE_AFTER"

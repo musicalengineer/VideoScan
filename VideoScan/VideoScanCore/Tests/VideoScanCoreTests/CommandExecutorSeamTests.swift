@@ -347,6 +347,117 @@ struct CommandExecutorSensorTests {
             #expect(text.contains("ProcessRunner.detachedKeepingExecutor"), "\(rel)")
         }
     }
+
+    // MARK: No hand-rolled child process outside ProcessRunner
+
+    /// Every place production code may start a child process WITHOUT
+    /// ProcessRunner, as "path under VideoScan/ → number of spawn sites".
+    /// A site that is not here fails the lane: a one-shot command belongs on
+    /// `ProcessRunner.runProcess` (deadline, kill escalation, drained pipes,
+    /// and a ScriptedExecutor can answer it in a test). When a site listed
+    /// here is converted, delete its line — the test fails until you do.
+    static let allowedSpawnSites: [String: Int] = [
+        // The runner itself: the one real fork/exec.
+        "VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift": 1,
+        // Long-lived workers that talk over stdin/stdout for their whole
+        // life; they need an interactive executor seam (not built yet).
+        "VideoScan/Media/FFmpegFrameProvider.swift": 1,
+        "VideoScan/Media/WhisperWorkerTranscriber.swift": 1,
+        "VideoScan/Hallie/Voice/HallieNeuralSpeech.swift": 2,
+        "VideoScanCore/Sources/VideoScanCore/ModelLab/PythonClipWorker.swift": 1,
+        // posix_spawn + SETSID: the preview helper must outlive the app.
+        "VideoScanCore/Sources/VideoScanCore/PreviewHelperSupervisor.swift": 1,
+    ]
+
+    /// Spawn sites in one file's text: `Process()` and `posix_spawn(` /
+    /// `posix_spawnp(` on code lines (comment lines and trailing comments
+    /// do not count).
+    static func spawnSites(in text: String) -> Int {
+        var count = 0
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(raw)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") { continue }
+            if let comment = line.range(of: " //") { line = String(line[..<comment.lowerBound]) }
+            for needle in ["Process()", "posix_spawn(", "posix_spawnp("] {
+                var from = line.startIndex
+                while let hit = line.range(of: needle, range: from..<line.endIndex) {
+                    // `Process()` must be the bare type, not `SomeProcess()` or `.Process()`.
+                    let before = hit.lowerBound > line.startIndex ? line[line.index(before: hit.lowerBound)] : " "
+                    if !(before.isLetter || before.isNumber || before == "_" || before == ".") { count += 1 }
+                    from = hit.upperBound
+                }
+            }
+        }
+        return count
+    }
+
+    @Test("sensor: no production source starts a child process by hand — only ProcessRunner and the listed streaming workers")
+    func noHandRolledProcessInProduction() throws {
+        var found: [String: Int] = [:]
+        var read = 0
+        for dir in ["VideoScan", "VideoScanCore/Sources", "VideoScanBackground"] {
+            let root = Self.videoScanDir.appendingPathComponent(dir, isDirectory: true)
+            let walk = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            for case let url as URL in walk where url.pathExtension == "swift" {
+                read += 1
+                let sites = Self.spawnSites(in: try String(contentsOf: url, encoding: .utf8))
+                guard sites > 0 else { continue }
+                let rel = String(url.standardizedFileURL.path.dropFirst(Self.videoScanDir.standardizedFileURL.path.count + 1))
+                found[rel] = sites
+            }
+        }
+        #expect(read > 500, "the sensor read only \(read) production files")
+        for (file, sites) in found.sorted(by: { $0.key < $1.key }) {
+            let allowed = Self.allowedSpawnSites[file] ?? 0
+            #expect(sites <= allowed,
+                    "\(file): \(sites) hand-rolled spawn site(s), \(allowed) allowed — run a one-shot command through ProcessRunner.runProcess, not Process()")
+        }
+        for (file, allowed) in Self.allowedSpawnSites.sorted(by: { $0.key < $1.key }) {
+            #expect(found[file] == allowed,
+                    "\(file): the list allows \(allowed) spawn site(s) but the file has \(found[file] ?? 0) — lower or delete its line")
+        }
+        // The rule catches its own mutations, and is not fooled by comments.
+        #expect(Self.spawnSites(in: "let p = Process()\np.arguments = []") == 1)
+        #expect(Self.spawnSites(in: "let rc = posix_spawn(&pid, path, nil, nil, argv, environ)") == 1)
+        #expect(Self.spawnSites(in: "    let a = Process(); let b = Process()") == 2)
+        #expect(Self.spawnSites(in: "// never a bare Process() here\n/// via `Process()`\nlet x = 1 // Process()") == 0)
+        #expect(Self.spawnSites(in: "let w = FakeProcess()\nlet i = ProcessInfo.processInfo\nposix_spawn_file_actions_init(&a)") == 0)
+    }
+
+    /// The only production callers of the blocking bridge, as "path under
+    /// VideoScan/ → calls". Both are synchronous by necessity (audit in
+    /// ProcessRunner+Blocking.swift). An `async` function awaits
+    /// `ProcessRunner.runProcess` instead — never add one here.
+    static let allowedBlockingCallers: [String: Int] = [
+        "VideoScan/Shared/RAMDisk.swift": 1,                                        // launch/quit sweep, main thread
+        "VideoScanCore/Sources/VideoScanCore/Background/EraCanary.swift": 1,         // synchronous throwing init
+    ]
+
+    @Test("sensor: only the audited synchronous callers use ProcessRunner.runProcessBlocking — async code awaits runProcess")
+    func onlyTheAuditedSynchronousCallersBlock() throws {
+        var found: [String: Int] = [:]
+        for dir in ["VideoScan", "VideoScanCore/Sources", "VideoScanBackground"] {
+            let root = Self.videoScanDir.appendingPathComponent(dir, isDirectory: true)
+            let walk = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            for case let url as URL in walk where url.pathExtension == "swift" && url.lastPathComponent != "ProcessRunner+Blocking.swift" {
+                let calls = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") && $0.contains("runProcessBlocking(") }.count
+                guard calls > 0 else { continue }
+                found[String(url.standardizedFileURL.path.dropFirst(Self.videoScanDir.standardizedFileURL.path.count + 1))] = calls
+            }
+        }
+        #expect(found == Self.allowedBlockingCallers,
+                "a blocking ProcessRunner call outside the audited list (or the list is stale): \(found)")
+        // Each allowed call sits in a synchronous function: no `async` between the func keyword and the call.
+        for file in Self.allowedBlockingCallers.keys {
+            let text = try String(contentsOf: Self.videoScanDir.appendingPathComponent(file), encoding: .utf8)
+            let call = try #require(text.range(of: "ProcessRunner.runProcessBlocking("))
+            let funcStart = try #require(text.range(of: "func ", options: .backwards, range: text.startIndex..<call.lowerBound))
+            let signature = text[funcStart.lowerBound..<(text[funcStart.lowerBound...].firstIndex(of: "{") ?? call.lowerBound)]
+            #expect(!signature.contains("async"), "\(file): runProcessBlocking is called from an async function: \(signature)")
+        }
+    }
 }
 
 /// Thread-safe line collector for callbacks.

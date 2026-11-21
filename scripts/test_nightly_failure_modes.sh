@@ -1789,9 +1789,25 @@ if [ "$1 $2" = "list --versions" ]; then
 fi
 exit 0
 SH
-printf '%s\n' '#!/bin/sh' 'case "$1" in -version) echo "Xcode 27.1"; echo "Build version 27A9275" ;; esac' 'exit 0' > "$RT/bin/xcodebuild"
-printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/xcrun"
-chmod +x "$RT/bin/brew" "$RT/bin/xcodebuild" "$RT/bin/xcrun"
+# GH #499: xcodebuild, xcrun and sudo are fakes that RECORD every call. The
+# update resets PATH, so a fake on PATH is never reached — before the
+# TOOLCHAIN_XCODEBUILD / TOOLCHAIN_XCRUN / TOOLCHAIN_SUDO overrides this
+# section ran the REAL tools (and, on a Mac missing components, would have run
+# the real `sudo -n xcodebuild -runFirstLaunch` / a MetalToolchain download).
+# A call missing from $RT/tools.log means a real binary answered it.
+# $FAKE_XCODE_MISSING=1 plays the Mac that needs first launch and Metal.
+cat > "$RT/bin/xcodebuild" <<'SH'
+#!/bin/sh
+echo "xcodebuild $*" >> "$FAKE_TOOL_LOG"
+case "$1" in
+    -version) echo "Xcode 27.1"; echo "Build version 27A9275" ;;
+    -checkFirstLaunchStatus) [ "${FAKE_XCODE_MISSING:-0}" = 1 ] && exit 69 ;;
+esac
+exit 0
+SH
+printf '%s\n' '#!/bin/sh' 'echo "xcrun $*" >> "$FAKE_TOOL_LOG"' '[ "${FAKE_XCODE_MISSING:-0}" = 1 ] && exit 72' 'exit 0' > "$RT/bin/xcrun"
+printf '%s\n' '#!/bin/sh' 'echo "sudo $*" >> "$FAKE_TOOL_LOG"' 'exit 0' > "$RT/bin/sudo"
+chmod +x "$RT/bin/brew" "$RT/bin/xcodebuild" "$RT/bin/xcrun" "$RT/bin/sudo"
 # The "is a nightly running?" pgrep -f pattern must match no real process.
 # 2026-11-20: concurrent self-test runs made Test 18 red (SKIPPED: a nightly
 # … in progress) — each run's own `pgrep -f <pattern>` carries the pattern in
@@ -1802,10 +1818,23 @@ chmod +x "$RT/bin/brew" "$RT/bin/xcodebuild" "$RT/bin/xcrun"
 TC_BUSY='no-such-[p]rocess-xyzzy'
 bash -c "exec -a 'tc-decoy $TC_BUSY' sleep 60" > /dev/null 2>&1 &
 TC_DECOY=$!
-: > "$RT/brew.log"; rm -f "$RT/brew.count"
+: > "$RT/brew.log"; rm -f "$RT/brew.count"; : > "$RT/tools.log"
 HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
+    FAKE_TOOL_LOG="$RT/tools.log" \
     TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN="$TC_BUSY" \
+    TOOLCHAIN_XCODEBUILD="$RT/bin/xcodebuild" TOOLCHAIN_XCRUN="$RT/bin/xcrun" TOOLCHAIN_SUDO="$RT/bin/sudo" \
     PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
+# GH #499: every Xcode question the update asks was answered by a fake — two
+# `-version` (before/after), the first-launch check, the Metal check — and on
+# this healthy fake Mac nothing was installed and sudo was never called.
+if [ "$(grep -c '^xcodebuild -version$' "$RT/tools.log")" = 2 ] &&
+   [ "$(grep -c '^xcodebuild -checkFirstLaunchStatus$' "$RT/tools.log")" = 1 ] &&
+   [ "$(grep -c '^xcrun -f metal$' "$RT/tools.log")" = 1 ] &&
+   [ "$(grep -c . "$RT/tools.log")" = 4 ]; then
+    pass "the update's xcodebuild/xcrun calls all went to the fakes (no real Xcode tool ran; nothing installed)"
+else
+    fail "a REAL xcodebuild/xcrun ran in the self-test (GH #499) — the fakes recorded only: '$(tr '\n' ';' < "$RT/tools.log")'"
+fi
 TC_LOG="$RT/home/Library/Logs/VideoScan/toolchain_update.log"
 TC_SUM="$RT/home/Library/Logs/VideoScan/toolchain_update_latest.json"
 if grep -q '^upgrade --formula tty=no$' "$RT/brew.log" && grep -q '^upgrade --cask tty=no$' "$RT/brew.log" &&
@@ -1826,6 +1855,24 @@ kill "$TC_DECOY" 2>/dev/null; wait "$TC_DECOY" 2>/dev/null
     && pass "a second update while one holds the lock touches nothing and leaves the lock alone" \
     || fail "concurrent toolchain update ran brew: $(tr '\n' ';' < "$RT/brew.log")"
 rmdir "$LOCKDIR"
+# GH #499: the Mac that needs first launch and the Metal toolchain. The two
+# installing commands are issued — to the fakes, exactly once each — and no
+# other sudo command is ever asked for.
+: > "$RT/brew.log"; rm -f "$RT/brew.count"; : > "$RT/tools.log"
+HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
+    FAKE_TOOL_LOG="$RT/tools.log" FAKE_XCODE_MISSING=1 \
+    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN="$TC_BUSY" \
+    TOOLCHAIN_XCODEBUILD="$RT/bin/xcodebuild" TOOLCHAIN_XCRUN="$RT/bin/xcrun" TOOLCHAIN_SUDO="$RT/bin/sudo" \
+    PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
+if [ "$(grep -c '^sudo ' "$RT/tools.log")" = 1 ] &&
+   grep -q '^sudo -n /usr/bin/xcodebuild -runFirstLaunch$' "$RT/tools.log" &&
+   [ "$(grep -c '^xcodebuild -downloadComponent MetalToolchain$' "$RT/tools.log")" = 1 ] &&
+   [ "$(grep -c . "$RT/tools.log")" = 6 ] &&
+   grep -q 'Xcode first launch done' "$TC_LOG"; then
+    pass "a Mac missing Xcode components: first launch and the Metal download go to the fakes, once each, and nothing else is sudo'd"
+else
+    fail "missing-components update (GH #499): tools='$(tr '\n' ';' < "$RT/tools.log")' log='$(tail -3 "$TC_LOG" 2>/dev/null | tr '\n' ' ')'"
+fi
 rota_run RicksM4 install_toolchain_update.sh
 TC_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.toolchain-update.plist"
 [ "$(plutil -extract StartCalendarInterval.Hour raw "$TC_PLIST" 2>/dev/null)" = "13" ] &&

@@ -242,13 +242,13 @@ struct EraJobConvergenceTests {
     }
 
     @Test("TRUTH: the tool check says why when ffmpeg can no longer rip the synthetic clip")
-    func theToolCheckSaysWhy() throws {
+    func theToolCheckSaysWhy() async throws {
         let root = try EraFixture.stateRoot()
         let environment = try SubprocessEnvironment.mediaTools(inheriting: ProcessInfo.processInfo.environment)
         let canary = try EraCanary(environment: environment, stateRoot: root)
-        #expect(canary.toolWorks(environment: environment) == nil)
+        #expect(await canary.toolWorks(environment: environment) == nil)
         try FileManager.default.removeItem(at: canary.clip)
-        let why = canary.toolWorks(environment: environment)
+        let why = await canary.toolWorks(environment: environment)
         #expect(why?.isEmpty == false, "ffmpeg's words, not a bare false")
     }
 

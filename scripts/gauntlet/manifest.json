@@ -480,6 +480,28 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraCanaryCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EraCanaryCommandTests"
+      ],
+      "tests": [
+        "aCancellationResultPublishedAfterExpiryIsNotTheAnswer",
+        "aResultInTimeIsReturnedAsIs",
+        "blockingFormRunsForReal",
+        "blockingWaitIsBoundedIndependently",
+        "exitZeroWithoutAStill",
+        "expiredWaitCancelsPendingWork",
+        "hangIsStoppedAtTheCap",
+        "jobTimeCheckIsAsync",
+        "launchFailureIsNamed",
+        "nonzeroExitIsNamed",
+        "silentNonzeroExitIsNamed",
+        "theTwoCommandLines"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraJobConvergenceTests.swift",
       "stage": "regression",
       "suites": [
@@ -1055,7 +1077,9 @@
         "everyEntryPointDelegates",
         "nestedScopesShadow",
         "nestedSequenceIsAFailure",
+        "noHandRolledProcessInProduction",
         "noTestSetsTheToolEnvVars",
+        "onlyTheAuditedSynchronousCallersBlock",
         "parallelA",
         "parallelB",
         "parallelReal",
@@ -38188,6 +38212,106 @@
         "stallMonitorKeepsItsStartersScope",
         "unboundIsTheProductionSink"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioTranscriberCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AudioTranscriberCommandTests"
+      ],
+      "tests": [
+        "cancelStopsIt",
+        "exitZeroWithoutATranscript",
+        "hangToTheDeadline",
+        "launchFailure",
+        "nonzeroExit",
+        "stderrTailIsBounded",
+        "stdoutGoesToTheLog",
+        "theCommandLine"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieWebFfmpegCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HallieWebFfmpegCommandTests"
+      ],
+      "tests": [
+        "posterCacheEndToEnd",
+        "posterCommandLine",
+        "posterFailures",
+        "proxyCacheEndToEnd",
+        "proxyCommandLine",
+        "proxyLaunchFailure",
+        "proxyNonzeroExit"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersistentLogRotationGzipTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PersistentLogRotationGzipTests"
+      ],
+      "tests": [
+        "gzipFailureIsContained",
+        "theCommandLine"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RAMDiskNegativeMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RAMDiskNegativeMatrixTests"
+      ],
+      "tests": [
+        "attachCannotStart",
+        "attachFails",
+        "attachHangs",
+        "attachPrintsGarbage",
+        "cancelledMidFormat",
+        "eraseCannotStart",
+        "eraseFails",
+        "eraseFailsThenDetachFails",
+        "eraseHangs",
+        "ownMountNames",
+        "ownedDeviceParser",
+        "refCount",
+        "sweepDetachFails",
+        "sweepDetachesOnlyOwnNames",
+        "sweepTrustsTheName",
+        "sweepWithNothing",
+        "theCommandLines",
+        "unmountDetachFails",
+        "unmountWithoutMount"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeRescueRsyncNegativeMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VolumeRescueRsyncNegativeMatrixTests"
+      ],
+      "tests": [
+        "exitZeroWithoutTheFile",
+        "hangThenStop",
+        "killedBySignal",
+        "launchFailure",
+        "launchFailureThenStop",
+        "mkdirCannotStart",
+        "mkdirExitsNonzero",
+        "mkdirLaunchFailureThenStop",
+        "noStartOutcomeInTheLog",
+        "oneOfThreeFails",
+        "partialTransferExit",
+        "stopBeforeTheFirstFile",
+        "stopThenNoLaunch",
+        "theCommandLinesAndARealCopy"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -40966,7 +41090,7 @@
       ],
       "expected_floor": 3959,
       "name": "unit",
-      "package_expected_floor": 988,
+      "package_expected_floor": 990,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -42176,9 +42300,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 887,
+      "expected_floor": 937,
       "name": "regression",
-      "package_expected_floor": 339,
+      "package_expected_floor": 351,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -42235,7 +42359,8 @@
         "VideoScanCoreTests.BackgroundQuitMarkerSweepTests",
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
-        "VideoScanCoreTests.CatalogCloseDrainTests"
+        "VideoScanCoreTests.CatalogCloseDrainTests",
+        "VideoScanCoreTests.EraCanaryCommandTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -42424,7 +42549,12 @@
         "VideoScanTests/HashReadFaultPruneTests",
         "VideoScanTests/HashReadFaultVerifyArchiveTests",
         "VideoScanTests/HashReadSeamTests",
-        "VideoScanTests/HashReadSeamSensorTests"
+        "VideoScanTests/HashReadSeamSensorTests",
+        "VideoScanTests/HallieWebFfmpegCommandTests",
+        "VideoScanTests/AudioTranscriberCommandTests",
+        "VideoScanTests/PersistentLogRotationGzipTests",
+        "VideoScanTests/RAMDiskNegativeMatrixTests",
+        "VideoScanTests/VolumeRescueRsyncNegativeMatrixTests"
       ]
     },
     {

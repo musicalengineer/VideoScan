@@ -8,6 +8,7 @@ import Foundation
 import SwiftUI
 import Combine
 import os
+import VideoScanCore
 
 private let rescueLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "rescue")
 
@@ -171,15 +172,15 @@ final class VolumeRescueOperation: ObservableObject {
 
     private var task: Task<Void, Never>?
 
-    /// Currently-running rsync (or future subprocess) so `cancel()` can
-    /// `terminate()` it mid-file. Without this, cancel was "soft" — it
-    /// marked the Task cancelled but `proc.waitUntilExit()` blocked until
-    /// the in-flight multi-GB rsync finished, which felt like a hung app.
-    /// Rick force-quit the app 2026-06-07 trying to cancel a copy.
-    /// `nonisolated(unsafe)` because we set it on the rsync helper actor
-    /// boundary and read it on MainActor cancel — single producer / single
-    /// reader, manual sync via task-cancellation semantics.
-    nonisolated(unsafe) private var currentProcess: Process?
+    /// True while an rsync child is running. Until 2026-11-21 this was the
+    /// `Process` itself, kept so `cancel()` could `terminate()` it mid-file
+    /// (without that, cancel was "soft": `waitUntilExit()` blocked until the
+    /// in-flight multi-GB rsync finished, and Rick force-quit the app
+    /// 2026-06-07 trying to cancel a copy). rsync now runs through
+    /// ProcessRunner, whose cancellation handler sends that same SIGTERM the
+    /// moment `task.cancel()` lands (and SIGKILL if rsync lingers past the
+    /// grace period) — so only the fact is kept, for the cancel log line.
+    private var rsyncInFlight = false
 
     /// Default subfolder name on the destination. Used as the placeholder
     /// in the Compare UI's "Folder name" TextField. The folder is created
@@ -240,7 +241,7 @@ final class VolumeRescueOperation: ObservableObject {
         bytesAlreadyPresent = 0
         filesRepaired = 0
         errors = []
-        currentProcess = nil
+        rsyncInFlight = false
         // Remember destination so post-completion UX can trigger a
         // rescan of the volume that just received the files.
         lastDestPath = destPath
@@ -306,18 +307,16 @@ final class VolumeRescueOperation: ObservableObject {
     /// nil before the first rescue.
     @Published private(set) var lastDestPath: String?
 
-    /// Stop a running copy as fast as possible. Calls Task.cancel() (which
-    /// stops the loop between files) AND `terminate()` on the current
-    /// rsync subprocess (which kills the in-flight transfer mid-file).
-    /// Without the latter, cancel was effectively "stop after this file"
-    /// which meant several minutes of "did it cancel?" UI for large MXFs.
+    /// Stop a running copy as fast as possible. Task.cancel() stops the
+    /// loop between files AND — through ProcessRunner's cancellation
+    /// handler — sends SIGTERM to the current rsync subprocess (which kills
+    /// the in-flight transfer mid-file). Without the latter, cancel was
+    /// effectively "stop after this file" which meant several minutes of
+    /// "did it cancel?" UI for large MXFs.
     func cancel() {
-        let hadProc = currentProcess != nil
+        let hadProc = rsyncInFlight
         task?.cancel()
-        if let proc = currentProcess, proc.isRunning {
-            proc.terminate()
-        }
-        currentProcess = nil
+        rsyncInFlight = false
         rescueLog.notice("Rescue cancel requested (hadProc=\(hadProc, privacy: .public))")
         // isRunning is flipped by the task's completion block once it
         // observes the cancellation. Leaving it true here keeps any
@@ -424,17 +423,25 @@ final class VolumeRescueOperation: ObservableObject {
                 self?.progress = progressFraction
             }
 
-            // Create destination directory
-            let mkdirProc = Process()
-            mkdirProc.executableURL = URL(fileURLWithPath: "/bin/mkdir")
-            mkdirProc.arguments = ["-p", destDir]
-            do {
-                try mkdirProc.run()
-                mkdirProc.waitUntilExit()
-            } catch {
+            // Create destination directory.
+            //
+            // Through ProcessRunner (2026-11-21; it was a hand-rolled
+            // `Process()`): same executable and argv, the app's environment
+            // and working directory. As before, only a FAILURE TO LAUNCH is
+            // reported here — mkdir's exit status is not read (rsync then
+            // fails on the missing directory and says so). mkdir's output,
+            // which used to go to the app's own stdout/stderr, is discarded.
+            let mkdir = await ProcessRunner.runProcess(executable: "/bin/mkdir", arguments: ["-p", destDir],
+                                                       stdoutLimitBytes: 0, stderrLimitBytes: 0)
+            if !mkdir.launched {
+                // The runner does not launch a child for a cancelled task:
+                // that is the user's Stop, not a failed file. Asked of the
+                // RESULT, not of the task: a Stop that lands after a genuine
+                // launch failure must not erase that failure (Codex r1 P2).
+                if mkdir.cancelledBeforeLaunch { break }
                 await MainActor.run { [weak self] in
                     self?.filesFailed += 1
-                    self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
+                    self?.errors.append("mkdir failed: \(relative) — \(mkdir.stderr)")
                 }
                 continue
             }
@@ -452,63 +459,68 @@ final class VolumeRescueOperation: ObservableObject {
             // parks partials in a sidecar directory instead. Deliberately
             // NOT changed here: one bug per change, and this one needs its
             // own test pass. Reported to the Manager 2026-09-13.
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
-            proc.arguments = [
-                "--checksum",       // verify with checksum, not just size/mtime
-                "--partial",        // keep partial transfers for resume
-                "--times",          // preserve modification times
-                srcFile,
-                destFile
-            ]
-
-            let errPipe = Pipe()
-            proc.standardError = errPipe
-
-            // Hand the running process to the actor so cancel() can kill
-            // it mid-transfer (rsync responds to SIGTERM by aborting the
-            // current chunk, which is what the user expects when they
-            // click Cancel on a multi-GB file).
+            //
+            // Through ProcessRunner (2026-11-21; it was a hand-rolled
+            // `Process()` + `waitUntilExit()`): the SAME executable and argv,
+            // the app's environment and working directory. What the runner
+            // does differently, none of it weaker:
+            //   • stderr is drained while rsync runs (it was read only after
+            //     exit, so more than the 64 KB pipe buffer blocked rsync
+            //     forever); the collected copy is capped at that same 64 KB;
+            //   • stdout (nothing, without -v) is discarded instead of
+            //     inherited;
+            //   • Stop: task cancellation sends the SIGTERM `cancel()` used
+            //     to send by hand, then SIGKILL after the 5 s grace if rsync
+            //     has not exited (before: SIGTERM only).
+            // There is still NO deadline: a multi-GB file on a slow disk
+            // legitimately takes as long as it takes.
             await MainActor.run { [weak self] in
-                self?.currentProcess = proc
+                self?.rsyncInFlight = true
             }
-            do {
-                try proc.run()
-                proc.waitUntilExit()
-                await MainActor.run { [weak self] in
-                    if self?.currentProcess === proc {
-                        self?.currentProcess = nil
-                    }
-                }
+            let result = await ProcessRunner.runProcess(
+                executable: "/usr/bin/rsync",
+                arguments: [
+                    "--checksum",       // verify with checksum, not just size/mtime
+                    "--partial",        // keep partial transfers for resume
+                    "--times",          // preserve modification times
+                    srcFile,
+                    destFile
+                ],
+                stdoutLimitBytes: 0,
+                stderrLimitBytes: 64 * 1024)
+            await MainActor.run { [weak self] in
+                self?.rsyncInFlight = false
+            }
 
-                if proc.terminationStatus == 0 {
-                    // Measure what is actually at the destination rather
-                    // than trusting the catalog's size for this record
-                    // (consistency with the fast path, which now reports
-                    // only measured bytes). rsync exited 0, so the file is
-                    // there and checksum-verified; if we somehow can't
-                    // measure it, report 0 written rather than invent a
-                    // number.
-                    let landed = Self.measuredSize(ofFileAt: destFile) ?? 0
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.bytesWritten += landed
-                    }
-                } else {
-                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errMsg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "exit \(proc.terminationStatus)"
-                    await MainActor.run { [weak self] in
-                        self?.filesFailed += 1
-                        self?.errors.append("\(relative) — rsync: \(errMsg)")
-                    }
-                }
-            } catch {
+            if !result.launched {
+                // The runner refused to launch because the task was already
+                // cancelled = the user's Stop landed before this file
+                // started: it was not attempted. Asked of the RESULT, not of
+                // the task — a Stop arriving after a genuine launch failure
+                // leaves that failure counted and named (Codex r1 P2).
+                if result.cancelledBeforeLaunch { break }
                 await MainActor.run { [weak self] in
-                    if self?.currentProcess === proc {
-                        self?.currentProcess = nil
-                    }
                     self?.filesFailed += 1
-                    self?.errors.append("\(relative) — \(error.localizedDescription)")
+                    self?.errors.append("\(relative) — \(result.stderr)")
+                }
+            } else if result.exitCode == 0 {
+                // Measure what is actually at the destination rather
+                // than trusting the catalog's size for this record
+                // (consistency with the fast path, which now reports
+                // only measured bytes). rsync exited 0, so the file is
+                // there and checksum-verified; if we somehow can't
+                // measure it, report 0 written rather than invent a
+                // number.
+                let landed = Self.measuredSize(ofFileAt: destFile) ?? 0
+                await MainActor.run { [weak self] in
+                    self?.filesCopied += 1
+                    self?.bytesWritten += landed
+                }
+            } else {
+                let errMsg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                await MainActor.run { [weak self] in
+                    self?.filesFailed += 1
+                    self?.errors.append("\(relative) — rsync: \(errMsg)")
                 }
             }
         }

@@ -135,6 +135,12 @@ public enum ProcessRunner {
         /// ffprobe execution). The one source of execution evidence; the
         /// never-launched paths (cancelled first, launch threw) leave false.
         public var launched: Bool = false
+        /// True only when the runner REFUSED to launch because the calling
+        /// task was already cancelled. With `launched == false` this is how
+        /// "the user's Stop got there first" is told from "the tool could
+        /// not be started" — the task's cancellation flag cannot say, since
+        /// a Stop may land after a genuine launch failure (Codex r1 P2).
+        public var cancelledBeforeLaunch: Bool = false
 
         public var succeeded: Bool { exitCode == 0 && stdout != nil }
 
@@ -143,7 +149,8 @@ public enum ProcessRunner {
         /// mints a Result — a sensor forbids `ProcessRunner.Result(` in the
         /// app sources. Same fields and defaults as the memberwise init.
         @_spi(Testing) public init(stdout: String?, stderr: String, exitCode: Int32,
-                    timedOut: Bool = false, launched: Bool = false) {
+                    timedOut: Bool = false, launched: Bool = false, cancelledBeforeLaunch: Bool = false) {
+            self.cancelledBeforeLaunch = cancelledBeforeLaunch
             self.stdout = stdout
             self.stderr = stderr
             self.exitCode = exitCode
@@ -280,7 +287,7 @@ public enum ProcessRunner {
         control: ProcessControl?
     ) async -> Result {
         guard !Task.isCancelled else {
-            return Result(stdout: nil, stderr: "cancelled", exitCode: -1)
+            return Result(stdout: nil, stderr: "cancelled", exitCode: -1, cancelledBeforeLaunch: true)
         }
 
         let proc = Process()
@@ -376,7 +383,7 @@ public enum ProcessRunner {
                     stdoutHandle.readabilityHandler = nil
                     stderrHandle.readabilityHandler = nil
                     lifecycle.finishNeverLaunched()
-                    completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
+                    completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1, cancelledBeforeLaunch: true))
                     return
                 }
                 launchAndArm(

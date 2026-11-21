@@ -290,17 +290,32 @@ struct MLXWhisperTranscriber: AudioTranscriber {
 // and ordering contract are unchanged — see SubprocessEnv.swift for
 // the doc comment.
 
-/// Why the Whisper subprocess died. Set from inside the deadline
-/// Task (`deadlineHit`) or onCancel handler (`userCancelled`), read
-/// once after waitUntilExit. `@unchecked Sendable` is fine — each
-/// field is mutated by exactly one writer, then read after a
-/// happens-before barrier (proc exit / handler return).
-///
-/// File-scope (not nested in transcribe) so `finishTranscribe` can
-/// take it as a typed parameter.
-private final class KillReason: @unchecked Sendable {
-    var deadlineHit = false
-    var userCancelled = false
+/// The last `capBytes` of the subprocess's stderr, kept line by line as the
+/// runner delivers it (ProcessRunner's own cap keeps the FIRST bytes; a
+/// failure's cause is at the END of a chatty model load). Memory: at most
+/// `capBytes` plus one line.
+/// (C++: a mutex-guarded std::deque<std::string> trimmed from the front.)
+private final class StderrTail: @unchecked Sendable {
+    private let lock = NSLock()
+    private let capBytes: Int
+    private var lines: [String] = []
+    private var bytes = 0
+
+    init(capBytes: Int) { self.capBytes = capBytes }
+
+    func add(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        lines.append(line)
+        bytes += line.utf8.count + 1
+        while bytes > capBytes, lines.count > 1 {
+            bytes -= lines.removeFirst().utf8.count + 1
+        }
+    }
+
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return String(lines.joined(separator: "\n").suffix(capBytes))
+    }
 }
 
 struct PythonSubprocessAudioTranscriber: AudioTranscriber {
@@ -370,9 +385,16 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
             try? FileManager.default.removeItem(at: outDir)
         }
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: pythonPath)
-        proc.arguments = [
+        // One shot through ProcessRunner (2026-11-21; this was a hand-rolled
+        // `Process()` with its own deadline poll and kill escalation). Same
+        // executable, argv and environment; the runner now owns what the
+        // hand-rolled code did by hand:
+        //   • deadline → SIGTERM → (2 s) SIGKILL → abandon   (`deadlineSeconds`,
+        //     `killGraceSeconds`; `Result.timedOut` says it was ours)
+        //   • task cancellation (skipLane) → SIGTERM → (2 s) SIGKILL
+        //   • both pipes drained continuously (a chatty child cannot block)
+        // and a ScriptedExecutor can answer it in a test.
+        let arguments = [
             "-u",                 // unbuffered stdout/stderr — matches
             scriptPath,           // IdentifyFamilyModel.swift pattern
             videoPath,
@@ -387,169 +409,57 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
         // Intel), so the Python child fails with `[Errno 2] No such file or
         // directory: 'ffmpeg'`. Prepending Homebrew prefixes makes the
         // lookup work regardless of how the parent app was launched.
-        // Hardcoded ≈ a #define in C — fine for this narrow fix; if we ever
-        // need a generic Homebrew-prefix detector we'll lift it then.
         env["PATH"] = augmentedPathWithHomebrew(
             inheriting: ProcessInfo.processInfo.environment["PATH"]
         )
-        proc.environment = env
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
 
         // Cap captured stderr so a chatty model load doesn't leak
         // unbounded memory if something goes wrong upstream. 64 KB is
         // more than enough to identify the failure mode.
-        let stderrCapMax = 64 * 1024
+        let stderrTail = StderrTail(capBytes: 64 * 1024)
 
-        // Run the subprocess on a background queue so we can `await`
-        // its completion via continuation. Swift's `withCheckedThrowingContinuation`
-        // ≈ a C++ promise/future bridge between callback APIs and
-        // coroutines.
-        do {
-            try proc.run()
-        } catch {
-            throw AudioTranscriberError.subprocessLaunchFailed(
-                reason: error.localizedDescription
-            )
+        // The deadline has always been measured from the top of this
+        // function (the audio preflight spends part of it); keep that.
+        // 0.2 s floor = the old watcher's first poll.
+        let remaining = deadlineSeconds.map { max(0.2, $0 - (CFAbsoluteTimeGetCurrent() - started)) }
+
+        let result = await ProcessRunner.runProcess(
+            executable: pythonPath,
+            arguments: arguments,
+            environment: env,
+            // Progress + diagnostics go to the app log as they are printed,
+            // alongside the other engines' output; nothing is collected.
+            stdoutLine: { line in appLog.write("whisper[\(filename)]: \(line)") },
+            stderrLine: { line in stderrTail.add(line) },
+            stdoutLimitBytes: 0,
+            stderrLimitBytes: 0,
+            deadlineSeconds: remaining,
+            killGraceSeconds: 2.0)
+
+        // A cancelled parent (skipLane) is our signal to the orchestrator
+        // to bank VLM-only and tag "user skipped" — before any other
+        // reading of the result (a cancel also makes the exit nonzero, and
+        // a cancel before the launch leaves `launched` false).
+        try Task.checkCancellation()
+
+        guard result.launched else {
+            throw AudioTranscriberError.subprocessLaunchFailed(reason: result.stderr)
         }
 
-        // See KillReason (file-scope) for why we hand-roll a small
-        // mutable record instead of returning multiple Bools through
-        // the cancellation handler.
-        let killReason = KillReason()
-
-        // Capture the subprocess PID up front as a Sendable Int32 so
-        // the @Sendable onCancel closure can SIGTERM directly without
-        // capturing the non-Sendable Process reference. This is the
-        // KEY fix for Skip not working: a bare `Task { ... }` polling
-        // loop does NOT inherit the parent task's cancellation
-        // (per Apple docs — Task.init is sibling, not child), so
-        // checking Task.isCancelled inside an inner Task never sees
-        // a cancel of the orchestrator's pendingWhisperTask.
-        // withTaskCancellationHandler's onCancel fires synchronously
-        // when the parent is cancelled — that's how we plug
-        // skipLane → SIGTERM end-to-end.
-        let subprocessPID = proc.processIdentifier
-        let killGraceSeconds: Double = 2.0
-
-        // Deadline watcher: still a polling Task, but now its ONLY
-        // job is the wall-clock deadline. User cancellation goes via
-        // the handler below. Bounded loop — exits when proc dies OR
-        // deadline trips OR (via defer) when the function returns.
-        let deadlineTask = Task {
-            guard let deadline = deadlineSeconds else { return }
-            while proc.isRunning {
-                if CFAbsoluteTimeGetCurrent() - started > deadline {
-                    killReason.deadlineHit = true
-                    transcribeLogger.warning("whisper subprocess exceeded \(deadline, format: .fixed(precision: 0), privacy: .public)s deadline for \(filename, privacy: .public) — sending SIGTERM")
-                    kill(subprocessPID, SIGTERM)
-                    try? await Task.sleep(for: .seconds(killGraceSeconds))
-                    if proc.isRunning {
-                        transcribeLogger.warning("whisper subprocess ignored SIGTERM (deadline) for \(filename, privacy: .public) — sending SIGKILL")
-                        kill(subprocessPID, SIGKILL)
-                    }
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(200))
+        if result.exitCode != 0 {
+            // Deadline kill MUST be checked before the generic
+            // subprocessFailed — a TERM-killed Python exits non-zero, but
+            // the cause is "we asked for it," not engine failure. (Exit
+            // status first: a child that finished as the deadline fired
+            // did its work — see ProcessRunner.Result.timedOut.)
+            if result.timedOut, let dl = deadlineSeconds {
+                transcribeLogger.warning("whisper subprocess exceeded \(dl, format: .fixed(precision: 0), privacy: .public)s deadline for \(filename, privacy: .public) — stopped")
+                throw AudioTranscriberError.deadlineExceeded(seconds: dl)
             }
-        }
-        defer { deadlineTask.cancel() }
-
-        // Cancellation-aware run: onCancel fires the instant parent
-        // (orchestrator's pendingWhisperTask) is cancelled — which is
-        // exactly what skipLane does. We SIGTERM immediately so the
-        // subprocess exits and the blocking pipe reads unblock; the
-        // 2s SIGTERM → SIGKILL escalation happens in a detached
-        // fire-and-forget so onCancel can return immediately.
-        return try await withTaskCancellationHandler {
-            // Drain stdout to the app log line-by-line so progress
-            // shows up alongside other engines' output. These reads
-            // ARE blocking — but once proc.terminate() fires from
-            // onCancel, the pipes close and the reads return.
-            let stdoutData = await Task.detached {
-                stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            }.value
-            let stderrData = await Task.detached {
-                stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            }.value
-
-            proc.waitUntilExit()
-            // checkCancellation throws CancellationError if parent
-            // was cancelled — that's our signal to the orchestrator
-            // to bank VLM-only and tag "user skipped".
-            try Task.checkCancellation()
-
-            return try finishTranscribe(
-                filename: filename,
-                exitCode: proc.terminationStatus,
-                stdoutData: stdoutData,
-                stderrData: stderrData,
-                stderrCapMax: stderrCapMax,
-                outFile: outFile,
-                started: started,
-                killReason: killReason,
-                deadlineSeconds: deadlineSeconds
-            )
-        } onCancel: {
-            killReason.userCancelled = true
-            transcribeLogger.notice("whisper subprocess cancelled for \(filename, privacy: .public) — sending SIGTERM")
-            kill(subprocessPID, SIGTERM)
-            // 2s grace then SIGKILL if Python didn't exit. Detached
-            // because onCancel is synchronous; this fire-and-forget
-            // task escalates safely after the handler returns.
-            Task.detached {
-                try? await Task.sleep(for: .seconds(killGraceSeconds))
-                kill(subprocessPID, SIGKILL)  // no-op if PID already reaped
-            }
-        }
-    }
-
-    /// Post-exit accounting extracted into a helper so the inline
-    /// transcribe body stays readable inside the cancellation handler.
-    /// Threads everything via parameters — no implicit captures so it
-    /// composes cleanly with whatever isolation the caller is on.
-    private func finishTranscribe(
-        filename: String,
-        exitCode: Int32,
-        stdoutData: Data,
-        stderrData: Data,
-        stderrCapMax: Int,
-        outFile: URL,
-        started: CFAbsoluteTime,
-        killReason: KillReason,
-        deadlineSeconds: Double?
-    ) throws -> String {
-
-        let stderrTail: String = {
-            let bytes = stderrData.suffix(stderrCapMax)
-            return String(data: bytes, encoding: .utf8) ?? ""
-        }()
-
-        // Stream stdout into the log for diagnostic context. Bounded
-        // memory: we already have it all in stdoutData; we just split.
-        if let stdoutText = String(data: stdoutData, encoding: .utf8) {
-            for line in stdoutText.split(separator: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty {
-                    appLog.write("whisper[\(filename)]: \(trimmed)")
-                }
-            }
-        }
-
-        // Deadline kill MUST be checked before the generic subprocessFailed
-        // branch — a TERM-killed Python exits with non-zero, but the
-        // semantic cause is "we asked for it," not engine failure.
-        if killReason.deadlineHit, let dl = deadlineSeconds {
-            throw AudioTranscriberError.deadlineExceeded(seconds: dl)
-        }
-
-        if exitCode != 0 {
-            transcribeLogger.error("whisper subprocess exited \(exitCode) for \(filename, privacy: .public): \(stderrTail, privacy: .public)")
+            let tail = stderrTail.text
+            transcribeLogger.error("whisper subprocess exited \(result.exitCode) for \(filename, privacy: .public): \(tail, privacy: .public)")
             throw AudioTranscriberError.subprocessFailed(
-                exitCode: exitCode, stderrTail: stderrTail
+                exitCode: result.exitCode, stderrTail: tail
             )
         }
 
