@@ -230,6 +230,34 @@ enum PictureFaultMatrix {
 
     /// The Check Media rows that are about the picture (the lengths row is
     /// about both, and is the one that can see a picture that stops early).
+    /// The table in four consecutive parts, one per slice suite (≈ C++: four spans over one array).
+    static let slices: [[Fault]] = {
+        let size = (faults.count + 3) / 4
+        return stride(from: 0, to: faults.count, by: size).map { Array(faults[$0..<min($0 + size, faults.count)]) }
+    }()
+
+    /// One fault, generated in every container it applies to and read back: it must land in its
+    /// pinned class. The body of the old `fault(_:)` test, unchanged.
+    static func expectPinned(_ fault: Fault, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("pfm")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for c in Container.allCases where !fault.skip.contains(c) {
+            let path = try generate(fault, c, into: dir)
+            let (outcome, detail) = try await Self.outcome(path: path)
+            let want = fault.expected(in: c)
+            switch (want, outcome) {
+            case (.flagged(let kind), .flagged):
+                // The named row must be among the ones that spoke.
+                #expect(detail.contains("\(kind.rawValue): "), "\(fault.name) / \(c.rawValue): wanted \(kind.rawValue), got \(detail)",
+                        sourceLocation: sourceLocation)
+            default:
+                #expect(outcome == want, "\(fault.name) / \(c.rawValue): wanted \(want), got \(outcome) — \(detail)",
+                        sourceLocation: sourceLocation)
+            }
+            try? FileManager.default.removeItem(atPath: path)
+        }
+    }
+
     static let pictureKinds: [MediaCheckKind] = [
         .bitrate, .frameRate, .timestamps, .avDuration, .aspect, .truncation, .distinctFrames,
         .decode, .black, .freeze, .interlace, .packetTiming, .keyframes, .dataRate, .sync, .timecode, .colour,
@@ -303,24 +331,16 @@ struct PictureFaultMatrixTests {
         }
     }
 
-    @Test("each fault lands in its pinned class in each container",
-          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(5)), arguments: M.faults)
-    func fault(_ fault: M.Fault) async throws {
-        let dir = try VerifyAudioTestMedia.makeScratchDir("pfm")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        for c in M.Container.allCases where !fault.skip.contains(c) {
-            let path = try M.generate(fault, c, into: dir)
-            let (outcome, detail) = try await M.outcome(path: path)
-            let want = fault.expected(in: c)
-            switch (want, outcome) {
-            case (.flagged(let kind), .flagged):
-                // The named row must be among the ones that spoke.
-                #expect(detail.contains("\(kind.rawValue): "), "\(fault.name) / \(c.rawValue): wanted \(kind.rawValue), got \(detail)")
-            default:
-                #expect(outcome == want, "\(fault.name) / \(c.rawValue): wanted \(want), got \(outcome) — \(detail)")
-            }
-            try? FileManager.default.removeItem(atPath: path)
-        }
+    // "each fault lands in its pinned class in each container" lives in the four slice suites below
+    // (2026-11-20): as ONE parameterized test it was 226 s that no -only-testing selector can divide,
+    // and it alone set the wall time of the sharded app lane. Same 20 faults, same assertions
+    // (PictureFaultMatrix.expectPinned); `theSlicesAreTheTable` pins that nothing fell between them.
+
+    @Test("the four slice suites cover every fault of the table exactly once, in order")
+    func theSlicesAreTheTable() {
+        let sliced = M.slices.flatMap { $0 }.map(\.name)
+        #expect(sliced == M.faults.map(\.name), "a fault is in no slice, or in two")
+        #expect(M.slices.count == 4 && M.slices.allSatisfy { !$0.isEmpty })
     }
 
     @Test("the table adds up: the totals are the table's own")
@@ -343,5 +363,49 @@ struct PictureFaultMatrixTests {
         #expect(flagged == 50, "a picture row is a Warning or a Problem: \(flagged)")
         #expect(notChecked == 4, "no picture — every picture row says not checked: \(notChecked)")
         #expect(missed == 30, "KNOWN GAPS — every picture row reads OK: \(missed)")
+    }
+}
+
+@Suite("Picture fault matrix — each fault lands where the table pins it (part 1 of 4)", .serialized)
+struct PictureFaultMatrixPartATests {
+    typealias M = PictureFaultMatrix
+
+    @Test("each fault lands in its pinned class in each container",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(5)), arguments: M.slices[0])
+    func faultsPartA(_ fault: M.Fault) async throws {
+        try await M.expectPinned(fault)
+    }
+}
+
+@Suite("Picture fault matrix — each fault lands where the table pins it (part 2 of 4)", .serialized)
+struct PictureFaultMatrixPartBTests {
+    typealias M = PictureFaultMatrix
+
+    @Test("each fault lands in its pinned class in each container",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(5)), arguments: M.slices[1])
+    func faultsPartB(_ fault: M.Fault) async throws {
+        try await M.expectPinned(fault)
+    }
+}
+
+@Suite("Picture fault matrix — each fault lands where the table pins it (part 3 of 4)", .serialized)
+struct PictureFaultMatrixPartCTests {
+    typealias M = PictureFaultMatrix
+
+    @Test("each fault lands in its pinned class in each container",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(5)), arguments: M.slices[2])
+    func faultsPartC(_ fault: M.Fault) async throws {
+        try await M.expectPinned(fault)
+    }
+}
+
+@Suite("Picture fault matrix — each fault lands where the table pins it (part 4 of 4)", .serialized)
+struct PictureFaultMatrixPartDTests {
+    typealias M = PictureFaultMatrix
+
+    @Test("each fault lands in its pinned class in each container",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(5)), arguments: M.slices[3])
+    func faultsPartD(_ fault: M.Fault) async throws {
+        try await M.expectPinned(fault)
     }
 }

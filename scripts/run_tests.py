@@ -3,7 +3,7 @@
 
     scripts/run_tests.sh [--smoke | --full] [--unit] [--regression] [--integration] [--perf]
                          [--stress] [--python] [--corpus] [--verbose] [--host m4|ultra|m5pro|m1]
-                         [--ref <rev>] [--filter PATTERNS] [--list] [--dry-run] [--yes] [--force]
+                         [--ref <rev>] [--filter PATTERNS] [--jobs N] [--list] [--dry-run] [--yes] [--force]
     scripts/run_tests.sh --status
 
 A THIN layer over the runners that already exist (Rick 2026-11-19: TestDriver was retired
@@ -43,6 +43,16 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     cannot name it). A filtered lane's plan is exact: it says "ran N of M" and ANY shortfall is RED
     (skipped tests count as ran; parameterized cases may add more). The source parser blanks string
     literals and comments before counting braces (it agrees with the manifest on every Swift file).
+  * --jobs N (2026-11-20, DECISIONS "parallel strands") — the app lane runs as N concurrent test HOSTS
+    (default: half the cores), each one `xcodebuild test-without-building -xctestrun … -only-testing:…`
+    with its own main thread, log and result bundle: <worktree>/scripts/xctest_shards.py on
+    scripts/testbed_strands.py deals the selected test files to N shards by their suites' recorded
+    seconds, keeps the suites that share state across processes in a serial tail (its SERIAL_TAIL
+    table, a reason each), and is RED for a shard that dies, times out, runs fewer tests than its
+    files declare or leaves a suite at zero tests. Its lines are parsed here as they come, so the
+    display and the counts are the single host's. `--jobs 1` is the single host, as before; so is a
+    commit whose worktree has no xctest_shards.py. --full is not sharded: its app lane is inside
+    scripts/nightly_local_tests.sh (one script: Core, the Release build, the app suite, the row).
   * --status — every live run_tests on this Mac (pid, filter, commit, slot, lane, n/N, since), the
     three slots (commit, in use or idle, DerivedData size) and, when reachable, who holds the M4
     testbed lock with an estimated finish (that lane's last finished run, else its planned length;
@@ -213,10 +223,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     ap.add_argument("--filter", default=None, metavar="PATTERNS",
                     help="gtest-style: 'Pos1:Pos2-Neg1:Neg2', globs on Suite.test (a pattern without '.' names "
                          "suites); picks from every runnable test file, not the smoke's few")
+    ap.add_argument("--jobs", type=int, default=None, metavar="N",
+                    help="app test hosts at once (default: half the cores; 1 = the single host). Not --full")
     ap.add_argument("--status", action="store_true", help="what run_tests is running on this Mac (and the M4 lock), then stop")
     ap.add_argument("--on-host", action="store_true", help=argparse.SUPPRESS)   # set by the ssh caller
     a = ap.parse_args(list(argv))                    # exits 2 on a usage error
     a.mode = "full" if a.full else "smoke"
+    if a.jobs is not None and a.jobs < 1:
+        ap.error("--jobs must be at least 1")
     a.stage_flags = any(getattr(a, f) for f in STAGE_FLAGS)
     if a.filter is not None:
         if a.full:
@@ -713,6 +727,58 @@ def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, res
     return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd)
             + ["-parallel-testing-enabled", "NO"] + (["-resultBundlePath", str(result)] if result else [])
             + [f"-only-testing:VideoScanTests/{s}" for s in suites])
+
+
+def app_jobs(a) -> int:
+    """Test hosts at once for the app lane: --jobs, else half the cores (testbed_strands.default_jobs)."""
+    n = getattr(a, "jobs", None)
+    return max(1, n if n else (os.cpu_count() or 2) // 2)
+
+
+def shards_script(wt: Path) -> Path:
+    return wt / "scripts" / "xctest_shards.py"
+
+
+def shard_plan(picks: Sequence[Pick]) -> dict:
+    """What xctest_shards.py --plan reads: one group per app test file — its selectors (as the single
+    host would get them), the tests it declares and whether that count is an exact floor."""
+    return {"groups": [{"name": Path(p.path).stem, "selectors": app_selectors([p]), "tests": p.tests,
+                        "exact": p.exact, "stage": p.stage, "path": p.path} for p in picks if p.kind == "app"]}
+
+
+def app_shards_cmd(wt: Path, plan: Path, jobs: int, shard_dir: Path, dd: Optional[Path] = None) -> List[str]:
+    """The app test phase as `jobs` concurrent test hosts (one child: it fans out, streams and fans in)."""
+    return [sys.executable, str(shards_script(wt)), "--products", str((dd or DD) / "Build" / "Products"),
+            "--plan", str(plan), "--jobs", str(jobs), "--run-dir", str(shard_dir), "--stream"]
+
+
+SHARD_LINE = "xctest-shards: "
+SHARD_VERDICT = re.compile(r"^(GREEN|RED): (\d+) passed, (\d+) failed, (\d+) skipped\b")
+SHARD_FAILED = re.compile(r"^failed: (.+?)(?: — (.*?))? · \S+ log: \S+$")
+
+
+def adopt_shard_verdict(lane: "LaneResult", lines: Sequence[str]) -> None:
+    """The fan-in's last verdict line is the lane's count. The stream parsed here is the K hosts' logs,
+    where a test's verdict line is now and then glued into the middle of an app log line and missed
+    (4 of 14,244 on 2026-11-20); the fan-in counts from each shard's result bundle. A failure it names
+    that the stream did not show is added, so no failed test is ever only a number."""
+    verdict = None
+    named: List[Tuple[str, str]] = []
+    for text in lines:
+        m = SHARD_VERDICT.match(text)
+        if m:
+            verdict = m
+        m = SHARD_FAILED.match(text)
+        if m:
+            named.append((m.group(1), m.group(2) or ""))
+    if verdict is None:
+        return
+    seen = {e.name for e in lane.failures}
+    for name, msg in named:
+        if name not in seen:
+            lane.failures.append(Event("FAILED", name, None, _short(msg)))
+    lane.passed, lane.skipped = int(verdict.group(2)), int(verdict.group(4))
+    lane.failed = max(int(verdict.group(3)), len(lane.failures))
 
 
 def app_selectors(picks: Sequence[Pick]) -> List[str]:
@@ -1892,8 +1958,32 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                     lane.ran, lane.expected = True, sum(p.tests for p in app)
                     lane.exact = exact(app)
                     phase(phase="app: testing", done=out.done, total=out.expected)
-                    lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult"), "app-test.log",
-                                                     LANE_BUDGET["app"], parser=LineParser(), lane=lane, gui=True)
+                    jobs = app_jobs(a)
+                    if jobs > 1 and shards_script(wt).exists():
+                        # N test hosts at once (scripts/xctest_shards.py). Its own lines say the deal, the
+                        # serial tail and each shard's verdict; a RED one is the lane's reason.
+                        plan = run_dir / "app-shards-plan.json"
+                        plan.write_text(json.dumps(shard_plan(app)))
+                        red: List[str] = []
+                        said: List[str] = []
+
+                        def shard_line(raw: str) -> None:
+                            if raw.startswith(SHARD_LINE):
+                                text = raw[len(SHARD_LINE):].rstrip()
+                                said.append(text)
+                                if " — RED" in text or text.startswith("RED"):
+                                    red.append(text)
+                                if not text.startswith("failed: "):      # the test's own line already said it
+                                    out.plain(" " * 13 + text)
+                        lane.rc, lane.seconds = r.stream(app_shards_cmd(wt, plan, jobs, run_dir / "app-shards", dd),
+                                                         "app-test.log", LANE_BUDGET["app"], parser=LineParser(),
+                                                         lane=lane, gui=True, on_line=shard_line)
+                        adopt_shard_verdict(lane, said)
+                        if lane.rc not in (0, None) and not lane.failed and red:
+                            lane.reason = _short("; ".join(red[:3]))
+                    else:
+                        lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult"), "app-test.log",
+                                                         LANE_BUDGET["app"], parser=LineParser(), lane=lane, gui=True)
                     lane_end(out, lane, run_dir / "app-test.log")
         if "core" in a.kinds and core and "core" in missing:
             lanes.append(setup_lane("core", missing["core"]))
@@ -2423,7 +2513,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         core = [p for p in picks if p.kind == "core"]
         if app:
             print("+ " + " ".join(shlex.quote(x) for x in app_build_cmd(wt, dd)))
-            print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(wt, app_selectors(app), dd, Path("<run>/app.xcresult"))))
+            if app_jobs(a) > 1:
+                print("+ " + " ".join(shlex.quote(x) for x in app_shards_cmd(
+                    wt, Path("<run>/app-shards-plan.json"), app_jobs(a), Path("<run>/app-shards"), dd))
+                      + f"   # {app_jobs(a)} test hosts at once; --jobs 1 = one host")
+            else:
+                print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(wt, app_selectors(app), dd, Path("<run>/app.xcresult"))))
         if core:
             print("+ " + " ".join(shlex.quote(x) for x in core_build_cmd(wt)))
             print("+ " + " ".join(shlex.quote(x) for x in core_test_cmd(

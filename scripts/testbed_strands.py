@@ -119,6 +119,26 @@ def _stop_group(p: subprocess.Popen) -> None:
             continue
 
 
+def _stop_groups(procs: Sequence[subprocess.Popen]) -> None:
+    """Stop many strands in ONE grace period: TERM every group, wait for all against one shared
+    deadline, KILL whatever is left, wait again (15 test hosts and a caller that gives us 10 s:
+    one grace period each would be minutes, and the caller's KILL would orphan them)."""
+    for sig, grace in ((signal.SIGTERM, TERM_GRACE_S), (signal.SIGKILL, 5.0)):
+        for p in procs:                      # the whole group, also when its leader is already gone
+            try:
+                os.killpg(p.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+        deadline = time.monotonic() + grace
+        for p in procs:
+            try:
+                p.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
+        if all(p.poll() is not None for p in procs):
+            return
+
+
 class Runner:
     """Runs strands; `on_done(result)` is called as each one ends (from a worker thread, serialised)."""
 
@@ -162,6 +182,12 @@ class Runner:
                 _stop_group(p)
                 rc = p.returncode if p.returncode is not None else -9
                 fh.write(f"\n# strand {s.name}: TIMEOUT after {s.timeout:g}s — its process group was stopped\n")
+            except BaseException:
+                # Ctrl-C / TERM lands HERE when the strand runs on the caller's thread (the serial phase).
+                # Stop the group before the `finally` forgets it: stop() only knows what is in _live, so
+                # no exit from this wait may skip the kill (≈ C++: the destructor of an RAII process guard).
+                _stop_group(p)
+                raise
             finally:
                 with self._lock:
                     self._live.pop(p.pid, None)
@@ -172,8 +198,7 @@ class Runner:
         with self._lock:
             self._stopping = True
             live = list(self._live.values())
-        for p in live:
-            _stop_group(p)
+        _stop_groups(live)
 
     def run(self, strands: Sequence[Strand]) -> List[Result]:
         """Parallel strands N at a time (longest first), then serial strands one by one. Results in

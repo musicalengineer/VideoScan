@@ -131,3 +131,24 @@ ts.Runner({str(tmp_path / 'run')!r}, jobs=2, timings_path={str(tmp_path / 't.jso
         pid = int(log.read_text().splitlines()[1])
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+def test_stop_asks_every_strand_to_end_at_once_not_one_grace_period_each(tmp_path):
+    # 15 test hosts each take a moment to wind down on TERM. Stopped one after another, a caller that
+    # waits 10 s before KILLing the runner (run_tests' lane budget) would orphan most of them.
+    import threading
+    code = ("import signal,sys,time\n"
+            "def bye(*a):\n    time.sleep(1.0); sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, bye); print('up', flush=True); time.sleep(60)")
+    work = [ts.Strand(name=f"s{i}", cmd=[sys.executable, "-c", code]) for i in range(6)]
+    runner = ts.Runner(tmp_path / "run", jobs=6, timings_path=tmp_path / "t.json")
+    th = threading.Thread(target=lambda: runner.run(work), daemon=True)
+    th.start()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and sum("up" in l.read_text() for l in (tmp_path / "run").glob("*/strand.log")) < 6:
+        time.sleep(0.05)
+    t0 = time.monotonic()
+    runner.stop()
+    took = time.monotonic() - t0
+    th.join(10)
+    assert took < 3.0, f"stopping 6 strands that each need 1 s took {took:.1f}s — they were stopped one by one"

@@ -576,6 +576,11 @@ struct TreeIdentityCenterTests {
         let kinship = KinshipDisplayCenter()
         let center = TreeIdentityCenter(kinshipCenter: kinship)
         center.defaults = nil
+        // The pin gate asks the PROCESS-WIDE archive authority by default (FamilyTreeAccessMode.current()).
+        // Any earlier suite in this host whose model has a designated-but-offline archive leaves it
+        // "unavailable", and every pin here was refused — order-dependent, found when the suites were
+        // dealt to shards (2026-11-20). These tests are not about the gate: inject the mode.
+        center.writeMode = { .full }
         center.speakers = { HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae",
                                                         ownerFamilySearchID: "GVQV-NW3") }
         return (center, kinship)

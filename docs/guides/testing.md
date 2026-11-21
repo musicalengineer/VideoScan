@@ -445,6 +445,7 @@ A thin front door over the runners above. It only selects and displays, so there
     scripts/run_tests.sh --verbose           # one coloured line per test, googletest-style
     scripts/run_tests.sh --host m4 -v        # the same on the M4, streamed live over ssh (+ corpus check --limit 10 from the Ultra)
     scripts/run_tests.sh --list              # what the smoke runs, by module and stage
+    scripts/run_tests.sh --jobs 8            # app test hosts at once (default: half the cores; 1 = one host; not --full)
     scripts/run_tests.sh --full              # everything: nightly_local_tests.sh --on-demand + run_python_tests.sh
 
 - **What the smoke runs.** It reads `scripts/gauntlet/manifest.json` at the commit and takes, for each module and stage,
