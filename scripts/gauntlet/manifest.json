@@ -10800,6 +10800,25 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogDebounceSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogCommitterDebounceSeamTests",
+        "CatalogStoreDebounceSeamTests"
+      ],
+      "tests": [
+        "aBindingDoesNotLeak",
+        "aDebouncedSaveLands",
+        "anEditDuringAHoldLandsAtRelease",
+        "anEditInsideTheWindowThenQuit",
+        "anEditInsideTheWindowThenQuit",
+        "editsInsideTheWindowCoalesce",
+        "productionDefaultsArePinned",
+        "theDefaultIsTheProductionDebounce"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogDistributionOffMainTests.swift",
       "stage": "unit",
       "suites": [
@@ -40894,7 +40913,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3939,
+      "expected_floor": 3947,
       "name": "unit",
       "package_expected_floor": 982,
       "package_selectors": [
@@ -41656,7 +41675,9 @@
         "VideoScanTests/CatalogAuditMarkerPublishFaultTests",
         "VideoScanTests/DeleteDuplicatesPlanPublishFaultTests",
         "VideoScanTests/IntegrityReportPublishFaultTests",
-        "VideoScanTests/LedgerRewritePublishFaultTests"
+        "VideoScanTests/LedgerRewritePublishFaultTests",
+        "VideoScanTests/CatalogCommitterDebounceSeamTests",
+        "VideoScanTests/CatalogStoreDebounceSeamTests"
       ]
     },
     {

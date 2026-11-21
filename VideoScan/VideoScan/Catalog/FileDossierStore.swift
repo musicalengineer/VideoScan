@@ -149,7 +149,16 @@ final class FileDossierStore: ObservableObject {
     private var changes: AnyCancellable?
     private var said: Set<String> = []
 
-    init() {}
+    /// At most one re-read per this period while change signals stream in: 1 s.
+    nonisolated static let readThrottle: Duration = .seconds(1)
+    /// This store's period — `readThrottle` unless a test passed a shorter
+    /// one (so a "no read after the view went away" test need not wait
+    /// out real seconds). Fixed at construction; no setter.
+    private let readThrottle: Duration
+
+    init(readThrottle: Duration = FileDossierStore.readThrottle) {
+        self.readThrottle = readThrottle
+    }
 
     /// Show `fileID`'s dossier (nil = the file has no catalog id). Called from
     /// the view's `.task(id:)`, so a new selection cancels the old read.
@@ -161,7 +170,7 @@ final class FileDossierStore: ObservableObject {
         if changes == nil {
             // Throttle, latest (review 11/05): a steady stream still reads, at most once a second.
             changes = loader.changes
-                .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
+                .throttle(for: .seconds(TimingBudget.seconds(readThrottle)), scheduler: DispatchQueue.main, latest: true)
                 .sink { [weak self] in MainActor.assumeIsolated { self?.reloadSoon() } }
         }
         guard let fileID else {

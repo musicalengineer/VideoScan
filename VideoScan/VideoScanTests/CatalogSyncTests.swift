@@ -512,11 +512,24 @@ struct CatalogStoreReadOnlyTests {
     func readOnlyStoreRefusesScheduleSave() async throws {
         let dir = scratchDir("ro-sched")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = CatalogStore(directory: dir)
+        // An injected 50 ms debounce (production: 2 s — this test used to
+        // sleep 2.5 s). The wait is not a guess: a WRITABLE twin with the
+        // same debounce is scheduled at the same moment, and once its
+        // debounced save is on disk the read-only store's window has
+        // passed too.
+        let store = CatalogStore(directory: dir, saveDebounce: .milliseconds(50))
+        let twinDir = scratchDir("ro-sched-twin")
+        defer { try? FileManager.default.removeItem(at: twinDir) }
+        let twin = CatalogStore(directory: twinDir, saveDebounce: .milliseconds(50))
         store.isReadOnly = true
         store.scheduleSave(records: [makeRecord("a.mov")])
-        // Debounce window in CatalogStore is 2s; wait longer than that.
-        try await Task.sleep(nanoseconds: 2_500_000_000)
+        twin.scheduleSave(records: [makeRecord("a.mov")])
+        for _ in 0..<500 where !FileManager.default.fileExists(atPath: twin.fileLocation) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(FileManager.default.fileExists(atPath: twin.fileLocation),
+                     "the writable twin's debounced save never landed — the wait proves nothing")
+        try await Task.sleep(for: .milliseconds(100))        // one more window, for a late timer
         #expect(!FileManager.default.fileExists(atPath: store.fileLocation),
                 "readOnly scheduleSave must not fire the debounced write")
     }
@@ -565,15 +578,22 @@ struct CatalogStoreReadOnlyTests {
         let url = URL(fileURLWithPath: store.fileLocation)
         let mtime1 = try FileManager.default
             .attributesOfItem(atPath: url.path)[.modificationDate] as? Date
-        // Force at least one second of separation so any HFS+/APFS mtime
-        // granularity doesn't make this race-prone.
-        Thread.sleep(forTimeInterval: 1.1)
+        // No sleep for timestamp granularity (this used to wait 1.1 s): a
+        // rewrite publishes a NEW file (temp + rename), so the inode changes
+        // whatever the clock's resolution — compared below with the mtime.
+        let inode1 = try FileManager.default
+            .attributesOfItem(atPath: url.path)[.systemFileNumber] as? UInt64
         store.isReadOnly = true
         store.saveNow(records: [makeRecord("second.mov")])
         let mtime2 = try FileManager.default
             .attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        let inode2 = try FileManager.default
+            .attributesOfItem(atPath: url.path)[.systemFileNumber] as? UInt64
         #expect(mtime1 == mtime2,
                 "readOnly save must not rewrite the existing catalog.json")
+        #expect(inode1 != nil && inode1 == inode2,
+                "readOnly save must not replace the existing catalog.json")
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("first.mov"))
     }
 }
 

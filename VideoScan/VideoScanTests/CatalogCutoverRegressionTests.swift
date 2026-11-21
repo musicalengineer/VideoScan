@@ -531,9 +531,22 @@ struct CutoverHoldTests {
         // 1. The job holds writes; the edit waits; the job ends; it lands.
         _ = await model.catalogStore.holdWrites(reason: "Verify Catalog is reading the catalog", owner: CatalogWriteHoldOwner())
         let healthy = try scene.record(.healthy)
-        model.setUserNotes("typed while Verify ran", for: healthy)
-        try await Task.sleep(for: .milliseconds(2_600))           // past one debounce: the commit was asked for
-        #expect(scene.sandbox.catalogLogText().contains("HELD — Verify Catalog is reading the catalog"))
+        // The edit's commit is scheduled on a 50 ms timer instead of the
+        // production 2 s (this test used to sleep 2.6 s). The timer's task
+        // carries the short debounce, so the held commit also re-arms every
+        // 50 ms — the wait ends when the timer has fired and said HELD.
+        let committer = try scene.committer()
+        let commitsBefore = committer.commitCount
+        CatalogCommitter.$debounce.withValue(.milliseconds(50)) {
+            model.setUserNotes("typed while Verify ran", for: healthy)
+        }
+        #expect(committer.isBusy, "the edit put a commit on the timer")
+        let held = "HELD — Verify Catalog is reading the catalog"
+        for _ in 0..<500 where !scene.sandbox.catalogLogText().contains(held) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(scene.sandbox.catalogLogText().contains(held), "past one debounce: the commit was asked for, and waits")
+        try await Task.sleep(for: .milliseconds(200))             // several more windows under the hold
+        #expect(committer.commitCount == commitsBefore, "nothing is written while the job holds")
+        #expect(committer.isBusy, "the held commit stays on the timer")
         #expect(try await scene.reloaded(.healthy).userNotes != "typed while Verify ran")
         _ = model.catalogStore.releaseWriteHold()
         try await scene.settle()
