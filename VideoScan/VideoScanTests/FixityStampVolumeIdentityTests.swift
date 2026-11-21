@@ -566,6 +566,11 @@ struct FixityStampVolumeIdentityTests {
             // Never a stored stamp; identity is then asked of the volume
             // UUID (`mountVolumeUUID`), not st_dev.
             "VideoScan/MediaOps/Cleanup/CleanupDiskProbe.swift": 1,
+            // Rsync rescue publish (Codex GH #501 r2 #4): the HELD destination
+            // folder fd vs a stat of the requested folder path, in the same
+            // instant just before the publish — "was the folder moved away",
+            // never a stored stamp.
+            "VideoScan/Volumes/VolumeCompare.swift": 1,
             // (CatalogKnownCopies — STORED stamps — compares volume UUID +
             // inode, never st_dev: nightly 2026-10-12.)
         ]
