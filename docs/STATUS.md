@@ -1,39 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-19 22:45 (Thursday night; theme: harden the testbed tools). **🔴 For Rick, in this order:**
-(1) **Click Allow on the M4** (Screen Sharing): corpus v2 `prepare`, started 20:47 as the M4's GUI LaunchAgent, is blocked in
-`open()` on the X10 by the macOS prompt "Python would like to access files on a removable volume", holding the testbed lock
-(its watchdog ends it ~02:47). Or grant `/opt/homebrew/Cellar/python@3.15/3.15.2/…/Python` Removable Volumes / Full Disk
-Access (per interpreter path: a Homebrew Python upgrade needs it again). From now on the harness refuses in 20 s with that
-message instead of hanging (`d3b923c1d`). Then: `scripts/corpus_run.sh prepare --wait`, `scripts/m4_run.sh testbed --smoke
---wait`, `scripts/corpus_run.sh run check --wait` (the first full real-corpus check, 6,351 files ~1.95 TB). (2) **Laptop
-setup** (the permission system rightly would not let me install software): `ssh ricksm5.local 'brew install node &&
-xcodebuild -downloadComponent MetalToolchain'`; the same on `ricksm1.local`, plus `scripts/install_dev_tools.sh` there (its
-`venv/` is an old 3.12 without pytest). (3) **The M1's disk:** 33 GB free after I removed two clean October worktrees and
-rebuildable DerivedData; `~/dev/spectre` (7.3 GB) and `.photo-backup-2026-08-20/` are yours to judge.
-**Tonight, all pushed:** `25f99d8c7` run_tests + corpus_select hardened from a fresh review (11 red tests, all fixed): no
-false GREEN (a lane that ran under half its selection is RED; `--full`'s Python lane gets the venv), a silent hang hits its
-budget, closing the terminal or a dropped ssh stops the builds, Ctrl-C on `--host m4` exits 130 and skips the corpus step,
-`--corpus --host m4` runs only the corpus, `--full` with a stage flag or `--host` is refused with the right command, a
-nothing-to-run selection is refused before any side effect, the 5 s countdown comes first, and a **tool preflight** reports
-a Mac that lacks Metal Toolchain / node / ffmpeg / pytest as `NOT READY: setup` (those lanes NOT RUN, the rest still run)
-instead of test failures. `c5fd90f34` thumbnail L1 cache review fixes (exact ledger when an image is stored again or refused;
-START + OUTCOME through the one sink, off the main actor; still one OUTCOME if the model is gone); **my #497 diagnosis was
-wrong** — approachable concurrency is YES in both configs; Release differs by whole-module optimisation; corrected in the
-code comment and on the issue; the fix that matters is a Release compile in the pre-merge gate. `d3b923c1d` the corpus
-privacy-prompt probe. `1aedd96fc` interrupt wording. Sensor lane GREEN (836) on every merged tree.
-**run_tests, live matrix (new code `c5fd90f34`+):** Ultra — smoke GREEN 2,146 tests 6m53s; `--unit -v`, `--python
---regression`, `--integration`, `--host ultra`, `--ref <older>`, `--perf` (36 tests, 3m54s of it a Core build), `--stress`
-(12 tests in 8 s — not yet a stress test) all GREEN; Ctrl-C at 75 s → exit 130, no orphan processes, no extra worktree;
-refusals (bad ref, `--corpus` here, `--full --unit`, `--full --host m4`) exit 2 with a plain message; `--host m4` while the
-lock is held → exit 3 naming the holder, no corpus step. M4 (your 20:38 run) — 2,140 tests GREEN in 8m34s; its corpus step
-was correctly refused (v2 needs one `prepare`). M5 Pro and M1 — `NOT READY: setup` naming exactly what is missing; Core ran
-GREEN on both (742 each). **Disk:** run_tests keeps ~1 MB of logs per run (newest 20) and one reused DerivedData (~6 GB) per
-Mac; the night's worker build folders (32 GB on the Ultra) removed with their merged worktrees and branches.
-**Bridge:** Thunderbolt Bridge static 10.77.0.1 (Ultra) / 10.77.0.2 (M4); `ricksm4.local` resolves to it first; 1.83 GB/s
-over ssh. **Corpus v2 copied and verified** (every file's SHA-256, both roots): X10 `crucial10_testdata` adopted (UUID
-01B908EE…), 80% used; M4 SSD 84% used (floor 15% free). The Rick-facing 11/18 notes below are unchanged. Rick corrects this
-file; agents read it at session start.*
+*Updated 2026-11-20 20:30 (Friday; theme: testbed 5–10x faster — DECISIONS 2026-11-20 "parallel strands; serial only with a stated reason"). **🔴 For Rick:** (1) **GH #500 (P0)** — Transcode with Replace trashes the original when ffprobe can't measure the new output (crash / garbage / "Invalid data"); found by the new ffmpeg mock, parked as a known issue. Ruling needed: an unverified output is kept beside the original (default) or moved to the Trash; then fix red-first + scoped Codex. (2) **GH #498** — the corpus test host is ad-hoc signed, so every build re-prompts for Removable Volumes on the headless M4 (and a check where every file couldNotRead read GREEN). Fix = sign corpus builds with the M4's Apple Development identity; needs Rick at the M4 for one Allow (+ maybe a keychain prompt). Until then no real-corpus result from the M4 is trustworthy. (3) Laptops: `brew install node && xcodebuild -downloadComponent MetalToolchain` (ricksm5, ricksm1) + `scripts/install_dev_tools.sh` (M1). (4) M1: `~/dev/spectre`, `.photo-backup-2026-08-20/` and 5 stale July files in the Ultra's real `scan_checkpoints/` are Rick's to keep or remove. **Merged 2026-11-20 (all pushed, sensor lane GREEN each; main 633dc3d51):** `scripts/testbed_strands.py` — the one fan-out runner (N = cores/2, longest first, own process group/log/TMPDIR per strand, serial only with a reason); Python lane on it, one strand per module: **37m33s → 143 s** on the Ultra (2629 passed); nightly failure-modes self-test split into 3 concurrent groups (365 s → 16 s; fixed: an orphaned `sleep 300` in nightly_local_tests.sh held the nightly's output 5 min; a self-matching pgrep); corpus check + proof lanes N files in flight (**5.6x** synthetic at N=15; a launch of N that dies convicts no one, reruns alone, is AMBER and never the baseline); MFO verbs: 21 of 37 kinds run at once with solo-identical outcomes, a 37-kind parallelism inventory sensor, K sweep 5.0x at K=15, 78 verb suites un-serialized (10 kept with a reason); `run_tests` concurrent (3 slots, build lock only per commit, `--filter` gtest-style, `--status`, exact "ran N of M"); `run_tests --full --host m4` runs the M4 testbed; the smoke corpus step is the harness's stratified `--smoke`; the command-executor seam + `ScriptedExecutor` mock (task-local per test, escape guard, recorded ffprobe fixtures; 5 suites off the global fake-ffmpeg env var: parallel 53.8 s red → 7.4 s green); tests no longer touch the real App Support (scan checkpoints sandboxed; the metadata-cache guard stats, never opens; Promote/Verify isolation snapshots skip `-shm`). **Overnight 11/20→21 (Fable 5.2):** (a) app tests as K = cores/2 `test-without-building` shards on the strand runner for run_tests, the gauntlet Runner (`-parallel-testing-enabled NO` today) and the nightly — measured ~4x on 489 tests; the CI plan's `"parallelizable": false` stays until shards land; (b) Core: parallel, with GH #208 timing/scale tests split into a serial lane; (c) mock refactors where they pay: the per-verb negative matrix (hang / crash / nonzero / garbage / missing output / launch failure) for the data-risk verbs first (trash, prune, delete duplicates, promote) — any data-risk fix stops at the RED test for Rick + Codex; the `appLog` swap (forces 6 of the 10 remaining `.serialized`) → a TaskLocal sink; (d) Thread Sanitizer over the newly parallel suites; (e) GH #499 (self-test 18 runs the real xcodebuild). Open: `--jobs` not plumbed through m4_run.sh/corpus_run.sh; ~16 hand-rolled `Process()` sites bypass the seam (FFmpegFrameProvider, AudioTranscriber); the M4 06:00 suite had 3 load-sensitive failures (two 100k timing budgets, PythonClipWorker) that passed at 12:16.*
 
 ## Read first (five minutes)
 0. **How work moves (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
