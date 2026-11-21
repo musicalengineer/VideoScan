@@ -436,6 +436,53 @@ struct HashReadFaultPromoteTests {
         #expect(rows.count == 1 && rows.first?[ArchiveManifestCSV.relPathColumn] != rel, "\(rows)")
     }
 
+    /// Codex r2 P1 (GH #504 D3c, the reconcile leg's SOURCE). Same interrupted
+    /// promotion, but the journal `intent` carries no digest and there is no
+    /// manifest row, so the reference digest comes from reading the SOURCE.
+    /// That one read flips byte 20,000: A hashes to SHA-256(B). Two clean
+    /// reads of B at the destination then "match" it. The source's digest
+    /// must be confirmed by a second fresh read before B is indexed.
+    @Test("ADOPTION, reconcile leg, the SOURCE's read (Codex r2 P1): no journal or manifest digest, the source's one read flips a bit so it hashes to the file at the destination → NOT indexed (two reads of the source disagree, said in the console); the source is then promoted beside it",
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
+    func aFlippedSourceReadOnTheReconcileLegIndexesNothing() async throws {
+        let rel = try await whereItWouldBeFiled()
+        let sb = try MasterArchiveTestSupport.makeSandbox("hrf_reconcile_src"); defer { sb.cleanup() }
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
+                                                         bytes: Self.bytes, seed: 21)
+        let a = try Data(contentsOf: src)
+        let digestA = try #require(MasterArchiveTestSupport.sha256(ofFile: src.path))
+        var b = a
+        b[Int(Self.faultAt)] ^= 0x01
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1994-05-01")
+        model.records = [rec]
+        let dest = sb.archiveRoot.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try b.write(to: dest)
+        try #require(MasterArchiveTestSupport.manifestRows(sb).isEmpty, "fixture: no manifest row")
+        try ArchivePromoteJournal.append(.init(sourceRecordID: rec.id, sourcePath: src.path, destRelPath: rel,
+                                               state: .intent, sha256: nil, copyRecordID: nil, at: Date()),
+                                         rootPath: sb.archiveRoot.path)
+
+        let fault = HashReadFault(.bitFlip, pathSuffix: "Sources/" + Self.fileName, atByte: Self.faultAt, onPass: 1)
+        let job = try #require(await fault.run { await MasterArchiveTestSupport.promote(model, ids: [rec.id]) })
+        await job.completionTask?.value
+        try #require(fault.firedCount == 1, "fixture: the reconcile leg never read the source")
+        let copy = model.masterArchiveCopy(of: rec)
+        print("[hash-matrix] promote reconcile leg | bitFlip in the SOURCE's first read, no journal/manifest digest | \(job.outcomes.map { "\($0.kind): \($0.detail)" }) | source reads \(fault.passCount) | archive copy \(copy?.fullPath ?? "none")")
+        // Seen RED 2026-11-21 (before the fix): B indexed as A's archive copy.
+        #expect(copy?.fullPath != dest.path, "the source was tied to a file that does not hold its bytes")
+        #expect(try Data(contentsOf: dest) == b, "the file that was there is untouched")
+        #expect(try Data(contentsOf: src) == a, "the source is untouched")
+        let console = await hashFaultConsole(model, containing: "left in place, not indexed")
+        #expect(console.contains("two reads of \(Self.fileName) disagreed") && console.contains("left in place, not indexed"), "\(console)")
+        // The source itself is then promoted like any other — beside the file that was there.
+        #expect(copy?.archiveFixity?.digest == digestA, "\(job.outcomes)")
+        let rows = MasterArchiveTestSupport.manifestRows(sb)
+        #expect(rows.count == 1 && rows.first?[ArchiveManifestCSV.relPathColumn] != rel, "\(rows)")
+    }
+
     /// EIO and a read that ends early are named as READ failures (GH #504
     /// D1; were "write failed: read errno 5" / "could not open source" /
     /// "changed"). A flip shows up as two reads that disagree;
