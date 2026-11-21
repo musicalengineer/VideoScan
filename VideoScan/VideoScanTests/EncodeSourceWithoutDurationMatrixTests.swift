@@ -201,9 +201,27 @@ struct EncodeSourceWithoutDurationMatrixTests {
         let job = await mx.run(b, m, preset: .preservation)
         guard case .finished(let summary) = job.state else { Issue.record("a proven master was refused: \(job.state)"); return }
         #expect(summary.hasPrefix("✓ Verified bit-exact lossless (frame MD5) → \(b.target.lastPathComponent)"), "\(summary)")
+        #expect(summary.contains(". " + Self.note + " The previous file is in the Trash."), "\(summary)")
         #expect(b.trashed.all == [b.target.path])
         #expect(MX.sha(b.fakeTrash.appendingPathComponent(b.target.lastPathComponent)) == b.priorSHA)
         #expect(b.model.records.first { $0.fullPath == b.target.path }?.derivedFrom == b.source.id)
+    }
+
+    /// Codex r1 #11: the note was dropped for Preservation. The proof is the
+    /// verification, but "the length was not compared" is still true and
+    /// still said — with or without Replace.
+    @Test("Preservation of a source with no readable duration, proof passes: the summary and OUTCOME still carry 'Length not compared…'",
+          arguments: [true, false])
+    func aProvenMasterStillCarriesTheNote(_ replace: Bool) async throws {
+        typealias P = TranscodePreservationProofMatrixTests
+        let b = try mx.bench("nodur_proof_note_\(replace)", preset: .preservation); defer { b.sb.cleanup() }
+        let m = try preservationMock(b, masterVideo: P.threeGoodFrames)
+        let job = await mx.run(b, m, preset: .preservation, replace: replace)
+        guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(summary.hasPrefix("✓ Verified bit-exact lossless (frame MD5) → "), "\(summary)")
+        #expect(summary.contains(Self.note), "the row does not say the length was not compared: \(summary)")
+        let outcome = MediaFileOperationsCenter.terminalSummaryLine(verb: job.kind.logVerb, title: job.title, state: job.state, wasRefused: job.wasRefused)
+        #expect(outcome?.contains(Self.note) == true, "OUTCOME: \(outcome ?? "nil")")
     }
 
     @Test("Preservation + Replace of a source with no readable duration whose proof FAILS: failed as any failed proof — nothing trashed")

@@ -374,7 +374,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         if preset == .preservation {
             logPreservationSummary(outputSize: size, verified: true, evidence: nil)
             await catalogTranscodeOutput()
-            await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size)))\(publishNote)")
+            // The proof is the verification; "the length was not compared"
+            // is still true when the source has no readable duration, and
+            // still said, as Transcode says it (Codex r1 #11).
+            await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))).\(gate.note)\(publishNote)")
             return
         }
 
@@ -479,8 +482,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     /// something destructive rests on the comparison. A Replace is refused
     /// — except for Preservation, whose frame-MD5 proof runs next and is a
     /// stronger check than a length (if it fails, the job fails there).
-    /// Without Replace the new file is published and `note` says the
-    /// length was not compared.
+    /// Whenever the new file is then published, `note` says the length
+    /// was not compared — for Preservation too.
     ///
     /// nil = the job has been finished here.
     private func passGate(_ encodeResult: ProcessRunner.Result, inputPath: String,
@@ -505,7 +508,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             }
             appLog.write("transcode: \(record.filename) has no readable duration (\(why)) — the new file's length was read but not compared"
                 + (proofFollows ? "; the frame-MD5 proof decides" : ""))
-            return (bytes, stamp, proofFollows ? "" : " " + FFmpegEncodeCheck.lengthNotComparedNote)
+            return (bytes, stamp, " " + FFmpegEncodeCheck.lengthNotComparedNote)
         }
     }
 
