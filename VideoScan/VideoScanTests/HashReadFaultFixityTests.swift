@@ -70,7 +70,7 @@ struct HashReadFaultFixityTests {
     }
 
     @Test("BACKFILL × {EIO, short read}: nothing is stored for the faulted file, it is counted and named, the control file is hashed; a clean run then stores the true digest",
-          .timeLimit(.minutes(2)), arguments: [HashReadFault.Kind.eio, .shortRead])
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [HashReadFault.Kind.eio, .shortRead])
     func backfillStoresNothingFromAFailedRead(_ kind: HashReadFault.Kind) async throws {
         let sb = try ShowAgainSandbox.make("hrf_fhb_\(kind)"); defer { sb.cleanup() }
         let victim = try sb.record("test_hrf_victim.mov", bytes: 30_000, stage: .none)
@@ -262,7 +262,7 @@ struct HashReadFaultFixityTests {
     }
 
     @Test("BIND × {EIO, short read}: nothing is bound, the old fixity stays exactly as it was (still untrusted), the tally and summary say why; a clean run then binds the true digest",
-          .timeLimit(.minutes(2)), arguments: [HashReadFault.Kind.eio, .shortRead])
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [HashReadFault.Kind.eio, .shortRead])
     func bindStoresNothingFromAFailedRead(_ kind: HashReadFault.Kind) async throws {
         let r = try bindRig("\(kind)"); defer { r.sb.cleanup() }
         let fault = HashReadFault(kind, pathSuffix: "test_hrf_bind.mov", atByte: 12_000, onPass: 0)

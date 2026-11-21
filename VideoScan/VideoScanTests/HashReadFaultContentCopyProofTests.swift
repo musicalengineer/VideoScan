@@ -245,7 +245,7 @@ struct HashReadFaultContentCopyProofTests {
     // MARK: Relocate
 
     @Test("MATRIX, Relocate's adoption proof (a real Migrate): EIO, a premature EOF or a flipped bit in the fresh read of the adopted destination file → the adoption is NOT proven and the summary does not invite retiring the drive; a partial read proves it",
-          .timeLimit(.minutes(2)), arguments: DedupeFaultKind.allCases)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: DedupeFaultKind.allCases)
     func theAdoptionProofUnderEachFault(_ kind: DedupeFaultKind) async throws {
         let fault = DedupeReadFault(kind, where: { $0.contains("/dest/") && $0.hasSuffix("/a.mov") }, atByte: Self.at, onPass: 0)
         let (adopted, proven, invites, headline) = try await fault.run { () -> (Int, Int, Bool, String) in

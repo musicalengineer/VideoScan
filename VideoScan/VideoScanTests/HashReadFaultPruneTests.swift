@@ -80,7 +80,7 @@ struct HashReadFaultPruneTests {
     }
 
     @Test("MATRIX: each fault in the copy's read or the archive's read → no PruneProof is made, the hold is named, both files untouched; the same call without the fault proves the copy",
-          .timeLimit(.minutes(2)), arguments: PruneFaultCase.all)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: PruneFaultCase.all)
     func anUnprovenReadMakesNoProof(_ c: PruneFaultCase) async throws {
         let f = try await PruneApplyTests.fixture("hrf_\(c.kind)_\(c.inArchiveRead ? "arch" : "copy")")
         defer { f.sb.cleanup() }
@@ -201,7 +201,7 @@ struct HashReadFaultPruneTests {
     /// reads → the mover. Was parked as `theJobsReadsAreOutOfReach` (seen RED:
     /// the fault never fired and the copy went to the Trash on clean reads).
     @Test("MATRIX at the JOB: each fault in the copy's read or the archive's read → the row is HELD and named, nothing is handed to the mover, both files and the catalog are untouched; the same job, clean, moves the copy",
-          .timeLimit(.minutes(2)), arguments: PruneFaultCase.all)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: PruneFaultCase.all)
     func aFaultedReadInTheJobMovesNothing(_ c: PruneFaultCase) async throws {
         let f = try await PruneApplyTests.fixture("hrfjob_\(c.kind)_\(c.inArchiveRead ? "arch" : "copy")")
         defer { f.sb.cleanup() }
@@ -257,7 +257,7 @@ struct HashReadFaultPruneTests {
     /// The read that D3a added at prune: a fault in the copy's SECOND read
     /// (identical files, the first read was clean and matched).
     @Test("VERDICT + JOB, the copy's SECOND read: EIO or a read that ends early → held 'could not be read in full'; a flipped bit → held 'two reads of <copy> disagreed — nothing was removed'; nothing is handed to the mover",
-          .timeLimit(.minutes(2)), arguments: HashReadFault.Kind.allCases)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: HashReadFault.Kind.allCases)
     func aFaultInTheCopysSecondReadHoldsIt(_ kind: HashReadFault.Kind) async throws {
         let f = try await PruneApplyTests.fixture("hrf_second_\(kind)"); defer { f.sb.cleanup() }
         let copyBytes = try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath))

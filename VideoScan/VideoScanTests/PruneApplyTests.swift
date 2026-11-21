@@ -174,7 +174,7 @@ struct PruneApplyTests {
 
     // MARK: I1 — both full reads, this batch
 
-    @Test("I1: the archive file is read in full once per batch, each copy once — a reproducing stamp never stands in")
+    @Test("I1: the archive file is read in full once per batch, each matching copy twice (GH #504 D3a) — a reproducing stamp never stands in")
     func bothFilesAreReadInFullEveryBatch() async throws {
         let f = try await Self.fixture("i1"); defer { f.sb.cleanup() }
         // A past Verify left a stamp on the archive that reproduces NOW; the

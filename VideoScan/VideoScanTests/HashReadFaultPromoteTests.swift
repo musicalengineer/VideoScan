@@ -109,7 +109,7 @@ struct HashReadFaultPromoteTests {
     }
 
     @Test("MATRIX: each fault in each of Promote's reads → the file is refused, nothing lands, nothing is recorded, a clean retry promotes it",
-          .timeLimit(.minutes(2)), arguments: PromoteFaultCase.all)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: PromoteFaultCase.all)
     func nothingIsPromoted(_ c: PromoteFaultCase) async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_promote"); defer { sb.cleanup() }
         let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
@@ -185,7 +185,7 @@ struct HashReadFaultPromoteTests {
     /// byte of A's proving read, so the digest Promote holds for A is
     /// SHA-256(B). The source's SECOND read, made before adopting, disagrees.
     @Test("a bit flipped in the proving read makes the source 'identical' to a different file at the destination — NOT adopted: the source's second read disagrees, 'two reads of <file> disagreed — nothing was recorded'",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func aFlippedProvingReadAdoptsAnotherFile() async throws {
         // Where would this file be filed? Ask a clean promote in a scratch sandbox.
         let probe = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_probe"); defer { probe.cleanup() }
@@ -270,7 +270,7 @@ struct HashReadFaultPromoteTests {
     /// really holds the source's bytes) still adopts — after the source's
     /// second read agreed — and a fault in that second read refuses by name.
     @Test("ADOPTION, the source's SECOND read: clean → adopted after exactly two source reads, no copy; EIO or a read that ends early → failed 'could not be read in full', nothing recorded",
-          .timeLimit(.minutes(2)), arguments: [HashReadFault.Kind?.none, .eio, .shortRead])
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [HashReadFault.Kind?.none, .eio, .shortRead])
     func theConfirmingReadBeforeAnAdoption(_ kind: HashReadFault.Kind?) async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt2"); defer { sb.cleanup() }
         let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
@@ -316,7 +316,7 @@ struct HashReadFaultPromoteTests {
     /// one bit apart; the destination's FIRST read returns that bit flipped,
     /// so it hashes to SHA-256(A). Two clean source reads cannot see that.
     @Test("ADOPTION, destination (Codex r1 P1): the file already at the destination is ONE BIT apart and its first read flips that bit → NOT adopted: its second read disagrees, 'two reads of <path> disagreed — nothing was recorded'",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func aFlippedDestinationReadAdoptsNothing() async throws {
         let rel = try await whereItWouldBeFiled()
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_dest"); defer { sb.cleanup() }
@@ -352,7 +352,7 @@ struct HashReadFaultPromoteTests {
     /// at now holds B, one bit apart from the manifest's bytes; its first
     /// read returns that bit flipped.
     @Test("ADOPTION, manifest leg (Codex r1 P1): the file the manifest row points at is ONE BIT apart and its first read flips that bit → NOT linked: its second read disagrees; a clean run refuses it as a digest mismatch",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func aFlippedDestinationReadOnTheManifestLegLinksNothing() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_manifest"); defer { sb.cleanup() }
         let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
@@ -399,7 +399,7 @@ struct HashReadFaultPromoteTests {
     /// interrupted promotion. That file is B, one bit apart; its first read
     /// returns the bit flipped, so it hashes to the source's digest.
     @Test("ADOPTION, reconcile leg: the file an interrupted promotion left at the destination is ONE BIT apart and its first read flips that bit → NOT indexed (its second read disagrees, said in the console); the source is then promoted beside it",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func aFlippedDestinationReadOnTheReconcileLegIndexesNothing() async throws {
         let rel = try await whereItWouldBeFiled()
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_reconcile"); defer { sb.cleanup() }

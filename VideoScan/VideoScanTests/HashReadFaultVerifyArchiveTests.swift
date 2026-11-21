@@ -71,7 +71,7 @@ struct HashReadFaultVerifyArchiveTests {
     }
 
     @Test("MATRIX: each fault in the archive file's read → never verified, no fixity written from it, the row and the red summary name it, the control file is unaffected",
-          .timeLimit(.minutes(2)), arguments: VerifyFaultCase.all)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: VerifyFaultCase.all)
     func aFaultedReadNeverVerifies(_ c: VerifyFaultCase) async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_verify"); defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
@@ -179,7 +179,7 @@ struct HashReadFaultVerifyArchiveTests {
     /// Verify called the file verified and restored a stripped fixity. Now
     /// the read fails by name and nothing is written.
     @Test("a read that ENDS EARLY on an archive file holding the manifest's bytes PLUS A TAIL is never verified/restored and writes no archiveFixity: a FAILED row, the run ends red",
-          .timeLimit(.minutes(2)), arguments: [true, false])
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [true, false])
     func aShortReadOfALongerArchiveFileVerifies(recordHasFixity: Bool) async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_verify_tail"); defer { sb.cleanup() }
         let model = MasterArchiveTestSupport.makeModel(sb)
@@ -248,7 +248,7 @@ struct HashReadFaultVerifyArchiveTests {
     }
 
     @Test("CONFLICT (Codex r1 P1): the archive holds B and correctly stores SHA(B); the manifest names A, one bit apart; ONE read flips B→A → the stored fingerprint is NOT replaced: 'read twice, disagreed (stored fingerprint kept)', a failed row, the run ends red",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func oneReadThatMatchesTheManifestDoesNotReplaceAStoredFingerprint() async throws {
         let flip: (Data) -> Data = { var d = $0; d[17_000] ^= 0x01; return d }
         let c = try await conflict("hrf_verify_conflict", disk: flip, stored: flip); defer { c.sb.cleanup() }
@@ -270,7 +270,7 @@ struct HashReadFaultVerifyArchiveTests {
     }
 
     @Test("CONFLICT, the other half: the record's fingerprint is stale and TWO reads agree with the manifest → the fingerprint is replaced and the row and the console SAY so, old → new",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func twoReadsThatAgreeWithTheManifestReplaceAStaleFingerprintAndSayIt() async throws {
         let c = try await conflict("hrf_verify_replace", disk: { $0 }, stored: { var d = $0; d[17_000] ^= 0x01; return d })
         defer { c.sb.cleanup() }
@@ -288,7 +288,7 @@ struct HashReadFaultVerifyArchiveTests {
     }
 
     @Test("CONFLICT × the SECOND read: EIO or a read that ends early in the confirming read → a failed row naming it, the stored fingerprint kept",
-          .timeLimit(.minutes(2)), arguments: [HashReadFault.Kind.eio, .shortRead])
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: [HashReadFault.Kind.eio, .shortRead])
     func aFailedSecondReadKeepsTheStoredFingerprint(_ kind: HashReadFault.Kind) async throws {
         let c = try await conflict("hrf_verify_second_\(kind)", disk: { $0 }, stored: { var d = $0; d[17_000] ^= 0x01; return d })
         defer { c.sb.cleanup() }
@@ -306,7 +306,7 @@ struct HashReadFaultVerifyArchiveTests {
     /// used to clear the true fingerprint and cry POSSIBLE CORRUPTION; the
     /// matrix above flips EVERY read (that is, to any reader, the content).
     @Test("ONE flipped read of an intact, verified file: the second read disagrees with the first → failed 'read twice, disagreed (stored fingerprint kept)', the true fingerprint is NOT cleared, no POSSIBLE CORRUPTION",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func oneFlippedReadDoesNotClearATrueFingerprint() async throws {
         let c = try await conflict("hrf_verify_oneflip", disk: { $0 }, stored: { $0 }); defer { c.sb.cleanup() }
         let before = c.copy.archiveFixity
@@ -325,7 +325,7 @@ struct HashReadFaultVerifyArchiveTests {
     // MARK: Codex r1 P1 (GH #504, D1 stricter) — a file that changes size under the read yields no digest
 
     @Test("SHRINK (Codex r1 P1): the archive file is truncated to half AFTER its whole content was buffered by the first read → never restored/verified from the former digest: a failed row 'changed while it was read (50000 bytes before, 25000 after)', no fixity written",
-          .timeLimit(.minutes(2)))
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)))
     func aFileThatShrinksUnderTheReadIsNeverRestored() async throws {
         let c = try await conflict("hrf_verify_shrink", disk: { $0 }, stored: { $0 }); defer { c.sb.cleanup() }
         c.copy.archiveFixity = nil

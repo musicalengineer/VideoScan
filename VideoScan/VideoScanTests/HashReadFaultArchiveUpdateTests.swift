@@ -42,7 +42,7 @@ struct HashReadFaultArchiveUpdateTests {
     }
 
     @Test("MATRIX: each fault in each of Update's two reads → never 'updated'; the file is at its old path with its old bytes, the index and the record are unchanged; a clean retry updates it",
-          .timeLimit(.minutes(2)), arguments: UpdateFaultCase.all)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: UpdateFaultCase.all)
     func aFaultedReadNeverUpdates(_ c: UpdateFaultCase) async throws {
         let a = try UpdateFixture.make("hrf_\(c.kind)_\(c.afterTheMove ? "after" : "before")")
         defer { a.sb.cleanup() }
