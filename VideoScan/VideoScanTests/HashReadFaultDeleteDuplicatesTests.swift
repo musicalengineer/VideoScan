@@ -333,9 +333,16 @@ struct HashReadFaultDeleteDuplicatesTests {
     }
 
     // MARK: The matrix (byte-identical files)
+    //
+    // `.serialized`: 28 cells, each two full runs of the job on a 12 MiB pair,
+    // all main-actor bound. Run at once (as the 16 cells were before GH #504
+    // added three read sites) they held the main actor long enough, in a
+    // parallel run on a busy machine, for a neighbouring suite's wall-clock
+    // fixture to time out (the real Migrate in HashReadFaultContentCopyProofTests,
+    // 30 s). One cell at a time; still parallel with every other test.
 
     @Test("MATRIX: {EIO, premature EOF, partial read, bit flip} × {keeper, duplicate at its path, quarantine re-hash, quarantine single read, keeper 2nd read, quarantine 2nd read, keeper confirming read} — only the benign partial read (and a flipped CONFIRMING read, after which both files are proven by clean reads) reaches the Trash; every other cell is refused, named, journalled, and the duplicate is back at its path, byte for byte",
-          .timeLimit(.minutes(3)), arguments: DedupeFaultCell.all)
+          .serialized, .timeLimit(.minutes(3)), arguments: DedupeFaultCell.all)
     func aFaultedReadNeverReachesTheTrash(_ c: DedupeFaultCell) async throws {
         let rig = try makeRig("m_\(c.site)_\(c.kind)", cachedKeeper: c.site.cachedKeeper)
         defer { rig.cleanup() }
