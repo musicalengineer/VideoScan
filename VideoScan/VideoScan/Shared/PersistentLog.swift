@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 /// Write-through log file for crash-resilient logging.
 /// Each line is flushed to disk immediately via FileHandle — no buffering.
@@ -91,6 +92,32 @@ final class PersistentLog: LogSink, @unchecked Sendable {
     /// beachball QA flagged on the Reconcile-preview logger.
     private(set) var synchronizeCount = 0
 
+    /// Every write of this sink goes through here (codex r1, 2026-11-21): the
+    /// throwing FileHandle API, every failure contained — a line that cannot
+    /// be written (disk full, I/O error) is dropped and counted, and said
+    /// once when writing works again. See `ContainedLogWrite`. Under `lock`.
+    private var contained = ContainedLogWrite()
+
+    /// Lines this sink could not write, over its life (tests, forensics).
+    var droppedLineCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return contained.totalDroppedLines
+    }
+
+    /// MUST hold `lock`. Never throws or raises. True when the bytes landed.
+    @discardableResult
+    private func put(_ data: Data, lines: Int, to handle: FileHandle) -> Bool {
+        contained.write(data, lines: lines, to: handle, stampPrefix: Self.lineStamp())
+    }
+
+    /// "[HH:mm:ss] " for now — the prefix of every line.
+    private static func lineStamp() -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm:ss"
+        return "[\(fmt.string(from: Date()))] "
+    }
+
     /// If the file at `url` exceeds the threshold, archive it and leave
     /// no file at `url`. Caller reopens. MUST hold `lock`.
     private func rotateIfOversized() {
@@ -152,8 +179,8 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
         let header = "VideoScan \(name) log — started \(fmt.string(from: Date()))\n"
             + "─────────────────────────────────────────────\n"
-        if let data = header.data(using: .utf8) {
-            handle?.write(data)
+        if let data = header.data(using: .utf8), let handle {
+            put(data, lines: 0, to: handle)
         }
     }
 
@@ -177,7 +204,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
                 fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
                 let header = "VideoScan \(name) log — rotated \(fmt.string(from: Date())) (previous archived beside this file)\n"
                     + "─────────────────────────────────────────────\n"
-                if let data = header.data(using: .utf8) { handle?.write(data) }
+                if let data = header.data(using: .utf8), let handle { put(data, lines: 0, to: handle) }
             }
         }
 
@@ -185,8 +212,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
         let stamped = "[\(fmt.string(from: Date()))] \(line)\n"
-        if let data = stamped.data(using: .utf8) {
-            handle.write(data)
+        if let data = stamped.data(using: .utf8), put(data, lines: 1, to: handle) {
             // Sync to disk immediately — no OS buffering
             try? handle.synchronize()
             synchronizeCount += 1
@@ -223,7 +249,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
                 fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
                 let header = "VideoScan \(name) log — rotated \(fmt.string(from: Date())) (previous archived beside this file)\n"
                     + "─────────────────────────────────────────────\n"
-                if let data = header.data(using: .utf8) { handle?.write(data) }
+                if let data = header.data(using: .utf8), let handle { put(data, lines: 0, to: handle) }
             }
         }
 
@@ -238,8 +264,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
             buf += line
             buf += "\n"
         }
-        if let data = buf.data(using: .utf8) {
-            handle.write(data)
+        if let data = buf.data(using: .utf8), put(data, lines: lines.count, to: handle) {
             try? handle.synchronize()
             synchronizeCount += 1
         }
@@ -274,7 +299,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
             let footer = "─────────────────────────────────────────────\n"
                 + "Log closed.\n"
             if let data = footer.data(using: .utf8) {
-                handle.write(data)
+                put(data, lines: 0, to: handle)
             }
             try? handle.close()
         }

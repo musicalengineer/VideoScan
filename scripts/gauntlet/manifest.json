@@ -98,6 +98,25 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AtomicFilePublishFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AtomicFilePublishFaultTests"
+      ],
+      "tests": [
+        "aDirectoryFsyncFailureStillReportsTheLandedSave",
+        "aFailedLowLevelPublishTouchesNeitherFile",
+        "aFailedStepPublishesNothing",
+        "aFaultIsScopedToItsTask",
+        "aStalledPublishIsVisibleToAnotherThread",
+        "fastDurabilityNeverSyncs",
+        "interruptedAndShortWritesStillWriteEverything",
+        "theSeamIsInternalAndComplete",
+        "unboundIsTheLivePublish"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AtomicFilePublishModeTests.swift",
@@ -1075,6 +1094,23 @@
         "richDetection",
         "syncCommitOneRow",
         "syncCommitThousandRows"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContainedLogWriteTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ContainedLogWriteTests",
+        "TimingBudgetNanosecondsTests"
+      ],
+      "tests": [
+        "aLongOutageIsBounded",
+        "failuresAreCountedThenSaidOnce",
+        "noRaisingFileHandleCallIsLeft",
+        "saturates",
+        "successIsByteForByte",
+        "theBackgroundSinkIsContained"
       ]
     },
     {
@@ -4610,6 +4646,18 @@
       ],
       "tests": [
         "randomKillsLeaveACommittedPrefix"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHighWaterPublishFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogHighWaterPublishFaultTests"
+      ],
+      "tests": [
+        "aFailedMarkRefusesTheCommit",
+        "theWriterItselfThrows"
       ]
     },
     {
@@ -9086,6 +9134,35 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AtomicPublishCallerFaultTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesPlanPublishFaultTests",
+        "LedgerRewritePublishFaultTests",
+        "IntegrityReportPublishFaultTests",
+        "CatalogAuditMarkerPublishFaultTests",
+        "ArchiveAuditPublishFaultTests",
+        "EventsStatsPublishFaultTests"
+      ],
+      "tests": [
+        "aFailedBackfillFinishLeavesAFalseResumeOffer",
+        "aFailedBackupPublishLeavesTheLedgerAlone",
+        "aFailedCountsFileIsSaid",
+        "aFailedFinishIsSaid",
+        "aFailedFirstReportLeavesNothing",
+        "aFailedLatestKeepsThePreviousReport",
+        "aFailedLedgerPublishKeepsTheOldLedger",
+        "aFailedSaveIsNotRecordedAsWritten",
+        "aFailedSaveReturnsFalseAndKeepsTheFile",
+        "aFailedTagSaveIsSaidInTheAppLog",
+        "aFailedWriteReturnsFalse",
+        "aHealthyRunSaysNothing",
+        "theFailureIsSaidOncePerOutage",
+        "theSameRenameLandsOnceTheDiskAnswers"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AudioFingerprintAttemptTests.swift",
       "stage": "regression",
       "suites": [
@@ -10744,6 +10821,29 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogDebounceSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogCommitterDebounceSeamTests",
+        "CatalogStoreDebounceSeamTests",
+        "CatalogDebounceClampTests"
+      ],
+      "tests": [
+        "aBindingDoesNotLeak",
+        "aDebouncedSaveLands",
+        "anEditDuringAHoldLandsAtRelease",
+        "anEditInsideTheWindowThenQuit",
+        "anEditInsideTheWindowThenQuit",
+        "editsInsideTheWindowCoalesce",
+        "productionDefaultsArePinned",
+        "theCommitterAcceptsAnyDuration",
+        "theDefaultIsTheProductionDebounce",
+        "theDossierTimingsSaturate",
+        "theStoreSaturates"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogDistributionOffMainTests.swift",
       "stage": "unit",
       "suites": [
@@ -11092,6 +11192,18 @@
         "staleSelectionIsANoOp",
         "twentyOneRowsAsk",
         "twentyRowsDoNotAsk"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogOutOfRangeStarCommitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogOutOfRangeStarCommitTests"
+      ],
+      "tests": [
+        "anEditOnTheSameRecordWaitsWithIt",
+        "onlyTheBadRowIsRefused"
       ]
     },
     {
@@ -26018,6 +26130,20 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersistentLogWriteFailureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersistentLogWriteFailureTests"
+      ],
+      "tests": [
+        "aLongOutageIsOneNumber",
+        "failedWritesAreDroppedCountedAndSaid",
+        "headerFooterAndFlushAreContained",
+        "theLayoutIsUnchangedWhenWritesSucceed"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonEvaluationCLIParseCharacterizationTests.swift",
       "stage": "unit",
       "suites": [
@@ -40838,9 +40964,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3928,
+      "expected_floor": 3959,
       "name": "unit",
-      "package_expected_floor": 971,
+      "package_expected_floor": 988,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40955,7 +41081,11 @@
         "VideoScanCoreTests.CommandExecutorSeamReviewTests",
         "VideoScanCoreTests.LogCaptureSeamTests",
         "VideoScanCoreTests.LogScopeCostTests",
-        "VideoScanCoreTests.LogScopeSensorTests"
+        "VideoScanCoreTests.LogScopeSensorTests",
+        "VideoScanCoreTests.AtomicFilePublishFaultTests",
+        "VideoScanCoreTests.CatalogHighWaterPublishFaultTests",
+        "VideoScanCoreTests.ContainedLogWriteTests",
+        "VideoScanCoreTests.TimingBudgetNanosecondsTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -41593,7 +41723,18 @@
         "VideoScanTests/MFOVerbsParallelInventorySensorTests",
         "VideoScanTests/AppLogScopeIsolationTests",
         "VideoScanTests/AppLogProductionDefaultTests",
-        "VideoScanTests/AppLogScopeEscapeTests"
+        "VideoScanTests/AppLogScopeEscapeTests",
+        "VideoScanTests/ArchiveAuditPublishFaultTests",
+        "VideoScanTests/CatalogAuditMarkerPublishFaultTests",
+        "VideoScanTests/DeleteDuplicatesPlanPublishFaultTests",
+        "VideoScanTests/IntegrityReportPublishFaultTests",
+        "VideoScanTests/LedgerRewritePublishFaultTests",
+        "VideoScanTests/CatalogCommitterDebounceSeamTests",
+        "VideoScanTests/CatalogStoreDebounceSeamTests",
+        "VideoScanTests/CatalogOutOfRangeStarCommitTests",
+        "VideoScanTests/EventsStatsPublishFaultTests",
+        "VideoScanTests/CatalogDebounceClampTests",
+        "VideoScanTests/PersistentLogWriteFailureTests"
       ]
     },
     {

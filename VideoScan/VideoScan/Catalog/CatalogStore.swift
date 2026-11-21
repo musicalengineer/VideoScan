@@ -638,7 +638,16 @@ final class CatalogStore {
         lock.release()
     }
 
+    /// The production save debounce: 2 s after the last mutation.
+    nonisolated static let saveDebounce: Duration = .seconds(2)
+    /// This store's debounce — `saveDebounce` unless a test's
+    /// `init(directory:saveDebounce:)` passed a shorter one, so a test of
+    /// the debounced path need not sleep out real seconds. Fixed at
+    /// construction: there is no setter, global or otherwise.
+    private let saveDebounce: Duration
+
     init() {
+        self.saveDebounce = Self.saveDebounce
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -653,7 +662,8 @@ final class CatalogStore {
     /// so unit tests don't touch `~/Library/Application Support/VideoScan/`.
     /// The directory is created if absent; `catalog.json` and
     /// `catalog.json.prev` live side-by-side inside it.
-    internal init(directory: URL) {
+    internal init(directory: URL, saveDebounce: Duration = CatalogStore.saveDebounce) {
+        self.saveDebounce = saveDebounce
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         self.fileURL = directory.appendingPathComponent("catalog.json")
         self.backupURL = directory.appendingPathComponent("catalog.json.prev")
@@ -1021,7 +1031,7 @@ final class CatalogStore {
     /// catalog file, codex QA #277 blocker C).
     var catalogFileURL: URL { fileURL }
 
-    /// Schedule a save 2 seconds after the most recent call. Repeated calls
+    /// Schedule a save `saveDebounce` (2 seconds) after the most recent call. Repeated calls
     /// reset the timer so a burst of mutations only triggers one disk write.
     func scheduleSave(records: [VideoRecord]) {
         if Self.isRunningTests && self === CatalogStore.shared { return }
@@ -1033,8 +1043,13 @@ final class CatalogStore {
         debounceTask?.cancel()
         debouncedSavePending = true
         let captured = records  // capture the array reference; elements are classes
+        // Same call as before the debounce became a property
+        // (`Task.sleep(nanoseconds:)`), so the timer's clock is unchanged.
+        // Saturating: an absurd injected Duration waits "forever", it does
+        // not trap (codex r1); the default is exactly 2_000_000_000.
+        let nanoseconds = TimingBudget.nanoseconds(saveDebounce)
         debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
             if Task.isCancelled { return }
             self?.debouncedSavePending = false
             self?.saveAsync(records: captured)

@@ -459,15 +459,22 @@ struct CatalogAuthorityFlipTests {
     @Test("codex #112: a launch commit pending when viewer mode is applied — the timer's commit is refused at admission, and so is the safety copy's commit-first")
     func pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives() async throws {
         let scene = try CutoverScene.make("role_timer"); defer { scene.cleanup() }
-        try await scene.launchOnSQLite()                        // a writable launch: the launch commit is scheduled
+        // The launch schedules its commit on a 500 ms timer instead of the
+        // production 2 s (this test used to sleep 2.8 s). Long enough that
+        // the role arrives while it is still pending — asserted below.
+        let debounce: Duration = .milliseconds(500)
+        try await CatalogCommitter.$debounce.withValue(debounce) {
+            try await scene.launchOnSQLite()                    // a writable launch: the launch commit is scheduled
+        }
         let committer = try #require(scene.model.catalogCutover.committer)
         #expect(committer.isBusy, "the launch-migration commit is on the timer")
         let stored = try await scene.reloaded(.healthy).starRating
         #expect(stored != 4)
         try scene.record(.healthy).starRating = 4              // what a launch migration would have changed
+        try #require(committer.isBusy, "the launch commit must still be pending when the role arrives, or this proves nothing")
         scene.model.applyReadOnlyMode(true)                     // onAppear: this Mac is a viewer
         let before = committer.commitCount
-        try await Task.sleep(for: CatalogCommitter.debounce + .milliseconds(800))
+        for _ in 0..<500 where committer.isBusy { try await Task.sleep(for: .milliseconds(10)) }
         #expect(!committer.isBusy, "the timer fired")
         #expect(committer.commitCount == before, "admission refused the timer's commit — nothing was written")
         #expect(try await scene.reloaded(.healthy).starRating == stored, "catalog.sqlite is untouched")

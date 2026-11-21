@@ -129,7 +129,22 @@ final class CatalogCommitter {
         var readOnlyReason: String? = nil
     }
 
-    static let debounce: Duration = .seconds(2)
+    /// How long after the last edit the timer's commit runs: 2 s. Nothing
+    /// in the app binds this — it only decides WHEN the same commit runs —
+    /// so production always reads the default.
+    ///
+    /// Task-local so a test can shorten it for one scope and stop sleeping
+    /// out real seconds:
+    ///
+    ///     CatalogCommitter.$debounce.withValue(.milliseconds(50)) { model.setUserNotes(…) }
+    ///
+    /// Read when a commit is SCHEDULED (`scheduleCommit`'s default argument),
+    /// on the scheduling task — so it reaches a committer built deep inside
+    /// a launch, which an init parameter would not. No global setter:
+    /// parallel tests each see their own value.
+    /// (For Rick: a `thread_local` override that follows the coroutine and
+    /// is popped at the closing brace.)
+    @TaskLocal static var debounce: Duration = .seconds(2)
     /// Lines naming records that left memory without a purge, per commit.
     static let unpurgedLinesPerCommit = 10
 

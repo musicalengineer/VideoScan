@@ -332,6 +332,14 @@ final class CatalogAuditRunMarker: ObservableObject {
     @Published private(set) var lastRun: CatalogAuditRunRecord?
     private var current: CatalogAuditRunRecord?
     private(set) var fileURL: URL?
+    /// Where a marker that could not be written is said (the app's one log
+    /// sink). An instance property so a test reads the line without
+    /// swapping the global sink. (C++: a `std::function` member defaulted
+    /// to the real logger.)
+    var log: (String) -> Void = { appLog.write($0) }
+    /// True from a failed publish until the next one that lands — the
+    /// failure is said once, not at every checkpoint of a run on a full disk.
+    private var publishFailing = false
 
     init() {}
 
@@ -430,9 +438,23 @@ final class CatalogAuditRunMarker: ObservableObject {
         }
     }
 
+    /// Publish the marker. A failure is SAID (it used to be `try?`): the
+    /// file then still holds the last publish that landed — after a failed
+    /// finish that is "running", which the next launch reads as a run that
+    /// quit or crashed and Catalog Status reads as the old date — so the
+    /// log must carry why. Said once per outage, not per checkpoint.
     private func persist() {
-        guard let fileURL, let current, let data = try? Self.encoder.encode(current) else { return }
-        try? AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+        guard let fileURL, let current else { return }
+        do {
+            let data = try Self.encoder.encode(current)
+            try AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+            publishFailing = false
+        } catch {
+            guard !publishFailing else { return }
+            publishFailing = true
+            log("Audit catalog: \(Self.fileName) could not be written (\(error.localizedDescription)) — the file keeps what was last "
+                + "saved, so Catalog Status and the next launch describe that, not this run, until a later save lands.")
+        }
     }
 
     /// The marker's one encoder (internal so the importer-agreement sensor,

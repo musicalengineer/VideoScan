@@ -65,17 +65,24 @@ struct CatalogCommitterTests {
         #expect(scene.sandbox.catalogLogText().contains("OUTCOME commit generation"))
     }
 
-    @Test("the debounced funnel commits on its own, ~2 s later")
+    @Test("the debounced funnel commits on its own, one debounce later (2 s in production; 50 ms injected here)")
     func debouncedCommits() async throws {
         let scene = try CutoverScene.make("b2_debounced"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let committer = try #require(scene.model.catalogCutover.committer)
+        #expect(scene.model.saveCatalogNow(), "the launch commit lands first")
+        #expect(CatalogCommitter.debounce == .seconds(2), "the production debounce, when nothing is bound")
         try scene.record(.healthy).userNotes = "the lake house"
-        scene.model.saveCatalogDebounced()
+        let before = committer.commitCount
+        CatalogCommitter.$debounce.withValue(.milliseconds(50)) {
+            scene.model.saveCatalogDebounced()
+        }
+        #expect(committer.commitCount == before, "nothing is written at the edit — only scheduled")
         let deadline = Date().addingTimeInterval(10)
         while committer.changedRecordCount() > 0, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(200))
+            try await Task.sleep(for: .milliseconds(10))
         }
+        #expect(committer.commitCount == before + 1, "the timer made exactly one commit")
         #expect(committer.changedRecordCount() == 0)
         #expect(try await scene.reloaded(.healthy).userNotes == "the lake house")
     }

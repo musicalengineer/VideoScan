@@ -208,6 +208,104 @@ public enum AtomicFilePublish {
             .joined(separator: ", ")
     }
 
+    // MARK: - Test seam (the syscalls of a publish)
+
+    /// The steps of a publish that touch the disk, as replaceable calls, so a
+    /// test can fail any one of them with a chosen errno and see what the
+    /// publish — and the store above it — does. No real disk has to fill up.
+    ///
+    /// Production never binds this: outside a `$hooks.withValue { }` scope the
+    /// value is `Hooks.live`, which is the same syscalls this file made before
+    /// the seam existed, in the same order.
+    ///
+    /// For Rick (C++): a struct of `std::function`s with the real syscalls as
+    /// defaults — the link-time `write()`/`rename()` shim you would hand gtest,
+    /// except it is scoped to one test's task tree (`@TaskLocal` ≈ a
+    /// `thread_local` that follows the coroutine and is popped at the closing
+    /// brace), so parallel tests never see each other's faults. There is no
+    /// global setter on purpose.
+    ///
+    /// Internal on purpose (the CommandExecutor seam's rule, review
+    /// 2026-11-20): tests reach it with `@testable import`; no app, helper or
+    /// CLI source can make the app's publishes fail.
+    ///
+    /// THREAD HOPS. `write`/`publish` are synchronous and read the hooks once,
+    /// on the caller's thread, then pass them down — nothing inside this type
+    /// hops (the watchdog timer only reads the registry). A CALLER that
+    /// publishes from `Task.detached` or a GCD block has left the task tree:
+    /// there the value is `.live` again, so a test must bind the hooks inside
+    /// that work (or call the store's synchronous writer directly).
+    struct Hooks: Sendable {
+        /// `.fast`: the whole temp write (`Data.write(to:)`). Throws on failure.
+        var writeFast: @Sendable (_ data: Data, _ temp: URL) throws -> Void
+        /// `.fullFsync`: one write(2) on the temp. Bytes written and 0, or
+        /// (-1, errno). May be short, like the syscall.
+        var write: @Sendable (_ fd: Int32, _ bytes: UnsafeRawPointer, _ count: Int) -> (written: Int, errno: Int32)
+        /// `.fullFsync`: F_FULLFSYNC on the temp. 0, or the errno.
+        var fullFsync: @Sendable (_ fd: Int32) -> Int32
+        /// rename(2) of the temp onto the destination. 0, or the errno.
+        var renameSyscall: @Sendable (_ from: String, _ to: String) -> Int32
+        /// `.fullFsync`: F_FULLFSYNC on the parent directory, after the
+        /// rename. 0, or the errno (best-effort: see `syncDirectory`).
+        var directoryFsync: @Sendable (_ fd: Int32) -> Int32
+
+        static let live = Hooks(
+            writeFast: { data, temp in try data.write(to: temp) },
+            write: { fd, bytes, count in
+                let n = Darwin.write(fd, bytes, count)
+                return (n, n < 0 ? errno : 0)
+            },
+            fullFsync: { fd in fcntl(fd, F_FULLFSYNC) != -1 ? 0 : errno },
+            renameSyscall: { from, to in Darwin.rename(from, to) == 0 ? 0 : errno },
+            directoryFsync: { fd in fcntl(fd, F_FULLFSYNC) != -1 ? 0 : errno })
+
+        /// The steps a test can fail.
+        enum Step: String, Sendable, CaseIterable {
+            case writeFast, write, fullFsync, rename, directoryFsync
+        }
+
+        /// The live syscalls with ONE step failing with `code`. `onHit` runs
+        /// each time the failing step is reached, so a test can prove the
+        /// fault was actually taken (a negative test whose fault never fired
+        /// proves nothing).
+        ///
+        /// The two write steps fail the way a full disk does: half the bytes
+        /// really land in the temp first, then the error — so "no temp is left
+        /// behind" is tested against a temp that exists and is torn.
+        static func failing(_ step: Step, errno code: Int32,
+                            onHit: @escaping @Sendable () -> Void = {}) -> Hooks {
+            var hooks = Hooks.live
+            switch step {
+            case .writeFast:
+                hooks.writeFast = { data, temp in
+                    onHit()
+                    try data.prefix(data.count / 2).write(to: temp)
+                    throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+                }
+            case .write:
+                hooks.write = { fd, bytes, count in
+                    onHit()
+                    // First call: a short write of half. Second call: the error.
+                    if count > 1, lseek(fd, 0, SEEK_CUR) == 0 {
+                        return (Darwin.write(fd, bytes, count / 2), 0)
+                    }
+                    return (-1, code)
+                }
+            case .fullFsync:
+                hooks.fullFsync = { _ in onHit(); return code }
+            case .rename:
+                hooks.renameSyscall = { _, _ in onHit(); return code }
+            case .directoryFsync:
+                hooks.directoryFsync = { _ in onHit(); return code }
+            }
+            return hooks
+        }
+    }
+
+    /// The hooks in force for the current task (`.live` unless a test bound
+    /// others): `AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: EIO)) { … }`.
+    @TaskLocal static var hooks = Hooks.live
+
     // MARK: - The publish
 
     /// Write `data` to `url` atomically.
@@ -244,6 +342,9 @@ public enum AtomicFilePublish {
         let token = registry.begin(destination: url, byteCount: data.count)
         defer { registry.end(token) }
         let started = Date()
+        // Read ONCE, here on the caller's thread, and passed down: every step
+        // of this publish sees the same hooks (see `Hooks`, THREAD HOPS).
+        let hooks = Self.hooks
 
         if createIntermediates {
             try FileManager.default.createDirectory(
@@ -253,8 +354,8 @@ public enum AtomicFilePublish {
 
         do {
             switch durability {
-            case .fast:       try data.write(to: tmp)
-            case .fullFsync:  try writeAndSync(data, to: tmp)
+            case .fast:       try hooks.writeFast(data, tmp)
+            case .fullFsync:  try writeAndSync(data, to: tmp, hooks: hooks)
             }
         } catch {
             try? FileManager.default.removeItem(at: tmp)
@@ -266,7 +367,7 @@ public enum AtomicFilePublish {
         }
 
         do {
-            try publish(tmp, as: url)
+            try publish(tmp, as: url, hooks: hooks)
         } catch {
             try? FileManager.default.removeItem(at: tmp)
             publishLog.error("""
@@ -279,7 +380,7 @@ public enum AtomicFilePublish {
         if durability == .fullFsync {
             // The directory entry itself must reach stable storage too, or a
             // reboot can lose the rename that a synced payload was published by.
-            syncDirectory(url.deletingLastPathComponent())
+            syncDirectory(url.deletingLastPathComponent(), hooks: hooks)
         }
 
         let elapsed = -started.timeIntervalSinceNow
@@ -311,9 +412,14 @@ public enum AtomicFilePublish {
     ///   semantics it does not deliver — and would collide textually with the
     ///   very API the sensors ban.
     public static func publish(_ source: URL, as destination: URL) throws {
+        try publish(source, as: destination, hooks: hooks)
+    }
+
+    private static func publish(_ source: URL, as destination: URL, hooks: Hooks) throws {
         try adoptExistingMode(of: destination, onto: source)
-        if Darwin.rename(source.path, destination.path) != 0 {
-            throw Failure(operation: "rename", path: destination.path, errnoValue: errno)
+        let code = hooks.renameSyscall(source.path, destination.path)
+        if code != 0 {
+            throw Failure(operation: "rename", path: destination.path, errnoValue: code)
         }
     }
 
@@ -365,7 +471,7 @@ public enum AtomicFilePublish {
 
     // MARK: - Durable write helpers
 
-    private static func writeAndSync(_ data: Data, to url: URL) throws {
+    private static func writeAndSync(_ data: Data, to url: URL, hooks: Hooks) throws {
         let fd = Darwin.open(url.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
         guard fd >= 0 else {
             throw Failure(operation: "open", path: url.path, errnoValue: errno)
@@ -376,27 +482,28 @@ public enum AtomicFilePublish {
             guard let base = buffer.baseAddress else { return }
             var offset = 0
             while offset < buffer.count {
-                let n = Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
+                let (n, code) = hooks.write(fd, base.advanced(by: offset), buffer.count - offset)
                 if n < 0 {
-                    if errno == EINTR { continue }
-                    throw Failure(operation: "write", path: url.path, errnoValue: errno)
+                    if code == EINTR { continue }
+                    throw Failure(operation: "write", path: url.path, errnoValue: code)
                 }
                 offset += n
             }
         }
         // F_FULLFSYNC, not fsync(2): on macOS only this asks the drive to
         // flush its own write cache.
-        guard fcntl(fd, F_FULLFSYNC) != -1 else {
-            throw Failure(operation: "F_FULLFSYNC", path: url.path, errnoValue: errno)
+        let code = hooks.fullFsync(fd)
+        guard code == 0 else {
+            throw Failure(operation: "F_FULLFSYNC", path: url.path, errnoValue: code)
         }
     }
 
     /// Best-effort — a failure here costs durability, not correctness, and
     /// must never fail a save that already landed.
-    private static func syncDirectory(_ url: URL) {
+    private static func syncDirectory(_ url: URL, hooks: Hooks) {
         let fd = Darwin.open(url.path, O_RDONLY)
         guard fd >= 0 else { return }
         defer { Darwin.close(fd) }
-        _ = fcntl(fd, F_FULLFSYNC)
+        _ = hooks.directoryFsync(fd)
     }
 }

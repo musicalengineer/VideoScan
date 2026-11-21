@@ -164,20 +164,31 @@ struct FileDossierStoreTests {
     }
 
     @Test func disappearingTearsDownTheChangeSubscription() async throws {
+        // An injected 50 ms read throttle (production: 1 s — this test used
+        // to sleep 1.5 s). The wait is not a guess: a twin store on the SAME
+        // signal, still listening, must re-read first.
         let subject = PassthroughSubject<Void, Never>()
-        let store = FileDossierStore()
+        let store = FileDossierStore(readThrottle: .milliseconds(50))
+        let twin = FileDossierStore(readThrottle: .milliseconds(50))
         await store.show(fileID: UUID(), loader: Self.loader({ id in Self.dossier(id, "A.mov") }, changes: subject.eraseToAnyPublisher()))
+        await twin.show(fileID: UUID(), loader: Self.loader({ id in Self.dossier(id, "A.mov") }, changes: subject.eraseToAnyPublisher()))
         #expect(store.isListening)
         store.cancel()
         #expect(!store.isListening)
         subject.send(())
-        try await Task.sleep(for: .milliseconds(1500))
+        for _ in 0..<500 where twin.reads < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(twin.reads == 2, "the listening twin never re-read — the wait proves nothing")
+        try await Task.sleep(for: .milliseconds(100))        // one more window, for a late read
         #expect(store.reads == 1, "no read after the view went away")
+        #expect(FileDossierStore.readThrottle == .seconds(1), "production still reads at most once a second")
     }
 
-    /// Edit at t0; the committer writes it at t0 + 2 s (its debounce). Through
-    /// the production timing (`afterCommit`) the open dossier still shows the
-    /// committed (old) lines at 1 s and the edit by about 3–4 s.
+    /// Edit at t0; the committer writes it at t0 + its debounce. Through the
+    /// production wiring (`afterCommit`) the open dossier still shows the
+    /// committed (old) lines half-way through the debounce and the edit one
+    /// sample later. Production: 2 s debounce, 3 s sample (pinned below).
+    /// Here the same shape a tenth the size — a 200 ms debounce, a 600 ms
+    /// sample — so the test takes under a second instead of 3–4 s.
     @Test(.timeLimit(.minutes(1)))
     func anEditShowsAfterItIsCommitted() async throws {
         final class Catalog: @unchecked Sendable {        // the fake catalog.sqlite (main actor only)
@@ -185,26 +196,29 @@ struct FileDossierStoreTests {
         }
         let db = Catalog()
         let edits = PassthroughSubject<Void, Never>()
+        let debounce: Duration = .milliseconds(200), sample: Duration = .milliseconds(600)
         let loader = Self.loader({ id in Self.dossier(id, await MainActor.run { db.name }) },
-                                 changes: FileDossierLoader.afterCommit(edits.eraseToAnyPublisher()))
-        let store = FileDossierStore()
+                                 changes: FileDossierLoader.afterCommit(edits.eraseToAnyPublisher(), period: sample))
+        let store = FileDossierStore(readThrottle: .milliseconds(50))
         await store.show(fileID: UUID(), loader: loader)
         let start = ContinuousClock.now
+        #expect(CatalogCommitter.debounce == .seconds(2), "the production debounce")
         #expect(FileDossierLoader.commitSample == CatalogCommitter.debounce + .seconds(1), "sampled one period after the committer's debounce")
         edits.send(())                                       // the edit (in memory)
-        let commit = Task { try await Task.sleep(for: CatalogCommitter.debounce); db.name = "New.mov" }
-        try await Task.sleep(for: .seconds(1))
+        let commit = Task { try await Task.sleep(for: debounce); db.name = "New.mov" }
+        try await Task.sleep(for: debounce / 2)
         guard case .loaded(let early) = store.shown else { Issue.record("\(store.shown)"); return }
-        #expect(early.filename == "Old.mov", "within 1 s the catalog still holds the old row")
+        #expect(early.filename == "Old.mov", "half-way through the debounce the catalog still holds the old row")
         var fresh = false
         while ContinuousClock.now - start < .seconds(6) {
             if case .loaded(let d) = store.shown, d.filename == "New.mov" { fresh = true; break }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: .milliseconds(20))
         }
         _ = try await commit.value
         let took = ContinuousClock.now - start
         #expect(fresh, "the committed edit reaches the open dossier")
-        #expect(took < .seconds(5), "by about 3–4 s: \(took)")
+        #expect(took >= sample, "not before the sample after the edit: \(took)")
+        #expect(took < .seconds(3), "one or two samples after the edit, never the 6 s give-up: \(took)")
     }
 
     @Test func theViewIsEqualForTheSameFileThroughTheSameDoor() {
