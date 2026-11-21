@@ -36978,6 +36978,7 @@
         "aFlippedDestinationReadOnTheManifestLegLinksNothing",
         "aFlippedDestinationReadOnTheReconcileLegIndexesNothing",
         "aFlippedProvingReadAdoptsAnotherFile",
+        "aFlippedSourceReadOnTheReconcileLegIndexesNothing",
         "nothingIsPromoted",
         "theConfirmingReadBeforeAnAdoption",
         "theThreeReads"
@@ -37012,7 +37013,9 @@
         "aFileThatShrinksUnderTheReadIsNeverRestored",
         "aShortReadOfALongerArchiveFileVerifies",
         "oneFlippedReadDoesNotClearATrueFingerprint",
+        "oneReadDoesNotReplaceAStoredContentFixity",
         "oneReadThatMatchesTheManifestDoesNotReplaceAStoredFingerprint",
+        "twoReadsThatAgreeReplaceAStaleContentFixity",
         "twoReadsThatAgreeWithTheManifestReplaceAStaleFingerprintAndSayIt"
       ]
     },
@@ -42554,7 +42557,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 981,
+      "expected_floor": 984,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
