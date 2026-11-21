@@ -821,3 +821,154 @@ def test_all_leaves_the_performance_and_stress_stages_out_unless_asked(tmp_path)
     assert code == 0 and "shard-" not in out and "serial tail: P" in out, out
     code, out = dry("--stages", "unit", "U")
     assert code == 2 and "--stages goes with --all" in out, out
+
+
+# ───────────────────────────────────────────── the nightly's client: --summary and --coverage (2026-11-21)
+
+def summary_of(bench, scenario, groups, jobs=2, extra=(), timeout=60.0):
+    path = bench.tmp / "summary.json"
+    code, out = bench.go(scenario, groups, jobs=jobs, extra=("--summary", str(path), *extra), timeout=timeout)
+    return code, out, json.loads(path.read_text())
+
+
+def test_the_summary_is_the_run_as_data_counts_shards_and_the_tail(bench):
+    scenario = {"A": {"tests": ["a()", "b()"], "skip": ["b()"]}, "B": {"tests": ["x()"]}, "T": {"tests": ["t()"]}}
+    # T's file is in a serial stage, so it runs in the tail
+    code, out, d = summary_of(bench, scenario, [grp("A", 2), grp("B", 1), dict(grp("T", 1), stage="performance")])
+    assert code == 0, out
+    assert (d["version"], d["verdict"], d["jobs"]) == (xs.NIGHTLY_SUMMARY_VERSION, "GREEN", 2)
+    assert (d["passed"], d["failed"], d["skipped"], d["expected"]) == (3, 0, 1, 4)
+    assert d["counts_from"] == "bundles" and d["expected_failures"] == 0 and d["failures"] == []
+    assert [s["name"] for s in d["shards"]] == ["shard-01", "shard-02", "serial-tail"]
+    tail = d["shards"][-1]
+    assert tail["serial"] and "timing budget" in tail["serial"] and tail["passed"] == 1
+    for i, s in enumerate(d["shards"]):
+        assert s["green"] and s["codes"] == [] and s["bundle_read"] and not s["timed_out"] and s["rc"] == 0
+        assert s["log"] == str(bench.run_dir / f"{i:04d}" / "strand.log")
+        assert s["bundle"] == str(bench.run_dir / f"{i:04d}" / "shard.xcresult")
+    # the verdict line is still the last line; the summary adds nothing to stdout
+    assert last(out).startswith("xctest-shards: GREEN: 3 passed, 0 failed, 1 skipped (ran 4 of 4)"), last(out)
+
+
+def test_the_summary_names_each_failed_test_once_also_one_whose_line_is_glued(bench):
+    scenario = {"A": {"tests": ["a()", "b()", "c()"], "fail": ["a()", "c()"], "glue": ["c()"]},
+                "X": {"tests": ["testOld"], "fail": ["testOld"], "xctest": True}}
+    code, out, d = summary_of(bench, scenario, [grp("A", 3), grp("X", 1)])
+    assert code == 1 and d["verdict"] == "RED" and d["failed"] == 3, out
+    assert sorted((f["id"], f["name"]) for f in d["failures"]) == [("A/a()", "a()"), ("A/c()", "c()"), ("X/testOld", "testOld")]
+    assert {f["shard"] for f in d["failures"]} == {"shard-01", "shard-02"}
+    assert all(s["codes"] == [] and not s["green"] for s in d["shards"]), d["shards"]   # red on tests alone: no code
+
+
+def test_the_summary_codes_say_how_a_shard_was_red_beyond_its_tests(bench):
+    # died: exit 9 with no failed test, one test short, and no bundle → mixed counts, no known-issue number
+    scenario = {"A": {"tests": ["a()", "b()", "c()"], "die": True}, "B": {"tests": ["x()", "y()"]}}
+    code, out, d = summary_of(bench, scenario, [grp("A", 3), grp("B", 2)])
+    assert code == 1, out
+    a, b = d["shards"]
+    assert a["codes"] == ["short", "died"] and a["rc"] == 9 and not a["bundle_read"] and not a["green"]
+    assert b["codes"] == [] and b["green"] and b["bundle_read"]
+    assert d["counts_from"] == "mixed" and d["expected_failures"] is None
+    assert (d["passed"], d["expected"]) == (4, 5)
+
+
+def test_the_summary_codes_a_timeout_a_short_file_and_a_silent_suite(bench):
+    scenario = {"A": {"tests": ["a()"], "hang": True}, "B": {"tests": ["x()"]}}
+    code, out, d = summary_of(bench, scenario, [grp("A", 1), grp("B", 1)], timeout=2.0)
+    assert code == 1, out
+    assert d["shards"][0]["codes"] == ["timeout", "short"] and d["shards"][0]["timed_out"]
+    assert d["shards"][1]["codes"] == []
+    bench.run_dir = bench.tmp / "run2"
+    scenario = {"A": {"tests": ["a()"]}, "Quiet": {"tests": ["q()"], "silent": True}, "B": {"tests": ["x()"]}}
+    code, out, d = summary_of(bench, scenario, [grp("A", 1), grp("Quiet", 1), grp("B", 1)], jobs=1)
+    assert code == 1 and d["shards"][0]["codes"] == ["short"] and d["shards"][0]["rc"] == 0, (out, d)
+
+
+def test_a_test_that_passed_with_a_known_issue_is_a_pass_and_is_counted_as_known():
+    st = xs.SuiteStats()
+    st.add("S/a()", 0.1, "Passed")
+    st.add("S/b()", 0.1, "Expected Failure")
+    st.add("S/c()", 0.1, "Skipped")
+    st.add("S/d()", 0.1, "Some New Word")
+    assert (st.passed, st.known, st.skipped, st.failed) == (2, 1, 1, 1)
+
+
+def test_coverage_makes_every_host_record_into_its_own_bundle_and_keeps_them_all(bench):
+    scenario = {"A": {"tests": ["a()"]}, "B": {"tests": ["x()"]}}
+    code, out = bench.go(scenario, [grp("A", 1), grp("B", 1)], jobs=2, extra=("--coverage",))
+    assert code == 0, out
+    for i in range(2):
+        head = (bench.run_dir / f"{i:04d}" / "strand.log").read_text().splitlines()[0]
+        assert "-enableCodeCoverage YES" in head and f"{i:04d}/shard.xcresult" in head, head
+        assert (bench.run_dir / f"{i:04d}" / "shard.xcresult").is_dir(), "a green shard's bundle holds its coverage"
+    # without it: the command is the one run_tests has always given, and a green bundle is not kept
+    assert "-enableCodeCoverage" not in " ".join(xs.shard_cmd(["xcodebuild"], Path("x"), ["A"], Path("r")))
+    bench.run_dir = bench.tmp / "run2"
+    code, out = bench.go(scenario, [grp("A", 1), grp("B", 1)], jobs=2)
+    assert code == 0 and not (bench.run_dir / "0000" / "shard.xcresult").exists(), out
+
+
+def test_the_nightly_only_shards_through_a_copy_that_carries_the_summary_version_line():
+    """nightly_local_tests.sh greps this exact line (app_shards_usable): a copy without it is the single host."""
+    assert re.search(r"(?m)^NIGHTLY_SUMMARY_VERSION = 1$", SCRIPT.read_text())
+    nightly = (ROOT / "scripts" / "nightly_local_tests.sh").read_text()
+    assert "grep -q '^NIGHTLY_SUMMARY_VERSION = 1$' \"$1\"" in nightly
+    assert 'd.get("version") != 1' in nightly
+
+
+# ───────────────────────────────────────────── a Release build does not compile `#if DEBUG` tests
+
+DEBUG_GATED = '''import Testing
+@Suite struct TrimLikeTests {
+    @Test func always() {}
+    #if DEBUG
+    // a seam that exists only in Debug
+    @Test func debugOnly() {}
+    #endif  // DEBUG
+    #if !DEBUG
+    @Test func releaseOnly() {}
+    @Test func releaseOnlyToo() {}
+    #else
+    @Test func debugElse() {}
+    #endif
+    #if canImport(AppKit)
+    @Test func eitherWay() {}
+    #endif
+    func budget() -> Int {
+        #if DEBUG
+        return 3
+        #else
+        return 1
+        #endif
+    }
+}
+'''
+
+
+def test_a_test_inside_if_debug_is_not_expected_of_a_release_build(tmp_path):
+    (tmp_path / "T.swift").write_text(DEBUG_GATED)
+    declared = len(rt.swift_cases(DEBUG_GATED))
+    assert declared == 6
+    g = [G("T", ["TrimLikeTests"], declared, True, "unit", "T.swift")]
+    names = lambda debug: sorted(c[1] for c in rt.swift_cases(xs.active_source(DEBUG_GATED, debug)))
+    assert names(True) == ["always", "debugElse", "debugOnly", "eitherWay"]
+    assert names(False) == ["always", "eitherWay", "releaseOnly", "releaseOnlyToo"]
+    assert xs.true_up_all(g, tmp_path, True, debug=False)[0].tests == 4       # Release
+    assert xs.true_up_all(g, tmp_path, True, debug=True)[0].tests == 4        # Debug
+    assert xs.true_up_all(g, tmp_path, True, debug=None)[0].tests == 6, "unknown configuration: the count is not touched"
+    assert xs.active_source(DEBUG_GATED, False).count("\n") == DEBUG_GATED.count("\n"), "line numbers are kept"
+
+
+def test_the_configuration_is_read_from_the_xctestrun_and_the_two_trim_files_lose_one_test_each_in_release(tmp_path):
+    rel, dbg, odd = tmp_path / "r.xctestrun", tmp_path / "d.xctestrun", tmp_path / "o.xctestrun"
+    rel.write_text("<string>__TESTROOT__/Release/VideoScan.app</string><string>__TESTROOT__/Release/X.xctest</string>")
+    dbg.write_text("<string>__TESTROOT__/Debug/VideoScan.app</string>")
+    odd.write_text("<string>__TESTROOT__/Debug/A</string><string>__TESTROOT__/Release/B</string>")
+    assert xs.build_configuration_is_debug(rel) is False and xs.build_configuration_is_debug(dbg) is True
+    assert xs.build_configuration_is_debug(odd) is None and xs.build_configuration_is_debug(tmp_path / "none") is None
+    manifest = json.loads((ROOT / "scripts" / "gauntlet" / "manifest.json").read_text())
+    count = lambda debug: {g.name: g.tests for g in xs.groups_from_manifest(
+        manifest, {"TrimSensorTests", "TrimMediaMatrixTests"}, ROOT, debug)}
+    debug, release = count(True), count(False)
+    assert set(debug) == {"TrimSensorTests", "TrimMediaMatrixTests"}
+    assert all(release[n] == debug[n] - 1 for n in debug), (debug, release)

@@ -285,6 +285,102 @@ class HostSuiteLaneTests(Testbed):
         row = json.loads((out / 'suite-row.json').read_text())
         self.assertEqual((row['core_passed'], row['core_status']), (4, 'ok'))
 
+    # A stand-in for scripts/xctest_shards.py OF THE COMMIT UNDER TEST (the real one: tests/test_xctest_shards.py).
+    # It carries the line the nightly looks for, lays the app log down as two shards' logs and writes the summary
+    # the nightly reads ($SUITE_FAKE/shards.json: the fields to change).
+    FAKE_SHARDER = r'''NIGHTLY_SUMMARY_VERSION = 1
+import json, os, sys
+a = sys.argv[1:]
+fake = os.environ["SUITE_FAKE"]
+open(fake + "/calls", "a").write("xctest_shards.py " + " ".join(a) + "\n")
+run_dir = a[a.index("--run-dir") + 1]
+lines = open(fake + "/app.log").read().splitlines(True)
+sys.stdout.write("".join(lines))        # --stream: the hosts' lines, live
+half = len(lines) // 2
+shards = []
+for i, part in enumerate((lines[:half], lines[half:])):
+    os.makedirs("%s/%04d" % (run_dir, i))
+    open("%s/%04d/strand.log" % (run_dir, i), "w").write("".join(part))
+    shards.append({"name": "shard-%02d" % (i + 1), "green": True, "codes": [], "problems": [], "timed_out": False,
+                   "bundle_read": True, "rc": 0, "log": "%s/%04d/strand.log" % (run_dir, i)})
+d = {"version": 1, "verdict": "GREEN", "jobs": int(a[a.index("--jobs") + 1]), "passed": 5, "failed": 0, "skipped": 1,
+     "counts_from": "bundles", "undealable_files": 0, "failures": [], "shards": shards}
+change = json.load(open(fake + "/shards.json")) if os.path.exists(fake + "/shards.json") else {}
+for i, s in enumerate(change.pop("shards", [])):
+    d["shards"][i].update(s)
+d.update(change)
+json.dump(d, open(a[a.index("--summary") + 1], "w"))
+print("xctest-shards: %s: 5 passed, 0 failed, 1 skipped (ran 6 of 6)" % d["verdict"])
+sys.exit(0 if d["verdict"] == "GREEN" else 1)
+'''
+
+    def commit_sharder(self):
+        (self.work / 'scripts').mkdir(exist_ok=True)
+        (self.work / 'scripts/xctest_shards.py').write_text(self.FAKE_SHARDER)
+        git = ['/usr/bin/git', '-C', str(self.work)]
+        subprocess.run(git + ['add', '-A'], check=True, env=self.git_env)
+        subprocess.run(git + ['commit', '-q', '-m', 'app test shards'], check=True, env=self.git_env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=self.git_env,
+                                  capture_output=True, text=True).stdout.strip()
+
+    def test_a_worktree_that_has_the_sharder_runs_the_app_phase_as_k_test_hosts(self):
+        # 2026-11-21: the app phase is scripts/xctest_shards.py OF THE COMMIT UNDER TEST, K hosts at once.
+        # The testbed repo of the tests above has none (an older commit): they pin the single-host fallback.
+        self.commit_sharder()
+        self.env['NIGHTLY_APP_JOBS'] = '4'
+        p, log, summary, out = self.host('k1')
+        self.assertEqual(p.returncode, 0, log)
+        calls = self.calls()
+        dd = str(self.home / 'Library/Caches/videoscan-m4run-dd-suite')
+        self.assertIn(f'xctest_shards.py --products {dd}/app/Build/Products --all --stages all --jobs 4 '
+                      f'--run-dir {out}/suite-app-shards/run --stream --timeout 1800 --timings {dd}/xctest-timings.json '
+                      f'--summary {out}/suite-app-shards/summary.json', calls)
+        self.assertFalse([c for c in calls if ' test-without-building ' in c], 'the single host ran as well')
+        self.assertRegex(summary, r'suite: GREEN app 5 passed, 0 failed, 1 skipped; core 4 passed, 0 failed, 0 skipped ')
+        row = json.loads((out / 'suite-row.json').read_text())
+        self.assertEqual((row['status'], row['passed'], row['skipped'], row['total'], row['app_test_hosts']), ('ok', 5, 1, 6, 4))
+        # The file a reader tails while the phase runs (run_tests --full, `status`) is the sharder's live stream.
+        # (The shards' folder is the run's scratch: the testbed's tidy removes it with the result bundles once
+        # the run is summarized.) Nothing published, nothing of the scheduled run's touched (its shard folder is
+        # /tmp/nightly-app-shards, its timings in ~/Library/Caches).
+        self.assertEqual((out / 'suite-app-test.log').read_text(),
+                         (self.fake / 'app.log').read_text() + 'xctest-shards: GREEN: 5 passed, 0 failed, 1 skipped (ran 6 of 6)\n')
+        self.assertIn('4 test hosts at once', (out / 'suite.log').read_text())
+        for call in calls:
+            self.assertNotIn('/tmp/nightly-', call)
+            self.assertNotIn('videoscan-nightly-', call)
+        self.assert_nothing_published()
+
+    def test_nightly_app_jobs_1_is_the_single_host_also_when_the_worktree_has_the_sharder(self):
+        self.commit_sharder()
+        self.env['NIGHTLY_APP_JOBS'] = '1'
+        p, log, summary, out = self.host('k2')
+        self.assertEqual(p.returncode, 0, log)
+        calls = self.calls()
+        self.assertFalse([c for c in calls if c.startswith('xctest_shards.py')], 'NIGHTLY_APP_JOBS=1 still sharded')
+        test = [c for c in calls if ' test-without-building ' in c]
+        dd = str(self.home / 'Library/Caches/videoscan-m4run-dd-suite')
+        self.assertEqual(test, [
+            'xcodebuild test-without-building -project VideoScan/VideoScan.xcodeproj -scheme VideoScan '
+            f'-configuration Release -destination platform=macOS,arch=arm64 -derivedDataPath {dd}/app '
+            f'-enableCodeCoverage YES -resultBundlePath {out}/suite-app.xcresult -skip-testing:VideoScanUITests '
+            'ENABLE_TESTABILITY=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS='])
+        row = json.loads((out / 'suite-row.json').read_text())
+        self.assertEqual((row['status'], row['passed']), ('ok', 5))
+        self.assertNotIn('app_test_hosts', row)
+        self.assertIn('one test host (NIGHTLY_APP_JOBS=1)', (out / 'suite.log').read_text())
+
+    def test_a_shard_that_came_up_short_is_red_by_name_though_every_test_passed(self):
+        self.commit_sharder()
+        self.env['NIGHTLY_APP_JOBS'] = '4'
+        (self.fake / 'shards.json').write_text(json.dumps({
+            'verdict': 'RED', 'shards': [{}, {'green': False, 'codes': ['short'], 'problems': ['ran 2 of 9 tests']}]}))
+        p, log, summary, out = self.host('k3')
+        self.assertEqual(p.returncode, 1, log)
+        self.assertIn('OUTCOME RED', log)
+        self.assertIn('suite: RED shard-short:1 — app 5 passed, 0 failed, 1 skipped', summary)
+        self.assertIn('App shards: RED shard-02: ran 2 of 9 tests', (out / 'suite.log').read_text())
+
     def test_a_failed_test_is_red_and_named_with_where_the_repo_declares_it(self):
         self.plant(app=app_log(failed=('theLedgerKeepsEveryRow()', '"A display name with spaces"', 'ghost()')), test_rc=65)
         p, log, summary, _ = self.host('r1')

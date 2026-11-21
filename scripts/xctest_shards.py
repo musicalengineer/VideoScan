@@ -45,6 +45,9 @@ Exit: 0 every shard green · 1 a red shard, or no test ran · 2 usage · 130 int
 usage:
   xctest_shards.py (--xctestrun FILE | --products DIR) [--jobs K] (--all [--stages A,B|all] | --plan FILE | Suite…)
                    [--run-dir DIR] [--timeout S] [--timings FILE] [--stream] [--dry-run] [--no-serial-tail]
+                   [--coverage] [--summary FILE]
+  --coverage / --summary are the nightly's (scripts/nightly_local_tests.sh): every host records coverage
+  into its own result bundle, kept for the caller to merge, and the run is written as JSON.
   --all leaves the performance and stress stages out (as run_tests' default does); `--stages all` runs
   every stage, those two in the serial tail.
 
@@ -86,6 +89,10 @@ DEFAULT_TIMINGS = Path.home() / "Library" / "Caches" / "videoscan-xctest-timings
 RUNS = Path.home() / "Library" / "Caches" / "videoscan-xctest-shards"
 KEEP_RUNS = 10
 DESTINATION = "platform=macOS,arch=arm64"
+# The schema of --summary FILE. scripts/nightly_local_tests.sh shards its app phase only through a
+# checkout whose copy of this file carries this exact line (it greps for it): an older copy has no
+# --summary / --coverage, and that commit gets the nightly's single host instead.
+NIGHTLY_SUMMARY_VERSION = 1
 
 # ───────────────────────────────────────────────────────────── the serial tail
 #
@@ -136,6 +143,12 @@ SERIAL_TAIL: Dict[str, str] = {
                                                     "run alone passed; 2026-11-20 run 4)",
     "FamilyTreeScaleTests": TIMING_SEEN + " (a 5,000-person pedigree laid out under 500 ms, load-aware ceiling; "
                             "2026-11-20 run 6, load average 50)",
+    # the nightly's runs (Release, VIDEOSCAN_TIMING_STRICT=1, coverage on; M5 Ultra, K=15, other agents building)
+    "JunkDeleteActionRegressionTests": TIMING_SEEN + " (onAct's deferred work for 10k files inside a 15 s deadline, "
+                                                    "and a 5 ms return; 2026-11-21 nightly run 1, load average 40)",
+    "VolumeRenameMigrationTests": TIMING_SEEN + " (a 100k-record migration under 15 s; beside 14 hosts its rename "
+                                               "candidate was not there after the rebuild it awaited, so the migration "
+                                               "aborted before the budget was judged; 2026-11-21 nightly run 1)",
     # not a budget: a race the load exposes, parked here until the test waits for a FRESH snapshot
     "CleanupTrashRunTests": "load race: its forced archive-volume snapshot was superseded while awaited (any volume "
                             "mount/rename on the Mac invalidates it), so the next line saw a provisional one and the "
@@ -242,9 +255,66 @@ def true_up(g: Group, text: str, add_loose: bool) -> Group:
     return Group(g.name, selectors, tests, g.exact, g.stage, g.path, g.rejected)
 
 
-def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool) -> List[Group]:
+DEBUG_IF = re.compile(r"^\s*#if\s+(!?)DEBUG\s*(?://.*)?$")
+DEBUG_IF_ANYWHERE = re.compile(r"^\s*#if\s+!?DEBUG\b", re.M)
+
+
+def active_source(text: str, debug: bool) -> str:
+    """The source as the compiler sees it in one build configuration: the lines of a `#if DEBUG` /
+    `#if !DEBUG` branch that is not compiled are blanked (line numbers kept). Any other condition
+    (`#if canImport(…)`, a custom flag, an `#elseif`) is not judged: both its branches stay.
+    ≈ C++: running only the DEBUG half of the preprocessor."""
+    out: List[str] = []
+    stack: List[List[bool]] = []           # [this branch is compiled, the condition is plain DEBUG / !DEBUG]
+    for line in text.split("\n"):
+        t = line.strip()
+        if t.startswith("#if"):
+            m = DEBUG_IF.match(line)
+            stack.append([(m.group(1) == "") == debug, True] if m else [True, False])
+        elif t.startswith("#elseif") and stack:
+            stack[-1] = [True, False]
+        elif t.startswith("#else") and stack:
+            if stack[-1][1]:
+                stack[-1][0] = not stack[-1][0]
+        elif t.startswith("#endif") and stack:
+            stack.pop()
+        else:
+            out.append(line if all(b[0] for b in stack) else "")
+            continue
+        out.append("")
+    return "\n".join(out)
+
+
+def compiled_count(g: Group, text: str, debug: bool) -> Group:
+    """A whole-file group's count less the tests this build configuration does not compile: a test
+    inside `#if DEBUG` does not exist in a Release build (2026-11-21, the nightly's Release run:
+    TrimSensorTests ran 6 of 7, TrimMediaMatrixTests 10 of 11 — one `#if DEBUG` test each), so
+    without this every Release shard holding one would be RED "short" for a test that cannot run."""
+    if g.by_case:
+        return g
+    gone = len(rt.swift_cases(text)) - len(rt.swift_cases(active_source(text, debug)))
+    if gone <= 0:
+        return g
+    return Group(g.name, g.selectors, max(g.tests - gone, 0), g.exact, g.stage, g.path, g.rejected)
+
+
+def build_configuration_is_debug(xctestrun: Path) -> Optional[bool]:
+    """True for a Debug build, False for any other (Release), None when the .xctestrun does not say:
+    its product paths are `__TESTROOT__/<Configuration>/…`. None = no `#if DEBUG` adjustment."""
+    try:
+        found = set(re.findall(r"__TESTROOT__/([A-Za-z0-9_-]+)/", Path(xctestrun).read_text(errors="replace")))
+    except OSError:
+        return None
+    if len(found) != 1:
+        return None
+    return next(iter(found)) == "Debug"
+
+
+def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool,
+                debug: Optional[bool] = None) -> List[Group]:
     """true_up for the groups whose file needs it: one with no suite at all, or one whose source has a
-    `func test…` in column 0 (a cheap regex first: parsing all 1,200 files would take ~20 s)."""
+    `func test…` in column 0 (a cheap regex first: parsing all 1,200 files would take ~20 s); and, when
+    the build configuration is known (`debug`), compiled_count for a file with a `#if DEBUG` in it."""
     out: List[Group] = []
     for g in groups:
         if root is not None and g.path:
@@ -252,6 +322,8 @@ def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool) 
                 text = (root / g.path).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 text = ""
+            if text and debug is not None and DEBUG_IF_ANYWHERE.search(text):
+                g = compiled_count(g, text, debug)
             if text and (not g.selectors or FILE_SCOPE_TEST_FUNC.search(text)):
                 g = true_up(g, text, add_loose)
         if g.selectors or g.undealable:
@@ -259,7 +331,8 @@ def true_up_all(groups: Sequence[Group], root: Optional[Path], add_loose: bool) 
     return out
 
 
-def groups_from_manifest(manifest: dict, only: Optional[Set[str]] = None, root: Optional[Path] = None) -> List[Group]:
+def groups_from_manifest(manifest: dict, only: Optional[Set[str]] = None, root: Optional[Path] = None,
+                         debug: Optional[bool] = None) -> List[Group]:
     """Every app (kind xcode) test file of the manifest as a Group; `only`: just the files holding
     one of these suites. With `root` (the checkout) the counts are trued up from the sources and a
     file's file-scope tests are named too (true_up); without it a file with no suite is left out."""
@@ -272,16 +345,16 @@ def groups_from_manifest(manifest: dict, only: Optional[Set[str]] = None, root: 
         if only is not None and not (set(g.selectors) & only):
             continue
         out.append(g)
-    return true_up_all(out, root, add_loose=True)
+    return true_up_all(out, root, add_loose=True, debug=debug)
 
 
-def groups_from_plan(plan: dict, root: Optional[Path] = None) -> List[Group]:
+def groups_from_plan(plan: dict, root: Optional[Path] = None, debug: Optional[bool] = None) -> List[Group]:
     """run_tests' picks. Their selectors are what the single host would be given (so the two run the
     same tests); only the count is trued up."""
     groups = [make_group(str(g["name"]), g.get("selectors") or [], int(g.get("tests") or 0),
                          bool(g.get("exact", True)), str(g.get("stage") or ""), str(g.get("path") or ""))
               for g in plan.get("groups", [])]
-    return true_up_all([g for g in groups if g.selectors or g.undealable], root, add_loose=False)
+    return true_up_all([g for g in groups if g.selectors or g.undealable], root, add_loose=False, debug=debug)
 
 
 def merge_shared(groups: Sequence[Group]) -> List[Group]:
@@ -398,11 +471,13 @@ def find_xctestrun(products: Path, plan: str = "VideoScan-CI") -> Path:
 
 
 def shard_cmd(xcodebuild: Sequence[str], xctestrun: Path, selectors: Sequence[str], result: Path,
-              target: str = TARGET) -> List[str]:
+              target: str = TARGET, coverage: bool = False) -> List[str]:
     """One host: -parallel-testing-enabled NO keeps the tests inside it serial (the main actor), and its
-    own -resultBundlePath keeps K xcodebuilds from racing for the default bundle name."""
+    own -resultBundlePath keeps K xcodebuilds from racing for the default bundle name. coverage: the
+    host writes its profile into its own result bundle (the caller merges the K bundles)."""
     return (list(xcodebuild) + ["test-without-building", "-xctestrun", str(xctestrun), "-destination", DESTINATION,
                                 "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result)]
+            + (["-enableCodeCoverage", "YES"] if coverage else [])
             + [f"-only-testing:{target}/{s}" for s in selectors])
 
 
@@ -415,6 +490,7 @@ class SuiteStats:
     passed: int = 0
     failed: int = 0
     skipped: int = 0
+    known: int = 0                                                      # of `passed`: result "Expected Failure"
     failures: List[Tuple[str, str]] = field(default_factory=list)      # (identifier, name) of each failed test
 
     @property
@@ -426,6 +502,7 @@ class SuiteStats:
         # issue"); anything that is not a pass or a skip is a failure — an unknown word is never green.
         if result in ("Passed", "Expected Failure"):
             self.passed += 1
+            self.known += result == "Expected Failure"
         elif result == "Skipped":
             self.skipped += 1
         else:
@@ -498,7 +575,10 @@ class ShardReport:
     skipped: int = 0
     failures: List[rt.Event] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)     # why RED beyond a failed test
+    codes: List[str] = field(default_factory=list)        # the same, as words a caller can switch on (PROBLEM_CODES)
     notes: List[str] = field(default_factory=list)
+    rc: int = 0
+    timed_out: bool = False
     short: Set[str] = field(default_factory=set)          # the groups (files) that ran fewer tests than declared
     launch: Optional[float] = None                        # strand start → the test host is up
     stats: Optional[SuiteStats] = None
@@ -517,6 +597,15 @@ class ShardReport:
         return not self.failed and not self.problems
 
 
+# What `codes` may hold, most telling first (the nightly's reason is the first one any shard has):
+#   timeout    the shard hit its own --timeout and its process group was stopped
+#   never-ran  the run was stopped before the shard started
+#   short      it ran fewer tests than its files declare, or a suite it was dealt ran none
+#   died       xcodebuild exited non-zero and no test failed (a crash, a dead host, an xcodebuild error)
+#   unproven   exit 0, but its result bundle (or its log) could not be read: nothing proves the count
+PROBLEM_CODES = ("timeout", "never-ran", "short", "died", "unproven")
+
+
 def _log_names(identifier: str, name: str) -> Set[str]:
     """The names run_tests' parser may have given a test the result bundle calls (identifier, name):
     Swift Testing `f()` or `"display name"`, XCTest `Class.method`."""
@@ -533,7 +622,8 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
     verdict lines and the app's own log lines, and the two get glued mid-line (2026-11-20, 15 hosts:
     4 of 14,244 verdict lines began in the middle of another line, so the parser saw 14,240). The
     bundle is the test host's own record; the log gives the failure messages and the live display."""
-    rep = ShardReport(name, result.log, groups, result.seconds, serial=result.strand.serial)
+    rep = ShardReport(name, result.log, groups, result.seconds, serial=result.strand.serial,
+                      rc=result.rc, timed_out=result.timed_out)
     parser = rt.LineParser()
     started: Optional[float] = None
     try:
@@ -557,6 +647,7 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
                         rep.failures.append(ev)
     except OSError:
         rep.problems.append("its log could not be read")
+        rep.codes.append("unproven")
     ran = not result.timed_out and not (result.rc == 130 and result.seconds == 0.0)
     if ran:
         rep.stats = read_suite_stats(bundle, xcresulttool)
@@ -572,19 +663,24 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
         rep.passed, rep.skipped, rep.failed = st.passed, st.skipped, max(st.failed, len(rep.failures))
     if result.timed_out:
         rep.problems.append(f"TIMEOUT after {result.strand.timeout:g}s (its process group was stopped)")
+        rep.codes.append("timeout")
     elif not ran:
         rep.problems.append("never ran (the run was stopped first)")
+        rep.codes.append("never-ran")
     elif result.rc != 0 and not rep.failed:
         rep.problems.append(f"xcodebuild exit {result.rc} with no failed test (a crash, a dead test host "
                             f"or an xcodebuild error)")
+        rep.codes.append("died")
     if rep.total < rep.expected:
         rep.problems.append(f"ran {rep.total} of {rep.expected} tests")
+        rep.codes.append("short")
     if ran:
         if rep.stats is None and result.rc == 0:
             # Exit 0 and no readable bundle: the log alone cannot say that every suite ran (a silent suite
             # hides behind another's surplus, and glued lines make its count soft). Not provable = RED.
             rep.problems.append("its result bundle could not be read, so no suite's count is proven "
                                 "(xcresulttool failed) — the log's count alone is not a green")
+            rep.codes.append("unproven")
         elif rep.stats is None:
             rep.notes.append("no per-suite counts (its result bundle could not be read)")
         else:
@@ -592,6 +688,7 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
             if silent:
                 rep.problems.append(f"{len(silent)} suite(s) ran zero tests: {', '.join(silent[:8])}"
                                     + (" …" if len(silent) > 8 else ""))
+                rep.codes.append("short")
             # A suite at zero is named above; a file of file-scope tests has no suite to name, so its
             # zero is "short" here.
             short = [(g.name, rep.stats.ran_group(g), g.tests) for g in groups
@@ -600,6 +697,7 @@ def fan_in(name: str, groups: List[Group], result: strands.Result, bundle: Path,
             if short:
                 rep.problems.append("short: " + ", ".join(f"{n} ran {a} of {b}" for n, a, b in short[:8])
                                     + (" …" if len(short) > 8 else ""))
+                rep.codes.append("short")
     return rep
 
 
@@ -676,10 +774,56 @@ def say_undealable(groups: Sequence[Group]) -> int:
     return len(lost)
 
 
+def summary_dict(reports: Sequence[ShardReport], bundles: Sequence[Path], jobs: int, wall: float, lost: int,
+                 word: str) -> dict:
+    """The run as data (--summary FILE), for a caller that publishes its own row (the nightly). Counts
+    are each shard's fan-in counts (its result bundle's when that could be read). `failures` names every
+    failed test once: by its bundle identifier when the bundle has it, else as the log named it."""
+    failures: List[dict] = []
+    for r in reports:
+        from_bundle = list(r.stats.failures) if r.stats is not None else []
+        known: Set[str] = set()
+        for ident, shown in from_bundle:
+            failures.append({"id": ident, "name": shown, "shard": r.name})
+            known |= _log_names(ident, shown)
+        failures += [{"id": "", "name": e.name, "shard": r.name} for e in r.failures if e.name not in known
+                     and not (e.message or "").startswith("its verdict line is garbled")]
+    read = [r.stats is not None and r.stats.total > 0 for r in reports]
+    return {
+        "version": NIGHTLY_SUMMARY_VERSION, "verdict": word, "jobs": jobs, "wall_s": round(wall, 1),
+        "passed": sum(r.passed for r in reports), "failed": sum(r.failed for r in reports),
+        "skipped": sum(r.skipped for r in reports), "expected": sum(r.expected for r in reports),
+        # Tests whose bundle result is "Expected Failure" (None when a bundle could not be read). NOT the
+        # count of tests that passed with a known issue: a parameterized Swift Testing test that did is
+        # plain "Passed" in the bundle (2026-11-21: 18 here, 23 "passed … with N known issues" lines in
+        # the logs), so the nightly keeps counting those from the logs.
+        "expected_failures": sum(r.stats.known for r in reports if r.stats is not None) if all(read) else None,
+        "counts_from": "bundles" if all(read) else ("logs" if not any(read) else "mixed"),
+        "undealable_files": lost, "failures": failures,
+        "shards": [{"name": r.name, "serial": r.serial, "rc": r.rc, "timed_out": r.timed_out,
+                    "seconds": round(r.seconds, 1), "passed": r.passed, "failed": r.failed, "skipped": r.skipped,
+                    "expected": r.expected, "green": r.green, "codes": [c for c in PROBLEM_CODES if c in r.codes],
+                    "problems": list(r.problems), "notes": list(r.notes), "log": str(r.log),
+                    "bundle": str(b), "bundle_read": ok, "suites": sum(len(g.suites) + len(g.loose) for g in r.groups)}
+                   for r, b, ok in zip(reports, bundles, read)],
+    }
+
+
+def write_summary(path: Optional[Path], data: dict) -> None:
+    """Whole or not at all (a temp file, then a rename): a reader never sees half a verdict."""
+    if path is None:
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
 def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path = DEFAULT_TIMINGS,
         timeout: float = SHARD_TIMEOUT, xcodebuild: Sequence[str] = ("xcodebuild",),
         xcresulttool: Sequence[str] = ("xcrun", "xcresulttool"), stream: bool = False, tail: bool = True,
-        target: str = TARGET, keep_results: bool = False, root: Optional[Path] = None) -> int:
+        target: str = TARGET, keep_results: bool = False, root: Optional[Path] = None,
+        coverage: bool = False, summary: Optional[Path] = None) -> int:
+    keep_results = keep_results or coverage        # the caller merges the K bundles' profiles
     timings = strands.load_timings(timings_path)
     shards, held = plan_shards(groups, jobs, timings, tail, root)
     lost = say_undealable(groups)
@@ -691,7 +835,8 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         work.append(strands.Strand(name=f"shard-{i + 1:02d}", weight_key=f"xctest-shard:{i + 1:02d}",
                                    estimate=sum(weight(g, timings) for g in gs), timeout=timeout,
                                    env={"NSUnbufferedIO": "YES"},
-                                   cmd=shard_cmd(xcodebuild, xctestrun, sel, run_dir / f"{len(work):04d}" / "shard.xcresult", target)))
+                                   cmd=shard_cmd(xcodebuild, xctestrun, sel, run_dir / f"{len(work):04d}" / "shard.xcresult",
+                                                 target, coverage)))
         dealt.append(gs)
     if held:
         gs = [g for g, _ in held]
@@ -701,7 +846,7 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
                                    serial=f"{sum(len(g.suites) for g in gs)} suites that must not run beside "
                                           f"another test host ({', '.join(reasons)})",
                                    cmd=shard_cmd(xcodebuild, xctestrun, [s for g in gs for s in g.selectors],
-                                                 run_dir / f"{len(work):04d}" / "shard.xcresult", target)))
+                                                 run_dir / f"{len(work):04d}" / "shard.xcresult", target, coverage)))
         dealt.append(gs)
     n_suites = sum(len(g.suites) + len(g.loose) for gs in dealt for g in gs)
     n_tests = sum(g.tests for gs in dealt for g in gs)
@@ -712,6 +857,7 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         say(f"serial tail: {', '.join(g.suites)} — {r}")
     if not work:
         say("RED: nothing to run")
+        write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED"))
         return 1
 
     lock = threading.Lock()
@@ -736,8 +882,8 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         follower.finish()
     wall = time.monotonic() - t0
 
-    reports = [fan_in(w.name, gs, r, run_dir / f"{i:04d}" / "shard.xcresult", xcresulttool)
-               for i, (w, gs, r) in enumerate(zip(work, dealt, results))]
+    bundles = [run_dir / f"{i:04d}" / "shard.xcresult" for i in range(len(work))]
+    reports = [fan_in(w.name, gs, r, b, xcresulttool) for w, gs, r, b in zip(work, dealt, results, bundles)]
     for i, rep in enumerate(reports):
         if rep.green and not keep_results:
             # Read and done: a green shard's result bundle is not evidence of anything (the whole suite's
@@ -786,6 +932,7 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         why = " · ZERO tests ran"
     if lost:
         why += f" · {lost} file(s) could not be dealt (named above)"
+    write_summary(summary, summary_dict(reports, bundles, jobs, wall, lost, word))
     say(f"{word}: {passed} passed, {failed} failed, {skipped} skipped (ran {passed + failed + skipped} of {expected}) "
         f"in {wall:.1f}s — {bounds}{why}")
     return 0 if word == "GREEN" else 1
@@ -818,6 +965,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--root", type=Path, default=SELF.parent.parent,
                     help="the checkout whose test sources true up the counts (default: this script's)")
     ap.add_argument("--keep-results", action="store_true", help="keep every shard's result bundle (default: a red shard's)")
+    ap.add_argument("--coverage", action="store_true",
+                    help="each host records code coverage into its result bundle (-enableCodeCoverage YES; the build "
+                         "must have it too) and every bundle is kept: the caller merges them")
+    ap.add_argument("--summary", type=Path, default=None, metavar="FILE",
+                    help="write the run as JSON (counts, each shard's verdict and problem codes, the failed tests)")
     ap.add_argument("--run-dir", type=Path, default=None)
     ap.add_argument("--timeout", type=float, default=SHARD_TIMEOUT, help="seconds, per shard")
     ap.add_argument("--timings", type=Path, default=DEFAULT_TIMINGS)
@@ -841,18 +993,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except (OSError, ValueError) as e:
             if a.plan is None:
                 ap.error(f"cannot read the manifest {a.manifest}: {e}")
+    try:
+        xctestrun = a.xctestrun or find_xctestrun(a.products, a.test_plan or manifest.get("test_plan") or "VideoScan-CI")
+    except FileNotFoundError as e:
+        ap.error(str(e))
+    # Debug or Release decides which `#if DEBUG` tests exist (compiled_count).
+    debug = build_configuration_is_debug(xctestrun)
     if a.plan is not None:
         try:
-            groups = groups_from_plan(json.loads(a.plan.read_text()), a.root)
+            groups = groups_from_plan(json.loads(a.plan.read_text()), a.root, debug)
         except (OSError, ValueError, KeyError, TypeError) as e:
             ap.error(f"cannot read the plan {a.plan}: {e}")
     elif a.all:
-        groups = groups_from_manifest(manifest, root=a.root)
+        groups = groups_from_manifest(manifest, root=a.root, debug=debug)
         if a.stages != "all":
             want = set(a.stages.split(",")) if a.stages else None
             groups = [g for g in groups if (g.stage in want if want is not None else g.stage not in SERIAL_STAGES)]
     else:
-        groups = groups_from_manifest(manifest, set(a.suites), a.root)
+        groups = groups_from_manifest(manifest, set(a.suites), a.root, debug)
         known = {s for g in groups for s in g.suites}
         # A suite the manifest does not list still runs (its count unknown), in a group of its own.
         groups += [Group(s, [s], 0, False) for s in a.suites if s not in known]
@@ -860,10 +1018,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ap.error("--stages goes with --all (a plan or suite names already say what to run)")
     if not groups:
         ap.error("nothing to run: no app suite matched")
-    try:
-        xctestrun = a.xctestrun or find_xctestrun(a.products, a.test_plan or manifest.get("test_plan") or "VideoScan-CI")
-    except FileNotFoundError as e:
-        ap.error(str(e))
 
     if a.dry_run:
         timings = strands.load_timings(a.timings)
@@ -889,7 +1043,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         return run(groups, xctestrun, a.jobs, run_dir, a.timings, a.timeout, shlex.split(a.xcodebuild),
                    shlex.split(a.xcresulttool), a.stream, not a.no_serial_tail, keep_results=a.keep_results,
-                   root=a.root)
+                   root=a.root, coverage=a.coverage, summary=a.summary)
     except KeyboardInterrupt:
         say("RED: interrupted — the run is incomplete")
         return 130

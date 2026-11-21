@@ -652,6 +652,26 @@ def test_r5_full_python_lane_names_an_interpreter_that_has_pytest(monkeypatch, t
     assert lanes[0].passed == 400 and lanes[0].word == "GREEN"
 
 
+def test_full_passes_jobs_to_the_nightly_runner_and_leaves_its_default_alone_otherwise(monkeypatch, tmp_path):
+    # 2026-11-21: the nightly runner shards its own app phase (half the cores). --full --jobs N is its
+    # NIGHTLY_APP_JOBS (1 = the single host); without --jobs the variable is whatever the caller's was.
+    seen = []
+
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if any(str(c).endswith("nightly_local_tests.sh") for c in cmd):
+            seen.append((cmd, dict(self.env)))
+        (self.run_dir / log_name).write_text("1 passed in 1.0s\n")
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    monkeypatch.setattr(rt, "python_for_tests", lambda repos: (["/some/venv/bin/python"], "/some/venv/bin/python"))
+    monkeypatch.delenv("NIGHTLY_APP_JOBS", raising=False)
+    rt.run_full(rt.parse_args(["--full", "--jobs", "1"]), quiet_out(), tmp_path, "ultra")
+    rt.run_full(rt.parse_args(["--full"]), quiet_out(), tmp_path, "ultra")
+    assert len(seen) == 2 and all("--on-demand" in cmd for cmd, _ in seen), seen
+    assert seen[0][1].get("NIGHTLY_APP_JOBS") == "1"
+    assert "NIGHTLY_APP_JOBS" not in seen[1][1]
+
+
 def test_r5_full_python_lane_without_pytest_anywhere_is_not_run_with_the_reason(monkeypatch, tmp_path):
     monkeypatch.setattr(rt.Runner, "stream", lambda *a, **k: pytest.fail("ran without pytest"))
     monkeypatch.setattr(rt, "python_for_tests", lambda repos: (None, "no pytest in x"))
