@@ -68,7 +68,8 @@ struct ContainedLogWriteTests {
         #expect(try String(contentsOf: url, encoding: .utf8).hasSuffix("[T] 1 log line could not be written: Bad file descriptor (errno 9)\ng\n"))
     }
 
-    @Test("SCALE: 100k failed lines cost no memory beyond the counter, and a count at Int.max saturates")
+    @Test("SCALE: 100k failed lines cost no memory beyond the counter, and a count at Int.max saturates",
+          .tags(.quietMachine))   // judges a wall-time bound: the serial phase (QuietMachine.swift)
     func aLongOutageIsBounded() throws {
         let url = try scratchFile(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let broken = try FileHandle(forReadingFrom: url)
