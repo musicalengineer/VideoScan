@@ -117,6 +117,11 @@ struct GlobalTestHookRetiredSensorTests {
     /// reads the task-local on the tree and hands the value in. A site that
     /// passed nil, or read the task-local inside the detached block, would
     /// silently stop injecting there.
+    /// This pin holds the SHAPE only. It cannot tell a capture made before
+    /// the detach from one moved inside it (Codex #347): that is held by
+    /// behaviour — ArchiveAngelSeamScopeTests (the cancel settle) and
+    /// ArchiveAngelLifecycleCompanionTests (both Skip paths), each seen
+    /// red with its `let fault` moved into the closure.
     @Test func theAngelJobHandsTheFaultToEveryDetachedSave() throws {
         let code = try SourceTree.appCode(named: "ArchiveAngel/Prepare/ArchiveAngelJob.swift")
         func count(_ needle: String) -> Int { code.components(separatedBy: needle).count - 1 }

@@ -6,8 +6,9 @@
 //   PersonNameGuard.roster                 the gallery a name-keyed write is judged against
 //   AdaFaceModelLoader.modelsDirOverride   where the AdaFace model is looked for
 //
-// Proven here: parallel tests with DIFFERENT bindings, and tests with none,
-// never see each other's — through the real sinks (`PersonNameGuard.check`,
+// Proven here: sibling tasks holding DIFFERENT bindings (and none) at the
+// same moment — a counted rendezvous (SeamRendezvousSupport), not a hope —
+// each see only their own, through the real sinks (`PersonNameGuard.check`,
 // the shared `AdaFaceModelLoader`). The source half (no app source binds
 // either; the globals are gone) is in GlobalTestHookRetiredSensorTests.
 //
@@ -23,38 +24,52 @@ struct PeopleSeamScopeTests {
 
     // MARK: PersonNameGuard.roster
 
-    /// 24 cases at once, ALL asking about the same short name. Case n binds
+    /// 24 sibling tasks, ALL asking about the same short name. Task n binds
     /// a roster holding n % 3 people of that name; every fourth binds none
     /// and is judged by the gallery on disk, which has nobody of that name.
-    /// The guard refuses exactly the cases whose own roster holds two.
-    @Test("24 concurrent rosters for one shared name: each write is judged by its own roster", arguments: 0..<24)
-    func rosterIsPerTaskTree(_ id: Int) async throws {
+    /// Each makes its binding and WAITS until all 24 hold theirs
+    /// (SeamRendezvous — the overlap is constructed and counted); only then
+    /// does each ask. The guard refuses exactly the tasks whose own roster
+    /// holds two.
+    @Test("24 rosters for one shared name held at once: each write is judged by its own roster",
+          .timeLimit(.minutes(1)))
+    func rosterIsPerTaskTree() async throws {
         try #require(TestEnvironment.isTestHost)
-        let name = "SeamScopeNamesake"   // the SAME name in every case, on purpose
-        let namesakes = id % 3
-        let fixture = (0..<namesakes).map { _ in POIProfile(name: name, referencePath: "") }
+        let parties = 24
+        let gate = SeamRendezvous(parties: parties)
+        let name = "SeamScopeNamesake"   // the SAME name in every task, on purpose
+        func namesakes(_ id: Int) -> Int? { id.isMultiple(of: 4) ? nil : id % 3 }   // nil: binds nothing
 
-        func refusals() async -> Int {
-            var refused = 0
-            for _ in 0..<20 {
-                do { try PersonNameGuard.check(name, operation: "seam scope") } catch { refused += 1 }
-                await Task.yield()   // let the other cases interleave
+        /// (id, people of that name visible at the rendezvous, refusals of 20)
+        let seen = await withTaskGroup(of: (Int, Int, Int).self, returning: [(Int, Int, Int)].self) { group in
+            for id in 0..<parties {
+                group.addTask {
+                    func party() async -> (Int, Int, Int) {
+                        await gate.arrive()                       // … until all 24 are here
+                        let visible = PersonNameGuard.roster().filter { $0.name == name }.count
+                        var refused = 0
+                        for _ in 0..<20 {
+                            do { try PersonNameGuard.check(name, operation: "seam scope") } catch { refused += 1 }
+                        }
+                        await gate.leave()
+                        return (id, visible, refused)
+                    }
+                    guard let count = namesakes(id) else { return await party() }
+                    let fixture = (0..<count).map { _ in POIProfile(name: name, referencePath: "") }
+                    return await PersonNameGuard.$roster.withValue({ fixture }) { await party() }
+                }
             }
-            return refused
+            return await group.reduce(into: []) { $0.append($1) }
         }
 
-        if id.isMultiple(of: 4) {
-            #expect(PersonNameGuard.roster().allSatisfy { $0.name != name },
-                    "an unbound case reads the gallery on disk, not another case's roster")
-            #expect(await refusals() == 0, "an unbound case was refused on another case's roster")
-        } else {
-            let refused = await PersonNameGuard.$roster.withValue({ fixture }) {
-                #expect(PersonNameGuard.roster().count == namesakes)
-                return await refusals()
-            }
-            #expect(refused == (namesakes > 1 ? 20 : 0), "case \(id) bound \(namesakes) namesake(s) and was refused \(refused) of 20")
-            #expect(PersonNameGuard.roster().allSatisfy { $0.name != name }, "the binding outlived its scope")
+        #expect(await gate.peakHeld == parties, "the bindings did not overlap — the test proved nothing")
+        #expect(seen.count == parties)
+        for (id, visible, refused) in seen {
+            let own = namesakes(id) ?? 0   // unbound: the gallery on disk has nobody of that name
+            #expect(visible == own, "task \(id) read another task's roster while all were held (\(visible) namesakes, own \(own))")
+            #expect(refused == (own > 1 ? 20 : 0), "task \(id) with \(own) namesake(s) was refused \(refused) of 20")
         }
+        #expect(PersonNameGuard.roster().allSatisfy { $0.name != name }, "a binding outlived its scope")
     }
 
     /// A child task is judged by its parent's roster; a detached task, which
@@ -86,36 +101,65 @@ struct PeopleSeamScopeTests {
         return dir
     }
 
-    /// 16 cases at once through the ONE shared loader. Even cases bind an
+    /// 16 sibling tasks through the ONE shared loader. Even ones bind an
     /// empty models dir, odd ones a dir holding an unloadable model. Each
-    /// is answered about its own directory, by name — never a sibling's,
-    /// never the real ~/dev/VideoScan/models.
-    @Test("16 concurrent models dirs through the shared loader: each is answered about its own directory",
-          arguments: 0..<16)
-    func modelsDirIsPerTaskTree(_ id: Int) async throws {
-        let corrupt = !id.isMultiple(of: 2)
-        let dir = try Self.modelsDir("\(id)", withCorruptModel: corrupt)
-        defer { try? FileManager.default.removeItem(at: dir) }
+    /// makes its binding and WAITS until all 16 hold theirs (SeamRendezvous);
+    /// only then does each ask. Every task is answered about its own
+    /// directory, by name — never a sibling's, never the real
+    /// ~/dev/VideoScan/models.
+    @Test("16 models dirs held at once through the shared loader: each task is answered about its own directory",
+          .timeLimit(.minutes(1)))
+    func modelsDirIsPerTaskTree() async throws {
+        let parties = 16
+        let gate = SeamRendezvous(parties: parties)
+        let dirs = try (0..<parties).map { try Self.modelsDir("\($0)", withCorruptModel: !$0.isMultiple(of: 2)) }
+        defer { dirs.forEach { try? FileManager.default.removeItem(at: $0) } }
+        struct Seen: Sendable {
+            let id: Int
+            let dirAtRendezvous: String
+            let assetsPresent: Bool
+            let loadedAModel: Bool
+            let messages: [String]
+        }
 
-        #expect(AdaFaceModelLoader.modelsDirOverride == nil, "another case's models dir is visible here")
-        let messages: [String] = await AdaFaceModelLoader.$modelsDirOverride.withValue(dir.path) {
-            #expect(AdaFaceModelLoader.modelsDir == dir.path)
-            #expect(AdaFaceModelLoader.modelAssetsPresent() == corrupt)
-            var out: [String] = []
-            for _ in 0..<3 {
-                // Only the message leaves the actor (an MLModel is not Sendable).
-                let (model, error) = await AdaFaceModelLoader.shared.getModel()
-                #expect(model == nil, "case \(id) was handed a model — a URL cached for another directory?")
-                out.append(error ?? "")
-                await Task.yield()
+        let seen = await withTaskGroup(of: Seen.self, returning: [Seen].self) { group in
+            for id in 0..<parties {
+                let dir = dirs[id].path
+                group.addTask {
+                    await AdaFaceModelLoader.$modelsDirOverride.withValue(dir) {
+                        await gate.arrive()                       // … until all 16 are here
+                        let visible = AdaFaceModelLoader.modelsDir
+                        let present = AdaFaceModelLoader.modelAssetsPresent()
+                        var loaded = false
+                        var messages: [String] = []
+                        for _ in 0..<3 {
+                            // Only the message leaves the actor (an MLModel is not Sendable).
+                            let (model, error) = await AdaFaceModelLoader.shared.getModel()
+                            if model != nil { loaded = true }
+                            messages.append(error ?? "")
+                        }
+                        await gate.leave()
+                        return Seen(id: id, dirAtRendezvous: visible, assetsPresent: present,
+                                    loadedAModel: loaded, messages: messages)
+                    }
+                }
             }
-            return out
+            return await group.reduce(into: []) { $0.append($1) }
         }
-        for message in messages {
-            #expect(message.contains(dir.path), "case \(id) was answered about another directory: \(message)")
-            #expect(message.contains(corrupt ? "found but failed to load" : "AdaFace model not found"), "\(message)")
+
+        #expect(await gate.peakHeld == parties, "the bindings did not overlap — the test proved nothing")
+        #expect(seen.count == parties)
+        for s in seen {
+            let corrupt = !s.id.isMultiple(of: 2), dir = dirs[s.id].path
+            #expect(s.dirAtRendezvous == dir, "task \(s.id) read another task's models dir while all were held")
+            #expect(s.assetsPresent == corrupt)
+            #expect(!s.loadedAModel, "task \(s.id) was handed a model — a URL cached for another directory?")
+            for message in s.messages {
+                #expect(message.contains(dir), "task \(s.id) was answered about another directory: \(message)")
+                #expect(message.contains(corrupt ? "found but failed to load" : "AdaFace model not found"), "\(message)")
+            }
         }
-        #expect(AdaFaceModelLoader.modelsDirOverride == nil, "the binding outlived its scope")
+        #expect(AdaFaceModelLoader.modelsDirOverride == nil, "a binding outlived its scope")
     }
 
     /// Unbound, the directory is what production reads: the environment
