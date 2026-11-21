@@ -168,6 +168,10 @@ enum ArchivePromoteEngine {
         /// read error ("read errno 5") or a read that ended before the
         /// file's size ("N of M bytes"). Never a digest (GH #504, D1).
         case readFailed(String)
+        /// The file's SIZE moved while it was being read (it was truncated
+        /// or appended to): what was read is not the file from end to end.
+        /// The file changed — it is not unreadable and not corrupt.
+        case changedDuringRead(String)
         case verifyMismatch(expected: String, actual: String)
         case renameFailed(String, errno: Int32)
         case publishedIdentityMismatch(String)
@@ -187,6 +191,7 @@ enum ArchivePromoteEngine {
             case .verifyMismatch(let e, let a): return "verification failed — copy \(a.prefix(12))… ≠ source \(e.prefix(12))…; partial removed"
             case .publishedIdentityMismatch(let p): return "the published file is not the file that was verified — refused: \(p)"
             case .manifestInvalid(let why): return "archive manifest refused: \(why) — run Initialize Master Archive again"
+            case .changedDuringRead(let how): return "changed while it was read (\(how))"
             case .cancelled: return "cancelled"
             case .createFailed, .writeFailed, .readFailed, .renameFailed, .durabilityBarrierFailed:
                 return syscallFailureDescription
@@ -574,6 +579,10 @@ enum ArchivePromoteEngine {
             // same way: no partial, no new folder left behind.
             removeCreatedDirectories(root: root, created: createdDirs)
             throw Failure.readFailed(why)
+        } catch Failure.changedDuringRead(let how) {
+            // The `.partial` itself changed size under its read-back.
+            removeCreatedDirectories(root: root, created: createdDirs)
+            throw Failure.changedDuringRead(how)
         }
     }
 
@@ -676,12 +685,18 @@ enum ArchivePromoteEngine {
         var copied: Int64 = 0
         // A read error or a read that ends early throws `.readFailed` (D1):
         // the file opened; what failed was a read.
-        _ = try pipelinedRead(fd: source.fd, hook: readHook,
-                              shouldCancel: shouldCancel) { buf, n in
-            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
-            try writeAll(dfd, buf, n, label: partialPath)
-            copied += Int64(n)
-            progress(copied)
+        do {
+            _ = try pipelinedRead(fd: source.fd, hook: readHook,
+                                  shouldCancel: shouldCancel) { buf, n in
+                hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
+                try writeAll(dfd, buf, n, label: partialPath)
+                copied += Int64(n)
+                progress(copied)
+            }
+        } catch Failure.changedDuringRead {
+            // The source's size moved under the copy: the failure this pass
+            // has always named (partial and created folders are rolled back).
+            throw Failure.sourceChangedDuringCopy(source.path)
         }
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), copied)
     }
@@ -807,14 +822,20 @@ enum ArchivePromoteEngine {
     /// a read error surfaces as `Failure.readFailed("read errno N")`.
     /// Returns total bytes consumed.
     ///
-    /// WHOLE FILE OR NOTHING (GH #504, D1): end-of-file must arrive at the
-    /// file's size. The size is taken from the descriptor before the first
-    /// read and again after the last; a read that ended short of BOTH is
-    /// `Failure.readFailed("N of M bytes")`, so no caller can hash, copy or
-    /// compare a prefix as if it were the file. A file that really shrank
-    /// or grew under the read is not this failure (its size moved with it);
-    /// the callers' before/after identity stamps name that one. Cost: two
-    /// fstat calls per pass.
+    /// WHOLE FILE OR NOTHING (GH #504, D1 — made strict after Codex r1): the
+    /// size is taken from the descriptor before the first read and again
+    /// after the last, and the read is whole ONLY when size-before ==
+    /// size-after == bytes consumed (`wholeReadFailure`). Otherwise it
+    /// throws — never a digest, a copy or a comparison of something that was
+    /// not the file from end to end:
+    ///   * the size moved under the read → `Failure.changedDuringRead`
+    ///     ("N bytes before, M after") — the file CHANGED; it is not
+    ///     unreadable and not corrupt. (The first rule compared with the
+    ///     smaller of the two sizes and so let a file that shrank after it
+    ///     had been buffered return its former digest.)
+    ///   * the size held and the read ended short → `Failure.readFailed`
+    ///     ("N of M bytes").
+    /// Cost: two fstat calls per pass.
     /// F_RDAHEAD is a best-effort hint; failure is ignored.
     private static func pipelinedRead(fd: Int32,
                                       hook: ReadHook?,
@@ -840,11 +861,24 @@ enum ArchivePromoteEngine {
             ring.free.signal()
             slot = (slot + 1) % ring.depth
         }
-        if let sizeBefore, let sizeAfter = FileIdentity.of(fd: fd)?.0.size,
-           total < min(sizeBefore, sizeAfter) {
-            throw Failure.readFailed("\(total) of \(min(sizeBefore, sizeAfter)) bytes")
+        if let failure = wholeReadFailure(consumed: total, sizeBefore: sizeBefore,
+                                          sizeAfter: FileIdentity.of(fd: fd)?.0.size) {
+            throw failure
         }
         return total
+    }
+
+    /// D1's rule, pure: nil = the read was the whole file (size before ==
+    /// size after == bytes consumed). A size that could not be taken is a
+    /// read failure — wholeness cannot be shown.
+    static func wholeReadFailure(consumed: Int64, sizeBefore: Int64?, sizeAfter: Int64?) -> Failure? {
+        guard let sizeBefore, let sizeAfter else { return .readFailed("its size could not be read") }
+        guard sizeBefore == sizeAfter else {
+            return .changedDuringRead("\(sizeBefore) bytes before, \(sizeAfter) after")
+        }
+        if consumed == sizeBefore { return nil }
+        return consumed < sizeBefore ? .readFailed("\(consumed) of \(sizeBefore) bytes")
+                                     : .changedDuringRead("\(consumed) bytes read, \(sizeBefore) bytes long")
     }
 
     /// write(2) until every byte of the buffer is out (EINTR-safe).

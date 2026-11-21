@@ -183,28 +183,70 @@ struct HashReadSeamTests {
         #expect(try Engine.sha256(path: url.path) == hashSeamReference(data), "outside the scope the file hashes clean")
     }
 
-    /// D1's two edges: the size is taken before AND after the read, so a
-    /// file that really changed length under the read is not called a read
-    /// failure — the callers' identity stamps name that. An empty file is a
+    /// D1, strict (Codex r1 P1, 2026-11-21; seen RED through Verify —
+    /// HashReadFaultVerifyArchiveTests.aFileThatShrinksUnderTheReadIsNeverRestored):
+    /// the read is whole only when size-before == size-after == bytes
+    /// consumed. A file whose size moves under the read yields NO digest —
+    /// not its former one (it shrank after it was buffered), not a prefix's
+    /// (it was cut mid-read), not a longer one's (it grew). It is named
+    /// "changed while it was read", never unreadable. An empty file is a
     /// complete read of nothing.
-    @Test("D1 edges: an empty file hashes (0 of 0 is complete); a file truncated to exactly the bytes read is not a read failure")
-    func aCompleteReadOfAShorterFileIsNotAReadFailure() throws {
+    @Test("D1 strict: an empty file hashes; a file that SHRINKS after it was buffered, is CUT mid-read, or GROWS under the read throws changedDuringRead — never a digest")
+    func aFileWhoseSizeMovesUnderTheReadYieldsNoDigest() throws {
         let sb = try sandbox("edges"); defer { sb.cleanup() }
         let (empty, none) = try write(sb, "test_empty.bin", bytes: 0, seed: 1)
         #expect(try Engine.sha256(path: empty.path) == hashSeamReference(none))
-        // The file is cut to `keep` bytes while its read is under way: the
-        // hook truncates the real file, then ends the read there.
-        let (url, data) = try write(sb, "test_trunc.bin", bytes: Self.chunk + 40_000, seed: 14)
-        let keep = Self.chunk
-        let hook: Engine.ReadHook = { fd, offset, _ in
-            guard offset == Int64(keep) else { return nil }
+
+        @Sendable func resize(_ url: URL, to bytes: Int) {
             let w = open(url.path, O_WRONLY)
-            ftruncate(w, off_t(keep))
+            ftruncate(w, off_t(bytes))
             close(w)
+        }
+        // Codex's shape: the whole file is already in the reader's buffer
+        // (one chunk) when it is truncated to half.
+        let (small, _) = try write(sb, "test_shrunk.bin", bytes: 50_000, seed: 15)
+        let shrink: Engine.ReadHook = { _, offset, _ in
+            if offset == 0 { resize(small, to: 25_000) }
+            return nil
+        }
+        #expect(throws: Engine.Failure.changedDuringRead("50000 bytes before, 25000 after")) {
+            _ = try Engine.$readHook.withValue(shrink) { try Engine.sha256(path: small.path) }
+        }
+        // Cut to `keep` bytes while the read is under way; the read then ends there.
+        let total = Self.chunk + 40_000
+        let (cut, _) = try write(sb, "test_trunc.bin", bytes: total, seed: 14)
+        let keep = Self.chunk
+        let truncate: Engine.ReadHook = { _, offset, _ in
+            guard offset == Int64(keep) else { return nil }
+            resize(cut, to: keep)
             return .shortRead(bytes: 0)
         }
-        let digest = try Engine.$readHook.withValue(hook) { try Engine.sha256(path: url.path) }
-        #expect(digest == hashSeamReference(data.prefix(keep)), "the file IS these bytes now; its change is the stamps' to report")
+        #expect(throws: Engine.Failure.changedDuringRead("\(total) bytes before, \(keep) after")) {
+            _ = try Engine.$readHook.withValue(truncate) { try Engine.sha256(path: cut.path) }
+        }
+        // Grown under the read (appended to after the first chunk was read).
+        let (grown, _) = try write(sb, "test_grown.bin", bytes: 30_000, seed: 16)
+        let grow: Engine.ReadHook = { _, offset, _ in
+            if offset == 0 { resize(grown, to: 31_000) }
+            return nil
+        }
+        #expect(throws: Engine.Failure.changedDuringRead("30000 bytes before, 31000 after")) {
+            _ = try Engine.$readHook.withValue(grow) { try Engine.sha256(path: grown.path) }
+        }
+        #expect(Engine.Failure.changedDuringRead("50000 bytes before, 25000 after").description
+                == "changed while it was read (50000 bytes before, 25000 after)")
+    }
+
+    @Test("D1's rule, pure: whole only when size-before == size-after == bytes consumed",
+          arguments: [(10, 10, 10, "whole"), (7, 10, 10, "short"), (10, 10, 5, "changed"), (10, 5, 10, "changed"),
+                      (5, 10, 5, "changed"), (12, 10, 10, "changed"), (0, 0, 0, "whole")] as [(Int64, Int64, Int64, String)])
+    func theWholeReadRule(_ consumed: Int64, _ before: Int64, _ after: Int64, _ verdict: String) {
+        let failure = Engine.wholeReadFailure(consumed: consumed, sizeBefore: before, sizeAfter: after)
+        switch (verdict, failure) {
+        case ("whole", nil), ("short", .readFailed?), ("changed", .changedDuringRead?): break
+        default: Issue.record("consumed \(consumed), before \(before), after \(after): \(String(describing: failure)), expected \(verdict)")
+        }
+        #expect(Engine.wholeReadFailure(consumed: 1, sizeBefore: nil, sizeAfter: 1) == .readFailed("its size could not be read"))
     }
 
     @Test("an ordinary PARTIAL read (fewer bytes than asked, more to come) changes nothing: same digest")
