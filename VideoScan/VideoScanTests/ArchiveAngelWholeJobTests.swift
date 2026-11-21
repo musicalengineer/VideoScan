@@ -10,7 +10,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-// serialized: sets the process-global ArchiveAngelPlanWriter.injectedFailure seam and VS_FFMPEG_PATH per test
+// serialized: sets the process-global ArchiveAngelPlanWriter.injectedFailure seam per test
 @Suite("Archive Angel — whole jobs on real media, failures injected", .serialized)
 @MainActor
 struct ArchiveAngelWholeJobTests {
@@ -137,20 +137,17 @@ struct ArchiveAngelWholeJobTests {
         let b = try bench("wholejob_boom"); defer { b.sb.cleanup() }
         let ok = try await clip("test_wj_fine.mp4", in: b.sb.sources)
         let boom = try await clip("test_wj_boom.mp4", in: b.sb.sources)
-        // Pass-through fake: fails only for test_wj_boom (see FFmpegEncodeCheckTests).
-        let fake = b.sb.root.appendingPathComponent("ffmpeg")
-        try """
-        #!/bin/sh
-        case "$*" in *-i*test_wj_boom.mp4*) ;; *) exec "\(Self.ffmpeg)" "$@" ;; esac
-        for out; do :; done
-        head -c 20000 /dev/zero > "$out"
-        echo "Error while decoding stream #0:0: Invalid data found when processing input" >&2
-        exit 69
-        """.write(to: fake, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
-        let job = await run(b, [record(ok), record(boom)])
+        // Scripted: an ffmpeg encode READING test_wj_boom fails (20 KB of
+        // junk, exit 69); every other command is the real tool.
+        let mock = ScriptedExecutor(claiming: [b.sb.root.path])
+            .on("ffmpeg", where: { args in
+                    args.last?.hasPrefix("/") == true   // writes a file (the access copy), not a decode to a pipe
+                        && zip(args, args.dropFirst()).contains { $0.0 == "-i" && $0.1.hasSuffix("test_wj_boom.mp4") }
+                },
+                .writeOutputFile(Data(count: 20_000),
+                                 stderr: "Error while decoding stream #0:0: Invalid data found when processing input\n", exit: 69))
+            .on("*", .passThrough)
+        let job = await mock.scoped { await run(b, [record(ok), record(boom)]) }
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
         let byName = Dictionary(uniqueKeysWithValues: job.plan.entries.map { ($0.filename, $0) })
         #expect(byName["test_wj_fine.mp4"]?.steps.first { $0.kind == .accessCopy }?.state == .done)

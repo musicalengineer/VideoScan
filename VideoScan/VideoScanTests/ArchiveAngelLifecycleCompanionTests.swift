@@ -21,7 +21,9 @@ import Testing
 @testable import VideoScan
 import VideoScanCore
 
-@Suite("Archive Angel — companions go only with files confirmed gone; skip after finish", .serialized)
+// Parallel: the slow ffmpeg is a ScriptedExecutor bound to each test's task
+// tree (it was a fake behind the process-global VS_FFMPEG_PATH, serialized).
+@Suite("Archive Angel — companions go only with files confirmed gone; skip after finish")
 @MainActor
 struct ArchiveAngelLifecycleCompanionTests {
     static let ffmpeg = ToolLocator.ffmpegPath
@@ -75,18 +77,14 @@ struct ArchiveAngelLifecycleCompanionTests {
         return r
     }
 
-    /// An ffmpeg that sleeps before working on any file whose name has
+    /// An ffmpeg that waits before working on any file whose name has
     /// `slowMarker` in it — a long transcode, so a skip or cancel can land
     /// while a later row is being prepared and earlier rows are ready.
-    private func installSlowFFmpeg(in sb: MasterArchiveTestSupport.Sandbox, slowMarker: String, seconds: Int) throws {
-        let fake = sb.root.appendingPathComponent("ffmpeg")
-        try """
-        #!/bin/sh
-        case "$*" in *\(slowMarker)*) sleep \(seconds) ;; esac
-        exec "\(Self.ffmpeg)" "$@"
-        """.write(to: fake, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
+    /// Every command is the real tool; only the delay is scripted.
+    private func slowFFmpeg(in sb: MasterArchiveTestSupport.Sandbox, slowMarker: String, seconds: Int) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [sb.root.path])
+            .on("ffmpeg", containing: [slowMarker], .after(.seconds(seconds), then: .passThrough))
+            .on("*", .passThrough)
     }
 
     private func entryDir(_ job: ArchiveAngelJob, _ id: UUID) -> URL {
@@ -120,58 +118,58 @@ struct ArchiveAngelLifecycleCompanionTests {
         let a = try await clip("test_lc_a.mp4", in: b.sb.sources)
         let c = try await clip("test_lc_b.mp4", in: b.sb.sources)
         let slow = try await clip("test_lc_slow.mp4", in: b.sb.sources)
-        try installSlowFFmpeg(in: b.sb, slowMarker: "test_lc_slow", seconds: 4)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
-        let recA = record(a), recB = record(c), recSlow = record(slow)
-        b.model.records = [recA, recB, recSlow]
-        let job = ArchiveAngelJob(model: b.model, center: b.center, count: 3, makeLossless: false,
-                                  bufferRoot: b.buffer, explicitRecordIDs: [recA.id, recB.id, recSlow.id])
-        job.start()
-        defer { job.cancel() }
+        try await slowFFmpeg(in: b.sb, slowMarker: "test_lc_slow", seconds: 4).scoped {
+            let recA = record(a), recB = record(c), recSlow = record(slow)
+            b.model.records = [recA, recB, recSlow]
+            let job = ArchiveAngelJob(model: b.model, center: b.center, count: 3, makeLossless: false,
+                                      bufferRoot: b.buffer, explicitRecordIDs: [recA.id, recB.id, recSlow.id])
+            job.start()
+            defer { job.cancel() }
 
-        // The two small files are ready and the slow one is being prepared.
-        try await waitUntil("A and B ready, slow preparing") {
-            job.preparingEntryID == recSlow.id
-                && job.plan.entries.first { $0.id == recA.id }?.status == .ready
-                && job.plan.entries.first { $0.id == recB.id }?.status == .ready
+            // The two small files are ready and the slow one is being prepared.
+            try await waitUntil("A and B ready, slow preparing") {
+                job.preparingEntryID == recSlow.id
+                    && job.plan.entries.first { $0.id == recA.id }?.status == .ready
+                    && job.plan.entries.first { $0.id == recB.id }?.status == .ready
+            }
+            let dirA = entryDir(job, recA.id), dirB = entryDir(job, recB.id)
+            // The Balance and Transcode jobs catalogued each row's companions
+            // (the left-only test clip gets a balanced copy AND an access copy; the
+            // access copy is derived from the balanced one, so match by folder).
+            let compsA = b.model.records.filter { $0.fullPath.hasPrefix(dirA.path + "/") }
+            let compsB = b.model.records.filter { $0.fullPath.hasPrefix(dirB.path + "/") }
+            #expect(compsA.count == 2 && compsB.count == 2, "\((compsA + compsB).map(\.filename))")
+            try #require(!compsA.isEmpty && !compsB.isEmpty, "the jobs catalogued the companions: \(b.model.records.map(\.filename))")
+            #expect((compsA + compsB).allSatisfy { fm.fileExists(atPath: $0.fullPath) })
+
+            // Injected removal failure: A's folder is read-only.
+            setPerms(0o555, dirA.path)
+            defer { setPerms(0o755, dirA.path) }
+            #expect(job.skip(entryID: recA.id))
+            await job.cleanupTask?.value
+            #expect(compsA.allSatisfy { fm.fileExists(atPath: $0.fullPath) }, "the files survived the failed removal")
+            #expect(compsA.allSatisfy { !$0.isPurged }, "SENSOR: a record is never tombstoned while its file is still there")
+            #expect(await copyDeletedLines(b.model).isEmpty, "no history line for a deletion that did not happen")
+            #expect(job.plan.entries.first { $0.id == recA.id }?.status == .skipped, "the decision itself stands")
+            try await Task.sleep(nanoseconds: 300_000_000)
+            #expect(b.model.dashboard.consoleLines.contains {
+                $0.contains("kept \(compsA.count) companion record(s)") && $0.contains("skipped by you") },
+                    "\(b.model.dashboard.consoleLines.suffix(8))")
+
+            // The success path: B's folder is writable.
+            #expect(job.skip(entryID: recB.id))
+            await job.cleanupTask?.value
+            #expect(!fm.fileExists(atPath: dirB.path))
+            #expect(compsB.filter { !$0.isPurged }.isEmpty, "every companion of B is retired")
+            let lines = await copyDeletedLines(b.model)
+            #expect(Set(lines.map(\.recordID)) == Set(compsB.map(\.id)), "exactly the confirmed deletions: \(lines.map(\.filename))")
+            #expect(lines.allSatisfy { $0.by == .angel && $0.batchID == job.plan.batchID })
+
+            setPerms(0o755, dirA.path)
+            await job.task?.value
+            guard case .finished = job.state else { Issue.record("\(job.state)"); return }
+            #expect(try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir).skippedCount == 2)
         }
-        let dirA = entryDir(job, recA.id), dirB = entryDir(job, recB.id)
-        // The Balance and Transcode jobs catalogued each row's companions
-        // (the left-only test clip gets a balanced copy AND an access copy; the
-        // access copy is derived from the balanced one, so match by folder).
-        let compsA = b.model.records.filter { $0.fullPath.hasPrefix(dirA.path + "/") }
-        let compsB = b.model.records.filter { $0.fullPath.hasPrefix(dirB.path + "/") }
-        #expect(compsA.count == 2 && compsB.count == 2, "\((compsA + compsB).map(\.filename))")
-        try #require(!compsA.isEmpty && !compsB.isEmpty, "the jobs catalogued the companions: \(b.model.records.map(\.filename))")
-        #expect((compsA + compsB).allSatisfy { fm.fileExists(atPath: $0.fullPath) })
-
-        // Injected removal failure: A's folder is read-only.
-        setPerms(0o555, dirA.path)
-        defer { setPerms(0o755, dirA.path) }
-        #expect(job.skip(entryID: recA.id))
-        await job.cleanupTask?.value
-        #expect(compsA.allSatisfy { fm.fileExists(atPath: $0.fullPath) }, "the files survived the failed removal")
-        #expect(compsA.allSatisfy { !$0.isPurged }, "SENSOR: a record is never tombstoned while its file is still there")
-        #expect(await copyDeletedLines(b.model).isEmpty, "no history line for a deletion that did not happen")
-        #expect(job.plan.entries.first { $0.id == recA.id }?.status == .skipped, "the decision itself stands")
-        try await Task.sleep(nanoseconds: 300_000_000)
-        #expect(b.model.dashboard.consoleLines.contains {
-            $0.contains("kept \(compsA.count) companion record(s)") && $0.contains("skipped by you") },
-                "\(b.model.dashboard.consoleLines.suffix(8))")
-
-        // The success path: B's folder is writable.
-        #expect(job.skip(entryID: recB.id))
-        await job.cleanupTask?.value
-        #expect(!fm.fileExists(atPath: dirB.path))
-        #expect(compsB.filter { !$0.isPurged }.isEmpty, "every companion of B is retired")
-        let lines = await copyDeletedLines(b.model)
-        #expect(Set(lines.map(\.recordID)) == Set(compsB.map(\.id)), "exactly the confirmed deletions: \(lines.map(\.filename))")
-        #expect(lines.allSatisfy { $0.by == .angel && $0.batchID == job.plan.batchID })
-
-        setPerms(0o755, dirA.path)
-        await job.task?.value
-        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
-        #expect(try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir).skippedCount == 2)
     }
 
     // MARK: - #4 Cancel (the reclaim of unfinished rows)
@@ -182,51 +180,51 @@ struct ArchiveAngelLifecycleCompanionTests {
         let fm = FileManager.default
         let a = try await clip("test_lc_ca.mp4", in: b.sb.sources)
         let slow = try await clip("test_lc_slowc.mp4", in: b.sb.sources)
-        try installSlowFFmpeg(in: b.sb, slowMarker: "test_lc_slowc", seconds: 4)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
+        try await slowFFmpeg(in: b.sb, slowMarker: "test_lc_slowc", seconds: 4).scoped {
 
-        for removalFails in [true, false] {
-            let recA = record(a), recSlow = record(slow)
-            b.model.records = [recA, recSlow]
-            let job = ArchiveAngelJob(model: b.model, center: b.center, count: 2, makeLossless: false,
-                                      bufferRoot: b.buffer, explicitRecordIDs: [recA.id, recSlow.id])
-            job.start()
-            try await waitUntil("A ready, slow preparing") {
-                job.preparingEntryID == recSlow.id && job.plan.entries.first { $0.id == recA.id }?.status == .ready
-            }
-            // A "completed" companion of the unfinished row: BalanceAudio
-            // catalogues its output the moment it finishes, before the
-            // access copy runs. Planted here with a real file.
-            let dirSlow = entryDir(job, recSlow.id)
-            try fm.createDirectory(at: dirSlow, withIntermediateDirectories: true)
-            let balanced = dirSlow.appendingPathComponent("test_lc_slowc_balanced.mov")
-            try Data(count: 4_096).write(to: balanced)
-            let planted = VideoRecord()
-            planted.filename = balanced.lastPathComponent
-            planted.fullPath = balanced.path
-            planted.sizeBytes = 4_096
-            planted.derivedFrom = recSlow.id
-            planted.workspaceActive = true
-            b.model.records.append(planted)
-            if removalFails { setPerms(0o555, dirSlow.path) }
+            for removalFails in [true, false] {
+                let recA = record(a), recSlow = record(slow)
+                b.model.records = [recA, recSlow]
+                let job = ArchiveAngelJob(model: b.model, center: b.center, count: 2, makeLossless: false,
+                                          bufferRoot: b.buffer, explicitRecordIDs: [recA.id, recSlow.id])
+                job.start()
+                try await waitUntil("A ready, slow preparing") {
+                    job.preparingEntryID == recSlow.id && job.plan.entries.first { $0.id == recA.id }?.status == .ready
+                }
+                // A "completed" companion of the unfinished row: BalanceAudio
+                // catalogues its output the moment it finishes, before the
+                // access copy runs. Planted here with a real file.
+                let dirSlow = entryDir(job, recSlow.id)
+                try fm.createDirectory(at: dirSlow, withIntermediateDirectories: true)
+                let balanced = dirSlow.appendingPathComponent("test_lc_slowc_balanced.mov")
+                try Data(count: 4_096).write(to: balanced)
+                let planted = VideoRecord()
+                planted.filename = balanced.lastPathComponent
+                planted.fullPath = balanced.path
+                planted.sizeBytes = 4_096
+                planted.derivedFrom = recSlow.id
+                planted.workspaceActive = true
+                b.model.records.append(planted)
+                if removalFails { setPerms(0o555, dirSlow.path) }
 
-            job.cancel()
-            await job.task?.value
-            await job.cleanupTask?.value
-            #expect(job.state == .cancelled)
-            let onDisk = try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir)
-            #expect(onDisk.status == .ready && onDisk.entries.first { $0.id == recSlow.id }?.status == .failed, "settled: A stays reviewable")
+                job.cancel()
+                await job.task?.value
+                await job.cleanupTask?.value
+                #expect(job.state == .cancelled)
+                let onDisk = try ArchiveAngelPlanStore.load(batchDir: job.plan.batchDir)
+                #expect(onDisk.status == .ready && onDisk.entries.first { $0.id == recSlow.id }?.status == .failed, "settled: A stays reviewable")
 
-            if removalFails {
-                #expect(fm.fileExists(atPath: balanced.path), "the reclaim could not remove the read-only folder")
-                #expect(!planted.isPurged, "SENSOR: the surviving companion keeps its record")
-                #expect(await copyDeletedLines(b.model).isEmpty)
-                setPerms(0o755, dirSlow.path)
-            } else {
-                #expect(!fm.fileExists(atPath: dirSlow.path))
-                #expect(planted.isPurged)
-                let lines = await copyDeletedLines(b.model)
-                #expect(lines.map(\.recordID) == [planted.id] && lines.first?.batchID == job.plan.batchID, "\(lines.map(\.filename))")
+                if removalFails {
+                    #expect(fm.fileExists(atPath: balanced.path), "the reclaim could not remove the read-only folder")
+                    #expect(!planted.isPurged, "SENSOR: the surviving companion keeps its record")
+                    #expect(await copyDeletedLines(b.model).isEmpty)
+                    setPerms(0o755, dirSlow.path)
+                } else {
+                    #expect(!fm.fileExists(atPath: dirSlow.path))
+                    #expect(planted.isPurged)
+                    let lines = await copyDeletedLines(b.model)
+                    #expect(lines.map(\.recordID) == [planted.id] && lines.first?.batchID == job.plan.batchID, "\(lines.map(\.filename))")
+                }
             }
         }
     }

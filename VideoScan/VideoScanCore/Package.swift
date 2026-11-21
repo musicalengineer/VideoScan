@@ -81,7 +81,10 @@ let package = Package(
         ),
         .testTarget(
             name: "VideoScanCoreTests",
-            dependencies: ["VideoScanCore"]
+            dependencies: ["VideoScanCore"],
+            // Recorded ffprobe JSON (ProbeFixtures.swift), read by path —
+            // data for the tests, not sources or bundle resources.
+            exclude: ["Fixtures"]
         ),
     ],
     swiftLanguageModes: [.v6]

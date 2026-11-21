@@ -143,7 +143,9 @@ enum CombineEngine {
         }
         let monitor = watchdog?.monitor
         let executable = ffmpegPath
-        let mux = Task.detached {
+        // Detached as before, but carrying the task's executor (2026-11-20
+        // seam: a bare Task.detached would escape a test's mock).
+        let mux = ProcessRunner.detachedKeepingExecutor {
             await ProcessRunner.runProcess(
                 executable: executable,
                 arguments: arguments,

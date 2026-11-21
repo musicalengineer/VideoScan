@@ -369,6 +369,19 @@ hand-rolled sites to sweep after it: `FFmpegFrameProvider.swift:56`, `AudioTrans
 **Tests.** Media matrix: all five synthetic fixtures through the call. Logic: the progress-line parser. Sensor: a
 fake child that ignores SIGTERM must still return `timedOut` within deadline + grace.
 
+Negative cases go through the executor seam, never a fake binary behind `setenv(VS_FFMPEG_PATH)` (a process-global
+that forced suites to `.serialized`). `ScriptedExecutor` (VideoScanCore) answers per tool and argument with
+`.output`, `.writeOutputFile`, `.hang` (a real child under the real deadline/kill path), `.crash`, `.launchFailure`,
+`.garbage`, `.streamLines`, `.sequence`, `.passThrough` or `.custom`; it records every call and fails the test on an
+unmatched one. Bind it for one test's task tree with `mock.scoped { … }`; pass `claiming: [scratchDir.path]` so a
+call that escaped the tree (a bare `Task.detached`) is refused and reported. Detached work that shells out uses
+`ProcessRunner.detachedKeepingExecutor`. Recorded real-ffprobe JSON for the five containers lives in
+`VideoScanCoreTests/Fixtures/ffprobe/` (drift-checked against the real tool). Worked example:
+`TranscodeReplaceNegativeMatrixTests`.
+
+> C++: `CommandExecutor` is the gtest-mocked interface; `@TaskLocal` is a `thread_local` that follows the coroutine
+> and its children, so parallel tests never see each other's mock.
+
 > C++: `ProcessRunner` is `posix_spawn` plus two reader threads plus `waitpid` in a SIGCHLD handler, with an RAII
 > guard that kills the child if the owning coroutine is destroyed. `RENAME_EXCL` is `link()` + `unlink()` in one
 > atomic syscall.

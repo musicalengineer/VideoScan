@@ -137,6 +137,18 @@ public enum ProcessRunner {
         public var launched: Bool = false
 
         public var succeeded: Bool { exitCode == 0 && stdout != nil }
+
+        /// Public so a `CommandExecutor` outside this module (a test's
+        /// `.custom` answer) can build one; the same fields and defaults as
+        /// the memberwise init the runner itself uses.
+        public init(stdout: String?, stderr: String, exitCode: Int32,
+                    timedOut: Bool = false, launched: Bool = false) {
+            self.stdout = stdout
+            self.stderr = stderr
+            self.exitCode = exitCode
+            self.timedOut = timedOut
+            self.launched = launched
+        }
     }
 
     // MARK: - Capture stdout, discard stderr
@@ -215,6 +227,47 @@ public enum ProcessRunner {
         deadlineSeconds: Double? = nil,
         killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds,
         control: ProcessControl? = nil
+    ) async -> Result {
+        // The seam (2026-11-20, CommandExecutor.swift): one request, handed
+        // to the task's executor — `RealCommandExecutor` (→ realRunProcess
+        // below) unless a test bound a mock for its own task tree.
+        await executor.run(CommandRequest(
+            executable: executable, arguments: arguments, environment: environment,
+            stdoutLine: stdoutLine, stderrLine: stderrLine, stdoutData: stdoutData,
+            stdoutLimitBytes: stdoutLimitBytes, stderrLimitBytes: stderrLimitBytes,
+            deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds,
+            control: control))
+    }
+
+    /// The real fork/exec. Only `RealCommandExecutor` and
+    /// `ScriptedExecutor`'s real-child behaviours (`.hang`, `.passThrough`)
+    /// call it.
+    static func realRunProcess(_ request: CommandRequest) async -> Result {
+        await spawn(executable: request.executable, arguments: request.arguments,
+                    environment: request.environment,
+                    stdoutLine: request.stdoutLine, stderrLine: request.stderrLine,
+                    stdoutData: request.stdoutData,
+                    stdoutLimitBytes: request.stdoutLimitBytes, stderrLimitBytes: request.stderrLimitBytes,
+                    deadlineSeconds: request.deadlineSeconds, killGraceSeconds: request.killGraceSeconds,
+                    control: request.control)
+    }
+
+    /// `runProcess`'s body before the seam, MOVED VERBATIM (2026-11-20):
+    /// same parameters, same lines — only the name changed, so the
+    /// fd-lifecycle, deadline and kill behaviour pinned by the
+    /// ProcessRunner*Tests is the code that ran before.
+    private static func spawn(
+        executable: String,
+        arguments: [String],
+        environment: [String: String]?,
+        stdoutLine: (@Sendable (String) -> Void)?,
+        stderrLine: (@Sendable (String) -> Void)?,
+        stdoutData: (@Sendable (Data) -> Void)?,
+        stdoutLimitBytes: Int?,
+        stderrLimitBytes: Int?,
+        deadlineSeconds: Double?,
+        killGraceSeconds: Double,
+        control: ProcessControl?
     ) async -> Result {
         guard !Task.isCancelled else {
             return Result(stdout: nil, stderr: "cancelled", exitCode: -1)

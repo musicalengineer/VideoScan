@@ -182,7 +182,8 @@ extension VideoScanModel {
         let permits = AsyncSemaphore(limit: max(batchSize * 4, 64))
 
         let stream = AsyncStream<EmbeddedProbeOutcome> { continuation in
-            let task = Task.detached(priority: .utility) {
+            // Detached as before, carrying the executor (CommandExecutor seam).
+            let task = ProcessRunner.detachedKeepingExecutor(priority: .utility) {
                 await withTaskGroup(of: Void.self) { group in
                     for lane in lanes {
                         group.addTask {
