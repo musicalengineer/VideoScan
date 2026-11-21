@@ -36662,10 +36662,12 @@
         "HashReadFaultFixityTests"
       ],
       "tests": [
-        "backfillCannotSeeAFlip",
+        "backfillStoresAnotherFilesDigest",
         "backfillStoresNothingFromAFailedRead",
         "bindOverwritesATrueDigestOnOneDisagreeingRead",
-        "bindStoresNothingFromAFailedRead"
+        "bindStoresNothingFromAFailedRead",
+        "deletionTierFactsCountTheFalseCopy",
+        "promoteBelievesTheFalseDigest"
       ]
     },
     {
@@ -36676,6 +36678,7 @@
         "HashReadFaultPromoteTests"
       ],
       "tests": [
+        "aFlippedProvingReadAdoptsAnotherFile",
         "nothingIsPromoted",
         "theThreeReads"
       ]
@@ -36688,6 +36691,7 @@
         "HashReadFaultPruneTests"
       ],
       "tests": [
+        "aShortReadOfALongerCopyMakesAFalseProof",
         "anUnprovenReadMakesNoProof",
         "theJobsReadsAreOutOfReach"
       ]
@@ -36700,7 +36704,8 @@
         "HashReadFaultVerifyArchiveTests"
       ],
       "tests": [
-        "aFaultedReadNeverVerifies"
+        "aFaultedReadNeverVerifies",
+        "aShortReadOfALongerArchiveFileVerifies"
       ]
     },
     {
@@ -41879,7 +41884,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 882,
+      "expected_floor": 887,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [

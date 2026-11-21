@@ -12,8 +12,22 @@
 //                                 any copy of the family can even be asked for;
 //   fault in the COPY's read    → no proof for that copy.
 //
-// In every cell the hold is named, both files are byte-for-byte untouched,
-// and the same call with no fault yields the proof (the hold is the fault's).
+// In every cell OF THAT MATRIX the hold is named, both files are
+// byte-for-byte untouched, and the same call with no fault yields the proof.
+// The matrix's copy is byte-identical to the archive, so a read that ends
+// early can only produce a mismatch there. It is NOT the whole story:
+//
+//   P1 (parked, Codex r1 #1) — `aShortReadOfALongerCopyMakesAFalseProof`:
+//   when the copy is the archive's bytes PLUS A TAIL, a read that ends at
+//   the archive's length hashes to the archive's digest and a PruneProof IS
+//   made for a file whose tail was never read. `pruneFullRead` hands
+//   `ContentFixity.captured` the stat size, not the bytes consumed.
+//
+// Corrected outcomes (verdict level):
+//   fault            copy == archive          copy == archive + tail
+//   EIO              held                     held
+//   bit flip         held                     held
+//   read ends early  held (as a "mismatch")   PROOF MADE — P1, parked
 //
 // WHY THE VERDICT AND NOT THE JOB: `pruneOneCopy` runs both reads inside
 // `Task.detached` (VideoScanModel+PruneApply.swift), and a detached task does
@@ -105,7 +119,7 @@ struct HashReadFaultPruneTests {
                     "\(c): \(holdText)")
         case .shortRead:
             #expect(!holdText.isEmpty)
-            withKnownIssue("PARKED 2026-11-20 (P3, truth): prune names a read that ENDED EARLY as a content mismatch (\"archive copy changed\" / the mismatch reason) — the digest is of a prefix. The copy is held either way. Proposed: bytes consumed vs size in the reader → \"could not be read in full\".") {
+            withKnownIssue("PARKED 2026-11-20 (naming; root cause is the P1 prefix digest): prune names a read that ENDED EARLY as a content mismatch (\"archive copy changed\" / the mismatch reason) — the digest is of a prefix. THIS copy is held only because it is byte-identical to the archive; a copy with extra bytes after the archive's is NOT held (aShortReadOfALongerCopyMakesAFalseProof, P1). Proposed: bytes consumed vs size in the reader → \"could not be read in full\".") {
                 #expect(holdText.contains("could not be read in full"), "\(c): \(holdText)")
             }
         }
@@ -123,6 +137,50 @@ struct HashReadFaultPruneTests {
             Issue.record("\(c): the clean reads did not prove the copy"); return
         }
         #expect(proof.copyID == f.copy.id && proof.archiveDigest == f.digest)
+    }
+
+    /// Codex r1 #1 (P1, parked). The copy is the archive's bytes followed by
+    /// bytes the archive does not have — a different, longer file whose
+    /// catalog digest still (wrongly) names the archive's. A full read
+    /// catches it (the control below). A read that ends at the archive's
+    /// length does not: the reader returns SHA-256(archive bytes),
+    /// `pruneFullRead` binds it to the file's STAT size, and the one maker of
+    /// a `PruneProof` makes one. The tail — the only copy of those bytes —
+    /// was never read. At the job this proof is what the mover accepts (its
+    /// guard re-stats; it does not re-read). The job itself is out of the
+    /// hook's reach (Task.detached), so the Trash move is not shown here.
+    @Test("P1 (parked): a read that ENDS EARLY on a copy holding the archive's bytes PLUS A TAIL makes a PruneProof — expected: held, no proof")
+    func aShortReadOfALongerCopyMakesAFalseProof() async throws {
+        let f = try await PruneApplyTests.fixture("hrf_tail"); defer { f.sb.cleanup() }
+        let archiveBytes = try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath))
+        let tail = Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) })
+        try (archiveBytes + tail).write(to: URL(fileURLWithPath: f.copy.fullPath))
+        let item = Model.PruneItem(copyID: f.copy.id, filename: f.copy.filename, path: f.copy.fullPath,
+                                   sizeBytes: Int64(archiveBytes.count + tail.count), archiveID: f.archive.id,
+                                   archivePath: f.archive.fullPath, archiveFilename: f.archive.filename,
+                                   archiveDigest: f.digest)
+        let hooks = Model.PruneVerifyHooks(shouldCancel: { false })
+        guard case .success(let reading) = Model.readArchiveInFull(id: item.archiveID, path: item.archivePath,
+                                                                   digest: item.archiveDigest, hooks: hooks) else {
+            Issue.record("fixture: the clean archive read failed"); return
+        }
+        // Control: read in full, the longer copy is NOT the archive's bytes.
+        guard case .failure(let clean) = Model.pruneCandidateProof(item, archive: reading, hooks: hooks) else {
+            Issue.record("fixture: a full read of the longer copy matched the archive"); return
+        }
+        #expect(clean.text == PruneReason.mismatchAtMove.text)
+
+        let fault = HashReadFault(.shortRead, pathSuffix: "copies/test_prune_a.mov", atByte: Int64(archiveBytes.count))
+        let verdict = fault.runSync { Model.pruneCandidateProof(item, archive: reading, hooks: hooks) }
+        #expect(fault.firedCount == 1)
+        print("[hash-matrix] prune | shortRead at the archive's length, copy = archive + tail | \(verdict)")
+        withKnownIssue("PARKED 2026-11-20 (P1, Codex r1 #1): a read of the copy that ends at the archive's length yields a PruneProof for a file whose tail was never read (pruneFullRead passes the stat size, not the bytes consumed, to ContentFixity.captured; sha256(fd:) returns a prefix digest). Proposed: the reader throws when bytes consumed ≠ st_size, or pruneFullRead compares the count itself → held \"could not be read in full\".") {
+            if case .success(let proof) = verdict {
+                Issue.record("a PROOF was made from a read that stopped \(tail.count) bytes short: \(proof)")
+            }
+        }
+        // The file the proof would send to the Trash still holds the tail.
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)).suffix(tail.count) == tail)
     }
 
     /// The seam's reach, pinned: the prune JOB reads inside `Task.detached`,

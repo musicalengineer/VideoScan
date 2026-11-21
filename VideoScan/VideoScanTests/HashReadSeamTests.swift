@@ -156,10 +156,11 @@ struct HashReadSeamTests {
         #expect(try Engine.sha256(path: url.path) == hashSeamReference(data), "outside the scope the file hashes clean")
     }
 
-    /// Pinned as it is today: the engine has no way to know a read ended
-    /// early, so it hands back a well-formed digest of the prefix. Every
-    /// caller must compare the bytes consumed with the file's size itself;
-    /// FixityRebind does, the others are in the per-verb matrix.
+    /// Pinned as it is today: the engine does not compare the bytes it
+    /// consumed with the file's size, so it hands back a well-formed digest
+    /// of the prefix. FixityRebind checks the count itself; prune and Verify
+    /// Archive Copies do not, and for a file that CONTINUES past the
+    /// expected bytes that is a false proof (P1 — see the known issue).
     @Test("a read that ends early: sha256 returns the digest of the PREFIX it was given, and says nothing")
     func prematureEOFYieldsAPrefixDigest() throws {
         let sb = try sandbox("short"); defer { sb.cleanup() }
@@ -173,7 +174,7 @@ struct HashReadSeamTests {
         #expect(seen == cut && seen < Int64(data.count), "the progress count is the only trace of the short read")
         #expect(digest == hashSeamReference(data.prefix(Int(cut))))
         #expect(digest != hashSeamReference(data))
-        withKnownIssue("PARKED 2026-11-20 (hash read seam): sha256(fd:) returns a digest for a read that ended before the size fstat reported. Proposed: compare bytes consumed with st_size after the loop and throw a named read failure.") {
+        withKnownIssue("PARKED 2026-11-20 (P1 — ROOT CAUSE, re-ranked from P3 after Codex r1 #1): sha256(fd:) returns a well-formed digest for a read that ended before the size fstat reported. Consequences pinned elsewhere: a false PruneProof (HashReadFaultPruneTests.aShortReadOfALongerCopyMakesAFalseProof) and a false verified/restored in Verify Archive Copies (HashReadFaultVerifyArchiveTests.aShortReadOfALongerArchiveFileVerifies). Proposed: compare bytes consumed with st_size after the loop and throw a named read failure.") {
             #expect(throws: Engine.Failure.self) {
                 _ = try HashReadFault(.shortRead, pathSuffix: "test_short.bin", atByte: cut)
                     .runSync { try Engine.sha256(path: url.path) }
@@ -321,7 +322,9 @@ struct HashReadSeamTests {
     /// pass hashes and writes the SAME buffer, so the read-back agrees. This
     /// is why Promote always reads the source first and passes
     /// `expectedSourceSHA` (GH #190); `PromoteToArchiveJob` has no call
-    /// without it (HashReadSeamSensorTests).
+    /// without it (HashReadSeamSensorTests). That protects FRESH COPIES
+    /// only: Promote's adoption branch makes no copy and no second source
+    /// read (HashReadFaultPromoteTests.aFlippedProvingReadAdoptsAnotherFile, P1).
     @Test("LIMIT: without expectedSourceSHA a bit flipped in the one source read is published as verified — the caller's prior read is the only defence")
     func withoutAReferenceASourceFlipIsInvisible() throws {
         let sb = try sandbox("noref"); defer { sb.cleanup() }
@@ -364,7 +367,7 @@ struct HashReadSeamSensorTests {
         #expect(code.components(separatedBy: "startReader(").count - 1 == 2, "one reader, one start")
     }
 
-    @Test("Promote never copies without the digest it read first (the only defence against a flip in the copy pass)")
+    @Test("Promote never copies without the digest it read first (the only defence against a flip in the copy pass; it does not cover adoption)")
     func promoteAlwaysPassesTheExpectedDigest() throws {
         let steps = try SourceTree.appCode(named: "PromoteToArchiveJob+Steps.swift")
         #expect(steps.components(separatedBy: "copyOffMain(").count - 1 == 2, "one definition, one call")
