@@ -3,7 +3,8 @@
 
     scripts/run_tests.sh [--smoke | --full] [--unit] [--regression] [--integration] [--perf]
                          [--stress] [--python] [--corpus] [--verbose] [--host m4|ultra|m5pro|m1]
-                         [--ref <rev>] [--list] [--dry-run] [--yes] [--force]
+                         [--ref <rev>] [--filter PATTERNS] [--list] [--dry-run] [--yes] [--force]
+    scripts/run_tests.sh --status
 
 A THIN layer over the runners that already exist (Rick 2026-11-19: TestDriver was retired
 because it could not keep up with features). It adds only SELECTION and DISPLAY:
@@ -27,12 +28,63 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     The parser reads the three line shapes our runners print (XCTest, Swift Testing, pytest -v)
     and xcodebuild's parallel "Test case '…' passed on" form; nothing to install (no xcbeautify).
 
+  * --filter PATTERNS (2026-11-20, Rick: "like gtest — module.*") — googletest's grammar,
+    `Pos1:Pos2-Neg1:Neg2`: ':'-separated globs, the part after the first '-' excludes, matched
+    against `Suite.test`. Suite = the Swift type name (a Swift Testing suite by its TYPE name, never
+    its display name) or XCTest class, or the Python/shell module stem; test = the function name.
+    A pattern without '.' names suites (`Catalog*` = `Catalog*.*`); `Suite.f()` = `Suite.f`.
+    The pool is every runnable manifest file of the stages asked (all five without a stage flag;
+    a stage flag narrows) — not the smoke's few; the sources at the commit tell which suite holds
+    which test. Each lane gets only what matched: -only-testing:VideoScanTests/Suite[/testX |
+    /f(x:)] (Swift Testing's identifier, labels included; a parameterized test is one id, all its
+    cases), the Core regex, pytest node ids. `--list` shows the matched tests. A filter that
+    matches nothing is refused (exit 2) before a worktree, a lock or a build, and says so when
+    it matched only tests that cannot run here, or picks a test that is not inside a type (-only-testing
+    cannot name it). A filtered lane's plan is exact: it says "ran N of M" and ANY shortfall is RED
+    (skipped tests count as ran; parameterized cases may add more). The source parser blanks string
+    literals and comments before counting braces (it agrees with the manifest on every Swift file).
+  * --status — every live run_tests on this Mac (pid, filter, commit, slot, lane, n/N, since), the
+    three slots (commit, in use or idle, DerivedData size) and, when reachable, who holds the M4
+    testbed lock with an estimated finish (that lane's last finished run, else its planned length;
+    scripts/m4_run.sh status --json). Every busy refusal prints the same block.
+
 Where it runs: on this Mac, or on --host over `ssh -t` (this file is copied to the host's
 ~/Library/Caches/videoscan-runall/ and run there with /usr/bin/python3: the host's own
-checkout is never touched). Always in the side worktree ~/dev/VideoScan-wt/run-all, detached
-at the ref (default: the HEAD commit of the checkout this script is run from), DerivedData
-~/Library/Caches/videoscan-runall-dd — never Rick's checkout or Xcode's DerivedData (CLAUDE.md
-rule 11; tests have been seen writing into a checkout, GH #495). A dirty side worktree is refused.
+checkout is never touched). Never Rick's checkout or Xcode's DerivedData (CLAUDE.md rule 11;
+tests have been seen writing into a checkout, GH #495). The commit: the ref (default: the HEAD
+commit of the checkout this script is run from).
+
+Concurrency (2026-11-20, Rick: "we should minimize the lock … the only ones that should lock … is
+something that requires a unique resource"). Runs on one Mac go side by side; only these are shared:
+  * a SLOT — one side worktree, detached at a commit, + its Debug DerivedData: ~/dev/VideoScan-wt/
+    run-all[-2|-3] + ~/Library/Caches/videoscan-runall-dd[-2|-3] (N_SLOTS = 3, the newest three
+    commits). A run at a commit some slot is at shares it; else the least recently used slot that
+    no live run holds is moved there (fixed paths, so the build is incremental, not clean). Every
+    live run holds its slot SHARED (flock) for its life, so a slot in use is never moved or pruned;
+    all three held at other commits → busy (exit 3, nothing queued). A dirty slot is never touched:
+    it is skipped for the next one and marked REFUSED in --status; refused only if none is usable.
+    Every lock fd a run holds is passed to its children (pass_fds): flock lives with the open file,
+    so a runner killed with -9 leaves its building/testing child still holding the slot.
+  * a BUILD — per slot and lane (app, Core), an exclusive flock held only while building. A second
+    run at the same commit prints "waiting for the build of <sha9> (pid N, since HH:MM)", then
+    skips the build and tests from the same products. The "built" stamp lives INSIDE the products
+    (<DerivedData>/.run_tests-built-app, <Core>/.build/.run_tests-built-core) and holds the commit
+    plus a checkout token (HEAD, the worktree's HEAD reflog size, HEAD's mtime): any checkout —
+    ours, an older run_tests', anyone's — makes it stale, and deleting the products drops it.
+    App tests: xcodebuild test-without-building with this run's own -resultBundlePath. Core tests:
+    the built bundle run directly (xctest + swiftpm-testing-helper, see core_exec): `swift test`,
+    even --skip-build, takes SwiftPM's .build lock and serialized two runs (measured).
+    Python: nothing shared (its own TMPDIR and pytest --basetemp in the run folder, no .pyc writes).
+  * the M4 testbed lock (~/m4run/lock), on the M4 only, for the whole run: its daily run has strict
+    timing budgets. The old whole-run lock (~/Library/Caches/videoscan-runall/lock) is held SHARED
+    by slot 1's users, so a run_tests from an older checkout cannot move run-all under them.
+Registry: each live run writes ~/Library/Caches/videoscan-runall/live/<pid>.json (argv, filter, commit,
+slot, run folder, lane, n/N, started), updated as it goes and removed on exit, and holds <pid>.lock
+exclusive for its life: a reader that can take that lock knows the run is gone (crash, kill -9, reused
+pid) and removes both. Each run keeps its own run folder (<stamp>-<mode>-<pid>); the newest-20 prune
+never removes a live run's folder.
+Over --host the runner is copied to the host as run_tests-<content hash>.py (tmp + mv), so a second
+caller never rewrites the file a live host run re-reads.
 
 Corpus lane: only from the Ultra with --host m4 (scripts/corpus_run.sh run check --smoke --wait:
 the harness's stratified subset, the smallest file of each codec mix; a first-N --limit picked
@@ -41,7 +93,7 @@ multi-GB tapes and ran 40 min on 2026-11-20); elsewhere it says NOT RUN and why.
 run on this Mac (e.g. --corpus without --host m4) is refused before anything is touched (exit 2).
 
 Verdict: a lane is GREEN only with no failure, exit 0, at least one test, and at least half of the
-tests its selection planned (a filter that matches nothing exits 0: "selection shrank"). A lane
+tests its selection planned (all of them under --filter) (a filter that matches nothing exits 0: "selection shrank"). A lane
 past its budget is stopped (its process group: TERM, then KILL) and RED, whether or not it prints.
 
 Preflight (on the Mac that runs the lanes, before the worktree or a build): the tools the
@@ -56,16 +108,17 @@ child's process group is stopped (or, over ssh, its one LaunchAgent job booted o
 
 Exit: 0 every lane that ran is green · 1 a failure, or a lane that ran zero tests (or under half
 its selection), or nothing ran, or NOT READY: setup · 2 usage (also: a --host ref that is not on origin, nothing to run
-here, --full with a --host other than m4 or with a stage flag) · 3 busy (the M4 testbed lock, another run_tests on this
-Mac, or the M4's nightly window without --force) · 130 interrupted (the caller of a --host run
-then skips its corpus step, as it does on 2 and 3).
+here, a --filter that matches nothing, --full with a --host other than m4, a stage flag or --filter) · 3 busy (the M4
+testbed lock, all three slots held at other commits, or the M4's nightly window without --force) · 130 interrupted (the
+caller of a --host run then skips its corpus step, as it does on 2 and 3).
 
 Memory: output is streamed line by line; held are the failure names and one message line each
 (≤ 300 chars), and the selection (a few hundred short records). Worst case a few MB.
 Disk: one run folder of raw logs per run (and per caller-side corpus step) under
-~/Library/Caches/videoscan-runall/runs (newest 20 kept), one Debug DerivedData (~15 GB), with
---full also the nightly runner's Release DerivedData + Core scratch (videoscan-runall-dd-full,
-~7 GB), the side worktree and its SwiftPM .build.
+~/Library/Caches/videoscan-runall/runs (newest 20 kept), up to three slots — each a side worktree
+with its SwiftPM .build (~2 GB) and a Debug DerivedData (5–15 GB) — and, with --full, the nightly
+runner's Release DerivedData + Core scratch per slot used (<slot dd>-full, ~7 GB). --status shows
+each DerivedData's size.
 The reader thread's line queue is bounded (QUEUE_LINES lines, ~a few MB at worst).
 
 Tests: tests/test_run_tests.py.
@@ -75,6 +128,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import fnmatch
 import json
 import os
 import re
@@ -102,6 +156,7 @@ DD = HOME / "Library" / "Caches" / "videoscan-runall-dd"
 XCODE_DD = HOME / "Library" / "Developer" / "Xcode" / "DerivedData"
 M4_LOCKDIR = HOME / "m4run" / "lock"                        # the M4 testbed lock (scripts/testbed_lock.py)
 KEEP_RUNS = 20
+N_SLOTS = 3        # side worktree + DerivedData pairs kept per Mac (the newest three commits; ~5-15 GB of DD each)
 
 # --host words → (ssh name, `hostname -s` lower-cased). Not IPs: the TB bridge moves (Rick, 11-19).
 HOSTS: Dict[str, Tuple[str, str]] = {
@@ -155,14 +210,28 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="print what would run and stop")
     ap.add_argument("--yes", "-y", action="store_true", help="no 5 s pause before starting")
     ap.add_argument("--force", action="store_true", help="run on the M4 inside its nightly window")
+    ap.add_argument("--filter", default=None, metavar="PATTERNS",
+                    help="gtest-style: 'Pos1:Pos2-Neg1:Neg2', globs on Suite.test (a pattern without '.' names "
+                         "suites); picks from every runnable test file, not the smoke's few")
+    ap.add_argument("--status", action="store_true", help="what run_tests is running on this Mac (and the M4 lock), then stop")
     ap.add_argument("--on-host", action="store_true", help=argparse.SUPPRESS)   # set by the ssh caller
     a = ap.parse_args(list(argv))                    # exits 2 on a usage error
     a.mode = "full" if a.full else "smoke"
+    a.stage_flags = any(getattr(a, f) for f in STAGE_FLAGS)
+    if a.filter is not None:
+        if a.full:
+            ap.error("--filter narrows a --smoke; --full runs everything")
+        try:
+            a.test_filter = TestFilter.parse(a.filter)
+        except Usage as e:
+            ap.error(str(e))
+    else:
+        a.test_filter = None
     # The smoke leaves performance and stress out unless asked: they are load-sensitive and long
     # (Core's 100k-row scale tests take ~3 min each; Ultra smoke 11-19: 4.5 of its 10 minutes).
+    # A --filter names the tests itself: every stage, unless a stage flag narrows it.
     a.stages = [STAGE_FLAGS[f] for f in STAGE_FLAGS if getattr(a, f)] or \
-        (list(STAGES) if a.mode == "full" else list(SMOKE_STAGES))
-    a.stage_flags = any(getattr(a, f) for f in STAGE_FLAGS)
+        (list(STAGES) if (a.mode == "full" or a.test_filter) else list(SMOKE_STAGES))
     if a.full and a.stage_flags:
         ap.error("--full runs every stage; a stage flag (--unit, --regression, …) narrows a --smoke only")
     # Kinds: --python / --corpus pick those; with a stage flag the Swift lanes come too.
@@ -175,7 +244,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         if a.stage_flags:
             kinds |= {"app", "core"}
     else:
-        kinds = {"app", "core", "python"} | (set() if a.stage_flags else {"corpus"})
+        kinds = {"app", "core", "python"} | (set() if (a.stage_flags or a.test_filter) else {"corpus"})
     a.kinds = kinds
     return a
 
@@ -214,9 +283,14 @@ def passthrough_args(argv: Sequence[str]) -> List[str]:
 def remote_commands(target: str, sha: str, ref_label: str, argv: Sequence[str]) -> Tuple[List[str], List[str]]:
     """(copy this runner to the host, run it there over a tty). The host fetches origin
     into ~/dev/VideoScan (objects and remote refs only — its branch and tree are untouched)."""
-    dest = "~/Library/Caches/videoscan-runall/run_tests.py"
+    # One file per content (review F9): a live host run re-reads its own file for --core-exec, so a second
+    # caller never rewrites it in place — it writes its own version beside it (tmp + mv, atomic).
+    import hashlib
+    h = hashlib.sha256(SELF.read_bytes()).hexdigest()[:12]
+    d = "~/Library/Caches/videoscan-runall"
+    dest = f"{d}/run_tests-{h}.py"
     copy = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", target,
-            f"mkdir -p ~/Library/Caches/videoscan-runall && cat > {dest}"]
+            f"mkdir -p {d} && cat > {d}/.run_tests-{h}.py.$$ && mv -f {d}/.run_tests-{h}.py.$$ {dest}"]
     args = " ".join(shlex.quote(x) for x in passthrough_args(argv))
     run = ["ssh", "-t", "-o", "ConnectTimeout=15", target,
            f"git -C ~/dev/VideoScan fetch -q origin && /usr/bin/python3 {dest} --on-host --yes "
@@ -234,6 +308,10 @@ class Pick:
     path: str
     suites: Tuple[str, ...]
     tests: int
+    # --filter: the (suite, test, identifier) cases picked inside a suite that is NOT taken whole;
+    # a suite in `suites` with no case here runs whole. Empty: the whole file.
+    cases: Tuple[Tuple[str, str, str], ...] = ()
+    exact: bool = True                   # tests is the exact count (False: a whole suite the parse saw no test in)
 
 
 def build_index(files: Sequence[str]) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
@@ -286,8 +364,10 @@ def runnable_here(entry: dict) -> bool:
     return not NOT_HERE_RE.search(r)
 
 
-def select(manifest: dict, files: Sequence[str], stages: Sequence[str], kinds: set, full: bool = False) -> List[Pick]:
-    """The deterministic smoke selection (or, with full, every runnable file — used for counts)."""
+def select(manifest: dict, files: Sequence[str], stages: Sequence[str], kinds: set, full: bool = False,
+           everything: bool = False) -> List[Pick]:
+    """The deterministic smoke selection (or, with full, every runnable file — the --filter pool).
+    everything: also the files that cannot run here (only to say why a filter matched nothing)."""
     index = build_index(files)
     groups: Dict[Tuple[str, str, str], List[dict]] = {}
     for e in manifest.get("assignments", []):
@@ -297,7 +377,7 @@ def select(manifest: dict, files: Sequence[str], stages: Sequence[str], kinds: s
             continue
         if (k in ("python", "shell") and "python" not in kinds) or (k in ("app", "core") and k not in kinds):
             continue
-        if not runnable_here(e) or len(e.get("tests") or []) < 1:
+        if (not everything and not runnable_here(e)) or len(e.get("tests") or []) < 1:
             continue
         groups.setdefault((k, module_of(e["path"], index), stage), []).append(e)
     picks: List[Pick] = []
@@ -313,36 +393,436 @@ def select(manifest: dict, files: Sequence[str], stages: Sequence[str], kinds: s
     return picks
 
 
+# ───────────────────────────────────────────────────────────── --filter (gtest-style)
+
+class TestFilter:
+    """`Pos1:Pos2-Neg1:Neg2` (googletest's --gtest_filter grammar): ':'-separated globs, the part after
+    the first '-' excludes. Matched against `Suite.test` — Suite is the Swift type name (never a
+    Swift Testing display name) or the XCTest class, or a Python/shell module stem; test is the
+    function name. A pattern without '.' names suites (`Catalog*` = `Catalog*.*`); a trailing `()`
+    is ignored (`Suite.f()` = `Suite.f`). Case-sensitive, like gtest. No positive part = `*`."""
+    __test__ = False                     # pytest: not a test class despite the name
+
+    def __init__(self, text: str, pos: List[str], neg: List[str]) -> None:
+        self.text, self.pos, self.neg = text, pos, neg
+
+    @staticmethod
+    def _norm(p: str) -> str:
+        p = p.strip()
+        if p.endswith("()"):
+            p = p[:-2]
+        if p.endswith(".*"):
+            p = p[:-2]                   # Suite.* is the suite whole
+        return p
+
+    @classmethod
+    def parse(cls, text: str) -> "TestFilter":
+        if not text or not text.strip():
+            raise Usage("--filter needs at least one pattern (e.g. 'CatalogStore*' or 'Suite.test')")
+        head, _, tail = text.partition("-")
+        pos = [cls._norm(x) for x in head.split(":") if x.strip()]
+        neg = [cls._norm(x) for x in tail.split(":") if x.strip()]
+        if not pos and not neg:
+            raise Usage(f"--filter {text!r} has no pattern")
+        return cls(text, pos or ["*"], neg)
+
+    @staticmethod
+    def _match(pat: str, suite: str, test: Optional[str]) -> bool:
+        if "." in pat:
+            return test is not None and fnmatch.fnmatchcase(f"{suite}.{test}", pat)
+        return fnmatch.fnmatchcase(suite, pat)
+
+    @staticmethod
+    def _suite_part(pat: str) -> str:
+        return pat.split(".", 1)[0]
+
+    def wants(self, suite: str, test: str) -> bool:
+        return any(self._match(p, suite, test) for p in self.pos) and \
+            not any(self._match(n, suite, test) for n in self.neg)
+
+    def touches(self, suite: str) -> bool:
+        """Some positive could pick a test of this suite."""
+        return any(fnmatch.fnmatchcase(suite, self._suite_part(p)) for p in self.pos)
+
+    def whole(self, suite: str) -> bool:
+        """The suite is picked whole, with no need to know its tests."""
+        return any("." not in p and fnmatch.fnmatchcase(suite, p) for p in self.pos) and \
+            not any(fnmatch.fnmatchcase(suite, self._suite_part(n)) for n in self.neg)
+
+
+SW_TYPE = re.compile(r"^\s*(?:@\S.*?\s+)?(?:(?:final|private|fileprivate|public|internal)\s+)*"
+                     r"(?:struct|class|extension|enum|actor)\s+([A-Za-z_][A-Za-z_0-9]*)")
+SW_FUNC = re.compile(r"\bfunc\s+([A-Za-z_][A-Za-z_0-9]*)\s*(?:<[^>{}]*>)?\s*\(")
+SW_TEST_ATTR = re.compile(r"@Test\b")
+
+
+def _swift_labels(lines: List[str], row: int, col: int) -> str:
+    """The argument labels of the parameter list opening at lines[row][col] == '(':
+    `(_ a: Int, b c: [String: Int] = [:])` → `_:b:`. Swift Testing names a test `f(_:b:)`."""
+    buf: List[str] = []
+    depth = 0
+    for r in range(row, min(row + 40, len(lines))):
+        s = lines[r]
+        for ch in s[col if r == row else 0:]:
+            if ch in "([":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif ch in ")]":
+                depth -= 1
+                if depth == 0:
+                    return _labels_of("".join(buf))
+            buf.append(ch)
+        buf.append(" ")
+    return _labels_of("".join(buf))
+
+
+def _labels_of(params: str) -> str:
+    parts, depth, cur = [], 0, []
+    for ch in params:
+        if ch in "([<":
+            depth += 1
+        elif ch in ")]>":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    out = ""
+    for p in parts:
+        words = p.split(":", 1)[0].split()
+        if words and ":" in p:
+            out += words[0] + ":"
+    return out
+
+
+def swift_code_only(text: str) -> str:
+    '''The text with every string literal's contents and every comment blanked (same length and line
+    breaks), so braces and `@Test` inside a string ("\\n    }\\n", review F2) or a comment never move a
+    test to another suite. Handles "..." with escapes, multi-line triple-quoted strings, raw #"..."#
+    and ##"..."##, `//`, and nested /* */. An interpolation inside a string is blanked with it.'''
+    out = list(text)
+    i, n = 0, len(text)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, min(b, n)):
+            if out[k] != "\n":
+                out[k] = " "
+    while i < n:
+        c = text[i]
+        if c == "/" and text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j)
+            i = j
+        elif c == "/" and text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+        elif c == "#" or c == '"':
+            j = i
+            while j < n and text[j] == "#":
+                j += 1
+            hashes = j - i
+            if j >= n or text[j] != '"':
+                i = j if hashes else i + 1
+                continue
+            multi = text.startswith('"""', j)
+            close = ('"""' if multi else '"') + "#" * hashes
+            k = j + (3 if multi else 1)
+            while k < n:
+                if hashes == 0 and text[k] == "\\":
+                    k += 2
+                    continue
+                if text.startswith(close, k):
+                    break
+                if not multi and text[k] == "\n":
+                    break                    # an unterminated one-line string: stop at the line end
+                k += 1
+            end = k + len(close) if k < n and text.startswith(close, k) else k
+            blank(j + (3 if multi else 1), k)
+            i = end
+        else:
+            i += 1
+    return "".join(out)
+
+
+def swift_cases(text: str) -> List[Tuple[str, str, str]]:
+    """(suite type, function, identifier) for every test declared in a Swift file — the same rules as
+    scripts/gauntlet/inventory.swift (a test credits the innermost enclosing type, by brace depth).
+    identifier: XCTest `testX`; Swift Testing `f()` / `f(x:)` (parameterized: one id, all its cases)."""
+    lines = swift_code_only(text).split("\n")
+    out: List[Tuple[str, str, str]] = []
+    depth = 0
+    open_types: List[Tuple[str, int]] = []
+    pending_type: Optional[str] = None
+    st_pending = False
+    for row, line in enumerate(lines):
+        trimmed = line.strip()
+        if trimmed.startswith("//"):
+            continue
+        attr = bool(SW_TEST_ATTR.search(line))
+        fm = SW_FUNC.search(line)
+        if not (attr or (fm and fm.group(1).startswith("test"))):
+            tm = SW_TYPE.match(line)
+            if tm:
+                pending_type = tm.group(1)
+        if attr:
+            st_pending = True
+        if fm:
+            name = fm.group(1)
+            suite = open_types[-1][0] if open_types else ""
+            if st_pending:
+                out.append((suite, name, f"{name}({_swift_labels(lines, row, fm.end() - 1)})"))
+                st_pending = False
+            elif name.startswith("test"):
+                out.append((suite, name, name))
+        for ch in line:
+            if ch == "{":
+                depth += 1
+                if pending_type is not None:
+                    open_types.append((pending_type, depth))
+                    pending_type = None
+            elif ch == "}":
+                depth -= 1
+                while open_types and open_types[-1][1] > depth:
+                    open_types.pop()
+    return out
+
+
+PY_CLASS = re.compile(r"^class\s+([A-Za-z_]\w*)")
+PY_DEF = re.compile(r"^(\s*)(?:async\s+)?def\s+(test_\w+)\s*\(")
+
+
+def python_cases(text: str, stem: str) -> List[Tuple[str, str, str]]:
+    """(module stem, function, pytest node-id tail): `test_x` or `TestC::test_x`. Parametrized tests:
+    one node id selects every parameter."""
+    out: List[Tuple[str, str, str]] = []
+    cls: Optional[str] = None
+    for line in text.split("\n"):
+        m = PY_CLASS.match(line)
+        if m:
+            cls = m.group(1)
+            continue
+        if line and not line[0].isspace() and not line.startswith("#"):
+            cls = None                   # any top-level statement ends the class
+        d = PY_DEF.match(line)
+        if d:
+            if d.group(1) == "":
+                out.append((stem, d.group(2), d.group(2)))
+            elif cls is not None:
+                out.append((stem, d.group(2), f"{cls}::{d.group(2)}"))
+    return out
+
+
+def pick_suites(p: Pick) -> List[str]:
+    return [Path(p.path).stem] if p.kind in ("python", "shell") else list(p.suites)
+
+
+def file_cases(p: Pick, text: str) -> List[Tuple[str, str, str]]:
+    if p.kind == "shell":
+        return [(Path(p.path).stem, "shell_suite", "")]
+    if p.kind == "python":
+        return python_cases(text, Path(p.path).stem)
+    return swift_cases(text)
+
+
+def apply_filter(picks: Sequence[Pick], flt: TestFilter, read) -> List[Pick]:
+    """Narrow a pool of picks to what the filter names. `read(paths) -> {path: text}` gives the sources
+    (at the commit) of the files whose tests must be known: only those a positive touches and that
+    are not taken whole. Memory: those files' text at once (a few MB for a whole-repo pattern).
+    A suite the filter takes whole and the manifest lists stays whole whatever the parse says (review
+    F2); a picked test that is not inside a type cannot be named by -only-testing: Refused (F3)."""
+    touched = [p for p in picks if any(flt.touches(s) for s in pick_suites(p))]
+    need = [p for p in touched if not all(flt.whole(s) for s in pick_suites(p))]
+    texts = read([p.path for p in need]) if need else {}
+    out: List[Pick] = []
+    for p in touched:
+        names = pick_suites(p)
+        if all(flt.whole(s) for s in names):
+            out.append(p)
+            continue
+        whole = {s for s in names if flt.whole(s)}
+        cases = file_cases(p, texts.get(p.path, ""))
+        if p.kind == "python":
+            whole = set()                # one module = one suite: handled by the cases below
+        sel = [c for c in cases if c[0] not in whole and flt.wants(c[0], c[1])]
+        loose = [c for c in sel if not c[0]]
+        if loose and p.kind in ("app", "core"):
+            raise Refused(f"--filter picks {loose[0][1]} in {p.path}, a test that is not inside a type: "
+                          f"-only-testing cannot name it alone — select the file's suites whole instead")
+        if not sel and not whole:
+            continue
+        if not whole and len(sel) == len(cases):
+            out.append(p)                # every test of the file: the file as the smoke would run it
+            continue
+        in_whole = sum(1 for c in cases if c[0] in whole)
+        full = {s for s in {c[0] for c in sel} if all(flt.wants(c[0], c[1]) for c in cases if c[0] == s)}
+        suites = tuple(sorted(whole | {c[0] for c in sel}))
+        out.append(Pick(p.kind, p.module, p.stage, p.path, suites, in_whole + len(sel),
+                        tuple(c for c in sel if c[0] not in full),
+                        exact=all(any(c[0] == w for c in cases) for w in whole)))
+    return out
+
+
+def cat_files(repo: Path, sha: str, paths: Sequence[str]) -> Dict[str, str]:
+    """Each path's text at the commit, through one `git cat-file --batch` (no worktree needed)."""
+    if not paths:
+        return {}
+    p = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"], input="".join(f"{sha}:{x}\n" for x in paths).encode(),
+                       capture_output=True)
+    data, out, i = p.stdout, {}, 0
+    for path in paths:
+        nl = data.index(b"\n", i)
+        head = data[i:nl].split()
+        i = nl + 1
+        if len(head) < 3 or head[1] == b"missing":
+            continue
+        n = int(head[2])
+        out[path] = data[i:i + n].decode("utf-8", "replace")
+        i += n + 1
+    return out
+
+
 # ───────────────────────────────────────────────────────────── commands
 
-def xcode_flags(project: Path) -> List[str]:
+def xcode_flags(project: Path, dd: Optional[Path] = None) -> List[str]:
     return ["-project", str(project), "-scheme", "VideoScan", "-configuration", "Debug",
-            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(DD)]
+            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(dd or DD)]
 
 
 SIGN = ["CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS=", "ONLY_ACTIVE_ARCH=YES"]
 
 
-def app_build_cmd(wt: Path) -> List[str]:
-    return ["xcodebuild", "build-for-testing"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj") + SIGN
+def app_build_cmd(wt: Path, dd: Optional[Path] = None) -> List[str]:
+    return ["xcodebuild", "build-for-testing"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd) + SIGN
 
 
-def app_test_cmd(wt: Path, suites: Sequence[str]) -> List[str]:
-    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj")
-            + ["-parallel-testing-enabled", "NO"] + [f"-only-testing:VideoScanTests/{s}" for s in suites])
+def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, result: Optional[Path] = None) -> List[str]:
+    """suites: `Suite` or `Suite/test` selectors (app_selectors). Each run its own -resultBundlePath:
+    two runs from one DerivedData must not race for xcodebuild's default result bundle name."""
+    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd)
+            + ["-parallel-testing-enabled", "NO"] + (["-resultBundlePath", str(result)] if result else [])
+            + [f"-only-testing:VideoScanTests/{s}" for s in suites])
 
 
-def core_filter(suites: Sequence[str]) -> str:
+def app_selectors(picks: Sequence[Pick]) -> List[str]:
+    """-only-testing selectors: a whole suite as `Suite`, a filtered one as `Suite/testX` (XCTest) or
+    `Suite/f(x:)` (Swift Testing's identifier, argument labels included)."""
+    sel = set()
+    for p in picks:
+        cased = {c[0] for c in p.cases}
+        sel |= {s for s in p.suites if s and s not in cased}
+        sel |= {f"{c[0]}/{c[2]}" for c in p.cases if c[0] and c[2]}
+    return sorted(sel)
+
+
+def core_filter(suites: Sequence[str], cases: Sequence[Tuple[str, str, str]] = ()) -> str:
     # matches "VideoScanCoreTests.Suite/testX" (XCTest) and "VideoScanCoreTests.Outer/Suite/f()" (Swift Testing)
-    return r"(\.|/)(" + "|".join(re.escape(s) for s in sorted(set(suites))) + r")/"
+    whole = sorted(set(suites) - {c[0] for c in cases})
+    rx = r"(\.|/)(" + "|".join(re.escape(s) for s in whole) + r")/" if whole else ""
+    if not cases:
+        return rx
+    one = [r"(\.|/)" + (re.escape(c[0]) + "/" if c[0] else "") + re.escape(c[1]) + r"(\(|$)"
+           for c in sorted(set(cases))]
+    return "|".join(([f"(?:{rx})"] if rx else []) + [f"(?:{x})" for x in one])
 
 
-def core_cmd(wt: Path, suites: Sequence[str]) -> List[str]:
-    return ["swift", "test", "--package-path", str(wt / "VideoScan" / "VideoScanCore"), "--filter", core_filter(suites)]
+def core_package(wt: Path) -> Path:
+    return wt / "VideoScan" / "VideoScanCore"
 
 
-def pytest_cmd(py: List[str], files: Sequence[str]) -> List[str]:
-    return py + ["-m", "pytest", "-v", "-rfE", "-p", "no:cacheprovider", "--color=no"] + list(files)
+def core_build_cmd(wt: Path) -> List[str]:
+    return ["swift", "build", "--build-tests", "--package-path", str(core_package(wt))]
+
+
+def core_products(wt: Path) -> Path:
+    # .build/debug is SwiftPM's link to the products in both build systems (native, swiftbuild's out/Products)
+    return core_package(wt) / ".build" / "debug"
+
+
+def core_test_cmd(wt: Path, regex: str) -> List[str]:
+    """The Core test phase, run as one child: this file with --core-exec (core_exec below) runs the built
+    bundle directly — no `swift test`, so no SwiftPM .build lock, so runs at one commit go side by side."""
+    return [sys.executable, str(SELF), "--core-exec", str(core_products(wt)), regex]
+
+
+def pytest_cmd(py: List[str], files: Sequence[str], basetemp: Optional[Path] = None) -> List[str]:
+    return (py + ["-m", "pytest", "-v", "-rfE", "-p", "no:cacheprovider", "--color=no"]
+            + ([f"--basetemp={basetemp}"] if basetemp else []) + list(files))
+
+
+def python_targets(picks: Sequence[Pick]) -> List[str]:
+    """pytest arguments: a whole file as its path, a filtered one as node ids (path::test, path::Class::test)."""
+    out: List[str] = []
+    for p in picks:
+        if p.kind != "python":
+            continue
+        if p.cases:
+            out += [f"{p.path}::{c[2]}" for c in p.cases]
+        else:
+            out.append(p.path)
+    return list(dict.fromkeys(out))
+
+
+# ───────────────────────────────────────────────────────────── the Core test phase (child)
+
+def core_exec(products: str, regex: str) -> int:
+    """`run_tests.py --core-exec <products> <regex>`: what `swift test --skip-build --filter <regex>` runs,
+    without SwiftPM (whose .build lock serializes every `swift test` on one package, even --skip-build:
+    "Another instance of SwiftPM … waiting", measured 2026-11-20). XCTest: list the bundle's tests with
+    swiftpm-xctest-helper, keep those whose `Module.Class/test` the regex finds, run them with `xcrun
+    xctest -XCTest`. Swift Testing: swiftpm-testing-helper --filter <regex>. Same counts as swift test
+    on the smoke's Core selection (57 XCTest + 685 Swift Testing). Exit: the first non-zero."""
+    bundle = Path(products) / "VideoScanCoreTests.xctest"
+    exe = bundle / "Contents" / "MacOS" / "VideoScanCoreTests"
+    if not exe.exists():
+        print(f"core-exec: no built test bundle at {bundle} (did the Core build run?)", flush=True)
+        return 1
+    xrun = lambda *a: subprocess.run(["xcrun"] + list(a), capture_output=True, text=True).stdout.strip()
+    plat = xrun("--sdk", "macosx", "--show-sdk-platform-path")
+    pm = Path(xrun("--find", "swift")).parent.parent / "libexec" / "swift" / "pm"
+    env = dict(os.environ, NO_COLOR="1",
+               DYLD_FRAMEWORK_PATH=f"{plat}/Developer/Library/Frameworks:{plat}/Developer/Library/PrivateFrameworks",
+               DYLD_LIBRARY_PATH=f"{Path(products).resolve()}:{plat}/Developer/usr/lib")
+    listing = Path(os.environ.get("TMPDIR", "/tmp")) / f"run_tests-xctest-{os.getpid()}.json"
+    try:
+        p = subprocess.run([str(pm / "swiftpm-xctest-helper"), str(bundle), str(listing)], env=env,
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            print(f"core-exec: listing the XCTest cases failed (exit {p.returncode}): {p.stderr.strip()[:300]}", flush=True)
+            return 1
+        tree = json.loads(listing.read_text())
+    finally:
+        with contextlib.suppress(OSError):
+            listing.unlink()
+    rx = re.compile(regex)
+    specs: List[str] = []
+    for b in tree.get("tests", []):
+        for c in b.get("tests", []):
+            names = [f"{c['name']}/{t['name']}" for t in c.get("tests", [])]
+            hit = [n for n in names if rx.search(n)]
+            specs += [c["name"]] if hit and len(hit) == len(names) else hit
+    rc = 0
+    print(f"core-exec: XCTest {len(specs)} selectors", flush=True)
+    if specs:
+        rc = subprocess.call(["xcrun", "xctest", "-XCTest", ",".join(specs), str(bundle)], env=env)
+    rc2 = subprocess.call([str(pm / "swiftpm-testing-helper"), "--test-bundle-path", str(exe), str(exe),
+                           "--testing-library", "swift-testing", "--filter", regex], env=env)
+    if rc2 == 69:
+        rc2 = 0                          # swiftpm-testing-helper: "no test matched" (an XCTest-only selection,
+                                         # review F1); `swift test` reads it the same way. Zero tests ran
+                                         # overall is still RED by the zero-test / shortfall rules.
+    return rc or rc2
 
 
 # ───────────────────────────────────────────────────────────── parsing
@@ -456,6 +936,7 @@ class LaneResult:
     reason: str = ""                       # why NOT RUN, or why RED beyond the counts
     failures: List[Event] = field(default_factory=list)
     expected: int = 0                      # tests the selection planned (0: unknown, no floor)
+    exact: bool = False                    # a --filter's plan is exact: ANY shortfall is RED, not under half
     setup: List[str] = field(default_factory=list)   # missing tools (preflight): NOT RUN, not RED
 
     @property
@@ -464,7 +945,10 @@ class LaneResult:
 
     @property
     def shrank(self) -> bool:
-        return self.expected > 0 and self.total < self.expected * SHRANK
+        if self.expected <= 0:
+            return False
+        # skipped tests count as ran (a trait or XCTSkip said why); only a test that never reported is short
+        return self.total < self.expected if self.exact else self.total < self.expected * SHRANK
 
     @property
     def word(self) -> str:
@@ -542,6 +1026,7 @@ def take_lock(lockdir: Path, info: str) -> int:
     fd = os.open(str(lockdir / "flock"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _HELD.add(fd)                    # the M4 lock, too, lives as long as the work (F6)
     except OSError:
         try:
             who = (lockdir / "info").read_text().strip().split(" ", 1)[-1]
@@ -551,6 +1036,453 @@ def take_lock(lockdir: Path, info: str) -> int:
         raise Busy(who)
     (lockdir / "info").write_text(f"{os.getpid()} {info}\n")
     return fd
+
+
+# ───────────────────────────────────────────────────────────── slots: the only shared resources
+#
+# A SLOT is one side worktree + its Debug DerivedData (and the worktree's SwiftPM .build). N_SLOTS of
+# them, at fixed paths, so a slot moved to a new commit builds INCREMENTALLY (Xcode and SwiftPM key
+# their caches on absolute paths: a fresh path per commit would make every new commit a clean build).
+# Slot 1 is the pre-2026-11-20 pair (run-all, videoscan-runall-dd), so its warm build is kept.
+#
+#   <CACHE>/slots/<i>.lock        flock SHARED by every live run using slot i, for its whole life;
+#                                 EXCLUSIVE (non-blocking) only to move it to another commit — so a
+#                                 slot a live run uses is never moved or pruned (C++: shared_mutex,
+#                                 try_lock() to write, lock_shared() to read).
+#   <CACHE>/slots/<i>.build-app   flock EXCLUSIVE while building (xcodebuild build-for-testing); a second
+#   <CACHE>/slots/<i>.build-core  run at the same commit waits here, then tests from the same products.
+#   <CACHE>/slots/<i>.built-<k>   the commit whose <k> build succeeded in this slot (cleared on a move).
+#   <CACHE>/slots/<i>.full        flock EXCLUSIVE for a --full run (its own Release DerivedData).
+#   <CACHE>/slots/<i>.used        mtime = last use; the least recently used free slot is moved first.
+#   <CACHE>/lock                  the old whole-run lock: slot 1's users hold it SHARED, so a run_tests
+#                                 from an older checkout (which takes it exclusive) cannot move run-all
+#                                 under us, and we skip slot 1 while one of those holds it.
+#
+# Everything else is per run: its run folder (logs, -resultBundlePath, pytest --basetemp, TMPDIR).
+
+@dataclass
+class Slot:
+    index: int
+    wt: Path
+    dd: Path
+    fds: List[int] = field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        return str(self.index + 1)
+
+    def release(self) -> None:
+        for fd in self.fds:
+            _close(fd)
+        self.fds = []
+
+
+def slot_dir() -> Path:
+    return CACHE / "slots"
+
+
+def slot_paths(i: int) -> Tuple[Path, Path]:
+    if i == 0:
+        return RUN_WT, DD
+    return RUN_WT.parent / f"{RUN_WT.name}-{i + 1}", DD.parent / f"{DD.name}-{i + 1}"
+
+
+# Lock fds this process holds for its work (slot, build, --full, M4). Every child gets them (pass_fds):
+# flock belongs to the open file description, so the lock lives as long as ANY holder — a runner killed
+# with -9 leaves its own-session xcodebuild/swift child holding the slot, which then cannot be moved
+# under it (review F6). C++: a shared_ptr every child copies. The registry's own lock is not passed.
+_HELD: set = set()
+
+
+def _lock_fd(path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    _HELD.add(fd)
+    return fd
+
+
+def _close(fd: int) -> None:
+    _HELD.discard(fd)
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
+def held_fds() -> Tuple[int, ...]:
+    out = []
+    for fd in sorted(_HELD):
+        try:
+            os.fstat(fd)
+            out.append(fd)
+        except OSError:
+            _HELD.discard(fd)
+    return tuple(out)
+
+
+def _flock(fd: int, how: int, block: bool = False) -> bool:
+    try:
+        fcntl.flock(fd, how | (0 if block else fcntl.LOCK_NB))
+        return True
+    except OSError:
+        return False
+
+
+def slot_head(wt: Path) -> Optional[str]:
+    if not (wt / ".git").is_file():
+        return None
+    return git(wt, "rev-parse", "HEAD", check=False) or None
+
+
+def _hold_slot(i: int, how: int, block: bool) -> Optional[List[int]]:
+    fds = [_lock_fd(slot_dir() / f"{i}.lock")]
+    if i == 0:
+        fds.append(_lock_fd(CACHE / "lock" / "flock"))
+    ok = _flock(fds[0], how, block) and (i != 0 or _flock(fds[1], fcntl.LOCK_SH, False))
+    if not ok:
+        for fd in fds:
+            _close(fd)
+        return None
+    return fds
+
+
+def _used(i: int) -> float:
+    try:
+        return (slot_dir() / f"{i}.used").stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _touch(path: Path, text: Optional[str] = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if text is not None:
+        path.write_text(text)
+    else:
+        path.touch()
+        os.utime(str(path), None)
+
+
+def acquire_slot(base: Path, sha: str) -> Slot:
+    """A slot at `sha`, held SHARED until this process exits. One already at the commit is shared
+    (its build reused); else the least recently used slot no live run holds is moved there. Raises
+    Busy when every slot is held at another commit (nothing is queued), Refused for a dirty or
+    foreign worktree (never touched); a dirty slot is skipped for the next one (review F7) and the
+    run is refused only when no slot is usable."""
+    refused: Dict[int, str] = {}
+    for _ in range(3):
+        for i in range(N_SLOTS):
+            wt, dd = slot_paths(i)
+            if slot_head(wt) != sha:
+                continue
+            fds = _hold_slot(i, fcntl.LOCK_SH, block=True)   # blocks only while a mover holds it (seconds)
+            if fds is None:
+                continue
+            slot = Slot(i, wt, dd, fds)
+            if slot_head(wt) == sha:
+                try:
+                    check_paths(base, wt, dd)
+                    dirty = git(wt, "status", "--porcelain", "--untracked-files=no")
+                except Refused as e:
+                    slot.release()
+                    refused[i] = str(e)
+                    continue
+                if dirty:
+                    slot.release()
+                    refused[i] = f"side worktree {wt} has local changes — not touching it:\n{dirty}"
+                    _touch(slot_dir() / f"{i}.refused", refused[i] + "\n")
+                    continue
+                _used_now(i)
+                return slot
+            slot.release()
+        for i in sorted(range(N_SLOTS), key=_used):
+            wt, dd = slot_paths(i)
+            fds = _hold_slot(i, fcntl.LOCK_EX, block=False)
+            if fds is None:
+                continue
+            slot = Slot(i, wt, dd, fds)
+            try:
+                prepare_worktree(base, wt, sha, dd)      # the checkout changes the stamps' token: no stale "built"
+            except Refused as e:
+                slot.release()                           # a dirty or foreign slot: never touched; try the next (F7)
+                refused[i] = str(e)
+                _touch(slot_dir() / f"{i}.refused", str(e) + "\n")
+                continue
+            except BaseException:
+                slot.release()
+                raise
+            fcntl.flock(fds[0], fcntl.LOCK_SH)     # moved: other runs at this commit may share it now
+            if slot_head(wt) == sha:
+                _used_now(i)
+                return slot
+            slot.release()
+            break
+    if refused:
+        raise Refused("no usable side worktree: " + "; ".join(f"slot {i + 1}: {m}" for i, m in sorted(refused.items()))
+                      + (" (the others are in use)" if len(refused) < N_SLOTS else ""))
+    raise Busy(f"all {N_SLOTS} side worktrees are in use by live runs at other commits")
+
+
+def _used_now(i: int) -> None:
+    _touch(slot_dir() / f"{i}.used")
+    with contextlib.suppress(OSError):
+        (slot_dir() / f"{i}.refused").unlink()
+
+
+def _lock_info(path: Path) -> Tuple[str, str, str]:
+    """(pid, HH:MM, sha9) from a build lock's info file ("pid sha epoch kind")."""
+    try:
+        w = path.read_text().split()
+        return w[0], time.strftime("%H:%M", time.localtime(float(w[2]))), w[1][:9]
+    except (OSError, IndexError, ValueError):
+        return "?", "?", "?"
+
+
+@contextlib.contextmanager
+def build_lock(slot: Optional[Slot], kind: str, sha: str, out: "Out", live: Optional["LiveRun"] = None):
+    """EXCLUSIVE while building `kind` in the slot. A second run at the same commit says whom it waits
+    for, then (the build stamp being current) skips the build and tests from the same products."""
+    if slot is None:
+        yield
+        return
+    path = slot_dir() / f"{slot.index}.build-{kind}"
+    fd = _lock_fd(path)
+    try:
+        if not _flock(fd, fcntl.LOCK_EX):
+            pid, since, who_sha = _lock_info(Path(str(path) + ".info"))
+            msg = f"waiting for the build of {who_sha} (pid {pid}, since {since})"
+            out.line("WAIT", msg, "BUILD")
+            if live is not None:
+                live.update(phase=msg)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        Path(str(path) + ".info").write_text(f"{os.getpid()} {sha} {time.time():.0f} {kind}\n")
+        yield
+    finally:
+        _close(fd)
+
+
+def _stamp(slot: Slot, kind: str) -> Path:
+    """INSIDE what it describes: deleting the DerivedData (or .build) drops it (review F4)."""
+    return (slot.dd / ".run_tests-built-app") if kind == "app" else (core_package(slot.wt) / ".build" / ".run_tests-built-core")
+
+
+def checkout_token(wt: Path) -> str:
+    """Changes with ANY checkout in the worktree — ours, an older run_tests', anyone's `git checkout`:
+    HEAD's commit, the size of the worktree's HEAD reflog (each checkout appends a line) and the HEAD
+    file's mtime (rewritten by a checkout)."""
+    gd = Path(git(wt, "rev-parse", "--absolute-git-dir", check=False) or "/nonexistent")
+    def stat(p: Path) -> str:
+        try:
+            st = p.stat()
+            return f"{st.st_size}:{st.st_mtime_ns}"
+        except OSError:
+            return "-"
+    return f"{git(wt, 'rev-parse', 'HEAD', check=False)} {stat(gd / 'logs' / 'HEAD')} {stat(gd / 'HEAD')}"
+
+
+def built_at(slot: Optional[Slot], kind: str) -> Optional[str]:
+    """The commit whose `kind` products this slot holds — only if no checkout happened since they were built."""
+    if slot is None:
+        return None
+    try:
+        sha, token = _stamp(slot, kind).read_text().strip().split(" ", 1)
+    except (OSError, ValueError):
+        return None
+    return sha if token == checkout_token(slot.wt) and token.startswith(sha) else None
+
+
+def mark_built(slot: Optional[Slot], kind: str, sha: str) -> None:
+    if slot is not None:
+        _touch(_stamp(slot, kind), f"{sha} {checkout_token(slot.wt)}\n")
+
+
+# ───────────────────────────────────────────────────────────── the run registry and --status
+
+def live_dir() -> Path:
+    return CACHE / "live"
+
+
+class LiveRun:
+    """<CACHE>/live/<pid>.json while this run lives: argv, commit, slot, run folder, the lane now and
+    n/N done. Rewritten atomically (tmp + rename) on each phase and at most once a second for
+    progress; removed on exit. Liveness is a lock, not a guess (review F8): the run holds
+    <pid>.lock EXCLUSIVE for its life; a reader that can take it knows the run is gone (a crash,
+    a kill -9, a reused pid all release it) and removes both files."""
+
+    def __init__(self, info: dict) -> None:
+        self.info = dict(info, pid=os.getpid(), started=time.time())
+        self.path = live_dir() / f"{os.getpid()}.json"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = self.path.with_suffix(".lock")
+        self.fd = os.open(str(self.lock), os.O_RDWR | os.O_CREAT, 0o644)   # not passed to children
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        self.last = 0.0
+        self.write()
+
+    def write(self) -> None:
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.info, sort_keys=True))
+        os.replace(str(tmp), str(self.path))
+        self.last = time.monotonic()
+
+    def update(self, **kw) -> None:
+        progress_only = set(kw) <= {"done"}
+        self.info.update(kw)
+        if not progress_only or time.monotonic() - self.last >= 1.0:
+            self.write()
+
+    def close(self) -> None:
+        for f in (self.path, self.lock):
+            with contextlib.suppress(OSError):
+                f.unlink()
+        with contextlib.suppress(OSError):
+            os.close(self.fd)
+
+
+def live_runs() -> List[dict]:
+    out: List[dict] = []
+    root = live_dir()
+    if not root.is_dir():
+        return out
+    for f in sorted(root.glob("*.json")):
+        lock = f.with_suffix(".lock")
+        alive = False
+        if lock.exists():
+            fd = os.open(str(lock), os.O_RDWR)
+            try:
+                alive = not _flock(fd, fcntl.LOCK_EX)
+            finally:
+                os.close(fd)
+        if not alive:
+            for g in (f, lock):
+                with contextlib.suppress(OSError):
+                    g.unlink()           # stale: its run is gone
+            continue
+        try:
+            out.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _hm(epoch: float) -> str:
+    return time.strftime("%H:%M", time.localtime(epoch))
+
+
+def run_line(r: dict, now: Optional[float] = None) -> str:
+    now = time.time() if now is None else now
+    what = r.get("phase") or "starting"
+    if r.get("total"):
+        what += f" {r.get('done', 0)}/{r['total']}"
+    flt = f" --filter {r['filter']!r}" if r.get("filter") else ""
+    return (f"pid {r.get('pid')} · {r.get('mode', 'smoke')}{flt} · {str(r.get('sha', ''))[:9]} · "
+            f"slot {r.get('slot', '?')} · {what} · since {_hm(r.get('started', now))} "
+            f"({fmt_secs(max(0, now - r.get('started', now)))})")
+
+
+def du_gb(path: Path, timeout: int = 30) -> Optional[float]:
+    if not path.exists():
+        return None
+    try:
+        p = subprocess.run(["du", "-sk", str(path)], capture_output=True, text=True, timeout=timeout)
+        return int(p.stdout.split()[0]) / 1048576
+    except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
+        return None
+
+
+def slot_lines(runs: Sequence[dict], disk: bool = True) -> List[str]:
+    lines = []
+    for i in range(N_SLOTS):
+        wt, dd = slot_paths(i)
+        head = slot_head(wt)
+        users = [r for r in runs if str(r.get("slot")) == str(i + 1)]
+        fd = _lock_fd(slot_dir() / f"{i}.lock")
+        held = not _flock(fd, fcntl.LOCK_EX)
+        _close(fd)
+        old = ""
+        if i == 0 and not held:          # an older run_tests (whole-run lock) using run-all
+            fd = _lock_fd(CACHE / "lock" / "flock")
+            if not _flock(fd, fcntl.LOCK_SH):
+                try:
+                    old = (CACHE / "lock" / "info").read_text().strip()
+                except OSError:
+                    old = "(no info)"
+            _close(fd)
+        try:
+            bad = (slot_dir() / f"{i}.refused").read_text().strip().splitlines()[0][:90]
+        except (OSError, IndexError):
+            bad = ""
+        state = (f"in use by an older run_tests: pid {old}" if old else
+                 f"REFUSED (skipped): {bad}" if bad and not (held or users) else
+                 f"in use by {len(users) or 'a'} run{'s' if len(users) > 1 else ''}" if held or users
+                 else (f"idle, last used {time.strftime('%m-%d %H:%M', time.localtime(_used(i)))}" if _used(i) else "idle"))
+        size = du_gb(dd) if disk else None
+        lines.append(f"  slot {i + 1}  {wt.name:12} {('at ' + head[:9]) if head else 'empty':13} {state:28} "
+                     f"DerivedData {f'{size:.1f} GB' if size is not None else '—'}")
+    return lines
+
+
+M4_DEFAULT_MIN = {"testbed": 120, "all": 90, "suite": 75, "deep": 60, "corpus": 45, "ui": 30, "run_tests": 20}
+
+
+def _ts(s: Optional[str]) -> Optional[float]:
+    try:
+        return time.mktime(time.strptime(s or "", "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return None
+
+
+def m4_lock_line(st: dict, now: Optional[float] = None) -> str:
+    """One line from `m4_run.sh status --json`: who holds the M4 testbed lock and, from that lane's last
+    finished run (else the testbed's own expected length), when it should be done."""
+    now = time.time() if now is None else now
+    holder = st.get("lock")
+    if st.get("state") != "running" or not holder:
+        return "M4 testbed: idle"
+    lane = holder.split()[0]
+    m = re.search(r"since (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", holder)
+    since = _ts(m.group(1)) if m else None
+    est, basis = None, ""
+    for key in ("last", "suite", "testbed"):
+        r = st.get(key) or {}
+        if r.get("lane") == lane and not r.get("running") and _ts(r.get("ended")) and _ts(r.get("started")):
+            est, basis = _ts(r["ended"]) - _ts(r["started"]), f"the last {lane} run took {fmt_secs(_ts(r['ended']) - _ts(r['started']))}"
+            break
+    if est is None:
+        for ln in ((st.get("testbed") or {}).get("lanes") or []):
+            if ln.get("name") == lane and ln.get("seconds"):
+                est, basis = float(ln["seconds"]), f"its {lane} lane took {fmt_secs(ln['seconds'])} in the last testbed"
+                break
+    if est is None:
+        est, basis = M4_DEFAULT_MIN.get(lane, 60) * 60.0, f"a {lane} run is planned at {M4_DEFAULT_MIN.get(lane, 60)} min"
+    eta = ""
+    if since is not None:
+        end = since + est
+        eta = (f" — est. finish ~{_hm(end)} ({basis})" if end > now
+               else f" — past its usual length ({basis}); see scripts/m4_run.sh status --host m4")
+    return f"M4 testbed: busy — {holder}{eta}"
+
+
+def m4_status_json(script_repo: Path, timeout: int = 25) -> Optional[dict]:
+    sh = script_repo / "scripts" / "m4_run.sh"
+    if not sh.exists():
+        return None
+    try:
+        p = subprocess.run(["/bin/bash", str(sh), "status", "--host", "m4", "--json"], capture_output=True,
+                           text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        return json.loads(p.stdout) if p.returncode == 0 else None
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return None
+
+
+def status_block(local_name: str, with_m4: bool = True, disk: bool = True, m4=None) -> List[str]:
+    """What --status prints and every busy refusal prints instead of one opaque line."""
+    runs = live_runs()
+    lines = [f"run_tests on {local_name} at {time.strftime('%H:%M')}: "
+             + (f"{len(runs)} live run{'s' if len(runs) != 1 else ''}" if runs else "nothing running")]
+    lines += ["  " + run_line(r) for r in runs]
+    lines += slot_lines(runs, disk)
+    if with_m4:
+        st = (m4 or m4_status_json)(SCRIPT_REPO or BASE_REPO)
+        lines.append(m4_lock_line(st) if st else "M4 testbed: not reachable (scripts/m4_run.sh status --host m4)")
+    return lines
 
 
 # ───────────────────────────────────────────────────────────── display
@@ -571,6 +1503,7 @@ class Out:
         self.done = 0
         self.expected = 0
         self.counter_shown = False
+        self.on_progress = None              # LiveRun.update(done=n), at most a write a second
 
     def c(self, word: str, text: str) -> str:
         return f"{self.COLORS.get(word, '')}{text}\033[0m" if self.tty and word in self.COLORS else text
@@ -587,6 +1520,8 @@ class Out:
 
     def event(self, ev: Event) -> None:
         self.done += 1
+        if self.on_progress is not None:
+            self.on_progress(self.done)
         ms = f" ({int(ev.seconds * 1000)} ms)" if ev.seconds is not None else ""
         if ev.status == "FAILED":
             self.line("FAILED", ev.name + ms, "FAILED")
@@ -696,7 +1631,8 @@ class Runner:
         log.write("$ " + " ".join(shlex.quote(x) for x in cmd) + "\n")
         self.child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                       cwd=str(cwd) if cwd else None, env=self.env, start_new_session=True,
-                                      text=True, encoding="utf-8", errors="replace", bufsize=1)
+                                      text=True, encoding="utf-8", errors="replace", bufsize=1,
+                                      pass_fds=held_fds())
         timed_out = False
         deadline = t0 + budget
         child = self.child
@@ -878,25 +1814,61 @@ def corpus_applies(target_host: Optional[str], local_key: Optional[str]) -> Tupl
 
 
 def prune_runs(root: Path, keep: int = KEEP_RUNS) -> None:
+    """Keep the newest `keep` run folders — never one a live run uses (review F5: side by side, an hour-long
+    --full is the oldest name while twenty quick runs come and go; its logs, TMPDIR and, over ssh, the .rc
+    file _stream_in_gui waits for live there)."""
     import shutil
+    live = live_runs()
+    pids = {str(r.get("pid")) for r in live}
+    dirs = {str(r.get("run_dir")) for r in live if r.get("run_dir")}
     runs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name)
     for p in runs[:-keep]:
+        if p.name.rsplit("-", 1)[-1] in pids or str(p) in dirs:
+            continue
         shutil.rmtree(p, ignore_errors=True)          # our own raw logs only, never media or a checkout
 
 
 def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Path, header: str,
-              missing: Optional[Dict[str, List[str]]] = None) -> List[LaneResult]:
-    """The smoke lanes. `missing` (preflight): a lane named there is NOT RUN (setup), the rest run."""
+              missing: Optional[Dict[str, List[str]]] = None, slot: Optional[Slot] = None,
+              live: Optional[LiveRun] = None, sha: str = "") -> List[LaneResult]:
+    """The smoke lanes. `missing` (preflight): a lane named there is NOT RUN (setup), the rest run.
+    `slot`: the worktree/DerivedData pair this run shares; each build happens under that slot's build
+    lock, once per commit (the built-<kind> stamp), and the tests run from its products side by side
+    with any other run at the same commit. Without a slot (tests): no lock, the default DerivedData."""
     missing = missing or {}
     env = dict(os.environ)
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
     r = Runner(out, run_dir, env)
+    # Python and shell tests: their own TMPDIR and pytest --basetemp in this run's folder (as
+    # testbed_strands gives each strand), no .pyc written into the shared worktree. The Swift lanes
+    # keep the system TMPDIR (their tests make their own unique temp folders).
+    py_env = dict(env, TMPDIR=str(run_dir / "tmp") + "/", PYTHONDONTWRITEBYTECODE="1")
+    rp = Runner(out, run_dir, py_env)
+    dd = slot.dd if slot is not None else None
     lanes: List[LaneResult] = []
     app = [p for p in picks if p.kind == "app"]
     core = [p for p in picks if p.kind == "core"]
     py = [p for p in picks if p.kind in ("python", "shell")]
     out.expected = sum(p.tests for p in picks)
+    phase = (lambda **kw: live.update(**kw)) if live is not None else (lambda **kw: None)
+    exact = lambda ps: bool(getattr(a, "test_filter", None)) and all(p.exact for p in ps)
     out.line("==========", header)
+
+    def build(kind: str, cmd: List[str], log: str, label: str) -> Tuple[int, float]:
+        """(exit, seconds) of the build, or (0, 0.0) when this commit's products are already built."""
+        with build_lock(slot, kind, sha, out, live):
+            if slot is not None and slot_head(slot.wt) != sha:      # cannot happen while we hold the slot; say so if it does
+                out.line("FAILED", f"slot {slot.label} is no longer at {sha[:9]} — not building or testing there", "FAILED")
+                return 1, 0.0
+            if slot is not None and built_at(slot, kind) == sha:
+                out.line("BUILD", f"{label} — already built at {sha[:9]} in slot {slot.label}", "BUILD")
+                return 0, 0.0
+            phase(phase=f"{kind}: building")
+            out.line("BUILD", f"{label} …", "BUILD")
+            rc, el = r.stream(cmd, log, LANE_BUDGET["build"])
+            if rc == 0:
+                mark_built(slot, kind, sha)
+            return rc, el
     try:
         if "app" in a.kinds and app and "app" in missing:
             lanes.append(setup_lane("app", missing["app"]))
@@ -906,19 +1878,22 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
             if not app:
                 lane.reason = "no app suites selected"
             else:
-                out.line("BUILD", "VideoScan Debug build-for-testing …", "BUILD")
-                rc, el = r.stream(app_build_cmd(wt), "app-build.log", LANE_BUDGET["build"])
+                rc, el = build("app", app_build_cmd(wt, dd), "app-build.log", "VideoScan Debug build-for-testing")
                 if rc != 0:
                     lane.ran, lane.rc, lane.seconds = True, rc, el
                     lane.reason = f"build failed (exit {rc}) — see {run_dir}/app-build.log"
                     out.line("FAILED", f"VideoScan Debug build-for-testing {fmt_secs(el)}: exit {rc}", "FAILED")
                 else:
-                    out.line("BUILD", f"VideoScan Debug build-for-testing {'.' * 8} {fmt_secs(el)}", "BUILD")
-                    suites = sorted({s for p in app for s in p.suites})
-                    out.line("RUN", f"app {'+'.join(a.stages_label)} ({len(suites)} suites, ~{sum(p.tests for p in app)} tests)")
+                    if el:
+                        out.line("BUILD", f"VideoScan Debug build-for-testing {'.' * 8} {fmt_secs(el)}", "BUILD")
+                    sel = app_selectors(app)
+                    out.line("RUN", f"app {'+'.join(a.stages_label)} ({len({s for p in app for s in p.suites})} suites, "
+                                    f"~{sum(p.tests for p in app)} tests)")
                     lane.ran, lane.expected = True, sum(p.tests for p in app)
-                    lane.rc, lane.seconds = r.stream(app_test_cmd(wt, suites), "app-test.log", LANE_BUDGET["app"],
-                                                     parser=LineParser(), lane=lane, gui=True)
+                    lane.exact = exact(app)
+                    phase(phase="app: testing", done=out.done, total=out.expected)
+                    lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult"), "app-test.log",
+                                                     LANE_BUDGET["app"], parser=LineParser(), lane=lane, gui=True)
                     lane_end(out, lane, run_dir / "app-test.log")
         if "core" in a.kinds and core and "core" in missing:
             lanes.append(setup_lane("core", missing["core"]))
@@ -929,35 +1904,43 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 lane.reason = "no Core suites selected"
             else:
                 suites = sorted({s for p in core for s in p.suites})
-                out.line("RUN", f"core swift test, Debug ({len(suites)} suites, ~{sum(p.tests for p in core)} tests; builds first)")
-                lane.ran, lane.expected = True, sum(p.tests for p in core)
-                t_build = time.monotonic()
-                seen = {"started": False}
-
-                def mark(raw: str) -> None:
-                    if not seen["started"] and ("Test Suite 'All tests' started" in raw or "Test run started" in raw):
-                        seen["started"] = True
-                        out.line("BUILD", f"VideoScanCore (swift build) {'.' * 8} {fmt_secs(time.monotonic() - t_build)}", "BUILD")
-                lane.rc, lane.seconds = r.stream(core_cmd(wt, suites), "core.log", LANE_BUDGET["core"],
-                                                 parser=LineParser(), lane=lane, on_line=mark)
-                lane_end(out, lane, run_dir / "core.log")
+                rc, el = build("core", core_build_cmd(wt), "core-build.log", "VideoScanCore swift build --build-tests")
+                if rc != 0:
+                    lane.ran, lane.rc, lane.seconds = True, rc, el
+                    lane.reason = f"build failed (exit {rc}) — see {run_dir}/core-build.log"
+                    out.line("FAILED", f"VideoScanCore swift build {fmt_secs(el)}: exit {rc}", "FAILED")
+                else:
+                    if el:
+                        out.line("BUILD", f"VideoScanCore (swift build --build-tests) {'.' * 8} {fmt_secs(el)}", "BUILD")
+                    out.line("RUN", f"core, Debug, from the built bundle ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
+                    lane.ran, lane.expected = True, sum(p.tests for p in core)
+                    lane.exact = exact(core)
+                    phase(phase="core: testing", done=out.done, total=out.expected)
+                    cases = [c for p in core for c in p.cases]
+                    lane.rc, lane.seconds = r.stream(core_test_cmd(wt, core_filter(suites, cases)), "core.log",
+                                                     LANE_BUDGET["core"], parser=LineParser(), lane=lane)
+                    lane_end(out, lane, run_dir / "core.log")
         if "python" in a.kinds and py and "python" in missing:
             lanes.append(setup_lane("python", missing["python"]))
         elif "python" in a.kinds:
             lane = LaneResult("python")
             lanes.append(lane)
-            pyfiles = [p.path for p in py if p.kind == "python"]
+            targets = python_targets(py)
             interp, why = python_for_tests([base, BASE_REPO])
-            if not pyfiles:
+            if not targets:
                 lane.reason = "no Python tests selected"
             elif interp is None:
                 lane.reason = why
             else:
-                lane.ran, lane.expected = True, sum(p.tests for p in py if p.kind == "python")
-                out.line("RUN", f"python pytest via {interp[0]} ({len(pyfiles)} files, "
-                                f"~{sum(p.tests for p in py if p.kind == 'python')} tests)")
-                lane.rc, lane.seconds = r.stream(pytest_cmd(interp, pyfiles), "python.log", LANE_BUDGET["python"],
-                                                 cwd=wt, parser=LineParser(), lane=lane)
+                n = sum(p.tests for p in py if p.kind == "python")
+                lane.ran, lane.expected = True, n
+                lane.exact = exact([p for p in py if p.kind == "python"])
+                out.line("RUN", f"python pytest via {interp[0]} ({len({p.path for p in py if p.kind == 'python'})} files, ~{n} tests)")
+                phase(phase="python: testing", done=out.done, total=out.expected)
+                with contextlib.suppress(OSError):
+                    (run_dir / "tmp").mkdir(parents=True, exist_ok=True)
+                lane.rc, lane.seconds = rp.stream(pytest_cmd(interp, targets, run_dir / "pytest-tmp"), "python.log",
+                                                 LANE_BUDGET["python"], cwd=wt, parser=LineParser(), lane=lane)
                 # pytest exit 1 = some test failed (each one counted and named): the counts say it
                 if lane.rc == 1 and lane.failed:
                     lane.rc = 0
@@ -967,8 +1950,11 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 sl = LaneResult("shell", ran=True, rc=0)
                 lanes.append(sl)
                 out.line("RUN", f"shell self-tests ({len(shfiles)})")
+                phase(phase="shell: testing")
                 for sh in shfiles:
-                    rc, el = r.stream(["/bin/bash", sh], "shell.log", 900, cwd=wt)
+                    with contextlib.suppress(OSError):
+                        (run_dir / "tmp").mkdir(parents=True, exist_ok=True)
+                    rc, el = rp.stream(["/bin/bash", sh], "shell.log", 900, cwd=wt)
                     sl.seconds += el
                     ev = Event("OK" if rc == 0 else "FAILED", sh, el, "" if rc == 0 else f"exit {rc} — see {run_dir}/shell.log")
                     if rc == 0:
@@ -980,6 +1966,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 lane_end(out, sl, run_dir / "shell.log")
     except KeyboardInterrupt as e:
         r.stop()
+        rp.stop()
         mark_interrupted(out, lanes, e)
     return lanes
 
@@ -1000,9 +1987,14 @@ def lane_end(out: Out, lane: LaneResult, log: Path) -> None:
         extra = f", exit {lane.rc}" + (" (timed out)" if lane.rc == 124 else "")
     if lane.total == 0:
         extra += " — ZERO tests ran (red)"
+    elif lane.shrank and lane.exact:
+        lane.reason = lane.reason or f"ran {lane.total} of {lane.expected} the filter named"
+        extra += f" — ran {lane.total} of {lane.expected} the filter named (red)"
     elif lane.shrank:
         lane.reason = lane.reason or f"selection shrank: ran {lane.total} of ~{lane.expected}"
         extra += f" — selection shrank: ran {lane.total} of ~{lane.expected} (red)"
+    elif lane.exact and lane.ran:
+        extra += f" — ran {lane.total} of {lane.expected} the filter named"
     out.line("----------", f"{lane.name}: {lane.passed} passed, {lane.failed} failed, {lane.skipped} skipped"
                            f"{extra} ({fmt_secs(lane.seconds)})", lane.word)
     if lane.word == "RED" and not lane.failed:
@@ -1200,7 +2192,9 @@ def plan_line(a, host_label: str, ref_label: str, sha: str, picks: List[Pick], c
     est = "~10 min with a warm build" if a.mode == "smoke" else "1–2 h"
     s = (f"{a.mode} · {host_label} · {ref_label} {sha[:9]} · {', '.join(kinds) or '—'}"
          f"{f' ({corpus_note})' if corpus_note else ''} · {n} · {est}")
-    if a.mode == "smoke" and not a.stage_flags:
+    if getattr(a, "test_filter", None):
+        s += f" · --filter {a.filter!r}"
+    elif a.mode == "smoke" and not a.stage_flags:
         s += " · perf/stress left out (--perf --stress)"
     if dirty:
         s += "\n  uncommitted changes in your checkout are NOT included (it tests the commit)"
@@ -1228,6 +2222,8 @@ def nothing_here(a, picks: List[Pick]) -> bool:
 
 def _main(argv: Optional[Sequence[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["--core-exec"] and len(argv) == 3:       # internal: the Core lane's test child
+        return core_exec(argv[1], argv[2])
     # --ref-label is internal (the ssh caller passes the name the user typed)
     ref_label = None
     if "--ref-label" in argv:
@@ -1241,6 +2237,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     local_name = socket.gethostname().split(".")[0]
     target = None if a.on_host else ssh_target(a.host, None)
     base = BASE_REPO if (a.on_host or SCRIPT_REPO is None) else SCRIPT_REPO
+
+    if a.status:
+        for line in status_block(local_name):
+            print(line)
+        return 0
 
     if target and a.mode == "full" and a.host != "m4":
         print("run_tests: --full --host runs only on the M4 (its testbed, in its GUI session); app-hosted tests "
@@ -1265,6 +2266,22 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     manifest = json.loads(git(base, "show", f"{sha}:scripts/gauntlet/manifest.json"))
     files = git(base, "ls-tree", "-r", "--name-only", sha).splitlines()
     picks = select(manifest, files, a.stages, a.kinds) if a.mode == "smoke" else []
+    if a.test_filter is not None:          # also before a --host run: a no-match never reaches ssh
+        # The pool is every runnable file of the stages and kinds asked (not the smoke's few); the
+        # filter names the tests. Nothing matched: refused here, before a worktree, a lock or a build.
+        pool = select(manifest, files, a.stages, a.kinds, full=True)
+        picks = apply_filter(pool, a.test_filter, lambda paths: cat_files(base, sha, paths))
+        if not picks:
+            blocked = apply_filter([p for p in select(manifest, files, a.stages, a.kinds, full=True, everything=True)
+                                    if p not in pool], a.test_filter, lambda paths: cat_files(base, sha, paths))
+            why = ""
+            if blocked:
+                reasons = {e["path"]: e.get("blocked_reason", "") for e in manifest.get("assignments", [])}
+                why = "; it matches only tests that cannot run here: " + "; ".join(
+                    f"{Path(p.path).name} ({reasons.get(p.path, '')[:80]})" for p in blocked[:5])
+            print(f"run_tests: --filter {a.filter!r} matches no test at {sha[:9]} "
+                  f"({', '.join(sorted(a.kinds))}; {', '.join(a.stages)}){why}", file=sys.stderr)
+            return 2
 
     if a.list:
         return print_list(a, picks, sha, ref_label)
@@ -1395,21 +2412,25 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     # ── on this Mac ──
     if a.dry_run:
         print(plan_line(a, host_label, ref_label, sha, picks, corpus_note, dirty))
-        print(f"+ worktree {RUN_WT} detached at {sha[:9]} (from {base}); DerivedData {DD}")
+        wt, dd = slot_paths(0)
+        print(f"+ a side worktree slot at {sha[:9]} (one of {N_SLOTS}: {RUN_WT}[-2|-3], from {base}); "
+              f"its DerivedData ({DD}[-2|-3]) — shown here for slot 1")
         if a.mode == "full":
             for c in full_commands(a, local_key):
                 print("+ " + " ".join(shlex.quote(x) for x in c))
             return 0
-        app = sorted({s for p in picks if p.kind == "app" for s in p.suites})
-        core = sorted({s for p in picks if p.kind == "core" for s in p.suites})
+        app = [p for p in picks if p.kind == "app"]
+        core = [p for p in picks if p.kind == "core"]
         if app:
-            print("+ " + " ".join(shlex.quote(x) for x in app_build_cmd(RUN_WT)))
-            print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(RUN_WT, app)))
+            print("+ " + " ".join(shlex.quote(x) for x in app_build_cmd(wt, dd)))
+            print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(wt, app_selectors(app), dd, Path("<run>/app.xcresult"))))
         if core:
-            print("+ " + " ".join(shlex.quote(x) for x in core_cmd(RUN_WT, core)))
-        pyf = [p.path for p in picks if p.kind == "python"]
+            print("+ " + " ".join(shlex.quote(x) for x in core_build_cmd(wt)))
+            print("+ " + " ".join(shlex.quote(x) for x in core_test_cmd(
+                wt, core_filter(sorted({s for p in core for s in p.suites}), [c for p in core for c in p.cases]))))
+        pyf = python_targets(picks)
         if pyf:
-            print("+ " + " ".join(shlex.quote(x) for x in pytest_cmd(["<python>"], pyf)))
+            print("+ " + " ".join(shlex.quote(x) for x in pytest_cmd(["<python>"], pyf, Path("<run>/pytest-tmp"))))
         return 0
 
     if a.mode == "full" and local_key == "ultra":
@@ -1441,53 +2462,83 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             return 130
     CACHE.mkdir(parents=True, exist_ok=True)
     info = f"run_tests {a.mode} sha={sha[:9]} since {time.strftime('%F %T')}"
-    held: List[int] = []
+    # The only whole-run lock left is the M4 testbed's (its daily run has strict timing budgets).
+    # Here, the shared things are the slots (worktree + DerivedData) and their builds: see acquire_slot.
+    if local_key == "m4":
+        try:
+            take_lock(M4_LOCKDIR, info)
+        except Busy as e:
+            print(f"run_tests: busy — the M4 testbed lock is held: {e} (nothing queued)", file=sys.stderr)
+            for line in status_block(local_name, with_m4=False, disk=False):
+                print(line, file=sys.stderr)
+            return 3
+    live = LiveRun({"argv": argv, "mode": a.mode, "filter": a.filter, "sha": sha, "host": local_name,
+                    "phase": "taking a side worktree", "slot": "?"})
     try:
-        held.append(take_lock(CACHE / "lock", info))
-        if local_key == "m4":
-            held.append(take_lock(M4_LOCKDIR, info))
-    except Busy as e:
-        print(f"run_tests: busy — {e} (try again when it is done; nothing queued)", file=sys.stderr)
-        return 3
-    try:
-        prepare_worktree(base, RUN_WT, sha)
-    except Refused as e:
-        print(f"run_tests: REFUSED — {e}", file=sys.stderr)
-        return 1
-    (CACHE / "runs").mkdir(exist_ok=True)
-    prune_runs(CACHE / "runs", KEEP_RUNS - 1)
-    run_dir = CACHE / "runs" / time.strftime(f"%Y%m%d-%H%M%S-{a.mode}")
-    run_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            slot = acquire_slot(base, sha)
+        except Busy as e:
+            print(f"run_tests: busy — {e} (nothing queued; try again when one finishes)", file=sys.stderr)
+            for line in status_block(local_name, with_m4=False, disk=False):
+                print(line, file=sys.stderr)
+            return 3
+        except Refused as e:
+            print(f"run_tests: REFUSED — {e}", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            out.plain("cancelled (while taking a side worktree; nothing ran)")
+            return 130
+        live.update(slot=slot.label, phase="starting")
+        out.on_progress = lambda n: live.update(done=n)
+        (CACHE / "runs").mkdir(exist_ok=True)
+        prune_runs(CACHE / "runs", KEEP_RUNS - 1)
+        run_dir = new_run_dir(a.mode)
+        live.update(run_dir=str(run_dir))
 
-    t0 = time.monotonic()
-    if a.mode == "full":
-        lanes = run_full(a, out, run_dir, local_key, missing)
-    else:
-        nlanes = len([k for k in ("app", "core", "python") if k in a.kinds])
-        header = (f"smoke · {host_label} · {ref_label} {sha[:9]} · {nlanes} lanes, "
-                  f"~{sum(p.tests for p in picks)} tests")
-        lanes = run_lanes(a, picks, RUN_WT, base, out, run_dir, header, missing)
-    if "corpus" in a.kinds and not a.on_host:
-        lanes.append(LaneResult("corpus", reason=corpus_why or "runs from the Ultra with --host m4"))
-    return summary(out, lanes, time.monotonic() - t0, run_dir)
+        t0 = time.monotonic()
+        if a.mode == "full":
+            lanes = run_full(a, out, run_dir, local_key, missing, slot=slot, live=live)
+        else:
+            nlanes = len([k for k in ("app", "core", "python") if k in a.kinds])
+            flt = f" · --filter {a.filter!r}" if a.filter else ""
+            header = (f"smoke · {host_label} · {ref_label} {sha[:9]} · slot {slot.label} · {nlanes} lanes, "
+                      f"~{sum(p.tests for p in picks)} tests{flt}")
+            lanes = run_lanes(a, picks, slot.wt, base, out, run_dir, header, missing, slot=slot, live=live, sha=sha)
+        if "corpus" in a.kinds and not a.on_host:
+            lanes.append(LaneResult("corpus", reason=corpus_why or "runs from the Ultra with --host m4"))
+        return summary(out, lanes, time.monotonic() - t0, run_dir)
+    finally:
+        live.close()
 
 
-def full_commands(a, local_key: Optional[str]) -> List[List[str]]:
-    wt = RUN_WT
+def new_run_dir(mode: str) -> Path:
+    """This run's own folder (concurrent runs: the pid keeps two started in one second apart)."""
+    d = CACHE / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{mode}-{os.getpid()}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def full_commands(a, local_key: Optional[str], slot: Optional[Slot] = None) -> List[List[str]]:
+    wt, dd = (slot.wt, slot.dd) if slot is not None else slot_paths(0)
     cmds = []
     if a.kinds & {"app", "core"}:
         cmds.append(["/bin/bash", str(wt / "scripts" / "nightly_local_tests.sh"), "--on-demand", "<run dir>/full",
-                     "--repo", str(wt), "--dd", str(DD) + "-full"])
+                     "--repo", str(wt), "--dd", str(dd) + "-full"])
     if "python" in a.kinds:
         cmds.append(["PYTHON=<python with pytest>", "/bin/bash", str(wt / "scripts" / "run_python_tests.sh")])
     return cmds
 
 
 def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
-             missing: Optional[Dict[str, List[str]]] = None) -> List[LaneResult]:
+             missing: Optional[Dict[str, List[str]]] = None, slot: Optional[Slot] = None,
+             live: Optional[LiveRun] = None) -> List[LaneResult]:
     """--full: the nightly's own runners, unchanged (one engine). Their logs are parsed for the
-    live display; their own verdict (exit code) decides the lane. `missing` as in run_lanes."""
+    live display; their own verdict (exit code) decides the lane. `missing` as in run_lanes.
+    In the slot's worktree; the Release DerivedData (<slot dd>-full) is one --full run's at a time
+    (the slot's .full lock — a second --full at that commit waits, a smoke there does not)."""
     missing = missing or {}
+    wt, dd = (slot.wt, slot.dd) if slot is not None else slot_paths(0)
+    full_fd = None
     swift_missing = list(dict.fromkeys(missing.get("app", []) + missing.get("core", [])))
     env = dict(os.environ)
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin")
@@ -1495,14 +2546,23 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
     lanes: List[LaneResult] = []
     out.line("==========", f"full · nightly_local_tests.sh --on-demand + run_python_tests.sh")
     try:
+        if slot is not None and a.kinds & {"app", "core"}:
+            full_fd = _lock_fd(slot_dir() / f"{slot.index}.full")
+            if not _flock(full_fd, fcntl.LOCK_EX):
+                out.line("WAIT", f"waiting for the other --full run in slot {slot.label} (its Release DerivedData)", "BUILD")
+                if live is not None:
+                    live.update(phase="waiting for another --full run")
+                fcntl.flock(full_fd, fcntl.LOCK_EX)
+        if live is not None:
+            live.update(phase="full: nightly runners")
         if a.kinds & {"app", "core"} and swift_missing:
             lanes.append(setup_lane("app+core (nightly runner, Release)", swift_missing))
         elif a.kinds & {"app", "core"}:
             lane = LaneResult("app+core (nightly runner, Release)", ran=True)
             lanes.append(lane)
             (run_dir / "full").mkdir(exist_ok=True)
-            cmd = ["/bin/bash", str(RUN_WT / "scripts" / "nightly_local_tests.sh"), "--on-demand", str(run_dir / "full"),
-                   "--repo", str(RUN_WT), "--dd", str(DD) + "-full"]
+            cmd = ["/bin/bash", str(wt / "scripts" / "nightly_local_tests.sh"), "--on-demand", str(run_dir / "full"),
+                   "--repo", str(wt), "--dd", str(dd) + "-full"]
             out.line("RUN", lane.name + f" — its own log: {run_dir}/full/suite.log")
             # The runner writes its test output to files, not stdout: tail them live.
             lane.rc, lane.seconds = tail_while(r, cmd, [run_dir / "full" / "suite-core-test.log",
@@ -1522,8 +2582,8 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
                 lane.ran = True
                 r.env["PYTHON"] = interp[0]
                 out.line("RUN", f"{lane.name} via {interp[0]}")
-                lane.rc, lane.seconds = r.stream(["/bin/bash", str(RUN_WT / "scripts" / "run_python_tests.sh")],
-                                                 "python-full.log", 3600, cwd=RUN_WT, parser=LineParser(), lane=lane)
+                lane.rc, lane.seconds = r.stream(["/bin/bash", str(wt / "scripts" / "run_python_tests.sh")],
+                                                 "python-full.log", 3600, cwd=wt, parser=LineParser(), lane=lane)
                 if lane.total == 0 and lane.rc == 0:
                     # run_python_tests.sh uses -q (dots, not names): trust its own summary line
                     txt = (run_dir / "python-full.log").read_text(errors="replace")
@@ -1533,6 +2593,9 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
     except KeyboardInterrupt as e:
         r.stop()
         mark_interrupted(out, lanes, e)
+    finally:
+        if full_fd is not None:
+            _close(full_fd)
     return lanes
 
 
@@ -1583,7 +2646,9 @@ def print_list(a, picks: List[Pick], sha: str, ref_label: str) -> int:
     by: Dict[Tuple[str, str], List[Pick]] = {}
     for p in picks:
         by.setdefault((p.kind if p.kind != "shell" else "python", p.module), []).append(p)
-    print(f"{a.mode} selection at {ref_label} {sha[:9]} (from scripts/gauntlet/manifest.json)")
+    flt = getattr(a, "test_filter", None)
+    print(f"{a.mode} selection at {ref_label} {sha[:9]} (from scripts/gauntlet/manifest.json)"
+          + (f" · --filter {a.filter!r} over every runnable file of {', '.join(a.stages)}" if flt else ""))
     if a.mode == "full":
         print("  --full runs what the nightly runs: nightly_local_tests.sh --on-demand (app + Core, Release),"
               " run_python_tests.sh")
@@ -1591,12 +2656,16 @@ def print_list(a, picks: List[Pick], sha: str, ref_label: str) -> int:
     for (kind, mod) in sorted(by):
         ps = by[(kind, mod)]
         print(f"  {kind:6} {mod:28} " + "; ".join(f"{p.stage}: {', '.join(p.suites)} ({p.tests})" for p in ps))
+        if flt:
+            for p in ps:
+                for c in p.cases:
+                    print(f"  {'':6} {'':28}   {c[0] or Path(p.path).name}.{c[1]}" + (f"  [{c[2]}]" if c[2] and c[2] != c[1] else ""))
     for kind in ("app", "core", "python"):
         ks = [p for p in picks if (p.kind if p.kind != "shell" else "python") == kind]
         if ks:
             print(f"# {kind}: {len(ks)} files, {len({s for p in ks for s in p.suites})} suites, ~{sum(p.tests for p in ks)} tests")
     print(f"# total ~{sum(p.tests for p in picks)} tests")
-    if not a.stage_flags:
+    if not a.stage_flags and not flt:
         print("# not in the default smoke: performance, stress (add --perf / --stress)")
     print("# not in v1: UI tests (need the GUI session; broken, GH #408) · the hallie stage (the hallie eval's)")
     print("# corpus: only from the Ultra with --host m4 (corpus_run.sh run check --smoke --wait)")
