@@ -215,6 +215,18 @@ struct RAMDiskNegativeMatrixTests {
         // …and the boundary: output that exactly fills the cap is not known to be whole.
         "/dev/disk912345" + String(repeating: " ", count: 4096 - "/dev/disk912345".utf8.count),
         "/dev/disk912345" + String(repeating: "\n", count: 8000),
+        // Codex r2 P1: a UTF-8 BOM first. The runner collects 4096 RAW bytes;
+        // decoding strips the 3-byte BOM, so a count taken AFTER decoding
+        // reads 4093 — "under the cap" — and the second node is gone.
+        "\u{FEFF}/dev/disk912345" + String(repeating: " ", count: 4096 - 3 - "/dev/disk912345".utf8.count) + "\n/dev/disk912346\n",
+        "\u{FEFF}/dev/disk912345\n",                    // a BOM alone: not hdiutil's bytes
+        "/dev/disk912345\u{0}\n",                       // a NUL after the node
+        "/dev/disk912345\n\u{0}",
+        "/dev/disk٩١٢٣٤٥\n",                            // Arabic-Indic digits
+        "/dev/disk91234５\n",                            // one full-width digit among ASCII ones
+        "/dev/disk912345\u{00A0}\n",                    // a no-break space is not hdiutil's padding
+        "/dev/disk912345" + String(repeating: " ", count: 400) + "\n",   // far longer than hdiutil's ~53-byte line
+        " /dev/disk912345\n",                           // leading space: not hdiutil's shape
     ]
 
     @Test("attach exits 0 but prints garbage: REFUSED before any erase — no diskutil, no detach",
@@ -243,20 +255,32 @@ struct RAMDiskNegativeMatrixTests {
 
     @Test("the device node parser accepts exactly hdiutil's own shape")
     func ownedDeviceParser() {
-        let cap = RAMDisk.attachOutputCap
-        #expect(cap == 4096)
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk4          \t         \n", collectionCap: cap)?.node == "/dev/disk4")
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk27\n", collectionCap: cap)?.node == "/dev/disk27")
-        #expect(RAMDisk.OwnedDevice(attachOutput: "/dev/disk1", collectionCap: cap)?.node == "/dev/disk1")
-        for bad in Self.garbage + ["/dev/disk04", "/dev/disk1234567", "/dev/disk4s", "/dev/disk-4", "/dev/disk4\u{0}"] {
-            // What the runner hands over: at most `cap` bytes of it.
-            let collected = String(decoding: Data(bad.utf8).prefix(cap), as: UTF8.self)
-            #expect(RAMDisk.OwnedDevice(attachOutput: collected, collectionCap: cap) == nil, "\(bad.prefix(60).debugDescription)… (\(bad.utf8.count) bytes)")
+        func parse(_ text: String) -> String? { RAMDisk.OwnedDevice(rawAttachOutput: Data(text.utf8))?.node }
+        #expect(parse("/dev/disk4          \t                              \t\n") == "/dev/disk4")     // hdiutil's own 53-byte line
+        #expect(parse("/dev/disk27\n") == "/dev/disk27")
+        #expect(parse("/dev/disk1") == "/dev/disk1")
+        #expect(parse("/dev/disk123456\r\n") == "/dev/disk123456")
+        for bad in Self.garbage + ["/dev/disk04", "/dev/disk1234567", "/dev/disk4s", "/dev/disk-4", "/dev/disk4\u{0}", "/dev/disk4\u{B}"] {
+            #expect(parse(bad) == nil, "\(bad.prefix(60).debugDescription)… (\(bad.utf8.count) bytes)")
         }
-        // One byte under the cap is whole; at the cap it is not.
+        // The bound: exactly at it is whole; one byte over is not.
+        let max = RAMDisk.maxAttachOutputBytes
+        #expect(max == 256)
         let node = "/dev/disk7"
-        #expect(RAMDisk.OwnedDevice(attachOutput: node + String(repeating: " ", count: cap - 1 - node.utf8.count), collectionCap: cap)?.node == node)
-        #expect(RAMDisk.OwnedDevice(attachOutput: node + String(repeating: " ", count: cap - node.utf8.count), collectionCap: cap) == nil)
+        #expect(parse(node + String(repeating: " ", count: max - node.utf8.count)) == node)
+        #expect(parse(node + String(repeating: " ", count: max + 1 - node.utf8.count)) == nil)
+        // Raw bytes that are not UTF-8 at all.
+        #expect(RAMDisk.OwnedDevice(rawAttachOutput: Data([0xFF, 0xFE] + Array("/dev/disk7\n".utf8))) == nil)
+        #expect(RAMDisk.OwnedDevice(rawAttachOutput: Data(Array("/dev/disk7".utf8) + [0x80, 0x0A])) == nil)
+
+        // The collector keeps one byte past the bound and counts everything,
+        // however the pipe chunks it — over-long output is never a prefix.
+        let raw = RAMDisk.RawOutput(limit: max)
+        raw.append(Data("/dev/disk7".utf8))
+        for _ in 0..<50 { raw.append(Data(repeating: 0x20, count: 100)) }
+        raw.append(Data("\n/dev/disk8\n".utf8))
+        #expect(raw.data.count == max + 1 && raw.byteCount == 10 + 5000 + 12)
+        #expect(RAMDisk.OwnedDevice(rawAttachOutput: raw.data) == nil)
     }
 
     // MARK: - eraseVolume fails

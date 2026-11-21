@@ -40,29 +40,63 @@ actor RAMDisk {
     struct OwnedDevice: Sendable, Equatable {
         let node: String
 
-        /// nil unless the WHOLE of what attach printed is exactly one
-        /// whole-disk node `/dev/diskN` (N ≥ 1) plus whitespace. Refused:
-        /// empty output, two lines, a slice (`/dev/disk4s1`), a mount
-        /// point, a volume name, text around the node, and `/dev/disk0`
-        /// (always the internal boot disk — a RAM device can never be
-        /// given that number).
+        /// nil unless the WHOLE of what attach printed — judged on its RAW
+        /// BYTES, before any decoding — is exactly hdiutil's own line:
         ///
-        /// `collectionCap` is the `stdoutLimitBytes` the output was
-        /// collected under. A copy that REACHED the cap may be a truncated
-        /// prefix of something longer — "/dev/disk5", padding up to the
-        /// cap, then a second node the runner dropped — so it is not the
-        /// whole output and is refused (Codex r1 P1, 2026-11-21).
-        init?(attachOutput: String, collectionCap: Int) {
-            guard attachOutput.utf8.count < collectionCap else { return nil }
-            let text = attachOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            let prefix = "/dev/disk"
-            guard text.hasPrefix(prefix) else { return nil }
-            let digits = text.dropFirst(prefix.count)
-            guard (1...6).contains(digits.count),
-                  digits.allSatisfy({ $0.isASCII && $0.isNumber }),
-                  digits.first != "0" else { return nil }
-            node = text
+        ///     "/dev/disk" · 1–6 ASCII digits, no leading zero · then only
+        ///     spaces, tabs, CR and LF · at most `maxAttachOutputBytes` in all
+        ///
+        /// Refused: empty output, a second line with content, a slice
+        /// (`/dev/disk4s1`), a mount point, a volume name, text before or
+        /// after the node, `/dev/disk0` (always the internal boot disk),
+        /// any byte that is not ASCII (a BOM, a no-break space, Unicode
+        /// digits), a NUL, and anything longer than the bound.
+        ///
+        /// Why raw bytes (Codex r1 P1, r2 P1; 2026-11-21): a decoded String
+        /// is not what the tool wrote. The runner's collected copy is cut at
+        /// a cap, and decoding then DROPS a leading UTF-8 BOM — so
+        /// "BOM · /dev/disk5 · padding to the cap · a second node" arrived
+        /// as a clean one-node string three bytes UNDER the cap. `raw` is
+        /// every byte attach wrote, up to one past the bound (`RawOutput`),
+        /// so over-long output is seen as over-long, never as a prefix.
+        init?(rawAttachOutput raw: Data) {
+            guard !raw.isEmpty, raw.count <= RAMDisk.maxAttachOutputBytes else { return nil }
+            let bytes = [UInt8](raw)
+            let prefix = Array("/dev/disk".utf8)
+            guard bytes.starts(with: prefix) else { return nil }
+            var index = prefix.count
+            let digitsStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+            let digits = bytes[digitsStart..<index]
+            guard (1...6).contains(digits.count), digits.first != 0x30 else { return nil }
+            // Nothing after the node but hdiutil's padding.
+            guard bytes[index...].allSatisfy({ $0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D }) else { return nil }
+            node = String(decoding: bytes[..<index], as: UTF8.self)     // pure ASCII by construction
         }
+    }
+
+    /// The raw bytes one command wrote to stdout, kept up to `limit + 1`
+    /// (one past the bound is enough to know the output was longer) and
+    /// counted in full. Fed from the runner's `stdoutData` callback — the
+    /// pipe's own chunks, before any cap or decoding.
+    /// (C++: a mutex-guarded std::vector<uint8_t> with a high-water mark.)
+    final class RawOutput: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var kept = Data()
+        private var total = 0
+
+        init(limit: Int) { self.limit = limit }
+
+        func append(_ chunk: Data) {
+            lock.lock(); defer { lock.unlock() }
+            total += chunk.count
+            let room = limit + 1 - kept.count
+            if room > 0 { kept.append(chunk.prefix(room)) }
+        }
+
+        var data: Data { lock.lock(); defer { lock.unlock() }; return kept }
+        var byteCount: Int { lock.lock(); defer { lock.unlock() }; return total }
     }
 
     /// Per-command deadlines. Production values are generous (a 16 GB RAM
@@ -75,9 +109,11 @@ actor RAMDisk {
     }
 
     static let volumeName = "VideoScan_Temp"
-    /// The cap attach's stdout is collected under (hdiutil prints ~40
-    /// bytes). `OwnedDevice` refuses output that reaches it.
-    static let attachOutputCap = 4096
+    /// The most `hdiutil attach -nomount` may print and still be believed.
+    /// Its line is a 20-column device field, a tab, a 30-column (empty)
+    /// content field, a tab and a newline — about 53 bytes; 256 leaves
+    /// room for a wider layout without admitting pages of text.
+    static let maxAttachOutputBytes = 256
     static let hdiutil = "/usr/bin/hdiutil"
     static let diskutil = "/usr/sbin/diskutil"
 
@@ -127,19 +163,23 @@ actor RAMDisk {
     /// Order: every refusal happens BEFORE the erase.
     private static func attachAndFormat(sectors: Int, timeouts: Timeouts) async -> OwnedDevice? {
         // Step 1: create the RAM device.
+        // stdout is taken RAW (stdoutData) and nothing is collected as a
+        // String: the device node is validated on the bytes attach wrote.
+        let raw = RawOutput(limit: maxAttachOutputBytes)
         let attach = await ProcessRunner.runProcess(
             executable: hdiutil, arguments: ["attach", "-nomount", "ram://\(sectors)"],
-            stdoutLimitBytes: attachOutputCap, stderrLimitBytes: 16 * 1024,
+            stdoutData: { raw.append($0) },
+            stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024,
             deadlineSeconds: timeouts.attachSeconds, killGraceSeconds: timeouts.killGraceSeconds)
         guard attach.launched, attach.exitCode == 0 else {
             note("ram disk: hdiutil attach failed (\(describe(attach))) — no RAM disk; nothing erased, nothing detached")
             return nil
         }
-        guard let owned = OwnedDevice(attachOutput: attach.stdout ?? "", collectionCap: attachOutputCap) else {
+        guard let owned = OwnedDevice(rawAttachOutput: raw.data) else {
             // Refuse rather than guess: `diskutil eraseVolume` accepts a
             // mount point or a volume name as its device argument.
-            note("ram disk: REFUSED — hdiutil attach exited 0 but printed \((attach.stdout ?? "").utf8.count) byte(s) "
-                 + "\(String((attach.stdout ?? "").prefix(200)).debugDescription), not exactly one /dev/diskN; nothing erased, nothing detached (a RAM device it made, if any, is left for the quit sweep)")
+            note("ram disk: REFUSED — hdiutil attach exited 0 but printed \(raw.byteCount) byte(s) "
+                 + "\(String(decoding: raw.data.prefix(80), as: UTF8.self).debugDescription), not exactly one /dev/diskN; nothing erased, nothing detached (a RAM device it made, if any, is left for the quit sweep)")
             return nil
         }
 
