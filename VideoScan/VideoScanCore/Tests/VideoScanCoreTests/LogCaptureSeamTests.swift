@@ -39,7 +39,7 @@ struct LogCaptureSeamTests {
         }
         #expect(mine.count == 8 * 50 + 1)
         #expect(mine.lines.allSatisfy { $0.hasPrefix(tag) }, "a line from another case reached this capture")
-        #expect(stray.count == 0, "a scoped line fell through to the default")
+        #expect(stray.lines.isEmpty, "a scoped line fell through to the default")
         #expect(LogScope.current == nil, "the binding ended with its closure")
     }
 
@@ -93,7 +93,7 @@ struct LogCaptureSeamTests {
         }
         #expect(out == "mocked\n")
         #expect(mine.lines == ["from detached"])
-        #expect(stray.count == 0)
+        #expect(stray.lines.isEmpty)
     }
 
     @Test("ProcessRunner.detachedKeepingExecutor is the same helper: it carries the log sink too")
@@ -103,7 +103,7 @@ struct LogCaptureSeamTests {
             await ProcessRunner.detachedKeepingExecutor { logLine("x", default: stray) }.value
         }
         #expect(mine.lines == ["x"])
-        #expect(stray.count == 0)
+        #expect(stray.lines.isEmpty)
     }
 
     @Test("TaskTreeScope.current.run re-enters the scope on a GCD queue and in a detached task")
@@ -175,7 +175,7 @@ struct LogCaptureSeamTests {
         #expect(log.lines(matching: { $0.hasPrefix("trim") }) == ["trim done: b.mov — ok"])
         #expect(log.joined.split(separator: "\n").count == 3 && log.count == 3)
         log.clear()
-        #expect(log.count == 0 && log.lines.isEmpty)
+        #expect(log.lines.isEmpty)
     }
 
     @Test("close() discards later writes; start(append: true) reopens and keeps; start(append: false) empties")
