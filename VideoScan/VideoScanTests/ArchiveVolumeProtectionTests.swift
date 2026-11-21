@@ -587,11 +587,15 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2,   // SignatureVerification 1 → 0: Trash only (codex r1 F1)
-        // Volume rescue 0 → 1 (2026-11-21): unlink of THIS file's own parked
-        // partial under `.videoscan-partial/` once its copy is whole and
-        // size-checked. Never a final name, never a catalog record's file —
-        // a rescue never replaces or removes what is at a destination name.
-        "VideoScan/Volumes/VolumeCompare.swift": 1,
+        // Volume rescue 0 → 1 (2026-11-21) → 2 (Codex GH #501 r1 #1/#2):
+        // RsyncStaging's two dirfd-relative unlinkat calls — the app's OWN
+        // staged copy in `.videoscan-partial` (a regular file, reached
+        // through the staging folder opened O_NOFOLLOW) after the final
+        // name was found taken at the publish, and that folder itself with
+        // AT_REMOVEDIR (empty only). Never a final name, never a catalog
+        // record's file — a rescue never replaces or removes what is at a
+        // destination name.
+        "VideoScan/Volumes/VolumeCompare.swift": 2,
         // GH #143: THE one Trash call. Every media Trash door reaches it —
         // the engine's disk turn (Junk, ⌘⌫, Prune, Discard), Delete
         // Duplicates' quarantine step (DeleteDuplicatesJob.moveToTrash and
@@ -679,6 +683,8 @@ struct ArchiveVolumeProtectionSourceSensor {
             "POI folder moves under App Support (never media)"),
         "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
             "a verified rescue partial → a FREE destination name; its ONLY publish — a taken name is refused, never replaced (2026-11-21)"),
+        "VideoScan/Volumes/VolumeCompare.swift": Reviewed(count: 1, reason:
+            "rsync rescue's ONLY publish (RsyncStaging.publish): its own size-checked staged copy in `.videoscan-partial` → the destination name, dirfd-relative; EEXIST is refused, never replaced (Codex GH #501 r1 #2)"),
         // NEW (10/7 codex batch: fix/family-writes-n1012 added the helper;
         // fix/p1-relocate-witness-and-rulings had a private copy in
         // FamilyIdentityDecisions, now delegating here — one site, not two).
