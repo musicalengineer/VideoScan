@@ -36974,6 +36974,9 @@
         "HashReadFaultPromoteTests"
       ],
       "tests": [
+        "aFlippedDestinationReadAdoptsNothing",
+        "aFlippedDestinationReadOnTheManifestLegLinksNothing",
+        "aFlippedDestinationReadOnTheReconcileLegIndexesNothing",
         "aFlippedProvingReadAdoptsAnotherFile",
         "nothingIsPromoted",
         "theConfirmingReadBeforeAnAdoption",
@@ -36988,7 +36991,10 @@
         "HashReadFaultPruneTests"
       ],
       "tests": [
+        "aFaultInTheCopysSecondReadHoldsIt",
         "aFaultedReadInTheJobMovesNothing",
+        "aFlippedReadOfACopyOneBitApartMakesNoProof",
+        "aFlippedReadOfACopyOneBitApartMovesNothingInTheJob",
         "aShortReadOfALongerCopyMakesAFalseProof",
         "anUnprovenReadMakesNoProof"
       ]
@@ -37001,8 +37007,13 @@
         "HashReadFaultVerifyArchiveTests"
       ],
       "tests": [
+        "aFailedSecondReadKeepsTheStoredFingerprint",
         "aFaultedReadNeverVerifies",
-        "aShortReadOfALongerArchiveFileVerifies"
+        "aFileThatShrinksUnderTheReadIsNeverRestored",
+        "aShortReadOfALongerArchiveFileVerifies",
+        "oneFlippedReadDoesNotClearATrueFingerprint",
+        "oneReadThatMatchesTheManifestDoesNotReplaceAStoredFingerprint",
+        "twoReadsThatAgreeWithTheManifestReplaceAStaleFingerprintAndSayIt"
       ]
     },
     {
@@ -37014,7 +37025,7 @@
         "HashReadSeamSensorTests"
       ],
       "tests": [
-        "aCompleteReadOfAShorterFileIsNotAReadFailure",
+        "aFileWhoseSizeMovesUnderTheReadYieldsNoDigest",
         "bitFlipChangesTheDigest",
         "containedReadIsSeamed",
         "copyVerifyPublishRefuses",
@@ -37027,6 +37038,7 @@
         "promoteAlwaysPassesTheExpectedDigest",
         "theEngineReadsItOnce",
         "theHookIsTaskLocal",
+        "theWholeReadRule",
         "withoutAReferenceASourceFlipIsInvisible"
       ]
     },
@@ -42542,7 +42554,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 969,
+      "expected_floor": 981,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
