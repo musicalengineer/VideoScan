@@ -480,6 +480,23 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraCanaryCommandTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EraCanaryCommandTests"
+      ],
+      "tests": [
+        "blockingFormRunsForReal",
+        "exitZeroWithoutAStill",
+        "hangIsStoppedAtTheCap",
+        "launchFailureIsNamed",
+        "nonzeroExitIsNamed",
+        "silentNonzeroExitIsNamed",
+        "theTwoCommandLines"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraJobConvergenceTests.swift",
       "stage": "regression",
       "suites": [
@@ -42178,7 +42195,7 @@
       ],
       "expected_floor": 887,
       "name": "regression",
-      "package_expected_floor": 339,
+      "package_expected_floor": 346,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -42235,7 +42252,8 @@
         "VideoScanCoreTests.BackgroundQuitMarkerSweepTests",
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
-        "VideoScanCoreTests.CatalogCloseDrainTests"
+        "VideoScanCoreTests.CatalogCloseDrainTests",
+        "VideoScanCoreTests.EraCanaryCommandTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

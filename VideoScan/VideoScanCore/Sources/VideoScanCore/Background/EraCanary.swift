@@ -69,21 +69,29 @@ public struct EraCanary: Sendable {
     }
 
     /// nil on exit 0, else the last stderr line (or the exit status). 60 s cap.
+    ///
+    /// Through ProcessRunner (2026-11-21; it was a hand-rolled `Process()`
+    /// with a usleep poll): same executable, argv and environment; stdout is
+    /// still discarded (limit 0); the 60 s cap is the runner's deadline, which
+    /// now also escalates SIGTERM → SIGKILL → abandon instead of sending one
+    /// SIGTERM and walking away. Blocking, as before — the callers are a
+    /// synchronous init and a once-in-a-while check, never a hot path.
+    /// Memory: at most 256 KB of the tool's stderr (`-loglevel error`: a line
+    /// or two).
     static func run(_ tool: String, _ args: [String], environment: [String: String]) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: tool)
-        p.arguments = args
-        p.environment = environment
-        p.standardOutput = FileHandle.nullDevice
-        let err = Pipe()
-        p.standardError = err
-        do { try p.run() } catch { return "could not start \(tool): \(error)" }
-        let deadline = Date().addingTimeInterval(60)
-        while p.isRunning, Date() < deadline { usleep(20_000) }
-        if p.isRunning { p.terminate(); return "\(tool) ran past 60 s" }
-        let words = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard p.terminationStatus != 0 else { return nil }
-        let last = words.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
-        return String((last ?? "exit \(p.terminationStatus)").prefix(300))
+        let result = ProcessRunner.runProcessBlocking(executable: tool, arguments: args, environment: environment,
+                                                      stdoutLimitBytes: 0, deadlineSeconds: capSeconds)
+        guard result.launched else { return "could not start \(tool): \(result.stderr)" }
+        // Exit status first: a child that finished in the instant the
+        // deadline fired did its work (ProcessRunner.Result.timedOut's note).
+        guard result.exitCode != 0 else { return nil }
+        if result.timedOut { return "\(tool) ran past \(Int(capSeconds)) s" }
+        let last = result.stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+        return String((last ?? "exit \(result.exitCode)").prefix(300))
     }
+
+    /// The cap on one canary command. Task-local so a test of the "ran past"
+    /// row does not wait a minute; production never binds it.
+    /// (C++: a thread_local override that follows the coroutine.)
+    @TaskLocal static var capSeconds: Double = 60
 }
