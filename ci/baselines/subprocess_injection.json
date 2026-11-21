@@ -1,6 +1,8 @@
 {
   "note": "Subprocess-injection ratchet baseline. Every entry here is a PRE-EXISTING hit, grandfathered in. New hits fail the nightly job. Shrink this file, never grow it casually.",
-  "entry_count": 0,
-  "hit_count": 0,
-  "entries": {}
+  "entry_count": 1,
+  "hit_count": 1,
+  "entries": {
+    "shell-invocation|VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift|child.executable = \"/bin/sh\"": 1
+  }
 }
