@@ -30986,6 +30986,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodePreservationProofMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodePreservationProofMatrixTests"
+      ],
+      "tests": [
+        "aMasterDecodeThatMisbehavesIsNeverAPass",
+        "aMatchingProofPublishesAndReplaces",
+        "aProofThatHangsIsStalled",
+        "aRealMasterIsProvenThenReplaces",
+        "aShortMasterIsNotProven",
+        "aSourceDecodeThatMisbehavesIsNeverAPass",
+        "aVideoMismatchIsNotPublishedWithoutReplace",
+        "aVideoMismatchNeverReplaces",
+        "anAudioDecodeThatMisbehavesIsNeverAPass",
+        "anAudioMismatchNeverReplaces",
+        "stopAfterTheProofAnsweredNeverPublishes",
+        "stopDuringTheProofNeverPublishes",
+        "theEvidenceForALongTapeIsComputedInBudget",
+        "theEvidenceIsBounded",
+        "theEvidenceSentences",
+        "theProofPrecedesThePublishInTheSource"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TranscodeReplaceNegativeMatrixTests.swift",
       "stage": "regression",
       "suites": [
@@ -31008,7 +31034,7 @@
         "encodeMissingOutput",
         "encodeNonzeroExit",
         "encodeTruncated",
-        "preservationReplaceProvesLosslessOnlyAfterTheReplace",
+        "preservationReplaceProvesLosslessBeforeTheReplace",
         "stopAfterTheProbesAnsweredNeverPublishes",
         "stopAfterTheReplaceBeganFinishesAndSaysSo",
         "stopBeforeTheReplaceBeginsCancels",
@@ -42534,7 +42560,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 963,
+      "expected_floor": 979,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42792,7 +42818,8 @@
         "VideoScanTests/DedupeHashReadSeamTests",
         "VideoScanTests/DedupeHashReadSeamSensorTests",
         "VideoScanTests/HashReadFaultContentCopyProofTests",
-        "VideoScanTests/HashReadFaultDeleteDuplicatesTests"
+        "VideoScanTests/HashReadFaultDeleteDuplicatesTests",
+        "VideoScanTests/TranscodePreservationProofMatrixTests"
       ]
     },
     {

@@ -134,16 +134,28 @@ extension TranscodeJob {
                                                    archiveCheck: archiveCheck, trash: trash)
     }
 
-    /// What became of the original and of the new file — said on every
-    /// failed Replace. "removed" only when the cleanup said so.
-    nonisolated static func disposition(original: String, newFile: String, cleanup: PartialCleanup) -> String {
-        let what: String
+    /// What became of the new file. "removed" only when the cleanup said so.
+    nonisolated static func newFileDisposition(_ newFile: String, cleanup: PartialCleanup) -> String {
         switch cleanup {
-        case .removed: what = "the \(newFile) new file was removed"
-        case .alreadyGone: what = "the \(newFile) new file was no longer there to remove"
-        case .notRemoved(let why): what = "the \(newFile) new file was NOT removed: \(why)"
+        case .removed: "the \(newFile) new file was removed"
+        case .alreadyGone: "the \(newFile) new file was no longer there to remove"
+        case .notRemoved(let why): "the \(newFile) new file was NOT removed: \(why)"
         }
-        return "\(original) was not moved or changed; \(what)."
+    }
+
+    /// What became of the original and of the new file — said on every
+    /// failed Replace.
+    nonisolated static func disposition(original: String, newFile: String, cleanup: PartialCleanup) -> String {
+        "\(original) was not moved or changed; \(newFileDisposition(newFile, cleanup: cleanup))."
+    }
+
+    /// A new file that failed a proof when NO Replace was asked: the same
+    /// sentence family, minus the original (nothing was going to be
+    /// replaced). Says that nothing was published or catalogued and what
+    /// became of the new file (GH #501 / #502).
+    nonisolated static func notPublishedMessage(failure: String, cleanup: PartialCleanup) -> String {
+        (failure.hasSuffix(".") ? failure : failure + ".") + " Nothing was published or added to the catalog: "
+            + newFileDisposition("failed", cleanup: cleanup) + "."
     }
 
     /// The one sentence for a Replace refused because the new file could

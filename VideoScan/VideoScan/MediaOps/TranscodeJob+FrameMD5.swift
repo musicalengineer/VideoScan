@@ -9,6 +9,7 @@
 // file. Behavior unchanged.
 
 import Foundation
+import VideoScanCore
 
 // MARK: - Frame MD5 verification (preservation only)
 //
@@ -110,5 +111,68 @@ extension TranscodeJob {
     /// Used only for the archive-grade summary's "frames verified" count.
     nonisolated static func frameCount(_ stream: String) -> Int {
         frameMD5Hashes(from: stream).count
+    }
+
+    // MARK: - Evidence for a proof that failed (GH #501)
+    //
+    // The proof runs before the publish; a master that fails it is removed,
+    // so the EVIDENCE must live in the job's failure sentence (the row, the
+    // Center's OUTCOME line, the summary block in videoscan.log). Each
+    // function below is pure and answers one bounded sentence, or nil when
+    // there is nothing to report.
+
+    /// The words every failed proof opens with.
+    nonisolated static let losslessProofFailed = "Lossless verification FAILED"
+
+    /// A hash token as evidence: at most 40 characters (an MD5 is 32; a
+    /// garbled token must not flood the line).
+    nonisolated static func evidenceHash(_ token: String) -> String {
+        token.isEmpty ? "(no hash)" : (token.count > 40 ? String(token.prefix(40)) + "…" : token)
+    }
+
+    /// Why two framemd5 streams are not proof of a lossless video stream,
+    /// or nil when every frame matches: the first frame that differs with
+    /// both hashes, how many of the frames compared differ, and both frame
+    /// counts when they disagree. O(frames), no I/O.
+    nonisolated static func frameMD5Evidence(source: String, output: String) -> String? {
+        switch compareFrameMD5(source: source, output: output) {
+        case .match:
+            return nil
+        case .malformed(let why):
+            return "the video frame MD5s could not be compared: \(why)"
+        case .mismatch(let frameIndex, let src, let out):
+            let a = frameMD5Hashes(from: source), b = frameMD5Hashes(from: output)
+            let compared = min(a.count, b.count)
+            var differing = 0
+            for i in 0..<compared where a[i] != b[i] { differing += 1 }
+            var words = "video frame \(frameIndex) (0-based) is the first of \(differing) that differ in \(compared) compared"
+                + " (source MD5 \(evidenceHash(src)), new master MD5 \(evidenceHash(out)))"
+            if a.count != b.count { words += "; the source has \(a.count) frames, the new master \(b.count)" }
+            return words
+        }
+    }
+
+    /// Why two whole-stream audio MD5s are not proof, or nil when they are
+    /// equal and non-empty. An empty hash means ffmpeg printed no `MD5=`.
+    nonisolated static func audioMD5Evidence(source: String, output: String, pcmCodec: String) -> String? {
+        guard source.isEmpty || output.isEmpty || source != output else { return nil }
+        return "the audio whole-stream MD5s differ, both decoded as \(pcmCodec)"
+            + " (source \(evidenceHash(source)), new master \(evidenceHash(output)))"
+    }
+
+    /// Why a proof decode gave no usable hash stream — ffmpeg could not be
+    /// started, or stopped nonzero (a crash is its signal number) — or nil
+    /// when it exited 0. `what` names the hash ("the source's video frame
+    /// MD5"). The tool's last words are bounded by FFmpegEncodeCheck.
+    nonisolated static func proofToolFailure(_ result: ProcessRunner.Result, what: String) -> String? {
+        let tail = FFmpegEncodeCheck.stderrTail(result.stderr)
+        let said = tail.isEmpty ? "" : " — \(tail)"
+        guard result.launched else {
+            return "\(what) could not be computed: ffmpeg could not be started (exit code \(result.exitCode))\(said)"
+        }
+        guard result.exitCode == 0 else {
+            return "\(what) could not be computed: ffmpeg stopped with exit code \(result.exitCode)\(said)"
+        }
+        return nil
     }
 }

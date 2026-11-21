@@ -39,13 +39,15 @@ import os
 //
 // Memory: ffmpeg streams; we hold no media in-process beyond the progress
 // lines (worst case ~200 bytes per stderr write). The Preservation
-// verification step captures framemd5 stdout in memory — worst case for a
-// long file is ~30k frames × ~50 bytes ≈ 1.5 MB per stream, bounded and
-// freed immediately after the compare. No intermediate media files.
+// verification step captures framemd5 stdout in memory: ~70 bytes per
+// frame, two streams held for the compare — ~4 MB for a 30-minute tape,
+// worst case ~60 MB for a 4-hour tape at 30 fps (432k frames × 2), freed
+// immediately after the compare. No intermediate media files.
 //
 // Cancellation: Task.cancel → ProcessRunner kills ffmpeg → partial output
-// is deleted in the cleanup path. The verify phase honors cancellation the
-// same way (the output master is left in place so the user can re-verify).
+// is deleted in the cleanup path. The lossless proof runs on the partial,
+// BEFORE the publish (GH #501), so a Stop or a stall during it ends the
+// same way: the new master is removed and nothing was published.
 
 private let transcodeLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                   category: "fileOps")
@@ -80,7 +82,7 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     let replaceExisting: Bool
 
     /// Where the derivative actually landed — `outputURL`, or a free name
-    /// beside it when that name was taken and kept. Verify, sidecars, the
+    /// beside it when that name was taken and kept. The
     /// catalog and the summary all use THIS after the publish.
     private(set) var publishedURL: URL
 
@@ -211,8 +213,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // destination — and it is published only after a COMPLETE,
         // non-trivial encode (#6.3). A killed/stalled encode leaves only
         // this partial, which we delete — never a truncated master at the
-        // real output path. The verify phase (preservation) runs against
-        // the published FINAL file, and only ever reads it.
+        // real output path. The lossless proof (preservation) runs against
+        // this partial too, BEFORE the publish (GH #501), and only reads it.
         //
         // NOTHING at the output name is touched before the publish
         // (2026-09-22): this used to remove it here, before the source
@@ -353,48 +355,46 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         // r1 F3): the probes' good answers do not publish over it.
         if await stoppedBeforePublish(partialURL) { return }
 
+        // Preservation: PROVE the new master bit-exact BEFORE anything is
+        // published (GH #501; DECISIONS 2026-11-20 "a Replace happens only
+        // after the new file is verified" — for a master, verified includes
+        // the lossless proof). THE BUG: the proof ran against the published
+        // file, so with Replace the previous master was already in the Trash
+        // and the name held a master that then failed its proof. It now
+        // reads the partial; a master that fails — a mismatch, or a proof
+        // that could not be computed — FAILS the job, is removed
+        // (discardPartial: this run's own reserved file), and nothing is
+        // trashed, renamed or catalogued. A Stop or a stall during the proof
+        // ends through stoppedBeforePublish like one during the encode. The
+        // partial's stamp taken by the gate is checked again by
+        // publishVerified, so the file published is the file proven.
+        if preset == .preservation {
+            let proof = await verifyLossless(ffmpeg: ffmpeg, source: inputPath, output: partialPath)
+            if await stoppedBeforePublish(partialURL) { return }
+            switch proof {
+            case .verified:
+                break
+            case .interrupted:
+                // Unknown is not verified: fail closed.
+                await failLosslessProof("the proof was interrupted before it finished", size: size, partial: partialURL)
+                return
+            case .failed(let evidence):
+                await failLosslessProof(evidence, size: size, partial: partialURL)
+                return
+            }
+        }
+
         // Publish: a complete, non-trivial encode takes the output name in
         // one no-clobber rename (#6.3) — or, when the name is taken, the
         // existing file is kept (or, with Replace allowed, Trashed first)
-        // and the job says which. Verify (if any) then reads the PUBLISHED
-        // file, which it only ever reads.
+        // and the job says which.
         guard let publishNote = await publish(partialURL, verified: verified) else { return }
-        let finalPath = publishedURL.path
 
-        // Preservation: PROVE the master is bit-exact before we declare
-        // success. Any non-match keeps the file and fails loudly. For
-        // editing/archival there's nothing to verify (they're intentionally
-        // lossy/transformed), so we go straight to cataloguing.
         if preset == .preservation {
-            let verdict = await verifyLossless(ffmpeg: ffmpeg,
-                                               source: inputPath,
-                                               output: finalPath)
-            // A stall DURING verify (the literal 14 h framemd5 incident) must
-            // fail loudly with attribution — not masquerade as a clean
-            // cancel. The master is left on disk; the user can re-verify.
-            if let stallReason {
-                transcodeLog.error("transcode FAILED (stall, verify): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
-                await finish(failed: stallReason)
-                return
-            }
-            if Task.isCancelled || state == .cancelling {
-                // Leave the master in place — the user can re-run verify
-                // later rather than re-encode an expensive FFV1 file.
-                await finish(cancelled: true)
-                return
-            }
-            switch verdict {
-            case .verified:
-                logPreservationSummary(outputSize: size, verified: true, sidecarName: nil)
-                await catalogTranscodeOutput()
-                await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size)))\(publishNote)")
-                return
-            case .failed(let sidecarName):
-                // Output kept on disk; sidecar written; loud failure.
-                logPreservationSummary(outputSize: size, verified: false, sidecarName: sidecarName)
-                await finish(failed: "Lossless verification FAILED — see \(sidecarName)")
-                return
-            }
+            logPreservationSummary(outputSize: size, verified: true, evidence: nil)
+            await catalogTranscodeOutput()
+            await finish(success: "✓ Verified bit-exact lossless (frame MD5) → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size)))\(publishNote)")
+            return
         }
 
         await catalogTranscodeOutput()
@@ -479,6 +479,21 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         await finish(failed: message)
     }
 
+    /// The lossless proof failed (GH #501): remove the new master, record
+    /// the evidence (the row, the Center's OUTCOME line and the summary
+    /// block in videoscan.log all carry it — no sidecar file is written),
+    /// and say what became of the original and of the new file.
+    private func failLosslessProof(_ evidence: String, size: Int64, partial: URL) async {
+        let cleanup = discardPartial(partial)
+        let failure = Self.losslessProofFailed + " — " + evidence
+        let message = replaceExisting
+            ? Self.failedReplaceMessage(failure: failure, original: outputURL.lastPathComponent, cleanup: cleanup)
+            : Self.notPublishedMessage(failure: failure, cleanup: cleanup)
+        logPreservationSummary(outputSize: size, verified: false, evidence: message)
+        transcodeLog.error("transcode FAILED (lossless proof): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
+    }
+
     /// Publish the partial; returns the summary's note, or nil when the
     /// job has been finished as failed here.
     private func publish(_ partialURL: URL, verified: PartialFileNaming.FileStamp?) async -> String? {
@@ -555,21 +570,37 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
     // MARK: Preservation verification
 
-    /// Outcome of the preservation verify phase.
+    /// Outcome of the preservation proof. Three answers, as the encode
+    /// check has: proven, NOT proven (with the evidence), and "the proof
+    /// did not finish" — which is never read as proven (GH #501).
+    /// (For Rick: ≈ std::variant<Verified, Interrupted, Failed>.)
     private enum VerifyOutcome {
         case verified
-        case failed(sidecarName: String)
+        /// Stop or a stall landed during the proof. The caller ends the
+        /// job through stoppedBeforePublish; nothing is published.
+        case interrupted
+        /// A mismatch, or a hash that could not be computed. The evidence
+        /// is one bounded sentence: which stream, which frame, both hashes
+        /// (or the tool, its exit code and its words).
+        case failed(evidence: String)
     }
 
-    /// Decode source + output to per-frame MD5 (video AND audio) and prove
-    /// they match. Drives the progress bar off the verify decode's
-    /// `-progress` output so a long file doesn't show a stuck bar. On any
-    /// mismatch/malformed verdict, writes a `<output>.framemd5-MISMATCH.log`
-    /// sidecar and returns `.failed`.
+    /// True when the user's Stop or the stall watchdog has ended this run.
+    private var proofInterrupted: Bool { stallReason != nil || Task.isCancelled || state == .cancelling }
+
+    /// Decode the source and the NEW master (`output`: this run's partial,
+    /// not yet published) to per-frame MD5 (video) and a whole-stream MD5
+    /// (audio) and prove they match. Reads only. Drives the progress bar
+    /// off the decode's `-progress` output. A mismatch, an empty or garbled
+    /// hash stream, or an ffmpeg that crashed / could not start is
+    /// `.failed` with the evidence — recorded in the row, the OUTCOME line
+    /// and the summary block (the `<output>.framemd5-MISMATCH.log` sidecar
+    /// this used to write beside the master is gone: the master it sat
+    /// beside is no longer kept, and the line carries the same facts).
     private func verifyLossless(ffmpeg: String,
                                 source: String,
                                 output: String) async -> VerifyOutcome {
-        transcodeLog.info("preservation verify: starting frame-MD5 comparison for \(self.publishedURL.lastPathComponent, privacy: .public)")
+        transcodeLog.info("preservation verify: starting frame-MD5 comparison for the new \(self.outputURL.lastPathComponent, privacy: .public)")
         let verifyStart = Date()
         defer { verifyElapsed = Date().timeIntervalSince(verifyStart) }
 
@@ -578,22 +609,23 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         fractionValue = 0
         isIndeterminateValue = (totalDurationSeconds == 0)
 
-        let srcVideoMD5 = await framemd5(ffmpeg: ffmpeg, file: source)
-        if Task.isCancelled || state == .cancelling { return .verified /* caller re-checks cancel */ }
-        let outVideoMD5 = await framemd5(ffmpeg: ffmpeg, file: output)
-        if Task.isCancelled || state == .cancelling { return .verified }
+        let srcVideo = await framemd5(ffmpeg: ffmpeg, file: source)
+        if proofInterrupted { return .interrupted }
+        if let failure = Self.proofToolFailure(srcVideo, what: "the source's video frame MD5") {
+            return failedProof(failure)
+        }
+        let outVideo = await framemd5(ffmpeg: ffmpeg, file: output)
+        if proofInterrupted { return .interrupted }
+        if let failure = Self.proofToolFailure(outVideo, what: "the new master's video frame MD5") {
+            return failedProof(failure)
+        }
 
-        let videoVerdict = Self.compareFrameMD5(source: srcVideoMD5, output: outVideoMD5)
-        if videoVerdict != .match {
-            let name = writeMismatchSidecar(stream: "video",
-                                            verdict: videoVerdict,
-                                            sourceStream: srcVideoMD5,
-                                            outputStream: outVideoMD5)
-            transcodeLog.error("preservation verify: VIDEO mismatch (\(String(describing: videoVerdict), privacy: .public)) → wrote \(name, privacy: .public)")
-            return .failed(sidecarName: name)
+        let srcVideoMD5 = srcVideo.stdout ?? "", outVideoMD5 = outVideo.stdout ?? ""
+        if let evidence = Self.frameMD5Evidence(source: srcVideoMD5, output: outVideoMD5) {
+            return failedProof(evidence)
         }
         verifiedVideoFrames = Self.frameCount(srcVideoMD5)
-        transcodeLog.info("preservation verify: video stream bit-exact (\(self.verifiedVideoFrames, privacy: .public) frames, \(self.publishedURL.lastPathComponent, privacy: .public))")
+        transcodeLog.info("preservation verify: video stream bit-exact (\(self.verifiedVideoFrames, privacy: .public) frames, \(self.outputURL.lastPathComponent, privacy: .public))")
 
         // ---- Audio stream ----
         // Skip cleanly if the source has no audio (video-only master).
@@ -627,60 +659,64 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
             // Match the comparison depth to the master so we compare like
             // for like (see the CRITICAL note above).
             let pcmCodec = await audioComparisonPCMCodec(master: output)
+            if proofInterrupted { return .interrupted }
 
-            let srcAudioMD5 = await streamMD5(ffmpeg: ffmpeg, file: source, pcmCodec: pcmCodec)
-            if Task.isCancelled || state == .cancelling { return .verified }
-            let outAudioMD5 = await streamMD5(ffmpeg: ffmpeg, file: output, pcmCodec: pcmCodec)
-            if Task.isCancelled || state == .cancelling { return .verified }
+            let srcAudio = await streamMD5(ffmpeg: ffmpeg, file: source, pcmCodec: pcmCodec)
+            if proofInterrupted { return .interrupted }
+            let outAudio = await streamMD5(ffmpeg: ffmpeg, file: output, pcmCodec: pcmCodec)
+            if proofInterrupted { return .interrupted }
 
-            if srcAudioMD5.isEmpty || outAudioMD5.isEmpty || srcAudioMD5 != outAudioMD5 {
-                let name = writeAudioMismatchSidecar(source: srcAudioMD5,
-                                                     output: outAudioMD5,
-                                                     pcmCodec: pcmCodec)
+            let failure = Self.proofToolFailure(srcAudio, what: "the source's audio MD5")
+                ?? Self.proofToolFailure(outAudio, what: "the new master's audio MD5")
+                ?? Self.audioMD5Evidence(source: Self.parseStreamMD5(srcAudio.stdout ?? ""),
+                                         output: Self.parseStreamMD5(outAudio.stdout ?? ""), pcmCodec: pcmCodec)
+            if let failure {
                 audioStreamMD5 = ""   // distinguishes failure from no-audio in the summary
-                audioVerifyDetail = "MISMATCH at \(pcmCodec) — see sidecar"
-                transcodeLog.error("preservation verify: AUDIO whole-stream MD5 mismatch @\(pcmCodec, privacy: .public) (src=\(srcAudioMD5, privacy: .public) out=\(outAudioMD5, privacy: .public)) → wrote \(name, privacy: .public)")
-                return .failed(sidecarName: name)
+                audioVerifyDetail = "NOT PROVEN at \(pcmCodec)"
+                return failedProof(failure)
             }
-            audioStreamMD5 = srcAudioMD5
-            audioVerifyDetail = "whole-stream MD5 \(srcAudioMD5) @\(pcmCodec)"
-            transcodeLog.info("preservation verify: audio stream bit-exact (whole-stream MD5 \(srcAudioMD5, privacy: .public) @\(pcmCodec, privacy: .public), \(self.publishedURL.lastPathComponent, privacy: .public))")
+            audioStreamMD5 = Self.parseStreamMD5(srcAudio.stdout ?? "")
+            audioVerifyDetail = "whole-stream MD5 \(audioStreamMD5) @\(pcmCodec)"
+            transcodeLog.info("preservation verify: audio stream bit-exact (whole-stream MD5 \(self.audioStreamMD5, privacy: .public) @\(pcmCodec, privacy: .public), \(self.outputURL.lastPathComponent, privacy: .public))")
         } else {
             audioVerifyDetail = "(no audio stream)"
         }
 
-        transcodeLog.info("preservation verify: PASS — \(self.publishedURL.lastPathComponent, privacy: .public) is bit-exact lossless")
+        transcodeLog.info("preservation verify: PASS — the new \(self.outputURL.lastPathComponent, privacy: .public) is bit-exact lossless")
         return .verified
     }
 
-    /// Decode the VIDEO stream to per-frame MD5 (`-f framemd5`) and return
-    /// the captured stdout. Per-frame on video is reliable — the frame
-    /// count is fixed by the coded pictures, independent of container — and
-    /// the localization (which frame diverged) is worth keeping. Progress
+    private func failedProof(_ evidence: String) -> VerifyOutcome {
+        transcodeLog.error("preservation verify: NOT PROVEN — \(evidence, privacy: .public)")
+        return .failed(evidence: evidence)
+    }
+
+    /// Decode the VIDEO stream to per-frame MD5 (`-f framemd5`); stdout is
+    /// the hash stream. Per-frame on video is reliable — the frame count
+    /// is fixed by the coded pictures, independent of container — and the
+    /// localization (which frame diverged) is worth keeping. Progress
     /// (`-progress pipe:2`) streams to stderr and drives the bar so a long
     /// decode never shows a stuck bar.
-    private func framemd5(ffmpeg: String, file: String) async -> String {
+    private func framemd5(ffmpeg: String, file: String) async -> ProcessRunner.Result {
         let args = ["-hide_banner", "-nostdin", "-i", file,
                     "-map", "0:v:0", "-an",
                     "-f", "framemd5", "-progress", "pipe:2", "-"]
         return await runDecodeCapture(ffmpeg: ffmpeg, args: args, phase: "verify (video framemd5)")
     }
 
-    /// Decode the AUDIO stream to a single WHOLE-STREAM MD5 and return just
-    /// the hex hash (`MD5=…` parsed off). `pcmCodec` forces an explicit
-    /// integer PCM format (e.g. "pcm_s24le") so source and master are hashed
-    /// in the SAME representation — without it, `-f md5` would hash each side
-    /// in its own native format (float for AAC/MP3, int for FLAC/PCM) and
-    /// always mismatch. Whole-stream (not per-frame) so a MOV→MKV PCM
-    /// re-block can't false-fail byte-identical audio. Returns "" on failure
-    /// so the caller fails loudly.
-    private func streamMD5(ffmpeg: String, file: String, pcmCodec: String) async -> String {
+    /// Decode the AUDIO stream to a single WHOLE-STREAM MD5 (stdout carries
+    /// one `MD5=…` line; `parseStreamMD5` reads it). `pcmCodec` forces an
+    /// explicit integer PCM format (e.g. "pcm_s24le") so source and master
+    /// are hashed in the SAME representation — without it, `-f md5` would
+    /// hash each side in its own native format (float for AAC/MP3, int for
+    /// FLAC/PCM) and always mismatch. Whole-stream (not per-frame) so a
+    /// MOV→MKV PCM re-block can't false-fail byte-identical audio.
+    private func streamMD5(ffmpeg: String, file: String, pcmCodec: String) async -> ProcessRunner.Result {
         let args = ["-hide_banner", "-nostdin", "-i", file,
                     "-map", "0:a:0", "-vn",
                     "-c:a", pcmCodec,
                     "-f", "md5", "-progress", "pipe:2", "-"]
-        let out = await runDecodeCapture(ffmpeg: ffmpeg, args: args, phase: "verify (audio md5)")
-        return Self.parseStreamMD5(out)
+        return await runDecodeCapture(ffmpeg: ffmpeg, args: args, phase: "verify (audio md5)")
     }
 
     /// Pick the integer PCM codec to hash both audio streams in, matched to
@@ -749,15 +785,15 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
     }
 
     /// Shared decode runner: spawns ffmpeg, drives the progress bar off its
-    /// `-progress pipe:2` stderr, and returns captured stdout (the md5
-    /// lines). Bounded output; see the file-header memory note.
+    /// `-progress pipe:2` stderr, and returns the run (stdout = the md5
+    /// lines). Memory: see the file-header note.
     ///
     /// Guarded by a StallMonitor (#6): the framemd5 decode of an archival
     /// master is the EXACT op that wedged for 14 h. Each progress line kicks
     /// the watchdog; silence past the threshold cancels the run (killing the
     /// ffmpeg child via ProcessRunner) and records a specific stall reason
     /// that the verify branch surfaces as a loud failure.
-    private func runDecodeCapture(ffmpeg: String, args: [String], phase: String) async -> String {
+    private func runDecodeCapture(ffmpeg: String, args: [String], phase: String) async -> ProcessRunner.Result {
         let totalDur = totalDurationSeconds
         let monitor = StallMonitor(label: "transcode \(phase) \(record.filename)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
@@ -777,15 +813,18 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
 
         monitor.start()
         pauser.register(monitor)
-        let stdout = await ProcessRunner.runStreaming(
+        // The exit status is kept (it was thrown away): a decoder that
+        // crashed or could not start is "could not be computed", with its
+        // exit code and words — not a bare mismatch against an empty hash.
+        let result = await ProcessRunner.runProcess(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
-            control: pauser.control,
-            stderrLine: progressUpdater
+            stderrLine: progressUpdater,
+            control: pauser.control
         )
         monitor.stop()
-        return stdout ?? ""
+        return result
     }
 
     // MARK: Stall handling
@@ -804,88 +843,6 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         transcodeLog.error("transcode WATCHDOG: killing \(self.record.filename, privacy: .public) (\(phase, privacy: .public)) — \(reason, privacy: .public)")
         appLog.write("transcode watchdog: \(record.filename) stalled \(Int(silentFor))s during \(phase) — \(attribution); killing ffmpeg")
         task?.cancel()
-    }
-
-    /// Write `<output>.framemd5-MISMATCH.log` next to the master with the
-    /// verdict details and enough of both framemd5 streams to investigate.
-    /// Returns the sidecar's last-path-component for the failure message.
-    private func writeMismatchSidecar(stream: String,
-                                      verdict: FrameMD5Verdict,
-                                      sourceStream: String,
-                                      outputStream: String) -> String {
-        let sidecarURL = URL(fileURLWithPath: publishedURL.path + ".framemd5-MISMATCH.log")
-
-        var body = ""
-        body += "VideoScan — Preservation master lossless verification FAILED\n"
-        body += "Generated: \(ISO8601DateFormatter().string(from: Date()))\n"
-        body += "Source:  \(record.fullPath)\n"
-        body += "Master:  \(publishedURL.path)\n"
-        body += "Stream:  \(stream)\n"
-        switch verdict {
-        case .match:
-            body += "Verdict: (match — unexpected in a mismatch sidecar)\n"
-        case .mismatch(let frameIndex, let src, let out):
-            body += "Verdict: MISMATCH at frame \(frameIndex) (0-based)\n"
-            body += "  source hash: \(src)\n"
-            body += "  master hash: \(out)\n"
-        case .malformed(let why):
-            body += "Verdict: MALFORMED — \(why)\n"
-        }
-        body += "\n----- source framemd5 (\(stream)) -----\n"
-        body += truncateForSidecar(sourceStream)
-        body += "\n----- master framemd5 (\(stream)) -----\n"
-        body += truncateForSidecar(outputStream)
-        body += "\n"
-
-        do {
-            try body.write(to: sidecarURL, atomically: true, encoding: .utf8)
-            transcodeLog.error("preservation verify: wrote mismatch sidecar \(sidecarURL.lastPathComponent, privacy: .public)")
-        } catch {
-            transcodeLog.error("preservation verify: FAILED to write mismatch sidecar: \(String(describing: error), privacy: .public)")
-        }
-        return sidecarURL.lastPathComponent
-    }
-
-    /// Audio counterpart to writeMismatchSidecar — audio is verified by a
-    /// single whole-stream md5, so there's nothing to localize; we just
-    /// record the two hashes. An empty hash means ffmpeg failed to decode
-    /// that side at all (called out explicitly).
-    private func writeAudioMismatchSidecar(source: String, output: String, pcmCodec: String) -> String {
-        let sidecarURL = URL(fileURLWithPath: publishedURL.path + ".framemd5-MISMATCH.log")
-
-        var body = ""
-        body += "VideoScan — Preservation master lossless verification FAILED\n"
-        body += "Generated: \(ISO8601DateFormatter().string(from: Date()))\n"
-        body += "Source:  \(record.fullPath)  (audio \(record.audioCodec))\n"
-        body += "Master:  \(publishedURL.path)\n"
-        body += "Stream:  audio (whole-stream MD5)\n"
-        body += "Compared as: \(pcmCodec) — both sides decoded to this integer PCM format\n"
-        body += "Verdict: MISMATCH\n"
-        body += "  source MD5: \(source.isEmpty ? "(ffmpeg produced no hash — decode failed)" : source)\n"
-        body += "  master MD5: \(output.isEmpty ? "(ffmpeg produced no hash — decode failed)" : output)\n"
-        body += "\n"
-        body += "Note: both streams were decoded to \(pcmCodec) before hashing, so a\n"
-        body += "mismatch here means the decoded samples genuinely differ — not a\n"
-        body += "float-vs-int representation artifact. Reproduce with:\n"
-        body += "  ffmpeg -i <file> -map 0:a:0 -vn -c:a \(pcmCodec) -f md5 -\n"
-
-        do {
-            try body.write(to: sidecarURL, atomically: true, encoding: .utf8)
-            transcodeLog.error("preservation verify: wrote audio mismatch sidecar \(sidecarURL.lastPathComponent, privacy: .public)")
-        } catch {
-            transcodeLog.error("preservation verify: FAILED to write audio mismatch sidecar: \(String(describing: error), privacy: .public)")
-        }
-        return sidecarURL.lastPathComponent
-    }
-
-    /// Cap each framemd5 dump in the sidecar so a 30k-frame file doesn't
-    /// produce a multi-MB log. We keep the head (where divergence almost
-    /// always is) plus a tail marker.
-    private func truncateForSidecar(_ stream: String, maxLines: Int = 400) -> String {
-        let lines = stream.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count > maxLines else { return stream }
-        let head = lines.prefix(maxLines).joined(separator: "\n")
-        return head + "\n… (truncated, \(lines.count - maxLines) more lines)\n"
     }
 
     /// Probe the new file and append to the catalog. Unlike ReformatJob, we
@@ -1008,8 +965,10 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         appLog.write("═══════════════════════════════════════════════════════")
     }
 
-    /// SUMMARY record — emitted once the verify phase resolves (pass or fail).
-    private func logPreservationSummary(outputSize: Int64, verified: Bool, sidecarName: String?) {
+    /// SUMMARY record — emitted once the proof resolves. On a pass the
+    /// master is published; on a failure `evidence` is the job's whole
+    /// failure sentence (what disagreed, and what became of both files).
+    private func logPreservationSummary(outputSize: Int64, verified: Bool, evidence: String?) {
         let src = record.sizeBytes
         let ratio = src > 0 ? Double(outputSize) / Double(src) : 0
         let encodeSpeed = (encodeElapsed > 0 && record.durationSeconds > 0)
@@ -1018,8 +977,8 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         appLog.write("──────── PRESERVATION MASTER — SUMMARY ────────")
         logField("Result:", verified
             ? "✓ VERIFIED bit-exact lossless (frame MD5)"
-            : "✗ VERIFICATION FAILED — master kept, see sidecar")
-        logField("Master:", publishedURL.path)
+            : "✗ VERIFICATION FAILED — the new master was not published")
+        logField("Master:", verified ? publishedURL.path : "(not published) \(outputURL.path)")
         logField("Master size:", "\(Self.humanBytes(outputSize)) (\(outputSize) bytes)")
         logField("Source size:", "\(Self.humanBytes(src)) (\(src) bytes)")
         let delta = "\(outputSize >= src ? "+" : "−")\(Self.humanBytes(abs(outputSize - src)))"
@@ -1030,14 +989,14 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
         logField("Audio verified:", audioVerifyDetail.isEmpty
             ? (audioStreamMD5.isEmpty ? "(not reached)" : "whole-stream MD5 \(audioStreamMD5)")
             : audioVerifyDetail)
-        if let sidecarName { logField("Mismatch log:", sidecarName) }
+        if let evidence { logField("Evidence:", evidence) }
         appLog.write("───────────────────────────────────────────────")
 
         // Mirror the headline to the unified log too.
         if verified {
             transcodeLog.info("preservation SUMMARY: VERIFIED \(self.publishedURL.lastPathComponent, privacy: .public) — \(Self.humanBytes(outputSize), privacy: .public), \(String(format: "%.2f", ratio), privacy: .public)× source, encode \(String(format: "%.1f", self.encodeElapsed), privacy: .public)s, verify \(String(format: "%.1f", self.verifyElapsed), privacy: .public)s")
         } else {
-            transcodeLog.error("preservation SUMMARY: FAILED \(self.publishedURL.lastPathComponent, privacy: .public) — see \(sidecarName ?? "sidecar", privacy: .public)")
+            transcodeLog.error("preservation SUMMARY: FAILED \(self.outputURL.lastPathComponent, privacy: .public) — \(evidence ?? "not proven", privacy: .public)")
         }
     }
 }

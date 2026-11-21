@@ -34,9 +34,11 @@
 // LogSinks+Test.swift; gmock's EXPECT_CALL shape): START once, the exact
 // FAILED line once, in that order, never "Transcoded", and no other OUTCOME.
 //
-// Two rows stay RED under `withKnownIssue`, reported for Rick, not fixed
-// here: plain Transcode (no Replace) adopting an unmeasurable output, and
-// Preservation + Replace running its frame-MD5 proof AFTER the Replace.
+// One row stays RED under `withKnownIssue`, reported for Rick, not fixed
+// here: plain Transcode (no Replace) adopting an unmeasurable output
+// (GH #502). Preservation + Replace now runs its frame-MD5 proof BEFORE the
+// Replace (GH #501, fixed 2026-11-21; the full proof matrix is
+// TranscodePreservationProofMatrixTests).
 //
 // Parallel by design (each test binds its own mock and Trash seam).
 
@@ -507,7 +509,7 @@ struct TranscodeReplaceNegativeMatrixTests {
             #expect(outcome.contains(words), "OUTCOME lacks “\(words)”: \(outcome)", sourceLocation: sourceLocation)
         }
         #expect(job.subtitle == message, sourceLocation: sourceLocation)
-        await expectLoggedFailure(b, outcome: outcome, sourceLocation: sourceLocation)
+        await expectLoggedFailure(b, outcome: outcome, preset: job.preset, sourceLocation: sourceLocation)
     }
 
     /// F1 (P0): while the output is probed, the reserved partial is moved
@@ -784,29 +786,26 @@ struct TranscodeReplaceNegativeMatrixTests {
         }
     }
 
-    /// RED (2026-11-20, reported, NOT changed — needs its own design).
-    /// Preservation + Replace: the bit-exact proof (frame MD5) runs against
-    /// the PUBLISHED file, i.e. after the prior file went to the Trash. A
-    /// master that fails the proof ends "Lossless verification FAILED"
-    /// (correctly failed, never a success) — but the Replace already
-    /// happened. Under "verify the temp, only when verified could it
-    /// replace anything" the proof belongs before the publish; moving it
-    /// changes where the mismatch sidecar and a kept failed master live.
-    @Test("RED: Preservation + Replace trashes the prior master BEFORE the frame-MD5 proof that then fails")
-    func preservationReplaceProvesLosslessOnlyAfterTheReplace() async throws {
+    // MARK: - GH #501: Preservation proves lossless BEFORE the Replace
+
+    /// GH #501 (was RED on main under `withKnownIssue` as
+    /// `preservationReplaceProvesLosslessOnlyAfterTheReplace`): the
+    /// bit-exact proof ran against the PUBLISHED file, after the prior
+    /// master went to the Trash. The full matrix is
+    /// TranscodePreservationProofMatrixTests; this is the original row.
+    @Test("Preservation + Replace: a master that fails its frame-MD5 proof never replaces — the prior master is untouched, the failed one removed")
+    func preservationReplaceProvesLosslessBeforeTheReplace() async throws {
         let b = try bench("preservation_order", preset: .preservation); defer { b.sb.cleanup() }
+        let before = b.catalogSnapshot()
         let m = try ScriptedExecutor(claiming: [b.sb.root.path])
             .on("ffmpeg", containing: ["framemd5", Self.sourceName], .output(stdout: "0,          0,          0,        1,   115200, 11111111111111111111111111111111\n"))
             .on("ffmpeg", containing: ["framemd5"], .output(stdout: "0,          0,          0,        1,   115200, 22222222222222222222222222222222\n"))
             .on("ffmpeg", containing: [Self.sourceName], .writeOutputFile(Data(repeating: 0x5A, count: 20_000)))
             .on("ffprobe", containing: ["format=duration"], Self.twelveSeconds)
         let job = await run(b, m, preset: .preservation)
-        guard case .failed(let reason) = job.state else { Issue.record("expected the proof to fail the job, got \(job.state)"); return }
-        #expect(reason.contains("Lossless verification FAILED"), "\(reason)")
-        withKnownIssue("RED: the prior master is in the Trash although the new one failed its lossless proof") {
-            #expect(b.trashed.all.isEmpty, "trashed before the proof: \(b.trashed.all)")
-            #expect(Self.sha(b.target) == b.priorSHA, "the name now holds a master that failed its proof")
-        }
+        expectRefused(b, job, catalogBefore: before,
+                      reason: ["Lossless verification FAILED", "11111111111111111111111111111111", "22222222222222222222222222222222"])
+        await expectFailedReplaceSaysWhatHappened(b, job)
     }
 }
 
