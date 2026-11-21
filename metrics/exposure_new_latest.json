@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-19T14:01:37Z",
- "sha": "431753b9",
+ "ts": "2026-11-21T13:09:41Z",
+ "sha": "78c4ca73",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -512,6 +512,13 @@
    "file": "VideoScan/VideoScan/App/CatalogQuitRecovery.swift",
    "name": "VideoScanModel.catalogQuitNote",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/App/VideoScanApp.swift::ScopedLogSinkAdapter.init",
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "name": "ScopedLogSinkAdapter.init",
+   "kind": "init",
    "classification": "could-be-private"
   },
   {
@@ -2741,13 +2748,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionStore.statsFilename",
-   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
-   "name": "EventsDecisionStore.statsFilename",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionWriter.init",
    "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
    "name": "EventsDecisionWriter.init",
@@ -3973,6 +3973,20 @@
    "classification": "widened-for-split"
   },
   {
+   "key": "VideoScan/VideoScan/Media/FFmpegEncodeCheck.swift::FFmpegEncodeCheck.probeDeadlineSeconds",
+   "file": "VideoScan/VideoScan/Media/FFmpegEncodeCheck.swift",
+   "name": "FFmpegEncodeCheck.probeDeadlineSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/FFmpegEncodeCheck.swift::FFmpegEncodeCheck.stderrHead",
+   "file": "VideoScan/VideoScan/Media/FFmpegEncodeCheck.swift",
+   "name": "FFmpegEncodeCheck.stderrHead",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Media/PreviewFrameRenderer.swift::PreviewFrameRenderer.filmstripFFmpegConcurrency",
    "file": "VideoScan/VideoScan/Media/PreviewFrameRenderer.swift",
    "name": "PreviewFrameRenderer.filmstripFFmpegConcurrency",
@@ -3998,6 +4012,20 @@
    "file": "VideoScan/VideoScan/Media/PreviewService.swift",
    "name": "PreviewService.thumbnailDebounceTask",
    "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift::ThumbnailCachePolicy.costLimitCapBytes",
+   "file": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift",
+   "name": "ThumbnailCachePolicy.costLimitCapBytes",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift::ThumbnailCachePolicy.costLimitFloorBytes",
+   "file": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift",
+   "name": "ThumbnailCachePolicy.costLimitFloorBytes",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {
@@ -4106,23 +4134,9 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/BalancedCopyProofMeasure.swift::BalancedCopyProof.Measurement",
-   "file": "VideoScan/VideoScan/MediaOps/BalancedCopyProofMeasure.swift",
-   "name": "BalancedCopyProof.Measurement",
-   "kind": "struct",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/BalancedCopyProofReadLog.swift::BalancedCopyProof.LogRecord",
    "file": "VideoScan/VideoScan/MediaOps/BalancedCopyProofReadLog.swift",
    "name": "BalancedCopyProof.LogRecord",
-   "kind": "struct",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/BalancedCopyProofReadLog.swift::BalancedCopyProof.ReadFault",
-   "file": "VideoScan/VideoScan/MediaOps/BalancedCopyProofReadLog.swift",
-   "name": "BalancedCopyProof.ReadFault",
    "kind": "struct",
    "classification": "could-be-private"
   },
@@ -4267,13 +4281,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift::CatalogKnownCopies.fileStamp",
-   "file": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift",
-   "name": "CatalogKnownCopies.fileStamp",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift::CatalogKnownCopies.mayBeSameFile",
    "file": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift",
    "name": "CatalogKnownCopies.mayBeSameFile",
@@ -4376,13 +4383,6 @@
    "file": "VideoScan/VideoScan/MediaOps/CheckCopies.swift",
    "name": "CheckCopiesSummary.saveConfirmed",
    "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/CheckCopies.swift::MediaFileOperationsCenter.startCheckCopies",
-   "file": "VideoScan/VideoScan/MediaOps/CheckCopies.swift",
-   "name": "MediaFileOperationsCenter.startCheckCopies",
-   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -5093,13 +5093,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/ContentCopyProof.swift::ContentCopyProof.Claim.holdsNow",
-   "file": "VideoScan/VideoScan/MediaOps/ContentCopyProof.swift",
-   "name": "ContentCopyProof.Claim.holdsNow",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/ContentCopyProof.swift::ContentCopyProof.sameDigest",
    "file": "VideoScan/VideoScan/MediaOps/ContentCopyProof.swift",
    "name": "ContentCopyProof.sameDigest",
@@ -5447,6 +5440,27 @@
    "file": "VideoScan/VideoScan/MediaOps/PairMemberFingerprint.swift",
    "name": "PairMemberFingerprint.onlyCopyEvidence",
    "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift::PartialFileNaming.FileStamp.modifiedNanoseconds",
+   "file": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift",
+   "name": "PartialFileNaming.FileStamp.modifiedNanoseconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift::PartialFileNaming.FileStamp.modifiedSeconds",
+   "file": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift",
+   "name": "PartialFileNaming.FileStamp.modifiedSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift::PartialFileNaming.isPinned",
+   "file": "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift",
+   "name": "PartialFileNaming.isPinned",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -5807,6 +5821,34 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift::TranscodeJob.PartialCleanup",
+   "file": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift",
+   "name": "TranscodeJob.PartialCleanup",
+   "kind": "enum",
+   "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift::TranscodeJob.changedAfterVerification",
+   "file": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift",
+   "name": "TranscodeJob.changedAfterVerification",
+   "kind": "let",
+   "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift::TranscodeJob.encodeGate",
+   "file": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift",
+   "name": "TranscodeJob.encodeGate",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift::TranscodeJob.replaceNotCompletedMessage",
+   "file": "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift",
+   "name": "TranscodeJob.replaceNotCompletedMessage",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/ValidateCatalogDetailView.swift::ValidateCatalogDetailView.phaseWords",
    "file": "VideoScan/VideoScan/MediaOps/ValidateCatalogDetailView.swift",
    "name": "ValidateCatalogDetailView.phaseWords",
@@ -6073,23 +6115,9 @@
    "classification": "widened-for-split"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift::VideoScanModel.pruneCandidateProof",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift",
-   "name": "VideoScanModel.pruneCandidateProof",
-   "kind": "func",
-   "classification": "widened-for-split"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift::VideoScanModel.pruneProofProblemInCatalog",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift",
    "name": "VideoScanModel.pruneProofProblemInCatalog",
-   "kind": "func",
-   "classification": "widened-for-split"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift::VideoScanModel.readArchiveInFull",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneVerification.swift",
-   "name": "VideoScanModel.readArchiveInFull",
    "kind": "func",
    "classification": "widened-for-split"
   },
@@ -8236,6 +8264,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner+Blocking.swift::ProcessRunner.blockingWaitMarginSeconds",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner+Blocking.swift",
+   "name": "ProcessRunner.blockingWaitMarginSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Provenance/ProvenanceResolver.swift::ProvenanceResolver.FieldStanding",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Provenance/ProvenanceResolver.swift",
    "name": "ProvenanceResolver.FieldStanding",
@@ -8358,6 +8393,27 @@
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.whatTheSoundSays",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
    "name": "RelatedLadder.whatTheSoundSays",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift::ScriptedExecutor.hangScript",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift",
+   "name": "ScriptedExecutor.hangScript",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift::ScriptedExecutor.launchFailureWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift",
+   "name": "ScriptedExecutor.launchFailureWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift::ScriptedExecutor.termExit",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift",
+   "name": "ScriptedExecutor.termExit",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -8698,8 +8754,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 177,
+ "fixed": 186,
  "baseline_before": 2456,
- "baseline_after": 2279,
+ "baseline_after": 2270,
  "shrink_skipped": false
 }

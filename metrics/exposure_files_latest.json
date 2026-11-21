@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-19T14:01:37Z",
- "sha": "431753b9",
+ "ts": "2026-11-21T13:09:41Z",
+ "sha": "78c4ca73",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -446,9 +446,10 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift": {
-   "lines": 1372,
-   "decls": 31,
+   "lines": 1414,
+   "decls": 35,
    "could_be_private": [
+    "ScopedLogSinkAdapter.init",
     "AppDelegate.vlmDrainDeadline",
     "AppDelegate.applicationWillFinishLaunching",
     "AppDelegate.applicationDidFinishLaunching",
@@ -676,8 +677,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift": {
-   "lines": 866,
-   "decls": 42,
+   "lines": 949,
+   "decls": 45,
    "could_be_private": [
     "ArchivePromoteEngine.pipelineDepth",
     "ArchivePromoteEngine.FileIdentity.mtimeSec",
@@ -977,7 +978,6 @@
     "PromoteToArchiveJob.ProvenBytesStep",
     "PromoteToArchiveJob.recordDateRefusal",
     "PromoteToArchiveJob.duplicateRefusal",
-    "PromoteToArchiveJob.trustedSourceDigestOffMain",
     "PromoteToArchiveJob.hashSourceOffMain"
    ],
    "widened_for_split": [
@@ -1336,7 +1336,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": {
-   "lines": 1283,
+   "lines": 1291,
    "decls": 34,
    "could_be_private": [
     "ArchiveAngelJob.RunningVerify",
@@ -1356,8 +1356,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": {
-   "lines": 967,
-   "decls": 132,
+   "lines": 990,
+   "decls": 135,
    "could_be_private": [
     "ArchiveAngelPlan.LoopAction",
     "ArchiveAngelPlan.ProposedDateSource",
@@ -1650,7 +1650,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift": {
-   "lines": 344,
+   "lines": 359,
    "decls": 23,
    "could_be_private": [
     "VideoScanModel.ClearDiskPhase",
@@ -1917,7 +1917,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogCommitter.swift": {
-   "lines": 855,
+   "lines": 870,
    "decls": 51,
    "could_be_private": [
     "CatalogCommitter.unpurgedLinesPerCommit",
@@ -2360,8 +2360,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogStore.swift": {
-   "lines": 1756,
-   "decls": 67,
+   "lines": 1771,
+   "decls": 68,
    "could_be_private": [
     "CatalogSnapshot.probeWindowBytes",
     "CatalogStore.heldRefusals",
@@ -2625,7 +2625,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/EventsPane.swift": {
-   "lines": 645,
+   "lines": 657,
    "decls": 75,
    "could_be_private": [
     "EventsStore.shownSuggestions",
@@ -2649,8 +2649,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/FileDossierStore.swift": {
-   "lines": 225,
-   "decls": 13,
+   "lines": 234,
+   "decls": 14,
    "could_be_private": [
     "FileDossierStore.slowRead"
    ],
@@ -3332,7 +3332,6 @@
    "lines": 529,
    "decls": 43,
    "could_be_private": [
-    "EventsDecisionStore.statsFilename",
     "EventsDecisionStore.authorityRefusal",
     "EventsDecisionWriter.init"
    ],
@@ -3428,8 +3427,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Events/VideoScanModel+Events.swift": {
-   "lines": 225,
-   "decls": 28,
+   "lines": 239,
+   "decls": 29,
    "could_be_private": [
     "EventsInputs.projectionNanos",
     "VideoScanModel.eventsRow",
@@ -3810,7 +3809,7 @@
    ]
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift": {
-   "lines": 2977,
+   "lines": 2978,
    "decls": 151,
    "could_be_private": [
     "FamilyTreeLiveModel.LoadState",
@@ -6162,7 +6161,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/Web/HallieWebPoster.swift": {
-   "lines": 111,
+   "lines": 112,
    "decls": 10,
    "could_be_private": [
     "HallieWebPosterCache.posterURL"
@@ -6170,7 +6169,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/Web/HallieWebProxy.swift": {
-   "lines": 193,
+   "lines": 191,
    "decls": 12,
    "could_be_private": [
     "HallieWebProxyPlan.defaultHeight"
@@ -6292,7 +6291,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/AudioTranscriber.swift": {
-   "lines": 570,
+   "lines": 480,
    "decls": 6,
    "could_be_private": [],
    "widened_for_split": []
@@ -6450,9 +6449,12 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/FFmpegEncodeCheck.swift": {
-   "lines": 90,
-   "decls": 7,
-   "could_be_private": [],
+   "lines": 196,
+   "decls": 15,
+   "could_be_private": [
+    "FFmpegEncodeCheck.probeDeadlineSeconds",
+    "FFmpegEncodeCheck.stderrHead"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/FFmpegFrameProvider.swift": {
@@ -6629,8 +6631,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/PreviewService.swift": {
-   "lines": 495,
-   "decls": 32,
+   "lines": 644,
+   "decls": 39,
    "could_be_private": [
     "PreviewService.thumbnailDebounceTask"
    ],
@@ -6675,9 +6677,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/ThumbnailPrecache.swift": {
-   "lines": 356,
-   "decls": 5,
+   "lines": 475,
+   "decls": 11,
    "could_be_private": [
+    "ThumbnailCachePolicy.costLimitFloorBytes",
+    "ThumbnailCachePolicy.costLimitCapBytes",
     "ThumbnailCachePolicy.precacheHeadroomBytes"
    ],
    "widened_for_split": []
@@ -6705,7 +6709,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/VideoScanModel+EmbeddedDateBackfill.swift": {
-   "lines": 278,
+   "lines": 279,
    "decls": 16,
    "could_be_private": [
     "VideoScanModel.EmbeddedDateBackfillResult",
@@ -6845,9 +6849,7 @@
   "VideoScan/VideoScan/MediaOps/BalancedCopyProofMeasure.swift": {
    "lines": 905,
    "decls": 53,
-   "could_be_private": [
-    "BalancedCopyProof.Measurement"
-   ],
+   "could_be_private": [],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/BalancedCopyProofReadLog.swift": {
@@ -6858,8 +6860,7 @@
     "BalancedCopyProof.quietLogLevels",
     "BalancedCopyProof.loudLogLevels",
     "BalancedCopyProof.reconfiguredPayload",
-    "BalancedCopyProof.cleanExitPayload",
-    "BalancedCopyProof.ReadFault"
+    "BalancedCopyProof.cleanExitPayload"
    ],
    "widened_for_split": []
   },
@@ -6907,8 +6908,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/CatalogAuditRun.swift": {
-   "lines": 452,
-   "decls": 36,
+   "lines": 474,
+   "decls": 37,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -6916,7 +6917,6 @@
    "lines": 139,
    "decls": 6,
    "could_be_private": [
-    "CatalogKnownCopies.fileStamp",
     "CatalogKnownCopies.mayBeSameFile"
    ],
    "widened_for_split": []
@@ -6966,8 +6966,7 @@
     "CheckCopiesSummary.regroupSkipped",
     "CheckCopiesSummary.saveConfirmed",
     "VideoScanModel.checkCopiesNote",
-    "VideoScanModel.checkCopiesRegroupScope",
-    "MediaFileOperationsCenter.startCheckCopies"
+    "VideoScanModel.checkCopiesRegroupScope"
    ],
    "widened_for_split": []
   },
@@ -7279,7 +7278,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/CombineEngine.swift": {
-   "lines": 425,
+   "lines": 427,
    "decls": 24,
    "could_be_private": [
     "CombineEngine.CodecCheck"
@@ -7343,11 +7342,10 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/ContentCopyProof.swift": {
-   "lines": 128,
+   "lines": 152,
    "decls": 14,
    "could_be_private": [
-    "ContentCopyProof.sameDigest",
-    "ContentCopyProof.Claim.holdsNow"
+    "ContentCopyProof.sameDigest"
    ],
    "widened_for_split": []
   },
@@ -7446,12 +7444,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift": {
-   "lines": 2996,
+   "lines": 2998,
    "decls": 148,
    "could_be_private": [
     "DeleteDuplicatesWorkItem.siblingAllowance",
     "DeleteDuplicatesWorkItem.targetHold",
-    "DeleteDuplicatesPhaseOne.learnedKeeperFixity",
     "DeleteDuplicatesPhaseOne.retainedInQuarantine",
     "DeleteDuplicatesPhaseOne.RetainedInQuarantine",
     "DeleteDuplicatesPhaseTwo.evidenceChanged",
@@ -7471,7 +7468,6 @@
     "DeleteDuplicatesJob.PairTally.bytesLeftAlone",
     "DeleteDuplicatesJob.PairTally.bytesSkipped",
     "DeleteDuplicatesJob.PairTally.siblingBytes",
-    "DeleteDuplicatesJob.rowLine",
     "DeleteDuplicatesJob.remainWords",
     "DeleteDuplicatesJob.leftAloneWords",
     "DeleteDuplicatesJob.PlanForThisRun",
@@ -7571,8 +7567,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/DerivativeOutputPublish.swift": {
-   "lines": 273,
-   "decls": 15,
+   "lines": 289,
+   "decls": 17,
    "could_be_private": [
     "DerivativeOutputPublish.isStalePartial"
    ],
@@ -7771,7 +7767,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift": {
-   "lines": 1720,
+   "lines": 1738,
    "decls": 111,
    "could_be_private": [
     "MediaFileOperationsCenter.removeJobs",
@@ -7797,7 +7793,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindowForwarder.swift": {
-   "lines": 677,
+   "lines": 683,
    "decls": 57,
    "could_be_private": [
     "MediaFileOperationsWindowForwarder.withUserOrigin",
@@ -7807,7 +7803,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/MediaTrash.swift": {
-   "lines": 57,
+   "lines": 70,
    "decls": 3,
    "could_be_private": [
     "MediaTrash.moveToTestHostTrash"
@@ -7884,14 +7880,16 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/PartialFileNaming.swift": {
-   "lines": 494,
-   "decls": 36,
+   "lines": 576,
+   "decls": 42,
    "could_be_private": [
     "PartialFileNaming.keptNameAttempts",
-    "PartialFileNaming.FileID",
+    "PartialFileNaming.FileStamp.modifiedSeconds",
+    "PartialFileNaming.FileStamp.modifiedNanoseconds",
     "PartialFileNaming.LiveSet",
     "PartialFileNaming.LiveSet.pinnedPaths",
     "PartialFileNaming.registerLive",
+    "PartialFileNaming.isPinned",
     "ExclusivePublish.noHardLinkErrnos"
    ],
    "widened_for_split": []
@@ -8207,16 +8205,14 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/SignatureVerification.swift": {
-   "lines": 982,
-   "decls": 51,
+   "lines": 1011,
+   "decls": 53,
    "could_be_private": [
     "VerifiedDuplicate.duplicateFixity",
     "SignatureVerification.HoldOutcome",
     "SignatureVerification.HeldVerification",
     "SignatureVerification.FinalVerdict",
     "SignatureVerification.QuarantineOutcome",
-    "SignatureVerification.headCompareBytes",
-    "SignatureVerification.WholeFileFixity",
     "SignatureVerification.candidateDisclaimer"
    ],
    "widened_for_split": []
@@ -8250,6 +8246,17 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/MediaOps/TranscodeJob+EncodeGate.swift": {
+   "lines": 184,
+   "decls": 11,
+   "could_be_private": [],
+   "widened_for_split": [
+    "TranscodeJob.PartialCleanup",
+    "TranscodeJob.changedAfterVerification",
+    "TranscodeJob.encodeGate",
+    "TranscodeJob.replaceNotCompletedMessage"
+   ]
+  },
   "VideoScan/VideoScan/MediaOps/TranscodeJob+FrameMD5.swift": {
    "lines": 114,
    "decls": 2,
@@ -8257,7 +8264,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/TranscodeJob.swift": {
-   "lines": 996,
+   "lines": 1043,
    "decls": 12,
    "could_be_private": [],
    "widened_for_split": []
@@ -8576,14 +8583,12 @@
     "VideoScanModel.PruneHold",
     "VideoScanModel.catalogDigestChangedReason",
     "VideoScanModel.PruneArchiveReading",
-    "VideoScanModel.readArchiveInFull",
-    "VideoScanModel.pruneCandidateProof",
     "VideoScanModel.pruneProofProblemOnDisk",
     "VideoScanModel.pruneProofProblemInCatalog"
    ]
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift": {
-   "lines": 1203,
+   "lines": 1212,
    "decls": 30,
    "could_be_private": [
     "VideoScanModel.quoteNotePath",
@@ -8656,7 +8661,7 @@
    ]
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+TrashSelection.swift": {
-   "lines": 649,
+   "lines": 653,
    "decls": 31,
    "could_be_private": [
     "VideoScanModel.knownCopyRetiredRoots",
@@ -8848,7 +8853,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/People/AdaFaceEngine.swift": {
-   "lines": 190,
+   "lines": 205,
    "decls": 10,
    "could_be_private": [],
    "widened_for_split": []
@@ -9303,7 +9308,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/People/PersonFinderCompilation.swift": {
-   "lines": 788,
+   "lines": 789,
    "decls": 26,
    "could_be_private": [
     "pfExtractAllClips",
@@ -9514,7 +9519,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/People/PersonNameGuard.swift": {
-   "lines": 110,
+   "lines": 119,
    "decls": 10,
    "could_be_private": [
     "PersonNameGuard.CatalogWriteResolution"
@@ -9895,7 +9900,7 @@
    ]
   },
   "VideoScan/VideoScan/Shared/LogSink.swift": {
-   "lines": 95,
+   "lines": 96,
    "decls": 1,
    "could_be_private": [],
    "widened_for_split": []
@@ -9925,12 +9930,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Shared/PersistentLog.swift": {
-   "lines": 287,
-   "decls": 9,
+   "lines": 324,
+   "decls": 10,
    "could_be_private": [
     "PersistentLog.testHostLogDir",
-    "PersistentLog.defaultRotationThresholdBytes",
-    "PersistentLog.rotationThresholdBytes"
+    "PersistentLog.defaultRotationThresholdBytes"
    ],
    "widened_for_split": []
   },
@@ -9949,11 +9953,9 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Shared/RAMDisk.swift": {
-   "lines": 164,
-   "decls": 5,
-   "could_be_private": [
-    "RAMDisk.currentRefCount"
-   ],
+   "lines": 314,
+   "decls": 24,
+   "could_be_private": [],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Shared/SendableRegex.swift": {
@@ -9975,7 +9977,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Shared/StallMonitor.swift": {
-   "lines": 335,
+   "lines": 344,
    "decls": 12,
    "could_be_private": [
     "StallMonitor.secondsSinceLastTick"
@@ -10203,8 +10205,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Volumes/ScanCheckpoint.swift": {
-   "lines": 118,
-   "decls": 11,
+   "lines": 141,
+   "decls": 12,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -10530,12 +10532,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Volumes/VolumeCompare.swift": {
-   "lines": 1270,
+   "lines": 1282,
    "decls": 29,
    "could_be_private": [
     "VolumeCompareResult.alreadySafe",
-    "VolumeCompareResult.missingHumanSize",
-    "VolumeRescueOperation.measuredSize"
+    "VolumeCompareResult.missingHumanSize"
    ],
    "widened_for_split": []
   },
@@ -10680,8 +10681,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/AtomicFilePublish.swift": {
-   "lines": 402,
-   "decls": 0,
+   "lines": 509,
+   "decls": 9,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -10796,7 +10797,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundLogSink.swift": {
-   "lines": 96,
+   "lines": 106,
    "decls": 0,
    "could_be_private": [],
    "widened_for_split": []
@@ -10851,8 +10852,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraCanary.swift": {
-   "lines": 89,
-   "decls": 0,
+   "lines": 124,
+   "decls": 3,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -11001,6 +11002,12 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CommandExecutor.swift": {
+   "lines": 189,
+   "decls": 3,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogChangeDetector.swift": {
    "lines": 88,
    "decls": 0,
@@ -11079,6 +11086,12 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/HashingEncoder.swift": {
    "lines": 134,
    "decls": 9,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ContainedLogWrite.swift": {
+   "lines": 72,
+   "decls": 1,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -12463,9 +12476,17 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner+Blocking.swift": {
+   "lines": 102,
+   "decls": 2,
+   "could_be_private": [
+    "ProcessRunner.blockingWaitMarginSeconds"
+   ],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift": {
-   "lines": 919,
-   "decls": 3,
+   "lines": 990,
+   "decls": 4,
    "could_be_private": [
     "ProcessControl.lastResumedAt",
     "ProcessControl.resumeForKill"
@@ -12574,6 +12595,16 @@
    "lines": 154,
    "decls": 0,
    "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ScriptedExecutor.swift": {
+   "lines": 416,
+   "decls": 3,
+   "could_be_private": [
+    "ScriptedExecutor.termExit",
+    "ScriptedExecutor.hangScript",
+    "ScriptedExecutor.launchFailureWords"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/SoundPresencePolicy.swift": {
@@ -12953,6 +12984,12 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/TaskTreeScope.swift": {
+   "lines": 297,
+   "decls": 3,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostDetection.swift": {
    "lines": 215,
    "decls": 5,
@@ -12970,7 +13007,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TimingBudget.swift": {
-   "lines": 436,
+   "lines": 449,
    "decls": 2,
    "could_be_private": [
     "TimingBudget.LoadSample.coresText"
