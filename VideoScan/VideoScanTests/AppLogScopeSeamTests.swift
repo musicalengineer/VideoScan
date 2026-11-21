@@ -14,7 +14,7 @@
 
 import Foundation
 import Testing
-import VideoScanCore
+@_spi(Testing) import VideoScanCore   // SPI: LogScope.with for the bare-Core-sink case
 @testable import VideoScan
 
 @Suite("appLog seam — a test's capture belongs to its own task tree")

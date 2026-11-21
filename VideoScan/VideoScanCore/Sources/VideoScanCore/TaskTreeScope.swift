@@ -72,15 +72,21 @@ public enum LogScope {
     public static var current: (any TaskScopedLogSink)? { bound }
 
     /// Bind `sink` for `body` and every child task it starts. TEST USE
-    /// ONLY (a sensor forbids it in production sources).
-    public static func with<R>(_ sink: any TaskScopedLogSink, _ body: () throws -> R) rethrows -> R {
+    /// ONLY, and the compiler holds that line: every way to bind (these
+    /// two, `LogCapture.scoped`, `LogCapture.init`) is `@_spi(Testing)`,
+    /// visible only to a file that writes `@_spi(Testing) import
+    /// VideoScanCore` — which a sensor forbids in app and helper sources
+    /// (Codex r1, 2026-11-21: with these merely `public`, an app source
+    /// could write `LogCapture.init().scoped { … }` and divert its lines).
+    /// (C++: a friend-only setter; the test targets are the friends.)
+    @_spi(Testing) public static func with<R>(_ sink: any TaskScopedLogSink, _ body: () throws -> R) rethrows -> R {
         try $bound.withValue(sink, operation: body)
     }
 
     /// Async form. `isolation` keeps `body` on the caller's actor (a
     /// `@MainActor` test stays on the main actor; nothing has to be
     /// Sendable to cross).
-    public static func with<R>(
+    @_spi(Testing) public static func with<R>(
         _ sink: any TaskScopedLogSink,
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> R
@@ -115,7 +121,8 @@ public final class LogCapture: TaskScopedLogSink {
     /// guards: the state is reachable only inside `withLock`.)
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    public init(name: String = "capture", maxLines: Int = 200_000) {
+    /// Testing SPI, like the binders: production cannot build one.
+    @_spi(Testing) public init(name: String = "capture", maxLines: Int = 200_000) {
         self.name = name
         self.maxLines = max(1, maxLines)
     }
@@ -123,12 +130,12 @@ public final class LogCapture: TaskScopedLogSink {
     // MARK: Scoping
 
     /// Bind this capture for `body` and every child task it starts.
-    public func scoped<R>(_ body: () throws -> R) rethrows -> R {
+    @_spi(Testing) public func scoped<R>(_ body: () throws -> R) rethrows -> R {
         try LogScope.with(self, body)
     }
 
     /// Async form; see `LogScope.with`.
-    public func scoped<R>(
+    @_spi(Testing) public func scoped<R>(
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> R
     ) async rethrows -> R {

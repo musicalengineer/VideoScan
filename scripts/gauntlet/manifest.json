@@ -37954,6 +37954,7 @@
         "productionSnapshotIsInert",
         "readHelpers",
         "snapshotReentersAcrossGCD",
+        "theProductionRuleCatchesTheCodexBypass",
         "theRuleCatchesItsOwnMutation",
         "throwingBodyEndsTheScope",
         "throwingDetachedCarriesTheScope",
@@ -40754,7 +40755,7 @@
       ],
       "expected_floor": 3928,
       "name": "unit",
-      "package_expected_floor": 970,
+      "package_expected_floor": 971,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",

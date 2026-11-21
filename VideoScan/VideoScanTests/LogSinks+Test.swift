@@ -1,5 +1,5 @@
 import Foundation
-import VideoScanCore
+@_spi(Testing) import VideoScanCore   // SPI: LogCapture.init and LogScope.with — the binders production cannot see
 @testable import VideoScan
 
 // MARK: - Capturing `appLog` in a test

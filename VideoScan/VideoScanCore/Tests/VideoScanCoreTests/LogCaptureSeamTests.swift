@@ -6,7 +6,7 @@
 
 import Foundation
 import Testing
-@testable import VideoScanCore
+@_spi(Testing) @testable import VideoScanCore   // SPI: LogCapture.init / scoped, LogScope.with
 
 /// What production's `appLog` does, in miniature: the scoped sink, else a default.
 private func logLine(_ line: String, default fallback: LogCapture) {
@@ -332,7 +332,18 @@ struct LogScopeSensorTests {
         #expect(!text.contains("nonisolated(unsafe) var appLog"))
     }
 
-    @Test("sensor: no app or helper (non-test) source binds a log scope or builds a LogCapture")
+    /// What a production source line must never contain (comment lines are
+    /// skipped by the caller): any spelling of a binder, the capture type
+    /// itself, or the import that makes the binders visible.
+    static func bindsAScope(_ line: String) -> Bool {
+        func has(_ pattern: String) -> Bool { line.range(of: pattern, options: .regularExpression) != nil }
+        return has(#"\bLogCapture\b"#)                    // the type, however it is built (`(`, `.init(`, `: LogCapture = .init()`)
+            || has(#"\bLogScope\s*\.\s*(with\b|\$)"#)     // the binder, called or referenced; the projected task-local
+            || has(#"\.\s*scoped\s*[({]"#)                // `x.scoped { … }` / `x.scoped(isolation:)`
+            || has(#"@_spi\(\s*Testing\s*\).*\bimport\b"#)   // the only door to all of the above
+    }
+
+    @Test("sensor: no app or helper (non-test) source binds a log scope, names LogCapture or imports the Testing SPI")
     func productionNeverBindsAScope() throws {
         var read = 0
         var hits: [String] = []
@@ -343,13 +354,33 @@ struct LogScopeSensorTests {
                 read += 1
                 let code = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
                     .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-                for line in code where line.contains("LogScope.with(") || line.contains("LogCapture(") || line.contains("LogScope.$") {
+                for line in code where Self.bindsAScope(String(line)) {
                     hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
                 }
             }
         }
         #expect(read > 700, "the sensor read only \(read) source files")
         #expect(hits.isEmpty, "\(hits)")
+    }
+
+    /// Codex r1 (2026-11-21, P2): `LogCapture.init().scoped { … }` bound a
+    /// capture from an ordinary app source and the rule above missed it —
+    /// it knew neither `.init()` nor `.scoped`.
+    @Test("regression (Codex r1): the production rule catches every way to bind — including LogCapture.init().scoped { … }")
+    func theProductionRuleCatchesTheCodexBypass() {
+        #expect(Self.bindsAScope(#"LogCapture.init().scoped { appLog.write("OUTCOME") }"#))
+        #expect(Self.bindsAScope("let c: LogCapture = .init()"))
+        #expect(Self.bindsAScope("capture.scoped { work() }"))
+        #expect(Self.bindsAScope("await capture.scoped(isolation: nil) { await work() }"))
+        #expect(Self.bindsAScope("LogScope.with(sink) { work() }"))
+        #expect(Self.bindsAScope("let f = LogScope.with"))
+        #expect(Self.bindsAScope("@_spi(Testing) import VideoScanCore"))
+        #expect(Self.bindsAScope("@_spi(Testing) @testable import VideoScanCore"))
+        // What production legitimately writes.
+        #expect(!Self.bindsAScope("AppLogRouting.resolve(scoped: LogScope.current, production: productionAppLog)"))
+        #expect(!Self.bindsAScope("let scope = TaskTreeScope.current"))
+        #expect(!Self.bindsAScope("scope.run { MainActor.assumeIsolated { work() } }"))
+        #expect(!Self.bindsAScope("@_spi(Testing) public init(stdout: String?, stderr: String, exitCode: Int32,"))
     }
 
     @Test("sensor: the escapes found by the log audit carry the task-tree scope")

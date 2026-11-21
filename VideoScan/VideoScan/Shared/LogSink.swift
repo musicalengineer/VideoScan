@@ -94,12 +94,3 @@ final class NullLogSink: LogSink, @unchecked Sendable {
     func close() {}
 }
 
-
-// MARK: - LogCapture is a LogSink
-//
-// Core's `LogCapture` (the recording sink tests bind, with `contains` /
-// `waitForLine`) already has `name` / `start` / `write` / `flush` /
-// `close`; it only lacks a file.
-extension LogCapture: LogSink {
-    var fileURL: URL? { nil }
-}

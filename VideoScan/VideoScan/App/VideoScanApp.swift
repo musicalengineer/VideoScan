@@ -35,7 +35,7 @@ private let shutdownLogger = Logger(subsystem: "Rick-Breen.VideoScan", category:
 // cross-suite races) no longer compiles, and a sensor keeps it out.
 //
 // Cost in production: one task-local read per log line and a nil check —
-// no lock, no allocation (LogCaptureSeamTests measures it; the write that
+// no lock, no allocation (Core's log-seam tests measure it; the write that
 // follows is a DateFormatter + write(2) + fsync).
 //
 // (C++: `appLog` used to be a namespace-scope `ILogSink*` that tests
@@ -60,7 +60,7 @@ enum AppLogRouting {
         guard let scoped else { return production }      // production: always this line
         // Test scopes only from here. Every sink bound through
         // `withAppLog` IS a LogSink, so the cast succeeds; the adapter
-        // covers a bare Core sink.
+        // covers a bare Core sink (Core's own recording sink included).
         // (C++: a dynamic_cast across two interfaces of the same object.)
         return (scoped as? any LogSink) ?? ScopedLogSinkAdapter(scoped)
     }
