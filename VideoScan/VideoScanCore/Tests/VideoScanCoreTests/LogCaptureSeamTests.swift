@@ -259,7 +259,8 @@ struct LogScopeCostTests {
     /// branch falls straight through to the production sink). Printed so the
     /// number is in the test log; the bound is ~100x looser than the
     /// measurement so a loaded machine cannot make it flap.
-    @Test("an unbound LogScope.current read costs well under a microsecond (no lock, no allocation)")
+    @Test("an unbound LogScope.current read costs well under a microsecond (no lock, no allocation)",
+          .tags(.quietMachine))   // judges a wall-time bound: the serial phase (QuietMachine.swift)
     func unboundReadIsCheap() {
         let iterations = 2_000_000
         var hits = 0
