@@ -839,6 +839,7 @@ def test_the_summary_is_the_run_as_data_counts_shards_and_the_tail(bench):
     assert (d["version"], d["verdict"], d["jobs"]) == (xs.NIGHTLY_SUMMARY_VERSION, "GREEN", 2)
     assert (d["passed"], d["failed"], d["skipped"], d["expected"]) == (3, 0, 1, 4)
     assert d["counts_from"] == "bundles" and d["expected_failures"] == 0 and d["failures"] == []
+    assert d["planned_shards"] == len(d["shards"]) == 3, "a reader checks the summary against the run with this"
     assert [s["name"] for s in d["shards"]] == ["shard-01", "shard-02", "serial-tail"]
     tail = d["shards"][-1]
     assert tail["serial"] and "timing budget" in tail["serial"] and tail["passed"] == 1

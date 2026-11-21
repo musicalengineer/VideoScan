@@ -547,6 +547,8 @@ awk '/^parse_test_counts\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "
 # parse_test_counts delegates the crash block to parse_crashed_tests; without
 # it the extracted lib would silently leave CRASHED unset.
 awk '/^parse_crashed_tests\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" >> "$PARSE_LIB"
+# … and both name readers share one rule (2026-11-21).
+awk '/^nightly_name_token_py\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" >> "$PARSE_LIB"
 FIXTURE_DIR="$SCRIPT_DIR/../tests/fixtures/logs"
 
 # Runs parse_test_counts on a log in a subshell and echoes
@@ -1932,7 +1934,8 @@ grep -q '^bootstrap gui/' "$RT/launchctl.log" \
 # tests/test_xctest_shards.py) lays down a chosen run — each shard's log, the
 # summary JSON, the result bundles — so the REAL run_app_tests_sharded,
 # parse_test_counts, read_app_shards_summary, classify_nightly_test_result,
-# apply_test_host_start_diagnosis and merge_app_shards_coverage run end to end
+# apply_test_host_start_diagnosis and union_app_shards_coverage (the real
+# scripts/xccov_union.py over a fake xccov) run end to end
 # with no test host. Pins: the same outcome gets the same row as one host
 # (green, a failed test, a crashed test, a host that never started); the
 # counts are the bundles' when a verdict line was glued away, and a failure
@@ -1968,7 +1971,26 @@ while os.path.exists(os.path.join(fix, "%d.log" % n)):
     d = os.path.join(run_dir, "%04d" % n)
     os.makedirs(os.path.join(d, "tmp"))
     shutil.copy(os.path.join(fix, "%d.log" % n), os.path.join(d, "strand.log"))
-    os.makedirs(os.path.join(d, "shard.xcresult"))
+    bundle = os.path.join(d, "shard.xcresult")
+    os.makedirs(bundle)
+    # Coverage as xccov prints it. One logic file of 4 executable lines (2-5): host n ran line n+2,
+    # and every host ran line 2; one SwiftUI-named file the logic filter leaves out. The union over
+    # three hosts is lines 2,3,4 of 4 = 75%; no host alone has more than 2 of 4.
+    # SHARD_FAKE_COV_SKEW: host 1 was built from other sources (line 6 is executable there).
+    skew = os.environ.get("SHARD_FAKE_COV_SKEW") and n == 1
+    ran = {2, min(n + 2, 5)}
+    logic = [{"line": 1, "isExecutable": False}] + [
+        {"line": k, "isExecutable": True, "executionCount": 3 if k in ran else 0,
+         "subranges": [{"column": 1, "length": 4, "executionCount": 1}]} for k in range(2, 7 if skew else 6)]
+    view = [{"line": 1, "isExecutable": True, "executionCount": 9}]
+    json.dump({"/src/Ledger.swift": logic, "/src/LedgerView.swift": view, "/dep/Other.swift": view},
+              open(os.path.join(bundle, "archive.json"), "w"))
+    json.dump({"targets": [
+        {"name": "VideoScan.app", "files": [
+            {"path": "/src/Ledger.swift", "coveredLines": len(ran) + 1, "executableLines": 6},
+            {"path": "/src/LedgerView.swift", "coveredLines": 1, "executableLines": 1}]},
+        {"name": "Other", "files": [{"path": "/dep/Other.swift", "coveredLines": 1, "executableLines": 1}]}]},
+        open(os.path.join(bundle, "report.json"), "w"))
     n += 1
 print("xctest-shards: 9 suites, ~9 tests → %d test hosts at once (jobs %s)" % (n, a[a.index("--jobs") + 1]), flush=True)
 stop = float(os.environ.get("SHARD_FAKE_HOST_STOP") or 0)
@@ -2034,6 +2056,7 @@ shard_case() {
         NIGHTLY_APP_SHARDS_TIMINGS="$SH/timings.json"
         NIGHTLY_TEST_LOG="$SH/app-test.log"
         NIGHTLY_XCRESULT="$SH/merged.xcresult"
+        export VIDEOSCAN_NIGHTLY_COVERAGE_UNION="${SHARD_CASE_UNION_TOOL:-$SCRIPT_DIR/xccov_union.py}"
         HOME="$SH/home"
         NIGHTLY_APP_SHARDS_USED=true
         APP_TEST_HOSTS=8
@@ -2051,20 +2074,26 @@ shard_case() {
             "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}" "$APP_SHARD_REASON"
         apply_test_host_start_diagnosis "$NIGHTLY_TEST_LOG" "$TOTAL"
         if [ -n "${SHARD_CASE_MERGE:-}" ]; then
-            merge_app_shards_coverage > /dev/null
-            printf '%s|%s|' "$?" "$([ -d "$NIGHTLY_XCRESULT" ] && echo bundle || echo none)"
+            COV_BASIS=""
+            union_app_shards_coverage > /dev/null
+            printf '%s|%s|%s|' "$?" "$COV_LOGIC" "$COV_BASIS"
         fi
         printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' "$STATUS" "$REASON" "$PASSED" "$FAILED" "$SKIPPED" \
             "$KNOWN_ISSUE_TESTS" "$FAILED_NAMES_JSON" "${CRASHED_NAMES_JSON:-[]}" "$APP_SHARDS_COMPLETE" "$APP_TEST_HOSTS"
     )
 }
-# A fake xcrun for the merge: records its arguments, makes the output bundle.
+# A fake xcrun for the coverage union: `xccov view --report|--archive --json <bundle>` prints the
+# bundle's report.json / archive.json; every call is recorded. SHARD_FAKE_XCCOV_FAILS: it cannot.
 cat > "$SH/bin/xcrun" <<'FXR'
 #!/bin/sh
-echo "$*" > "$SHARD_FAKE_ARGS.xcrun"
-[ -n "${SHARD_FAKE_MERGE_FAILS:-}" ] && { echo "error: cannot merge" >&2; exit 1; }
-while [ $# -gt 1 ]; do [ "$1" = "--output-path" ] && mkdir -p "$2"; shift; done
-exit 0
+echo "$*" >> "$SHARD_FAKE_ARGS.xcrun"
+[ -n "${SHARD_FAKE_XCCOV_FAILS:-}" ] && { echo "error: cannot read the result bundle" >&2; exit 1; }
+[ "$1 $2 $4" = "xccov view --json" ] || { echo "unexpected: $*" >&2; exit 64; }
+case "$3" in
+    --report) cat "$5/report.json" ;;
+    --archive) cat "$5/archive.json" ;;
+    *) exit 64 ;;
+esac
 FXR
 chmod +x "$SH/bin/xcrun"
 mkdir -p "$SH/home"
@@ -2146,7 +2175,7 @@ else
     shard_fixture died '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":1,"green":false,"rc":65,"codes":["died"],"bundle_read":false,"problems":["xcodebuild exit 65 with no failed test (a crash, a dead test host or an xcodebuild error)"]}],"counts_from":"mixed","expected_failures":null}' \
         "$P1\n$P2\n" "$P1\n"
     got=$(SHARD_CASE_MERGE=1 shard_case died 1)
-    want='1|none|failed|shard-died:1|3|0|0|0|[]|[]|false|8'
+    want='1|null||failed|shard-died:1|3|0|0|0|[]|[]|false|8'
     if [ "$got" = "$want" ] && grep -q 'App shards: RED shard-02: xcodebuild exit 65 with no failed test' "$SH/case.log" \
         && grep -q 'Coverage NOT published' "$SH/case.log"; then
         pass "a shard that dies with no failed test: shard-died:1, the shard and its log named, and no coverage number from a partial run"
@@ -2164,7 +2193,7 @@ else
     shard_fixture short '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":3,"green":false,"codes":["short"],"problems":["ran 1 of 3 tests"]}]}' \
         "$P1\n$P2\n" "$P1\n"
     got=$(shard_case short 1)
-    want='failed|shard-short:1|3|0|0|0|[]|[]|true|8'
+    want='failed|shard-short:1|3|0|0|0|[]|[]|false|8'
     [ "$got" = "$want" ] && grep -q 'App shards: RED shard-02: ran 1 of 3 tests' "$SH/case.log" \
         && pass "counts short (a shard ran 1 of its 3 tests, every one green): shard-short:1, never ok" \
         || fail "short shard: got '$got' want '$want'"
@@ -2224,38 +2253,162 @@ else
         || fail "the watchdog's extra grace '${stop_default}' is not above the strand runner's stop time '${strands_stop}'"
 
     # ── coverage ──
-    got=$(SHARD_CASE_MERGE=1 shard_case green 0)
-    xcrun_args=$(cat "$SH/args.txt.xcrun" 2>/dev/null)
-    want_args="xcresulttool merge $SH/run/run/0000/shard.xcresult $SH/run/run/0001/shard.xcresult $SH/run/run/0002/shard.xcresult --output-path $SH/merged.xcresult"
-    case "$got" in
-        "0|bundle|ok||"*) [ "$xcrun_args" = "$want_args" ] \
-            && pass "coverage: every shard's result bundle (the tail's too) is merged into the one bundle xccov reads" \
-            || fail "merge arguments: got '$xcrun_args' want '$want_args'" ;;
-        *) fail "coverage merge on a green run: got '$got'" ;;
-    esac
+    # The number is the exact union (scripts/xccov_union.py, the real one, over a fake xccov): a
+    # line is covered when it ran in ANY host. Three hosts ran lines {2}, {2,3}, {2,4} of the logic
+    # file's four: 3 of 4 = 75%, where no host alone has more than 2 (and Xcode's own merge, which
+    # this replaces, is neither). The SwiftUI-named file is left out, as the awk leaves it out.
     rm -f "$SH/args.txt.xcrun"
-    got=$(SHARD_FAKE_MERGE_FAILS=1 SHARD_CASE_MERGE=1 shard_case green 0)
+    got=$(SHARD_CASE_MERGE=1 shard_case green 0)
     case "$got" in
-        "1|none|ok||"*) grep -q 'Coverage NOT published: xcresulttool merge of 3 bundles failed' "$SH/case.log" \
-            && pass "a merge that fails publishes no coverage number (no bundle is left to read), and says why" \
-            || fail "merge failure was silent: $(cat "$SH/case.log")" ;;
-        *) fail "failed merge: got '$got'" ;;
+        "0|75.000|lines|ok||"*)
+            [ "$(grep -c -- '--archive --json' "$SH/args.txt.xcrun")" = 3 ] && [ "$(grep -c -- '--report --json' "$SH/args.txt.xcrun")" = 3 ] \
+                && ! grep -q 'xcresulttool' "$SH/args.txt.xcrun" \
+                && grep -q 'Coverage: coverage-union: 75.000% (3/4 distinct lines of VideoScan.app, logic only; union of 3 bundle(s)' "$SH/case.log" \
+                && pass "coverage: the exact union over every shard's bundle (the tail's too) — 3 of 4 lines, where the best single host has 2; never xcresulttool merge" \
+                || fail "coverage union calls or log line: $(cat "$SH/args.txt.xcrun"; cat "$SH/case.log")" ;;
+        *) fail "coverage union on a green run: got '$got'" ;;
     esac
-    # After the merge a green shard's bundle goes (620 MB each for real); a red shard's stays.
+    got=$(SHARD_FAKE_XCCOV_FAILS=1 SHARD_CASE_MERGE=1 shard_case green 0)
+    case "$got" in
+        "1|null||ok||"*) grep -q 'Coverage NOT published: coverage-union: REFUSED — .*xccov view --report failed' "$SH/case.log" \
+            && pass "a bundle xccov cannot read publishes no coverage number, and the log says which and why" \
+            || fail "unreadable bundle was silent: $(cat "$SH/case.log")" ;;
+        *) fail "unreadable bundle: got '$got'" ;;
+    esac
+    # A bundle from another build (its file has an executable line the others do not): no union.
+    got=$(SHARD_FAKE_COV_SKEW=1 SHARD_CASE_MERGE=1 shard_case green 0)
+    case "$got" in
+        "1|null||ok||"*) grep -q 'Coverage NOT published: coverage-union: REFUSED — .*0001/shard.xcresult: /src/Ledger.swift has 5 executable lines, .*0000/shard.xcresult has 4' "$SH/case.log" \
+            && pass "a shard whose file has other executable lines than the first shard's refuses the union (not one build): no number, the file and both bundles named" \
+            || fail "a skewed denominator was not refused by name: $(cat "$SH/case.log")" ;;
+        *) fail "skewed denominators: got '$got'" ;;
+    esac
+    got=$(SHARD_CASE_UNION_TOOL="$SH/no-such-tool.py" SHARD_CASE_MERGE=1 shard_case green 0)
+    case "$got" in
+        "2|null||ok||"*) pass "a checkout without scripts/xccov_union.py publishes no sharded coverage number (never Xcode's merge)" ;;
+        *) fail "sharded coverage without the union tool: got '$got'" ;;
+    esac
+    # After the union a green shard's bundle goes (620 MB each for real); a red shard's stays.
     shard_case onered 1 > /dev/null
     kept=$( # shellcheck disable=SC1090
         source "$CORE_LIB"; NIGHTLY_APP_SHARDS_DIR="$SH/run"; prune_green_shard_bundles
         ls -d "$SH"/run/run/*/shard.xcresult 2>/dev/null | tr '\n' ' ')
     [ "$kept" = "$SH/run/run/0001/shard.xcresult " ] && [ -f "$SH/run/run/0000/strand.log" ] \
-        && pass "after the merge a green shard's result bundle is removed, a red shard's bundle and every log stay" \
+        && pass "after the union a green shard's result bundle is removed, a red shard's bundle and every log stay" \
         || fail "bundle pruning kept '$kept'"
+    # The paths that never reach a summary (the watchdog, zero tests): nothing is known green, so a
+    # plain prune keeps everything and `all` (what remove_test_artifacts asks on a red run) removes
+    # every bundle — the logs stay.
+    shard_case noverdict 1 > /dev/null
+    kept=$( # shellcheck disable=SC1090
+        source "$CORE_LIB"; NIGHTLY_APP_SHARDS_DIR="$SH/run"
+        prune_green_shard_bundles; ls -d "$SH"/run/run/*/shard.xcresult 2>/dev/null | wc -l | tr -d ' '
+        prune_green_shard_bundles all; ls -d "$SH"/run/run/*/shard.xcresult 2>/dev/null | wc -l | tr -d ' '
+        [ -f "$SH/run/run/0000/strand.log" ] && echo log)
+    [ "$(echo $kept)" = "1 0 log" ] \
+        && pass "with no summary no bundle is known green: kept by default, all removed on the red no-summary paths, logs kept" \
+        || fail "bundle pruning without a summary: '$(echo $kept)' want '1 0 log'"
     rm -f "$SH/args.txt.xcrun"
     got=$(SHARD_CASE_MERGE=1 shard_case timeout 1)
     case "$got" in
-        "1|none|failed|shard-timeout:1800s|"*) [ ! -e "$SH/args.txt.xcrun" ] \
-            && pass "a run with an unfinished shard is never merged: no partial coverage number" \
-            || fail "an incomplete run was merged: $(cat "$SH/args.txt.xcrun")" ;;
+        "1|null||failed|shard-timeout:1800s|"*) [ ! -e "$SH/args.txt.xcrun" ] \
+            && pass "a run with an unfinished shard is never measured: no partial coverage number" \
+            || fail "an incomplete run was measured: $(cat "$SH/args.txt.xcrun")" ;;
         *) fail "incomplete run coverage: got '$got'" ;;
+    esac
+
+    # ── review 2026-11-21, round 1: R1–R5 (each seen red on fec3dc1ea) ──
+    # R1 — read_app_shards_summary's `extra` match.
+    # ONE parameterized Swift Testing test fails. parse_test_counts names it as the log does
+    # ("parse(_:) with 20 test cases"); the bundle names the function ("parse(_:)"); no key matches,
+    # so the bundle's copy is added as a second failure: failed-tests:2, two names, total one too many.
+    PF='✘ Test parse(_:) recorded an issue with 1 argument value → 3 at P.swift:9:5: Expectation failed: a == b\n✘ Test parse(_:) with 20 test cases failed after 0.120 seconds with 1 issue.'
+    shard_fixture r1param '{"shards":[{"passed":2,"expected":2},{"passed":1,"failed":1,"expected":2,"green":false,"rc":65}],"failures":[{"id":"GedcomDateTests/parse(_:)","name":"parse(_:)","shard":"shard-02"}]}' \
+        "$P1\n$P2\n" "$P1\n$PF\n"
+    got=$(shard_case r1param 1)
+    want='failed|failed-tests:1|3|1|0|0|["parse(_:) with 20 test cases"]|[]|true|8'
+    [ "$got" = "$want" ] && pass "R1 one failed parameterized test is one failure, named once (as one host names it)" \
+        || fail "R1 parameterized failure counted twice: got '$got' want '$want'"
+
+    # R2 — APP_SHARDS_COMPLETE left "short" out.
+    # A shard that ran 1 of its 900 tests is a partial profile; the header promises "NO coverage
+    # number, never a low one". It is merged and published.
+    shard_fixture r2short '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":900,"green":false,"codes":["short"],"problems":["ran 1 of 900 tests"]}]}' \
+        "$P1\n$P2\n" "$P1\n"
+    rm -f "$SH/args.txt.xcrun"
+    got=$(SHARD_CASE_MERGE=1 shard_case r2short 1)
+    case "$got" in
+        "1|null||failed|shard-short:1|"*) pass "R2 a shard that came up short publishes no coverage number" ;;
+        *) fail "R2 a shard that ran 1 of 900 tests was merged into the coverage number: got '$got'" ;;
+    esac
+
+    # R3 — classify_nightly_test_result with tools/publish_metrics.py's WATCH rule. One test failed AND another shard's host died after 1 of
+    # 900 tests (or the sharder left no verdict). The reason is the plain failed-tests:1, which the
+    # page reads as "the suite ran to the end" → WATCH (yellow). The run was cut short: red.
+    page_colour() { python3 - "$SCRIPT_DIR/../tools/publish_metrics.py" "$1" "$2" "$3" <<'PYC'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pm", sys.argv[1]); pm = importlib.util.module_from_spec(spec); spec.loader.exec_module(pm)
+print(pm.classify_nightly_row({"status": "failed", "reason": sys.argv[2], "total": int(sys.argv[3]), "failed": int(sys.argv[4])}))
+PYC
+    }
+    shard_fixture r3faildied '{"shards":[{"passed":1,"failed":1,"expected":2,"green":false,"rc":65},{"passed":1,"expected":900,"green":false,"rc":65,"codes":["short","died"],"problems":["xcodebuild exit 65 with no failed test (a crash, a dead test host or an xcodebuild error)","ran 1 of 900 tests"]}],"failures":[{"id":"LedgerTests/ledgerKeepsEveryRow()","name":"ledgerKeepsEveryRow()","shard":"shard-01"}]}' \
+        "$P1\n$F1\n" "$P2\n"
+    got=$(shard_case r3faildied 1)
+    reason=$(printf '%s' "$got" | cut -d'|' -f2); names=$(printf '%s' "$got" | cut -d'|' -f7)
+    colour=$(page_colour "$reason" 3 1)
+    [ "$colour" = "red" ] && [ "$names" = '["ledgerKeepsEveryRow()"]' ] \
+        && pass "R3 a failed test beside a dead shard: the page is red and the failure is still named" \
+        || fail "R3 a failed test beside a shard that ran 1 of 900: reason '$reason' reads '$colour' on the page (899 tests never ran)"
+    shard_fixture r3noverdict - "$P1\n$F1\n"
+    got=$(shard_case r3noverdict 130)
+    reason=$(printf '%s' "$got" | cut -d'|' -f2); colour=$(page_colour "$reason" 2 1)
+    [ "$colour" = "red" ] && pass "R3b a failed test in the logs of a sharder that left no verdict: red" \
+        || fail "R3b the sharder died (rc 130, no summary) with one failed test in its partial logs: reason '$reason' reads '$colour'"
+
+    # R4 — short was asked before died.
+    # fan_in codes a dead host BOTH died and short (it always ran fewer than declared), so
+    # shard-died is unreachable for the case it is named for; the row says "short".
+    shard_fixture r4died '{"shards":[{"passed":2,"expected":2},{"passed":1,"expected":900,"green":false,"rc":65,"codes":["short","died"],"problems":["xcodebuild exit 65 with no failed test","ran 1 of 900 tests"]}]}' \
+        "$P1\n$P2\n" "$P1\n"
+    got=$(shard_case r4died 1)
+    case "$got" in
+        "failed|shard-died:1|"*) pass "R4 a host that died is shard-died by name" ;;
+        *) fail "R4 a host that died (codes short+died, as fan_in writes them) is published as: '$got'" ;;
+    esac
+
+    # R5 — the summary was not checked against the run.
+    # Three hosts wrote logs; the summary lists two shards. Trusted: ok, and coverage merged.
+    shard_fixture r5fewer '{"shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' "$P1\n" "$P2\n" "$P1\n$P2\n"
+    got=$(shard_case r5fewer 0)
+    case "$got" in
+        "ok|"*) fail "R5 a summary naming 2 shards for a run of 3 hosts is published green: '$got'" ;;
+        *) pass "R5 a summary that does not account for every host is not green" ;;
+    esac
+
+    # A host killed mid-line leaves its log without a newline: the next host's first line must
+    # not be glued to it (an XCTest verdict line is anchored at the line start: glued, it is lost).
+    shard_fixture nonewline '{"shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' "$P1\n◇ Test cut() star" "$PX\n"
+    got=$(shard_case nonewline 0)
+    [ "$got" = 'ok||2|0|0|0|[]|[]|true|8' ] && [ "$(grep -c '^Test Case ' "$SH/run/hosts.log")" = 1 ] \
+        && ! grep -q 'counts trued up' "$SH/case.log" \
+        && pass "a shard log that ends mid-line is closed with a newline in the join: the next host's first verdict line stays a line (the logs alone count both tests)" \
+        || fail "log join without a newline guard: got '$got' ($(cat "$SH/case.log"))"
+    # On a watchdog stop the hosts still running are named, each with the test it was in.
+    shard_fixture stopnames '{"shards":[{"passed":1,"expected":1},{"passed":1,"expected":1}]}' \
+        "# strand shard-01: xcodebuild …\n$P1\n** TEST EXECUTE SUCCEEDED **\n" "# strand serial-tail: xcodebuild …\n$P2\n◇ Test hundredThousandRows() started.\n"
+    got=$(
+        export SHARD_FAKE_HOST_STOP=0.2 SHARD_FAKE_HOST_PID="$SH/host.pid"
+        export NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS=1 NIGHTLY_APP_SHARDS_STOP_SECONDS=1
+        SHARD_CASE_TIMEOUT=2 shard_case stopnames 0
+    )
+    kill "$(cat "$SH/host.pid" 2>/dev/null)" 2>/dev/null || true
+    case "$got" in
+        "failed|test-timeout:2s|2|0|0|0|"*)
+            grep -q 'App shards at the watchdog stop: serial-tail had not finished (.*/0001/strand.log); last test started: ◇ Test hundredThousandRows() started.' "$SH/case.log" \
+                && ! grep -q 'watchdog stop: shard-01' "$SH/case.log" \
+                && pass "a watchdog stop names each host that had not finished and the test it was running; a finished host is not named" \
+                || fail "watchdog stop did not name the running host: $(cat "$SH/case.log")" ;;
+        *) fail "watchdog stop naming: got '$got'" ;;
     esac
 fi
 
@@ -2278,23 +2431,30 @@ true 100 3 false 1 0 shard-timeout:1800s~failed|test-timeout:7200s
 false 0 0 false 1 0 shard-timeout:1800s~failed|shard-timeout:1800s
 false 100 3 false 1 2 shard-timeout:1800s~failed|shard-timeout:1800s
 false 0 0 false 1 0 shard-died:2~failed|zero-tests-ran:test-rc=1
-false 100 3 false 1 2 shard-short:1~failed|failed-tests:3
-false 100 0 false 1 2 shard-short:1~failed|crashed-tests:2
+false 100 3 false 1 2 shard-short:1~failed|shard-short:1
+false 100 0 false 1 2 shard-short:1~failed|shard-short:1
+false 100 3 false 1 0 shard-died:1~failed|shard-died:1
+false 100 3 false 1 0 shard-no-verdict~failed|shard-no-verdict
+false 100 3 false 1 0 shard-summary-mismatch~failed|shard-summary-mismatch
+false 100 3 false 65 2~failed|failed-tests:3
+false 100 0 false 65 2~failed|crashed-tests:2
 false 100 0 true 1 0 shard-died:1~failed|shard-died:1
 false 100 0 false 0 0 shard-unproven:1~failed|shard-unproven:1
 false 100 0 true 65 0~failed|ui-runner-hung
 false 100 0 false 65 0~failed|test-rc:65
 LAD
-[ "$ladder_ok" = yes ] && pass "verdict ladder: watchdog > shard-timeout > zero tests > failed > crashed > other shard reasons > runner-hang > rc; unchanged without a shard reason"
+[ "$ladder_ok" = yes ] && pass "verdict ladder: watchdog > shard-timeout > zero tests > every other shard reason (an incomplete run) > failed > crashed > runner-hang > rc; unchanged without a shard reason"
 codes_ok=$(python3 - "$SCRIPT_DIR/../tools/publish_metrics.py" <<'PYCODES'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("pm", sys.argv[1]); pm = importlib.util.module_from_spec(spec); spec.loader.exec_module(pm)
-codes = ["shard-timeout:1800s", "shard-short:1", "shard-died:2", "shard-unproven:1", "shard-undealable:1", "shard-no-verdict", "shard-red"]
-row = lambda r: {"status": "failed", "reason": r, "total": 100, "failed": 0}
-print("yes" if all(pm.reason_code(c) == c and pm.classify_nightly_row(row(c)) == "red" for c in codes) else "no")
+codes = ["shard-timeout:1800s", "shard-short:1", "shard-died:2", "shard-unproven:1", "shard-undealable:1", "shard-no-verdict",
+         "shard-red", "shard-summary-mismatch"]
+row = lambda r, failed: {"status": "failed", "reason": r, "total": 100, "failed": failed}
+# red with no failed test, and red with ONE (which a plain failed-tests:1 would read as yellow "watch")
+print("yes" if all(pm.reason_code(c) == c and pm.classify_nightly_row(row(c, n)) == "red" for c in codes for n in (0, 1)) else "no")
 PYCODES
 )
-[ "$codes_ok" = "yes" ] && pass "every shard reason survives the publisher and reads red (a run cut short, never yellow or green)" \
+[ "$codes_ok" = "yes" ] && pass "every shard reason survives the publisher and reads red with or without a failed test (a run cut short, never yellow or green)" \
     || fail "a shard reason is rejected or miscoloured by the publisher"
 
 # ── how many hosts, and the fallback ──
@@ -2345,7 +2505,9 @@ if [ -n "$GATE_LINE" ] && [ -n "$SHARD_CALL_LINE" ] && [ -n "$SINGLE_LINE" ] && 
     && [ "$SINGLE_LINE" -lt "$PARSE_LINE" ] && [ "$PARSE_LINE" -lt "$READ_LINE" ] && [ "$READ_LINE" -lt "$CLASSIFY19_LINE" ] \
     && grep -q '^APP_SHARDS_SCRIPT="\${VIDEOSCAN_NIGHTLY_APP_SHARDS:-\$REPO/scripts/xctest_shards.py}"$' "$NIGHTLY" \
     && grep -q '^if \$NIGHTLY_APP_SHARDS_USED && ! \$TEST_TIMED_OUT; then$' "$NIGHTLY" \
-    && [ "$(grep -A2 '^        merge_app_shards_coverage || true$' "$NIGHTLY" | grep -c '^        prune_green_shard_bundles$')" = 1 ]; then
+    && [ "$(grep -A2 '^        union_app_shards_coverage || true$' "$NIGHTLY" | grep -c '^        prune_green_shard_bundles$')" = 1 ] \
+    && [ "$(grep -c 'xcresulttool merge' <(grep -v '^ *#' "$NIGHTLY"))" = 0 ] \
+    && [ "$(grep -B3 '^    exit 1$' "$NIGHTLY" | grep -c '^    \$NIGHTLY_APP_SHARDS_USED && remove_test_artifacts$')" = 1 ]; then
     pass "wiring: K hosts only past the gate (jobs > 1 and a usable sharder of the checkout under test), else the single host; parse, then the bundles' true-up (never after the watchdog), then the ladder with the shard reason"
 else
     fail "sharded app-phase wiring moved (gate=$GATE_LINE shards=$SHARD_CALL_LINE single=$SINGLE_LINE parse=$PARSE_LINE read=$READ_LINE classify=$CLASSIFY19_LINE)"
@@ -2362,6 +2524,38 @@ row_case() {   # sharded? → the row
 got="$(row_case true)|$(row_case false)"
 [ "$got" = "8 5 ok|None 5 ok" ] && pass "the row says how many test hosts ran the app phase (app_test_hosts), and a single-host row keeps its exact shape" \
     || fail "row app_test_hosts: got '$got'"
+# Coverage in the row: the ruler is named, and a single host's old-ruler number rides along.
+cov_row() {   # COV_LOGIC COV_BASIS COV_LOGIC_REPORT → coverage_logic_pct|coverage_basis|coverage_logic_report_pct
+    ( # shellcheck disable=SC1090
+      source "$CORE_LIB"
+      HOST=h BRANCH=b COMMIT=c COMMIT_DATE=d DIRTY=false PASSED=5 FAILED=0 SKIPPED=1 TOTAL=6 KNOWN_ISSUE_TESTS=0
+      ELAPSED=7 STATUS=ok REASON="" NIGHTLY_SCRIPT_VERSION=test NIGHTLY_CONFIGURATION=Release FAILED_NAMES_JSON='[]'
+      CRASHED_NAMES_JSON='[]' NIGHTLY_APP_SHARDS_USED=false COV_LOGIC="$1" COV_BASIS="$2" COV_LOGIC_REPORT="$3"
+      make_current_test_result_row | python3 -c 'import json,sys; r=json.load(sys.stdin); print("|".join(str(r.get(k)) for k in ("coverage_logic_pct", "coverage_basis", "coverage_logic_report_pct")))' )
+}
+got="$(cov_row 79.017 lines 72.238) $(cov_row 79.022 lines null) $(cov_row 72.238 "" null) $(cov_row null lines 72.238)"
+want="79.017|lines|72.238 79.022|lines|None 72.238|None|None None|None|None"
+[ "$got" = "$want" ] && pass "the row names the coverage ruler (coverage_basis lines), carries a single host's function-summed number beside it, and a row with no number carries neither" \
+    || fail "coverage row fields: got '$got' want '$want'"
+# One bundle through the same tool (the single host's path): the union of one, plus the bundle's
+# own report number for the same files.
+one=$( # shellcheck disable=SC1090
+    source "$CORE_LIB"
+    log() { printf '%s\n' "$*" >> "$SH/case.log"; }
+    : > "$SH/case.log"
+    export SHARD_FAKE_ARGS="$SH/args.txt" NIGHTLY_XCRUN="$SH/bin/xcrun" VIDEOSCAN_NIGHTLY_COVERAGE_UNION="$SCRIPT_DIR/xccov_union.py"
+    NIGHTLY_XCRESULT="$SH/one.xcresult" COV_LOGIC=null COV_BASIS=""
+    union_coverage "$SH/run/run/0000/shard.xcresult"; printf '%s|%s|%s' "$?" "$COV_LOGIC" "$COV_BASIS")
+if [ "$one" = "0|25.000|lines" ]; then
+    grep -q "the bundle's own report (function-summed): " "$SH/case.log" \
+        && pass "a single bundle is measured by the same tool on the same ruler ($one), and the log shows Xcode's function-summed number beside it" \
+        || fail "single-bundle coverage did not log the report's number: $(cat "$SH/case.log")"
+else
+    fail "single-bundle coverage: got '$one'"
+fi
+UNION_CALL=$(grep -c '^        union_coverage /tmp/nightly-results.xcresult$' "$NIGHTLY")
+[ "$UNION_CALL" = 1 ] && pass "the single host's bundle goes through union_coverage too: one ruler whatever K is" \
+    || fail "the single-host coverage path does not call union_coverage ($UNION_CALL)"
 
 }
 

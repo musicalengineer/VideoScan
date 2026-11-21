@@ -36110,6 +36110,28 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_xccov_union.py",
+      "stage": "unit",
+      "suites": [
+        "test_xccov_union.py"
+      ],
+      "tests": [
+        "test_a_bundle_with_other_executable_lines_is_refused_by_file_and_bundle",
+        "test_a_line_is_covered_when_it_ran_in_any_bundle_and_the_denominator_is_the_builds",
+        "test_an_unreadable_bundle_a_missing_target_and_a_file_the_archive_lacks_are_refusals",
+        "test_bundles_that_do_not_name_the_same_files_are_refused",
+        "test_each_archive_record_becomes_one_int_as_it_is_parsed",
+        "test_one_bundle_gives_both_rulers_and_the_cli_prints_one_line",
+        "test_real_single_host_bundle_gives_back_xcodes_own_number_and_the_line_number",
+        "test_real_sixteen_shards_union_is_at_least_every_shard_in_every_file_and_close_to_one_host",
+        "test_the_logic_filter_is_the_nightlys_awk_pattern",
+        "test_the_result_is_checked_not_assumed",
+        "test_usage_errors_exit_2"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_testbed_strands.py",
       "stage": "unit",
       "suites": [
@@ -41073,6 +41095,10 @@
         },
         {
           "name": "tests/test_xctest_shards.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_xccov_union.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {

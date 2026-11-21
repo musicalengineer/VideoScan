@@ -775,7 +775,7 @@ def say_undealable(groups: Sequence[Group]) -> int:
 
 
 def summary_dict(reports: Sequence[ShardReport], bundles: Sequence[Path], jobs: int, wall: float, lost: int,
-                 word: str) -> dict:
+                 word: str, planned: Optional[int] = None) -> dict:
     """The run as data (--summary FILE), for a caller that publishes its own row (the nightly). Counts
     are each shard's fan-in counts (its result bundle's when that could be read). `failures` names every
     failed test once: by its bundle identifier when the bundle has it, else as the log named it."""
@@ -800,6 +800,9 @@ def summary_dict(reports: Sequence[ShardReport], bundles: Sequence[Path], jobs: 
         "expected_failures": sum(r.stats.known for r in reports if r.stats is not None) if all(read) else None,
         "counts_from": "bundles" if all(read) else ("logs" if not any(read) else "mixed"),
         "undealable_files": lost, "failures": failures,
+        # How many hosts the deal started (the parallel shards + the tail). A reader checks it against
+        # `shards` and against the run folder: a summary that does not account for every host is no verdict.
+        "planned_shards": len(reports) if planned is None else planned,
         "shards": [{"name": r.name, "serial": r.serial, "rc": r.rc, "timed_out": r.timed_out,
                     "seconds": round(r.seconds, 1), "passed": r.passed, "failed": r.failed, "skipped": r.skipped,
                     "expected": r.expected, "green": r.green, "codes": [c for c in PROBLEM_CODES if c in r.codes],
@@ -857,7 +860,7 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         say(f"serial tail: {', '.join(g.suites)} — {r}")
     if not work:
         say("RED: nothing to run")
-        write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED"))
+        write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED", planned=0))
         return 1
 
     lock = threading.Lock()
@@ -932,7 +935,7 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         why = " · ZERO tests ran"
     if lost:
         why += f" · {lost} file(s) could not be dealt (named above)"
-    write_summary(summary, summary_dict(reports, bundles, jobs, wall, lost, word))
+    write_summary(summary, summary_dict(reports, bundles, jobs, wall, lost, word, planned=len(work)))
     say(f"{word}: {passed} passed, {failed} failed, {skipped} skipped (ran {passed + failed + skipped} of {expected}) "
         f"in {wall:.1f}s — {bounds}{why}")
     return 0 if word == "GREEN" else 1
