@@ -1001,6 +1001,19 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CommandExecutorSeamReviewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CommandExecutorSeamReviewTests"
+      ],
+      "tests": [
+        "aVagueClaimCannotRefuseABystander",
+        "hangMatchesARealFFmpegKilledAtTheDeadline",
+        "theBindingAndTheRegistryAreNotPublic"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CommandExecutorSeamTests.swift",
       "stage": "unit",
       "suites": [
@@ -1010,8 +1023,10 @@
         "CommandExecutorSensorTests"
       ],
       "tests": [
+        "appSourcesNeverUseTheMock",
         "auditedDetachedSitesKeepTheExecutor",
         "claimIsReleasedAfterTheScope",
+        "claimSpecificity",
         "concurrentTreesNeverCross",
         "customSeesTheRequest",
         "detachedEscapeIsCaught",
@@ -4215,6 +4230,7 @@
         "garbageMatchesReal",
         "hangCancelMatchesReal",
         "hangDeadlineMatchesReal",
+        "hangExitOnTermMatchesReal",
         "hangIgnoringTermMatchesReal",
         "hangWithWordsMatchesReal",
         "launchFailureMatchesReal",
@@ -40498,7 +40514,7 @@
       ],
       "expected_floor": 3916,
       "name": "unit",
-      "package_expected_floor": 942,
+      "package_expected_floor": 948,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40609,7 +40625,8 @@
         "VideoScanCoreTests.CommandExecutorEscapeGuardTests",
         "VideoScanCoreTests.ProbeFixtureMatrixTests",
         "VideoScanCoreTests.ScriptedExecutorFidelityTests",
-        "VideoScanCoreTests.CommandExecutorSensorTests"
+        "VideoScanCoreTests.CommandExecutorSensorTests",
+        "VideoScanCoreTests.CommandExecutorSeamReviewTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

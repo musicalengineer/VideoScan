@@ -30,6 +30,7 @@ import Darwin
 import Foundation
 import Testing
 @testable import VideoScan
+@_spi(Testing) import VideoScanCore   // ProcessRunner.Result.init for a .custom answer
 
 @Suite("Transcode Replace — negative matrix through a scripted ffmpeg/ffprobe", .timeLimit(.minutes(1)))
 @MainActor

@@ -30,8 +30,12 @@
 // on a tiny real command by ScriptedExecutorFidelityTests. Behaviours whose
 // point is the runner's own timing/signal machinery use a REAL child through
 // the real runner with the caller's deadline, grace, control and callbacks:
-// `.hang` (deadline → SIGTERM → SIGKILL → abandon, Pause, cancellation all
-// behave exactly as they do for a wedged ffmpeg) and `.passThrough`.
+// `.hang` (the runner's deadline → SIGTERM → SIGKILL → abandon, Pause and
+// cancellation are the real machinery; the child answers SIGTERM the way the
+// matched tool does — ffmpeg traps it and exits 255, ffprobe dies of it —
+// measured on ffmpeg/ffprobe 9.0.2, pinned by the fidelity and review
+// tests) and `.passThrough`. Not modelled: a tool wedged in uninterruptible
+// I/O that answers nothing until SIGKILL — use `ignoringSIGTERM` for that.
 //
 // Memory: one `Call` (the argument vector) per command, kept for the
 // mock's life — a test issues tens to hundreds; `.writeOutputFile` holds its
@@ -42,7 +46,9 @@ import Darwin
 import Foundation
 import os
 
-public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchecked Sendable {
+// Checked Sendable: every stored property is an immutable Sendable value or
+// the lock-guarded state (C++: all members const or behind one mutex).
+public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, Sendable {
 
     /// One recorded command.
     public struct Call: Sendable, CustomStringConvertible {
@@ -71,13 +77,17 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchec
         /// The same, copying a fixture file read at call time (e.g. a real
         /// clip of a chosen length made once by the test).
         case copyToOutputFile(URL, stderr: String = "", exit: Int32 = 0)
-        /// Never finish on its own: a REAL child (`/bin/sleep`) under the
-        /// real runner, so the request's deadline, kill grace, Pause control
-        /// and task cancellation produce exactly the Result a wedged tool
-        /// produces (`timedOut`, SIGTERM/SIGKILL exit, or abandon).
-        /// `stderr` is written first (a tool that printed, then stopped);
-        /// `ignoringSIGTERM` makes the child need the SIGKILL stage.
-        case hang(stderr: String = "", ignoringSIGTERM: Bool = false)
+        /// Never finish on its own: a REAL child (`/bin/sh` + `/bin/sleep`)
+        /// under the real runner, so the request's deadline, kill grace,
+        /// Pause control and task cancellation go through the real
+        /// machinery (`timedOut`, the SIGTERM/SIGKILL stages, abandon).
+        /// How the child answers SIGTERM: `exitOnTERM` if given; otherwise
+        /// what the matched tool really does — ffmpeg traps TERM and exits
+        /// 255, anything else (ffprobe, python, sleep) dies of it (exit 15).
+        /// `ignoringSIGTERM` makes the child need the SIGKILL stage (a tool
+        /// stuck past SIGTERM). `stderr` is written first (a tool that
+        /// printed, then stopped).
+        case hang(stderr: String = "", ignoringSIGTERM: Bool = false, exitOnTERM: Int32? = nil)
         /// Killed by `signal` (the real runner reports the signal number as
         /// the exit code; stdout is empty, not nil — the child did run).
         case crash(signal: Int32, stderr: String = "")
@@ -176,6 +186,9 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchec
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> R
     ) async rethrows -> R {
+        for vague in claims where !CommandExecutorEscapeGuard.isSpecific(vague) {
+            fail("ScriptedExecutor: claim \(vague.debugDescription) is too vague to be this test's own (want an absolute path of 3+ components or 16+ characters) — not claimed; it would refuse other tests' real commands")
+        }
         let id = CommandExecutorEscapeGuard.claim(claims, for: self)
         defer { CommandExecutorEscapeGuard.release(id) }
         return try await ProcessRunner.$executor.withValue(self) {
@@ -183,7 +196,7 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchec
         }
     }
 
-    public func recordEscape(_ request: CommandRequest) {
+    func recordEscape(_ request: CommandRequest) {
         let call = Call(executable: request.executable, arguments: request.arguments, environment: request.environment)
         state.withLock {
             $0.calls.append(call)
@@ -231,10 +244,11 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchec
     /// `exitAtOnce`.
     private func perform(_ behaviour: Behaviour, _ request: CommandRequest) async -> ProcessRunner.Result {
         switch behaviour {
-        case let .hang(stderr, ignoringSIGTERM):
+        case let .hang(stderr, ignoringSIGTERM, exitOnTERM):
             var child = request
             child.executable = "/bin/sh"
-            child.arguments = ["-c", (ignoringSIGTERM ? "trap '' TERM; " : "") + "printf '%s' \"$1\" >&2; exec /bin/sleep 86400",
+            child.arguments = ["-c", Self.hangScript(ignoringSIGTERM: ignoringSIGTERM,
+                                                     exitOnTERM: exitOnTERM ?? Self.termExit(of: request.tool)),
                                "sh", stderr]
             child.environment = nil
             return await ProcessRunner.realRunProcess(child)
@@ -285,6 +299,26 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, @unchec
             fail("ScriptedExecutor: \(behaviour) is not an instant behaviour")
             return ProcessRunner.Result(stdout: nil, stderr: "ScriptedExecutor: internal routing", exitCode: -1)
         }
+    }
+
+    /// How a real tool answers SIGTERM mid-work (measured 2026-11-20,
+    /// Homebrew 9.0.2): ffmpeg's handler exits 255; ffprobe and the rest
+    /// die of the signal (nil → the runner reports 15).
+    static func termExit(of tool: String) -> Int32? {
+        tool == "ffmpeg" ? 255 : nil
+    }
+
+    /// The hanging child. Dying of TERM: `exec sleep`. Ignoring it: the
+    /// SIG_IGN survives exec. Exiting N on TERM: the shell must stay alive
+    /// to run its trap, so sleep runs in the background with its fds on
+    /// /dev/null (an orphan never holds the runner's pipes open) and the
+    /// trap kills it before exiting.
+    static func hangScript(ignoringSIGTERM: Bool, exitOnTERM: Int32?) -> String {
+        let say = "printf '%s' \"$1\" >&2; "
+        if ignoringSIGTERM { return "trap '' TERM; " + say + "exec /bin/sleep 86400" }
+        guard let code = exitOnTERM else { return say + "exec /bin/sleep 86400" }
+        return "trap 'kill $c 2>/dev/null; exit \(code)' TERM; " + say
+            + "/bin/sleep 86400 </dev/null >/dev/null 2>&1 & c=$!; wait $c"
     }
 
     /// The words `Process.run()` throws for an executable that is not

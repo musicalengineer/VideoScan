@@ -106,7 +106,10 @@ extension ProcessRunner {
     /// The executor every ProcessRunner call goes through. Task-local:
     /// bind a mock with `ProcessRunner.$executor.withValue(mock) { … }`;
     /// outside such a scope it is always the real one.
-    @TaskLocal public static var executor: any CommandExecutor = RealCommandExecutor()
+    /// Internal on purpose (review 2026-11-20): only ScriptedExecutor
+    /// binds it, through `withInstalled` — no app, helper or CLI source can
+    /// swap the executor production commands go through.
+    @TaskLocal static var executor: any CommandExecutor = RealCommandExecutor()
 
     /// `Task.detached` that carries THIS task's executor into the detached
     /// task (a detached task inherits no task-locals). Same priority, same
@@ -128,14 +131,14 @@ extension ProcessRunner {
 }
 
 /// Receives the commands that escaped a mocked scope (see file header).
-public protocol CommandEscapeSink: AnyObject, Sendable {
+protocol CommandEscapeSink: AnyObject, Sendable {
     func recordEscape(_ request: CommandRequest)
 }
 
 /// The escape guard's registry: claimed strings → the mock that claimed
 /// them. Empty in production. Bounded by the number of live mocks (one
-/// small entry per test in flight).
-public enum CommandExecutorEscapeGuard {
+/// small entry per test in flight). Internal: only ScriptedExecutor claims.
+enum CommandExecutorEscapeGuard {
     private struct Claim {
         let tokens: [String]
         weak var sink: (any CommandEscapeSink)?
@@ -143,16 +146,26 @@ public enum CommandExecutorEscapeGuard {
 
     private static let claims = OSAllocatedUnfairLock<[UUID: Claim]>(initialState: [:])
 
-    /// Register `tokens` for `sink` until the returned id is released.
-    /// Empty tokens are ignored (an empty string is contained in everything).
-    public static func claim(_ tokens: [String], for sink: any CommandEscapeSink) -> UUID {
+    /// A claim is honoured only when it is specific enough to be one
+    /// test's own: an absolute path of at least three components (a
+    /// scratch directory), or any string of 16+ characters. "/", "/tmp" or
+    /// "mov" occur in nearly every command line — the process-wide guard
+    /// would refuse other tests' real commands (review 2026-11-20).
+    static func isSpecific(_ token: String) -> Bool {
+        if token.hasPrefix("/"), (token as NSString).pathComponents.filter({ $0 != "/" }).count >= 3 { return true }
+        return token.count >= 16
+    }
+
+    /// Register the specific `tokens` for `sink` until the returned id is
+    /// released; vague ones are dropped (ScriptedExecutor reports them).
+    static func claim(_ tokens: [String], for sink: any CommandEscapeSink) -> UUID {
         let id = UUID()
-        let usable = tokens.filter { !$0.isEmpty }
+        let usable = tokens.filter(isSpecific)
         claims.withLock { $0[id] = Claim(tokens: usable, sink: sink) }
         return id
     }
 
-    public static func release(_ id: UUID) {
+    static func release(_ id: UUID) {
         _ = claims.withLock { $0.removeValue(forKey: id) }
     }
 

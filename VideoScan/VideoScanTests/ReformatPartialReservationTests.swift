@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import VideoScan
+@_spi(Testing) import VideoScanCore   // ProcessRunner.Result.init for a .custom answer
 
 // MARK: - ReformatPartialReservationTests (N1014-F1, 2026-10-07)
 //

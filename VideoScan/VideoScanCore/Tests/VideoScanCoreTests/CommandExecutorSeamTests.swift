@@ -17,7 +17,7 @@
 import Darwin
 import Foundation
 import Testing
-@testable import VideoScanCore
+@_spi(Testing) @testable import VideoScanCore   // SPI: ProcessRunner.Result.init for .custom answers
 
 @Suite("CommandExecutor seam — default, rules, recording")
 struct CommandExecutorSeamTests {
@@ -257,13 +257,20 @@ struct CommandExecutorEscapeGuardTests {
         #expect(mock.failures.isEmpty)
     }
 
-    @Test("an empty claim claims nothing (it would match every command)")
+    @Test("an empty claim claims nothing (it would match every command) and is reported as too vague")
     func emptyClaimIsIgnored() async {
         let mock = ScriptedExecutor(claiming: [""]).on("*", .output())
         let r = await mock.withInstalled {
             await Task.detached { await ProcessRunner.runProcess(executable: "/bin/echo", arguments: ["free"]) }.value
         }
         #expect(r.launched && r.stdout == "free\n")
+        #expect(mock.failures.count == 1 && mock.failures[0].contains("too vague"), "\(mock.failures)")
+    }
+
+    @Test("claim specificity: absolute paths of 3+ components or 16+ characters only")
+    func claimSpecificity() {
+        for ok in ["/tmp/a/b", "/private/var/folders", "test_negmx_tape.mov-1"] { #expect(CommandExecutorEscapeGuard.isSpecific(ok), "\(ok)") }
+        for vague in ["", "/", "/tmp", "/tmp/x", "mov", "test_stallmux_"] { #expect(!CommandExecutorEscapeGuard.isSpecific(vague), "\(vague)") }
     }
 
     @Test(".passThrough runs the real tool even with claimed arguments (it is the mock's own call, not an escape)")
@@ -311,6 +318,24 @@ struct CommandExecutorSensorTests {
         #expect(hits.isEmpty, "\(hits)")
         #expect(Self.offenders(in: "setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)") == ["setenv(ToolLocator.ffmpegEnvVar"],
                 "the rule catches its own mutation")
+    }
+
+    @Test("sensor: no app (non-test) source mints a ProcessRunner.Result or uses the ScriptedExecutor mock")
+    func appSourcesNeverUseTheMock() throws {
+        let app = Self.videoScanDir.appendingPathComponent("VideoScan", isDirectory: true)
+        let walk = try #require(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil))
+        var read = 0
+        var hits: [String] = []
+        for case let url as URL in walk where url.pathExtension == "swift" {
+            read += 1
+            let code = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            for line in code where line.contains("ScriptedExecutor") || line.contains("ProcessRunner.Result(") {
+                hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        #expect(read > 500, "the sensor read only \(read) app files")
+        #expect(hits.isEmpty, "\(hits)")
     }
 
     @Test("sensor: the three detached shell-outs found by the escape audit carry the executor")

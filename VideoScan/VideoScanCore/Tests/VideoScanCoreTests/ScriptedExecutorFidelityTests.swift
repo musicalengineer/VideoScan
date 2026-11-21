@@ -104,9 +104,19 @@ struct ScriptedExecutorFidelityTests {
     @Test(".hang + deadline: timedOut, SIGTERM's exit 15, launched — the same Result as a real wedged child")
     func hangDeadlineMatchesReal() async {
         let real = await Self.shape("/bin/sleep", ["3600"], deadline: 0.4)
-        let mock = await Self.mocked(.hang(), deadline: 0.4)
+        let mock = await Self.mocked(.hang(), deadline: 0.4, executable: "/opt/homebrew/bin/ffprobe")   // ffprobe dies of TERM
         #expect(mock == real, "mock: \(mock)\nreal: \(real)")
         #expect(real.timedOut && real.exitCode == SIGTERM && real.launched)
+    }
+
+    @Test(".hang(exitOnTERM:) + deadline: a tool that traps TERM and exits N (ffmpeg: 255) — the same Result as a real trapping child; ffmpeg gets 255 by default")
+    func hangExitOnTermMatchesReal() async {
+        let real = await Self.sh("trap 'kill $c; exit 255' TERM; /bin/sleep 3600 </dev/null >/dev/null 2>&1 & c=$!; wait $c", deadline: 0.4)
+        let explicit = await Self.mocked(.hang(exitOnTERM: 255), deadline: 0.4, executable: "/x/python3")
+        let ffmpegDefault = await Self.mocked(.hang(), deadline: 0.4)   // executable: …/ffmpeg
+        #expect(explicit == real, "mock: \(explicit)\nreal: \(real)")
+        #expect(ffmpegDefault == real, "mock: \(ffmpegDefault)\nreal: \(real)")
+        #expect(real.timedOut && real.exitCode == 255 && real.launched)
     }
 
     @Test(".hang(ignoringSIGTERM) + deadline: the runner's SIGKILL stage — exit 9, timedOut")
@@ -120,7 +130,7 @@ struct ScriptedExecutorFidelityTests {
     @Test(".hang(stderr:) delivers what the tool printed before it stopped")
     func hangWithWordsMatchesReal() async {
         let real = await Self.sh("printf 'frame=1\\n' >&2; exec /bin/sleep 3600", deadline: 0.4)
-        let mock = await Self.mocked(.hang(stderr: "frame=1\n"), deadline: 0.4)
+        let mock = await Self.mocked(.hang(stderr: "frame=1\n", exitOnTERM: nil), deadline: 0.4, executable: "/x/ffprobe")
         #expect(mock == real, "mock: \(mock)\nreal: \(real)")
     }
 
@@ -133,7 +143,7 @@ struct ScriptedExecutorFidelityTests {
             return await task.value
         }
         let real = await cancelled { await Self.shape("/bin/sleep", ["3600"]) }
-        let mock = await cancelled { await Self.mocked(.hang()) }
+        let mock = await cancelled { await Self.mocked(.hang(), executable: "/x/ffprobe") }
         #expect(mock == real, "mock: \(mock)\nreal: \(real)")
         #expect(!real.timedOut && real.exitCode == SIGTERM)
     }

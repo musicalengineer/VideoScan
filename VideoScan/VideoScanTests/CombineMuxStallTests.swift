@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import VideoScan
+@_spi(Testing) import VideoScanCore   // ProcessRunner.Result.init for a .custom answer
 
 // MARK: - CombineMuxStallTests (N1014-F3, 2026-10-07)
 //

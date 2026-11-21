@@ -138,10 +138,11 @@ public enum ProcessRunner {
 
         public var succeeded: Bool { exitCode == 0 && stdout != nil }
 
-        /// Public so a `CommandExecutor` outside this module (a test's
-        /// `.custom` answer) can build one; the same fields and defaults as
-        /// the memberwise init the runner itself uses.
-        public init(stdout: String?, stderr: String, exitCode: Int32,
+        /// For a test's `.custom` answer outside this module (app tests
+        /// `@_spi(Testing) import VideoScanCore`); production code never
+        /// mints a Result — a sensor forbids `ProcessRunner.Result(` in the
+        /// app sources. Same fields and defaults as the memberwise init.
+        @_spi(Testing) public init(stdout: String?, stderr: String, exitCode: Int32,
                     timedOut: Bool = false, launched: Bool = false) {
             self.stdout = stdout
             self.stderr = stderr
@@ -401,7 +402,7 @@ public enum ProcessRunner {
     }
 
     /// Build the Process terminationHandler: drain both pipes, release the
-    /// per-run fd lifecycle, resume the caller. Extracted from `runProcess`
+    /// per-run fd lifecycle, resume the caller. Extracted from `spawn`
     /// purely for function-length hygiene — behavior is identical.
     private static func makeTerminationHandler(
         stdoutHandle: FileHandle,
@@ -464,7 +465,8 @@ public enum ProcessRunner {
     }
 
     /// Launch the child and arm the deadline/cancellation escalation.
-    /// Extracted from `runProcess` for function-length hygiene.
+    /// Extracted from `spawn` (runProcess's body before the seam) for
+    /// function-length hygiene.
     private static func launchAndArm(
         proc: Process,
         executable: String,
