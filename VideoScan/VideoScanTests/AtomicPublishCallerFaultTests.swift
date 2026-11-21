@@ -10,6 +10,8 @@
 //   3. IntegrityReportStore         integrity-latest.json — what Catalog Status reads
 //   4. CatalogAuditRunMarker        catalog-audit.json — File Presence + the importer
 //   5. ArchiveAuditStore            archive-audit.json — Rick's keep-both / tags
+//   6. EventsStats                  events_latest.json — the Events page's counts (metrics)
+//   7. FullHashBackfillResumeMarker fullhash-backfill.json — the Resume offer (parked, in suite 5)
 // (The catalog's own commit door, catalog.highwater, is in VideoScanCore:
 // CatalogHighWaterPublishFaultTests.)
 //
@@ -393,8 +395,122 @@ struct ArchiveAuditPublishFaultTests {
         #expect(!FileManager.default.fileExists(atPath: model.archiveAuditStore.fileURL.path), "nothing was saved")
         #expect(sink.lines.contains { $0.contains("Audit: tagged") && $0.contains("clip0042") }, "the action was announced")
         withKnownIssue("persistArchiveAudit drops ArchiveAuditStore.save()'s result: the failed save never reaches the app log") {
-            #expect(sink.lines.contains { $0.localizedCaseInsensitiveContains("could not") || $0.localizedCaseInsensitiveContains("not saved") },
+            // "audit": the swapped sink is the process-wide one, so another
+            // suite's line (the Events page's "could not be written") can land in it.
+            #expect(sink.lines.contains { $0.localizedCaseInsensitiveContains("audit")
+                        && ($0.localizedCaseInsensitiveContains("could not") || $0.localizedCaseInsensitiveContains("not saved")) },
                     "the app log must say the tag was not saved; it holds only: \(sink.lines)")
         }
+    }
+
+    // PARKED RED (Fill In Full Hashes writes fixity — treated as data-risk,
+    // reported, not fixed). `FullHashBackfillResumeMarker.persist` is
+    // `try? AtomicFilePublish.write(…)` — the twin of the audit marker fixed
+    // in suite 4. In this suite only because it too reads the global app log.
+    //
+    // Reproduction: a run starts (marker on disk: unfinished), finishes, and
+    // the finish cannot be published. In this session the menu says "Fill In
+    // Full Hashes…" (nothing to resume). On disk the marker still says
+    // unfinished, so the NEXT launch offers "Resume…" and writes "the run
+    // started … did not finish" for a run that finished — and nothing,
+    // anywhere, said the marker could not be written. (Resume itself is
+    // harmless: saved hashes are skipped. The claim is what is wrong.)
+    @Test("Fill In Full Hashes: a finish that cannot be published leaves a false Resume offer for the next launch, with no word of the failure (parked RED)")
+    func aFailedBackfillFinishLeavesAFalseResumeOffer() throws {
+        let dir = try scratch("fullhash_marker"); defer { try? FileManager.default.removeItem(at: dir) }
+        let catalogFile = dir.appendingPathComponent("catalog.json").path
+        let sink = InMemoryLogSink()
+        let previous = appLog
+        appLog = sink
+        defer { appLog = previous }
+        let marker = FullHashBackfillResumeMarker()
+        marker.attach(catalogFile: catalogFile)
+        marker.noteStarted()
+        let url = try #require(marker.fileURL)
+        let before = try Data(contentsOf: url)
+        let hits = FaultHits()
+
+        AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
+            marker.noteFinished(hashed: 12)
+        }
+
+        // What is on disk, and what each side then claims — pinned as it is today.
+        #expect(hits.count == 1, "the fault was never reached")
+        #expect(try Data(contentsOf: url) == before, "the marker on disk is the one from the start of the run")
+        #expect(temps(under: dir).isEmpty)
+        #expect(marker.unfinished == nil && marker.menuTitle == "Fill In Full Hashes…", "this session: nothing to resume")
+        let relaunch = FullHashBackfillResumeMarker()
+        let offered = try #require(relaunch.attach(catalogFile: catalogFile), "the next launch reads the stale marker")
+        #expect(relaunch.menuTitle == "Resume Filling In Full Hashes…")
+        #expect(FullHashBackfillResumeMarker.launchLine(offered).contains("did not finish (0 hashes saved)"),
+                "the next launch's line, for a run that finished with 12")
+        withKnownIssue("FullHashBackfillResumeMarker.persist is try?: a marker that could not be written is said nowhere") {
+            #expect(sink.lines.contains { $0.contains(FullHashBackfillResumeMarker.fileName) && $0.localizedCaseInsensitiveContains("could not") },
+                    "the app log must say fullhash-backfill.json could not be written; it holds: \(sink.lines)")
+        }
+    }
+}
+
+// MARK: - 6. Events — events_latest.json
+
+@Suite("Publish fault — the Events page's counts file")
+@MainActor
+struct EventsStatsPublishFaultTests {
+
+    private typealias F = EventsFixture
+
+    @Test("the writer: a failed publish returns false and the previous counts file stands")
+    func aFailedWriteReturnsFalse() async throws {
+        let dir = try scratch("eventsstats"); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(EventsDecisionStore.statsFilename)
+        let stats = EventsStats(plan: .empty, decisions: .empty, now: Date(timeIntervalSince1970: 1_790_000_000))
+        #expect(await EventsStats.write(stats, to: url))
+        let before = try Data(contentsOf: url)
+        let hits = FaultHits()
+
+        let later = EventsStats(plan: .empty, decisions: .empty, now: Date(timeIntervalSince1970: 1_790_009_000))
+        let written = await AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: EIO, onHit: { hits.hit() })) {
+            await EventsStats.write(later, to: url)
+        }
+
+        #expect(hits.count == 1, "the fault was never reached")
+        #expect(written == false)
+        #expect(try Data(contentsOf: url) == before)
+        #expect(temps(under: dir).isEmpty)
+    }
+
+    // RED before the fix: `EventsStore.refresh` discarded the writer's Bool
+    // (`_ = await EventsStats.write(…)`), so the counts file went stale —
+    // and tools/publish_metrics kept publishing the old numbers — with
+    // nothing said.
+    @Test("the page: a refresh whose counts file cannot be published SAYS so, once per outage; the page still shows its plan; the old file stands")
+    func aFailedCountsFileIsSaid() async throws {
+        let dir = try F.scratchDirectory("eventsstats_page"); defer { try? FileManager.default.removeItem(at: dir) }
+        let page = EventsStore(decisions: EventsDecisionStore(directory: dir))
+        let model = VideoScanModel()
+        model.records = [F.record("/Volumes/Tapes/Xmas/a.mov", caption: "A Christmas tree.")]
+        await page.refresh(model: model)?.value                              // a first, healthy build
+        let url = page.decisions.statsURL
+        let before = try Data(contentsOf: url)
+        let hits = FaultHits()
+
+        // `refresh` saves from an unstructured Task, which inherits the hooks.
+        await AtomicFilePublish.$hooks.withValue(.failing(.rename, errno: ENOSPC, onHit: { hits.hit() })) {
+            await page.refresh(model: model)?.value
+            await page.refresh(model: model)?.value
+        }
+
+        #expect(hits.count == 2, "both refreshes tried to publish")
+        #expect(page.plan?.suggestions.count == 1, "the page is not hostage to its metrics file")
+        #expect(try Data(contentsOf: url) == before, "the previous counts file stands")
+        #expect(temps(under: dir).isEmpty)
+        try? await Task.sleep(for: .milliseconds(400))                        // console flush debounce (150 ms)
+        let said = model.dashboard.consoleLines.filter { $0.contains(EventsDecisionStore.statsFilename) && $0.contains("could not be written") }
+        #expect(said.count == 1, "said once for the outage; the console holds: \(model.dashboard.consoleLines)")
+        #expect(said.first?.contains("No space left on device") == true, "with the real reason")
+
+        await page.refresh(model: model)?.value                              // the disk answers again
+        #expect(hits.count == 2, "outside the scope the publish is live")
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }

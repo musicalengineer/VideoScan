@@ -217,9 +217,23 @@ struct EventsStats: Codable, Equatable, Sendable {
     @concurrent
     #endif
     nonisolated static func write(_ stats: EventsStats, to url: URL) async -> Bool {
+        await publish(stats, to: url) == nil
+    }
+
+    /// The same write, answering WHY when it fails (nil = written), so the
+    /// caller can say it: a counts file that silently stops updating keeps
+    /// feeding the old numbers to whatever reads it.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func publish(_ stats: EventsStats, to url: URL) async -> String? {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .prettyPrinted]
-        guard let data = try? enc.encode(stats) else { return false }
-        return (try? AtomicFilePublish.write(data, to: url)) != nil
+        do {
+            try AtomicFilePublish.write(try enc.encode(stats), to: url)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 }

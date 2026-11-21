@@ -83,6 +83,8 @@ final class EventsStore: ObservableObject {
     /// A refresh asked for while one was running (a "different occasions"
     /// mark needs the runs rebuilt): run once more when this one lands.
     private var refreshQueued = false
+    /// The counts file's last publish failed (said once, until one lands).
+    private var statsFailing = false
     private var decisionsWatch: AnyCancellable?
 
     init(decisions: EventsDecisionStore = .shared) {
@@ -113,7 +115,17 @@ final class EventsStore: ObservableObject {
             self.builtAt = Date()
             self.isBuilding = false
             let stats = VideoScanModel.eventsStats(plan: plan, decisions: self.decisions.snapshot(), now: Date())
-            _ = await EventsStats.write(stats, to: self.decisions.statsURL)
+            // Said once per outage (it used to be `_ =`): the page does not
+            // depend on this file, but its readers do.
+            if let why = await EventsStats.publish(stats, to: self.decisions.statsURL) {
+                if !self.statsFailing {
+                    self.statsFailing = true
+                    model.eventsNote("\(EventsDecisionStore.statsFilename) could not be written (\(why)) — "
+                        + "the counts file keeps the last numbers that were saved until a later refresh lands")
+                }
+            } else {
+                self.statsFailing = false
+            }
             if self.refreshQueued {
                 self.refreshQueued = false
                 self.refresh(model: model)
