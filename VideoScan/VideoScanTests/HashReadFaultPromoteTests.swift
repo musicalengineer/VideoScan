@@ -310,6 +310,132 @@ struct HashReadFaultPromoteTests {
         #expect(rec.archiveStage != .masterAssigned)
     }
 
+    // MARK: Codex r1 P1 (GH #504, D3c) — the adoption DESTINATION is confirmed too
+
+    /// Source A (no stored fixity); the file already at the destination is B,
+    /// one bit apart; the destination's FIRST read returns that bit flipped,
+    /// so it hashes to SHA-256(A). Two clean source reads cannot see that.
+    @Test("ADOPTION, destination (Codex r1 P1): the file already at the destination is ONE BIT apart and its first read flips that bit → NOT adopted: its second read disagrees, 'two reads of <path> disagreed — nothing was recorded'",
+          .timeLimit(.minutes(2)))
+    func aFlippedDestinationReadAdoptsNothing() async throws {
+        let rel = try await whereItWouldBeFiled()
+        let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_dest"); defer { sb.cleanup() }
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
+                                                         bytes: Self.bytes, seed: 21)
+        let a = try Data(contentsOf: src)
+        var b = a
+        b[Int(Self.faultAt)] ^= 0x01
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let existing = sb.archiveRoot.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try b.write(to: existing)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1994-05-01")
+        model.records = [rec]
+
+        let fault = HashReadFault(.bitFlip, where: { $0.hasSuffix(rel) }, atByte: Self.faultAt, onPass: 1)
+        let job = try #require(await fault.run { await MasterArchiveTestSupport.promote(model, ids: [rec.id]) })
+        await job.completionTask?.value
+        #expect(fault.firedCount == 1, "the flip never reached the destination's read")
+        let row = try #require(job.outcomes.first)
+        print("[hash-matrix] promote adoption | bitFlip in the DESTINATION's first read, destination one bit apart | \(row.kind) | \(row.detail) | destination reads \(fault.passCount)")
+        #expect(row.kind == .failed, "\(row.kind): \(row.detail)")
+        #expect(row.detail.contains("two reads of") && row.detail.contains("disagreed — nothing was recorded"), "\(row.detail)")
+        #expect(fault.passCount == 2, "the destination was read a second time — \(fault.passCount)")
+        #expect(MasterArchiveTestSupport.manifestRows(sb).isEmpty && model.masterArchiveCopy(of: rec) == nil)
+        #expect(rec.archiveStage != .masterAssigned)
+        #expect(try Data(contentsOf: existing) == b && Data(contentsOf: src) == a)
+    }
+
+    /// The manifest leg: a manifest row names this source (a crash after the
+    /// manifest append), its catalog record is gone. The file the row points
+    /// at now holds B, one bit apart from the manifest's bytes; its first
+    /// read returns that bit flipped.
+    @Test("ADOPTION, manifest leg (Codex r1 P1): the file the manifest row points at is ONE BIT apart and its first read flips that bit → NOT linked: its second read disagrees; a clean run refuses it as a digest mismatch",
+          .timeLimit(.minutes(2)))
+    func aFlippedDestinationReadOnTheManifestLegLinksNothing() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_manifest"); defer { sb.cleanup() }
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
+                                                         bytes: Self.bytes, seed: 21)
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1994-05-01")
+        model.records = [rec]
+        _ = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
+        let copy = try #require(model.masterArchiveCopy(of: rec))
+        let archiveURL = URL(fileURLWithPath: copy.fullPath)
+        let a = try Data(contentsOf: archiveURL)
+        // The crash shape: the manifest row stays, the catalog record is gone.
+        model.records = [rec]
+        rec.contentFixity = nil
+        try #require(model.masterArchiveCopy(of: rec) == nil, "fixture: the archive record is gone")
+        // Control: a clean run adopts from the manifest.
+        MasterArchiveTestSupport.unlockTree(sb.root)
+        var b = a
+        b[Int(Self.faultAt)] ^= 0x01
+        try b.write(to: archiveURL)
+        let name = archiveURL.lastPathComponent
+
+        let fault = HashReadFault(.bitFlip, where: { $0.contains("/Archive/") && $0.hasSuffix(name) }, atByte: Self.faultAt, onPass: 1)
+        let job = try #require(await fault.run { await MasterArchiveTestSupport.promote(model, ids: [rec.id]) })
+        await job.completionTask?.value
+        try #require(fault.firedCount == 1, "fixture: the manifest leg never read the archive file — \(job.outcomes)")
+        let row = try #require(job.outcomes.first)
+        print("[hash-matrix] promote adoption, manifest leg | bitFlip in the archive file's first read | \(row.kind) | \(row.detail) | reads \(fault.passCount)")
+        #expect(row.kind == .failed, "\(row.kind): \(row.detail)")
+        #expect(row.detail.contains("two reads of") && row.detail.contains("disagreed — nothing was recorded"), "\(row.detail)")
+        #expect(fault.passCount == 2, "\(fault.passCount)")
+        #expect(model.masterArchiveCopy(of: rec) == nil, "the source was linked to a file that does not hold its bytes")
+        #expect(try Data(contentsOf: archiveURL) == b)
+        // Clean: one read, a plain digest mismatch, still nothing linked.
+        let clean = try #require(await MasterArchiveTestSupport.promote(model, ids: [rec.id]))
+        await clean.completionTask?.value
+        #expect(clean.outcomes.first?.kind == .failed && clean.outcomes.first?.detail.contains("does not match the recorded digest") == true,
+                "\(clean.outcomes)")
+    }
+
+    /// The reconcile leg (same rule, third place): the journal holds an
+    /// `intent` for this source and a file sits at its destination — an
+    /// interrupted promotion. That file is B, one bit apart; its first read
+    /// returns the bit flipped, so it hashes to the source's digest.
+    @Test("ADOPTION, reconcile leg: the file an interrupted promotion left at the destination is ONE BIT apart and its first read flips that bit → NOT indexed (its second read disagrees, said in the console); the source is then promoted beside it",
+          .timeLimit(.minutes(2)))
+    func aFlippedDestinationReadOnTheReconcileLegIndexesNothing() async throws {
+        let rel = try await whereItWouldBeFiled()
+        let sb = try MasterArchiveTestSupport.makeSandbox("hrf_adopt_reconcile"); defer { sb.cleanup() }
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent(Self.fileName),
+                                                         bytes: Self.bytes, seed: 21)
+        let a = try Data(contentsOf: src)
+        let digestA = try #require(MasterArchiveTestSupport.sha256(ofFile: src.path))
+        var b = a
+        b[Int(Self.faultAt)] ^= 0x01
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path, userDate: "1994-05-01")
+        model.records = [rec]
+        let dest = sb.archiveRoot.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try b.write(to: dest)
+        try ArchivePromoteJournal.append(.init(sourceRecordID: rec.id, sourcePath: src.path, destRelPath: rel,
+                                               state: .intent, sha256: nil, copyRecordID: nil, at: Date()),
+                                         rootPath: sb.archiveRoot.path)
+
+        let fault = HashReadFault(.bitFlip, where: { $0.hasSuffix(rel) }, atByte: Self.faultAt, onPass: 1)
+        let job = try #require(await fault.run { await MasterArchiveTestSupport.promote(model, ids: [rec.id]) })
+        await job.completionTask?.value
+        try #require(fault.firedCount == 1, "fixture: the reconcile leg never read the file at the destination")
+        let copy = model.masterArchiveCopy(of: rec)
+        print("[hash-matrix] promote reconcile leg | bitFlip in the destination's first read | \(job.outcomes.map { "\($0.kind): \($0.detail)" }) | archive copy \(copy?.fullPath ?? "none")")
+        #expect(copy?.fullPath != dest.path, "the source was tied to a file that does not hold its bytes")
+        #expect(try Data(contentsOf: dest) == b, "the file that was there is untouched")
+        let console = await hashFaultConsole(model, containing: "left in place, not indexed")
+        #expect(console.contains("two reads of \(rel) disagreed") && console.contains("left in place, not indexed"), "\(console)")
+        // The source itself is then promoted like any other — beside the file that was there.
+        #expect(copy?.archiveFixity?.digest == digestA, "\(job.outcomes)")
+        let rows = MasterArchiveTestSupport.manifestRows(sb)
+        #expect(rows.count == 1 && rows.first?[ArchiveManifestCSV.relPathColumn] != rel, "\(rows)")
+    }
+
     /// EIO and a read that ends early are named as READ failures (GH #504
     /// D1; were "write failed: read errno 5" / "could not open source" /
     /// "changed"). A flip shows up as two reads that disagree;

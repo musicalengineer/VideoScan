@@ -172,6 +172,10 @@ enum ArchivePromoteEngine {
         /// or appended to): what was read is not the file from end to end.
         /// The file changed — it is not unreadable and not corrupt.
         case changedDuringRead(String)
+        /// Two fresh, complete reads of ONE file produced different digests
+        /// (GH #504 D3): one of them was wrong. Nothing may be adopted or
+        /// recorded on either. The payload names the file.
+        case readsDisagree(String)
         case verifyMismatch(expected: String, actual: String)
         case renameFailed(String, errno: Int32)
         case publishedIdentityMismatch(String)
@@ -192,6 +196,7 @@ enum ArchivePromoteEngine {
             case .publishedIdentityMismatch(let p): return "the published file is not the file that was verified — refused: \(p)"
             case .manifestInvalid(let why): return "archive manifest refused: \(why) — run Initialize Master Archive again"
             case .changedDuringRead(let how): return "changed while it was read (\(how))"
+            case .readsDisagree(let what): return "two reads of \(what) disagreed — nothing was recorded"
             case .cancelled: return "cancelled"
             case .createFailed, .writeFailed, .readFailed, .renameFailed, .durabilityBarrierFailed:
                 return syscallFailureDescription
@@ -487,6 +492,34 @@ enum ArchivePromoteEngine {
         guard let fd = try openContainedFile(root: root, relativePath: relativePath) else { return nil }
         defer { Darwin.close(fd) }
         return try sha256(fd: fd, shouldCancel: shouldCancel)
+    }
+
+    /// The digest of a contained archive file that is about to be ADOPTED on
+    /// the strength of `expected` (GH #504 D3c, Codex r1 P1): when the first
+    /// read produces `expected`, the file is read in full a SECOND time and
+    /// must produce it again — one read that happens to match must never be
+    /// the only witness that ties a source to a file already in the archive.
+    /// Returns the first digest (the caller refuses a mismatch as before);
+    /// nil ⇒ absent or cancelled; two reads that disagree throw
+    /// `Failure.readsDisagree`. Cost: one more full read, only on a match.
+    static func sha256(root: String, relativePath: String, confirmingWhenEqualTo expected: String,
+                       shouldCancel: () -> Bool = { false }) throws -> String? {
+        guard let fd = try openContainedFile(root: root, relativePath: relativePath) else { return nil }
+        defer { Darwin.close(fd) }
+        guard let first = try sha256(fd: fd, shouldCancel: shouldCancel) else { return nil }
+        guard first == expected else { return first }
+        return try secondRead(fd: fd, mustEqual: first, what: relativePath, shouldCancel: shouldCancel)
+    }
+
+    /// THE second read of an archive file about to be adopted: `fd` hashed
+    /// again from the top (a fresh pass of the one reader; nothing reused).
+    /// Returns `first` when the two agree, nil when cancelled; throws
+    /// `Failure.readsDisagree(what)` when they do not.
+    private static func secondRead(fd: Int32, mustEqual first: String, what: String,
+                                   shouldCancel: () -> Bool) throws -> String? {
+        guard let again = try sha256(fd: fd, shouldCancel: shouldCancel) else { return nil }
+        guard again == first else { throw Failure.readsDisagree(what) }
+        return first
     }
 
     /// Remove `<relativePath>.partial` if present — via the dirfd chain,
@@ -992,14 +1025,20 @@ enum ArchivePromoteEngine {
     /// Descriptor-based on purpose (codex R5 blocker 2): the caller
     /// obtained `fd` through the dirfd O_NOFOLLOW chain, so a symlinked
     /// intermediate can never make an outside file look adoptable.
+    ///
+    /// A match is confirmed by a SECOND full read of the existing file
+    /// (GH #504 D3c, Codex r1 P1 — the source is confirmed by the job): two
+    /// reads that disagree throw `Failure.readsDisagree(what)`; `what` names
+    /// the file for the row. A cancelled second read is "not identical".
     static func identicalDigest(fd: Int32,
                                 sourceSize: Int64,
+                                what: String,
                                 sourceSHA: () throws -> String?,
                                 shouldCancel: () -> Bool = { false }) throws -> String? {
         guard let (existing, _) = FileIdentity.of(fd: fd), existing.size == sourceSize else { return nil }
         guard let theirs = try sha256(fd: fd, shouldCancel: shouldCancel),
               let ours = try sourceSHA(), theirs == ours else { return nil }
-        return ours
+        return try secondRead(fd: fd, mustEqual: theirs, what: what, shouldCancel: shouldCancel)
     }
 
     /// Whole contents of an already-open (validated) descriptor via pread
