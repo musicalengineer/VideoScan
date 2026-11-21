@@ -14,20 +14,20 @@
 //
 // In every cell OF THAT MATRIX the hold is named, both files are
 // byte-for-byte untouched, and the same call with no fault yields the proof.
-// The matrix's copy is byte-identical to the archive, so a read that ends
-// early can only produce a mismatch there. It is NOT the whole story:
 //
-//   P1 (parked, Codex r1 #1) — `aShortReadOfALongerCopyMakesAFalseProof`:
-//   when the copy is the archive's bytes PLUS A TAIL, a read that ends at
-//   the archive's length hashes to the archive's digest and a PruneProof IS
-//   made for a file whose tail was never read. `pruneFullRead` hands
-//   `ContentFixity.captured` the stat size, not the bytes consumed.
+// GH #504 D1 (FIXED 2026-11-21, was P1 / Codex r1 #1): a read that ends
+// before the file's size is a read failure in the one reader
+// (`ArchivePromoteEngine.pipelinedRead`), so prune holds the copy as "could
+// not be read in full" — including `aShortReadOfALongerCopyMakesAFalseProof`,
+// where the copy is the archive's bytes PLUS A TAIL and the read ends at the
+// archive's length (before the fix: a PruneProof was made for a file whose
+// tail was never read).
 //
-// Corrected outcomes (verdict level):
-//   fault            copy == archive          copy == archive + tail
-//   EIO              held                     held
-//   bit flip         held                     held
-//   read ends early  held (as a "mismatch")   PROOF MADE — P1, parked
+// Outcomes (verdict level):
+//   fault            copy == archive                  copy == archive + tail
+//   EIO              held "could not be read in full" held
+//   bit flip         held (mismatch)                  held
+//   read ends early  held "could not be read in full" held "could not be read in full"
 //
 // WHY THE VERDICT AND NOT THE JOB: `pruneOneCopy` runs both reads inside
 // `Task.detached` (VideoScanModel+PruneApply.swift), and a detached task does
@@ -118,10 +118,9 @@ struct HashReadFaultPruneTests {
             #expect(c.inArchiveRead ? holdText.contains("archive copy changed") : holdText == PruneReason.mismatchAtMove.text,
                     "\(c): \(holdText)")
         case .shortRead:
-            #expect(!holdText.isEmpty)
-            withKnownIssue("PARKED 2026-11-20 (naming; root cause is the P1 prefix digest): prune names a read that ENDED EARLY as a content mismatch (\"archive copy changed\" / the mismatch reason) — the digest is of a prefix. THIS copy is held only because it is byte-identical to the archive; a copy with extra bytes after the archive's is NOT held (aShortReadOfALongerCopyMakesAFalseProof, P1). Proposed: bytes consumed vs size in the reader → \"could not be read in full\".") {
-                #expect(holdText.contains("could not be read in full"), "\(c): \(holdText)")
-            }
+            // D1: named for what it is — not "archive copy changed" / a mismatch.
+            #expect(holdText.contains("could not be read in full"), "\(c): \(holdText)")
+            if c.inArchiveRead { #expect(holdText.hasPrefix("its archive copy: ")) }
         }
 
         // --- Read-only: nothing on disk or in the catalog moved.
@@ -139,17 +138,15 @@ struct HashReadFaultPruneTests {
         #expect(proof.copyID == f.copy.id && proof.archiveDigest == f.digest)
     }
 
-    /// Codex r1 #1 (P1, parked). The copy is the archive's bytes followed by
-    /// bytes the archive does not have — a different, longer file whose
-    /// catalog digest still (wrongly) names the archive's. A full read
-    /// catches it (the control below). A read that ends at the archive's
-    /// length does not: the reader returns SHA-256(archive bytes),
-    /// `pruneFullRead` binds it to the file's STAT size, and the one maker of
-    /// a `PruneProof` makes one. The tail — the only copy of those bytes —
-    /// was never read. At the job this proof is what the mover accepts (its
-    /// guard re-stats; it does not re-read). The job itself is out of the
-    /// hook's reach (Task.detached), so the Trash move is not shown here.
-    @Test("P1 (parked): a read that ENDS EARLY on a copy holding the archive's bytes PLUS A TAIL makes a PruneProof — expected: held, no proof")
+    /// Codex r1 #1 (was P1; FIXED by GH #504 D1, seen RED 2026-11-21). The
+    /// copy is the archive's bytes followed by bytes the archive does not
+    /// have — a different, longer file whose catalog digest still (wrongly)
+    /// names the archive's. A full read catches it (the control below). A
+    /// read that ends at the archive's length used to hash to the archive's
+    /// digest and make a `PruneProof` for a file whose tail — the only copy
+    /// of those bytes — was never read. Now the reader throws and the copy
+    /// is held.
+    @Test("a read that ENDS EARLY on a copy holding the archive's bytes PLUS A TAIL makes NO PruneProof: held, 'could not be read in full'")
     func aShortReadOfALongerCopyMakesAFalseProof() async throws {
         let f = try await PruneApplyTests.fixture("hrf_tail"); defer { f.sb.cleanup() }
         let archiveBytes = try Data(contentsOf: URL(fileURLWithPath: f.archive.fullPath))
@@ -174,10 +171,11 @@ struct HashReadFaultPruneTests {
         let verdict = fault.runSync { Model.pruneCandidateProof(item, archive: reading, hooks: hooks) }
         #expect(fault.firedCount == 1)
         print("[hash-matrix] prune | shortRead at the archive's length, copy = archive + tail | \(verdict)")
-        withKnownIssue("PARKED 2026-11-20 (P1, Codex r1 #1): a read of the copy that ends at the archive's length yields a PruneProof for a file whose tail was never read (pruneFullRead passes the stat size, not the bytes consumed, to ContentFixity.captured; sha256(fd:) returns a prefix digest). Proposed: the reader throws when bytes consumed ≠ st_size, or pruneFullRead compares the count itself → held \"could not be read in full\".") {
-            if case .success(let proof) = verdict {
-                Issue.record("a PROOF was made from a read that stopped \(tail.count) bytes short: \(proof)")
-            }
+        switch verdict {
+        case .success(let proof):
+            Issue.record("a PROOF was made from a read that stopped \(tail.count) bytes short: \(proof)")
+        case .failure(let hold):
+            #expect(hold.text == "could not be read in full", "\(hold.text)")
         }
         // The file the proof would send to the Trash still holds the tail.
         #expect(try Data(contentsOf: URL(fileURLWithPath: f.copy.fullPath)).suffix(tail.count) == tail)

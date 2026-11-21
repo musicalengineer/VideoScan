@@ -309,7 +309,7 @@ struct DedupeHashReadSeamTests {
         let once = InterruptOnce(atOffset: 0)
         let digest = try? ArchivePromoteEngine.$readHook.withValue(once.hook) { try ArchivePromoteEngine.sha256(path: url.path) }
         #expect(once.fired)
-        withKnownIssue("PARKED 2026-11-21 (P3, seam fidelity only — no product defect): ArchivePromoteEngine's reader applies an injected .errno(EINTR) AFTER its EINTR-retry loop, so a test cannot simulate an interrupted archive read (it gets Failure.writeFailed \"read errno 4\"). Proposed: in ChunkRing.startReader, an injected EINTR re-issues the pread (as applyReadFault does for the serial hashers).") {
+        withKnownIssue("PARKED 2026-11-21 (P3, seam fidelity only — no product defect): ArchivePromoteEngine's reader applies an injected .errno(EINTR) AFTER its EINTR-retry loop, so a test cannot simulate an interrupted archive read (it gets Failure.readFailed \"read errno 4\"). Proposed: in ChunkRing.startReader, an injected EINTR re-issues the pread (as applyReadFault does for the serial hashers).") {
             #expect(digest == hashSeamReference(data))
         }
     }

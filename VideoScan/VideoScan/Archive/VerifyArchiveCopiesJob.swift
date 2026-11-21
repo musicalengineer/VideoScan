@@ -642,9 +642,16 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             guard Self.itemVolumeIsReachable(item, archiveRoot: root) else {
                 return abortRootUnreachable(name: name, item: item)
             }
+            // A read that failed or ended early is not a verdict on the
+            // bytes (GH #504, D1): the row fails, the record's fixity is
+            // left exactly as it was, and the file and the reason are in
+            // the console and the app log — not only in a count.
             tally.failed += 1
-            record(.failed, name, PromoteToArchiveJob.describe(error))
-            verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(PromoteToArchiveJob.describe(error), privacy: .public)")
+            let why = PromoteToArchiveJob.describe(error)
+            record(.failed, name, why)
+            model.log("Verify Archive: FAILED \(name) — \(why). Its fixity record was left as it was; nothing was changed.")
+            appLog.write("verify archive FAILED: \(name) — \(why); fixity record untouched")
+            verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(why, privacy: .public)")
             return true
         }
         // `sha256` returns nil on cancel as well as on absence.

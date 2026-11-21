@@ -66,16 +66,23 @@ struct HashReadFaultArchiveUpdateTests {
         // --- Named, never a success.
         #expect(r.kind == (c.afterTheMove ? .rolledBack : .refused), "\(c): \(r.kind) — \(r.message)")
         let m = r.message
+        // GH #504 D1: EIO AND a read that ends early are read failures (the
+        // latter used to be a digest of the prefix, reported as a mismatch);
+        // only a flipped bit is a fingerprint mismatch.
         switch (c.kind, c.afterTheMove) {
-        case (.eio, false): #expect(m.contains("could not be read") && m.contains(a.relPath), "\(m)")
-        case (.eio, true): #expect(m.contains("could not be read back") && m.contains(to), "\(m)")
-        case (_, false): #expect(m.contains("does not match its manifest fingerprint") && m.contains(a.relPath), "\(m)")
-        case (_, true): #expect(m.contains("does not match its manifest fingerprint after the move") && m.contains(to), "\(m)")
+        case (.bitFlip, false): #expect(m.contains("does not match its manifest fingerprint") && m.contains(a.relPath), "\(m)")
+        case (.bitFlip, true): #expect(m.contains("does not match its manifest fingerprint after the move") && m.contains(to), "\(m)")
+        case (_, false): #expect(m.contains("could not be read") && m.contains(a.relPath), "\(m)")
+        case (_, true): #expect(m.contains("could not be read back") && m.contains(to), "\(m)")
         }
-        if c.kind == .eio {
-            withKnownIssue("PARKED 2026-11-20 (P3, wording): the reason inside Update's read failure is the engine's \"write failed: read errno 5\" (Failure.writeFailed). Proposed: Failure.readFailed.") {
-                #expect(!m.lowercased().contains("write failed"), "\(m)")
-            }
+        switch c.kind {
+        case .eio:
+            // Was P3: the reason inside is the engine's read failure, not "write failed".
+            #expect(!m.lowercased().contains("write failed"), "\(m)")
+            #expect(m.contains("could not be read in full (read errno \(EIO))"), "\(m)")
+        case .shortRead:
+            #expect(m.contains("could not be read in full (11000 of \(bytesBefore.count) bytes)"), "\(m)")
+        case .bitFlip: break
         }
 
         // --- Where the media is: the old path, the old bytes; nothing at the new one.

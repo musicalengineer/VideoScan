@@ -5,7 +5,8 @@
 // production is unchanged when nothing is bound.
 //
 //   LOGIC     — EIO at byte N, a read that ends early, a partial read, one
-//               flipped bit: the engine's answer to each.
+//               flipped bit: the engine's answer to each. EIO and an early
+//               end are `Failure.readFailed` — never a digest (GH #504 D1).
 //   UNCHANGED — hook nil ⇒ the reference digest at every chunk-boundary
 //               size; a bound-but-silent hook sees every chunk once, in
 //               file order, and the digest is still the reference digest.
@@ -149,7 +150,7 @@ struct HashReadSeamTests {
         let fault = HashReadFault(.eio, pathSuffix: "test_eio.bin", atByte: byte)
         let h = try Engine.openSource(path: url.path); defer { h.close() }
         var seen: Int64 = 0
-        #expect(throws: Engine.Failure.writeFailed("read errno \(EIO)")) {
+        #expect(throws: Engine.Failure.readFailed("read errno \(EIO)")) {
             try fault.runSync { try Engine.sha256(fd: h.fd, progress: { seen = $0 }) }
         }
         #expect(fault.firedCount == 1)
@@ -157,12 +158,10 @@ struct HashReadSeamTests {
         #expect(try Engine.sha256(path: url.path) == hashSeamReference(data), "outside the scope the file hashes clean")
     }
 
-    /// Pinned as it is today: the engine does not compare the bytes it
-    /// consumed with the file's size, so it hands back a well-formed digest
-    /// of the prefix. FixityRebind checks the count itself; prune and Verify
-    /// Archive Copies do not, and for a file that CONTINUES past the
-    /// expected bytes that is a false proof (P1 — see the known issue).
-    @Test("a read that ends early: sha256 returns the digest of the PREFIX it was given, and says nothing")
+    /// GH #504 D1 (was parked P1, the root cause): a read that ends before
+    /// the file's size is a READ FAILURE, never a digest of the prefix. Seen
+    /// RED 2026-11-21 (sha256 returned SHA-256 of the first `cut` bytes).
+    @Test("a read that ends early: sha256 THROWS a named read failure (\"N of M bytes\") — never the digest of the prefix it was given")
     func prematureEOFYieldsAPrefixDigest() throws {
         let sb = try sandbox("short"); defer { sb.cleanup() }
         let (url, data) = try write(sb, "test_short.bin", bytes: Self.chunk + 40_000, seed: 4)
@@ -170,17 +169,42 @@ struct HashReadSeamTests {
         let fault = HashReadFault(.shortRead, pathSuffix: "test_short.bin", atByte: cut)
         var seen: Int64 = 0
         let h = try Engine.openSource(path: url.path); defer { h.close() }
-        let digest = try fault.runSync { try Engine.sha256(fd: h.fd, progress: { seen = $0 }) }
-        #expect(fault.firedCount == 1)
-        #expect(seen == cut && seen < Int64(data.count), "the progress count is the only trace of the short read")
-        #expect(digest == hashSeamReference(data.prefix(Int(cut))))
-        #expect(digest != hashSeamReference(data))
-        withKnownIssue("PARKED 2026-11-20 (P1 — ROOT CAUSE, re-ranked from P3 after Codex r1 #1): sha256(fd:) returns a well-formed digest for a read that ended before the size fstat reported. Consequences pinned elsewhere: a false PruneProof (HashReadFaultPruneTests.aShortReadOfALongerCopyMakesAFalseProof) and a false verified/restored in Verify Archive Copies (HashReadFaultVerifyArchiveTests.aShortReadOfALongerArchiveFileVerifies). Proposed: compare bytes consumed with st_size after the loop and throw a named read failure.") {
-            #expect(throws: Engine.Failure.self) {
-                _ = try HashReadFault(.shortRead, pathSuffix: "test_short.bin", atByte: cut)
-                    .runSync { try Engine.sha256(path: url.path) }
-            }
+        let expected = Engine.Failure.readFailed("\(cut) of \(data.count) bytes")
+        #expect(throws: expected) {
+            _ = try fault.runSync { try Engine.sha256(fd: h.fd, progress: { seen = $0 }) }
         }
+        #expect(fault.firedCount == 1)
+        #expect(seen == cut && seen < Int64(data.count), "the bytes before the cut were consumed, none after")
+        #expect(expected.description == "could not be read in full (\(cut) of \(data.count) bytes)")
+        #expect(throws: expected) {
+            _ = try HashReadFault(.shortRead, pathSuffix: "test_short.bin", atByte: cut)
+                .runSync { try Engine.sha256(path: url.path) }
+        }
+        #expect(try Engine.sha256(path: url.path) == hashSeamReference(data), "outside the scope the file hashes clean")
+    }
+
+    /// D1's two edges: the size is taken before AND after the read, so a
+    /// file that really changed length under the read is not called a read
+    /// failure — the callers' identity stamps name that. An empty file is a
+    /// complete read of nothing.
+    @Test("D1 edges: an empty file hashes (0 of 0 is complete); a file truncated to exactly the bytes read is not a read failure")
+    func aCompleteReadOfAShorterFileIsNotAReadFailure() throws {
+        let sb = try sandbox("edges"); defer { sb.cleanup() }
+        let (empty, none) = try write(sb, "test_empty.bin", bytes: 0, seed: 1)
+        #expect(try Engine.sha256(path: empty.path) == hashSeamReference(none))
+        // The file is cut to `keep` bytes while its read is under way: the
+        // hook truncates the real file, then ends the read there.
+        let (url, data) = try write(sb, "test_trunc.bin", bytes: Self.chunk + 40_000, seed: 14)
+        let keep = Self.chunk
+        let hook: Engine.ReadHook = { fd, offset, _ in
+            guard offset == Int64(keep) else { return nil }
+            let w = open(url.path, O_WRONLY)
+            ftruncate(w, off_t(keep))
+            close(w)
+            return .shortRead(bytes: 0)
+        }
+        let digest = try Engine.$readHook.withValue(hook) { try Engine.sha256(path: url.path) }
+        #expect(digest == hashSeamReference(data.prefix(keep)), "the file IS these bytes now; its change is the stamps' to report")
     }
 
     @Test("an ordinary PARTIAL read (fewer bytes than asked, more to come) changes nothing: same digest")
@@ -224,7 +248,7 @@ struct HashReadSeamTests {
         let data = hashSeamBlob(bytes: 30_000, seed: 8)
         try data.write(to: url)
         let fault = HashReadFault(.eio, pathSuffix: "test_contained.bin", atByte: 10_000)
-        #expect(throws: Engine.Failure.writeFailed("read errno \(EIO)")) {
+        #expect(throws: Engine.Failure.readFailed("read errno \(EIO)")) {
             try fault.runSync { try Engine.sha256(root: sb.archiveRoot.path, relativePath: rel) }
         }
         #expect(fault.firedCount == 1)
@@ -302,13 +326,15 @@ struct HashReadSeamTests {
         }
         #expect(fault.firedCount == 1, "\(c): the fault did not reach its read")
         switch (c.kind, c.inSource) {
-        case (.eio, true):
-            #expect(thrown == .sourceUnreadable(url.path))
-        case (.shortRead, true), (.bitFlip, true):
+        case (.eio, _):
+            #expect(thrown == .readFailed("read errno \(EIO)"), "\(String(describing: thrown))")
+        case (.shortRead, _):
+            // D1: a read that ends early is a read failure in the copy pass
+            // and in the read-back alike — never a digest of the prefix.
+            #expect(thrown == .readFailed("\(Self.chunk + 9) of \(data.count) bytes"), "\(String(describing: thrown))")
+        case (.bitFlip, true):
             #expect(thrown == .sourceChangedDuringCopy(url.path), "\(String(describing: thrown))")
-        case (.eio, false):
-            #expect(thrown == .writeFailed("read errno \(EIO)"))
-        case (.shortRead, false), (.bitFlip, false):
+        case (.bitFlip, false):
             guard case .verifyMismatch(let want, let got)? = thrown else {
                 Issue.record("\(c): \(String(describing: thrown))"); return
             }

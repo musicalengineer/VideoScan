@@ -13,25 +13,24 @@
 //   * the archive file, the manifest and the control file's verdict are
 //     untouched; a clean second run verifies / restores the file.
 //
-// The matrix's archive file is the file the manifest describes, so a read
-// that ends early can only disagree with the manifest there. It is NOT the
-// whole story:
+// GH #504 D1 (FIXED 2026-11-21, seen RED first): a read that ends before the
+// file's size is a read failure in the one reader, so Verify reports a
+// FAILED row "could not be read in full (N of M bytes)", clears nothing and
+// writes nothing — also for `aShortReadOfALongerArchiveFileVerifies` (was P1,
+// Codex r1 #1: an archive file that is the manifest's bytes PLUS A TAIL,
+// read only as far as the manifest's length, was reported verified /
+// restored and had archiveFixity written). The failed row names its file
+// and reason in the console and the app log (was P3: os_log only).
 //
-//   P1 (parked, Codex r1 #1) — `aShortReadOfALongerArchiveFileVerifies`: an
-//   archive file that is the manifest's bytes PLUS A TAIL, read only as far
-//   as the manifest's length, hashes to the manifest's digest: Verify
-//   reports verified / restored and WRITES archiveFixity for bytes it did
-//   not read.
-//
-// Corrected outcomes:
+// Outcomes:
 //   fault            file == manifest bytes            file == manifest bytes + tail
 //   EIO              failed, fixity kept               failed
 //   bit flip         MISMATCH, fixity cleared          MISMATCH
-//   read ends early  MISMATCH, fixity cleared (P2)     VERIFIED / RESTORED, fixity written — P1, parked
+//   read ends early  failed, fixity kept               failed, nothing written
 //
 // What happens to a fixity the record ALREADY carried is pinned per fault
-// (EIO keeps it — "the check errored"; a digest that disagrees clears it —
-// codex #975). Misnamed outcomes are PARKED, not fixed (rule 10).
+// (a read that failed keeps it — "the check errored"; a digest that
+// disagrees clears it — codex #975).
 //
 // Parallel-safe: sandbox per test, task-local hook, no global log swap.
 
@@ -114,23 +113,21 @@ struct HashReadFaultVerifyArchiveTests {
             if c.recordHasFixity {
                 #expect(victim.archiveFixity == fixityBefore, "an errored check clears nothing")
             }
-            withKnownIssue("PARKED 2026-11-20 (P3, wording): Verify reports a READ error as \"write failed: read errno 5\" (Failure.writeFailed from sha256(fd:)). Proposed: Failure.readFailed — \"could not be read in full (errno N)\".") {
-                #expect(!row.detail.lowercased().contains("write failed"), "\(row.detail)")
-            }
-            #expect(row.detail.contains("read errno \(EIO)"))
+            #expect(!row.detail.lowercased().contains("write failed"), "\(row.detail)")
+            #expect(row.detail == "could not be read in full (read errno \(EIO))", "\(row.detail)")
         case .bitFlip:
             #expect(row.kind == .mismatch && job.tally.mismatch == 1 && summary.contains("1 MISMATCH"), "\(c): \(row) / \(summary)")
             #expect(row.expectedDigest == trueDigest && row.actualDigest != trueDigest)
             // codex #975: a digest that disagrees clears what the record claimed.
             #expect(victim.archiveFixity == nil)
         case .shortRead:
-            #expect(row.kind == .mismatch && job.tally.mismatch == 1, "\(c): \(row) / \(summary)")
-            #expect(victim.archiveFixity == nil)
-            withKnownIssue("PARKED 2026-11-20 (P2, truth; root cause is the P1 prefix digest — see aShortReadOfALongerArchiveFileVerifies): a read that ENDS EARLY (bytes consumed < file size) is reported as \"POSSIBLE CORRUPTION — bytes on disk hash to …\" and clears the record's fixity; the digest is of a prefix, not of the bytes on disk. Proposed: compare bytes consumed with the size (as FixityRebind does) → a `.failed` row \"could not be read in full (read N of M bytes)\", fixity left alone.") {
-                #expect(row.kind == .failed, "\(c): \(row.kind)")
-                #expect(!row.detail.contains("bytes on disk hash to"), "\(row.detail)")
-                if c.recordHasFixity { #expect(victim.archiveFixity == fixityBefore) }
-            }
+            // GH #504 D1 (was P2): a read that ends early is a FAILED row,
+            // never "POSSIBLE CORRUPTION", and it clears nothing.
+            #expect(row.kind == .failed && job.tally.failed == 1 && job.tally.mismatch == 0 && summary.contains("1 failed"),
+                    "\(c): \(row) / \(summary)")
+            #expect(row.detail == "could not be read in full (17000 of \(bytesBefore.count) bytes)", "\(row.detail)")
+            #expect(!row.detail.contains("bytes on disk hash to"), "\(row.detail)")
+            if c.recordHasFixity { #expect(victim.archiveFixity == fixityBefore, "a read that ended early clears nothing") }
         }
 
         // --- The log says which file and why (not only a count).
@@ -138,12 +135,14 @@ struct HashReadFaultVerifyArchiveTests {
         #expect(console.contains("Verify Archive: \(summary)."), "\(c): console:\n\(console)")
         let verifyLines = console.split(separator: "\n").filter { $0.hasPrefix("Verify Archive") }
         let namesTheFile = verifyLines.contains { $0.contains(victimName) }
-        if c.kind == .eio {
-            withKnownIssue("PARKED 2026-11-20 (P3, logging): a FAILED read in Verify is counted in the summary (\"1 failed\") but the file and the reason reach only os_log — not the console, catalog.log or videoscan.log (mismatch and missing do log their file). Proposed: model.log + appLog.write for the failed row, like flagMismatch.") {
-                #expect(namesTheFile, "\(c): \(verifyLines)")
-            }
-        } else {
+        if c.kind == .bitFlip {
             #expect(verifyLines.contains { $0.contains("MISMATCH") && $0.contains(victimName) }, "\(c): \(verifyLines)")
+        } else {
+            // A failed read names its file and its reason in the console
+            // (was P3: os_log only).
+            #expect(namesTheFile, "\(c): \(verifyLines)")
+            #expect(verifyLines.contains { $0.contains("FAILED") && $0.contains(victimName) && $0.contains("could not be read in full") },
+                    "\(c): \(verifyLines)")
         }
 
         // --- Media and index untouched; the control verified.
@@ -158,13 +157,13 @@ struct HashReadFaultVerifyArchiveTests {
         #expect(victim.archiveFixity?.digest == trueDigest)
     }
 
-    /// Codex r1 #1 (P1, parked). The archive file was changed after Promote:
-    /// it is the manifest's bytes followed by more. A full read flags it
-    /// (the control). A read that ends at the manifest's length hashes to
-    /// the manifest's digest — Verify calls the file verified, restores a
-    /// stripped fixity, and the contract "archiveFixity present ⇒ these
-    /// bytes verified" is false.
-    @Test("P1 (parked): a read that ENDS EARLY on an archive file holding the manifest's bytes PLUS A TAIL is reported verified/restored and writes archiveFixity — expected: never verified, nothing written",
+    /// Codex r1 #1 (was P1; FIXED by GH #504 D1, seen RED 2026-11-21). The
+    /// archive file was changed after Promote: it is the manifest's bytes
+    /// followed by more. A full read flags it (the control). A read that
+    /// ends at the manifest's length used to hash to the manifest's digest —
+    /// Verify called the file verified and restored a stripped fixity. Now
+    /// the read fails by name and nothing is written.
+    @Test("a read that ENDS EARLY on an archive file holding the manifest's bytes PLUS A TAIL is never verified/restored and writes no archiveFixity: a FAILED row, the run ends red",
           .timeLimit(.minutes(2)), arguments: [true, false])
     func aShortReadOfALongerArchiveFileVerifies(recordHasFixity: Bool) async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("hrf_verify_tail"); defer { sb.cleanup() }
@@ -200,12 +199,11 @@ struct HashReadFaultVerifyArchiveTests {
         #expect(fault.firedCount == 1)
         let row = try #require(job.outcomes.first { $0.name.hasSuffix(name) })
         print("[hash-matrix] verify-archive | shortRead at the manifest's length, file = manifest bytes + tail, record \(recordHasFixity ? "has" : "lost its") fixity | \(row.kind) | \(job.state)")
-        withKnownIssue("PARKED 2026-11-20 (P1, Codex r1 #1): Verify Archive Copies reports an archive file verified/restored, and writes archiveFixity, from a read that ended at the manifest's length while the file continues (sha256(fd:) returns a prefix digest; nothing compares bytes consumed with the file's size). Proposed: the reader throws when bytes consumed ≠ st_size → `.failed` \"could not be read in full\", nothing written.") {
-            #expect(row.kind != .verified && row.kind != .restored, "\(row.kind): \(row.detail)")
-            #expect(copy.archiveFixity == before, "archiveFixity was written from a short read: \(String(describing: copy.archiveFixity))")
-            if case .finished = job.state { Issue.record("the run ended green: \(job.state)") }
-        }
-        // What the record now claims is not what the disk holds.
+        #expect(row.kind == .failed, "\(row.kind): \(row.detail)")
+        #expect(row.detail == "could not be read in full (\(original.count) of \(original.count + tail.count) bytes)", "\(row.detail)")
+        #expect(copy.archiveFixity == before, "archiveFixity was written from a short read: \(String(describing: copy.archiveFixity))")
+        if case .finished = job.state { Issue.record("the run ended green: \(job.state)") }
+        // The file on disk is untouched.
         #expect(MasterArchiveTestSupport.sha256(ofFile: copy.fullPath) == diskDigest)
     }
 }

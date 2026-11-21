@@ -6,8 +6,8 @@
 //
 //   EIO mid-file        → `unreadable`: nothing stored, the row and the
 //                         summary say so, the old fixity (if any) is kept;
-//   a read ending early → refused ("read N bytes, the file has M"): nothing
-//                         stored;
+//   a read ending early → `unreadable` ("could not be read in full (N of M
+//                         bytes)", GH #504 D1): nothing stored;
 //   one flipped bit     → P1, PARKED (Codex r1 #2). A single read with no
 //                         second read cannot see it, and the digest stored
 //                         need not be a digest of "nothing": when files A
@@ -82,10 +82,9 @@ struct HashReadFaultFixityTests {
         case .eio:
             #expect(job.totals[.unreadable] == 1 && job.totals.line.contains("1 unreadable"), "\(job.totals.line)")
         case .shortRead:
-            #expect(job.totals[.changedDuringRead] == 1, "\(job.totals.line)")
-            withKnownIssue("PARKED 2026-11-20 (P3, truth): a read that ENDED EARLY is counted as \"changed while it was read\" (FixityRebind.changedDuringRead); the detail \"read N bytes, the file has M\" is accurate, the bucket is not — the file did not change. Proposed: a `.unreadable(\"read N of M bytes\")` outcome for seen ≠ size when the before/after stamps agree.") {
-                #expect(job.totals[.unreadable] == 1, "\(job.totals.line)")
-            }
+            // GH #504 D1 (was P3): the file did not change — it could not be
+            // read in full; the engine now says so and it lands in "unreadable".
+            #expect(job.totals[.unreadable] == 1 && job.totals[.changedDuringRead] == 0, "\(job.totals.line)")
         case .bitFlip: break
         }
         #expect(try Data(contentsOf: URL(fileURLWithPath: victim.fullPath)) == bytesBefore)
@@ -259,7 +258,7 @@ struct HashReadFaultFixityTests {
         #expect(job.tally.bound == 0 && job.storedCount == 0 && job.tally.digestChanged == 0, "\(job.tally)")
         switch kind {
         case .eio: #expect(job.tally.unreadable == 1 && job.summaryLine.contains("1 unreadable"), "\(job.summaryLine)")
-        case .shortRead: #expect(job.tally.changedDuringRead == 1 && job.summaryLine.contains("1 changed during the read"), "\(job.summaryLine)")
+        case .shortRead: #expect(job.tally.unreadable == 1 && job.tally.changedDuringRead == 0 && job.summaryLine.contains("1 unreadable"), "\(job.summaryLine)")
         case .bitFlip: break
         }
         #expect(trueDigest(r.record.fullPath) == r.digest)

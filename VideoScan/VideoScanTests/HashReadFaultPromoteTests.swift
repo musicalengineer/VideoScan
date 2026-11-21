@@ -30,12 +30,14 @@
 //
 // Corrected outcomes:
 //   read faulted            fresh copy                       destination already holds a file
-//   proving read, EIO/short failed                           (not covered)
+//   proving read, EIO/short failed ("could not be read in    (not covered)
+//                           full")
 //   proving read, bit flip  failed ("source changed")        ADOPTED as identical — P1, parked
 //   copy pass / read-back   failed                           (no such read on this path)
 //
-// Wording that names the failure wrongly is PARKED (withKnownIssue), not
-// fixed here: Promote is a data-risk path (rule 10).
+// Wording (GH #504 D1, fixed 2026-11-21): EIO and a read that ends early are
+// "could not be read in full (read errno N | N of M bytes)" in all three
+// reads — no longer "write failed: read errno 5" / "could not open source".
 //
 // Parallel-safe: one sandbox, model, ledger and task-local hook per test.
 
@@ -232,21 +234,18 @@ struct HashReadFaultPromoteTests {
         if let copy { #expect(copy.archiveFixity?.digest == digestB && copy.archiveFixity?.digest != digestA) }
     }
 
-    /// EIO must be named as a READ failure. A flip or an early end shows up
-    /// as two reads that disagree; "changed"/"verification failed" is the
-    /// most the app can know, and is accepted.
+    /// EIO and a read that ends early are named as READ failures (GH #504
+    /// D1; were "write failed: read errno 5" / "could not open source" /
+    /// "changed"). A flip shows up as two reads that disagree;
+    /// "changed"/"verification failed" is the most the app can know.
     private func expectTruthfulWords(_ c: PromoteFaultCase, _ detail: String) {
         let d = detail.lowercased()
         switch (c.kind, c.read) {
-        case (.eio, .sourceProof), (.eio, .copyReadBack):
-            withKnownIssue("PARKED 2026-11-20 (P3, wording): a READ error during a hash is reported as \"write failed: read errno 5\" (ArchivePromoteEngine.sha256(fd:) maps it to Failure.writeFailed). Proposed: a Failure.readFailed case — \"could not be read in full (errno N)\".") {
-                #expect(!d.contains("write failed"), "\(c): \(detail)")
-            }
-            #expect(d.contains("read errno \(EIO)"), "\(c): the errno is in the words: \(detail)")
-        case (.eio, .sourceCopy):
-            withKnownIssue("PARKED 2026-11-20 (P3, wording): a READ error in the copy pass is reported as \"could not open source …\" (Failure.sourceUnreadable); the file opened, a read failed. Proposed: the same Failure.readFailed case.") {
-                #expect(!d.contains("could not open"), "\(c): \(detail)")
-            }
+        case (.eio, _):
+            #expect(!d.contains("write failed") && !d.contains("could not open"), "\(c): \(detail)")
+            #expect(d.contains("could not be read in full (read errno \(EIO))"), "\(c): the errno is in the words: \(detail)")
+        case (.shortRead, _):
+            #expect(d.contains("could not be read in full (\(Self.faultAt) of \(Self.bytes) bytes)"), "\(c): \(detail)")
         case (_, .sourceProof), (_, .sourceCopy):
             #expect(d.contains("changed") || d.contains("does not match"), "\(c): \(detail)")
         case (_, .copyReadBack):
