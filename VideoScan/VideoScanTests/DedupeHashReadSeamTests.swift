@@ -102,7 +102,7 @@ struct DedupeHashReadSeamTests {
         #expect(digest == expected)
         var offset: Int64 = 0
         for chunk in observer.chunks {
-            #expect(chunk.offset == offset && chunk.count > 0 && chunk.count <= Self.block)
+            #expect(chunk.offset == offset && chunk.count >= 1 && chunk.count <= Self.block)
             offset += Int64(chunk.count)
         }
         #expect(offset == Int64(size) && observer.chunks.count == (size + Self.block - 1) / Self.block)
@@ -115,7 +115,7 @@ struct DedupeHashReadSeamTests {
         #expect(ContentCopyProof.sha256(path: url.path, expectedBytes: Int64(size), readHook: proofObserver.hook) == expected)
         offset = 0
         for chunk in proofObserver.chunks {
-            #expect(chunk.offset == offset && chunk.count > 0 && chunk.count <= Self.proofBlock)
+            #expect(chunk.offset == offset && chunk.count >= 1 && chunk.count <= Self.proofBlock)
             offset += Int64(chunk.count)
         }
         #expect(offset == Int64(size) && proofObserver.chunks.count == (size + Self.proofBlock - 1) / Self.proofBlock)
