@@ -105,6 +105,6 @@ struct VideoRecordIdentityGenerationTests {
             record.filename = "clip_\(index).mov"
         }
         let elapsed = ContinuousClock.now - started
-        #expect(elapsed < .seconds(1), "100k identity writes took \(elapsed)")
+        expectBudget(elapsed, under: .seconds(1), "100k identity writes took \(elapsed)")
     }
 }

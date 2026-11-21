@@ -81,7 +81,7 @@ struct ContainedLogWriteTests {
         }
         #expect(sink.droppedLines == 100_000)
         #expect(MemoryLayout<ContainedLogWrite>.size <= 64, "two integers and a string — nothing accumulates")
-        #expect(took < .seconds(10), "\(took)")
+        expectBudget(took, under: .seconds(10), "\(took)")
         sink.write(line, lines: .max, to: broken, stampPrefix: "[T] ")
         #expect(sink.droppedLines == .max && sink.totalDroppedLines == .max, "saturates, never traps")
         sink.write(line, lines: -5, to: broken, stampPrefix: "[T] ")

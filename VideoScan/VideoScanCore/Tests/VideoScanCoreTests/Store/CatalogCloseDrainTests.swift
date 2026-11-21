@@ -169,7 +169,7 @@ struct CatalogCloseDrainTests {
         var answers = 0
         for reader in readers { if await reader.value != nil { answers += 1 } }
         let elapsed = ContinuousClock.now - started
-        #expect(elapsed < .seconds(10), "took \(elapsed)")
+        expectBudget(elapsed, under: .seconds(10), "took \(elapsed)")
         let after = await repository.closeDrainState
             #expect(!after.closing && after.readsInFlight == 0)
         #expect(Self.walBytes(beside: fixture.url) == 0)

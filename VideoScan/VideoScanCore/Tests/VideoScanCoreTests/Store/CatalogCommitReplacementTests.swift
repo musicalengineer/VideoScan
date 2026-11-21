@@ -174,6 +174,6 @@ struct CatalogCommitReplacementTests {
         let live: Int? = try s.scalar("SELECT count(*) FROM files WHERE full_path LIKE '/Volumes/Fixture/Scale/%' AND removal_state IS NULL")
         #expect(live == count)
         #expect(outcome.rows.prefix(count).allSatisfy { if case .refused = $0.landing { return true }; return false })
-        #expect(elapsed < .seconds(30))
+        expectBudget(elapsed, under: .seconds(30))
     }
 }

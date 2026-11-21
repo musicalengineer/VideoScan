@@ -296,7 +296,7 @@ struct AudioFingerprintStoreScaleTests {
         let elapsed = clock.now - start
         #expect(found == 2_000)
         #expect(try store.count() == 2_000)
-        #expect(elapsed < .seconds(3), "2,000 puts + 2,000 lookups took \(elapsed)")
+        expectBudget(elapsed, under: .seconds(3), "2,000 puts + 2,000 lookups took \(elapsed)")
     }
 }
 

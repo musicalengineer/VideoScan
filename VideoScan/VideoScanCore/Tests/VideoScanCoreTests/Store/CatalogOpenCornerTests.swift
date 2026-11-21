@@ -96,7 +96,7 @@ struct CatalogOpenCornerTests {
         let opened = await repository.open(at: fixture.url)
         let waited = clock.now - start
         print("[corner-open] write lock held elsewhere: \(opened) after \(waited)")
-        #expect(waited < .seconds(GRDBCatalogRepository.busyTimeoutSeconds * 3), "fail fast: waited \(waited)")
+        expectBudget(waited, under: .seconds(GRDBCatalogRepository.busyTimeoutSeconds * 3), "fail fast: waited \(waited)")
         var wrote: CatalogWriteOutcome = .refused(reason: "not tried")
         switch opened {
         case .readWrite:

@@ -239,6 +239,6 @@ final class BackupAttestationTests: QuietMachineXCTestCase {
         XCTAssertEqual(s.workingCopyCount, 95_000)
         XCTAssertEqual(s.archive, .verified)
         XCTAssertEqual(s.cloud, .mixed, "two thirds of the families were never asked")
-        XCTAssertLessThan(elapsed, 1.0, "summarize(families:) took \(elapsed)s for 100k copies")
+        XCTAssertBudget(elapsed, under: 1.0, "summarize(families:) took \(elapsed)s for 100k copies")
     }
 }

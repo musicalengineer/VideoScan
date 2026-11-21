@@ -125,12 +125,15 @@ func withAppLog<R>(
 /// Run `body` with `sink` bound as `appLog`, then verify `expectations`.
 /// After `body` returns it waits up to `waitingUpTo` for lines still to
 /// come (the Center writes an OUTCOME one main-actor turn after the job's
-/// task ends); a met or already-final verdict never waits. Returns the
-/// body's value and the sink, for ad hoc assertions.
+/// task ends); a met or already-final verdict never waits. `settling`
+/// (default none) is a fixed beat after that, then judged again — for a
+/// `.never` / `.once` / `.noOtherLines` a LATE line would break. Returns
+/// the body's value and the sink, for ad hoc assertions.
 @discardableResult
 func expectingLog<R>(
     _ expectations: LogExpectation...,
     waitingUpTo timeout: Duration = .seconds(5),
+    settling: Duration = .zero,
     sink: InMemoryLogSink = InMemoryLogSink(name: "expecting"),
     isolation: isolated (any Actor)? = #isolation,
     sourceLocation: SourceLocation = #_sourceLocation,
@@ -138,7 +141,7 @@ func expectingLog<R>(
 ) async rethrows -> (value: R, log: InMemoryLogSink) {
     // Bound through the sink (a LogSink), judged on its capture: one buffer.
     let value = try await LogExpectations.run(expectations, capture: sink.capture, binding: sink, waitingUpTo: timeout,
-                                              isolation: isolation,
+                                              settling: settling, isolation: isolation,
                                               report: { Issue.record(Comment(rawValue: $0), sourceLocation: sourceLocation) },
                                               body)
     return (value, sink)
@@ -157,17 +160,17 @@ extension InMemoryLogSink {
 
     /// The same, first waiting (bounded) for lines still to come.
     @discardableResult
-    func verify(_ expectations: LogExpectation..., waitingUpTo timeout: Duration,
+    func verify(_ expectations: LogExpectation..., waitingUpTo timeout: Duration, settling: Duration = .zero,
                 isolation: isolated (any Actor)? = #isolation,
                 sourceLocation: SourceLocation = #_sourceLocation) async -> Bool {
-        await verify(expectations, waitingUpTo: timeout, isolation: isolation, sourceLocation: sourceLocation)
+        await verify(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation, sourceLocation: sourceLocation)
     }
 
     @discardableResult
-    func verify(_ expectations: [LogExpectation], waitingUpTo timeout: Duration,
+    func verify(_ expectations: [LogExpectation], waitingUpTo timeout: Duration, settling: Duration = .zero,
                 isolation: isolated (any Actor)? = #isolation,
                 sourceLocation: SourceLocation = #_sourceLocation) async -> Bool {
-        let report = await capture.check(expectations, waitingUpTo: timeout, isolation: isolation)
+        let report = await capture.check(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation)
         if let message = report.message { Issue.record(Comment(rawValue: message), sourceLocation: sourceLocation) }
         return report.isMet
     }

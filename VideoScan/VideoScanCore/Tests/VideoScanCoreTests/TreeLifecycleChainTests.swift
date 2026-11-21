@@ -160,7 +160,7 @@ final class TreeLifecycleChainTests: QuietMachineXCTestCase {
         _ = s.auditCurrentGeneration()
         let elapsed = -start.timeIntervalSinceNow
 
-        XCTAssertLessThan(elapsed, 20.0,
-                          "the full chain took \(String(format: "%.1f", elapsed))s")
+        XCTAssertBudget(elapsed, under: 20.0,
+                        "the full chain took \(String(format: "%.1f", elapsed))s")
     }
 }

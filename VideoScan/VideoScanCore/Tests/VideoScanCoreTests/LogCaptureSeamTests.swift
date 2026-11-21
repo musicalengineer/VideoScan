@@ -269,7 +269,7 @@ struct LogScopeCostTests {
         let ns = Double(DispatchTime.now().uptimeNanoseconds - start) / Double(iterations)
         print(String(format: "LogScope.current (unbound): %.1f ns per read over %d reads", ns, iterations))
         #expect(hits == 0)
-        #expect(ns < 2_000, "\(ns) ns per read")
+        expectBudget(ns, under: 2_000, "\(ns) ns per read")
     }
 }
 

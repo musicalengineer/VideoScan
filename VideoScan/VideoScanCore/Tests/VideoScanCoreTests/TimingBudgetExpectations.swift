@@ -87,8 +87,32 @@ func expectRatio(_ judgement: TimingBudget.RatioJudgement,
     requireQuietMachineTag(sourceLocation)
     print(judgement.logLine)
     if !judgement.passed {
-        Issue.record(Comment(rawValue: judgement.logLine), sourceLocation: sourceLocation)
+        Issue.record(Comment(rawValue: "\(quietBudgetMarker) \(judgement.logLine)"), sourceLocation: sourceLocation)
     }
+}
+
+/// A budget with no load-aware judgement behind it: `measured` must be under
+/// `limit` (a time, a byte count, a ratio). The issue it records carries
+/// `quietBudgetMarker` and both numbers. Use it instead of a bare
+/// `#expect(elapsed < .seconds(2))`, whose failure the lane cannot tell from
+/// a wrong value.
+func expectBudget<T: Comparable>(_ measured: T, under limit: T, _ what: @autoclosure () -> String = "",
+                                 sourceLocation: SourceLocation = #_sourceLocation) {
+    requireQuietMachineTag(sourceLocation)
+    if !(measured < limit) { recordBudgetMiss(measured, "under", limit, what(), sourceLocation) }
+}
+
+/// The same with `<=`.
+func expectBudget<T: Comparable>(_ measured: T, atMost limit: T, _ what: @autoclosure () -> String = "",
+                                 sourceLocation: SourceLocation = #_sourceLocation) {
+    requireQuietMachineTag(sourceLocation)
+    if !(measured <= limit) { recordBudgetMiss(measured, "at most", limit, what(), sourceLocation) }
+}
+
+private func recordBudgetMiss<T>(_ measured: T, _ relation: String, _ limit: T, _ what: String, _ sourceLocation: SourceLocation) {
+    let about = what.isEmpty ? "" : " — \(what)"
+    Issue.record(Comment(rawValue: "\(quietBudgetMarker) measured \(measured), budget: \(relation) \(limit)\(about)"),
+                 sourceLocation: sourceLocation)
 }
 
 func recordTimingJudgement(_ judgement: TimingBudget.Judgement,
@@ -103,6 +127,6 @@ func recordTimingJudgement(_ judgement: TimingBudget.Judgement,
             Issue.record(Comment(rawValue: judgement.logLine), sourceLocation: sourceLocation)
         }
     case .fail:
-        Issue.record(Comment(rawValue: judgement.logLine), sourceLocation: sourceLocation)
+        Issue.record(Comment(rawValue: "\(quietBudgetMarker) \(judgement.logLine)"), sourceLocation: sourceLocation)
     }
 }

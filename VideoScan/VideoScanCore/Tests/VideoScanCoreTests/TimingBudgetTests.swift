@@ -294,7 +294,7 @@ struct TimingBudgetTests {
             slept = wall.measure { Thread.sleep(forTimeInterval: 0.3) }
         }
         #expect(slept >= .milliseconds(300))
-        #expect(sleepCPU < .milliseconds(50), "sleeping 300 ms cost \(sleepCPU) of thread CPU")
+        expectBudget(sleepCPU, under: .milliseconds(50), "sleeping 300 ms cost \(sleepCPU) of thread CPU")
 
         var sink: UInt64 = 0
         let spinCPU = TimingBudget.measureThreadCPUTime {

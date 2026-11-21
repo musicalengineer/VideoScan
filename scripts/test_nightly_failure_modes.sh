@@ -1247,9 +1247,9 @@ ${ZW}✔ Test importRoundTrip() passed after 0.010 seconds.
 ➜ Test needsFfmpeg() skipped.
 ✔ Test run with 2 tests in 1 suite passed after 0.100 seconds.
 core-lane: phase B (serial, quiet machine, VIDEOSCAN_TIMING_STRICT=1): 3 tests planned (1 XCTest + 2 Swift Testing)
-core-lane: phase B runs as 2 serial strands (--quiet-jobs 4); a test that fails beside the others is run again alone before it is judged — strand 1: 2 tests, ~22 s recorded; strand 2: 1 tests, ~3 s recorded
+core-lane: phase B runs as 2 serial strands (--quiet-jobs 4); a test whose only failures beside the others are budget judgements is run again alone before it is judged — strand 1: 2 tests, ~22 s recorded; strand 2: 1 tests, ~3 s recorded
 Test Case '-[VideoScanCoreTests.GedcomPerfBaselineTests testMemory100k]' passed (2.010 seconds).
-✘ Test hundredThousandAdvances() recorded an issue at AdvanceTests.swift:9:5: Expectation failed: 31.0 s is over the 30 s budget
+✘ Test hundredThousandAdvances() recorded an issue at AdvanceTests.swift:9:5: Issue recorded: [quiet-budget] 31.0 s is over the 30 s budget
 core-lane: strand 1: failed beside the other strands — to be run again alone: hundredThousandAdvances()
 ✘ Test run with 1 test in 1 suite failed after 31.100 seconds with 1 issue.
 ━ Test oneHundredThousandRowsLoadWithinBudget() passed after 3.030 seconds with 1 known issue.
@@ -1306,6 +1306,8 @@ r = json.load(sys.stdin)
 keys = ["status", "reason", "passed", "total", "core_status", "core_reason", "core_passed",
         "core_failed", "core_skipped", "core_total", "core_known_issue_tests", "core_rc",
         "core_configuration", "core_failed_names"]
+if "'"${CORE_CASE_AMBER:-}"'":
+    keys += ["core_amber_count", "core_amber_names"]
 print("|".join(json.dumps(r.get(k)) if isinstance(r.get(k), list) else str(r.get(k)) for k in keys))'
     )
 }
@@ -1352,14 +1354,18 @@ else
     # strands and passed alone is ONE passed test in the row (its withheld
     # failing line is not a verdict, the issue line never was), the row is
     # green, and the AMBER line that names it reaches the nightly log.
-    got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; run_core_case "$SANDBOX/core-strands.log" 0 ok "")
-    want='ok||7|7|ok||5|0|1|6|1|0|release|[]'
+    got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; CORE_CASE_AMBER=1 run_core_case "$SANDBOX/core-strands.log" 0 ok "")
+    want='ok||7|7|ok||5|0|1|6|1|0|release|[]|1|["VideoScanCoreTests.AdvanceTests/hundredThousandAdvances()"]'
     [ "$got" = "$want" ] && pass "strands: failed beside / passed alone is counted once, as passed: 5p/0f/1s of 6, row ok" \
         || fail "strands Core lane: got '$got' want '$want'"
     grep -q 'core-lane: AMBER — phase B (serial, quiet machine): passed alone after failing beside 1 other strand: VideoScanCoreTests.AdvanceTests/hundredThousandAdvances()' "$SANDBOX/core-case.log" \
         && grep -q '2 strands, 1 passed alone after failing beside the others' "$SANDBOX/core-case.log" \
         && pass "the test that passed only alone is named in the nightly log (AMBER), with the count on the phase line" \
         || fail "the AMBER line did not reach the nightly log: $(cat "$SANDBOX/core-case.log")"
+    # …and a run with no AMBER says so in the row: 0 and an empty list, never a missing field.
+    got=$(CORE_CASE_AMBER=1 run_core_case "$SANDBOX/core-two-phase.log" 0 ok "")
+    case "$got" in *'|release|[]|0|[]') pass "a run with no AMBER has core_amber_count 0 and an empty core_amber_names" ;;
+        *) fail "amber fields on a clean run: '$got'" ;; esac
     # A phase that ran zero of its plan: core_lane.py exits 2 with no failed
     # test. The row is red BY NAME, not a bare rc.
     got=$(CORE_CASE_LOG="$SANDBOX/core-case.log"; export CORE_CASE_LOG; : > "$CORE_CASE_LOG"; run_core_case "$SANDBOX/core-phase-short.log" 2 ok "")

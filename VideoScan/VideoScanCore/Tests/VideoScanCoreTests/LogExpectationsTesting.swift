@@ -17,18 +17,21 @@ import Testing
 /// that a later line could still meet (an OUTCOME written one actor turn
 /// after the job's task ended). A met or already-final verdict never waits;
 /// pass `.zero` when everything is logged before `body` returns.
+/// `settling` (default none): a fixed beat after that, then judged again —
+/// for a `.never` / `.once` / `.noOtherLines` that a LATE line would break.
 ///
 /// Returns the body's value and the capture, for ad hoc assertions.
 @discardableResult
 func expectingLog<R>(
     _ expectations: LogExpectation...,
     waitingUpTo timeout: Duration = .seconds(5),
+    settling: Duration = .zero,
     capture: LogCapture = LogCapture(name: "expecting"),
     isolation: isolated (any Actor)? = #isolation,
     sourceLocation: SourceLocation = #_sourceLocation,
     _ body: () async throws -> R
 ) async rethrows -> (value: R, log: LogCapture) {
-    let value = try await LogExpectations.run(expectations, capture: capture, waitingUpTo: timeout, isolation: isolation,
+    let value = try await LogExpectations.run(expectations, capture: capture, waitingUpTo: timeout, settling: settling, isolation: isolation,
                                               report: { Issue.record(Comment(rawValue: $0), sourceLocation: sourceLocation) },
                                               body)
     return (value, capture)
@@ -50,10 +53,11 @@ extension LogCapture {
     func verify(
         _ expectations: LogExpectation...,
         waitingUpTo timeout: Duration,
+        settling: Duration = .zero,
         isolation: isolated (any Actor)? = #isolation,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async -> Bool {
-        let report = await check(expectations, waitingUpTo: timeout, isolation: isolation)
+        let report = await check(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation)
         if let message = report.message { Issue.record(Comment(rawValue: message), sourceLocation: sourceLocation) }
         return report.isMet
     }

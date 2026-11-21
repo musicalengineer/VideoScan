@@ -297,7 +297,7 @@ struct ContentFixityVolumeIdentityScaleTests {
             for i in 0..<n where stored[i].describesFileNow(current[i]) { fresh += 1 }
         }
         #expect(fresh == n / 2, "UUID stamps fresh across the remount; legacy ones never")
-        #expect(elapsed < .seconds(2), "\(elapsed)")
+        expectBudget(elapsed, under: .seconds(2), "\(elapsed)")
     }
 
     /// Real captures (open + fstat + fgetattrlist + stat + close) — the
@@ -310,6 +310,6 @@ struct ContentFixityVolumeIdentityScaleTests {
             for _ in 0..<20_000 where FileIdentityStamp.capture(path: a.path)?.volumeUUID != nil { withUUID += 1 }
         }
         #expect(withUUID == 20_000)
-        #expect(elapsed < .seconds(3), "\(elapsed)")
+        expectBudget(elapsed, under: .seconds(3), "\(elapsed)")
     }
 }

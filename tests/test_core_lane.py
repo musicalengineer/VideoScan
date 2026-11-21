@@ -545,7 +545,8 @@ def test_F4_a_bare_wall_time_assertion_needs_the_mark_too(tmp_path):
 def test_F4_real_tree_the_one_unmarked_wall_time_ratio():
     src = (cl.CORE_TESTS / "Background" / "EraJobRetryReviewTests.swift").read_text()
     i = src.index("func recordingATryDoesNotRewriteEveryEntry")
-    assert "#expect(large < small * 4" in src[i:]                 # two clock.measure windows compared (line 169)
+    # two clock.measure windows compared (line 169); since 2026-11-21 through the helper that marks it a budget
+    assert "expectBudget(large, under: small * 4" in src[i:]
     assert ".quietMachine" in src[src.rindex("@Test", 0, i):i], "judges wall time in the parallel phase"
 
 
@@ -822,10 +823,14 @@ class StrandFake:
     and, when asked for one, writes the Swift Testing event stream (ids, not display names).
     beside: names that fail the FIRST time they run (beside the others) and pass after;
     always: names that fail every time; die / die_always: the process exits 134 on starting that test
-    (the first time / every time); mute: names whose failure the event stream does not record."""
+    (the first time / every time); mute: names whose failure the event stream does not record.
+    budget: the failures are budget judgements — their issue text carries the marker the timing helpers
+    write. Without it a failure is a plain wrong value, as any `#expect(a == b)` reports it."""
 
-    def __init__(self, L, beside=(), always=(), die=(), die_always=(), mute=(), exit_after=None):
+    def __init__(self, L, beside=(), always=(), die=(), die_always=(), mute=(), exit_after=None, budget=False, also_logic=()):
         self.L, self.beside, self.always = L, set(beside), set(always)
+        self.why = f"{cl.BUDGET_MARKER} 31.0 s is over the 30 s budget" if budget else "took too long"
+        self.also_logic = set(also_logic)                   # names whose failure has a second, unmarked issue
         self.die, self.die_always, self.mute, self.exit_after = set(die), set(die_always), set(mute), exit_after or {}
         self.seen, self.cmds, self.envs = {}, [], []
 
@@ -853,6 +858,10 @@ class StrandFake:
             text += f"Test Case '-[{M}.{cls} {m}]' started.\n"
             if fate == "die":
                 return "xctest", text, 134
+            if fate == "fail":
+                text += f"/x/{cls}.swift:9: error: -[{M}.{cls} {m}] : failed - {self.why}\n"
+                if m in self.also_logic:
+                    text += f"/x/{cls}.swift:12: error: -[{M}.{cls} {m}] : XCTAssertEqual failed: (\"99999\") is not equal to (\"100000\")\n"
             text += f"Test Case '-[{M}.{cls} {m}]' {'failed' if fate == 'fail' else 'passed'} (0.250 seconds).\n"
             rc = 1 if fate == "fail" else rc
         return "xctest", text, rc
@@ -878,7 +887,9 @@ class StrandFake:
                 break
             clock += 2.0
             if fate == "fail":
-                text += f"✘ Test {name} recorded an issue at X.swift:1:1: Expectation failed: took too long\n"
+                text += f"✘ Test {name} recorded an issue at X.swift:1:1: Expectation failed: {self.why}\n"
+                if name in self.also_logic:
+                    text += f"✘ Test {name} recorded an issue at X.swift:2:1: Expectation failed: (rows.count → 99999) == 100000\n"
                 text += f"✘ Test {name} failed after 2.000 seconds with 1 issue.\n"
                 if name not in self.mute:
                     events.append({"kind": "issueRecorded", "testID": i, "issue": {"isKnown": False, "isFailure": True}})
@@ -937,7 +948,7 @@ def phase_b_work(fake):
 
 
 def test_strands_the_default_is_min_4_and_a_quarter_of_the_cores():
-    assert [cl.default_quiet_jobs(n) for n in (30, 16, 12, 10, 8, 4, 2, 1)] == [4, 4, 3, 2, 2, 1, 1, 1]
+    assert [cl.default_quiet_jobs(n, 96) for n in (30, 16, 12, 10, 8, 4, 2, 1)] == [4, 4, 3, 2, 2, 1, 1, 1]
 
 
 @pytest.mark.parametrize("jobs", [1, 2, 3, 4, 6, 50])
@@ -996,7 +1007,7 @@ def test_strands_green_every_test_one_verdict_each_strand_serial_strict_and_told
 
 @pytest.mark.parametrize("name, shown", [("load100k()", f"{M}.ScaleTests/load100k()"), ("testMemory", "PerfTests/testMemory")])
 def test_strands_a_test_that_fails_beside_the_others_and_passes_alone_is_green_and_named(tmp_path, monkeypatch, name, shown):
-    fake = StrandFake(strands_listing(), beside={name})
+    fake = StrandFake(strands_listing(), beside={name}, budget=True)
     rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
     assert rc == 0, text
     assert re.search(r"core-lane: strand \d: failed beside the other strands — to be run again alone: .*" + re.escape(name), text)
@@ -1014,7 +1025,7 @@ def test_strands_a_test_that_fails_beside_the_others_and_passes_alone_is_green_a
 
 @pytest.mark.parametrize("name, console", [("load100k()", "load100k()"), ("testMemory", f"-[{M}.PerfTests testMemory]")])
 def test_strands_a_test_that_fails_beside_the_others_and_alone_is_red_by_name_and_counted_once(tmp_path, monkeypatch, name, console):
-    fake = StrandFake(strands_listing(), always={name})
+    fake = StrandFake(strands_listing(), always={name}, budget=True)
     rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
     assert rc == cl.EXIT_FAILED, text
     assert f"core-lane: RED — phase B (serial, quiet machine): FAILED {console} — failed when run ALONE too" in text
@@ -1023,27 +1034,27 @@ def test_strands_a_test_that_fails_beside_the_others_and_alone_is_red_by_name_an
     assert nightly_counts(tmp_path, text) == (20, 1, 0, [console]), "one FAILED line, not two"
 
 
-def test_strands_a_strand_that_dies_leaves_its_unfinished_tests_to_the_alone_pass_never_lost_never_twice(tmp_path, monkeypatch):
+def test_strands_a_strand_that_dies_is_red_by_its_exit_and_its_unfinished_tests_still_get_one_verdict_each(tmp_path, monkeypatch):
     L = strands_listing()
     fake = StrandFake(L, die={"budget1()"})
     rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=2)
-    assert rc == 0, text
-    _, b = cl.plan_phases(L, None)
+    assert rc == cl.EXIT_FAILED, text
+    assert re.search(r"RED — phase B \(serial, quiet machine\): strand \d Swift Testing exited 134 with no failed test", text)
     dead = next(sel for what, sel in phase_b_work(fake) if what == "swift" and fn("TimingTests", "budget1", line=21) in sel)
     unfinished = dead[dead.index(fn("TimingTests", "budget1", line=21)):]
     assert f"running {len(unfinished)} test(s) again ALONE" in text
     for ident in unfinished:
         assert re.search(r"AMBER — phase B \(serial, quiet machine\): passed alone after strand \d's Swift Testing process ended "
                          r"\(exit 134\) before it finished: " + re.escape(cl.swift_name(ident)), text), ident
-    assert "13 passed / 0 failed / 0 skipped — 13 of 13 planned" in text and f"{len(unfinished)} passed alone" in text
+    assert "13 passed / 0 failed / 0 skipped — 13 of 13 planned" in text, "never lost: every test has its verdict"
     finished_before = dead[:dead.index(fn("TimingTests", "budget1", line=21))]
     assert all(fake.seen[i.split("/")[-2]] == 1 for i in finished_before), "a test that had its verdict is not run again"
     assert nightly_counts(tmp_path, text)[:3] == (21, 0, 0)
     # the same for an XCTest process
     fake = StrandFake(L, die={"testGrowth"})
     rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=2)
-    assert rc == 0 and "13 of 13 planned" in text, text
-    assert re.search(r"AMBER — .*passed alone after strand \d's XCTest process ended \(exit 134\) before it finished: MemTests/testGrowth", text)
+    assert rc == cl.EXIT_FAILED and "13 of 13 planned" in text, text
+    assert re.search(r"RED — .*strand \d XCTest exited 134", text)
     assert fake.seen["testResident"] == 1 and fake.seen["testGrowth"] == 2
 
 
@@ -1062,7 +1073,7 @@ def test_strands_a_test_that_kills_its_process_alone_too_is_red_by_name_and_the_
 
 
 def test_strands_failures_the_event_stream_does_not_name_are_not_guessed_at_they_stand(tmp_path, monkeypatch):
-    fake = StrandFake(strands_listing(), beside={"load100k()"}, mute={"load100k()"})
+    fake = StrandFake(strands_listing(), beside={"load100k()"}, mute={"load100k()"}, budget=True)
     rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
     assert rc == cl.EXIT_FAILED, text
     assert re.search(r"RED — phase B \(serial, quiet machine\): strand \d Swift Testing printed 1 failed test\(s\) but its event stream "
@@ -1116,7 +1127,7 @@ def test_strands_the_cli_passes_quiet_jobs_and_the_cache_and_defaults_to_the_mac
     with pytest.raises(SystemExit):
         cl.main(["run", "--products", str(tmp_path), "--tests", tests, "--quiet-jobs", "0"])
     assert cl.strand_options(None, {}) == (cl.default_quiet_jobs(), cl.DEFAULT_QUIET_TIMINGS)
-    assert cl.strand_options(3, {cl.QUIET_TIMINGS_KEY: "/x/t.json"}) == (3, Path("/x/t.json"))
+    assert cl.strand_options(3, {cl.QUIET_TIMINGS_KEY: "/x/t.json"}, mem_gb=64) == (3, Path("/x/t.json"))
     assert cl.DEFAULT_QUIET_TIMINGS.name == "videoscan-core-quiet-timings.json"
 
 
@@ -1165,4 +1176,109 @@ def test_strands_the_nightly_logs_the_amber_lines_and_the_decision_is_recorded()
     nightly = (ROOT / "scripts" / "nightly_local_tests.sh").read_text()
     assert "'^core-lane: (phase [AB] \\(.*planned, |total |RED |AMBER |stopped )'" in nightly
     decisions = (ROOT / "docs" / "DECISIONS.md").read_text()
-    assert "2026-11-21 — The Core lane's quiet-machine phase runs as K serial strands" in decisions
+    assert "2026-11-21 — The Core lane's quiet-machine phase runs as K serial strands; only a BUDGET miss earns a run alone" in decisions
+    assert '"core_amber_count": len(amber), "core_amber_names": amber' in nightly
+    assert "AMBER (`core_amber_names`" in (ROOT / "docs" / "BACKLOG.md").read_text()
+
+
+# ───────────────────────────── review of 9148e09dc (2026-11-21): the reviewer's red tests, then what the fixes add
+
+class CrashAfterAFailure(StrandFake):
+    """A strand process in which one test fails beside the others AND which then dies (SIGABRT, 134) after
+    its last verdict — a trap in a detached task, an atexit handler. Alone, the test passes and exits 0."""
+    def __call__(self, cmd, env):
+        self.envs.append(dict(env))
+        what, text, rc = self._xctest(cmd) if cmd[:2] == ["xcrun", "xctest"] else self._swift(cmd)
+        rc = 134 if rc == 1 else rc
+        code = f"import sys; sys.stdout.write({text!r}); sys.exit({rc})"
+        return subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+
+@pytest.mark.parametrize("budget", [False, True])
+@pytest.mark.parametrize("name", ["load100k()", "testMemory"])
+def test_R1_a_strand_that_crashed_is_not_explained_away_by_a_test_that_failed_in_it(tmp_path, monkeypatch, name, budget):
+    fake = CrashAfterAFailure(strands_listing(), beside={name}, budget=budget)
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
+    assert "exited 134" in text and rc == cl.EXIT_FAILED, "a process that died with 134 is RED whatever else failed in it:\n" + text[-900:]
+    if budget:
+        assert fake.seen[name] == 2 and "13 of 13 planned" in text, "the budget miss still gets its run alone, and one verdict"
+
+
+class NoStream(StrandFake):
+    """The helper runs and prints every verdict but its event stream never reaches the disk."""
+    def _swift(self, cmd):
+        return super()._swift([c for c in cmd if c != "--event-stream-output-path"])
+
+
+def test_R2_a_green_strand_whose_event_stream_is_missing_does_not_run_and_count_every_test_twice(tmp_path, monkeypatch):
+    fake = NoStream(strands_listing())
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=2)
+    c = counted(text)
+    assert c.total == 21, f"each planned test has ONE verdict line; got {c.total}:\n" + text[-700:]
+    assert rc == 0 and "event stream missing — its " in text and "again ALONE" not in text
+    assert all(n == 1 for n in fake.seen.values())
+
+
+def test_R2_a_missing_event_stream_on_a_strand_that_failed_is_red_and_still_counts_once(tmp_path, monkeypatch):
+    fake = NoStream(strands_listing(), beside={"load100k()"}, budget=True)
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=2)
+    assert rc == cl.EXIT_FAILED and counted(text).total == 21, text[-700:]
+    assert "left no event stream: which tests failed or never finished cannot be told" in text
+    assert "RED — phase B (serial, quiet machine): FAILED load100k()\n" in text and fake.seen["load100k()"] == 1
+
+
+def test_R3_the_default_k_fits_the_machines_memory(capsys):
+    import inspect
+    assert "mem" in inspect.signature(cl.default_quiet_jobs).parameters
+    assert [cl.default_quiet_jobs(30, m) for m in (96, 64, 32, 24, 16, 8, 4)] == [4, 4, 4, 3, 2, 1, 1]
+    assert cl.default_quiet_jobs(10, 64) == 2, "the smaller of the two bounds"
+    assert cl.strand_options(6, {}, mem_gb=96)[0] == 6 and cl.strand_options(6, {}, mem_gb=16)[0] == 2, "an asked-for K is capped too"
+    assert cl.memory_cap(4, 4) == 1, "never zero"
+    assert (cl.physical_memory_gb() or 0) >= 8, "this Mac's memory is readable"
+    with pytest.raises(SystemExit):
+        cl.main(["run", "--help"])
+    assert "never more than physical memory / 8 GB" in " ".join(capsys.readouterr().out.split()), "--help says so"
+
+
+def test_R4_view_a_failure_that_is_not_a_timing_budget_is_not_given_a_second_run(tmp_path, monkeypatch):
+    fake = StrandFake(strands_listing(), beside={"load100k()"})
+    orig = fake._swift
+    def swift(cmd):
+        what, text, rc = orig(cmd)
+        return what, text.replace("Expectation failed: took too long", "Expectation failed: (rows.count → 99999) == 100000"), rc
+    fake._swift = swift
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
+    assert rc != 0, "a wrong row count that happens once in two runs is a flaky data bug, reported GREEN/AMBER:\n" + text[-500:]
+
+
+@pytest.mark.parametrize("name, console, mixed", [
+    ("load100k()", "load100k()", False), ("testMemory", f"-[{M}.PerfTests testMemory]", False),
+    ("load100k()", "load100k()", True), ("testMemory", f"-[{M}.PerfTests testMemory]", True)])
+def test_strands_only_a_budget_judgement_earns_a_run_alone(tmp_path, monkeypatch, name, console, mixed):
+    """A wrong value — alone, or beside a budget miss in the same test — is RED at once, as in the single pass."""
+    fake = StrandFake(strands_listing(), beside={name}, budget=mixed, also_logic={name} if mixed else ())
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
+    assert rc == cl.EXIT_FAILED, text[-600:]
+    assert fake.seen[name] == 1, "no second run"
+    assert f"RED — phase B (serial, quiet machine): FAILED {console} — not a budget judgement: no second run" in text
+    assert re.search(r"core-lane: strand \d: not a budget judgement \(no \[quiet-budget\] in every issue\) — no second run: " + re.escape(console), text)
+    assert "12 passed / 1 failed / 0 skipped — 13 of 13 planned" in text and "AMBER" not in text and "again ALONE" not in text
+    assert nightly_counts(tmp_path, text) == (20, 1, 0, [console])
+
+
+def test_strands_each_failure_says_which_kind_it_was(tmp_path, monkeypatch):
+    """One run: a budget miss that fails alone too, and a budget miss that passes alone — the suffix is per failure."""
+    fake = StrandFake(strands_listing(), beside={"budget0()"}, always={"load100k()"}, budget=True)
+    rc, text = run_strands(tmp_path, monkeypatch, fake, jobs=4)
+    assert rc == cl.EXIT_FAILED
+    assert "FAILED load100k() — failed when run ALONE too" in text
+    assert f"AMBER — phase B (serial, quiet machine): passed alone after failing beside 3 other strands: {M}.TimingTests/budget0()" in text
+    assert "12 passed / 1 failed / 0 skipped — 13 of 13 planned" in text and "1 passed alone" in text
+
+
+def test_strands_the_marker_is_the_one_the_swift_helpers_write():
+    src = (cl.CORE_TESTS / "QuietMachine.swift").read_text()
+    assert f'let quietBudgetMarker = "{cl.BUDGET_MARKER}"' in src
+    for name in ("TimingBudgetExpectations.swift", "TimingBudgetXCTestSupport.swift"):
+        assert "quietBudgetMarker" in (cl.CORE_TESTS / name).read_text(), name
+    assert {"expectBudget", "XCTAssertBudget"} <= set(cl.JUDGING_HELPERS), "a test that calls them must carry the mark"

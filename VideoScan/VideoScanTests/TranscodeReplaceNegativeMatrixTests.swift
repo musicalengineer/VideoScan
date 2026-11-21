@@ -820,7 +820,7 @@ extension TranscodeReplaceNegativeMatrixTests {
     }
 
     /// Any OUTCOME-shaped transcode line (for "no OTHER outcome was written").
-    static let anyOutcome = LogLineMatcher.matching(#/^transcode (done|FAILED|refused|cancelled): /#)
+    static let anyOutcome = LogLineMatcher.matching(#/^transcode (done|FAILED|refused|cancelled): /#, label: "a transcode OUTCOME line")
 
     /// The log half of a failed row, as expectations on what the Center
     /// wrote: START once, exactly `outcome` once and after it, never a

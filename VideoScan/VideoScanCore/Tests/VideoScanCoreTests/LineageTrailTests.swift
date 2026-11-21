@@ -479,12 +479,12 @@ struct LineageTrailTests {
         #expect(r.matches.count == topStart)
         #expect(r.matchPaths.count == T.maxTiePaths)
         #expect(r.matches.first?.person.id == "@I\(topStart)@")
-        #expect(elapsed < 5.0, Comment(rawValue: "all-ancestors walk over \(n) people took \(elapsed) s"))
+        expectBudget(elapsed, under: 5.0, "all-ancestors walk over \(n) people took \(elapsed) s")
 
         // The single line is O(depth) regardless of tree size.
         let t1 = Date()
         let single = T.walk(line: .paternal, from: root, stop: .continent(.europe), graph: big)
         #expect(single.match?.generation == generations - 1)
-        #expect(Date().timeIntervalSince(t1) < 0.5)
+        expectBudget(Date().timeIntervalSince(t1), under: 0.5)
     }
 }

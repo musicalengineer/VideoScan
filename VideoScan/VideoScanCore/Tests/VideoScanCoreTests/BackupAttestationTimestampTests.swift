@@ -198,7 +198,7 @@ final class BackupAttestationTimestampTests: QuietMachineXCTestCase {
         for x in dates where TS.date(TS.string(x)) != TS.quantized(x) { mismatches += 1 }
         let codec = Date().timeIntervalSince(start)
         XCTAssertEqual(mismatches, 0)
-        XCTAssertLessThan(codec, 3.0, "100k format+parse round trips took \(codec)s")
+        XCTAssertBudget(codec, under: 3.0, "100k format+parse round trips took \(codec)s")
 
         // The catalog-save shape: 100k attestations through JSONEncoder /
         // JSONDecoder (what a fully attested 50k-record catalog costs).
@@ -208,6 +208,6 @@ final class BackupAttestationTimestampTests: QuietMachineXCTestCase {
         let back = try JSONDecoder().decode([BackupAttestation].self, from: data)
         let json = Date().timeIntervalSince(jsonStart)
         XCTAssertEqual(back, list)
-        XCTAssertLessThan(json, 3.0, "100k attestations encode+decode took \(json)s")
+        XCTAssertBudget(json, under: 3.0, "100k attestations encode+decode took \(json)s")
     }
 }

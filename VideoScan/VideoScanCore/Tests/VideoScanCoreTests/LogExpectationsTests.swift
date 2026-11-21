@@ -6,6 +6,7 @@
 // 100 000 captured lines are judged inside a budget.
 
 import Foundation
+import os
 import Testing
 @_spi(Testing) @testable import VideoScanCore
 
@@ -48,7 +49,7 @@ struct LogExpectationsLogicTests {
                            .atMost(1, .contains("watchdog")),
                            .never(.contains("Transcoded")),
                            .line(containing: "FAILED"),
-                           .line(matching: /^transcode FAILED: .* Stalled$/, .once),
+                           .line(matching: /^transcode FAILED: .* Stalled$/, label: "the stalled OUTCOME", .once),
                            .inOrder(.hasPrefix("transcode: "), .contains("watchdog"), .hasPrefix("transcode FAILED: ")),
                            .noOtherLines(matching: .contains("FAILED")))
         #expect(report.isMet)
@@ -176,10 +177,9 @@ struct LogExpectationsLogicTests {
         #expect(both.description == "a line starting with “balance audio refused: ” AND a line containing “already running”")
         #expect(LogLineMatcher.containsAll(["a", "b"]).description == "a line containing all of “a”, “b”")
         #expect(LogLineMatcher.line("over 40 characters") { $0.count > 40 }.description == "a line over 40 characters")
-        #expect(LogLineMatcher.matching(/x+/, "one or more x").description == "a line matching one or more x")
-        if #available(macOS 15, *) {
-            #expect(LogLineMatcher.matching(/OUTCOME .* FAILED/).description == "a line matching /OUTCOME .* FAILED/")
-        }
+        #expect(LogLineMatcher.matching(/x+/, label: "one or more x").description == "a line matching one or more x")
+        #expect(LogLineMatcher.matching(/OUTCOME .* FAILED/).description == "a line matching a regular expression",
+                "a Regex cannot print its pattern through public API: the caller labels it")
     }
 
     @Test("bounded: 1 000 offending lines quote five and count the rest; a 10 000-character line is cut to 300")
@@ -192,6 +192,16 @@ struct LogExpectationsLogicTests {
         #expect(failure.excerpt.last == "… and 995 more")
         #expect(failure.excerpt[0].hasPrefix("[1] ERROR 0 xxx") && failure.excerpt[0].hasSuffix("… (10008 characters)"), "\(failure.excerpt[0].suffix(40))")
         #expect((report.message ?? "").count < 5 * 400 + 600, "the message is bounded whatever the capture holds: \((report.message ?? "").count)")
+    }
+
+    @Test("a negative count is a mistake in the test: a failure that says so, never read as .never")
+    func aNegativeCountIsAFailure() throws {
+        for bad in [LogExpectation.exactly(-1, .contains("x")), .atLeast(-2, .contains("x")), .atMost(-1, .contains("x"))] {
+            let onNothing = try #require(judge([], bad).message)
+            #expect(onNothing.contains("actual: not a valid expectation: a count cannot be negative"), "\(onNothing)")
+            #expect(!judge(["x"], bad).isMet && !judge([], bad).hasOutstanding)
+        }
+        #expect(judge([], .exactly(0, .contains("x"))).isMet)
     }
 
     @Test("nothing logged at all says so")
@@ -238,7 +248,7 @@ struct LogExpectingScopeTests {
         await withKnownIssue {
             await expectingLog(
                 .once(.contains("START transcode")),
-                .once(.matching(/^transcode FAILED: .* exit code 228/)),
+                .once(.matching(/^transcode FAILED: .* exit code 228/, label: "FAILED with exit code 228")),
                 .never(.contains("Transcoded")),
                 .once(.hasPrefix("transcode: ")),
                 waitingUpTo: .zero
@@ -290,6 +300,58 @@ struct LogExpectingScopeTests {
         #expect(issues.all.count == 1)
         #expect(issues.all.first?.contains("(judged when the body threw: Boom())") == true, "\(issues.all)")
         #expect(LogScope.current == nil)
+    }
+
+    @Test("the thrown error's text is bounded like the rest of the message")
+    func theThrownErrorTextIsBounded() async {
+        struct Pages: Error, CustomStringConvertible { var description: String { String(repeating: "e", count: 50_000) } }
+        let issues = IssueLog()
+        await withKnownIssue {
+            await #expect(throws: Pages.self) {
+                try await expectingLog(.once(.contains("OUTCOME")), waitingUpTo: .zero) { throw Pages() }
+            }
+        } matching: { issues.add($0); return true }
+        let text = issues.all.first ?? ""
+        #expect(text.contains("(judged when the body threw: eee") && text.count < 1_000, "\(text.count)")
+    }
+
+    /// The late writer is released by a flag, never by a short sleep racing the
+    /// verdict: without settling it writes only AFTER the scope has returned;
+    /// with settling it writes at once and has the whole 2 s beat to land.
+    @Test("settling: a .once / .never that holds when the body returns is judged again a beat later, and a late duplicate fails it",
+          .tags(.quietMachine))   // its verdict needs a detached task to run within a 2 s real-time window (QuietMachine.swift, category 3)
+    func settlingCatchesALateLine() async {
+        let released = OSAllocatedUnfairLock(initialState: false)
+        @Sendable func lateWriter() -> Task<Void, Never> {
+            TaskTreeScope.detached {
+                while !released.withLock({ $0 }) { try? await Task.sleep(for: .milliseconds(2)) }
+                log("OUTCOME"); log("x FAILED")
+            }
+        }
+        // Without settling the late second OUTCOME is not judged: the verdict was final when the body returned.
+        var writer = Task<Void, Never> {}
+        let (_, first) = await expectingLog(.once(.equals("OUTCOME")), .never(.contains("FAILED")), waitingUpTo: .seconds(60)) {
+            log("OUTCOME")
+            writer = lateWriter()
+        }
+        released.withLock { $0 = true }
+        await writer.value
+        #expect(first.count == 3, "the late lines did arrive — after the verdict")
+        let issues = IssueLog()
+        await withKnownIssue {
+            await expectingLog(.once(.equals("OUTCOME")), .never(.contains("FAILED")),
+                               waitingUpTo: .seconds(60), settling: .seconds(2)) {
+                log("OUTCOME")
+                _ = lateWriter()            // already released: it writes while the scope settles
+            }
+        } matching: { issues.add($0); return true }
+        #expect(issues.all.count == 1)
+        #expect(issues.all.first?.contains("actual: logged 2 times") == true && issues.all.first?.contains("[3] x FAILED") == true, "\(issues.all)")
+        // Checked after, the same way; and settling is not paid while something is still outstanding and never comes.
+        let capture = LogCapture()
+        capture.write("a")
+        let late = await capture.check([.once(.equals("never comes"))], waitingUpTo: .milliseconds(20), settling: .seconds(600))
+        #expect(!late.isMet && late.hasOutstanding)
     }
 
     @Test("the bounded wait: an OUTCOME written after the body returned (from a task that carries the scope) is met")

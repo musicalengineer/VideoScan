@@ -63,6 +63,19 @@ import Foundation
 import Testing
 import XCTest
 
+/// What a BUDGET judgement writes at the front of the issue it records: a
+/// measured time or resident size over its bound, and nothing else. The Core
+/// lane reads it (scripts/core_lane.py BUDGET_MARKER): when the quiet-machine
+/// phase runs as strands, a test whose EVERY issue carries this marker is run
+/// again alone before it is judged; a failure without it (a wrong value, a
+/// bare `#expect(elapsed < …)`) is red at once. So a budget is asserted with
+/// a helper that writes it — expectWithinTimingBudget, recordTimingJudgement,
+/// expectRatio, expectBudget (Swift Testing); assertTimingJudgements,
+/// XCTAssertBudget (XCTest) — never with a bare comparison.
+/// (C++: a tag in the failure message that the test runner's retry policy
+/// keys on, like gtest's --gtest_flaky_test_attempts limited to one category.)
+let quietBudgetMarker = "[quiet-budget]"
+
 extension Tag {
     /// The test's verdict needs a quiet machine: it runs in the Core lane's
     /// serial phase (see the file header for what qualifies). Use

@@ -169,6 +169,6 @@ struct GedcomRefreshPolicyTests {
         let out = old.merge(with: new, policy: .refreshFromNewer)
         let elapsed = -start.timeIntervalSinceNow
         #expect(out.sharedPeopleCount == 10_000)
-        #expect(elapsed < 5.0, "10k refresh took \(String(format: "%.2f", elapsed))s")
+        expectBudget(elapsed, under: 5.0, "10k refresh took \(String(format: "%.2f", elapsed))s")
     }
 }

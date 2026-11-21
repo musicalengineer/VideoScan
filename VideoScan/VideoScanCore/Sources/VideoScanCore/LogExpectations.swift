@@ -23,7 +23,7 @@
 //
 //     EXPECT_CALL(log, Write(HasSubstr("x"))).Times(1)    .once(.contains("x"))
 //     .Times(n) / .Times(AtLeast(n)) / .Times(0)          .exactly(n, …) / .atLeast(n, …) / .never(…)
-//     HasSubstr / StartsWith / MatchesRegex / Truly(pred)  .contains / .hasPrefix / .matching(/…/) / .line("…") { pred }
+//     HasSubstr / StartsWith / MatchesRegex / Truly(pred)  .contains / .hasPrefix / .matching(/…/, label:) / .line("…") { pred }
 //     AllOf(m1, m2)                                        .all(m1, m2)
 //     InSequence s;                                        .inOrder(…)
 //     StrictMock<MockLog>                                  .noOtherLines()            (any line no expectation names)
@@ -40,7 +40,8 @@
 //     an OUTCOME line is often written one main-actor turn after the job's
 //     task has ended. Only "not yet enough" is waited for (`.once`,
 //     `.exactly(n)`, `.atLeast(n)`, `.inOrder`); `.never` and "too many" are
-//     judged on what has been logged when the wait ends.
+//     judged on what has been logged when the wait ends — plus `settling:`,
+//     an optional fixed beat for a line that would arrive late.
 //
 // This file imports no test framework (Core is linked into the app). It
 // computes a `LogExpectationReport`; the ten-line shims in the two test
@@ -114,8 +115,12 @@ import os
     }
 
     /// ContainsRegex: the regex is found somewhere in the line (anchor it
-    /// with `^…$` to match the whole line). `label` replaces the pattern in
-    /// the failure message when the regex was not written as a literal.
+    /// with `^…$` to match the whole line). `label` is what the failure
+    /// message calls it — a `Regex` cannot print its own pattern through
+    /// public API, so say what it looks for:
+    /// `.matching(/^transcode (done|FAILED): /, label: "a transcode OUTCOME")`.
+    /// Unlabelled, the message says "a regular expression" and points at
+    /// the expectation's file and line.
     ///
     /// `Regex` is not `Sendable`, and a matcher may be read from more than
     /// one task (a `static let` shared by a suite's parallel tests), so the
@@ -123,14 +128,9 @@ import os
     /// nanoseconds a line.
     /// (C++: a `std::regex` guarded by a mutex because the type does not
     /// promise const-thread-safety.)
-    public static func matching<Output>(_ regex: Regex<Output>, _ label: String? = nil) -> LogLineMatcher {
+    public static func matching<Output>(_ regex: Regex<Output>, label: String = "a regular expression") -> LogLineMatcher {
         let guarded = OSAllocatedUnfairLock<Regex<Output>>(uncheckedState: regex)
-        // The pattern's text, for the message: readable only on macOS 15+
-        // (the package's floor is 13; the test hosts run 15 or later).
-        var pattern: String?
-        if #available(macOS 15, *) { pattern = regex._literalPattern.map { "/\($0)/" } }
-        let shown = label ?? pattern ?? "a regular expression"
-        return LogLineMatcher("a line matching \(shown)") { line in
+        return LogLineMatcher("a line matching \(label)") { line in
             guarded.withLockUnchecked { line.contains($0) }
         }
     }
@@ -163,6 +163,13 @@ import os
         case .exactly(let n): count == n
         case .atLeast(let n): count >= n
         case .atMost(let n): count <= n
+        }
+    }
+
+    /// A count below zero is a mistake in the test, never "never".
+    var isValid: Bool {
+        switch self {
+        case .exactly(let n), .atLeast(let n), .atMost(let n): n >= 0
         }
     }
 
@@ -215,17 +222,17 @@ import os
 
     /// Times(n).
     public static func exactly(_ n: Int, _ matcher: LogLineMatcher, fileID: String = #fileID, line: Int = #line) -> LogExpectation {
-        LogExpectation(.count(matcher, .exactly(max(0, n))), fileID, line)
+        LogExpectation(.count(matcher, .exactly(n)), fileID, line)
     }
 
     /// Times(AtLeast(n)).
     public static func atLeast(_ n: Int, _ matcher: LogLineMatcher, fileID: String = #fileID, line: Int = #line) -> LogExpectation {
-        LogExpectation(.count(matcher, .atLeast(max(0, n))), fileID, line)
+        LogExpectation(.count(matcher, .atLeast(n)), fileID, line)
     }
 
     /// Times(AtMost(n)).
     public static func atMost(_ n: Int, _ matcher: LogLineMatcher, fileID: String = #fileID, line: Int = #line) -> LogExpectation {
-        LogExpectation(.count(matcher, .atMost(max(0, n))), fileID, line)
+        LogExpectation(.count(matcher, .atMost(n)), fileID, line)
     }
 
     /// Times(0).
@@ -245,9 +252,10 @@ import os
         LogExpectation(.count(.contains(text), times), fileID, line)
     }
 
-    public static func line<Output>(matching regex: Regex<Output>, _ times: LogTimes = .once,
+    public static func line<Output>(matching regex: Regex<Output>, label: String = "a regular expression",
+                                    _ times: LogTimes = .once,
                                     fileID: String = #fileID, line: Int = #line) -> LogExpectation {
-        LogExpectation(.count(.matching(regex), times), fileID, line)
+        LogExpectation(.count(.matching(regex, label: label), times), fileID, line)
     }
 
     /// InSequence: a line for each matcher, each one AFTER the line that
@@ -451,6 +459,10 @@ struct LogTally {
     /// Cardinality (gmock's "Actual: never called / called twice").
     static func judgeCount(_ matcher: LogLineMatcher, _ wanted: LogTimes, logged n: Int, at seen: [Int],
                            _ excerpt: LogExcerpt) -> Verdict {
+        guard wanted.isValid else {
+            // A programmer error must not pass (or read as `.never`): it is a failure that says so.
+            return Verdict(actual: "not a valid expectation: a count cannot be negative", excerpt: [])
+        }
         let outstanding = n < wanted.needed
         if wanted.allows(n) { return Verdict(outstanding: outstanding) }
         if n == 0 { return Verdict(actual: "never logged", excerpt: excerpt.nearMisses(matcher), outstanding: outstanding) }
@@ -494,6 +506,7 @@ struct LogTally {
         capture: LogCapture,
         binding: (any TaskScopedLogSink)? = nil,
         waitingUpTo timeout: Duration,
+        settling: Duration = .zero,
         isolation: isolated (any Actor)? = #isolation,
         report: (String) -> Void,
         _ body: () async throws -> R
@@ -503,11 +516,12 @@ struct LogTally {
             value = try await LogScope.with(binding ?? capture, isolation: isolation, body)
         } catch {
             if let message = capture.check(expectations).message {
-                report(message + "\n  (judged when the body threw: \(error))")
+                // Bounded like everything else in the message: an error can carry pages.
+                report(message + "\n  (judged when the body threw: \(String(describing: error).prefix(LogExpectationReport.lineLimit)))")
             }
             throw error
         }
-        if let message = await capture.check(expectations, waitingUpTo: timeout, isolation: isolation).message {
+        if let message = await capture.check(expectations, waitingUpTo: timeout, settling: settling, isolation: isolation).message {
             report(message)
         }
         return value
@@ -526,9 +540,17 @@ extension LogCapture {
     /// suspends, so a `@MainActor` caller lets the main-actor hop that
     /// writes an OUTCOME run) and re-judges only when a line has arrived.
     /// A verdict that is already final returns without waiting.
+    ///
+    /// `settling` (default none): once nothing is outstanding, wait this
+    /// long more and judge again — for `.never`, `.atMost`, `.once` and
+    /// `.noOtherLines`, which a line that arrives LATE would violate (a
+    /// second OUTCOME from a straggling hop). It is a fixed wait paid by
+    /// every run, passing or not, so keep it short and use it only where a
+    /// late duplicate is the thing under test.
     @_spi(Testing) public func check(
         _ expectations: [LogExpectation],
         waitingUpTo timeout: Duration,
+        settling: Duration = .zero,
         isolation: isolated (any Actor)? = #isolation
     ) async -> LogExpectationReport {
         var judged = count
@@ -541,6 +563,10 @@ extension LogCapture {
                 judged = now
                 report = check(expectations)
             }
+        }
+        if settling > .zero, !report.hasOutstanding {
+            try? await Task.sleep(for: settling)
+            report = check(expectations)
         }
         return report
     }

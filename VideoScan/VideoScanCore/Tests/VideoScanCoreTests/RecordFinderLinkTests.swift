@@ -320,7 +320,7 @@ struct RecordFinderScaleTests {
         // Debug `swift test` on the M4 measured 20.8 s (2026-10-01; 51 s
         // before the byte-loop encoder). 60 s catches an accidental O(n²)
         // without flaking on a busy machine; Release is far faster.
-        #expect(elapsed < 60, "100k people took \(elapsed) s")
+        expectBudget(elapsed, under: 60, "100k people took \(elapsed) s")
     }
 }
 

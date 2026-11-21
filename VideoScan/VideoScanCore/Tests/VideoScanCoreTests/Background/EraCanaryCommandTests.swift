@@ -171,7 +171,7 @@ struct EraCanaryCommandTests {
                                                       deadlineSeconds: 0.1, killGraceSeconds: 0.1)
         let waited = clock.now - started
         // 0.8 s bound vs the 4 s the pipes stay open; 3 s leaves 3.7x slack.
-        #expect(waited < .seconds(3), "the caller was held \(waited) — until the descendant closed the pipes")
+        expectBudget(waited, under: .seconds(3), "the caller was held \(waited) — until the descendant closed the pipes")
         #expect(result.timedOut && result.exitCode == -1 && !result.launched)
         #expect(result.stderr.contains("stopped waiting"), "\(result.stderr)")
     }

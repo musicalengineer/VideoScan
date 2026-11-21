@@ -400,7 +400,7 @@ the call's line names every expectation not met, with the captured lines that sh
 ```swift
 let (job, log) = await expectingLog(
     .once(.hasPrefix("compare: ")),                                       // START
-    .once(.matching(/^compare FAILED: .* no such file/)),                 // OUTCOME
+    .once(.matching(/^compare FAILED: .* no such file/, label: "FAILED: no such file")),   // OUTCOME
     .inOrder(.hasPrefix("compare: "), .hasPrefix("compare FAILED: ")),
     .never(.hasPrefix("compare done: ")),
     .noOtherLines(matching: .contains(stem))                              // nothing else about my file
@@ -413,7 +413,9 @@ let (job, log) = await expectingLog(
 
 It returns the body's value and the sink for ad hoc assertions. After the body returns the scope waits, bounded
 (`waitingUpTo:`, 5 s by default, never when the verdict is already final), for lines still to come: the Center writes
-an OUTCOME one main-actor turn after the job's task ends. Checked after instead of up front: `sink.verify(…)` on a
+an OUTCOME one main-actor turn after the job's task ends. `settling:` (default none) adds a fixed beat after that and
+judges again, for a `.never` or `.once` that a late line would break. A regex cannot print its own pattern, so label
+it (`.matching(/…/, label: "…")`). Checked after instead of up front: `sink.verify(…)` on a
 sink the test bound itself. A test file that writes expectations needs `@_spi(Testing) import VideoScanCore`. Worked
 examples: `MFOCenterOutcomeWatcherTests`, `MFOLogSummaryEndToEndTests`, `TranscodeReplaceNegativeMatrixTests`;
 the layer's own tests are `LogExpectationsTests`.
@@ -422,7 +424,7 @@ the layer's own tests are `LogExpectationsTests`.
 |---|---|
 | `EXPECT_CALL(log, Write(HasSubstr("x"))).Times(1)` | `.once(.contains("x"))` |
 | `.Times(n)` / `.Times(AtLeast(n))` / `.Times(AtMost(n))` / `.Times(0)` | `.exactly(n, …)` / `.atLeast(n, …)` / `.atMost(n, …)` / `.never(…)` |
-| `StartsWith` / `EndsWith` / `StrEq` / `ContainsRegex` / `AllOf` / `Truly(pred)` | `.hasPrefix` / `.hasSuffix` / `.equals` / `.matching(/…/)` / `.all(…)` / `.line("…") { pred }` |
+| `StartsWith` / `EndsWith` / `StrEq` / `ContainsRegex` / `AllOf` / `Truly(pred)` | `.hasPrefix` / `.hasSuffix` / `.equals` / `.matching(/…/, label:)` / `.all(…)` / `.line("…") { pred }` |
 | `InSequence s;` | `.inOrder(first, then, …)` (order only; pair with `.once` to forbid repeats) |
 | `StrictMock<MockLog>` | `.noOtherLines()`, or narrowed: `.noOtherLines(matching: .contains("FAILED"))` |
 | `NiceMock<MockLog>` | a plain capture: `withAppLog(sink) { … }` and `#expect(sink.contains(…))` |
