@@ -40,25 +40,45 @@ public struct EraCanary: Sendable {
         let dir = stateRoot.appendingPathComponent("canary", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         clip = dir.appendingPathComponent("canary.mp4")
-        let made = Self.run(ffmpeg, ["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2",
-                                     "-c:v", "mpeg4", "-q:v", "5", clip.path], environment: environment)
+        let made = Self.runBlocking(ffmpeg, ["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2",
+                                             "-c:v", "mpeg4", "-q:v", "5", clip.path], environment: environment)
         guard made == nil else {
             throw Refusal("era: ffmpeg (\(ffmpeg)) cannot make a 2 s synthetic clip — the tool is broken, not the files; "
                           + "refused at START, nothing counted against any file: \(made ?? "")")
         }
-        if let why = toolWorks(environment: environment) {
+        if let why = stillVerdict(Self.runBlocking(ffmpeg, stillArguments, environment: environment)) {
             throw Refusal("era: ffmpeg (\(ffmpeg)) cannot rip a still from a synthetic clip — the tool is broken, not the files; "
                           + "refused at START, nothing counted against any file: \(why)")
         }
     }
 
     /// nil when the tool rips a still from the synthetic clip (bench.py's own filter), else ffmpeg's words.
-    public func toolWorks(environment: [String: String]) -> String? {
-        let still = clip.deletingLastPathComponent().appendingPathComponent("still.png")
-        defer { try? FileManager.default.removeItem(at: still) }
+    /// Async (2026-11-21): the job calls this mid-run from an `async`
+    /// function, so it AWAITS the runner — an async caller never parks a
+    /// cooperative-pool thread on the blocking bridge.
+    public func toolWorks(environment: [String: String]) async -> String? {
+        // Detached from the caller's cancellation, as the blocking form
+        // was: a cancelled job must not read its own SIGTERM of ffmpeg as
+        // "the tool is broken". The cap bounds it.
+        let (tool, arguments, cap) = (ffmpeg, stillArguments, Self.capSeconds)
+        let result = await TaskTreeScope.detached {
+            await ProcessRunner.runProcess(executable: tool, arguments: arguments, environment: environment,
+                                           stdoutLimitBytes: 0, deadlineSeconds: cap)
+        }.value
+        return Self.$capSeconds.withValue(cap) { stillVerdict(Self.words(for: result, tool: ffmpeg)) }
+    }
+
+    private var still: URL { clip.deletingLastPathComponent().appendingPathComponent("still.png") }
+
+    private var stillArguments: [String] {
         let vf = "scale=448:448:force_original_aspect_ratio=decrease,pad=448:448:(ow-iw)/2:(oh-ih)/2:color=black"
-        if let why = Self.run(ffmpeg, ["-nostdin", "-loglevel", "error", "-y", "-ss", "1.000", "-i", clip.path, "-frames:v", "1", "-vf", vf, still.path],
-                              environment: environment) { return why }
+        return ["-nostdin", "-loglevel", "error", "-y", "-ss", "1.000", "-i", clip.path, "-frames:v", "1", "-vf", vf, still.path]
+    }
+
+    /// The still command's own words if it failed; else whether a still was really written. Removes the still.
+    private func stillVerdict(_ commandFailure: String?) -> String? {
+        defer { try? FileManager.default.removeItem(at: still) }
+        if let commandFailure { return commandFailure }
         let size = (try? FileManager.default.attributesOfItem(atPath: still.path)[.size] as? NSNumber)?.intValue ?? 0
         return size > 0 ? nil : "ffmpeg exited 0 and wrote no still"
     }
@@ -75,17 +95,24 @@ public struct EraCanary: Sendable {
     /// still discarded (limit 0); the 60 s cap is the runner's deadline, which
     /// now also escalates SIGTERM → SIGKILL → abandon instead of sending one
     /// SIGTERM and walking away. Blocking, as before — the callers are a
-    /// synchronous init and a once-in-a-while check, never a hot path.
+    /// synchronous init (once per job, at START); the job-time check is
+    /// `toolWorks`, which awaits.
     /// Memory: at most 256 KB of the tool's stderr (`-loglevel error`: a line
     /// or two).
-    static func run(_ tool: String, _ args: [String], environment: [String: String]) -> String? {
-        let result = ProcessRunner.runProcessBlocking(executable: tool, arguments: args, environment: environment,
-                                                      stdoutLimitBytes: 0, deadlineSeconds: capSeconds)
-        guard result.launched else { return "could not start \(tool): \(result.stderr)" }
+    static func runBlocking(_ tool: String, _ args: [String], environment: [String: String]) -> String? {
+        words(for: ProcessRunner.runProcessBlocking(executable: tool, arguments: args, environment: environment,
+                                                    stdoutLimitBytes: 0, deadlineSeconds: capSeconds), tool: tool)
+    }
+
+    /// One command's result as nil (it worked) or why not.
+    static func words(for result: ProcessRunner.Result, tool: String) -> String? {
         // Exit status first: a child that finished in the instant the
         // deadline fired did its work (ProcessRunner.Result.timedOut's note).
-        guard result.exitCode != 0 else { return nil }
+        if result.launched, result.exitCode == 0 { return nil }
+        // Before `launched`: the blocking bridge's own bound reports
+        // timedOut with no launch evidence.
         if result.timedOut { return "\(tool) ran past \(Int(capSeconds)) s" }
+        guard result.launched else { return "could not start \(tool): \(result.stderr)" }
         let last = result.stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
         return String((last ?? "exit \(result.exitCode)").prefix(300))
     }

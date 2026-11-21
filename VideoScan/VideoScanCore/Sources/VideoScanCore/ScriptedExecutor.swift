@@ -86,8 +86,12 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, Sendabl
         /// 255, anything else (ffprobe, python, sleep) dies of it (exit 15).
         /// `ignoringSIGTERM` makes the child need the SIGKILL stage (a tool
         /// stuck past SIGTERM). `stderr` is written first (a tool that
-        /// printed, then stopped).
-        case hang(stderr: String = "", ignoringSIGTERM: Bool = false, exitOnTERM: Int32? = nil)
+        /// printed, then stopped). `maxSeconds` is how long the child lives
+        /// if NOTHING stops it: a test whose point is "the runner stops it"
+        /// passes a small number, so a regression (or a red run) cannot
+        /// leave a day-long `/bin/sleep` orphan behind on the machine.
+        case hang(stderr: String = "", ignoringSIGTERM: Bool = false, exitOnTERM: Int32? = nil,
+                  maxSeconds: Int = 86_400)
         /// Killed by `signal` (the real runner reports the signal number as
         /// the exit code; stdout is empty, not nil — the child did run).
         case crash(signal: Int32, stderr: String = "")
@@ -233,7 +237,7 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, Sendabl
         // The real runner's entry guard: a task cancelled before the launch
         // never starts the child.
         guard !Task.isCancelled else {
-            return ProcessRunner.Result(stdout: nil, stderr: "cancelled", exitCode: -1)
+            return ProcessRunner.Result(stdout: nil, stderr: "cancelled", exitCode: -1, cancelledBeforeLaunch: true)
         }
         return await perform(behaviour, request)
     }
@@ -244,11 +248,12 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, Sendabl
     /// `exitAtOnce`.
     private func perform(_ behaviour: Behaviour, _ request: CommandRequest) async -> ProcessRunner.Result {
         switch behaviour {
-        case let .hang(stderr, ignoringSIGTERM, exitOnTERM):
+        case let .hang(stderr, ignoringSIGTERM, exitOnTERM, maxSeconds):
             var child = request
             child.executable = "/bin/sh"
             child.arguments = ["-c", Self.hangScript(ignoringSIGTERM: ignoringSIGTERM,
-                                                     exitOnTERM: exitOnTERM ?? Self.termExit(of: request.tool)),
+                                                     exitOnTERM: exitOnTERM ?? Self.termExit(of: request.tool),
+                                                     seconds: maxSeconds),
                                "sh", stderr]
             child.environment = nil
             return await ProcessRunner.realRunProcess(child)
@@ -313,12 +318,13 @@ public final class ScriptedExecutor: CommandExecutor, CommandEscapeSink, Sendabl
     /// to run its trap, so sleep runs in the background with its fds on
     /// /dev/null (an orphan never holds the runner's pipes open) and the
     /// trap kills it before exiting.
-    static func hangScript(ignoringSIGTERM: Bool, exitOnTERM: Int32?) -> String {
+    static func hangScript(ignoringSIGTERM: Bool, exitOnTERM: Int32?, seconds: Int = 86_400) -> String {
         let say = "printf '%s' \"$1\" >&2; "
-        if ignoringSIGTERM { return "trap '' TERM; " + say + "exec /bin/sleep 86400" }
-        guard let code = exitOnTERM else { return say + "exec /bin/sleep 86400" }
+        let sleep = "/bin/sleep \(max(1, seconds))"
+        if ignoringSIGTERM { return "trap '' TERM; " + say + "exec " + sleep }
+        guard let code = exitOnTERM else { return say + "exec " + sleep }
         return "trap 'kill $c 2>/dev/null; exit \(code)' TERM; " + say
-            + "/bin/sleep 86400 </dev/null >/dev/null 2>&1 & c=$!; wait $c"
+            + sleep + " </dev/null >/dev/null 2>&1 & c=$!; wait $c"
     }
 
     /// The words `Process.run()` throws for an executable that is not

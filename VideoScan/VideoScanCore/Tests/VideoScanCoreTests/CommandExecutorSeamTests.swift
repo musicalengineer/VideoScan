@@ -424,6 +424,40 @@ struct CommandExecutorSensorTests {
         #expect(Self.spawnSites(in: "// never a bare Process() here\n/// via `Process()`\nlet x = 1 // Process()") == 0)
         #expect(Self.spawnSites(in: "let w = FakeProcess()\nlet i = ProcessInfo.processInfo\nposix_spawn_file_actions_init(&a)") == 0)
     }
+
+    /// The only production callers of the blocking bridge, as "path under
+    /// VideoScan/ → calls". Both are synchronous by necessity (audit in
+    /// ProcessRunner+Blocking.swift). An `async` function awaits
+    /// `ProcessRunner.runProcess` instead — never add one here.
+    static let allowedBlockingCallers: [String: Int] = [
+        "VideoScan/Shared/RAMDisk.swift": 1,                                        // launch/quit sweep, main thread
+        "VideoScanCore/Sources/VideoScanCore/Background/EraCanary.swift": 1,         // synchronous throwing init
+    ]
+
+    @Test("sensor: only the audited synchronous callers use ProcessRunner.runProcessBlocking — async code awaits runProcess")
+    func onlyTheAuditedSynchronousCallersBlock() throws {
+        var found: [String: Int] = [:]
+        for dir in ["VideoScan", "VideoScanCore/Sources", "VideoScanBackground"] {
+            let root = Self.videoScanDir.appendingPathComponent(dir, isDirectory: true)
+            let walk = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            for case let url as URL in walk where url.pathExtension == "swift" && url.lastPathComponent != "ProcessRunner+Blocking.swift" {
+                let calls = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") && $0.contains("runProcessBlocking(") }.count
+                guard calls > 0 else { continue }
+                found[String(url.standardizedFileURL.path.dropFirst(Self.videoScanDir.standardizedFileURL.path.count + 1))] = calls
+            }
+        }
+        #expect(found == Self.allowedBlockingCallers,
+                "a blocking ProcessRunner call outside the audited list (or the list is stale): \(found)")
+        // Each allowed call sits in a synchronous function: no `async` between the func keyword and the call.
+        for file in Self.allowedBlockingCallers.keys {
+            let text = try String(contentsOf: Self.videoScanDir.appendingPathComponent(file), encoding: .utf8)
+            let call = try #require(text.range(of: "ProcessRunner.runProcessBlocking("))
+            let funcStart = try #require(text.range(of: "func ", options: .backwards, range: text.startIndex..<call.lowerBound))
+            let signature = text[funcStart.lowerBound..<(text[funcStart.lowerBound...].firstIndex(of: "{") ?? call.lowerBound)]
+            #expect(!signature.contains("async"), "\(file): runProcessBlocking is called from an async function: \(signature)")
+        }
+    }
 }
 
 /// Thread-safe line collector for callbacks.

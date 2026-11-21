@@ -487,8 +487,11 @@
       ],
       "tests": [
         "blockingFormRunsForReal",
+        "blockingWaitIsBoundedIndependently",
         "exitZeroWithoutAStill",
+        "expiredWaitCancelsPendingWork",
         "hangIsStoppedAtTheCap",
+        "jobTimeCheckIsAsync",
         "launchFailureIsNamed",
         "nonzeroExitIsNamed",
         "silentNonzeroExitIsNamed",
@@ -1074,6 +1077,7 @@
         "nestedSequenceIsAFailure",
         "noHandRolledProcessInProduction",
         "noTestSetsTheToolEnvVars",
+        "onlyTheAuditedSynchronousCallersBlock",
         "parallelA",
         "parallelB",
         "parallelReal",
@@ -41081,7 +41085,7 @@
       ],
       "expected_floor": 3959,
       "name": "unit",
-      "package_expected_floor": 989,
+      "package_expected_floor": 990,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -42293,7 +42297,7 @@
       ],
       "expected_floor": 934,
       "name": "regression",
-      "package_expected_floor": 346,
+      "package_expected_floor": 349,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

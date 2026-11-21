@@ -91,7 +91,7 @@ struct EraCanaryCommandTests {
         defer { try? FileManager.default.removeItem(at: b.root) }
         let mock = ScriptedExecutor(claiming: [b.root.path]).on("ffmpeg", .crash(signal: 11))
         await mock.scoped {
-            #expect(EraCanary.run(b.ffmpeg, ["-version"], environment: b.environment) == "exit 11")
+            #expect(EraCanary.runBlocking(b.ffmpeg, ["-version"], environment: b.environment) == "exit 11")
         }
     }
 
@@ -101,7 +101,7 @@ struct EraCanaryCommandTests {
         defer { try? FileManager.default.removeItem(at: b.root) }
         let mock = ScriptedExecutor(claiming: [b.root.path]).on("ffmpeg", .launchFailure)
         await mock.scoped {
-            let why = EraCanary.run(b.ffmpeg, ["-version"], environment: b.environment)
+            let why = EraCanary.runBlocking(b.ffmpeg, ["-version"], environment: b.environment)
             #expect(why?.hasPrefix("could not start \(b.ffmpeg): ") == true, "\(why ?? "nil")")
         }
     }
@@ -110,10 +110,10 @@ struct EraCanaryCommandTests {
     func hangIsStoppedAtTheCap() async throws {
         let b = try bench()
         defer { try? FileManager.default.removeItem(at: b.root) }
-        let mock = ScriptedExecutor(claiming: [b.root.path]).on("ffmpeg", .hang())
+        let mock = ScriptedExecutor(claiming: [b.root.path]).on("ffmpeg", .hang(maxSeconds: 20))
         await mock.scoped {
             let why = EraCanary.$capSeconds.withValue(0.4) {
-                EraCanary.run(b.ffmpeg, ["-version"], environment: b.environment)
+                EraCanary.runBlocking(b.ffmpeg, ["-version"], environment: b.environment)
             }
             #expect(why == "\(b.ffmpeg) ran past 0 s", "the bound 0.4 s cap ended it (the suite time limit would catch the 60 s default)")
         }
@@ -135,6 +135,61 @@ struct EraCanaryCommandTests {
             }
         }
         #expect(mock.calls.count == 2)
+    }
+
+    @Test("the job-time check AWAITS the runner (no blocking bridge from async code): same still command, and a hang is named")
+    func jobTimeCheckIsAsync() async throws {
+        let b = try bench()
+        defer { try? FileManager.default.removeItem(at: b.root) }
+        let mock = ScriptedExecutor(claiming: [b.root.path])
+            .on("ffmpeg", .sequence([.writeOutputFile(Data([1])), .writeOutputFile(Data([1])),      // init: clip, still
+                                     .writeOutputFile(Data([2])),                                    // job-time: a still
+                                     .hang(maxSeconds: 20)]))                                        // job-time: wedged
+        try await mock.scoped {
+            let canary = try EraCanary(environment: b.environment, stateRoot: b.root)
+            #expect(await canary.toolWorks(environment: b.environment) == nil)
+            #expect(!FileManager.default.fileExists(atPath: b.still), "the still is removed after the check")
+            let why = await EraCanary.$capSeconds.withValue(0.4) { await canary.toolWorks(environment: b.environment) }
+            #expect(why == "\(b.ffmpeg) ran past 0 s")
+        }
+        #expect(mock.calls.count == 4)
+        #expect(mock.calls.dropFirst().allSatisfy { $0.arguments == ["-nostdin", "-loglevel", "error", "-y", "-ss", "1.000", "-i", b.clip,
+                                                                    "-frames:v", "1", "-vf", Self.stillFilter, b.still]
+                                                     && $0.environment == b.environment })
+    }
+
+    @Test("BRIDGE (Codex r1 P2): the blocking wait has its own bound — a child whose descendant holds the pipes open cannot hold the caller")
+    func blockingWaitIsBoundedIndependently() {
+        // The shell exits at once; its background sleep keeps the pipes open
+        // for 4 s, so the runner drains for 4 s and its deadline callbacks
+        // find no child to kill. Bound: 0.1 + 2 x 0.1 + 0.5 margin = 0.8 s.
+        let clock = ContinuousClock()
+        let started = clock.now
+        let result = ProcessRunner.runProcessBlocking(executable: "/bin/sh", arguments: ["-c", "/bin/sleep 4 & exit 0"],
+                                                      deadlineSeconds: 0.1, killGraceSeconds: 0.1)
+        let waited = clock.now - started
+        // quiet-machine: not a budget — 0.8 s bound vs the 4 s the pipes stay open; 3 s leaves 3.7x slack
+        #expect(waited < .seconds(3), "the caller was held \(waited) — until the descendant closed the pipes")
+        #expect(result.timedOut && result.exitCode == -1 && !result.launched)
+        #expect(result.stderr.contains("stopped waiting"), "\(result.stderr)")
+    }
+
+    @Test("BRIDGE (Codex r1 P2): work that has not started when the wait expires is cancelled — it never launches later")
+    func expiredWaitCancelsPendingWork() async {
+        // The mock holds the command for 1.5 s before "launching"; the
+        // bridge's bound is 0.1 + 0.2 + 0.5 = 0.8 s. After the wait expires
+        // the work is cancelled, so the delayed launch never happens.
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent("bridge-late-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let mock = ScriptedExecutor(claiming: [marker.path])
+            .on("touch", .after(.milliseconds(1500), then: .passThrough))
+        await mock.scoped {
+            let result = ProcessRunner.runProcessBlocking(executable: "/usr/bin/touch", arguments: [marker.path],
+                                                          deadlineSeconds: 0.1, killGraceSeconds: 0.1)
+            #expect(result.timedOut && !result.launched)
+            try? await Task.sleep(for: .milliseconds(2200))
+        }
+        #expect(!FileManager.default.fileExists(atPath: marker.path), "the command launched after the caller had stopped waiting")
     }
 
     @Test("BRIDGE: outside any mock the blocking form really runs, bounded by its deadline")
