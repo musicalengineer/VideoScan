@@ -1045,8 +1045,9 @@ final class CatalogStore {
         let captured = records  // capture the array reference; elements are classes
         // Same call as before the debounce became a property
         // (`Task.sleep(nanoseconds:)`), so the timer's clock is unchanged.
-        let (seconds, attoseconds) = saveDebounce.components
-        let nanoseconds = UInt64(max(0, seconds)) * 1_000_000_000 + UInt64(max(0, attoseconds) / 1_000_000_000)
+        // Saturating: an absurd injected Duration waits "forever", it does
+        // not trap (codex r1); the default is exactly 2_000_000_000.
+        let nanoseconds = TimingBudget.nanoseconds(saveDebounce)
         debounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: nanoseconds)
             if Task.isCancelled { return }

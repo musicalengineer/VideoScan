@@ -433,4 +433,17 @@ public enum TimingBudget {
         let c = duration.components
         return Double(c.seconds) + Double(c.attoseconds) / 1e18
     }
+
+    /// Whole nanoseconds for `Task.sleep(nanoseconds:)`, SATURATING: zero or
+    /// negative is 0, anything past UInt64.max ns (about 584 years) is
+    /// UInt64.max. Plain multiplication trapped on an absurd Duration
+    /// (codex r1, 2026-11-21). `.seconds(2)` is exactly 2_000_000_000.
+    public static func nanoseconds(_ duration: Duration) -> UInt64 {
+        let c = duration.components
+        guard c.seconds > 0 || (c.seconds == 0 && c.attoseconds > 0) else { return 0 }
+        let whole = UInt64(c.seconds).multipliedReportingOverflow(by: 1_000_000_000)
+        guard !whole.overflow else { return .max }
+        let sum = whole.partialValue.addingReportingOverflow(UInt64(max(0, c.attoseconds)) / 1_000_000_000)
+        return sum.overflow ? .max : sum.partialValue
+    }
 }

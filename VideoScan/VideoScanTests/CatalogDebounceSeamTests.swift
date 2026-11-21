@@ -21,6 +21,7 @@
 // C++ readers: `$debounce.withValue(x) { … }` ≈ a scoped thread_local
 // override, restored at the closing brace.
 
+import Combine
 import Foundation
 import Testing
 @testable import VideoScan
@@ -211,5 +212,69 @@ struct CatalogStoreDebounceSeamTests {
         #expect(store.hasUnsavedChanges, "still on the 2 s timer")
         #expect(!FileManager.default.fileExists(atPath: store.fileLocation))
         #expect(store.saveNow(records: [record("a.mov")]))      // leave nothing pending
+    }
+}
+
+// MARK: - An absurd injected duration (codex r1 P2)
+
+// The JSON store converts its injected debounce to UInt64 nanoseconds for
+// `Task.sleep(nanoseconds:)`; a duration past UInt64.max ns used to TRAP in
+// that multiplication — the first test killed the host before the clamp
+// (TimingBudget.nanoseconds, saturating). `.seconds(18_446_744_074)` is the
+// first whole second past UInt64.max ns. The dossier's Dispatch stride and
+// the committer's `Task.sleep(for:)` never trapped; their tests pin that.
+@Suite("Catalog debounce seam — an absurd duration saturates, it does not trap")
+@MainActor
+struct CatalogDebounceClampTests {
+
+    nonisolated static let absurd: Duration = .seconds(18_446_744_074)
+
+    private func scratchDir(_ label: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_debounce_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    }
+
+    @Test("the JSON store: a save scheduled with an absurd, a zero or a negative debounce does not trap; the quit save still lands",
+          arguments: [CatalogDebounceClampTests.absurd, .zero, .seconds(-5), .seconds(Int64.max)])
+    func theStoreSaturates(debounce: Duration) async throws {
+        let dir = scratchDir("clamp"); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir, saveDebounce: debounce)
+        let record = VideoRecord()
+        record.filename = "a.mov"
+        record.fullPath = "/Volumes/Test/a.mov"
+        store.scheduleSave(records: [record])                   // trapped here for the absurd one, before the clamp
+        #expect(store.saveNow(records: [record]))
+        #expect(CatalogStore(directory: dir).load().map(\.filename) == ["a.mov"])
+    }
+
+    @Test("the dossier store and afterCommit: an absurd throttle or sample period does not trap")
+    func theDossierTimingsSaturate() async throws {
+        let store = FileDossierStore(readThrottle: Self.absurd)
+        let edits = PassthroughSubject<Void, Never>()
+        let loader = FileDossierLoader(load: { _ in nil }, note: { _ in },
+                                       changes: FileDossierLoader.afterCommit(edits.eraseToAnyPublisher(), period: Self.absurd))
+        await store.show(fileID: UUID(), loader: loader)        // builds the Dispatch stride
+        edits.send(())
+        #expect(store.shown == .notStored)
+        store.cancel()
+    }
+
+    @Test("the committer: an absurd or negative debounce schedules without trapping, and Quit still commits")
+    func theCommitterAcceptsAnyDuration() async throws {
+        let scene = try CutoverScene.make("deb_absurd"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let committer = try scene.committer()
+        #expect(scene.model.saveCatalogNow(), "the launch commit lands first")
+        let healthy = try scene.record(.healthy)
+        CatalogCommitter.$debounce.withValue(Self.absurd) {
+            scene.model.setUserNotes("scheduled centuries out", for: healthy)
+        }
+        #expect(committer.isBusy)
+        CatalogCommitter.$debounce.withValue(.seconds(-5)) {
+            scene.model.saveCatalogDebounced()                  // negative: fires at once, like zero
+        }
+        for _ in 0..<500 where committer.isBusy { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!committer.isBusy)
+        #expect(try await scene.reloaded(.healthy).userNotes == "scheduled centuries out")
     }
 }

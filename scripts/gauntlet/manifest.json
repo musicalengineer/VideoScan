@@ -1097,6 +1097,23 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContainedLogWriteTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ContainedLogWriteTests",
+        "TimingBudgetNanosecondsTests"
+      ],
+      "tests": [
+        "aLongOutageIsBounded",
+        "failuresAreCountedThenSaidOnce",
+        "noRaisingFileHandleCallIsLeft",
+        "saturates",
+        "successIsByteForByte",
+        "theBackgroundSinkIsContained"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRacilyCleanTests.swift",
@@ -10808,7 +10825,8 @@
       "stage": "unit",
       "suites": [
         "CatalogCommitterDebounceSeamTests",
-        "CatalogStoreDebounceSeamTests"
+        "CatalogStoreDebounceSeamTests",
+        "CatalogDebounceClampTests"
       ],
       "tests": [
         "aBindingDoesNotLeak",
@@ -10818,7 +10836,10 @@
         "anEditInsideTheWindowThenQuit",
         "editsInsideTheWindowCoalesce",
         "productionDefaultsArePinned",
-        "theDefaultIsTheProductionDebounce"
+        "theCommitterAcceptsAnyDuration",
+        "theDefaultIsTheProductionDebounce",
+        "theDossierTimingsSaturate",
+        "theStoreSaturates"
       ]
     },
     {
@@ -26109,6 +26130,20 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersistentLogWriteFailureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersistentLogWriteFailureTests"
+      ],
+      "tests": [
+        "aLongOutageIsOneNumber",
+        "failedWritesAreDroppedCountedAndSaid",
+        "headerFooterAndFlushAreContained",
+        "theLayoutIsUnchangedWhenWritesSucceed"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonEvaluationCLIParseCharacterizationTests.swift",
       "stage": "unit",
       "suites": [
@@ -40929,9 +40964,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3952,
+      "expected_floor": 3959,
       "name": "unit",
-      "package_expected_floor": 982,
+      "package_expected_floor": 988,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -41048,7 +41083,9 @@
         "VideoScanCoreTests.LogScopeCostTests",
         "VideoScanCoreTests.LogScopeSensorTests",
         "VideoScanCoreTests.AtomicFilePublishFaultTests",
-        "VideoScanCoreTests.CatalogHighWaterPublishFaultTests"
+        "VideoScanCoreTests.CatalogHighWaterPublishFaultTests",
+        "VideoScanCoreTests.ContainedLogWriteTests",
+        "VideoScanCoreTests.TimingBudgetNanosecondsTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -41695,7 +41732,9 @@
         "VideoScanTests/CatalogCommitterDebounceSeamTests",
         "VideoScanTests/CatalogStoreDebounceSeamTests",
         "VideoScanTests/CatalogOutOfRangeStarCommitTests",
-        "VideoScanTests/EventsStatsPublishFaultTests"
+        "VideoScanTests/EventsStatsPublishFaultTests",
+        "VideoScanTests/CatalogDebounceClampTests",
+        "VideoScanTests/PersistentLogWriteFailureTests"
       ]
     },
     {

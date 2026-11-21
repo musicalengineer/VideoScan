@@ -33,6 +33,11 @@ public final class BackgroundFileLog: BackgroundLogSink, @unchecked Sendable {
         return f
     }()
 
+    /// Dropped-line bookkeeping for this sink's writes. Under `lock`.
+    private var contained = ContainedLogWrite()
+    /// Lines this sink could not write, over its life.
+    public var droppedLineCount: Int { lock.lock(); defer { lock.unlock() }; return contained.totalDroppedLines }
+
     public init(url: URL) { self.url = url }
 
     /// The production file: ~/Library/Logs/VideoScan/background.log.
@@ -53,14 +58,19 @@ public final class BackgroundFileLog: BackgroundLogSink, @unchecked Sendable {
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         let header = "VideoScan background log — started \(f.string(from: Date())) (pid \(ProcessInfo.processInfo.processIdentifier))\n"
             + "─────────────────────────────────────────────\n"
-        if let data = header.data(using: .utf8) { handle?.write(data) }
+        if let data = header.data(using: .utf8), let handle {
+            contained.write(data, lines: 0, to: handle, stampPrefix: "[\(stamp.string(from: Date()))] ")
+        }
     }
 
     public func write(_ line: String) {
         lock.lock(); defer { lock.unlock() }
         guard let handle else { return }
-        if let data = "[\(stamp.string(from: Date()))] \(line)\n".data(using: .utf8) {
-            handle.write(data)
+        // Contained (codex r1, 2026-11-21): the non-throwing FileHandle.write
+        // raises an ObjC exception on a full disk. See ContainedLogWrite.
+        let prefix = "[\(stamp.string(from: Date()))] "
+        if let data = "\(prefix)\(line)\n".data(using: .utf8),
+           contained.write(data, lines: 1, to: handle, stampPrefix: prefix) {
             try? handle.synchronize()
         }
     }
