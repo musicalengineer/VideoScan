@@ -590,6 +590,36 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         b.expectSourcesUntouched()
     }
 
+    /// Codex r2 #8 (P1): an mkdir that could not be started was counted and
+    /// listed but never passed through `recordFailed` — no "rescue FAILED"
+    /// line, while the banner says every line is in videoscan.log. The fast
+    /// copier's folder-creation failure had the same bypass.
+    @Test("mkdir cannot be started for two files (rsync) / the folder cannot be made (fast): every failure is in the app log as \"rescue FAILED\"",
+          arguments: [RescueCopyMode.verified, .fast])
+    func everyMkdirFailureIsLogged(_ mode: RescueCopyMode) async throws {
+        let b = try bench(files: 2)
+        defer { b.cleanup() }
+        let sink = InMemoryLogSink()
+        let mock = ScriptedExecutor(claiming: [b.root.path]).on("mkdir", .launchFailure).on("rsync", .passThrough)
+        if mode == .fast {   // a rescue folder that cannot be written: creating Rescued/Tapes/1994 fails
+            try FileManager.default.createDirectory(at: b.rescued, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: b.rescued.path)
+        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: b.rescued.path) }
+        let done = await withAppLog(sink) {
+            await mock.scoped {
+                b.op.start(files: b.sources.map(\.record), sourcePath: b.sourceVolume.path, destPath: b.destVolume.path, mode: mode)
+                return await waitUntilDone(b)
+            }
+        }
+        #expect(done && b.op.filesFailed == 2 && b.op.errors.count == 2 && b.op.filesCopied == 0)
+        let logged = sink.lines.filter { $0.hasPrefix("rescue FAILED: ") }.map { String($0.dropFirst("rescue FAILED: ".count)) }
+        #expect(logged == b.op.errors, "the banner says every line is in videoscan.log; logged \(logged) of \(b.op.errors)")
+        for (i, s) in b.sources.enumerated() { #expect(b.op.errors[i].hasPrefix("mkdir failed: \(s.relative) — "), "\(b.op.errors[i])") }
+        #expect(mock.calls(to: "rsync").isEmpty)
+        b.expectSourcesUntouched()
+    }
+
     @Test("mkdir exits nonzero: its status is not read — the folder it did not make cannot be opened, so the file FAILS naming it; rsync is never run")
     func mkdirExitsNonzero() async throws {
         let b = try bench(files: 1)

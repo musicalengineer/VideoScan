@@ -457,10 +457,9 @@ final class VolumeRescueOperation: ObservableObject {
             do {
                 try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
             } catch {
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
-                }
+                // Through recordFailed, like every other failure: the banner
+                // says every line is in videoscan.log (Codex r2 #8).
+                await recordFailed("mkdir failed: \(relative) — \(error.localizedDescription)")
                 continue
             }
 
@@ -558,10 +557,8 @@ final class VolumeRescueOperation: ObservableObject {
                 // RESULT, not of the task: a Stop that lands after a genuine
                 // launch failure must not erase that failure (Codex r1 P2).
                 if mkdir.cancelledBeforeLaunch { break }
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("mkdir failed: \(relative) — \(mkdir.stderr)")
-                }
+                // Through recordFailed: counted, listed AND logged (Codex r2 #8).
+                await recordFailed("mkdir failed: \(relative) — \(mkdir.stderr)")
                 continue
             }
 
