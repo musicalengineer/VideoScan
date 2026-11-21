@@ -104,8 +104,10 @@ final class HashReadFault: @unchecked Sendable {
     }
 
     /// Run `body` with this fault bound for its task tree.
-    func run<T: Sendable>(isolation: isolated (any Actor)? = #isolation,
-                          _ body: () async throws -> T) async rethrows -> T {
+    /// No `isolation:` parameter: this target builds with nonisolated(nonsending) by default, so a
+    /// plain `async` function already runs on its caller's actor, and `withValue` resolves to the
+    /// current overload (the isolation-taking one is deprecated: warning ratchet, 2026-11-20).
+    func run<T: Sendable>(_ body: () async throws -> T) async rethrows -> T {
         try await ArchivePromoteEngine.$readHook.withValue(hook) { try await body() }
     }
 
