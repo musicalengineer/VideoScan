@@ -371,6 +371,28 @@ struct CleanupUnverifiedRenderMatrixTests {
         #expect(outcome?.contains(lockScratch ? "was NOT removed" : "scratch folder was removed") == true, "OUTCOME: \(outcome ?? "nil")")
     }
 
+    /// Codex r2 #6 (P1): the removal failed (EIO) and the existence check
+    /// that followed failed too (EIO) while the folder remained —
+    /// `fileExists` said false, and the row said "was removed". Only a
+    /// confirmed absence (ENOENT) is "removed"; anything else is NOT, with
+    /// the removal's error and the path. (A failing disk cannot be made in a
+    /// test; the decision is pure, and the caller hands it a fresh lstat's
+    /// errno.)
+    @Test("CleanupJob: a scratch removal that failed is \"removed\" only when a fresh lstat says ENOENT — an EIO answer is NOT removed, with the path and both errors")
+    func aScratchRemovalIsRemovedOnlyWhenConfirmedAbsent() {
+        let removal = NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+        let path = "/Volumes/Work/.videoscan-cleanup-1234"
+        #expect(CleanupJob.scratchRemovalLine(path: path, removalError: removal, lstatErrno: ENOENT) == nil, "confirmed absent: removed")
+        let stillThere = CleanupJob.scratchRemovalLine(path: path, removalError: removal, lstatErrno: 0)
+        #expect(stillThere == "The job's scratch folder \(path) was NOT removed: \(removal.localizedDescription).")
+        for unreadable in [EIO, EACCES, ENOTDIR, ELOOP] {
+            let line = CleanupJob.scratchRemovalLine(path: path, removalError: removal, lstatErrno: unreadable)
+            #expect(line == "The job's scratch folder \(path) was NOT removed: \(removal.localizedDescription) "
+                    + "(whether it is still there could not be read: \(String(cString: strerror(unreadable)))).",
+                    "errno \(unreadable) after a failed removal was taken for \"removed\": \(line ?? "nil")")
+        }
+    }
+
     /// Sensor: why an engine throw is enough. CleanupJob publishes and
     /// catalogues only the URL `renderOffMain` RETURNED; a throw goes to
     /// failOrCancel and returns before the publish.

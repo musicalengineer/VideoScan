@@ -684,9 +684,22 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
             try FileManager.default.removeItem(at: dir)
             return nil
         } catch {
-            guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
-            return "The job's scratch folder \(dir.path) was NOT removed: \(error.localizedDescription)."
+            var sb = stat()
+            let presence: Int32 = lstat(dir.path, &sb) == 0 ? 0 : errno
+            return Self.scratchRemovalLine(path: dir.path, removalError: error, lstatErrno: presence)
         }
+    }
+
+    /// After a removal of the scratch folder threw: nil when it is
+    /// CONFIRMED gone (a fresh lstat says ENOENT), else the sentence with
+    /// the removal's error. THE BUG (Codex r2 #6, P1): `fileExists` false
+    /// was taken for gone — but an lstat that fails with EIO (a failing
+    /// disk) says nothing about whether the folder is there. `lstatErrno`
+    /// is the fresh lstat's answer (0 = something is at the path). Pure.
+    nonisolated static func scratchRemovalLine(path: String, removalError: Error, lstatErrno: Int32) -> String? {
+        if lstatErrno == ENOENT { return nil }
+        let unknown = lstatErrno == 0 ? "" : " (whether it is still there could not be read: \(String(cString: strerror(lstatErrno))))"
+        return "The job's scratch folder \(path) was NOT removed: \(removalError.localizedDescription)\(unknown)."
     }
 
     /// Every exit: remove the scratch folder if still held; a removal that
