@@ -85,7 +85,9 @@ public enum LogScope {
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> R
     ) async rethrows -> R {
-        try await $bound.withValue(sink, operation: body, isolation: isolation)
+        // No explicit `isolation:` — that overload is deprecated; inside a function with an
+        // `isolated` parameter the closure already runs on the caller's actor (as ScriptedExecutor does).
+        try await $bound.withValue(sink) { try await body() }
     }
 }
 
@@ -242,9 +244,9 @@ public struct TaskTreeScope: Sendable {
         isolation: isolated (any Actor)? = #isolation,
         _ body: () async throws -> R
     ) async rethrows -> R {
-        try await ProcessRunner.$executor.withValue(executor, operation: {
-            try await LogScope.$bound.withValue(logSink, operation: body, isolation: isolation)
-        }, isolation: isolation)
+        try await ProcessRunner.$executor.withValue(executor) {
+            try await LogScope.$bound.withValue(logSink) { try await body() }
+        }
     }
 
     /// `callback`, re-entering this scope each time it is called — for a
