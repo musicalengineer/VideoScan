@@ -84,6 +84,37 @@ enum ArchivePromoteEngine {
     }
     @TaskLocal static var barriers = Barriers.live
 
+    // MARK: Read-fault seam (tests only)
+
+    /// What a test can make ONE read of the full-file hash do instead of
+    /// what the disk did. Applied on the reader thread to a chunk that
+    /// pread just filled, before the consumer sees it.
+    enum ReadFault: Sendable, Equatable {
+        /// The read fails with this errno (EIO: the drive fell off the bus).
+        case errno(Int32)
+        /// The read returns only its first `bytes` bytes. 0 = the file
+        /// "ends" here (premature EOF); >0 = an ordinary partial read, after
+        /// which the reader simply reads on from the new offset.
+        case shortRead(bytes: Int)
+        /// One bit of the byte at this index INSIDE the chunk reads back
+        /// inverted (a flip on the wire / in RAM; the file is untouched).
+        case flip(byteInChunk: Int)
+    }
+
+    /// Asked once per chunk with the descriptor, the chunk's file offset
+    /// and its byte count; nil = leave the chunk alone.
+    typealias ReadHook = @Sendable (_ fd: Int32, _ offset: Int64, _ count: Int) -> ReadFault?
+
+    /// The read seam of every full-file hash and of the promote copy pass
+    /// (`pipelinedRead`). nil in production — nothing binds it outside the
+    /// tests (HashReadSeamSensorTests), and with nil the reader loop does
+    /// exactly the preads it always did: one optional check per 8 MiB chunk.
+    /// TASK-LOCAL like `barriers`. A raw Thread does not inherit task-locals,
+    /// so `pipelinedRead` reads the value on the CALLING task and hands it
+    /// to the reader thread by value. (For Rick: ≈ reading a thread_local
+    /// on the parent and passing it as the pthread's start argument.)
+    @TaskLocal static var readHook: ReadHook? = nil
+
     // MARK: Errors
 
     enum Failure: Error, Equatable, CustomStringConvertible {
@@ -644,7 +675,7 @@ enum ArchivePromoteEngine {
         /// is posted as the final slot and the reader exits. pread never
         /// moves the fd's file offset, so the consumer-side descriptor
         /// state is untouched.
-        func startReader(fd: Int32) {
+        func startReader(fd: Int32, hook: ReadHook?) {
             let thread = Thread { [self] in
                 var offset: off_t = 0
                 var slot = 0
@@ -653,8 +684,22 @@ enum ArchivePromoteEngine {
                     if isStopped { break }
                     var n = pread(fd, buffers[slot], slotSize, offset)
                     while n < 0 && errno == EINTR { n = pread(fd, buffers[slot], slotSize, offset) }
+                    var readErrno = n < 0 ? errno : 0
+                    // Test seam (readHook): nil in production, so `n`, the
+                    // buffer and `readErrno` are exactly what pread produced.
+                    if let hook, n > 0, let fault = hook(fd, Int64(offset), n) {
+                        switch fault {
+                        case .errno(let e): n = -1; readErrno = e
+                        case .shortRead(let bytes): n = max(0, min(n, bytes))
+                        case .flip(let i):
+                            if i >= 0 && i < n {
+                                let byte = buffers[slot].load(fromByteOffset: i, as: UInt8.self)
+                                buffers[slot].storeBytes(of: byte ^ 0x01, toByteOffset: i, as: UInt8.self)
+                            }
+                        }
+                    }
                     counts[slot] = n
-                    errnos[slot] = n < 0 ? errno : 0
+                    errnos[slot] = readErrno
                     filled.signal()
                     if n <= 0 { break }        // EOF or error: this reader is done
                     offset += off_t(n)
@@ -701,7 +746,8 @@ enum ArchivePromoteEngine {
                                       consume: (UnsafeRawPointer, Int) throws -> Void) throws -> Int64 {
         _ = fcntl(fd, F_RDAHEAD, 1)
         let ring = ChunkRing(depth: pipelineDepth, slotSize: pipelineChunkSize)
-        ring.startReader(fd: fd)
+        // Read on the calling task: the reader thread cannot see task-locals.
+        ring.startReader(fd: fd, hook: readHook)
         defer { ring.shutdown() }
         var total: Int64 = 0
         var slot = 0
