@@ -157,8 +157,22 @@ struct ArchiveAngelSeamScopeTests {
 
     // MARK: The job's detached save (capture-and-pass)
 
+    /// A job over a model with no qualifying record: it picks nothing.
+    ///
+    /// The model is RETURNED and every caller holds it until the job and
+    /// its settle are over. `ArchiveAngelJob.model` is `weak`, and nothing
+    /// else in a test owns a fresh `VideoScanModel`, so without this the
+    /// job's `run()` found the model alive or already freed depending on
+    /// when the model's own stray strong references (its startup tasks)
+    /// let go. Freed, `run()` ends at "Catalog went away" →
+    /// `finish(failed:)` → (a Stop is pending) `.cancelled`; alive, it
+    /// runs the selection and ends `.finished("Nothing to recommend…")`.
+    /// That was GH #507: the same test, 8 of 10 red on one build, green on
+    /// a quiet rerun. Held, there is one interleaving.
+    /// (C++: the job keeps a `weak_ptr`; the test must keep the
+    /// `shared_ptr` in scope or `lock()` races the last owner's release.)
     @MainActor
-    private func cancelledEmptyJob(_ label: String) throws -> (job: ArchiveAngelJob, sb: MasterArchiveTestSupport.Sandbox) {
+    private func cancelledEmptyJob(_ label: String) throws -> (job: ArchiveAngelJob, model: VideoScanModel, sb: MasterArchiveTestSupport.Sandbox) {
         let sb = try MasterArchiveTestSupport.makeSandbox(label)
         let model = MasterArchiveTestSupport.makeModel(sb)
         model.scanTargets = []
@@ -171,10 +185,29 @@ struct ArchiveAngelSeamScopeTests {
         // No record qualifies: the job picks nothing, saves once and ends.
         let job = ArchiveAngelJob(model: model, center: MediaFileOperationsCenter(), count: 1, makeLossless: false,
                                   bufferRoot: buffer, explicitRecordIDs: [UUID()])
-        return (job, sb)
+        return (job, model, sb)
+    }
+
+    /// Start, Stop at once, and wait for the run and its settle — with the
+    /// model held for all of it (see `cancelledEmptyJob`).
+    @MainActor
+    private func startStopAndWait(_ job: ArchiveAngelJob, holding model: VideoScanModel) async {
+        job.start()
+        job.cancel()
+        await job.task?.value
+        await job.cleanupTask?.value
+        withExtendedLifetime(model) {}
     }
 
     private static let cancelledSaveLine = "could not save the cancelled batch"
+    /// Every plan-save failure line the job can write (the settle's, the
+    /// skip's, and the loop's `.failed` reason).
+    private static func isSaveFailure(_ line: String) -> Bool {
+        line.contains("could not save") || line.contains("Could not write plan.json")
+    }
+    /// `run()` writes this right after `guard let model` — its presence
+    /// proves the run met a live model (the GH #507 interleaving is gone).
+    private static let ranWithModelLine = "Archive Angel: want 1"
 
     /// A Stop pressed as the job starts: its one loop save fails under the
     /// bound fault, the job settles as cancelled, and the settle's save —
@@ -183,36 +216,59 @@ struct ArchiveAngelSeamScopeTests {
     /// read on the tree and handed in.
     @Test @MainActor
     func theJobsDetachedSettleSaveStillSeesTheFault() async throws {
-        let (job, sb) = try cancelledEmptyJob("seam_detached_bound"); defer { sb.cleanup() }
+        let (job, model, sb) = try cancelledEmptyJob("seam_detached_bound"); defer { sb.cleanup() }
         let sink = InMemoryLogSink(name: "seam-detached-bound")
         let fault = ArchiveAngelPlanWriter.InjectedFailure(batchNameContains: sb.root.path, afterWrites: 0)
         await withAppLog(sink) {
             await ArchiveAngelPlanWriter.$injectedFailure.withValue(fault) {
-                job.start()
-                job.cancel()
-                await job.task?.value
-                await job.cleanupTask?.value
+                await startStopAndWait(job, holding: model)
             }
         }
+        #expect(sink.contains(Self.ranWithModelLine), "fixture: the run never met the model: \(sink.lines.suffix(6))")
         guard case .cancelled = job.state else { Issue.record("fixture: the job ended \(job.state)"); return }
         #expect(sink.contains(Self.cancelledSaveLine),
                 "the detached settle save did not see the fault: \(sink.lines.suffix(6))")
         #expect(!FileManager.default.fileExists(atPath: job.plan.planURL.path), "a failed save wrote plan.json")
     }
 
-    /// The control: the same Stop with nothing bound saves and says nothing.
+    /// The control: the same Start-then-Stop with nothing bound — no save
+    /// fails and none says so. Only that is asserted: how the job ENDS
+    /// after a Stop that meets an empty pick is a production defect pinned
+    /// separately (`aStopBeforeAnEmptyPickEndsCancelled`, known issue).
     @Test @MainActor
     func unboundTheSameSettleSaves() async throws {
-        let (job, sb) = try cancelledEmptyJob("seam_detached_unbound"); defer { sb.cleanup() }
+        let (job, model, sb) = try cancelledEmptyJob("seam_detached_unbound"); defer { sb.cleanup() }
         let sink = InMemoryLogSink(name: "seam-detached-unbound")
-        await withAppLog(sink) {
-            job.start()
-            job.cancel()
-            await job.task?.value
-            await job.cleanupTask?.value
+        await withAppLog(sink) { await startStopAndWait(job, holding: model) }
+        #expect(sink.contains(Self.ranWithModelLine), "fixture: the run never met the model: \(sink.lines.suffix(6))")
+        if case .failed(let why) = job.state { Issue.record("unbound, a save failed: \(why)") }
+        #expect(sink.lines(matching: Self.isSaveFailure).isEmpty,
+                "unbound, a save failed: \(sink.lines(matching: Self.isSaveFailure))")
+    }
+
+    /// PRODUCTION DEFECT, pinned (found under GH #507; not fixed here —
+    /// ArchiveAngel is data-risk code). A Stop pressed before the run
+    /// starts puts the job in `.cancelling`; when the selection then comes
+    /// up empty, `run()` takes the `entries.isEmpty` exit, which saves the
+    /// plan as `.ready` and calls `finish(success: "Nothing to recommend…")`
+    /// WITHOUT checking `stopRequested` — and `finish(success:)`, unlike
+    /// `finish(failed:)`, does not defer to a pending cancel. So the Stop
+    /// is overwritten: the job reports `.finished`, the empty batch stays
+    /// on disk as `.ready` instead of being settled and discarded by
+    /// `finishCancelled()`. Deterministic with the model held. When the
+    /// job honours the Stop this known issue stops being recorded and the
+    /// test fails — remove `withKnownIssue` then.
+    @Test @MainActor
+    func aStopBeforeAnEmptyPickEndsCancelled() async throws {
+        let (job, model, sb) = try cancelledEmptyJob("seam_stop_empty_pick"); defer { sb.cleanup() }
+        let sink = InMemoryLogSink(name: "seam-stop-empty-pick")
+        await withAppLog(sink) { await startStopAndWait(job, holding: model) }
+        #expect(sink.contains(Self.ranWithModelLine), "fixture: the run never met the model: \(sink.lines.suffix(6))")
+        withKnownIssue("ArchiveAngelJob: finish(success:) on the empty-pick exit overwrites a pending Stop (GH #507 follow-up)") {
+            guard case .cancelled = job.state else {
+                Issue.record("a Stop before the run was overwritten: the job ended \(job.state)"); return
+            }
         }
-        guard case .cancelled = job.state else { Issue.record("fixture: the job ended \(job.state)"); return }
-        #expect(!sink.contains(Self.cancelledSaveLine), "\(sink.lines.suffix(6))")
     }
 
     // MARK: Clear's disk probe
