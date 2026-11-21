@@ -45,6 +45,7 @@ struct GlobalTestHookRetiredSensorTests {
              oldSpelling: "ArchiveAngelPlanWriter.injectedFailure"),
         Hook(file: "ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift", name: "diskProbe",
              oldSpelling: "VideoScanModel.clearDiskProbe"),
+        Hook(file: "People/PersonNameGuard.swift", name: "roster", oldSpelling: "PersonNameGuard.roster"),
     ]
 
     /// Every test source: (file name, text).
@@ -90,7 +91,9 @@ struct GlobalTestHookRetiredSensorTests {
     @Test("no app source binds it — only a test can", arguments: hooks)
     func noAppSourceBinds(_ hook: Hook) throws {
         #expect(SourceTree.appSources.count > 500, "the walk read \(SourceTree.appSources.count) app sources — not the tree")
-        let binder = "$" + hook.name
+        // `.withValue` is the only way to bind a task-local, and it keeps a
+        // SwiftUI `$roster` binding of the same name out of the match.
+        let binder = "$" + hook.name + ".withValue"
         for source in SourceTree.appSources {
             let text = try String(contentsOf: source.url, encoding: .utf8)
             guard text.contains(binder) else { continue }
@@ -103,7 +106,7 @@ struct GlobalTestHookRetiredSensorTests {
         }
         // The positive control: the tests DO bind it, so the spelling this
         // looks for is the real one.
-        #expect(Self.testSources.contains { $0.name != "GlobalTestHookRetiredSensorTests.swift" && $0.text.contains(binder + ".withValue") },
+        #expect(Self.testSources.contains { $0.name != "GlobalTestHookRetiredSensorTests.swift" && $0.text.contains(binder) },
                 "no test binds \(binder) — the sensor is looking for the wrong spelling, or the seam is unused")
     }
 

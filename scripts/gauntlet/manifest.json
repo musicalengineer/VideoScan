@@ -38398,6 +38398,18 @@
         "noTestAssignsTheGlobal",
         "theAngelJobHandsTheFaultToEveryDetachedSave"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PeopleSeamScopeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PeopleSeamScopeTests"
+      ],
+      "tests": [
+        "rosterIsPerTaskTree",
+        "rosterReachesChildTasksOnly"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -41174,7 +41186,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3968,
+      "expected_floor": 3970,
       "name": "unit",
       "package_expected_floor": 990,
       "package_selectors": [
@@ -41946,7 +41958,8 @@
         "VideoScanTests/CatalogDebounceClampTests",
         "VideoScanTests/PersistentLogWriteFailureTests",
         "VideoScanTests/ArchiveAngelSeamScopeTests",
-        "VideoScanTests/GlobalTestHookRetiredSensorTests"
+        "VideoScanTests/GlobalTestHookRetiredSensorTests",
+        "VideoScanTests/PeopleSeamScopeTests"
       ]
     },
     {
