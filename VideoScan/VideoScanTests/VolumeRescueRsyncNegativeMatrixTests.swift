@@ -740,9 +740,12 @@ struct VolumeRescueRsyncNegativeMatrixTests {
         let alreadyCount = try #require(body.range(of: "filesCopied += 1", range: already.upperBound..<body.endIndex))
         #expect(body.distance(from: already.upperBound, to: alreadyCount.lowerBound) < 200 && alreadyCount.lowerBound < sizeCheck.lowerBound)
         #expect(body.contains("let source = Self.entry(at: srcFile)") && body.contains("let final = Self.entry(at: destFile)"), "both are stat'ed fresh")
-        // The one unlink is of this file's own parked partial, after the copy is whole; nothing else is ever deleted.
-        #expect(body.components(separatedBy: "unlink(").count == 2 && body.contains("unlink(Self.partialPath(forDestination: destFile))"),
+        // The one removal is of this file's own parked partial, after the copy is whole, bound to a staging
+        // folder opened without following a link (Codex r1 #1); nothing else is ever deleted.
+        #expect(!body.contains("unlink(") && body.components(separatedBy: "Self.removeOwnPartial(forDestination: destFile)").count == 2,
                 "the rescue unlinks something other than its own partial")
+        let staged = try #require(body.range(of: "Self.stagingRefusal(relative: relative, destFile: destFile)"))
+        #expect(staged.lowerBound < rsync.lowerBound, "the staging folder is checked before the transfer")
         #expect(!body.contains("removeItem") && !body.contains("unlink(destFile") && !body.contains("rename("), "the rescue never deletes or replaces a final name")
     }
 

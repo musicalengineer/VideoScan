@@ -564,6 +564,16 @@ final class VolumeRescueOperation: ObservableObject {
                 continue
             }
 
+            // The staging folder must be a PLAIN folder, or absent (Codex r1
+            // #1, P0). THE BUG: a `.videoscan-partial` that was a symlink —
+            // to the source folder, say — was used and cleaned through: the
+            // "own partial" unlinked below was the SOURCE file. lstat, never
+            // followed; anything else fails this file, nothing touched.
+            if let refusal = Self.stagingRefusal(relative: relative, destFile: destFile) {
+                await recordFailed(refusal)
+                continue
+            }
+
             // rsync with --checksum.
             //
             // `--partial-dir=.videoscan-partial` (GH #506, 2026-11-21; it was
@@ -645,8 +655,10 @@ final class VolumeRescueOperation: ObservableObject {
                     // an earlier interrupted run has served its purpose.
                     // (With --ignore-existing the installed rsync leaves it
                     // behind.) The only file a rescue ever unlinks — its
-                    // own, under `.videoscan-partial`, never a final name.
-                    unlink(Self.partialPath(forDestination: destFile))
+                    // own, under `.videoscan-partial`, never a final name —
+                    // bound to that folder (opened without following a link)
+                    // and only if what is there is a regular file.
+                    Self.removeOwnPartial(forDestination: destFile)
                 } else {
                     await recordFailed(Self.notCopiedLine(relative: relative, source: source, final: final, stderr: result.stderr))
                 }
@@ -700,6 +712,32 @@ final class VolumeRescueOperation: ObservableObject {
 
     nonisolated static func partialDirectory(forDestination destFile: String) -> String {
         ((destFile as NSString).deletingLastPathComponent as NSString).appendingPathComponent(partialDirName)
+    }
+
+    /// Why this file's staging folder cannot be used, or nil: absent, or a
+    /// plain directory (lstat — a symlink is never followed).
+    nonisolated static func stagingRefusal(relative: String, destFile: String) -> String? {
+        let staging = partialDirectory(forDestination: destFile)
+        var sb = stat()
+        if lstat(staging, &sb) != 0 { return errno == ENOENT ? nil : "\(relative) — the staging folder at \(staging) could not be read (\(String(cString: strerror(errno)))) — nothing was touched." }
+        guard (sb.st_mode & S_IFMT) == S_IFDIR else {
+            return "\(relative) — the staging folder at \(staging) is not a plain folder — nothing was touched, and the file is still on the source."
+        }
+        return nil
+    }
+
+    /// Unlink this file's own parked partial: relative to the staging
+    /// folder opened with O_NOFOLLOW (a link in its place is refused), and
+    /// only when the entry there is a regular file. Residual (GH #503): a
+    /// swap inside the instant between that fstatat and the unlinkat.
+    nonisolated static func removeOwnPartial(forDestination destFile: String) {
+        let dir = Darwin.open(partialDirectory(forDestination: destFile), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard dir >= 0 else { return }
+        defer { Darwin.close(dir) }
+        let name = (destFile as NSString).lastPathComponent
+        var sb = stat()
+        guard fstatat(dir, name, &sb, AT_SYMLINK_NOFOLLOW) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return }
+        unlinkat(dir, name, 0)
     }
 
     nonisolated static func partialPath(forDestination destFile: String) -> String {

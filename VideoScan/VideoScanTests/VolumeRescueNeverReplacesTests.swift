@@ -199,6 +199,37 @@ struct VolumeRescueNeverReplacesTests {
         b.expectSourcesUntouched()
     }
 
+    /// Codex r1 #1 (P0), its reproduction: the destination's
+    /// `.videoscan-partial` is a symlink to the SOURCE folder; after the name
+    /// check sees a free name, another job puts a same-size file there; the
+    /// rescue then "cleaned up its own partial" — `unlink(.videoscan-partial/
+    /// <name>)` — through the link: the SOURCE file. The staging folder must
+    /// be a plain folder, or the file fails with nothing touched.
+    @Test("rsync mode: a `.videoscan-partial` that is a SYMLINK (here to the source folder) is never used or cleaned through — FAILED, nothing touched, the source intact")
+    func aSymlinkedStagingFolderIsNeverFollowed() async throws {
+        let b = try matrix.bench(files: 1); defer { b.cleanup() }
+        let dest = b.dest(0)
+        let staging = dest.deletingLastPathComponent().appendingPathComponent(VolumeRescueOperation.partialDirName)
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: staging, withDestinationURL: b.sources[0].url.deletingLastPathComponent())
+        let size = Int(b.sources[0].size)
+        let mock = ScriptedExecutor(claiming: [b.root.path])
+            .on("mkdir", .custom { request in
+                try? FileManager.default.createDirectory(atPath: request.arguments[1], withIntermediateDirectories: true)
+                try? Data(repeating: 0x66, count: size).write(to: dest)     // another job's same-size file
+                return ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
+            })
+            .on("rsync", .passThrough)
+        #expect(await run(b, mock, mode: .verified))
+        b.expectSourcesUntouched()
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: staging.path)) == b.sources[0].url.deletingLastPathComponent().path,
+                "the link was replaced or removed")
+        #expect((try? Data(contentsOf: dest)) == Data(repeating: 0x66, count: size), "the other job's file was changed")
+        #expect(b.op.filesCopied == 0 && b.op.filesFailed == 1 && b.op.bytesWritten == 0, "\(b.op.errors)")
+        #expect(b.op.errors.first?.contains("the staging folder at \(staging.path) is not a plain folder — nothing was touched") == true, "\(b.op.errors)")
+        #expect(mock.calls(to: "rsync").isEmpty, "a transfer was started into a linked staging folder: \(mock.calls)")
+    }
+
     @Test("fast mode: a file that APPEARS at the name while the copy is being written is not replaced — the publish is an exclusive rename; the partial is removed")
     func aFileThatAppearsDuringTheFastCopyIsNotReplaced() async throws {
         let b = try matrix.bench(files: 1); defer { b.cleanup() }
