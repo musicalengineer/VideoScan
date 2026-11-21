@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import VideoScan
+@_spi(Testing) import VideoScanCore   // ProcessRunner.Result.init for a .custom answer
 
 // MARK: - ReformatPartialReservationTests (N1014-F1, 2026-10-07)
 //
@@ -16,38 +17,32 @@ import Foundation
 // publisher Transcode/Combine use) and removes only that file through
 // PartialFileNaming.remove.
 //
-// Fixtures: two tiny `test_` placeholder sources (the fake ffmpeg never
-// reads them) and a pass-through fake ffmpeg that only intercepts this
-// suite's names. VS_FFMPEG_PATH is process-global, so the suite is
-// serialized and every other call goes to the real ffmpeg.
+// Fixtures: two tiny `test_` placeholder sources (the scripted encode never
+// reads them) and a ScriptedExecutor bound to this test's task tree that
+// answers this suite's encodes and passes everything else to the real tool.
+// Parallel: it used to be serialized around a process-global VS_FFMPEG_PATH.
 
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor
+@Suite(.timeLimit(.minutes(2))) @MainActor
 struct ReformatPartialReservationTests {
 
     static let stem = "test_rfres_tape"
 
-    /// Fake ffmpeg: for this suite's sources it logs the output path it was
-    /// given, writes the INPUT path into it (so the file says whose it is),
-    /// then waits for `<input>.go` and exits 1 (a failed encode → the job
-    /// cleans up its partial). Everything else runs the real ffmpeg.
-    static func fakeFFmpeg(in dir: URL, log: URL, real: String) throws -> URL {
-        let url = dir.appendingPathComponent("ffmpeg")
-        let script = """
-        #!/bin/sh
-        case "$*" in *\(stem)*) ;; *) exec "\(real)" "$@" ;; esac
-        for out; do :; done
-        in=""; prev=""
-        for a; do [ "$prev" = "-i" ] && in="$a"; prev="$a"; done
-        printf '%s' "$in" > "$out"
-        echo "$out" >> "\(log.path)"
-        n=0
-        while [ ! -f "$in.go" ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n+1)); done
-        echo "test_rfres: released" >&2
-        exit 1
-        """
-        try script.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        return url
+    /// The scripted encode: for this suite's sources it writes the INPUT
+    /// path into the output it was given (so the file says whose it is),
+    /// then waits for `<input>.go` (≤ 30 s) and exits 1 (a failed encode →
+    /// the job cleans up its partial). Everything else runs the real tool.
+    static func mock(claiming dir: URL) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [dir.path])
+            .on("ffmpeg", containing: [stem], .custom { request in
+                let args = request.arguments
+                let input = zip(args, args.dropFirst()).first { $0.0 == "-i" }?.1 ?? ""
+                if let out = args.last { try? Data(input.utf8).write(to: URL(fileURLWithPath: out)) }
+                for _ in 0..<600 where !FileManager.default.fileExists(atPath: input + ".go") {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                return ProcessRunner.Result(stdout: "", stderr: "test_rfres: released\n", exitCode: 1, launched: true)
+            })
+            .on("*", .passThrough)
     }
 
     static func record(_ path: URL) -> VideoRecord {
@@ -60,20 +55,20 @@ struct ReformatPartialReservationTests {
         return r
     }
 
-    static func loggedPaths(_ log: URL) -> [String] {
-        ((try? String(contentsOf: log, encoding: .utf8)) ?? "")
-            .split(separator: "\n").map(String.init)
+    /// The output paths this suite's encodes were handed, in call order.
+    static func loggedPaths(_ mock: ScriptedExecutor) -> [String] {
+        mock.calls(to: "ffmpeg", containing: [stem]).compactMap(\.arguments.last)
     }
 
-    /// Poll (yielding the main actor) until `count` partial paths are logged.
-    static func waitForLog(_ log: URL, count: Int) async throws -> [String] {
+    /// Poll (yielding the main actor) until `count` encodes have started.
+    static func waitForLog(_ mock: ScriptedExecutor, count: Int) async throws -> [String] {
         for _ in 0..<400 {
-            let lines = loggedPaths(log)
+            let lines = loggedPaths(mock)
             if lines.count >= count { return lines }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        Issue.record("fake ffmpeg logged \(loggedPaths(log).count) of \(count) runs")
-        return loggedPaths(log)
+        Issue.record("the scripted ffmpeg saw \(loggedPaths(mock).count) of \(count) runs")
+        return loggedPaths(mock)
     }
 
     /// Two jobs whose sources share a stem, built in the same second, so
@@ -97,10 +92,7 @@ struct ReformatPartialReservationTests {
             .appendingPathComponent("test_rfres_\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let tools = dir.appendingPathComponent("tools", isDirectory: true)
-        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
-        let log = tools.appendingPathComponent("partials.log")
-        let fake = try Self.fakeFFmpeg(in: tools, log: log, real: real)
+        let log = Self.mock(claiming: dir)
 
         let srcA = dir.appendingPathComponent("\(Self.stem).avi")
         let srcB = dir.appendingPathComponent("\(Self.stem).mov")
@@ -111,47 +103,46 @@ struct ReformatPartialReservationTests {
         let model = VideoScanModel()
         model.records = [recA, recB]
 
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
+        try await log.scoped {
+            let (jobA, jobB) = try Self.sameSecondJobs(recA, recB, model: model)
+            // Release both fakes whatever happens, so no test run leaves them waiting.
+            defer {
+                FileManager.default.createFile(atPath: srcA.path + ".go", contents: nil)
+                FileManager.default.createFile(atPath: srcB.path + ".go", contents: nil)
+            }
 
-        let (jobA, jobB) = try Self.sameSecondJobs(recA, recB, model: model)
-        // Release both fakes whatever happens, so no test run leaves them waiting.
-        defer {
-            FileManager.default.createFile(atPath: srcA.path + ".go", contents: nil)
+            jobA.start()
+            let afterA = try await Self.waitForLog(log, count: 1)
+            jobB.start()
+            let afterB = try await Self.waitForLog(log, count: 2)
+            try #require(afterA.count >= 1 && afterB.count >= 2)
+            let partialA = afterB[0]
+            let partialB = afterB[1]
+
+            #expect(partialA != partialB, "both jobs were handed the same partial: \(partialA)")
+            #expect(PartialFileNaming.isPartialName((partialA as NSString).lastPathComponent),
+                    "Reformat's partial must be a reserved `<…>.<8 hex>.vs-partial.<ext>` name: \(partialA)")
+
+            // B fails and cleans up. A is still encoding: its file must survive.
             FileManager.default.createFile(atPath: srcB.path + ".go", contents: nil)
+            await jobB.task?.value
+            #expect(FileManager.default.fileExists(atPath: partialA),
+                    "job B's cleanup removed job A's in-flight partial")
+            #expect((try? String(contentsOfFile: partialA, encoding: .utf8)) == srcA.path,
+                    "job A's partial now holds another job's bytes")
+
+            FileManager.default.createFile(atPath: srcA.path + ".go", contents: nil)
+            await jobA.task?.value
+            if case .failed = jobA.state {} else { Issue.record("job A: \(jobA.state)") }
+            if case .failed = jobB.state {} else { Issue.record("job B: \(jobB.state)") }
+
+            let left = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+                .filter { $0.contains("vs-partial") }
+            #expect(left.isEmpty, "each job removes its own partial: \(left)")
+            #expect(!PartialFileNaming.isLive(URL(fileURLWithPath: partialA)), "A's reservation released")
+            #expect(!PartialFileNaming.isLive(URL(fileURLWithPath: partialB)), "B's reservation released")
+            #expect(!FileManager.default.fileExists(atPath: jobA.outputURL.path), "a failed encode publishes nothing")
         }
-
-        jobA.start()
-        let afterA = try await Self.waitForLog(log, count: 1)
-        jobB.start()
-        let afterB = try await Self.waitForLog(log, count: 2)
-        try #require(afterA.count >= 1 && afterB.count >= 2)
-        let partialA = afterB[0]
-        let partialB = afterB[1]
-
-        #expect(partialA != partialB, "both jobs were handed the same partial: \(partialA)")
-        #expect(PartialFileNaming.isPartialName((partialA as NSString).lastPathComponent),
-                "Reformat's partial must be a reserved `<…>.<8 hex>.vs-partial.<ext>` name: \(partialA)")
-
-        // B fails and cleans up. A is still encoding: its file must survive.
-        FileManager.default.createFile(atPath: srcB.path + ".go", contents: nil)
-        await jobB.task?.value
-        #expect(FileManager.default.fileExists(atPath: partialA),
-                "job B's cleanup removed job A's in-flight partial")
-        #expect((try? String(contentsOfFile: partialA, encoding: .utf8)) == srcA.path,
-                "job A's partial now holds another job's bytes")
-
-        FileManager.default.createFile(atPath: srcA.path + ".go", contents: nil)
-        await jobA.task?.value
-        if case .failed = jobA.state {} else { Issue.record("job A: \(jobA.state)") }
-        if case .failed = jobB.state {} else { Issue.record("job B: \(jobB.state)") }
-
-        let left = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
-            .filter { $0.contains("vs-partial") }
-        #expect(left.isEmpty, "each job removes its own partial: \(left)")
-        #expect(!PartialFileNaming.isLive(URL(fileURLWithPath: partialA)), "A's reservation released")
-        #expect(!PartialFileNaming.isLive(URL(fileURLWithPath: partialB)), "B's reservation released")
-        #expect(!FileManager.default.fileExists(atPath: jobA.outputURL.path), "a failed encode publishes nothing")
     }
 
     /// Sensor: Reformat goes through the shared partial publishers and has

@@ -2,8 +2,10 @@
 // Archive Angel robustness pass (2026-09-19). A failed or truncated ffmpeg
 // encode used to be published as "done": TranscodeJob threw away the exit
 // status and only checked "≥ 10 KB". Logic tests for FFmpegEncodeCheck,
-// then real-media tests that swap in a fake ffmpeg (VS_FFMPEG_PATH is
-// process-global, so that suite is serialized).
+// then real-media tests whose encode is answered by a ScriptedExecutor bound
+// to the test's own task tree (ffprobe and fixtures run for real), so the
+// suite runs in parallel — it used to be serialized around a process-global
+// VS_FFMPEG_PATH fake.
 
 import Foundation
 import Testing
@@ -48,8 +50,8 @@ struct FFmpegEncodeCheckLogicTests {
     }
 }
 
-/// Real ffmpeg for fixtures; a fake one (a shell script) for the failures.
-@Suite("ffmpeg encode verdict — a failed encode is never published", .serialized)
+/// Real ffmpeg for fixtures; a scripted encode for the failures.
+@Suite("ffmpeg encode verdict — a failed encode is never published")
 struct FFmpegEncodeFailureTests {
     static let realFFmpeg = ToolLocator.ffmpegPath
 
@@ -67,43 +69,55 @@ struct FFmpegEncodeFailureTests {
         return src
     }
 
-    /// A fake ffmpeg: `body` runs with $out = the last argument — ONLY for
-    /// this suite's fixture (test_tape.mov); every other call goes to the
-    /// real ffmpeg. VS_FFMPEG_PATH is process-global and other suites run
-    /// in parallel, so a fake must never break their encodes.
-    private func fakeFFmpeg(in dir: URL, _ body: String) throws -> URL {
-        let url = dir.appendingPathComponent("ffmpeg")
-        let script = "#!/bin/sh\ncase \"$*\" in *test_tape.mov*) ;; *) exec \"\(Self.realFFmpeg)\" \"$@\" ;; esac\n"
-            + "for out; do :; done\n\(body)\n"
-        try script.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        return url
+    /// The encode of this test's tape answers with `encode`; every other
+    /// command (ffprobe's length checks) runs the real tool.
+    private func mock(_ encode: ScriptedExecutor.Behaviour, sandbox: MasterArchiveTestSupport.Sandbox) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [sandbox.root.path])
+            .on("ffmpeg", containing: ["test_tape.mov"], encode)
+            .on("*", .passThrough)
     }
 
     @MainActor
-    private func run(source: URL, ffmpeg: URL?, sandbox: MasterArchiveTestSupport.Sandbox) async -> (TranscodeJob, URL) {
-        if let ffmpeg { setenv(ToolLocator.ffmpegEnvVar, ffmpeg.path, 1) }
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
+    private func run(source: URL, mock: ScriptedExecutor?, sandbox: MasterArchiveTestSupport.Sandbox) async -> (TranscodeJob, URL) {
         let model = MasterArchiveTestSupport.makeModel(sandbox)
         let rec = MasterArchiveTestSupport.makeRecord(path: source.path)
         rec.durationSeconds = 12
         let out = sandbox.root.appendingPathComponent("test_tape.vs.archive.mov")
         let job = TranscodeJob(record: rec, preset: .archival, outputURL: out, model: model)
-        job.start()
-        await job.task?.value
+        guard let mock else {
+            job.start()
+            await job.task?.value
+            return (job, out)
+        }
+        await mock.scoped {
+            job.start()   // the job's Task {} inherits the mock
+            await job.task?.value
+        }
+        #expect(mock.calls(to: "ffmpeg", containing: ["test_tape.mov"]).count == 1, "\(mock.calls)")
         return (job, out)
+    }
+
+    /// A real, playable clip of `seconds` (mov/h264), made outside any mock.
+    private func clip(seconds: Int, in dir: URL) async throws -> URL {
+        let url = dir.appendingPathComponent("test_clip_\(seconds)s.mov")
+        let r = await ProcessRunner.runProcess(
+            executable: Self.realFFmpeg,
+            arguments: ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "testsrc=size=320x240:rate=30:duration=\(seconds)",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mov", url.path],
+            deadlineSeconds: 120)
+        try #require(r.exitCode == 0, "fixture: \(r.stderr)")
+        return url
     }
 
     @Test @MainActor func aNonZeroExitWithAPlausibleFileIsAFailure() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("encode_exit"); defer { sb.cleanup() }
         let src = try await makeSource(in: sb.sources)
         // 20 KB of junk (passes the old ≥10 KB gate), then "disk full".
-        let fake = try fakeFFmpeg(in: sb.root, """
-        head -c 20000 /dev/zero > "$out"
-        echo "[out#0/mov @ 0x1] Error writing trailer: No space left on device" >&2
-        exit 228
-        """)
-        let (job, out) = await run(source: src, ffmpeg: fake, sandbox: sb)
+        let encode = mock(.writeOutputFile(Data(count: 20_000),
+                                           stderr: "[out#0/mov @ 0x1] Error writing trailer: No space left on device\n",
+                                           exit: 228), sandbox: sb)
+        let (job, out) = await run(source: src, mock: encode, sandbox: sb)
         guard case .failed(let reason) = job.state else {
             Issue.record("a failed encode was published: \(job.state)"); return
         }
@@ -116,12 +130,8 @@ struct FFmpegEncodeFailureTests {
         let sb = try MasterArchiveTestSupport.makeSandbox("encode_short"); defer { sb.cleanup() }
         let src = try await makeSource(in: sb.sources)
         // A real, playable file — but 2 s of a 12 s tape — and exit 0.
-        let fake = try fakeFFmpeg(in: sb.root, """
-        "\(Self.realFFmpeg)" -hide_banner -loglevel error -y -f lavfi -i testsrc=size=320x240:rate=30:duration=2 \
-          -c:v libx264 -pix_fmt yuv420p -f mov "$out"
-        exit 0
-        """)
-        let (job, out) = await run(source: src, ffmpeg: fake, sandbox: sb)
+        let short = try await clip(seconds: 2, in: sb.root)
+        let (job, out) = await run(source: src, mock: mock(.copyToOutputFile(short), sandbox: sb), sandbox: sb)
         guard case .failed(let reason) = job.state else {
             Issue.record("a truncated encode was published: \(job.state)"); return
         }
@@ -134,7 +144,7 @@ struct FFmpegEncodeFailureTests {
     @Test @MainActor func aRealEncodeStillPublishes() async throws {
         let sb = try MasterArchiveTestSupport.makeSandbox("encode_ok"); defer { sb.cleanup() }
         let src = try await makeSource(in: sb.sources)
-        let (job, out) = await run(source: src, ffmpeg: nil, sandbox: sb)
+        let (job, out) = await run(source: src, mock: nil, sandbox: sb)
         guard case .finished = job.state else { Issue.record("a good encode was rejected: \(job.state)"); return }
         #expect(FileManager.default.fileExists(atPath: out.path))
     }

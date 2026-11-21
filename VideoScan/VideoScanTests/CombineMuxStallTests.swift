@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import os
 @testable import VideoScan
+@_spi(Testing) import VideoScanCore   // ProcessRunner.Result.init for a .custom answer
 
 // MARK: - CombineMuxStallTests (N1014-F3, 2026-10-07)
 //
@@ -18,13 +19,15 @@ import os
 //   • every verify subprocess has a deadline, and a timed-out probe fails
 //     verification (never passes it).
 //
-// Fixtures: CombineNeverOverwritesTests' synthetic `test_` pairs, and fake
-// tools (shell scripts in the test's temp dir) that sleep silently. The
-// ffmpeg fake is pass-through for everything but this suite's mux;
-// VS_FFMPEG_PATH is process-global, so the suite is serialized. Thresholds
-// come from CombineTestSeams (production uses StallMonitor's default).
+// Fixtures: CombineNeverOverwritesTests' synthetic `test_` pairs; a
+// ScriptedExecutor bound to the test's task tree answers this suite's mux
+// (a REAL silent child under the real runner, so the watchdog's cancel goes
+// through the real SIGTERM path) and passes every other command to the real
+// tool; the verify tests hand the verifier sleeping shell scripts by path.
+// Parallel: it used to be serialized around a process-global VS_FFMPEG_PATH.
+// Thresholds come from CombineTestSeams (production uses StallMonitor's default).
 
-@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor
+@Suite(.timeLimit(.minutes(2))) @MainActor
 struct CombineMuxStallTests {
 
     typealias H = CombineNeverOverwritesTests
@@ -36,34 +39,33 @@ struct CombineMuxStallTests {
         return url
     }
 
-    /// Silent sleeper for this suite's mux only (`-movflags` is in the mux
-    /// arguments, never in a probe or a fixture call).
-    static func stallingFFmpeg(in dir: URL, real: String) throws -> URL {
-        try script("""
-        case "$*" in *-movflags*test_stallmux_*) ;; *) exec "\(real)" "$@" ;; esac
-        exec sleep 60
-        """, named: "ffmpeg", in: dir)
+    /// A silent, never-ending mux for this suite only (`-movflags` is in the
+    /// mux arguments, never in a probe or a fixture call); everything else
+    /// is the real tool.
+    static func stallingMux(claiming root: URL) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [root.path])
+            .on("ffmpeg", containing: ["-movflags", "test_stallmux_"], .hang())
+            .on("*", .passThrough)
     }
 
     @Test("a mux that goes silent fails the pair as stalled, removes only its partial, publishes nothing")
     func silentMuxFailsAsStalled() async throws {
         try #require(H.toolsPresent, "ffmpeg/ffprobe not found")
-        let real = ToolLocator.ffmpegPath
         let root = try H.makeDir("mux_stall")
         defer { try? FileManager.default.removeItem(at: root) }
         let out = root.appendingPathComponent("out")
-        let tools = root.appendingPathComponent("tools")
-        for d in [out, tools] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let pair = try H.makePair(.movProRes, in: root, stem: "test_stallmux_clip", seconds: 2)
-        let fake = try Self.stallingFFmpeg(in: tools, real: real)
+        let mock = Self.stallingMux(claiming: root)
 
         let model = await H.makeModel()
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
         let started = Date()
-        let ok = await CombineTestSeams.$muxStallThresholdSeconds.withValue(2) {
-            await H.run(model, pair, into: out)
+        let ok = await mock.scoped {
+            await CombineTestSeams.$muxStallThresholdSeconds.withValue(2) {
+                await H.run(model, pair, into: out)
+            }
         }
+        #expect(mock.calls(to: "ffmpeg", containing: ["-movflags"]).count == 1, "\(mock.calls)")
         let elapsed = Date().timeIntervalSince(started)
 
         #expect(!ok)
@@ -212,16 +214,23 @@ struct CombineMuxStallTests {
     }
 
     /// Silent for ~8 s but appending to its output every 0.1 s — the shape
-    /// of faststart's rewrite, without gigabytes of fixture, on a real
-    /// process and the real timer. Wall-clock, so opt-in.
-    static func silentWriterFFmpeg(in dir: URL, real: String) throws -> URL {
-        try script("""
-        case "$*" in *-movflags*test_silentwrite_*) ;; *) exec "\(real)" "$@" ;; esac
-        for out; do :; done
-        i=0
-        while [ $i -lt 80 ]; do head -c 65536 /dev/zero >> "$out"; sleep 0.1; i=$((i+1)); done
-        exit 0
-        """, named: "ffmpeg", in: dir)
+    /// of faststart's rewrite, without gigabytes of fixture, on the real
+    /// timer. Wall-clock, so opt-in.
+    static func silentWriterMux(claiming root: URL) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [root.path])
+            .on("ffmpeg", containing: ["-movflags", "test_silentwrite_"], .custom { request in
+                guard let out = request.arguments.last, let handle = FileHandle(forWritingAtPath: out) else {
+                    return ProcessRunner.Result(stdout: "", stderr: "no output", exitCode: 1, launched: true)
+                }
+                defer { try? handle.close() }
+                for _ in 0..<80 where !Task.isCancelled {
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: Data(count: 65_536))
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                return ProcessRunner.Result(stdout: "", stderr: "", exitCode: Task.isCancelled ? 15 : 0, launched: true)
+            })
+            .on("*", .passThrough)
     }
 
     @Test("an ffmpeg that prints nothing but keeps writing its output is not a stall",
@@ -231,17 +240,17 @@ struct CombineMuxStallTests {
         try #require(FileManager.default.isExecutableFile(atPath: real), "ffmpeg not found")
         let root = try H.makeDir("silent_write")
         defer { try? FileManager.default.removeItem(at: root) }
-        let fake = try Self.silentWriterFFmpeg(in: root, real: real)
+        let mock = Self.silentWriterMux(claiming: root)
         let out = root.appendingPathComponent("test_silentwrite_combined.vs-test.mov")
         FileManager.default.createFile(atPath: out.path, contents: nil)   // the 0-byte reservation
 
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
         let started = Date()
-        let result = await CombineEngine.runFFMpeg(
-            videoPath: root.appendingPathComponent("test_silentwrite_v.mov").path,
-            audioPath: root.appendingPathComponent("test_silentwrite_a.wav").path,
-            outputPath: out.path, stallThresholdSeconds: 3.0, log: { _ in })
+        let result = await mock.scoped {
+            await CombineEngine.runFFMpeg(
+                videoPath: root.appendingPathComponent("test_silentwrite_v.mov").path,
+                audioPath: root.appendingPathComponent("test_silentwrite_a.wav").path,
+                outputPath: out.path, stallThresholdSeconds: 3.0, log: { _ in })
+        }
         let elapsed = Date().timeIntervalSince(started)
 
         #expect(elapsed > 6.0, "the fake must stay silent well past the 3 s threshold (ran \(elapsed) s)")

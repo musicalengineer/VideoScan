@@ -12,35 +12,43 @@ import Foundation
 // Transcode and Reformat use: output vs a FRESH probe of the source, within
 // max(3 s, 3 %); skipped (never failed) when either length can't be read.
 //
-// Fixtures: a 60 s synthetic `test_` source (tiny mpeg4 + aac), and a fake
-// ffmpeg (VS_FFMPEG_PATH, pass-through for everything except this suite's
-// render) that writes a real, playable clip of a chosen length and exits 0.
-// VS_FFMPEG_PATH is process-global, so the suite is serialized.
+// Fixtures: a 60 s synthetic `test_` source (tiny mpeg4 + aac), a real,
+// playable clip of a chosen length made once per test, and a ScriptedExecutor
+// that answers this test's render by copying that clip to the render target
+// and exiting 0; ffprobe runs for real (pass-through), so the length rule
+// measures real files. The mock is bound to the test's own task tree, so the
+// suite runs in parallel (it used to be serialized around a process-global
+// VS_FFMPEG_PATH fake).
 // Tested at the engine: a throw is what keeps CleanupJob from publishing
 // (it publishes only a returned URL). A job-level run would mount a RAM
 // disk, and avoiding that means writing the user's persisted perf settings.
 
-// serialized: each test points the process-global VS_FFMPEG_PATH at its own fake ffmpeg (setenv)
-@Suite(.serialized, .timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(2)))
 struct CleanupLengthCheckTests {
 
     static let sourceName = "test_cleanup_len60.mp4"
 
-    /// A real, playable clip of `seconds` written to the render target,
-    /// exit 0 — ffmpeg's behaviour on a source that "ended" early.
-    static func fakeFFmpeg(in dir: URL, real: String, writesSeconds seconds: Int) throws -> URL {
-        let url = dir.appendingPathComponent("ffmpeg")
-        let script = """
-        #!/bin/sh
-        case "$*" in *\(sourceName)*cleanup-render*) ;; *) exec "\(real)" "$@" ;; esac
-        for out; do :; done
-        "\(real)" -hide_banner -loglevel error -nostdin -y -f lavfi -i testsrc=duration=\(seconds):size=320x240:rate=25 \\
-          -c:v mpeg4 -q:v 2 -f mov "$out" || exit 9
-        exit 0
-        """
-        try script.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    /// A real, playable clip of `seconds` — what ffmpeg leaves behind when
+    /// a source "ended" early and it still exits 0.
+    static func clip(in dir: URL, real: String, seconds: Int) throws -> URL {
+        let url = dir.appendingPathComponent("test_cleanup_clip\(seconds).mov")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: real)
+        p.arguments = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi",
+                       "-i", "testsrc=duration=\(seconds):size=320x240:rate=25", "-c:v", "mpeg4", "-q:v", "2",
+                       "-f", "mov", url.path]
+        try p.run()
+        p.waitUntilExit()
+        try #require(p.terminationStatus == 0, "fixture clip of \(seconds) s")
         return url
+    }
+
+    /// The render (`…cleanup-render.mov` from this suite's source) copies
+    /// `clip` and exits 0; every other command runs the real tool.
+    static func mock(_ bench: Bench, clip: URL) -> ScriptedExecutor {
+        ScriptedExecutor(claiming: [bench.dir.path])
+            .on("ffmpeg", containing: [sourceName, "cleanup-render"], .copyToOutputFile(clip))
+            .on("*", .passThrough)
     }
 
     struct Bench {
@@ -63,12 +71,16 @@ struct CleanupLengthCheckTests {
         return Bench(dir: dir, scratch: scratch, source: source, real: real)
     }
 
-    static func render(_ bench: Bench, fake: URL) async throws -> URL {
-        setenv(ToolLocator.ffmpegEnvVar, fake.path, 1)
-        defer { unsetenv(ToolLocator.ffmpegEnvVar) }
-        return try await CleanupFFmpegEngine().render(
-            recipe: CleanupRecipeRegistry.vhsQuickClean, source: bench.source,
-            scratchDirectory: bench.scratch, progress: { _ in })
+    static func render(_ bench: Bench, clip: URL) async throws -> URL {
+        let mock = Self.mock(bench, clip: clip)
+        let url = try await mock.scoped {
+            try await CleanupFFmpegEngine().render(
+                recipe: CleanupRecipeRegistry.vhsQuickClean, source: bench.source,
+                scratchDirectory: bench.scratch, progress: { _ in })
+        }
+        #expect(mock.calls(to: "ffmpeg", containing: ["cleanup-render"]).count == 1, "\(mock.calls)")
+        #expect(mock.calls(to: "ffprobe").count == 2, "source and render are both probed fresh: \(mock.calls)")
+        return url
     }
 
     @Test("a render that exits 0 but runs 5 s of a 60 s source is renderFailed, never returned")
@@ -76,10 +88,10 @@ struct CleanupLengthCheckTests {
         try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
         let bench = try Self.makeBench("length_short")
         defer { try? FileManager.default.removeItem(at: bench.dir) }
-        let fake = try Self.fakeFFmpeg(in: bench.dir, real: bench.real, writesSeconds: 5)
+        let clip = try Self.clip(in: bench.dir, real: bench.real, seconds: 5)
 
         do {
-            let url = try await Self.render(bench, fake: fake)
+            let url = try await Self.render(bench, clip: clip)
             Issue.record("a 5 s render of a 60 s source was returned as good: \(url.lastPathComponent)")
         } catch CleanupEngineError.renderFailed(let detail) {
             #expect(detail.contains("stopped early") && detail.contains("0:05") && detail.contains("1:00"),
@@ -94,9 +106,9 @@ struct CleanupLengthCheckTests {
         try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies")
         let bench = try Self.makeBench("length_full")
         defer { try? FileManager.default.removeItem(at: bench.dir) }
-        let fake = try Self.fakeFFmpeg(in: bench.dir, real: bench.real, writesSeconds: 59)
+        let clip = try Self.clip(in: bench.dir, real: bench.real, seconds: 59)
 
-        let url = try await Self.render(bench, fake: fake)
+        let url = try await Self.render(bench, clip: clip)
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 

@@ -588,7 +588,8 @@ extension PersonFinderModel {
         job.compiledVideoPaths = []
         job.appendLog("\n━ Compilation started ━━━━━━━━━━━━━━━━━━━━━")
 
-        job.compilationTask = Task.detached(priority: .userInitiated) {
+        // Detached as before, carrying the executor (CommandExecutor seam).
+        job.compilationTask = ProcessRunner.detachedKeepingExecutor(priority: .userInitiated) {
             await Self.runCompilation(
                 job: job,
                 results: results,

@@ -1001,6 +1001,55 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CommandExecutorSeamReviewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CommandExecutorSeamReviewTests"
+      ],
+      "tests": [
+        "aVagueClaimCannotRefuseABystander",
+        "hangMatchesARealFFmpegKilledAtTheDeadline",
+        "theBindingAndTheRegistryAreNotPublic"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CommandExecutorSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CommandExecutorSeamTests",
+        "CommandExecutorIsolationTests",
+        "CommandExecutorEscapeGuardTests",
+        "CommandExecutorSensorTests"
+      ],
+      "tests": [
+        "appSourcesNeverUseTheMock",
+        "auditedDetachedSitesKeepTheExecutor",
+        "claimIsReleasedAfterTheScope",
+        "claimSpecificity",
+        "concurrentTreesNeverCross",
+        "customSeesTheRequest",
+        "detachedEscapeIsCaught",
+        "detachedKeepingExecutorCarriesTheMock",
+        "dispatchEscapeIsCaught",
+        "emptyClaimIsIgnored",
+        "everyEntryPointDelegates",
+        "nestedScopesShadow",
+        "nestedSequenceIsAFailure",
+        "noTestSetsTheToolEnvVars",
+        "parallelA",
+        "parallelB",
+        "parallelReal",
+        "passThroughIsNotAnEscape",
+        "productionDefaultIsReal",
+        "rulesMatchInOrderAndCallsAreRecorded",
+        "sequenceAnswersPerCall",
+        "structuredChildIsNotAnEscape",
+        "unmatchedCallFails"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
       "stage": "unit",
       "suites": [
@@ -3975,6 +4024,29 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ProbeFixtureDriftTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ProbeFixtureDriftTests"
+      ],
+      "tests": [
+        "fixturesMatchTheRealTool"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ProbeFixtureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProbeFixtureMatrixTests"
+      ],
+      "tests": [
+        "fixtureDecodes",
+        "fixturesAreAnonymized"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/PrunePlanTests.swift",
@@ -4143,6 +4215,32 @@
         "portraitsAreChosenFirstWhenCapped",
         "sameYearTiesAreDeterministic",
         "zeroLimitAndEmptyInputGiveNothing"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ScriptedExecutorFidelityTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ScriptedExecutorFidelityTests"
+      ],
+      "tests": [
+        "afterDelaysThenBehaves",
+        "crashMatchesReal",
+        "garbageMatchesReal",
+        "hangCancelMatchesReal",
+        "hangDeadlineMatchesReal",
+        "hangExitOnTermMatchesReal",
+        "hangIgnoringTermMatchesReal",
+        "hangWithWordsMatchesReal",
+        "launchFailureMatchesReal",
+        "outputCapsMatchReal",
+        "outputMatchesReal",
+        "preCancelledMatchesReal",
+        "streamLinesDeadline",
+        "streamLinesMatchesReal",
+        "writeOutputFileNeedsAPath",
+        "writeOutputFileWritesTheLastArgument"
       ]
     },
     {
@@ -30710,6 +30808,25 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodeReplaceNegativeMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodeReplaceNegativeMatrixTests"
+      ],
+      "tests": [
+        "anUnmeasurableOutputIsNeverTrustedWithAReplace",
+        "controlAGoodEncodeReplaces",
+        "encodeCrash",
+        "encodeHangThenStop",
+        "encodeHangThenWatchdog",
+        "encodeLaunchFailure",
+        "encodeMissingOutput",
+        "encodeNonzeroExit",
+        "encodeTruncated"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TranscodeTests.swift",
       "stage": "unit",
       "suites": [
@@ -40397,7 +40514,7 @@
       ],
       "expected_floor": 3916,
       "name": "unit",
-      "package_expected_floor": 904,
+      "package_expected_floor": 948,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -40502,7 +40619,14 @@
         "VideoScanCoreTests.ProvenanceResolverDoorTests",
         "VideoScanCoreTests.ProvenanceResolverGroupingTests",
         "VideoScanCoreTests.ProvenanceResolverReviewTests",
-        "VideoScanCoreTests.ProvenanceResolverReviewFixTests"
+        "VideoScanCoreTests.ProvenanceResolverReviewFixTests",
+        "VideoScanCoreTests.CommandExecutorSeamTests",
+        "VideoScanCoreTests.CommandExecutorIsolationTests",
+        "VideoScanCoreTests.CommandExecutorEscapeGuardTests",
+        "VideoScanCoreTests.ProbeFixtureMatrixTests",
+        "VideoScanCoreTests.ScriptedExecutorFidelityTests",
+        "VideoScanCoreTests.CommandExecutorSensorTests",
+        "VideoScanCoreTests.CommandExecutorSeamReviewTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -41579,7 +41703,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 835,
+      "expected_floor": 844,
       "name": "regression",
       "package_expected_floor": 339,
       "package_selectors": [
@@ -41818,7 +41942,8 @@
         "VideoScanTests/BalancedCopyProofCorpusFindingsTests",
         "VideoScanTests/ArchivePromotionIndexFreshnessTests",
         "VideoScanTests/CatalogTrashGroupTurnsWordsTests",
-        "VideoScanTests/MediaTrashTestHostRaceTests"
+        "VideoScanTests/MediaTrashTestHostRaceTests",
+        "VideoScanTests/TranscodeReplaceNegativeMatrixTests"
       ]
     },
     {
@@ -42054,14 +42179,15 @@
       },
       "expected_floor": 70,
       "name": "performance",
-      "package_expected_floor": 15,
+      "package_expected_floor": 16,
       "package_selectors": [
         "VideoScanCoreTests.CatalogRepositoryScaleTests",
         "VideoScanCoreTests.CatalogDataSchemaScaleTests",
         "VideoScanCoreTests.CatalogImporterScaleTests",
         "VideoScanCoreTests.CatalogLoadScaleTests",
         "VideoScanCoreTests.CatalogCommitScaleTests",
-        "VideoScanCoreTests.ModelLabScaleTests"
+        "VideoScanCoreTests.ModelLabScaleTests",
+        "VideoScanCoreTests.ProbeFixtureDriftTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
