@@ -38521,20 +38521,27 @@
         "VolumeRescueRsyncNegativeMatrixTests"
       ],
       "tests": [
+        "aFileAlreadyAtTheFinalNameIsReportedAndLeftAlone",
+        "aRealInterruptedTransferNeverLeavesATruncatedFileAtTheFinalName",
+        "aSourceTheRealRsyncSkipsIsNotCountedCopied",
         "exitZeroWithoutTheFile",
         "hangThenStop",
         "killedBySignal",
         "launchFailure",
         "launchFailureThenStop",
+        "manyFailuresAreCountedAndTheLogIsBounded",
         "mkdirCannotStart",
         "mkdirExitsNonzero",
         "mkdirLaunchFailureThenStop",
-        "noStartOutcomeInTheLog",
         "oneOfThreeFails",
         "partialTransferExit",
         "stopBeforeTheFirstFile",
+        "stopBeforeTheFirstFileInFastMode",
         "stopThenNoLaunch",
-        "theCommandLinesAndARealCopy"
+        "theCommandLinesAndARealCopy",
+        "theRescueWritesStartAndOutcome",
+        "theShapeInTheSource",
+        "theWords"
       ]
     },
     {
@@ -42584,7 +42591,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 992,
+      "expected_floor": 999,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [

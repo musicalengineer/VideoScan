@@ -618,7 +618,8 @@ struct VolumeRescueOperationFastCopyTests {
     @Test func doneSummaryReadsHonestlyForAResumedRescue() {
         let line = VolumeRescueOperation.doneSummary(safe: 40, failed: 0, bytesWritten: 0,
                                                      alreadyPresent: 40, repaired: 0)
-        #expect(line.contains("40 safe"))
+        #expect(line.contains("40 at the destination (size checked)"))
+        #expect(!line.contains("safe") && !line.localizedCaseInsensitiveContains("verified"), "a size check is not \"safe\" or \"verified\": \(line)")
         #expect(line.contains("already there"))
         #expect(!line.contains("40 copied"))
     }
