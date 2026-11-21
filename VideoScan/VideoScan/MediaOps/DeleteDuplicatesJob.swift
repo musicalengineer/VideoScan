@@ -204,9 +204,9 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
 }
 
 /// Phase 1's result: the outcome, plus the keeper's fresh whole-file
-/// fixity when path 1 read it — WHATEVER the verdict. A refused first
-/// pair (a look-alike) must not cost the next pair a second read of the
-/// same keeper (codex follow-up P2 #6).
+/// fixity when path 1 read it AND the pair verified (the duplicate's full
+/// read produced the same digest). A refused pair teaches nothing that may
+/// be stored (GH #504 D2): its keeper digest is one unconfirmed read.
 struct DeleteDuplicatesPhaseOne: Sendable {
     let outcome: DeleteDuplicatesDiskOutcome
     let learnedKeeperFixity: ContentFixity?
@@ -219,9 +219,9 @@ struct DeleteDuplicatesPhaseOne: Sendable {
     /// (QA 2026-09-21 F1). nil for every other outcome.
     var retainedInQuarantine: RetainedInQuarantine? = nil
     /// Every sibling this pair read in full to prove it (2026-09-21),
-    /// WHATEVER the verdict — each fresh fixity is stored on the
-    /// sibling's record so no later row or run reads it again while its
-    /// stamp holds.
+    /// WHATEVER the pair's verdict — the fresh fixity of each sibling that
+    /// MATCHED is stored on its record so no later row or run reads it
+    /// again while its stamp holds.
     var siblingReads: [SiblingRead] = []
     /// Set when the worker left the copy alone for a PROTECTION it found
     /// itself (a drive marked Read only, seen only by the file's own
@@ -1550,17 +1550,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let stamp = retained.stamp.flatMap { $0.size == entry.sizeBytes ? $0 : nil }
             mutatePlan { $0.setRetainedInQuarantine(entry.id, directory: retained.directory, stamp: stamp) }
         }
-        // The keeper was read in full by this pair: publish its fixity to
-        // the catalog NOW, whatever this pair's verdict, so the next pair
-        // with this keeper only stats it (P2 #6).
+        // The keeper was read in full by this pair and the pair VERIFIED
+        // (GH #504 D2 — never from a refused pair): publish its fixity to
+        // the catalog now, so the next pair with this keeper need not read
+        // it against its duplicate again.
         if let learned = phaseOne.learnedKeeperFixity, keeper.contentFixity != learned,
            model.storeContentFixity(recordID: keeper.id, path: keeper.fullPath, fixity: learned) {
             tally.catalogMutated = true
         }
-        // Every sibling read to prove it: its fresh fixity goes on ITS
-        // record now (where the keeper's goes), whatever it said and
-        // whatever this pair's verdict — the next row naming it, or the
-        // next run, only stats it (2026-09-21).
+        // Every sibling read that MATCHED the duplicate's digest: its fresh
+        // fixity goes on ITS record now (where the keeper's goes), whatever
+        // this pair's verdict — the next row naming it, or the next run,
+        // only stats it (2026-09-21). A sibling that differed carries no
+        // fixity to store (GH #504 D2).
         noteSiblingReads(phaseOne.siblingReads, for: entry, model: model)
         var finalFacts: DeletionTierFacts?
         if case .quarantined(let ticket, let facts) = outcome {
@@ -2038,9 +2040,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         return reason
     }
 
-    /// Sibling reads of one pair: store each fresh fixity on the
-    /// sibling's record (id AND path must still match), count them, and
-    /// log one line each.
+    /// Sibling reads of one pair: store the fresh fixity of each sibling
+    /// that matched on its record (id AND path must still match), count
+    /// them, and log one line each.
     private func noteSiblingReads(_ reads: [SiblingRead], for entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {
         for read in reads {
             if read.bytes > 0 {

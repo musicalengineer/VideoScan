@@ -216,11 +216,15 @@ enum SignatureVerification {
         /// inject a move into a scratch folder so no fixture ever lands
         /// in Rick's real Trash.
         var trashItem: ((URL) throws -> URL)?
-        /// Called the moment `verify` (path 1) has hashed the KEEPER in
-        /// full and re-stat'ed it — before the pair's verdict. The job
-        /// stores that fixity on the keeper at once, so a refused first
-        /// pair (a look-alike) does not cost the next pair a second read
-        /// of the same keeper (codex follow-up P2 #6).
+        /// Called when `verify` (path 1) has read the KEEPER in full and the
+        /// pair VERIFIED — the duplicate's own full read produced the same
+        /// digest. The job stores that fixity on the keeper. Never called
+        /// for a pair that was refused (GH #504 D2): a digest from a
+        /// comparison that did not verify is one unconfirmed read, and a
+        /// stored, stamp-bound keeper digest is removal authority for every
+        /// later pair. The price: a keeper whose first pair is a same-size,
+        /// same-head look-alike is read again for its next pair (this
+        /// replaces codex follow-up P2 #6, which stored it regardless).
         var didComputeKeeperFixity: ((ContentFixity) -> Void)?
         /// TEST SEAM, nil in production (DedupeHashReadSeamSensorTests): the
         /// read-fault hook `cancellableFullHash` consults once per block —
@@ -326,18 +330,18 @@ enum SignatureVerification {
               keeperAfter == keeperBefore else {
             return .failure(.changedSinceVerification(keeperPath))
         }
-        // The keeper's whole-file fixity is knowledge worth keeping whatever
-        // this pair's verdict turns out to be.
         let now = Date()
         let keeperFixity = ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
                                          stamp: keeperAfter, computedAt: now)
-        hooks.didComputeKeeperFixity?(keeperFixity)
         guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
               duplicateAfter == duplicateBefore else {
             return .failure(.changedSinceVerification(duplicatePath))
         }
 
         guard keeperHash == duplicateHash else { return .failure(.contentDiffers) }
+        // Published only now, from a pair that verified (GH #504 D2): two
+        // files' full reads agreed. A refused pair publishes nothing.
+        hooks.didComputeKeeperFixity?(keeperFixity)
 
         return .success(VerifiedDuplicate(
             keeperPath: keeperPath,

@@ -28,9 +28,9 @@
 //
 //   read                 EIO mid-file            premature EOF           bit flip                     partial read
 //   KEEPER               refused "could not      refused "could not      refused "content differs —   trashed
-//                        read <keeper>"          read <keeper>"          NOT a duplicate"             (proven)
-//                                                                        + P1: the FLIPPED digest is
-//                                                                        STORED as the keeper's fixity
+//                        read <keeper>"          read <keeper>"          NOT a duplicate"; no         (proven)
+//                                                                        keeper fixity is stored
+//                                                                        (D2, fixed 2026-11-21)
 //   DUPLICATE at path    refused "could not      refused "could not      refused "content differs —   trashed
 //                        read <dup>"             read <dup>"             NOT a duplicate"
 //   quarantine RE-HASH   put back; P3: named     put back; P3: named     put back "<dup> changed      trashed
@@ -38,9 +38,8 @@
 //                        verification"           verification"
 //   quarantine SINGLE    put back "could not     put back "could not     put back "content differs —  trashed
 //   READ (cached keeper) read <dup>"             read <dup>"             NOT a duplicate"
-//   SIBLING (prover)     "could not be read —    "could not be read —    "differs" + P1: the FLIPPED  matches
-//                        not counted"            not counted"            digest is the sibling's
-//                                                                        fixity (stored by the job)
+//   SIBLING (prover)     "could not be read —    "could not be read —    "differs"; no fixity is      matches
+//                        not counted"            not counted"            handed back to store (D2)
 //
 // CODEX'S SHAPES (GH #504):
 //   A  the duplicate is the keeper's bytes + a tail, its read ends at the
@@ -389,14 +388,11 @@ struct HashReadFaultDeleteDuplicatesTests {
         // --- No fixity from a faulted read.
         switch c.site {
         case .keeper:
-            if c.kind == .bitFlip {
-                withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B — and the SUPPLIER of shape C's P0 poisoned cache): a bit flipped in the keeper's one full read is STORED as the keeper's whole-file fixity — `verify` calls didComputeKeeperFixity before the pair's verdict and the job stores it (`learnedKeeperFixity`), stamp-bound, although the pair it came from was refused as a mismatch. Every later stamp-trusting reader believes it without a read: Delete Duplicates' single-read path then refuses the keeper's TRUE duplicates as 'NOT a duplicate' and would trash a file that holds the flipped bytes (shape C); ContentCopyProof vouches by it. No media moves in this cell. Proposed: store a keeper fixity only from a pair that verified (two files' reads agreed), or after a second read of the keeper agrees.") {
-                    #expect(rig.keeper.contentFixity == nil || rig.keeper.contentFixity?.digest == trueDigest,
-                            "\(c): the keeper's stored fixity is a digest no clean read ever produced")
-                }
-            } else {
-                #expect(rig.keeper.contentFixity == nil, "\(c): a fixity was stored from a keeper read that failed")
-            }
+            // GH #504 D2 (was P1, the SUPPLIER of shape C's poisoned cache;
+            // seen RED 2026-11-21: the flipped digest was stored, stamp-bound,
+            // from a pair that was refused). A keeper fixity is published only
+            // from a pair that verified — so in every faulted cell: nothing.
+            #expect(rig.keeper.contentFixity == nil, "\(c): a fixity was stored on the keeper from a pair that did not verify")
         case .duplicateAtPath, .quarantineRehash:
             // The keeper's own read was clean: its true digest may be kept.
             #expect(rig.keeper.contentFixity == nil || rig.keeper.contentFixity?.digest == trueDigest, "\(c)")
@@ -407,7 +403,6 @@ struct HashReadFaultDeleteDuplicatesTests {
         // --- The refusal was the fault's: the same run, clean, trashes the copy.
         #expect(rig.dup.duplicateDisposition == .review, "\(c): a refused pair is re-marked Review")
         rig.dup.duplicateDisposition = .extraCopy
-        if c.site == .keeper && c.kind == .bitFlip { rig.keeper.contentFixity = nil }   // drop the parked false digest
         let clean = try await runThroughTheCenter(rig, hook: nil)
         #expect(clean.row.status == .trashed && rig.inTrash, "\(c): the clean re-run: \(clean.row.status) — \(clean.row.note)")
     }
@@ -510,7 +505,7 @@ struct HashReadFaultDeleteDuplicatesTests {
         #expect(ran.row.remainingVerifiedCopies == 1)
     }
 
-    @Test("SIBLING × fault, at the prover (goal 2): a sibling whose read fails or ends early is 'could not be read — not counted' and gets no fixity; a partial read proves it; a flipped read makes it 'differs' and hands back the FLIPPED digest as its fixity (P1, parked)",
+    @Test("SIBLING × fault, at the prover (goal 2): a sibling whose read fails or ends early is 'could not be read — not counted' and gets no fixity; a partial read proves it; a flipped read makes it 'differs' and hands back NO fixity to store (D2)",
           arguments: DedupeFaultKind.allCases)
     func theSiblingProofUnderEachFault(_ kind: DedupeFaultKind) async throws {
         let rig = try makeRig("sib_\(kind)", cachedKeeper: true); defer { rig.cleanup() }
@@ -542,12 +537,10 @@ struct HashReadFaultDeleteDuplicatesTests {
         case .bitFlip:
             // Not counted — the safe direction…
             #expect(read.result == .differs && facts.remainingVerifiedCopies == 1, "\(kind): \(read.result)")
-            // …but the flipped digest is handed back as the sibling's fixity, and
-            // the job stores every `read.fixity` on the sibling's record
-            // (noteSiblingReads), whatever the result.
-            withKnownIssue("PARKED 2026-11-21 (P1, GH #504 root cause B; unreachable from the job while KEEP ONE reads no sibling): one flipped bit in a sibling's proving read is returned as that sibling's stamp-bound fixity (SiblingRead.fixity) and named 'holds different bytes'; DeleteDuplicatesJob.noteSiblingReads stores it on the sibling's record whether it matched or not. No media moves. Proposed: store a sibling's fixity only when it matched the duplicate's digest (two reads of two files agreed); a lone disagreeing read is reported, not recorded.") {
-                #expect(read.fixity == nil, "a digest no clean read produced is on its way to the sibling's record: \(read.fixity?.digest ?? "")")
-            }
+            // …and (GH #504 D2, was P1; seen RED 2026-11-21) no fixity is handed
+            // back for the job to store: a lone read that disagrees is
+            // reported, never recorded.
+            #expect(read.fixity == nil, "a digest no clean read produced is on its way to the sibling's record: \(read.fixity?.digest ?? "")")
         }
         #expect(try Data(contentsOf: sibURL) == rig.keeperData)
     }

@@ -16,7 +16,8 @@
 // that sibling IN FULL, once, on its own drive, exactly the way a
 // keeper's fixity is produced (`SignatureVerification.wholeFileFixity`:
 // stat, stream every byte, stat again, the two stamps identical). The
-// digest + stamp go onto the sibling's record — the same field and the
+// digest + stamp of a sibling that MATCHED (GH #504 D2: never one that
+// differed) go onto the sibling's record — the same field and the
 // same store call as the keeper's — so the next row naming it, or the
 // next run, only stats it. A sibling whose digest is the duplicate's
 // then counts through the ORDINARY path (`DeletionTierFacts.gather`),
@@ -89,9 +90,20 @@ struct SiblingRead: Sendable, Equatable {
     /// Bytes read (the file's size at the read); 0 when nothing was read.
     let bytes: Int64
     let result: Result
-    /// The fresh stamp-bound fixity (matches / differs) — stored on the
-    /// sibling's record whatever it says.
+    /// The fresh stamp-bound fixity, ONLY when the sibling matched (its
+    /// read and the duplicate's produced the same digest) — the job stores
+    /// it on the sibling's record. nil for `.differs` (GH #504 D2): a lone
+    /// read that disagrees is reported, never recorded.
     let fixity: ContentFixity?
+
+    /// A sibling that was read to the end with a stable stamp: `matches`
+    /// says whether its digest is the duplicate's. THE rule of D2 lives
+    /// here — only a match carries its fixity out to be stored.
+    static func completed(recordID: UUID?, path: String, label: String,
+                          fixity: ContentFixity, matches: Bool) -> SiblingRead {
+        SiblingRead(recordID: recordID, path: path, label: label, bytes: fixity.byteCount,
+                    result: matches ? .matches : .differs, fixity: matches ? fixity : nil)
+    }
 }
 
 enum SiblingProver {
@@ -192,8 +204,11 @@ enum SiblingProver {
                 candidates.otherCopies[candidate.index].fixity = fixity
                 let same = fixity.digest == wanted
                 if same { matched += 1 }
-                reads.append(SiblingRead(recordID: copy.recordID, path: copy.path, label: copy.label,
-                                         bytes: fixity.byteCount, result: same ? .matches : .differs, fixity: fixity))
+                // The candidate keeps the fresh fixity for THIS pair's count
+                // (a mismatch is named "holds different bytes"); only a
+                // match is handed back for the catalog (D2).
+                reads.append(.completed(recordID: copy.recordID, path: copy.path, label: copy.label,
+                                        fixity: fixity, matches: same))
             case .unavailable:
                 candidates.otherCopies[candidate.index].unverifiedNote = "offline — not counted"
                 reads.append(SiblingRead(recordID: copy.recordID, path: copy.path, label: copy.label,

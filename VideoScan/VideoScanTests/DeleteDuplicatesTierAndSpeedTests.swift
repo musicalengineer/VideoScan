@@ -1040,12 +1040,15 @@ struct DeleteDuplicatesCodexFollowupTests {
         #expect(console.contains("still in quarantine and could not be put back"))
     }
 
-    /// P2 #6: a keeper without a stored fixity is read in full by its
-    /// first pair; when that pair is REFUSED (a look-alike that differs
-    /// past the head compare), the keeper's fixity is still published, so
-    /// the next pair is single-read. N duplicates of one keeper read the
-    /// keeper at most once per run.
-    @Test func refusedFirstPairStillPublishesTheKeeperFixityForTheNext() async throws {
+    /// GH #504 D2 (2026-11-21) — REVERSES codex follow-up P2 #6. A keeper
+    /// without a stored fixity is read in full by its first pair; when that
+    /// pair is REFUSED (a look-alike that differs past the head compare),
+    /// the keeper's digest is NOT published: it came from a comparison that
+    /// did not verify, and a stored keeper digest is removal authority for
+    /// every later pair. The next pair reads the keeper again, verifies, and
+    /// only then is the fixity stored; the pair after that is single-read.
+    /// The price is one more keeper read per refused look-alike.
+    @Test func refusedFirstPairPublishesNoKeeperFixityTheNextVerifiedPairDoes() async throws {
         // Past the 4 MiB head compare, so the look-alike costs a FULL read
         // of both files before it is refused (5 blocks, differing in the 5th).
         let size = blockSize * 5
@@ -1059,13 +1062,15 @@ struct DeleteDuplicatesCodexFollowupTests {
 
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.status) == [.refused, .trashed, .trashed], "\(plan.entries.map(\.status))")
-        #expect(probe.blocks("keeper") == 5, "the keeper is read exactly once — \(probe.blocks("keeper")) blocks")
-        #expect(probe.opens(of: rig.keeper.fullPath) == 2, "head compare + one full read, both in the refused first pair — \(probe.opens(of: rig.keeper.fullPath))")
-        #expect(probe.blocks("duplicate") == 5, "only the first pair read its file at its path")
-        #expect(probe.blocks("quarantine") == 10, "the two identical copies were single-read")
-        #expect(plan.entries[1].keeperMatchedByStoredFixity == true && plan.entries[2].keeperMatchedByStoredFixity == true)
-        let fixity = try #require(rig.keeper.contentFixity, "published by the refused pair")
+        #expect(probe.blocks("keeper") == 10, "the refused pair's read is not kept: the second pair reads the keeper again — \(probe.blocks("keeper")) blocks")
+        #expect(probe.opens(of: rig.keeper.fullPath) == 4, "head compare + one full read, in each of the first two pairs — \(probe.opens(of: rig.keeper.fullPath))")
+        #expect(probe.blocks("duplicate") == 10, "the first two pairs read their file at its path")
+        #expect(probe.blocks("quarantine") == 10, "the second pair's re-read in quarantine + the third pair's single read")
+        #expect(plan.entries[1].keeperMatchedByStoredFixity != true, "the second pair read the keeper itself")
+        #expect(plan.entries[2].keeperMatchedByStoredFixity == true, "the third pair stands on the fixity the second pair verified")
+        let fixity = try #require(rig.keeper.contentFixity, "published by the pair that VERIFIED")
         #expect(fixity.stampMatches(path: rig.keeper.fullPath))
+        #expect(fixity.digest == SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined())
         #expect(rig.copies[0].duplicateDisposition == .review)
     }
 }
