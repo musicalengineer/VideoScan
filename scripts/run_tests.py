@@ -39,7 +39,10 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     /f(x:)] (Swift Testing's identifier, labels included; a parameterized test is one id, all its
     cases), the Core regex, pytest node ids. `--list` shows the matched tests. A filter that
     matches nothing is refused (exit 2) before a worktree, a lock or a build, and says so when
-    it matched only tests that cannot run here. A filtered lane's planned count is the filtered count.
+    it matched only tests that cannot run here, or picks a test that is not inside a type (-only-testing
+    cannot name it). A filtered lane's plan is exact: it says "ran N of M" and ANY shortfall is RED
+    (skipped tests count as ran; parameterized cases may add more). The source parser blanks string
+    literals and comments before counting braces (it agrees with the manifest on every Swift file).
   * --status — every live run_tests on this Mac (pid, filter, commit, slot, lane, n/N, since), the
     three slots (commit, in use or idle, DerivedData size) and, when reachable, who holds the M4
     testbed lock with an estimated finish (that lane's last finished run, else its planned length;
@@ -58,10 +61,16 @@ something that requires a unique resource"). Runs on one Mac go side by side; on
     commits). A run at a commit some slot is at shares it; else the least recently used slot that
     no live run holds is moved there (fixed paths, so the build is incremental, not clean). Every
     live run holds its slot SHARED (flock) for its life, so a slot in use is never moved or pruned;
-    all three held at other commits → busy (exit 3, nothing queued). A dirty slot is refused.
+    all three held at other commits → busy (exit 3, nothing queued). A dirty slot is never touched:
+    it is skipped for the next one and marked REFUSED in --status; refused only if none is usable.
+    Every lock fd a run holds is passed to its children (pass_fds): flock lives with the open file,
+    so a runner killed with -9 leaves its building/testing child still holding the slot.
   * a BUILD — per slot and lane (app, Core), an exclusive flock held only while building. A second
     run at the same commit prints "waiting for the build of <sha9> (pid N, since HH:MM)", then
-    skips the build (the slot's built-<lane> stamp is this commit) and tests from the same products.
+    skips the build and tests from the same products. The "built" stamp lives INSIDE the products
+    (<DerivedData>/.run_tests-built-app, <Core>/.build/.run_tests-built-core) and holds the commit
+    plus a checkout token (HEAD, the worktree's HEAD reflog size, HEAD's mtime): any checkout —
+    ours, an older run_tests', anyone's — makes it stale, and deleting the products drops it.
     App tests: xcodebuild test-without-building with this run's own -resultBundlePath. Core tests:
     the built bundle run directly (xctest + swiftpm-testing-helper, see core_exec): `swift test`,
     even --skip-build, takes SwiftPM's .build lock and serialized two runs (measured).
@@ -70,8 +79,12 @@ something that requires a unique resource"). Runs on one Mac go side by side; on
     timing budgets. The old whole-run lock (~/Library/Caches/videoscan-runall/lock) is held SHARED
     by slot 1's users, so a run_tests from an older checkout cannot move run-all under them.
 Registry: each live run writes ~/Library/Caches/videoscan-runall/live/<pid>.json (argv, filter, commit,
-slot, lane, n/N, started), updated as it goes and removed on exit; a file whose pid is gone is stale
-(ignored, removed by the next reader). Each run keeps its own run folder (<stamp>-<mode>-<pid>).
+slot, run folder, lane, n/N, started), updated as it goes and removed on exit, and holds <pid>.lock
+exclusive for its life: a reader that can take that lock knows the run is gone (crash, kill -9, reused
+pid) and removes both. Each run keeps its own run folder (<stamp>-<mode>-<pid>); the newest-20 prune
+never removes a live run's folder.
+Over --host the runner is copied to the host as run_tests-<content hash>.py (tmp + mv), so a second
+caller never rewrites the file a live host run re-reads.
 
 Corpus lane: only from the Ultra with --host m4 (scripts/corpus_run.sh run check --smoke --wait:
 the harness's stratified subset, the smallest file of each codec mix; a first-N --limit picked
@@ -80,7 +93,7 @@ multi-GB tapes and ran 40 min on 2026-11-20); elsewhere it says NOT RUN and why.
 run on this Mac (e.g. --corpus without --host m4) is refused before anything is touched (exit 2).
 
 Verdict: a lane is GREEN only with no failure, exit 0, at least one test, and at least half of the
-tests its selection planned (a filter that matches nothing exits 0: "selection shrank"). A lane
+tests its selection planned (all of them under --filter) (a filter that matches nothing exits 0: "selection shrank"). A lane
 past its budget is stopped (its process group: TERM, then KILL) and RED, whether or not it prints.
 
 Preflight (on the Mac that runs the lanes, before the worktree or a build): the tools the
@@ -270,9 +283,14 @@ def passthrough_args(argv: Sequence[str]) -> List[str]:
 def remote_commands(target: str, sha: str, ref_label: str, argv: Sequence[str]) -> Tuple[List[str], List[str]]:
     """(copy this runner to the host, run it there over a tty). The host fetches origin
     into ~/dev/VideoScan (objects and remote refs only — its branch and tree are untouched)."""
-    dest = "~/Library/Caches/videoscan-runall/run_tests.py"
+    # One file per content (review F9): a live host run re-reads its own file for --core-exec, so a second
+    # caller never rewrites it in place — it writes its own version beside it (tmp + mv, atomic).
+    import hashlib
+    h = hashlib.sha256(SELF.read_bytes()).hexdigest()[:12]
+    d = "~/Library/Caches/videoscan-runall"
+    dest = f"{d}/run_tests-{h}.py"
     copy = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", target,
-            f"mkdir -p ~/Library/Caches/videoscan-runall && cat > {dest}"]
+            f"mkdir -p {d} && cat > {d}/.run_tests-{h}.py.$$ && mv -f {d}/.run_tests-{h}.py.$$ {dest}"]
     args = " ".join(shlex.quote(x) for x in passthrough_args(argv))
     run = ["ssh", "-t", "-o", "ConnectTimeout=15", target,
            f"git -C ~/dev/VideoScan fetch -q origin && /usr/bin/python3 {dest} --on-host --yes "
@@ -293,6 +311,7 @@ class Pick:
     # --filter: the (suite, test, identifier) cases picked inside a suite that is NOT taken whole;
     # a suite in `suites` with no case here runs whole. Empty: the whole file.
     cases: Tuple[Tuple[str, str, str], ...] = ()
+    exact: bool = True                   # tests is the exact count (False: a whole suite the parse saw no test in)
 
 
 def build_index(files: Sequence[str]) -> Tuple[List[Tuple[str, str]], List[str], List[str]]:
@@ -479,11 +498,69 @@ def _labels_of(params: str) -> str:
     return out
 
 
+def swift_code_only(text: str) -> str:
+    '''The text with every string literal's contents and every comment blanked (same length and line
+    breaks), so braces and `@Test` inside a string ("\\n    }\\n", review F2) or a comment never move a
+    test to another suite. Handles "..." with escapes, multi-line triple-quoted strings, raw #"..."#
+    and ##"..."##, `//`, and nested /* */. An interpolation inside a string is blanked with it.'''
+    out = list(text)
+    i, n = 0, len(text)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, min(b, n)):
+            if out[k] != "\n":
+                out[k] = " "
+    while i < n:
+        c = text[i]
+        if c == "/" and text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j)
+            i = j
+        elif c == "/" and text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+        elif c == "#" or c == '"':
+            j = i
+            while j < n and text[j] == "#":
+                j += 1
+            hashes = j - i
+            if j >= n or text[j] != '"':
+                i = j if hashes else i + 1
+                continue
+            multi = text.startswith('"""', j)
+            close = ('"""' if multi else '"') + "#" * hashes
+            k = j + (3 if multi else 1)
+            while k < n:
+                if hashes == 0 and text[k] == "\\":
+                    k += 2
+                    continue
+                if text.startswith(close, k):
+                    break
+                if not multi and text[k] == "\n":
+                    break                    # an unterminated one-line string: stop at the line end
+                k += 1
+            end = k + len(close) if k < n and text.startswith(close, k) else k
+            blank(j + (3 if multi else 1), k)
+            i = end
+        else:
+            i += 1
+    return "".join(out)
+
+
 def swift_cases(text: str) -> List[Tuple[str, str, str]]:
     """(suite type, function, identifier) for every test declared in a Swift file — the same rules as
     scripts/gauntlet/inventory.swift (a test credits the innermost enclosing type, by brace depth).
     identifier: XCTest `testX`; Swift Testing `f()` / `f(x:)` (parameterized: one id, all its cases)."""
-    lines = text.split("\n")
+    lines = swift_code_only(text).split("\n")
     out: List[Tuple[str, str, str]] = []
     depth = 0
     open_types: List[Tuple[str, int]] = []
@@ -562,25 +639,38 @@ def file_cases(p: Pick, text: str) -> List[Tuple[str, str, str]]:
 def apply_filter(picks: Sequence[Pick], flt: TestFilter, read) -> List[Pick]:
     """Narrow a pool of picks to what the filter names. `read(paths) -> {path: text}` gives the sources
     (at the commit) of the files whose tests must be known: only those a positive touches and that
-    are not taken whole. Memory: those files' text at once (a few MB for a whole-repo pattern)."""
+    are not taken whole. Memory: those files' text at once (a few MB for a whole-repo pattern).
+    A suite the filter takes whole and the manifest lists stays whole whatever the parse says (review
+    F2); a picked test that is not inside a type cannot be named by -only-testing: Refused (F3)."""
     touched = [p for p in picks if any(flt.touches(s) for s in pick_suites(p))]
     need = [p for p in touched if not all(flt.whole(s) for s in pick_suites(p))]
     texts = read([p.path for p in need]) if need else {}
     out: List[Pick] = []
     for p in touched:
-        if all(flt.whole(s) for s in pick_suites(p)):
+        names = pick_suites(p)
+        if all(flt.whole(s) for s in names):
             out.append(p)
             continue
+        whole = {s for s in names if flt.whole(s)}
         cases = file_cases(p, texts.get(p.path, ""))
-        sel = [c for c in cases if flt.wants(c[0], c[1])]
-        if not sel:
+        if p.kind == "python":
+            whole = set()                # one module = one suite: handled by the cases below
+        sel = [c for c in cases if c[0] not in whole and flt.wants(c[0], c[1])]
+        loose = [c for c in sel if not c[0]]
+        if loose and p.kind in ("app", "core"):
+            raise Refused(f"--filter picks {loose[0][1]} in {p.path}, a test that is not inside a type: "
+                          f"-only-testing cannot name it alone — select the file's suites whole instead")
+        if not sel and not whole:
             continue
-        if len(sel) == len(cases):
+        if not whole and len(sel) == len(cases):
             out.append(p)                # every test of the file: the file as the smoke would run it
             continue
+        in_whole = sum(1 for c in cases if c[0] in whole)
         full = {s for s in {c[0] for c in sel} if all(flt.wants(c[0], c[1]) for c in cases if c[0] == s)}
-        out.append(Pick(p.kind, p.module, p.stage, p.path, tuple(sorted({c[0] for c in sel})), len(sel),
-                        tuple(c for c in sel if c[0] not in full)))
+        suites = tuple(sorted(whole | {c[0] for c in sel}))
+        out.append(Pick(p.kind, p.module, p.stage, p.path, suites, in_whole + len(sel),
+                        tuple(c for c in sel if c[0] not in full),
+                        exact=all(any(c[0] == w for c in cases) for w in whole)))
     return out
 
 
@@ -631,8 +721,8 @@ def app_selectors(picks: Sequence[Pick]) -> List[str]:
     sel = set()
     for p in picks:
         cased = {c[0] for c in p.cases}
-        sel |= {s for s in p.suites if s not in cased}
-        sel |= {f"{c[0]}/{c[2]}" if c[0] else c[2] for c in p.cases}
+        sel |= {s for s in p.suites if s and s not in cased}
+        sel |= {f"{c[0]}/{c[2]}" for c in p.cases if c[0] and c[2]}
     return sorted(sel)
 
 
@@ -728,6 +818,10 @@ def core_exec(products: str, regex: str) -> int:
         rc = subprocess.call(["xcrun", "xctest", "-XCTest", ",".join(specs), str(bundle)], env=env)
     rc2 = subprocess.call([str(pm / "swiftpm-testing-helper"), "--test-bundle-path", str(exe), str(exe),
                            "--testing-library", "swift-testing", "--filter", regex], env=env)
+    if rc2 == 69:
+        rc2 = 0                          # swiftpm-testing-helper: "no test matched" (an XCTest-only selection,
+                                         # review F1); `swift test` reads it the same way. Zero tests ran
+                                         # overall is still RED by the zero-test / shortfall rules.
     return rc or rc2
 
 
@@ -842,6 +936,7 @@ class LaneResult:
     reason: str = ""                       # why NOT RUN, or why RED beyond the counts
     failures: List[Event] = field(default_factory=list)
     expected: int = 0                      # tests the selection planned (0: unknown, no floor)
+    exact: bool = False                    # a --filter's plan is exact: ANY shortfall is RED, not under half
     setup: List[str] = field(default_factory=list)   # missing tools (preflight): NOT RUN, not RED
 
     @property
@@ -850,7 +945,10 @@ class LaneResult:
 
     @property
     def shrank(self) -> bool:
-        return self.expected > 0 and self.total < self.expected * SHRANK
+        if self.expected <= 0:
+            return False
+        # skipped tests count as ran (a trait or XCTSkip said why); only a test that never reported is short
+        return self.total < self.expected if self.exact else self.total < self.expected * SHRANK
 
     @property
     def word(self) -> str:
@@ -928,6 +1026,7 @@ def take_lock(lockdir: Path, info: str) -> int:
     fd = os.open(str(lockdir / "flock"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _HELD.add(fd)                    # the M4 lock, too, lives as long as the work (F6)
     except OSError:
         try:
             who = (lockdir / "info").read_text().strip().split(" ", 1)[-1]
@@ -974,8 +1073,7 @@ class Slot:
 
     def release(self) -> None:
         for fd in self.fds:
-            with contextlib.suppress(OSError):
-                os.close(fd)
+            _close(fd)
         self.fds = []
 
 
@@ -989,9 +1087,35 @@ def slot_paths(i: int) -> Tuple[Path, Path]:
     return RUN_WT.parent / f"{RUN_WT.name}-{i + 1}", DD.parent / f"{DD.name}-{i + 1}"
 
 
+# Lock fds this process holds for its work (slot, build, --full, M4). Every child gets them (pass_fds):
+# flock belongs to the open file description, so the lock lives as long as ANY holder — a runner killed
+# with -9 leaves its own-session xcodebuild/swift child holding the slot, which then cannot be moved
+# under it (review F6). C++: a shared_ptr every child copies. The registry's own lock is not passed.
+_HELD: set = set()
+
+
 def _lock_fd(path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
-    return os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    _HELD.add(fd)
+    return fd
+
+
+def _close(fd: int) -> None:
+    _HELD.discard(fd)
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
+def held_fds() -> Tuple[int, ...]:
+    out = []
+    for fd in sorted(_HELD):
+        try:
+            os.fstat(fd)
+            out.append(fd)
+        except OSError:
+            _HELD.discard(fd)
+    return tuple(out)
 
 
 def _flock(fd: int, how: int, block: bool = False) -> bool:
@@ -1015,7 +1139,7 @@ def _hold_slot(i: int, how: int, block: bool) -> Optional[List[int]]:
     ok = _flock(fds[0], how, block) and (i != 0 or _flock(fds[1], fcntl.LOCK_SH, False))
     if not ok:
         for fd in fds:
-            os.close(fd)
+            _close(fd)
         return None
     return fds
 
@@ -1040,7 +1164,9 @@ def acquire_slot(base: Path, sha: str) -> Slot:
     """A slot at `sha`, held SHARED until this process exits. One already at the commit is shared
     (its build reused); else the least recently used slot no live run holds is moved there. Raises
     Busy when every slot is held at another commit (nothing is queued), Refused for a dirty or
-    foreign worktree (never touched)."""
+    foreign worktree (never touched); a dirty slot is skipped for the next one (review F7) and the
+    run is refused only when no slot is usable."""
+    refused: Dict[int, str] = {}
     for _ in range(3):
         for i in range(N_SLOTS):
             wt, dd = slot_paths(i)
@@ -1054,13 +1180,16 @@ def acquire_slot(base: Path, sha: str) -> Slot:
                 try:
                     check_paths(base, wt, dd)
                     dirty = git(wt, "status", "--porcelain", "--untracked-files=no")
-                except Refused:
+                except Refused as e:
                     slot.release()
-                    raise
+                    refused[i] = str(e)
+                    continue
                 if dirty:
                     slot.release()
-                    raise Refused(f"side worktree {wt} has local changes — not touching it:\n{dirty}")
-                _touch(slot_dir() / f"{i}.used")
+                    refused[i] = f"side worktree {wt} has local changes — not touching it:\n{dirty}"
+                    _touch(slot_dir() / f"{i}.refused", refused[i] + "\n")
+                    continue
+                _used_now(i)
                 return slot
             slot.release()
         for i in sorted(range(N_SLOTS), key=_used):
@@ -1070,21 +1199,31 @@ def acquire_slot(base: Path, sha: str) -> Slot:
                 continue
             slot = Slot(i, wt, dd, fds)
             try:
-                if slot_head(wt) != sha:
-                    for k in ("app", "core"):
-                        with contextlib.suppress(OSError):
-                            (slot_dir() / f"{i}.built-{k}").unlink()
-                prepare_worktree(base, wt, sha, dd)
+                prepare_worktree(base, wt, sha, dd)      # the checkout changes the stamps' token: no stale "built"
+            except Refused as e:
+                slot.release()                           # a dirty or foreign slot: never touched; try the next (F7)
+                refused[i] = str(e)
+                _touch(slot_dir() / f"{i}.refused", str(e) + "\n")
+                continue
             except BaseException:
                 slot.release()
                 raise
             fcntl.flock(fds[0], fcntl.LOCK_SH)     # moved: other runs at this commit may share it now
             if slot_head(wt) == sha:
-                _touch(slot_dir() / f"{i}.used")
+                _used_now(i)
                 return slot
             slot.release()
             break
+    if refused:
+        raise Refused("no usable side worktree: " + "; ".join(f"slot {i + 1}: {m}" for i, m in sorted(refused.items()))
+                      + (" (the others are in use)" if len(refused) < N_SLOTS else ""))
     raise Busy(f"all {N_SLOTS} side worktrees are in use by live runs at other commits")
+
+
+def _used_now(i: int) -> None:
+    _touch(slot_dir() / f"{i}.used")
+    with contextlib.suppress(OSError):
+        (slot_dir() / f"{i}.refused").unlink()
 
 
 def _lock_info(path: Path) -> Tuple[str, str, str]:
@@ -1116,21 +1255,42 @@ def build_lock(slot: Optional[Slot], kind: str, sha: str, out: "Out", live: Opti
         Path(str(path) + ".info").write_text(f"{os.getpid()} {sha} {time.time():.0f} {kind}\n")
         yield
     finally:
-        os.close(fd)
+        _close(fd)
+
+
+def _stamp(slot: Slot, kind: str) -> Path:
+    """INSIDE what it describes: deleting the DerivedData (or .build) drops it (review F4)."""
+    return (slot.dd / ".run_tests-built-app") if kind == "app" else (core_package(slot.wt) / ".build" / ".run_tests-built-core")
+
+
+def checkout_token(wt: Path) -> str:
+    """Changes with ANY checkout in the worktree — ours, an older run_tests', anyone's `git checkout`:
+    HEAD's commit, the size of the worktree's HEAD reflog (each checkout appends a line) and the HEAD
+    file's mtime (rewritten by a checkout)."""
+    gd = Path(git(wt, "rev-parse", "--absolute-git-dir", check=False) or "/nonexistent")
+    def stat(p: Path) -> str:
+        try:
+            st = p.stat()
+            return f"{st.st_size}:{st.st_mtime_ns}"
+        except OSError:
+            return "-"
+    return f"{git(wt, 'rev-parse', 'HEAD', check=False)} {stat(gd / 'logs' / 'HEAD')} {stat(gd / 'HEAD')}"
 
 
 def built_at(slot: Optional[Slot], kind: str) -> Optional[str]:
+    """The commit whose `kind` products this slot holds — only if no checkout happened since they were built."""
     if slot is None:
         return None
     try:
-        return (slot_dir() / f"{slot.index}.built-{kind}").read_text().strip() or None
-    except OSError:
+        sha, token = _stamp(slot, kind).read_text().strip().split(" ", 1)
+    except (OSError, ValueError):
         return None
+    return sha if token == checkout_token(slot.wt) and token.startswith(sha) else None
 
 
 def mark_built(slot: Optional[Slot], kind: str, sha: str) -> None:
     if slot is not None:
-        _touch(slot_dir() / f"{slot.index}.built-{kind}", sha + "\n")
+        _touch(_stamp(slot, kind), f"{sha} {checkout_token(slot.wt)}\n")
 
 
 # ───────────────────────────────────────────────────────────── the run registry and --status
@@ -1139,33 +1299,24 @@ def live_dir() -> Path:
     return CACHE / "live"
 
 
-def pid_alive(pid: int) -> bool:
-    """A live run_tests (not a reused pid): the process exists and is a run_tests (or is us)."""
-    if pid == os.getpid():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    p = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
-    return "run_tests" in p.stdout
-
-
 class LiveRun:
-    """<CACHE>/live/<pid>.json while this run lives: argv, commit, slot, the lane now and n/N done.
-    Rewritten atomically (tmp + rename) on each phase and at most once a second for progress;
-    removed on exit. A file whose pid is dead is stale: ignored and removed by the next reader."""
+    """<CACHE>/live/<pid>.json while this run lives: argv, commit, slot, run folder, the lane now and
+    n/N done. Rewritten atomically (tmp + rename) on each phase and at most once a second for
+    progress; removed on exit. Liveness is a lock, not a guess (review F8): the run holds
+    <pid>.lock EXCLUSIVE for its life; a reader that can take it knows the run is gone (a crash,
+    a kill -9, a reused pid all release it) and removes both files."""
 
     def __init__(self, info: dict) -> None:
         self.info = dict(info, pid=os.getpid(), started=time.time())
         self.path = live_dir() / f"{os.getpid()}.json"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = self.path.with_suffix(".lock")
+        self.fd = os.open(str(self.lock), os.O_RDWR | os.O_CREAT, 0o644)   # not passed to children
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
         self.last = 0.0
         self.write()
 
     def write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.info, sort_keys=True))
         os.replace(str(tmp), str(self.path))
@@ -1178,8 +1329,11 @@ class LiveRun:
             self.write()
 
     def close(self) -> None:
+        for f in (self.path, self.lock):
+            with contextlib.suppress(OSError):
+                f.unlink()
         with contextlib.suppress(OSError):
-            self.path.unlink()
+            os.close(self.fd)
 
 
 def live_runs() -> List[dict]:
@@ -1188,16 +1342,23 @@ def live_runs() -> List[dict]:
     if not root.is_dir():
         return out
     for f in sorted(root.glob("*.json")):
+        lock = f.with_suffix(".lock")
+        alive = False
+        if lock.exists():
+            fd = os.open(str(lock), os.O_RDWR)
+            try:
+                alive = not _flock(fd, fcntl.LOCK_EX)
+            finally:
+                os.close(fd)
+        if not alive:
+            for g in (f, lock):
+                with contextlib.suppress(OSError):
+                    g.unlink()           # stale: its run is gone
+            continue
         try:
-            info = json.loads(f.read_text())
-            pid = int(info["pid"])
-        except (OSError, ValueError, KeyError, TypeError):
+            out.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
             continue
-        if not pid_alive(pid):
-            with contextlib.suppress(OSError):
-                f.unlink()               # stale: its run is gone
-            continue
-        out.append(info)
     return out
 
 
@@ -1234,7 +1395,7 @@ def slot_lines(runs: Sequence[dict], disk: bool = True) -> List[str]:
         users = [r for r in runs if str(r.get("slot")) == str(i + 1)]
         fd = _lock_fd(slot_dir() / f"{i}.lock")
         held = not _flock(fd, fcntl.LOCK_EX)
-        os.close(fd)
+        _close(fd)
         old = ""
         if i == 0 and not held:          # an older run_tests (whole-run lock) using run-all
             fd = _lock_fd(CACHE / "lock" / "flock")
@@ -1243,8 +1404,13 @@ def slot_lines(runs: Sequence[dict], disk: bool = True) -> List[str]:
                     old = (CACHE / "lock" / "info").read_text().strip()
                 except OSError:
                     old = "(no info)"
-            os.close(fd)
+            _close(fd)
+        try:
+            bad = (slot_dir() / f"{i}.refused").read_text().strip().splitlines()[0][:90]
+        except (OSError, IndexError):
+            bad = ""
         state = (f"in use by an older run_tests: pid {old}" if old else
+                 f"REFUSED (skipped): {bad}" if bad and not (held or users) else
                  f"in use by {len(users) or 'a'} run{'s' if len(users) > 1 else ''}" if held or users
                  else (f"idle, last used {time.strftime('%m-%d %H:%M', time.localtime(_used(i)))}" if _used(i) else "idle"))
         size = du_gb(dd) if disk else None
@@ -1465,7 +1631,8 @@ class Runner:
         log.write("$ " + " ".join(shlex.quote(x) for x in cmd) + "\n")
         self.child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                       cwd=str(cwd) if cwd else None, env=self.env, start_new_session=True,
-                                      text=True, encoding="utf-8", errors="replace", bufsize=1)
+                                      text=True, encoding="utf-8", errors="replace", bufsize=1,
+                                      pass_fds=held_fds())
         timed_out = False
         deadline = t0 + budget
         child = self.child
@@ -1647,9 +1814,17 @@ def corpus_applies(target_host: Optional[str], local_key: Optional[str]) -> Tupl
 
 
 def prune_runs(root: Path, keep: int = KEEP_RUNS) -> None:
+    """Keep the newest `keep` run folders — never one a live run uses (review F5: side by side, an hour-long
+    --full is the oldest name while twenty quick runs come and go; its logs, TMPDIR and, over ssh, the .rc
+    file _stream_in_gui waits for live there)."""
     import shutil
+    live = live_runs()
+    pids = {str(r.get("pid")) for r in live}
+    dirs = {str(r.get("run_dir")) for r in live if r.get("run_dir")}
     runs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name)
     for p in runs[:-keep]:
+        if p.name.rsplit("-", 1)[-1] in pids or str(p) in dirs:
+            continue
         shutil.rmtree(p, ignore_errors=True)          # our own raw logs only, never media or a checkout
 
 
@@ -1676,11 +1851,15 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
     py = [p for p in picks if p.kind in ("python", "shell")]
     out.expected = sum(p.tests for p in picks)
     phase = (lambda **kw: live.update(**kw)) if live is not None else (lambda **kw: None)
+    exact = lambda ps: bool(getattr(a, "test_filter", None)) and all(p.exact for p in ps)
     out.line("==========", header)
 
     def build(kind: str, cmd: List[str], log: str, label: str) -> Tuple[int, float]:
         """(exit, seconds) of the build, or (0, 0.0) when this commit's products are already built."""
         with build_lock(slot, kind, sha, out, live):
+            if slot is not None and slot_head(slot.wt) != sha:      # cannot happen while we hold the slot; say so if it does
+                out.line("FAILED", f"slot {slot.label} is no longer at {sha[:9]} — not building or testing there", "FAILED")
+                return 1, 0.0
             if slot is not None and built_at(slot, kind) == sha:
                 out.line("BUILD", f"{label} — already built at {sha[:9]} in slot {slot.label}", "BUILD")
                 return 0, 0.0
@@ -1711,6 +1890,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                     out.line("RUN", f"app {'+'.join(a.stages_label)} ({len({s for p in app for s in p.suites})} suites, "
                                     f"~{sum(p.tests for p in app)} tests)")
                     lane.ran, lane.expected = True, sum(p.tests for p in app)
+                    lane.exact = exact(app)
                     phase(phase="app: testing", done=out.done, total=out.expected)
                     lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult"), "app-test.log",
                                                      LANE_BUDGET["app"], parser=LineParser(), lane=lane, gui=True)
@@ -1734,6 +1914,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                         out.line("BUILD", f"VideoScanCore (swift build --build-tests) {'.' * 8} {fmt_secs(el)}", "BUILD")
                     out.line("RUN", f"core, Debug, from the built bundle ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
                     lane.ran, lane.expected = True, sum(p.tests for p in core)
+                    lane.exact = exact(core)
                     phase(phase="core: testing", done=out.done, total=out.expected)
                     cases = [c for p in core for c in p.cases]
                     lane.rc, lane.seconds = r.stream(core_test_cmd(wt, core_filter(suites, cases)), "core.log",
@@ -1753,6 +1934,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
             else:
                 n = sum(p.tests for p in py if p.kind == "python")
                 lane.ran, lane.expected = True, n
+                lane.exact = exact([p for p in py if p.kind == "python"])
                 out.line("RUN", f"python pytest via {interp[0]} ({len({p.path for p in py if p.kind == 'python'})} files, ~{n} tests)")
                 phase(phase="python: testing", done=out.done, total=out.expected)
                 with contextlib.suppress(OSError):
@@ -1805,9 +1987,14 @@ def lane_end(out: Out, lane: LaneResult, log: Path) -> None:
         extra = f", exit {lane.rc}" + (" (timed out)" if lane.rc == 124 else "")
     if lane.total == 0:
         extra += " — ZERO tests ran (red)"
+    elif lane.shrank and lane.exact:
+        lane.reason = lane.reason or f"ran {lane.total} of {lane.expected} the filter named"
+        extra += f" — ran {lane.total} of {lane.expected} the filter named (red)"
     elif lane.shrank:
         lane.reason = lane.reason or f"selection shrank: ran {lane.total} of ~{lane.expected}"
         extra += f" — selection shrank: ran {lane.total} of ~{lane.expected} (red)"
+    elif lane.exact and lane.ran:
+        extra += f" — ran {lane.total} of {lane.expected} the filter named"
     out.line("----------", f"{lane.name}: {lane.passed} passed, {lane.failed} failed, {lane.skipped} skipped"
                            f"{extra} ({fmt_secs(lane.seconds)})", lane.word)
     if lane.word == "RED" and not lane.failed:
@@ -2306,6 +2493,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         (CACHE / "runs").mkdir(exist_ok=True)
         prune_runs(CACHE / "runs", KEEP_RUNS - 1)
         run_dir = new_run_dir(a.mode)
+        live.update(run_dir=str(run_dir))
 
         t0 = time.monotonic()
         if a.mode == "full":
@@ -2407,7 +2595,7 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
         mark_interrupted(out, lanes, e)
     finally:
         if full_fd is not None:
-            os.close(full_fd)
+            _close(full_fd)
     return lanes
 
 

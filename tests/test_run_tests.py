@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import fcntl
 import os
 import re
 import signal
@@ -1321,7 +1322,8 @@ def test_an_old_run_tests_holding_the_whole_run_lock_keeps_slot_one(slots, repo,
         os.close(old)
 
 
-def test_a_dirty_slot_worktree_is_refused_never_touched(slots, repo):
+def test_a_dirty_slot_worktree_is_refused_never_touched(slots, repo, monkeypatch):
+    monkeypatch.setattr(rt, "N_SLOTS", 1)          # the only slot (F7: with others free, the next is used)
     s = take(slots, repo, "HEAD")
     (s.wt / "f.txt").write_text("changed")
     with pytest.raises(rt.Refused, match="local changes"):
@@ -1520,3 +1522,228 @@ def test_a_host_run_carries_the_filter_quoted_and_a_no_match_never_reaches_ssh(m
     monkeypatch.setattr(rt, "local_host_key", lambda hostname=None: "ultra")
     assert rt.main(["--host", "m4", "--filter", "Nope*", "--yes"]) == 2
     assert "matches no test" in capsys.readouterr().err
+
+
+# ───────────────────────────── review 2026-11-20 of 83763f8fa (F1–F9): each was RED on that commit
+
+# ── F1  run_tests.py:729-731  core_exec returns the Swift Testing helper's 69 ("no test matched") as a failure:
+#        any Core selection that is XCTest-only (33 Core files; every `--filter <XCTestCase class>`) is RED.
+#        Measured on this Mac: swiftpm-testing-helper … --filter ZZZ/ → exit 69. `swift test` reads 69 as "none here".
+def test_f1_core_xctest_only_selection_is_not_red_because_swift_testing_matched_nothing(monkeypatch, tmp_path):
+    exe = tmp_path / "VideoScanCoreTests.xctest" / "Contents" / "MacOS" / "VideoScanCoreTests"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    tree = {"tests": [{"name": "VideoScanCoreTests.xctest", "tests": [
+        {"name": "VideoScanCoreTests.OldXCTests", "tests": [{"name": "testA"}, {"name": "testB"}]}]}]}
+
+    class P:
+        returncode, stdout, stderr = 0, "/x/usr/bin/swift", ""
+
+    def fake_run(cmd, **kw):
+        if "swiftpm-xctest-helper" in str(cmd[0]):
+            Path(cmd[2]).write_text(json.dumps(tree))
+        return P()
+
+    def fake_call(cmd, **kw):
+        return 69 if "swiftpm-testing-helper" in str(cmd[0]) else 0     # xctest passed; Swift Testing: none matched
+    monkeypatch.setattr(rt.subprocess, "run", fake_run)
+    monkeypatch.setattr(rt.subprocess, "call", fake_call)
+    assert rt.core_exec(str(tmp_path), r"(\.|/)(OldXCTests)/") == 0, \
+        "XCTest ran and passed; Swift Testing's 'no test matched' (69) made the Core lane RED"
+
+
+SWIFT_BRACE_IN_STRING = textwrap.dedent('''
+    import Testing
+    struct ASensorTests {
+        func cut(_ rest: String) -> Bool { let end = "\\n    }\\n"; return rest.contains(end) }
+        @Test func sensor() {}
+        @Test func sensorTwo() {}
+    }
+    struct AModelTests {
+        @Test func first() {}
+    }
+''')
+
+
+# ── F2  run_tests.py:512-521 + 574-577  swift_cases counts braces inside string literals, so the tests after one
+#        fall out of their suite; apply_filter then DROPS a suite the filter names whole and the manifest lists.
+#        Real at this commit: `--filter '*SensorTests'` drops FamilyTreeNoteCorrectionSensorTests (2 tests;
+#        FamilyTreeNoteCorrectionTests.swift:361 has "\n    }\n") and the run is GREEN on the other 138 suites.
+def test_f2_a_suite_the_filter_names_whole_is_never_dropped_by_the_source_parser():
+    pick = rt.Pick("app", "M", "unit", "x/ATests.swift", ("AModelTests", "ASensorTests"), 3)
+    out = rt.apply_filter([pick], rt.TestFilter.parse("*SensorTests"), lambda ps: {"x/ATests.swift": SWIFT_BRACE_IN_STRING})
+    assert out and "ASensorTests" in out[0].suites, "the suite the filter named (and the manifest lists) was dropped"
+    assert rt.app_selectors(out) == ["ASensorTests"]
+
+
+def test_f2b_the_real_file_at_this_commit():
+    path = "VideoScan/VideoScanTests/FamilyTreeNoteCorrectionTests.swift"
+    m = json.loads((ROOT / "scripts" / "gauntlet" / "manifest.json").read_text())
+    e = next(x for x in m["assignments"] if x["path"] == path)
+    pick = rt.Pick("app", "FamilyTree", e["stage"], path, tuple(sorted(e["suites"])), len(e["tests"]))
+    out = rt.apply_filter([pick], rt.TestFilter.parse("*SensorTests"), lambda ps: {p: (ROOT / p).read_text() for p in ps})
+    assert out and "FamilyTreeNoteCorrectionSensorTests" in out[0].suites
+
+
+# ── F3  run_tests.py:582 + 634-635  the same misattribution puts the empty suite "" into a Pick; app_selectors
+#        then emits `-only-testing:VideoScanTests/` (no suite). Real: `--filter=-ScanLocationVolumeTests`.
+def test_f3_no_selector_is_ever_the_bare_target():
+    pick = rt.Pick("app", "M", "unit", "x/ATests.swift", ("AModelTests", "ASensorTests"), 3)
+    out = rt.apply_filter([pick], rt.TestFilter.parse("-AModelTests"), lambda ps: {"x/ATests.swift": SWIFT_BRACE_IN_STRING})
+    sel = rt.app_selectors(out)
+    assert all(s and not s.startswith("/") for s in sel), sel
+    assert all(s for p in out for s in p.suites), [p.suites for p in out]
+
+
+# ── F4  run_tests.py:1122-1133, 1684  the built-<kind> stamp is a bare sha in the cache folder: a checkout the
+#        new code did not make (an OLDER run_tests on run-all — `--python` there never builds — or anyone's
+#        `git checkout`) leaves it saying "built at X" while DerivedData holds another commit's products.
+#        The next run at X prints "already built" and tests them: a GREEN for X on Y's binaries.
+def test_f4_a_checkout_made_behind_the_stamp_invalidates_it(slots, repo, monkeypatch):
+    monkeypatch.setattr(rt, "N_SLOTS", 1)
+    x, y = sha(repo, "HEAD"), sha(repo, "HEAD~1")
+    s = take(slots, repo, "HEAD")
+    rt.mark_built(s, "app", x)                       # new run_tests built X in run-all
+    s.release()
+    slots.clear()
+    git("checkout", "-q", "--detach", y, cwd=s.wt)   # an older run_tests (whole-run lock) moves run-all to Y, builds Y
+    git("checkout", "-q", "--detach", x, cwd=s.wt)   # … and another moves it back to X without an app build (--python)
+    t = take(slots, repo, "HEAD")
+    assert rt.built_at(t, "app") != x, "the stamp says X is built; DerivedData holds Y's products"
+
+
+# ── F5  run_tests.py:1649-1653, 2307  prune_runs keeps the newest 20 folders by name; with runs side by side a
+#        long live run (a --full, an hour or more) is the OLDEST name: 20 quick --filter runs delete its logs, its
+#        TMPDIR, its pytest basetemp and (over ssh) the .rc file _stream_in_gui waits for.
+def test_f5_prune_never_deletes_a_live_runs_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "CACHE", tmp_path)
+    mine = tmp_path / "runs" / f"20261120-100000-full-{os.getpid()}"
+    mine.mkdir(parents=True)
+    live = rt.LiveRun({"argv": ["--full"], "mode": "full", "sha": "a" * 40, "slot": "1", "phase": "full"})
+    try:
+        for i in range(rt.KEEP_RUNS):
+            (tmp_path / "runs" / f"20261120-11{i:02d}00-smoke-{90000 + i}").mkdir()
+        rt.prune_runs(tmp_path / "runs", rt.KEEP_RUNS - 1)      # what the 21st run does on its way in
+        assert mine.is_dir(), "a live run's folder was pruned under it"
+    finally:
+        live.close()
+
+
+# ── F6  run_tests.py:1466-1468 (close_fds) + 1011-1020  the slot's shared lock lives in the runner only. kill -9
+#        the runner (the bar's own case): its xcodebuild/swift child (own session) goes on building or testing
+#        in the slot, the kernel has dropped the lock, and the next run may MOVE that slot under it.
+def test_f6_a_killed_runners_child_still_holds_the_slot(tmp_path):
+    lock = tmp_path / "0.lock"
+    pidfile = tmp_path / "child.pid"
+    code = textwrap.dedent(f"""
+        import fcntl, importlib.util, io, sys
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("run_tests", {str(ROOT / 'scripts' / 'run_tests.py')!r})
+        rt = importlib.util.module_from_spec(spec); sys.modules["run_tests"] = rt; spec.loader.exec_module(rt)
+        fd = rt._lock_fd(Path({str(lock)!r}))
+        assert rt._flock(fd, fcntl.LOCK_SH)                      # what acquire_slot holds for the run's life
+        r = rt.Runner(rt.Out(False, io.StringIO()), Path({str(tmp_path)!r}), dict(__import__("os").environ))
+        r.stream(["/bin/sh", "-c", "echo $$ > {pidfile}; exec sleep 60"], "x.log", 120)
+    """)
+    runner = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        for _ in range(200):
+            if pidfile.exists() and pidfile.read_text().strip():
+                break
+            time.sleep(0.05)
+        child = int(pidfile.read_text())
+        runner.kill()                                            # kill -9: no stop(), no finally
+        runner.wait()
+        os.kill(child, 0)                                        # the build/test child is still alive …
+        fd = rt._lock_fd(lock)
+        try:
+            moved = rt._flock(fd, fcntl.LOCK_EX)                 # … what a mover asks before `git checkout`
+        finally:
+            os.close(fd)
+        assert not moved, "the slot can be moved to another commit while the killed run's child still works in it"
+    finally:
+        with __import__("contextlib").suppress(Exception):
+            os.killpg(int(pidfile.read_text()), signal.SIGKILL)
+        runner.kill()
+
+
+# ── F7  run_tests.py:1066-1080  one dirty slot refuses every run at a new commit while it is the least recently
+#        used — a failed move never touches .used, so it stays first — though the other slots are idle and clean.
+def test_f7_a_dirty_idle_slot_does_not_take_the_clean_ones_down(slots, repo, monkeypatch):
+    monkeypatch.setattr(rt, "N_SLOTS", 2)
+    a = take(slots, repo, "HEAD")
+    b = take(slots, repo, "HEAD~1")
+    (a.wt / "f.txt").write_text("a test wrote into the checkout (GH #495)")
+    a.release()
+    b.release()
+    slots.clear()
+    os.utime(str(rt.slot_dir() / f"{a.index}.used"), (1, 1))     # the dirty one is the least recently used
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "three", cwd=repo)
+    c = take(slots, repo, "HEAD")                                # b's slot is idle and clean
+    assert c.index == b.index and (a.wt / "f.txt").read_text().startswith("a test wrote")
+
+
+# ── F8  run_tests.py:1142-1153  "alive" = any process whose command line contains "run_tests": after a kill -9
+#        and pid reuse, an editor on run_tests.py or `pytest tests/test_run_tests.py` is listed as a live run.
+def test_f8_the_registry_does_not_take_an_unrelated_process_for_a_live_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt, "CACHE", tmp_path)
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "notes-about-run_tests.txt"])
+    try:
+        (tmp_path / "live").mkdir()
+        (tmp_path / "live" / f"{other.pid}.json").write_text(json.dumps({"pid": other.pid, "sha": "b" * 40, "slot": "2"}))
+        assert rt.live_runs() == [], "a process that is not a run_tests run is reported as one"
+    finally:
+        other.kill()
+
+
+# ── F9  run_tests.py:273-275 + 666  a --host run executes ONE shared file on the host and the Core lane re-reads
+#        it later (`python3 <SELF> --core-exec`): a second caller's `cat >` (truncate in place; an older checkout's
+#        copy has no --core-exec) changes the program under a live run → its Core lane exits 2, zero tests, RED.
+def test_f9_the_host_copy_is_not_overwritten_in_place_under_a_live_run():
+    copy, run = rt.remote_commands("ricksm4.local", "a" * 40, "main", ["--unit"])
+    assert "cat > ~/Library/Caches/videoscan-runall/run_tests.py" not in copy[-1], \
+        "the one shared host copy is truncated and rewritten in place (per-content name, or tmp + mv)"
+
+
+def test_a_filtered_lane_short_by_one_is_red_and_says_ran_n_of_m(monkeypatch, tmp_path):
+    # reviewer's note: a filter's plan is exact, so the under-half floor let 1 of 2 named tests pass GREEN
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if lane is not None:
+            lane.passed += 1
+        return 0, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    picks = [rt.Pick("core", "Core/Store", "unit", "x/ATests.swift", ("ATests",), 2,
+                     (("ATests", "testA", "testA"), ("ATests", "testB", "testB")))]
+    a = rt.parse_args(["--filter", "ATests.testA:ATests.testB"])
+    a.kinds, a.stages_label = {"core"}, ["unit"]
+    buf = io.StringIO()
+    lanes = rt.run_lanes(a, picks, tmp_path, tmp_path, rt.Out(False, buf), tmp_path, "smoke")
+    assert lanes[0].word == "RED" and "ran 1 of 2 the filter named (red)" in buf.getvalue()
+    # skipped by their own trait still reported: not short
+    assert L("core", ran=True, passed=1, skipped=1, rc=0, expected=2, exact=True).word == "GREEN"
+    assert L("core", ran=True, passed=3, rc=0, expected=2, exact=True).word == "GREEN"     # parameterized: more is fine
+    assert L("core", ran=True, passed=1, rc=0, expected=2).word == "GREEN"                 # the smoke keeps its half floor
+
+
+def test_swift_code_only_blanks_strings_and_comments_keeping_lines():
+    src = ('let a = "}"; let b = #"raw " } "#\n'
+           'let c = """\n  { } \\"""\n  """\n'
+           '/* { /* nested } */ } */ let d = 1 // }\n'
+           'func f() { }\n')
+    code = rt.swift_code_only(src)
+    assert code.count("\n") == src.count("\n") and len(code) == len(src)
+    assert code.count("{") == 1 and code.count("}") == 1 and "func f() { }" in code
+
+
+def test_every_dirty_slot_refuses_with_each_reason_and_status_shows_it(slots, repo, monkeypatch):
+    monkeypatch.setattr(rt, "N_SLOTS", 2)
+    a = take(slots, repo, "HEAD")
+    b = take(slots, repo, "HEAD~1")
+    for s in (a, b):
+        (s.wt / "f.txt").write_text("dirty")
+        s.release()
+    slots.clear()
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "three", cwd=repo)
+    with pytest.raises(rt.Refused, match="(?s)no usable side worktree: slot 1: .*local changes.*slot 2: "):
+        rt.acquire_slot(repo, sha(repo))
+    assert all("REFUSED (skipped)" in line for line in rt.slot_lines([], disk=False))
