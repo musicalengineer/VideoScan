@@ -44,7 +44,9 @@ import os
 //
 // Verdict before a render is returned (and so before CleanupJob can
 // publish it): exit code, the 10 KB floor, then length against the source
-// (FFmpegEncodeCheck — N1014-F2).
+// (FFmpegEncodeCheck — N1014-F2) — and the length must have been READ: a
+// render whose length (or whose source's length) cannot be measured is not
+// verified and is never returned (GH #502, Rick 2026-11-21).
 
 private let cleanupEngineLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                       category: "cleanup")
@@ -70,7 +72,7 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
     func render(recipe: CleanupRecipe,
                 source: CleanupSource,
                 scratchDirectory: URL,
-                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL {
+                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender {
         guard canExecute(recipe) else {
             let unsupported = recipe.steps.first {
                 $0.enabled && !Self.supportedKinds.contains($0.kind)
@@ -128,23 +130,64 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
         // error (bad sectors on an aging drive) ends its input early, so a
         // 20-minute render of a 60-minute tape passed both gates above and
         // was published as the cleaned copy. Same rule Transcode/Reformat use.
-        if let shortfall = await Self.lengthShortfall(sourcePath: source.path, renderPath: renderURL.path) {
+        //
+        // UNKNOWN IS NOT VERIFIED (GH #502, 2026-11-21). THE BUG: this read
+        // both lengths through a "seconds or nil" probe and a nil — ffprobe
+        // crashed, could not start, answered garbage, said "Invalid data",
+        // hung to its deadline — skipped the rule, so a render nobody could
+        // measure was returned and published as the cleaned copy. The three
+        // answers are now all handled: only `.verified` returns the render.
+        //
+        // THIS file (Codex r1 #4, P0 — as #500 did for Transcode): the
+        // render's stamp is taken before the probes and must be the same
+        // after them; it travels with the render to the publish, which
+        // copies the file only while it still has it. Residual (declined,
+        // GH #503): a swap and swap-back inside one probe.
+        let before = FileIdentityStamp.capture(path: renderURL.path)
+        let length = await FFmpegEncodeCheck.lengthVerification(sourcePath: source.path, outputPath: renderURL.path,
+                                                                output: "the cleaned copy")
+        // A Stop that landed while the probes were out is still a Stop: a
+        // good answer does not hand back a render over it.
+        try Task.checkCancellation()
+        switch length {
+        case .verified, .lengthNotCompared:
+            guard let before, FileIdentityStamp.capture(path: renderURL.path) == before else { throw Self.changedWhileVerified(source) }
+            if case .lengthNotCompared(let why) = length {
+                // The source has no readable duration (ffprobe ran and said
+                // so). Cleanup never replaces the original, so this is a
+                // note, not a refusal: the render was measured on its own terms.
+                appLog.write("cleanup: \((source.path as NSString).lastPathComponent) has no readable duration (\(why)) — the cleaned copy's length was read but not compared")
+                progress(CleanupProgress(phase: "Cleaning up…", fraction: 1.0, note: FFmpegEncodeCheck.lengthNotComparedNote))
+            }
+            return CleanupRender(url: renderURL, verified: before)
+        case .failed(let shortfall):
             cleanupEngineLog.error("cleanup render FAILED (length): \(source.path, privacy: .public) — \(shortfall, privacy: .public)")
             throw CleanupEngineError.renderFailed(shortfall.prefix(1).uppercased() + shortfall.dropFirst())
+        case .unmeasured(let cause):
+            let message = Self.unverifiedRenderMessage(cause: cause)
+            cleanupEngineLog.error("cleanup render FAILED (verify): \(source.path, privacy: .public) — \(message, privacy: .public)")
+            throw CleanupEngineError.renderFailed(message)
         }
-
-        return renderURL
     }
 
-    /// FFmpegEncodeCheck's length rule for a finished render: the render
-    /// against a FRESH probe of the source (never the catalog value), within
-    /// max(3 s, 3 %). nil when long enough — or when either length can't be
-    /// read (a check that cannot measure must not invent a verdict).
-    nonisolated static func lengthShortfall(sourcePath: String, renderPath: String) async -> String? {
-        async let sourceSeconds = FFmpegEncodeCheck.probeDurationSeconds(sourcePath)
-        async let renderSeconds = FFmpegEncodeCheck.probeDurationSeconds(renderPath)
-        return FFmpegEncodeCheck.durationShortfall(sourceSeconds: await sourceSeconds,
-                                                   outputSeconds: await renderSeconds)
+    /// The cause when the render measured is not the render at the name now.
+    nonisolated static let changedWhileVerifiedCause = "the new file changed while it was being verified"
+
+    private static func changedWhileVerified(_ source: CleanupSource) -> CleanupEngineError {
+        let message = unverifiedRenderMessage(cause: changedWhileVerifiedCause)
+        cleanupEngineLog.error("cleanup render FAILED (verify): \(source.path, privacy: .public) — \(message, privacy: .public)")
+        return .renderFailed(message)
+    }
+
+    /// The row's sentence for a render that could not be verified — the
+    /// #500 family, minus the original (Cleanup never replaces it). The
+    /// render sits in the job's scratch folder; nothing was copied beside
+    /// the original. The sentence says where the render IS and promises
+    /// nothing more (Codex r1 #8): the engine does not remove it, and the
+    /// JOB appends what its own removal of the scratch folder did.
+    nonisolated static func unverifiedRenderMessage(cause: String) -> String {
+        "Could not verify the cleaned copy — nothing was published or added to the catalog. Cause: \(cause). "
+            + "The unverified render is only in the job's scratch folder; the original is untouched."
     }
 
     // MARK: - Pure builders (unit-tested, no I/O)

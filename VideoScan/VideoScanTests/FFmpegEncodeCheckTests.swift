@@ -92,43 +92,48 @@ struct FFmpegEncodeCheckLogicTests {
 
     /// The three answers, through a scripted ffprobe: `.verified` needs BOTH
     /// lengths; a length that cannot be read is `.unmeasured` (never
-    /// `.verified`); and `verdict` — "may it be published beside what is
-    /// there" — keeps its old meaning: nil unless the encode FAILED.
-    @Test func verificationHasThreeAnswersAndVerdictKeepsItsMeaning() async throws {
+    /// `.verified`). The old "failure or nil" form (`verdict`), whose nil
+    /// every caller read as leave to publish, is gone (GH #502) — pinned by
+    /// the sensor at the end.
+    @Test func verificationHasThreeAnswersAndNoNilMeansPassForm() async throws {
         typealias C = FFmpegEncodeCheck
         let ok = ProcessRunner.Result(stdout: "", stderr: "", exitCode: 0, launched: true)
         func answers(source: ScriptedExecutor.Behaviour, output: ScriptedExecutor.Behaviour,
-                     encode: ProcessRunner.Result = ok) async -> (C.Verification, String?) {
+                     encode: ProcessRunner.Result = ok, noun: String? = nil) async -> C.Verification {
             let mock = ScriptedExecutor()
                 .on("ffprobe", containing: ["/test_fec/source.mov"], source)
                 .on("ffprobe", containing: ["/test_fec/output.mov"], output)
             return await mock.scoped {
-                (await C.verification(for: encode, sourcePath: "/test_fec/source.mov", outputPath: "/test_fec/output.mov"),
-                 await C.verdict(for: encode, sourcePath: "/test_fec/source.mov", outputPath: "/test_fec/output.mov"))
+                if let noun {
+                    return await C.lengthVerification(sourcePath: "/test_fec/source.mov", outputPath: "/test_fec/output.mov", output: noun)
+                }
+                return await C.verification(for: encode, sourcePath: "/test_fec/source.mov", outputPath: "/test_fec/output.mov")
             }
         }
         let twelve = ScriptedExecutor.Behaviour.output(stdout: "12.000000\n")
         let invalid = ScriptedExecutor.Behaviour.output(stdout: "", stderr: "Invalid data found when processing input\n", exit: 1)
 
-        var (verification, verdict) = await answers(source: twelve, output: twelve)
-        #expect(verification == .verified)
-        #expect(verdict == nil)
-
-        (verification, verdict) = await answers(source: twelve, output: .output(stdout: "2.000000\n"))
-        #expect(verification == .failed("the output runs 0:02 but the source runs 0:12 — the encode stopped early"))
-        #expect(verdict == "the output runs 0:02 but the source runs 0:12 — the encode stopped early")
-
-        (verification, verdict) = await answers(source: twelve, output: invalid)
-        #expect(verification == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
-        #expect(verdict == nil, "unmeasured is not a FAILED encode: without Replace it may still be published beside")
-
-        (verification, verdict) = await answers(source: .output(stdout: "N/A\n"), output: twelve)
-        #expect(verification == .unmeasured("the source's length could not be read to compare against: ffprobe exited 0 but its answer was not a length (“N/A”)"))
-        #expect(verdict == nil)
-
+        #expect(await answers(source: twelve, output: twelve) == .verified)
+        #expect(await answers(source: twelve, output: .output(stdout: "2.000000\n"))
+                == .failed("the output runs 0:02 but the source runs 0:12 — the encode stopped early"))
+        #expect(await answers(source: twelve, output: invalid)
+                == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
+        // A source ffprobe could not READ (the tool failed) is still unmeasured…
+        #expect(await answers(source: invalid, output: twelve)
+                == .unmeasured("the source's length could not be read to compare against: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
+        // …a source that HAS no duration is the fourth answer (EncodeSourceWithoutDurationMatrixTests).
         // Both unreadable: the new file's is the one named.
-        (verification, verdict) = await answers(source: invalid, output: .crash(signal: SIGSEGV))
-        #expect(verification == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 11"))
+        #expect(await answers(source: invalid, output: .crash(signal: SIGSEGV))
+                == .unmeasured("the new file's length could not be read: ffprobe stopped with exit code 11"))
+        // The length half alone (Cleanup's engine), naming its own output.
+        #expect(await answers(source: twelve, output: twelve, noun: "the cleaned copy") == .verified)
+        #expect(await answers(source: twelve, output: invalid, noun: "the cleaned copy")
+                == .unmeasured("the cleaned copy's length could not be read: ffprobe stopped with exit code 1 — Invalid data found when processing input"))
+
+        // Sensor: no caller can ask a question whose nil means "publish".
+        let source = try SourceTree.appSource(named: "FFmpegEncodeCheck.swift")
+        #expect(!source.contains("static func verdict("), "the failure-or-nil verdict is back")
+        #expect(!source.contains("static func probeDurationSeconds("), "the seconds-or-nil probe is back")
 
         // ffmpeg's own failure comes first and nothing is probed.
         let failed = ProcessRunner.Result(stdout: "", stderr: "Conversion failed!\n", exitCode: 1, launched: true)

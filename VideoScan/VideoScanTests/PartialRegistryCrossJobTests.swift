@@ -333,7 +333,7 @@ struct PartialRegistryCrossJobTests {
         let exitBranch = try #require(gate.range(of: "if let failure = FFmpegEncodeCheck.exitFailure("))
         let gateReturn = try #require(gate.range(of: "return", range: exitBranch.upperBound..<gate.endIndex))
         #expect(gate[gateReturn.upperBound...].hasPrefix(" .failed("), "an ffmpeg exit failure with no output is a failed gate")
-        for refusing in ["private func failEncode(", "private func refuseUnverifiedReplace(", "private func stoppedBeforePublish("] {
+        for refusing in ["private func failEncode(", "private func refuseUnverified(", "private func stoppedBeforePublish("] {
             let branch = try #require(text.range(of: refusing), "\(refusing)")
             let finish = try #require(text.range(of: "await finish(", range: branch.upperBound..<text.endIndex))
             #expect(text[branch.upperBound..<finish.lowerBound].contains("discardPartial(partial)"), "\(refusing)")

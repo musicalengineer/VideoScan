@@ -9183,6 +9183,10 @@
         "aFailedTagSaveIsSaidInTheAppLog",
         "aFailedWriteReturnsFalse",
         "aHealthyRunSaysNothing",
+        "aLostFinishWithAnUnreadableMarkerPredictsNothing",
+        "aLostFinishWithNoMarkerOnDiskPromisesNoResume",
+        "aSavedTagIsAnnouncedAfterTheSave",
+        "theBackfillMarkerSaysAFailureOncePerOutage",
         "theFailureIsSaidOncePerOutage",
         "theSameRenameLandsOnceTheDiskAnswers"
       ]
@@ -16316,7 +16320,7 @@
         "anUnmeasurableLengthIsNeverAVerdict",
         "nonZeroExitNamesFfmpegsLastWordsNotItsProgress",
         "shortOutputFailsLongEnoughPasses",
-        "verificationHasThreeAnswersAndVerdictKeepsItsMeaning",
+        "verificationHasThreeAnswersAndNoNilMeansPassForm",
         "zeroExitIsNotAFailure"
       ]
     },
@@ -29185,14 +29189,14 @@
       ],
       "tests": [
         "destinationDirectoryVanishingMidCopyPublishesNothing",
-        "doneSummaryNamesRepairedFiles",
         "doneSummaryReadsHonestlyForAResumedRescue",
+        "doneSummarySaysHowManyWereRefusedBecauseTheNameWasTaken",
         "emptySourceIsCopiedAsAnEmptyFile",
         "failedDataBarrierPublishesNothing",
         "failureMidCopyLeavesNeitherFinalFileNorPartial",
         "freshCopyPublishesCompleteFileAndReportsMeasuredBytes",
         "leftoverPartialIsDiscardedAndNeverCounted",
-        "longerDestinationIsAlsoRecopied",
+        "longerDestinationIsAlsoRefusedAndUntouched",
         "missingSourceIsReportedAsFailure",
         "modificationTimeAndExtendedAttributesSurviveTheCopy",
         "resumedRescueReportsZeroBytesWritten",
@@ -29201,8 +29205,9 @@
         "scale_threeThousandSmallFilesStayWithinBudget",
         "sensor_interruptedCopyNeverLeavesAFinalNamedFile",
         "sensor_shortDestinationIsNeverReportedAsAlreadyCopied",
-        "sensor_shortDestinationIsRepairedNotCountedAsCopied",
-        "shortDestinationIsRecopiedNotCounted",
+        "sensor_shortDestinationIsRefusedNotCountedNotReplaced",
+        "sensor_theCopierPublishesOnlyWithAnExclusiveRename",
+        "shortDestinationIsRefusedNeverReplacedNeverCounted",
         "sourceThatIsNotARegularFileIsRefused",
         "stalePartialBesideCompleteDestinationIsSwept",
         "symlinkAtDestinationIsRefused",
@@ -30997,12 +31002,12 @@
         "aFileSubstitutedAtTheNewFilesNameIsNeverRemovedByTheCleanup",
         "aNewFileSwappedDuringVerificationIsNeverPublished",
         "aNewFileThatCannotBeRemovedIsNeverReportedRemoved",
-        "aPlainTranscodeStillAdoptsAnUnmeasurableOutput",
+        "aPlainTranscodeNeverAdoptsAnUnmeasurableOutput",
         "aReplaceThatFailsAfterTheTrashSaysWhereBothFilesAre",
         "aStalledReplaceWhoseCleanupFailsSaysNotRemoved",
         "anUnmeasurableOutputIsNeverTrustedWithAReplace",
-        "anUnmeasurableSourceIsNotAVerifiedReplace",
         "controlAGoodEncodeReplaces",
+        "controlAPlainTranscodePublishesBeside",
         "encodeCrash",
         "encodeHangThenStop",
         "encodeHangThenWatchdog",
@@ -31010,10 +31015,11 @@
         "encodeMissingOutput",
         "encodeNonzeroExit",
         "encodeTruncated",
-        "preservationReplaceProvesLosslessOnlyAfterTheReplace",
+        "preservationReplaceProvesLosslessBeforeTheReplace",
         "stopAfterTheProbesAnsweredNeverPublishes",
         "stopAfterTheReplaceBeganFinishesAndSaysSo",
         "stopBeforeTheReplaceBeginsCancels",
+        "stopDuringTheProbesOfAPlainTranscodeNeverPublishes",
         "theCauseIsBounded",
         "theDispositionSentenceReportsTheCleanupsOwnResult",
         "thePublishRefusesAFileThatIsNotTheVerifiedOne"
@@ -38494,20 +38500,30 @@
         "VolumeRescueRsyncNegativeMatrixTests"
       ],
       "tests": [
+        "aDifferentFileAlreadyAtTheDestinationIsDestroyed",
+        "aFileAlreadyAtTheFinalNameIsReportedAndLeftAlone",
+        "aRealInterruptedTransferNeverLeavesATruncatedFileAtTheFinalName",
+        "aSourceTheRealRsyncSkipsIsNotCountedCopied",
+        "everyMkdirFailureIsLogged",
         "exitZeroWithoutTheFile",
         "hangThenStop",
         "killedBySignal",
         "launchFailure",
         "launchFailureThenStop",
+        "manyFailuresAreCountedAndEveryLineIsLogged",
         "mkdirCannotStart",
         "mkdirExitsNonzero",
         "mkdirLaunchFailureThenStop",
-        "noStartOutcomeInTheLog",
         "oneOfThreeFails",
         "partialTransferExit",
         "stopBeforeTheFirstFile",
+        "stopBeforeTheFirstFileInFastMode",
         "stopThenNoLaunch",
-        "theCommandLinesAndARealCopy"
+        "theCommandLinesAndARealCopy",
+        "theFailureLogCapIsSaid",
+        "theRescueWritesStartAndOutcome",
+        "theShapeInTheSource",
+        "theWords"
       ]
     },
     {
@@ -38553,6 +38569,107 @@
         "rosterIsPerTaskTree",
         "rosterReachesChildTasksOnly",
         "unboundTheModelsDirIsProductions"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeSourceWithoutDurationMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EncodeSourceWithoutDurationMatrixTests"
+      ],
+      "tests": [
+        "aCleanupRenderIsReturned",
+        "aFallbackMeasureStillCatchesAShortOutput",
+        "aMalformedReplyIsUnreadable",
+        "aMixedRateStreamIsNotGivenALength",
+        "aPlainTranscodeIsPublishedWithTheNote",
+        "aProvenMasterStillCarriesTheNote",
+        "aProvenMasterStillReplaces",
+        "aReformatIsPublishedWithTheNote",
+        "aReplaceIsRefused",
+        "aStreamDurationMeasuresTheSource",
+        "anOutputMeasuredByItsStreamsIsVerified",
+        "anOutputWithNoDurationIsStillFailed",
+        "anUnprovenMasterStillNeverReplaces",
+        "realElementaryStreams",
+        "theChainsParsing",
+        "theFourAnswersAndTheLogLine"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeVerifyReformatCleanupMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ReformatUnverifiedOutputMatrixTests",
+        "CleanupUnverifiedRenderMatrixTests"
+      ],
+      "tests": [
+        "aRenderChangedAfterVerificationIsNeverPublished",
+        "aRenderSwappedDuringVerificationIsNeverReturned",
+        "aScratchRemovalIsRemovedOnlyWhenConfirmedAbsent",
+        "aShortReformatIsStillRefused",
+        "anUnmeasurableReformatIsNeverAdopted",
+        "anUnmeasurableRenderIsNeverReturned",
+        "controlAVerifiedReformatPublishes",
+        "controlAVerifiedRenderIsReturned",
+        "stopDuringTheProbesNeverPublishes",
+        "stopDuringTheProbesNeverReturnsARender",
+        "theJobPublishesOnlyAReturnedRender",
+        "theScratchFoldersFateIsSaid"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodePreservationProofMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodePreservationProofMatrixTests"
+      ],
+      "tests": [
+        "aMasterDecodeThatMisbehavesIsNeverAPass",
+        "aMatchingProofPublishesAndReplaces",
+        "aProofThatHangsIsStalled",
+        "aRealMasterIsProvenThenReplaces",
+        "aShortMasterIsNotProven",
+        "aSourceDecodeThatMisbehavesIsNeverAPass",
+        "aVideoMismatchIsNotPublishedWithoutReplace",
+        "aVideoMismatchNeverReplaces",
+        "anAudioDecodeThatMisbehavesIsNeverAPass",
+        "anAudioMismatchNeverReplaces",
+        "carriageReturnSeparatedRecordsAreComparedOneByOne",
+        "garbageIsBoundedToo",
+        "identicalGarbageAudioProofsAreNotAMatch",
+        "identicalGarbageVideoProofsAreNotAMatch",
+        "stopAfterTheProofAnsweredNeverPublishes",
+        "stopDuringTheProofNeverPublishes",
+        "theEvidenceForALongTapeIsComputedInBudget",
+        "theEvidenceIsBounded",
+        "theEvidenceSentences",
+        "theProofPrecedesThePublishInTheSource"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeRescueNeverReplacesTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VolumeRescueNeverReplacesTests"
+      ],
+      "tests": [
+        "aDestinationMovedDuringTheRescueIsNeverPublishedInto",
+        "aDifferentSizeFileIsNeverReplaced",
+        "aDirectoryAtTheNameIsNeverReplaced",
+        "aFileArrivingDuringTheRealTransferSurvives",
+        "aFileThatAppearsBeforeRsyncRunsIsNotReplaced",
+        "aFileThatAppearsDuringTheFastCopyIsNotReplaced",
+        "aSameSizeFileIsCountedAndLeftUntouched",
+        "aSameSizeFileThatAppearsIsAlreadyThereNotWritten",
+        "aSymlinkAtTheNameIsNeverReplaced",
+        "aSymlinkedStagingFolderIsNeverFollowed",
+        "theCopiersOwnPartialIsStillResumed",
+        "twoCameraCardsIntoOneFolder"
       ]
     }
   ],
@@ -41334,7 +41451,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3974,
+      "expected_floor": 3978,
       "name": "unit",
       "package_expected_floor": 1018,
       "package_selectors": [
@@ -42557,7 +42674,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 984,
+      "expected_floor": 1055,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -42815,7 +42932,12 @@
         "VideoScanTests/DedupeHashReadSeamTests",
         "VideoScanTests/DedupeHashReadSeamSensorTests",
         "VideoScanTests/HashReadFaultContentCopyProofTests",
-        "VideoScanTests/HashReadFaultDeleteDuplicatesTests"
+        "VideoScanTests/HashReadFaultDeleteDuplicatesTests",
+        "VideoScanTests/TranscodePreservationProofMatrixTests",
+        "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
+        "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
+        "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
+        "VideoScanTests/VolumeRescueNeverReplacesTests"
       ]
     },
     {

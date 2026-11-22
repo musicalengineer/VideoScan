@@ -94,7 +94,6 @@ struct AppSupportSideStoreInventoryTests {
         ".attestation_journal.jsonl": .notAppSupport, ".promote_journal.jsonl": .notAppSupport,
         ".promote_decisions.jsonl": .notAppSupport, ".videoscan-backup.json": .notAppSupport,
         "Archive_Inventory_Manifest.csv": .notAppSupport, "README_Naming_and_Layout.txt": .notAppSupport,
-        ".framemd5-MISMATCH.log": .notAppSupport,             // beside a transcode output
         "2026-10-09_214502_junk.csv": .notAppSupport,         // Logs/VideoScan/deletions (doc example)
         "SetAsidePhotosMusic_dry_run.csv": .notAppSupport, "VideoScan_Volumes.csv": .notAppSupport,
         "rick-review-neutral.csv": .notAppSupport, "rick-review-neutral.person.txt": .notAppSupport,

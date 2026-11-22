@@ -161,7 +161,7 @@ struct CleanupMediaMatrixTests {
             recipe: CleanupRecipeRegistry.vhsQuickClean,
             source: source,
             scratchDirectory: scratch,
-            progress: { _ in })
+            progress: { _ in }).url
 
         // ---- Output invariants
         #expect(rendered.path.hasPrefix(scratch.path),

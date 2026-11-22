@@ -16,22 +16,33 @@
 //      words as the reason.
 //   2. length — ffmpeg can exit 0 on a truncated input. The output must
 //      run as long as the source (probed fresh, never the catalog value,
-//      which can be wrong for MXF/MTS), within max(3 s, 3 %). Skipped —
-//      never failed — when either duration cannot be read (no ffprobe, or
-//      a stream with no container duration), because a check that cannot
-//      measure must not invent a verdict.
+//      which can be wrong for MXF/MTS), within max(3 s, 3 %). When either
+//      duration cannot be read (no ffprobe, a probe that crashed or hung,
+//      a stream with no container duration) the answer is `.unmeasured` —
+//      a check that cannot measure must not invent a verdict, in EITHER
+//      direction.
 //
-// UNKNOWN IS NOT VERIFIED (Rick 2026-11-20, GH #500). "Skipped" above means
-// only "not failed": the output may be published beside what is there. It
-// never meant "proven", yet Transcode with Replace read the nil verdict as
-// leave to send the file already at the output name to the Trash — so an
-// output ffprobe could not read (it crashed, could not start, answered
-// garbage, or said "Invalid data") replaced a good file and was catalogued
-// as "Transcoded". `verification` therefore has THREE answers, and a caller
-// that is about to remove something asks for `.verified`, nothing less.
+// UNKNOWN IS NOT VERIFIED (Rick 2026-11-20, GH #500; every verb 2026-11-21,
+// GH #502). The check used to answer a nullable failure string, and nil
+// meant only "not failed" — yet every caller read nil as leave to publish:
+// Transcode with Replace sent the file already at the output name to the
+// Trash for an output ffprobe could not read (#500), and plain Transcode,
+// Reformat and Cleanup published such an output and reported success
+// (#502). `verification` therefore has THREE answers and the nil-means-pass
+// functions (`verdict`, `probeDurationSeconds`) are GONE: a caller must
+// handle `.unmeasured`, and all four fail the job on it — the output is
+// removed, nothing is published or catalogued, the cause is said.
 // "Verified" here is what it always was on the success path: ffmpeg exited
 // 0 and BOTH container lengths were read and agree within max(3 s, 3 %).
 // It is not a decode proof (Preservation's frame-MD5 pass is that).
+// THE SOURCE IS DIFFERENT (2026-11-21, same day): a SOURCE with no readable
+// duration is a fact about the file, not a failed check. Its length is
+// asked two ways, container then streams (FFmpegEncodeCheck+Length.swift); when ffprobe RAN and
+// the file has none, the answer is the fourth case, `.lengthNotCompared`:
+// the new file was measured on its own terms and there was nothing to
+// compare it against. Strict where something destructive rests on it — a
+// caller that would REPLACE a file refuses on it (unless a stronger proof
+// passed: Preservation's frame MD5) — and a plain note where not.
 // (For Rick: `Verification` ≈ a tri-state enum where the old code had a
 // nullable error string; nil could not tell "checked, fine" from "could
 // not check".)
@@ -99,7 +110,16 @@ enum FFmpegEncodeCheck {
         /// ffmpeg exited 0 but a length could not be read: nothing was
         /// proven either way. The reason names the file and the cause.
         case unmeasured(String)
+        /// ffmpeg exited 0 and the NEW file's length was read, but the
+        /// source has no readable duration (ffprobe ran and said so; the
+        /// reason lists the measures tried). Not a comparison: may be
+        /// published beside with a note, never grounds for a Replace.
+        case lengthNotCompared(String)
     }
+
+    /// The note a job's summary carries when it published on
+    /// `.lengthNotCompared`.
+    nonisolated static let lengthNotComparedNote = "Length not compared: the source has no readable duration."
 
     /// The probe's deadline. 60 s: a length read is a header read.
     nonisolated static let probeDeadlineSeconds: Double = 60
@@ -131,7 +151,7 @@ enum FFmpegEncodeCheck {
             return .unreadable("ffprobe stopped with exit code \(result.exitCode)\(said)")
         }
         let answer = (result.stdout ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Double(answer), value.isFinite, value > 0 else {
+        guard let value = decimalSeconds(answer) else {
             let shown = answer.count > 80 ? String(answer.prefix(80)) + "…" : answer
             return .unreadable(answer.isEmpty
                 ? "ffprobe exited 0 but reported no length\(said)"
@@ -156,26 +176,28 @@ enum FFmpegEncodeCheck {
         return measurement(from: result)
     }
 
-    /// Container duration in seconds via ffprobe, or nil when it cannot be
-    /// read. Off the caller's actor; 60 s deadline.
-    nonisolated static func probeDurationSeconds(_ path: String) async -> Double? {
-        await measureDuration(path).seconds
-    }
-
-    /// Exit code first, then both lengths. `.verified` only when both were
-    /// read and agree; a length that could not be read is `.unmeasured`,
-    /// never a pass (GH #500).
-    nonisolated static func verification(for result: ProcessRunner.Result, sourcePath: String,
-                                         outputPath: String) async -> Verification {
-        if let failure = exitFailure(exitCode: result.exitCode, stderr: result.stderr) { return .failed(failure) }
-        async let source = measureDuration(sourcePath)
-        async let output = measureDuration(outputPath)
+    /// The length half of the check, for a caller that has already judged
+    /// the exit code (Cleanup's engine): both lengths, probed fresh.
+    /// `.verified` only when both were read and agree; a length that could
+    /// not be read is `.unmeasured`, never a pass; a source with no
+    /// readable duration is `.lengthNotCompared`. Each length is asked by
+    /// the fallback chain (`measureLength`). `output` names the new file
+    /// in the reason ("the new file", "the cleaned copy").
+    nonisolated static func lengthVerification(sourcePath: String, outputPath: String,
+                                               output noun: String = "the new file") async -> Verification {
+        async let source = measureLength(sourcePath)
+        async let output = measureLength(outputPath)
+        // The new file first: it must be measurable in every mode.
         switch (await source, await output) {
         case (_, .unreadable(let why)):
-            return .unmeasured("the new file's length could not be read: \(why)")
+            return .unmeasured("\(noun)'s length could not be read: \(why)")
+        case (_, .noDuration(let why)):
+            return .unmeasured("\(noun)'s length could not be read: it has no readable duration (\(why))")
         case (.unreadable(let why), _):
             return .unmeasured("the source's length could not be read to compare against: \(why)")
-        case (.seconds(let sourceSeconds), .seconds(let outputSeconds)):
+        case (.noDuration(let why), .measured):
+            return .lengthNotCompared(why)
+        case (.measured(let sourceSeconds, _), .measured(let outputSeconds, _)):
             if let shortfall = durationShortfall(sourceSeconds: sourceSeconds, outputSeconds: outputSeconds) {
                 return .failed(shortfall)
             }
@@ -183,14 +205,13 @@ enum FFmpegEncodeCheck {
         }
     }
 
-    /// The failure reason for one encode, or nil = may be PUBLISHED BESIDE
-    /// what is there. Nil is "not failed", NOT "verified": a caller that
-    /// will remove or replace a file must ask `verification` for
-    /// `.verified` (GH #500).
-    nonisolated static func verdict(for result: ProcessRunner.Result, sourcePath: String, outputPath: String) async -> String? {
-        if case .failed(let failure) = await verification(for: result, sourcePath: sourcePath, outputPath: outputPath) {
-            return failure
-        }
-        return nil
+    /// Exit code first, then both lengths. `.verified` only when both were
+    /// read and agree; a length that could not be read is `.unmeasured`,
+    /// never a pass (GH #500, #502). There is deliberately no "failure or
+    /// nil" form of this: nil could not tell verified from unknown.
+    nonisolated static func verification(for result: ProcessRunner.Result, sourcePath: String,
+                                         outputPath: String) async -> Verification {
+        if let failure = exitFailure(exitCode: result.exitCode, stderr: result.stderr) { return .failed(failure) }
+        return await lengthVerification(sourcePath: sourcePath, outputPath: outputPath)
     }
 }

@@ -8,25 +8,35 @@
 //      source (FFmpegEncodeCheck);
 //   2. ffmpeg wrote nothing, or under 10 KB (it sometimes exits 0 with a
 //      header-only file when a codec library is missing);
-//   3. REPLACE ONLY (GH #500; Rick 2026-11-20: "transcode to a temp, verify
-//      the temp, only when verified could it replace anything. If the
-//      transcode is not verified, the operation fails."): the new file must
-//      be VERIFIED — both container lengths read and in agreement. A length
-//      that could not be read is not verified. The bug: the old nil verdict
+//   3. the new file must be VERIFIED — both container lengths read and in
+//      agreement. A length that could not be read is not verified.
+//      (GH #500, Rick 2026-11-20: "transcode to a temp, verify the temp,
+//      only when verified could it replace anything. If the transcode is
+//      not verified, the operation fails." The bug: the old nil verdict
 //      ("not failed") was read as leave to Trash the file at the output
 //      name, so an output ffprobe could not read replaced a good file and
-//      was catalogued as "Transcoded".
+//      was catalogued as "Transcoded". GH #502, Rick 2026-11-21: the same
+//      rule WITHOUT Replace and for Reformat — an unverified output was
+//      still published beside what was there and adopted into the catalog
+//      as a success nobody had checked.)
 //      Verified means THIS file (codex r1 F2): the partial's stamp (device,
 //      inode, size, mtime) is taken before the probes and must be the same
 //      after them, and again immediately before the publish
 //      (`publishVerified`). A length read from one file never vouches for
 //      another put at its name. Residual: the re-stat and the publish's
 //      rename are separate syscalls; a swap inside that instant is not seen.
-// Without Replace nothing can be removed, and an unmeasured output is still
-// published beside whatever is there, as before.
+//   4. the SOURCE has no readable duration (ffprobe ran and said so, by
+//      container and streams): `.notCompared`. The new file
+//      was measured on its own terms; nothing was compared. Strict where
+//      something destructive rests on it: a Replace is refused (except a
+//      Preservation master whose frame-MD5 proof then passes); otherwise it
+//      is published with the note "Length not compared: …".
 //
-// `replace` is the user's answer, not "is a file at the name right now", so
-// there is no check-then-act window between this gate and the publish.
+// ONE gate for the verbs that publish an ffmpeg encode through
+// DerivativeOutputPublish: Transcode (every preset) and Reformat call
+// `encodeGate` and `publishVerified`. (Cleanup renders into a scratch
+// folder and has its own engine; it asks FFmpegEncodeCheck the same
+// three-answer question.)
 //
 // Memory: two one-line ffprobe answers and one stat; ffprobe streams.
 // (For Rick: `EncodeGate` ≈ a std::variant<Failed, Unverified, Passed>; the
@@ -41,13 +51,19 @@ extension TranscodeJob {
         /// The encode failed. `message` is the row's sentence; `stage` tags
         /// the console line.
         case failed(String, stage: String)
-        /// Replace was chosen and the new file could not be verified.
-        /// `cause` names the file, the tool, its exit code and its words.
+        /// The new file could not be verified. `cause` names the file, the
+        /// tool, its exit code and its words.
         case unverified(cause: String)
         /// May be published. `sizeBytes` is the new file's size. `verified`
-        /// (Replace only) is the stamp of the file whose lengths were read:
-        /// the publish must find exactly that file.
-        case passed(sizeBytes: Int64, verified: PartialFileNaming.FileStamp?)
+        /// is the stamp of the file whose lengths were read: the publish
+        /// must find exactly that file.
+        case passed(sizeBytes: Int64, verified: PartialFileNaming.FileStamp)
+        /// The new file is measurable and non-trivial, but the SOURCE has
+        /// no readable duration, so nothing was compared (2026-11-21). A
+        /// case of its own so every caller must decide: publish beside
+        /// with the note; refuse a Replace — unless a stronger proof
+        /// (Preservation's frame MD5) then passes.
+        case notCompared(sizeBytes: Int64, verified: PartialFileNaming.FileStamp, sourceWhy: String)
     }
 
     /// What the cleanup of this run's partial actually did — the job's
@@ -67,7 +83,7 @@ extension TranscodeJob {
     /// Reads only. Disk and probes run off the main actor.
     @concurrent
     nonisolated static func encodeGate(_ result: ProcessRunner.Result, inputPath: String,
-                                       partialPath: String, replace: Bool) async -> EncodeGate {
+                                       partialPath: String) async -> EncodeGate {
         let fm = FileManager.default
         // The file the probes are about to read. DECLINED (codex r2 F2):
         // a file swapped in for the length of one probe and swapped BACK
@@ -100,12 +116,12 @@ extension TranscodeJob {
         guard size >= 10_000 else {
             return .failed("ffmpeg output too small (\(size) bytes) — likely a codec failure", stage: "output too small")
         }
-        guard replace else { return .passed(sizeBytes: size, verified: nil) }
         guard let before, PartialFileNaming.fileStamp(partialPath) == before else {
             return .unverified(cause: "the new file changed while it was being verified")
         }
         switch verification {
         case .verified: return .passed(sizeBytes: size, verified: before)
+        case .lengthNotCompared(let why): return .notCompared(sizeBytes: size, verified: before, sourceWhy: why)
         case .unmeasured(let why): return .unverified(cause: why)
         case .failed, nil: return .unverified(cause: "the new file was not there to measure")
         }
@@ -115,35 +131,47 @@ extension TranscodeJob {
         reason.prefix(1).uppercased() + reason.dropFirst()
     }
 
-    /// The disk half of the publish, off the main thread. With Replace
-    /// (`verified` non-nil) the partial must still be exactly the verified
-    /// file — checked here, immediately before the publish that may Trash
-    /// the previous file — else `ChangedSinceVerified` and nothing is touched.
+    /// The disk half of the publish, off the main thread. The partial must
+    /// still be exactly the verified file — checked here, immediately
+    /// before the publish that may Trash the previous file — else
+    /// `ChangedSinceVerified` and nothing is touched.
     @concurrent
     nonisolated static func publishVerified(
         partial: String, final: URL, policy: DerivativeOutputPublish.ExistingFilePolicy,
         archiveCheck: ArchiveRemovalCheck?, trash: @escaping @Sendable (URL) throws -> URL?,
-        verified: PartialFileNaming.FileStamp?
+        verified: PartialFileNaming.FileStamp
     ) async throws -> DerivativeOutputPublish.Outcome {
         // A Stop that landed during the hop off the main actor: nothing
         // has been touched yet (codex r2 F3). The publish checks once more
         // at its commit point, immediately before the Trash move.
         try Task.checkCancellation()
-        if let verified, PartialFileNaming.fileStamp(partial) != verified { throw ChangedSinceVerified() }
+        if PartialFileNaming.fileStamp(partial) != verified { throw ChangedSinceVerified() }
         return try DerivativeOutputPublish.publish(partial: partial, as: final, policy: policy,
                                                    archiveCheck: archiveCheck, trash: trash)
     }
 
-    /// What became of the original and of the new file — said on every
-    /// failed Replace. "removed" only when the cleanup said so.
-    nonisolated static func disposition(original: String, newFile: String, cleanup: PartialCleanup) -> String {
-        let what: String
+    /// What became of the new file. "removed" only when the cleanup said so.
+    nonisolated static func newFileDisposition(_ newFile: String, cleanup: PartialCleanup) -> String {
         switch cleanup {
-        case .removed: what = "the \(newFile) new file was removed"
-        case .alreadyGone: what = "the \(newFile) new file was no longer there to remove"
-        case .notRemoved(let why): what = "the \(newFile) new file was NOT removed: \(why)"
+        case .removed: "the \(newFile) new file was removed"
+        case .alreadyGone: "the \(newFile) new file was no longer there to remove"
+        case .notRemoved(let why): "the \(newFile) new file was NOT removed: \(why)"
         }
-        return "\(original) was not moved or changed; \(what)."
+    }
+
+    /// What became of the original and of the new file — said on every
+    /// failed Replace.
+    nonisolated static func disposition(original: String, newFile: String, cleanup: PartialCleanup) -> String {
+        "\(original) was not moved or changed; \(newFileDisposition(newFile, cleanup: cleanup))."
+    }
+
+    /// A new file that failed a proof when NO Replace was asked: the same
+    /// sentence family, minus the original (nothing was going to be
+    /// replaced). Says that nothing was published or catalogued and what
+    /// became of the new file (GH #501 / #502).
+    nonisolated static func notPublishedMessage(failure: String, cleanup: PartialCleanup) -> String {
+        (failure.hasSuffix(".") ? failure : failure + ".") + " Nothing was published or added to the catalog: "
+            + newFileDisposition("failed", cleanup: cleanup) + "."
     }
 
     /// The one sentence for a Replace refused because the new file could
@@ -155,6 +183,25 @@ extension TranscodeJob {
                                                      cleanup: PartialCleanup) -> String {
         "Could not verify the new file — the original was not replaced. Cause: \(cause). "
             + disposition(original: original, newFile: "unverified", cleanup: cleanup)
+    }
+
+    /// The same refusal when NO Replace was asked (GH #502): the #500
+    /// sentence minus the original — nothing was going to be replaced.
+    /// Says that nothing was published or catalogued, the specific cause,
+    /// and what became of the new file.
+    nonisolated static func unverifiedMessage(cause: String, cleanup: PartialCleanup) -> String {
+        let what = newFileDisposition("unverified", cleanup: cleanup)
+        return "Could not verify the new file — nothing was published or added to the catalog. Cause: \(cause). "
+            + what.prefix(1).uppercased() + what.dropFirst() + "."
+    }
+
+    /// A Replace refused because the SOURCE has no readable duration: the
+    /// new file is measurable, but there is nothing to verify it against,
+    /// and a Replace rests on that comparison. `why` lists the measures
+    /// tried.
+    nonisolated static func uncomparedReplaceMessage(why: String, original: String, cleanup: PartialCleanup) -> String {
+        "Could not verify the new file against the original: the source has no readable duration — the original was not replaced. "
+            + "Cause: \(why). " + disposition(original: original, newFile: "unverified", cleanup: cleanup)
     }
 
     /// A Replace whose ENCODE failed says the same two things after the

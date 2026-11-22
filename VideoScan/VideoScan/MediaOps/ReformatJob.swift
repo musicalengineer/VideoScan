@@ -250,29 +250,83 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             return
         }
 
-        // Exit code, then length, then "something was written" and the
-        // 10 KB floor — before anything is published. A partial that fails
-        // any of them is removed.
+        // Gate, then publish — or the job has been finished as failed /
+        // cancelled there and nothing was published.
+        guard let published = await verifyThenPublish(encodeResult, inputPath: inputPath, partialURL: partialURL) else { return }
+        let size = published.size
+
+        // Catalog + queue for analyze.
+        await catalogAndQueueAnalyze()
+
+        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
+        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.\(published.note)")
+    }
+
+    /// The gate between the finished encode and its publish, then the
+    /// publish itself. Returns the new file's size once it is PUBLISHED
+    /// (and the note for a source whose length could not be compared —
+    /// Reformat never replaces, so that is a note, not a refusal); nil
+    /// when the job has been finished here (failed, unverified, stopped)
+    /// — in which case nothing was published.
+    private func verifyThenPublish(_ encodeResult: ProcessRunner.Result, inputPath: String,
+                                   partialURL: URL) async -> (size: Int64, note: String)? {
+        let partialPath = partialURL.path
+        // The ONE gate Transcode uses (TranscodeJob+EncodeGate.swift): exit
+        // code, then length, then "something was written" and the 10 KB
+        // floor — and VERIFIED: both lengths read and in agreement (GH
+        // #502, Rick 2026-11-21). THE BUG: the old "failure or nil" check
+        // answered nil when a length could not be read, and nil was read
+        // as leave to publish — an output ffprobe could not measure was
+        // published, reported "Reformatted" and adopted into the catalog.
+        // A partial that fails the gate is removed; nothing is published.
         let size: Int64
-        switch await Self.checkEncode(encodeResult, inputPath: inputPath, partialPath: partialPath) {
-        case .failed(let failure):
+        let verified: PartialFileNaming.FileStamp
+        var note = ""
+        switch await TranscodeJob.encodeGate(encodeResult, inputPath: inputPath, partialPath: partialPath) {
+        case .failed(let failure, let stage):
             discardPartial(partialURL)
-            reformatLog.error("reformat FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
+            reformatLog.error("reformat FAILED (\(stage, privacy: .public)): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
             await finish(failed: failure)
-            return
-        case .passed(let bytes):
+            return nil
+        case .unverified(let cause):
+            await refuseUnverified(cause: cause, partial: partialURL)
+            return nil
+        case .passed(let bytes, let stamp):
             size = bytes
+            verified = stamp
+        case .notCompared(let bytes, let stamp, let why):
+            size = bytes
+            verified = stamp
+            note = " " + FFmpegEncodeCheck.lengthNotComparedNote
+            appLog.write("reformat: \(record.filename) has no readable duration (\(why)) — the new file's length was read but not compared")
         }
 
-        // Atomic publish: the encode is complete and non-trivial — promote
-        // the partial to the real output name in one rename (#6.3).
+        // A Stop (or a stall) that landed while the gate's probes were out
+        // is still a Stop: a good answer does not publish over it.
+        if await stoppedBeforePublish(partialURL) { return nil }
+
+        // Atomic publish: the encode is complete, non-trivial and verified
+        // — promote the partial to the real output name in one rename
+        // (#6.3), after checking it is still the file that was verified.
         // A taken name keeps BOTH files: the new one lands beside it.
         do {
-            let outcome = try await Self.publishOffMain(partial: partialPath, final: outputURL)
+            let outcome = try await TranscodeJob.publishVerified(
+                partial: partialPath, final: outputURL, policy: .keep(reason: "a file already has that name"),
+                archiveCheck: nil, trash: { _ in nil }, verified: verified)
             publishedURL = outcome.url
             if case .publishedBeside(let url, let kept, _) = outcome {
                 reformatLog.notice("reformat: \(kept.lastPathComponent, privacy: .public) already existed — kept; new file published as \(url.lastPathComponent, privacy: .public)")
             }
+        } catch is CancellationError {
+            // Stop before anything was renamed: nothing was published.
+            if !(await stoppedBeforePublish(partialURL)) {
+                discardPartial(partialURL)
+                await finish(cancelled: true)
+            }
+            return nil
+        } catch is TranscodeJob.ChangedSinceVerified {
+            await refuseUnverified(cause: TranscodeJob.changedAfterVerification, partial: partialURL)
+            return nil
         } catch {
             // The finished encode is kept — moved OFF the partial pattern
             // (`.vs-kept.`, no-clobber) so no stale sweep can remove it once
@@ -281,14 +335,9 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             reformatLog.error("reformat FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
             appLog.write("reformat: \(record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
             await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
-            return
+            return nil
         }
-
-        // Catalog + queue for analyze.
-        await catalogAndQueueAnalyze()
-
-        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+        return (size, note)
     }
 
     /// Apple Silicon optimization (Rick 2026-06-14):
@@ -359,52 +408,44 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         return result
     }
 
-    enum EncodeCheck: Equatable, Sendable {
-        case failed(String)
-        case passed(sizeBytes: Int64)
-    }
-
-    /// The post-encode verdict: FFmpegEncodeCheck (exit code, then length
-    /// against a fresh probe of the source), then the reservation must have
-    /// been written to (an empty partial = ffmpeg wrote nothing), then the
-    /// 10 KB floor (ffmpeg sometimes exits 0 with a header-only file when a
-    /// codec library is unavailable). Disk + probes run off the main actor.
-    @concurrent
-    nonisolated static func checkEncode(_ result: ProcessRunner.Result, inputPath: String,
-                                        partialPath: String) async -> EncodeCheck {
-        if let failure = await FFmpegEncodeCheck.verdict(for: result, sourcePath: inputPath,
-                                                          outputPath: partialPath) {
-            return .failed(failure.prefix(1).uppercased() + failure.dropFirst())
-        }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        guard attrs != nil, size > 0 else {
-            return .failed("ffmpeg finished but no output file was produced")
-        }
-        guard size >= 10_000 else {
-            return .failed("ffmpeg output too small (\(size) bytes) — likely a codec failure")
-        }
-        return .passed(sizeBytes: size)
-    }
-
-    /// Remove this run's own partial after a stall / cancel / failed
-    /// encode (name-guarded, releases the reservation). A failure is
-    /// logged, never swallowed; a leftover is a later sweep's to remove.
-    private func discardPartial(_ partial: URL) {
+    /// Remove this run's own partial after a stall / cancel / failed or
+    /// unverified encode (name- AND identity-guarded: only the file this
+    /// run reserved; releases the reservation). Returns what actually
+    /// happened — the refusal's sentence reports it. A failure is logged,
+    /// never swallowed; a leftover is a later sweep's to remove.
+    @discardableResult
+    private func discardPartial(_ partial: URL) -> TranscodeJob.PartialCleanup {
         do {
-            try PartialFileNaming.remove(partial)
+            return try PartialFileNaming.remove(partial) == .removed ? .removed : .alreadyGone
         } catch {
             reformatLog.error("reformat: could not remove partial \(partial.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .notRemoved(error.localizedDescription)
         }
     }
 
-    /// The disk half of the publish, off the main thread. Never replaces.
-    @concurrent
-    nonisolated private static func publishOffMain(partial: String, final: URL) async throws
-        -> DerivativeOutputPublish.Outcome {
-        try DerivativeOutputPublish.publish(partial: partial, as: final,
-                                            policy: .keep(reason: "a file already has that name"),
-                                            archiveCheck: nil, trash: { _ in nil })
+    /// The new file could not be verified (GH #502): the job FAILS, the
+    /// new file is removed, nothing is published or catalogued, and the
+    /// row + OUTCOME line carry the cause and what the cleanup did.
+    private func refuseUnverified(cause: String, partial: URL) async {
+        let cleanup = discardPartial(partial)
+        let message = TranscodeJob.unverifiedMessage(cause: cause, cleanup: cleanup)
+        reformatLog.error("reformat FAILED (verify): \(self.record.filename, privacy: .public) — \(message, privacy: .public)")
+        await finish(failed: message)
+    }
+
+    /// Stop, or a watchdog stall, seen after the encode and before the
+    /// publish: the partial is discarded and the job ends Cancelled — or
+    /// Failed with the stall that caused it. True = the run is over.
+    private func stoppedBeforePublish(_ partial: URL) async -> Bool {
+        guard stallReason != nil || Task.isCancelled || state == .cancelling else { return false }
+        discardPartial(partial)
+        if let stallReason {
+            reformatLog.error("reformat FAILED (stall): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
+            await finish(failed: stallReason)
+        } else {
+            await finish(cancelled: true)
+        }
+        return true
     }
 
     @concurrent

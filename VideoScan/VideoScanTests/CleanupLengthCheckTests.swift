@@ -10,7 +10,8 @@ import Foundation
 // 60-minute tape was published beside the original as a good cleaned copy.
 // The render now goes through FFmpegEncodeCheck's length rule, the one
 // Transcode and Reformat use: output vs a FRESH probe of the source, within
-// max(3 s, 3 %); skipped (never failed) when either length can't be read.
+// max(3 s, 3 %). (A length that can't be read used to SKIP the rule; since
+// GH #502 it fails the render — CleanupUnverifiedRenderMatrixTests.)
 //
 // Fixtures: a 60 s synthetic `test_` source (tiny mpeg4 + aac), a real,
 // playable clip of a chosen length made once per test, and a ScriptedExecutor
@@ -76,7 +77,7 @@ struct CleanupLengthCheckTests {
         let url = try await mock.scoped {
             try await CleanupFFmpegEngine().render(
                 recipe: CleanupRecipeRegistry.vhsQuickClean, source: bench.source,
-                scratchDirectory: bench.scratch, progress: { _ in })
+                scratchDirectory: bench.scratch, progress: { _ in }).url
         }
         #expect(mock.calls(to: "ffmpeg", containing: ["cleanup-render"]).count == 1, "\(mock.calls)")
         #expect(mock.calls(to: "ffprobe").count == 2, "source and render are both probed fresh: \(mock.calls)")
@@ -116,7 +117,7 @@ struct CleanupLengthCheckTests {
     @Test("sensor: CleanupFFmpegEngine checks length through FFmpegEncodeCheck")
     func engineUsesTheSharedLengthRule() throws {
         let text = try SourceTree.appSource(named: "CleanupFFmpegEngine.swift")
-        #expect(text.contains("FFmpegEncodeCheck.durationShortfall("))
-        #expect(text.contains("FFmpegEncodeCheck.probeDurationSeconds("))
+        #expect(text.contains("FFmpegEncodeCheck.lengthVerification("))
+        #expect(!text.contains("probeDurationSeconds("), "the nil-means-pass length read is back (GH #502)")
     }
 }

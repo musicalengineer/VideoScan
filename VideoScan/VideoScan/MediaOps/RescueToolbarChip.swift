@@ -35,7 +35,10 @@ struct RescueToolbarChip: View {
         if rescue.isRunning {
             chipShell(color: .blue, icon: "doc.on.doc.fill", label: runningLabel)
         } else if rescue.isDone {
-            chipShell(color: .green, icon: "checkmark.circle.fill", label: doneLabel)
+            // A stopped or partly failed copy is not a green tick (GH #506).
+            let attention = rescue.wasStopped || rescue.filesFailed > 0
+            chipShell(color: attention ? .orange : .green,
+                      icon: attention ? "exclamationmark.triangle.fill" : "checkmark.circle.fill", label: doneLabel)
         }
         // Otherwise: hide. Toolbar width is precious.
     }
@@ -46,7 +49,8 @@ struct RescueToolbarChip: View {
     }
 
     private var doneLabel: String {
-        "Copy done · \(rescue.filesCopied)"
+        if rescue.wasStopped { return "Copy stopped · \(rescue.filesCopied) of \(rescue.filesPlanned)" }
+        return rescue.filesFailed > 0 ? "Copy done · \(rescue.filesCopied) · \(rescue.filesFailed) failed" : "Copy done · \(rescue.filesCopied)"
     }
 
     @ViewBuilder

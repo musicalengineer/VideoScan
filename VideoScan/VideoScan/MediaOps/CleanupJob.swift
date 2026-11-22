@@ -108,6 +108,8 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
     /// Set-once ledger of the first terminal cause (watchdog stall vs the
     /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
     private var terminalCause = MFOTerminalCause()
+    /// The scratch folder this run made and has not yet removed.
+    private var scratchHeld: URL?
     private var stallReason: String? { terminalCause.stallReason }
 
     var title: String { record.filename }
@@ -212,8 +214,11 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         cleanupLog.info("cleanup scratch: \(scratchDir.path, privacy: .public) (ramDisk=\(usedRAMDisk, privacy: .public), estimate=\(estimate, privacy: .public) bytes)")
 
         // Everything from here on must release the scratch dir + RAM disk.
+        // A failed job says what the removal did (finish(failed:)); any
+        // other exit logs a removal that failed (Codex r1 #8).
+        scratchHeld = scratchDir
         defer {
-            try? FileManager.default.removeItem(at: scratchDir)
+            releaseScratchSayingIfLeft()
             if usedRAMDisk {
                 let disk = model?.ramDisk
                 Task { await disk?.unmount() }
@@ -231,8 +236,10 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
                 self?.handleStall(silentFor: silentFor)
             }
         }
+        let resultNote = CleanupResultNote()
         let progressSink: @Sendable (CleanupProgress) -> Void = { [weak self] beat in
             monitor.tick()
+            resultNote.record(beat)
             guard let self, let fraction = beat.fraction else { return }
             Task { @MainActor in
                 self.applyProgressFraction(fraction)
@@ -242,7 +249,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // ---- Render (fully off-main — see renderOffMain).
         let renderStart = Date()
         monitor.start()
-        let rendered: URL
+        let rendered: CleanupRender
         do {
             rendered = try await Self.renderOffMain(engine: engine,
                                                     recipe: recipe,
@@ -284,7 +291,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         }
         let published: URL
         do {
-            published = try await Self.publishOffMain(renderedPath: rendered.path,
+            published = try await Self.publishOffMain(render: rendered,
                                                       sourcePath: inputPath,
                                                       preferredOutput: outputURL,
                                                       progress: copyProgress)
@@ -319,7 +326,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         cleanupLog.info("cleanup DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) render \(renderElapsed, format: .fixed(precision: 1), privacy: .public)s")
         // (The Center's "cleanup done:" OUTCOME line carries this same
         // summary — no separate appLog write here.)
-        finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
+        finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.\(resultNote.suffix)")
     }
 
     /// Shared error terminal for the two long phases: watchdog stall wins
@@ -368,7 +375,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         source: CleanupSource,
         scratchDirectory: URL,
         progress: @escaping @Sendable (CleanupProgress) -> Void
-    ) async throws -> URL {
+    ) async throws -> CleanupRender {
         try await engine.render(recipe: recipe,
                                 source: source,
                                 scratchDirectory: scratchDirectory,
@@ -401,7 +408,7 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
     @concurrent
     #endif
     private static func publishOffMain(
-        renderedPath: String,
+        render: CleanupRender,
         sourcePath: String,
         preferredOutput: URL,
         progress: @escaping @Sendable (Double) -> Void
@@ -418,10 +425,16 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
             candidate = cleanedOutputURL(forSourcePath: sourcePath, fileExists: taken)
         }
 
-        // 2. Chunked copy to the candidate's partial sibling.
+        // 2. Chunked copy to the candidate's partial sibling — of the
+        // render the engine VERIFIED, and only while it still is that file
+        // (Codex r1 #4): its stamp is checked before the copy and again
+        // after it, before the rename. A changed render is never published;
+        // our own partial copy of it is removed.
+        guard render.isUnchanged else { throw changedSinceVerified }
         let partialPath = ReformatJob.partialURL(for: candidate).path
         do {
-            try await chunkedCopy(from: renderedPath, to: partialPath, progress: progress)
+            try await chunkedCopy(from: render.url.path, to: partialPath, progress: progress)
+            guard render.isUnchanged else { throw changedSinceVerified }
         } catch {
             try? fm.removeItem(atPath: partialPath)
             throw error
@@ -447,6 +460,10 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
             }
         }
     }
+
+    /// The failure when the render is no longer the file the engine verified.
+    nonisolated static let changedSinceVerified = CleanupEngineError.renderFailed(
+        CleanupFFmpegEngine.unverifiedRenderMessage(cause: CleanupFFmpegEngine.changedWhileVerifiedCause))
 
     /// Streaming file copy: 8 MB chunks, cancellation checked per chunk,
     /// byte-fraction progress, and a per-chunk `Task.yield()` so a
@@ -645,10 +662,52 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // not a failure. A stall recorded before the Stop is not diverted
         // (codex gate 2026-08-26) — see MFOTerminalCause.
         if terminalCause.isCancel { finishCancelled(); return }
+        // The failure says what became of the job's scratch folder (where an
+        // unverified render sits) — the removal's own result, now.
+        var failed = failed
+        if scratchHeld != nil {
+            failed += " " + (releaseScratch() ?? "The job's scratch folder was removed.")
+        }
         state = .failed(message: failed)
         subtitleText = failed
         isIndeterminateValue = false
         cleanupLog.warning("cleanup failed: \(failed, privacy: .public)")
+    }
+
+    /// Remove the job's scratch folder once. nil when it is gone (or was
+    /// never made); otherwise the sentence that says it is still there.
+    /// Memory: none; one removeItem of a folder holding one render.
+    private func releaseScratch() -> String? {
+        guard let dir = scratchHeld else { return nil }
+        scratchHeld = nil
+        do {
+            try FileManager.default.removeItem(at: dir)
+            return nil
+        } catch {
+            var sb = stat()
+            let presence: Int32 = lstat(dir.path, &sb) == 0 ? 0 : errno
+            return Self.scratchRemovalLine(path: dir.path, removalError: error, lstatErrno: presence)
+        }
+    }
+
+    /// After a removal of the scratch folder threw: nil when it is
+    /// CONFIRMED gone (a fresh lstat says ENOENT), else the sentence with
+    /// the removal's error. THE BUG (Codex r2 #6, P1): `fileExists` false
+    /// was taken for gone — but an lstat that fails with EIO (a failing
+    /// disk) says nothing about whether the folder is there. `lstatErrno`
+    /// is the fresh lstat's answer (0 = something is at the path). Pure.
+    nonisolated static func scratchRemovalLine(path: String, removalError: Error, lstatErrno: Int32) -> String? {
+        if lstatErrno == ENOENT { return nil }
+        let unknown = lstatErrno == 0 ? "" : " (whether it is still there could not be read: \(String(cString: strerror(lstatErrno))))"
+        return "The job's scratch folder \(path) was NOT removed: \(removalError.localizedDescription)\(unknown)."
+    }
+
+    /// Every exit: remove the scratch folder if still held; a removal that
+    /// failed is said in the logs (a failed job has already said it).
+    private func releaseScratchSayingIfLeft() {
+        guard let left = releaseScratch() else { return }
+        cleanupLog.error("cleanup: \(left, privacy: .public)")
+        appLog.write("cleanup: \(left)")
     }
 
     private func finishCancelled() {
@@ -678,4 +737,21 @@ final class CleanupJob: @MainActor MediaFileOperationJob {
         // Rick 2026-08-18: one app-wide decimal formatter (Finder / df base).
         MediaBytes.display(bytes)
     }
+}
+
+/// The engine's note about the RESULT of a render ("Length not compared:
+/// the source has no readable duration."), carried from a progress beat to
+/// the job's summary. Lock-guarded: beats arrive on pipe-reader threads and
+/// the summary reads it on the main actor after the render has returned.
+/// (For Rick: ≈ a std::mutex-guarded std::optional<std::string>.)
+struct CleanupResultNote: Sendable {
+    private let box = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    /// Keep the beat's note, if it has one (the last one wins).
+    func record(_ beat: CleanupProgress) {
+        if let note = beat.note { box.withLock { $0 = note } }
+    }
+
+    /// " <note>" for the end of the summary, or "".
+    var suffix: String { box.withLock { $0 }.map { " " + $0 } ?? "" }
 }

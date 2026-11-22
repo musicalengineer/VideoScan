@@ -313,9 +313,12 @@ nonisolated static func encode(_ src: URL, to output: URL, ffmpeg: String,
         deadlineSeconds: nil,                                 // stall monitor bounds silence instead
         control: pauser.control)                              // SIGSTOP/SIGCONT for Pause
     if Task.isCancelled { discardPartial(partial); throw CancellationError() }
-    if let why = await FFmpegEncodeCheck.verdict(for: result, sourcePath: src.path,
-                                                 outputPath: partial.path) {
-        discardPartial(partial); throw EncodeFailure(why)     // exit code, THEN length
+    // Exit code, THEN both lengths. Three answers; only `.verified` publishes.
+    // Unknown is NOT verified (GH #500, #502): `.unmeasured` fails the job too.
+    switch await FFmpegEncodeCheck.verification(for: result, sourcePath: src.path, outputPath: partial.path) {
+    case .verified: break
+    case .failed(let why), .unmeasured(let why):
+        discardPartial(partial); throw EncodeFailure(why)
     }
     let outcome = try DerivativeOutputPublish.publish(partial: partial.path, as: output,
                                                       policy: .keepBoth, archiveCheck: nil,

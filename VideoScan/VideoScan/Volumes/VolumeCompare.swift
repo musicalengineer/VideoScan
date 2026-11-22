@@ -130,12 +130,24 @@ enum VolumeComparer {
 
 enum RescueCopyMode: String, CaseIterable {
     case fast = "Fast (no verification)"
-    case verified = "Verified (rsync --checksum)"
+    /// The case keeps its name (call sites); the LABEL no longer says
+    /// "Verified" (GH #506): what VideoScan itself checks after rsync is
+    /// that the destination is a regular file of the source's size — a
+    /// size check, not a content hash.
+    case verified = "rsync --checksum (size checked)"
 
     var description: String {
         switch self {
-        case .fast: return "Uses system copy — fastest, no post-copy checksum"
-        case .verified: return "Uses rsync with checksums — slower but guarantees integrity"
+        case .fast: return "Uses system copy — fastest, no post-copy checksum. Nothing already at the destination is ever replaced."
+        case .verified: return "Uses rsync --checksum — slower. A file counts as copied only after its size at the destination is checked against the source (a size check, not a hash). Nothing already at the destination is ever replaced."
+        }
+    }
+
+    /// For the START line in the log.
+    var logName: String {
+        switch self {
+        case .fast: return "fast copy"
+        case .verified: return "rsync --checksum"
         }
     }
 }
@@ -163,12 +175,27 @@ final class VolumeRescueOperation: ObservableObject {
     /// reads honestly instead of looking like it re-copied everything.
     @Published var filesAlreadyPresent: Int = 0
     @Published var bytesAlreadyPresent: Int64 = 0
-    /// Destinations found INCOMPLETE (size ≠ source) and re-copied. Before
-    /// 2026-09-13 these were silently counted as good copies — this
-    /// counter is the visible half of that fix.
-    @Published var filesRepaired: Int = 0
+    /// Subset of `filesFailed`: source files NOT copied because a different
+    /// file (another size, a folder, a link) is already at their name under
+    /// the destination. A rescue never replaces what is there (rule 2).
+    @Published private(set) var filesNameTaken: Int = 0
+    /// One line per file that is NOT a copy (failed, or in flight at Stop),
+    /// each saying why and what is at the destination. Bounded: one line of
+    /// at most ~700 characters per such file.
     @Published var errors: [String] = []
     @Published var isDone = false
+    /// GH #506 item 4: a Stop is a named outcome, not "done, 1 failed".
+    /// True when Stop ended the run with files still to copy.
+    @Published private(set) var wasStopped = false
+    /// The file whose transfer Stop killed (0 or 1): not copied, not failed.
+    @Published private(set) var filesInterrupted: Int = 0
+    /// Files the run never started because Stop came first.
+    @Published private(set) var filesNotAttempted: Int = 0
+    /// How many files this run was asked to copy. Always
+    /// `filesCopied + filesFailed + filesInterrupted + filesNotAttempted`
+    /// once the run is done.
+    @Published private(set) var filesPlanned: Int = 0
+    private var stopRequested = false
 
     private var task: Task<Void, Never>?
 
@@ -203,15 +230,52 @@ final class VolumeRescueOperation: ObservableObject {
     /// figure is what this run actually WROTE, so a resumed rescue reads
     /// "40 safe · 0 failed · 0 bytes · 40 already there" instead of
     /// claiming it copied 400 GB it never touched.
+    ///
+    /// GH #506: the first figure is "at the destination (size checked)" —
+    /// not "safe" and not "verified": what was checked is that each file
+    /// is a regular file of the source's size (and it is not "copied",
+    /// because a resumed run counts files that were already there). After
+    /// a Stop the file in flight and the files never attempted are named.
     nonisolated static func doneSummary(safe: Int,
                                         failed: Int,
                                         bytesWritten: Int64,
                                         alreadyPresent: Int,
-                                        repaired: Int) -> String {
-        var parts = ["\(safe) safe", "\(failed) failed", humanSize(bytesWritten) + " written"]
+                                        nameTaken: Int = 0,
+                                        interrupted: Int = 0,
+                                        notAttempted: Int = 0) -> String {
+        // "Failed" says how many were refused because the name is taken:
+        // those files are not lost (they are still on the source) and
+        // nothing at the destination was replaced.
+        let failedWords = nameTaken > 0
+            ? "\(failed) failed (\(nameTaken) not replaced: a different file was already there)" : "\(failed) failed"
+        var parts = ["\(safe) at the destination (size checked)", failedWords, humanSize(bytesWritten) + " written"]
         if alreadyPresent > 0 { parts.append("\(alreadyPresent) already there") }
-        if repaired > 0 { parts.append("\(repaired) incomplete re-copied") }
+        if interrupted > 0 { parts.append("\(interrupted) interrupted by Stop") }
+        if notAttempted > 0 { parts.append("\(notAttempted) not attempted") }
         return parts.joined(separator: " · ")
+    }
+
+    /// The banner's title: a stopped or partly failed copy is never
+    /// headed "Copy finished" over a green tick.
+    nonisolated static func doneTitle(stopped: Bool, failed: Int) -> String {
+        if stopped { return "Copy stopped" }
+        return failed > 0 ? "Copy finished — \(failed) file\(failed == 1 ? "" : "s") failed" : "Copy finished"
+    }
+
+    /// The banner's second line when some file is not a copy: the first
+    /// such line, and where the rest are. nil when every file was copied.
+    nonisolated static func doneDetail(errors: [String]) -> String? {
+        guard let first = errors.first else { return nil }
+        if errors.count == 1 { return first }
+        let whereTheyAre = errors.count <= failureLogLimit
+            ? "every line is in videoscan.log (rescue FAILED)."
+            : "the first \(failureLogLimit.formatted()) are in videoscan.log (rescue FAILED), then a count of the rest."
+        return "\(first) — and \(errors.count - 1) more; \(whereTheyAre)"
+    }
+
+    /// The one OUTCOME line for the app log.
+    nonisolated static func outcomeLine(stopped: Bool, planned: Int, summary: String, destination: String, elapsedSeconds: Int) -> String {
+        "rescue OUTCOME: \(stopped ? "stopped" : "done") — \(planned) planned: \(summary) — destination \(destination), \(elapsedSeconds) s"
     }
 
     nonisolated static func sanitizeRescueFolderName(_ raw: String) -> String {
@@ -239,9 +303,14 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         filesAlreadyPresent = 0
         bytesAlreadyPresent = 0
-        filesRepaired = 0
+        filesNameTaken = 0
         errors = []
         rsyncInFlight = false
+        wasStopped = false
+        stopRequested = false
+        filesInterrupted = 0
+        filesNotAttempted = 0
+        filesPlanned = files.count
         // Remember destination so post-completion UX can trigger a
         // rescan of the volume that just received the files.
         lastDestPath = destPath
@@ -257,11 +326,16 @@ final class VolumeRescueOperation: ObservableObject {
         let started = Date()
         let totalBytesPlanned = snapshots.reduce(Int64(0)) { $0 + $1.sizeBytes }
         rescueLog.notice("Rescue start: \(total, privacy: .public) files, \(humanSize(totalBytesPlanned), privacy: .public) → \(destPath, privacy: .public)/\(safeFolder, privacy: .public) (mode=\(mode.rawValue, privacy: .public))")
+        let rescueDir = (destPath as NSString).appendingPathComponent(safeFolder)
+        // START and OUTCOME through the one log sink (GH #506 item 5). The
+        // rescue is NOT an MFO job yet (no Pause, no stall watchdog — a
+        // bigger design, noted in the issue); this is its audit trail.
+        appLog.write("rescue START: \(total) file(s), \(humanSize(totalBytesPlanned)), \(sourcePath) → \(rescueDir) (\(mode.logName)); "
+            + "a file counts only when it is at the destination with the source's size (a size check, not a hash); nothing at the source is changed")
         task = Task { [weak self] in
             let fm = FileManager.default
 
             // Create destination root if needed
-            let rescueDir = (destPath as NSString).appendingPathComponent(safeFolder)
             try? fm.createDirectory(atPath: rescueDir, withIntermediateDirectories: true)
 
             if mode == .verified {
@@ -275,7 +349,19 @@ final class VolumeRescueOperation: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 let elapsed = Date().timeIntervalSince(started)
-                rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) repairedIncomplete=\(self.filesRepaired, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                // Counts add up: planned = at the destination + failed +
+                // interrupted + not attempted. Only a Stop leaves files
+                // unattempted (the loops break on nothing else).
+                self.filesNotAttempted = max(0, total - self.filesCopied - self.filesFailed - self.filesInterrupted)
+                self.wasStopped = self.stopRequested && (self.filesInterrupted + self.filesNotAttempted) > 0
+                rescueLog.notice("Rescue done: safe=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) written=\(humanSize(self.bytesWritten), privacy: .public) alreadyPresent=\(self.filesAlreadyPresent, privacy: .public) (\(humanSize(self.bytesAlreadyPresent), privacy: .public)) nameTaken=\(self.filesNameTaken, privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                if let overflow = Self.failureOverflowLine(failed: self.filesFailed) { appLog.write(overflow) }
+                appLog.write(Self.outcomeLine(
+                    stopped: self.wasStopped, planned: total,
+                    summary: Self.doneSummary(safe: self.filesCopied, failed: self.filesFailed, bytesWritten: self.bytesWritten,
+                                              alreadyPresent: self.filesAlreadyPresent, nameTaken: self.filesNameTaken,
+                                              interrupted: self.filesInterrupted, notAttempted: self.filesNotAttempted),
+                    destination: rescueDir, elapsedSeconds: Int(elapsed)))
                 self.progress = 1.0
                 self.isRunning = false
                 self.isDone = true
@@ -297,7 +383,12 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         filesAlreadyPresent = 0
         bytesAlreadyPresent = 0
-        filesRepaired = 0
+        filesNameTaken = 0
+        filesInterrupted = 0
+        filesNotAttempted = 0
+        filesPlanned = 0
+        wasStopped = false
+        errors = []
         currentFile = ""
     }
 
@@ -315,6 +406,7 @@ final class VolumeRescueOperation: ObservableObject {
     /// "did it cancel?" UI for large MXFs.
     func cancel() {
         let hadProc = rsyncInFlight
+        if isRunning { stopRequested = true }
         task?.cancel()
         rsyncInFlight = false
         rescueLog.notice("Rescue cancel requested (hadProc=\(hadProc, privacy: .public))")
@@ -353,13 +445,21 @@ final class VolumeRescueOperation: ObservableObject {
                 self?.progress = progressFraction
             }
 
+            // Refuse before mutating (rule 2): a name that is taken by a
+            // different file is never touched. (A same-size file goes on
+            // to the copier, which leaves it alone, counts it as already
+            // there and sweeps only its OWN stale `.partial`.)
+            if case .taken(let line) = Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+                await recordFailed(line, nameTaken: true)
+                continue
+            }
+
             do {
                 try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
             } catch {
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
-                }
+                // Through recordFailed, like every other failure: the banner
+                // says every line is in videoscan.log (Codex r2 #8).
+                await recordFailed("mkdir failed: \(relative) — \(error.localizedDescription)")
                 continue
             }
 
@@ -381,23 +481,20 @@ final class VolumeRescueOperation: ObservableObject {
                         self?.filesAlreadyPresent += 1
                         self?.bytesAlreadyPresent += bytes
                     }
-                case .recopiedIncomplete(let written, let previousSize):
-                    // The bug this fix exists for: before today this file
-                    // would have been counted as a good copy. Say so loudly.
-                    rescueLog.warning("Incomplete rescue copy REPAIRED: \(relative, privacy: .public) was \(previousSize, privacy: .public) bytes, source is \(written, privacy: .public) — re-copied")
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.filesRepaired += 1
-                        self?.bytesWritten += written
-                    }
                 }
             } catch RescueFileCopier.Failure.cancelled {
+                // In flight at Stop: named, not failed (as the rsync path).
+                await recordInterrupted("\(relative) — stopped during the copy; nothing was published at the final name.")
                 break
             } catch {
-                rescueLog.error("Rescue copy failed: \(relative, privacy: .public) — \(String(describing: error), privacy: .public)")
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("\(relative) — \(error.localizedDescription)")
+                // The copier refused because the name is (or became) taken:
+                // say it in the same words as the check above, from a
+                // fresh look at what is there now.
+                if Self.isNameTaken(error),
+                   case .taken(let line) = Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+                    await recordFailed(line, nameTaken: true)
+                } else {
+                    await recordFailed("\(relative) — \(error.localizedDescription)")
                 }
             }
         }
@@ -408,6 +505,7 @@ final class VolumeRescueOperation: ObservableObject {
     private nonisolated func rsyncCopy(files: [VideoRecordSnapshot], sourcePath: String, rescueDir: String, total: Int) async {
         // rsync individual files to preserve per-file progress reporting
         // and handle errors per-file rather than aborting the whole batch
+        var movedAt: String?   // the file whose destination folder was moved mid-run (Codex r2 #4)
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
@@ -421,6 +519,37 @@ final class VolumeRescueOperation: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.currentFile = filename
                 self?.progress = progressFraction
+            }
+
+            // A destination folder moved during the run (dragged to the
+            // Trash, say) is the user's doing: the files after it are NOT
+            // attempted — the next mkdir would silently re-create the folder
+            // they moved away. Each is FAILED with the line, so the counts
+            // still add up and every line is logged.
+            if let first = movedAt {
+                await recordFailed(Self.notAttemptedAfterMove(relative: relative, first: first))
+                continue
+            }
+
+            // NEVER REPLACE (rule 2, 2026-11-21). THE BUG: nothing asked
+            // what was already at the destination name, and a successful
+            // rsync replaced it — the previous bytes unlinked, not trashed.
+            // Two volumes with the same relative path (two camera cards
+            // with DCIM/100CANON/MVI_0001.MOV) rescued into one folder is
+            // all it took. Decided here, before mkdir and before rsync:
+            // a free name is transferred; a regular file of the source's
+            // size is counted as already there and left alone (content is
+            // NOT compared — a size check); anything else at the name
+            // fails this file and is not touched.
+            switch Self.nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+            case .free:
+                break
+            case .alreadyThere(let bytes):
+                await record(.alreadyThere(bytes))
+                continue
+            case .taken(let line):
+                await record(.failed(line, nameTaken: true))
+                continue
             }
 
             // Create destination directory.
@@ -439,31 +568,40 @@ final class VolumeRescueOperation: ObservableObject {
                 // RESULT, not of the task: a Stop that lands after a genuine
                 // launch failure must not erase that failure (Codex r1 P2).
                 if mkdir.cancelledBeforeLaunch { break }
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("mkdir failed: \(relative) — \(mkdir.stderr)")
-                }
+                // Through recordFailed: counted, listed AND logged (Codex r2 #8).
+                await recordFailed("mkdir failed: \(relative) — \(mkdir.stderr)")
                 continue
             }
 
-            // rsync with checksum verification.
-            //
-            // NOTE (2026-09-13, while fixing the fast path): `--partial`
-            // keeps an interrupted transfer AT THE FINAL NAME, so this mode
-            // can also leave a truncated file named like a good one. It is
-            // less dangerous than the old fast path was, because the next
-            // run's `--checksum` pass re-transfers anything whose content
-            // doesn't match, so rsync itself never mistakes it for
-            // complete — but a catalog scan of the destination in between
-            // would. The fix is `--partial-dir=.videoscan-partial`, which
-            // parks partials in a sidecar directory instead. Deliberately
-            // NOT changed here: one bug per change, and this one needs its
-            // own test pass. Reported to the Manager 2026-09-13.
+            // STAGE, THEN PUBLISH EXCLUSIVELY (Codex r1 #2, P0). THE BUG:
+            // rsync wrote to the FINAL name; `--ignore-existing` is checked
+            // when the transfer starts and rsync's last step is an ordinary
+            // rename, so a file that arrived at the name during a long
+            // transfer was overwritten. Now rsync's destination is the
+            // app's own staged copy, `<folder>/.videoscan-partial/<name>`
+            // (resumable there: `--partial` keeps an interrupted transfer AT
+            // THE STAGED NAME, never a final one); the app size-checks it
+            // and publishes it with ONE no-clobber rename (RENAME_EXCL),
+            // like the fast copier. Every folder the rescue creates is
+            // opened without following a link, and the staging folder must
+            // be a plain folder (Codex r1 #1: a linked one was cleaned
+            // through, unlinking the SOURCE).
+            let staging: RsyncStaging
+            switch RsyncStaging.open(relative: relative, rescueDir: rescueDir, destFile: destFile) {
+            case .refused(let line):
+                await recordFailed(line)
+                continue
+            case .ready(let opened):
+                staging = opened
+            }
+            defer { staging.close() }   // each iteration: closes both folders, removes the staging folder if empty
+
+            // rsync with --checksum, into the staged copy.
             //
             // Through ProcessRunner (2026-11-21; it was a hand-rolled
-            // `Process()` + `waitUntilExit()`): the SAME executable and argv,
-            // the app's environment and working directory. What the runner
-            // does differently, none of it weaker:
+            // `Process()` + `waitUntilExit()`): the app's environment and
+            // working directory. What the runner does differently, none of
+            // it weaker:
             //   • stderr is drained while rsync runs (it was read only after
             //     exit, so more than the 64 KB pipe buffer blocked rsync
             //     forever); the collected copy is capped at that same 64 KB;
@@ -480,11 +618,11 @@ final class VolumeRescueOperation: ObservableObject {
             let result = await ProcessRunner.runProcess(
                 executable: "/usr/bin/rsync",
                 arguments: [
-                    "--checksum",       // verify with checksum, not just size/mtime
-                    "--partial",        // keep partial transfers for resume
+                    "--checksum",       // compare by checksum, not just size/mtime
+                    "--partial",        // an interrupted transfer stays at the STAGED name, for the next run
                     "--times",          // preserve modification times
                     srcFile,
-                    destFile
+                    staging.stagedPath
                 ],
                 stdoutLimitBytes: 0,
                 stderrLimitBytes: 64 * 1024)
@@ -499,31 +637,294 @@ final class VolumeRescueOperation: ObservableObject {
                 // the task — a Stop arriving after a genuine launch failure
                 // leaves that failure counted and named (Codex r1 P2).
                 if result.cancelledBeforeLaunch { break }
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("\(relative) — \(result.stderr)")
-                }
-            } else if result.exitCode == 0 {
-                // Measure what is actually at the destination rather
-                // than trusting the catalog's size for this record
-                // (consistency with the fast path, which now reports
-                // only measured bytes). rsync exited 0, so the file is
-                // there and checksum-verified; if we somehow can't
-                // measure it, report 0 written rather than invent a
-                // number.
-                let landed = Self.measuredSize(ofFileAt: destFile) ?? 0
-                await MainActor.run { [weak self] in
-                    self?.filesCopied += 1
-                    self?.bytesWritten += landed
-                }
-            } else {
-                let errMsg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                await MainActor.run { [weak self] in
-                    self?.filesFailed += 1
-                    self?.errors.append("\(relative) — rsync: \(errMsg)")
-                }
+                await recordFailed("\(relative) — \(result.stderr)")
+                continue
             }
+
+            let outcome = Self.settle(result, staging: staging, relative: relative, srcFile: srcFile, destFile: destFile,
+                                      rescueDir: rescueDir, stopped: Task.isCancelled)
+            if case .destinationMoved = outcome { movedAt = relative }
+            await record(outcome)
         }
+    }
+
+    /// What became of one file the rsync rescue attempted. (For Rick: a
+    /// tagged union — the counters and lines follow from it in one place.)
+    enum FileOutcome: Equatable, Sendable {
+        case copied(Int64)
+        case alreadyThere(Int64)
+        case failed(String, nameTaken: Bool)
+        case interrupted(String)
+        /// The requested destination folder no longer names the folder the
+        /// staging holds: nothing published; the run attempts no more files.
+        case destinationMoved(String)
+    }
+
+    /// After rsync ran: the evidence, then the one publish (Codex r1 #2,
+    /// #7). EVIDENCE, NOT AN EXIT STATUS (GH #506 item 1, P0): the staged
+    /// copy is published only when a FRESH lstat shows a regular file whose
+    /// size equals the source's — a size check, NOT content verification,
+    /// said as "size checked", never "verified".
+    nonisolated static func settle(_ result: ProcessRunner.Result, staging: RsyncStaging, relative: String, srcFile: String,
+                                   destFile: String, rescueDir: String, stopped: Bool) -> FileOutcome {
+        let source = entry(at: srcFile)
+        let staged = staging.stagedEntry()
+        guard result.exitCode == 0 else {
+            let reason = rsyncReason(exitCode: result.exitCode, stderr: result.stderr)
+            let left = leftAtDestination(final: entry(at: destFile), partialBytes: staged.regularSize, sourceSize: source.regularSize)
+            // The user's Stop killed this transfer: it is not a failed copy
+            // (GH #506 item 4), and it is named.
+            return stopped ? .interrupted("\(relative) — stopped during the transfer (\(reason)). At the destination: \(left)")
+                           : .failed("\(relative) — \(reason). At the destination: \(left)", nameTaken: false)
+        }
+        guard let size = source.regularSize, staged == .regular(size) else {
+            return .failed(notCopiedLine(relative: relative, source: source, staged: staged, stderr: result.stderr), nameTaken: false)
+        }
+        // THE BUG (Codex r2 #4, P0): the publish is relative to HELD
+        // descriptors, so after the user moved the destination folder (to
+        // the Trash, say) it landed in the moved folder and was counted at
+        // the destination, which held nothing. The requested path must
+        // still name the held folder; else nothing is published, and the
+        // size-checked copy stays where it now is, said. (A move inside the
+        // window between this check and the rename is GH #503's class.)
+        if case .moved(let copyNow) = staging.place() {
+            return .destinationMoved("\(relative) — the destination folder \(staging.destPath) was moved while the rescue ran — nothing was published; "
+                + "the copy (size checked) is \(copyNow), and the file is still on the source.")
+        }
+        switch staging.publish() {
+        case .published:
+            return .copied(size)
+        case .nameTaken:
+            // Something arrived at the final name during the transfer. It is
+            // not ours and is not touched; our staged copy is removed (it is
+            // ours). A same-size file is "already there" with nothing
+            // written (Codex r1 #7); anything else fails.
+            let fate = stagedCopyFate(removed: staging.removeStaged())
+            switch nameCheck(relative: relative, rescueDir: rescueDir, sourceFile: srcFile, destFile: destFile) {
+            case .alreadyThere(let bytes): return .alreadyThere(bytes)
+            case .taken(let line): return .failed(line + " " + fate, nameTaken: true)
+            case .free: return .failed("\(relative) — the final name was taken at the publish and is free again; nothing was replaced. \(fate)", nameTaken: false)
+            }
+        case .failed(let why):
+            return .failed("\(relative) — the staged copy could not be published at the final name (\(why)); "
+                + "it is kept in \(partialDirName) for the next run, and nothing at the final name was touched.", nameTaken: false)
+        }
+    }
+
+    /// The counters and lines for one file's outcome — the only place the
+    /// rsync rescue counts a file.
+    private nonisolated func record(_ outcome: FileOutcome) async {
+        switch outcome {
+        case .copied(let size):
+            await MainActor.run { [weak self] in
+                self?.filesCopied += 1
+                self?.bytesWritten += size
+            }
+        case .alreadyThere(let bytes):
+            await MainActor.run { [weak self] in
+                self?.filesCopied += 1
+                self?.filesAlreadyPresent += 1
+                self?.bytesAlreadyPresent += bytes
+            }
+        case .failed(let line, let nameTaken):
+            await recordFailed(line, nameTaken: nameTaken)
+        case .destinationMoved(let line):
+            await recordFailed(line)
+        case .interrupted(let line):
+            await recordInterrupted(line)
+        }
+    }
+
+    // MARK: - What happened to one file (GH #506)
+
+    /// One file that is NOT a copy: counted, listed, and written to the app
+    /// log (every line up to `failureLogLimit`; past it one line counts the
+    /// rest, and the OUTCOME line carries the count of all of them).
+    private nonisolated func recordFailed(_ line: String, nameTaken: Bool = false) async {
+        rescueLog.error("Rescue copy failed: \(line, privacy: .public)")
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            self.filesFailed += 1
+            if nameTaken { self.filesNameTaken += 1 }
+            self.errors.append(line)
+            if self.filesFailed <= Self.failureLogLimit { appLog.write("rescue FAILED: \(line)") }
+        }
+    }
+
+    /// A file after the one whose destination folder was moved mid-run.
+    nonisolated static func notAttemptedAfterMove(relative: String, first: String) -> String {
+        "\(relative) — not attempted: a destination folder was moved while the rescue ran (see \(first)); "
+            + "nothing was copied, and the file is still on the source."
+    }
+
+    /// The file in flight when Stop landed: not copied, not failed.
+    private nonisolated func recordInterrupted(_ line: String) async {
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            self.filesInterrupted += 1
+            self.errors.append(line)
+            appLog.write("rescue STOPPED: \(line)")
+        }
+    }
+
+    /// Failure lines written to the app log per run (Codex r1 #10: it was
+    /// 50 while the banner said every line was there). Past it, one line
+    /// says how many more there were. Worst case ~10,000 × ~700 B ≈ 7 MB
+    /// of log for a run that fails that often.
+    nonisolated static let failureLogLimit = 10_000
+
+    /// The one line for failures past the log limit, or nil.
+    nonisolated static func failureOverflowLine(failed: Int) -> String? {
+        guard failed > failureLogLimit else { return nil }
+        return "rescue FAILED: … and \(failed - failureLogLimit) more failure lines not written here (this log keeps the first "
+            + "\(failureLogLimit.formatted()) of a run); the result list holds every one."
+    }
+    /// Where rsync parks an interrupted transfer, inside the destination
+    /// file's own folder.
+    nonisolated static let partialDirName = ".videoscan-partial"
+
+    nonisolated static func partialDirectory(forDestination destFile: String) -> String {
+        ((destFile as NSString).deletingLastPathComponent as NSString).appendingPathComponent(partialDirName)
+    }
+
+    /// What became of the app's own staged copy after the final name was
+    /// found taken at the publish.
+    nonisolated static func stagedCopyFate(removed: Bool) -> String {
+        removed ? "The copy VideoScan staged in \(partialDirName) was removed (it was its own)."
+                : "The copy VideoScan staged in \(partialDirName) could not be removed and is still there."
+    }
+
+    nonisolated static func partialPath(forDestination destFile: String) -> String {
+        (partialDirectory(forDestination: destFile) as NSString).appendingPathComponent((destFile as NSString).lastPathComponent)
+    }
+
+    /// What the rescue does with one destination name, decided from a fresh
+    /// lstat of the source and of the name BEFORE anything is written.
+    enum NameCheck: Equatable, Sendable {
+        /// Nothing is there: transfer.
+        case free
+        /// A regular file of the source's size: counted as already at the
+        /// destination, left alone. Content is not compared.
+        case alreadyThere(Int64)
+        /// Anything else is there. The line for the user; nothing is touched.
+        case taken(String)
+    }
+
+    nonisolated static func nameCheck(relative: String, rescueDir: String, sourceFile: String, destFile: String) -> NameCheck {
+        nameCheck(relative: relative, folder: (rescueDir as NSString).lastPathComponent,
+                  source: entry(at: sourceFile), final: entry(at: destFile))
+    }
+
+    /// Pure. `folder` is the rescue folder's name, so the line reads as a
+    /// path under the destination ("Rescued/DCIM/100CANON/MVI_0001.MOV").
+    nonisolated static func nameCheck(relative: String, folder: String, source: DiskEntry, final: DiskEntry) -> NameCheck {
+        let there: String
+        switch (final, source.regularSize) {
+        case (.absent, _):
+            return .free
+        case (.regular(let bytes), .some(let size)) where bytes == size:
+            return .alreadyThere(bytes)
+        case (.regular(let bytes), _):
+            there = "\(bytes) bytes there"
+        case (.notRegular, _):
+            there = "not a regular file there — a folder or a link"
+        }
+        let placed = (folder as NSString).appendingPathComponent(relative)
+        let onSource = source.regularSize.map { "\($0) bytes on the source" } ?? "the source could not be measured"
+        let kept = source.regularSize == nil ? "nothing was touched." : "nothing was touched, and the file is still on the source."
+        return .taken("\(relative) — a different file is already at \(placed) (\(there), \(onSource)) — not replaced; \(kept)")
+    }
+
+    /// The fast copier's refusals that mean "the name is taken".
+    nonisolated static func isNameTaken(_ error: Error) -> Bool {
+        switch error as? RescueFileCopier.Failure {
+        case .differentFileAtDestination, .destinationNotRegularFile, .destinationAppearedDuringCopy: return true
+        default: return false
+        }
+    }
+
+    /// What one fresh lstat says is at a path. (For Rick: ≈ a tagged union
+    /// over stat()'s answer — absent / S_ISREG with st_size / anything else.)
+    enum DiskEntry: Equatable, Sendable {
+        case absent
+        case regular(Int64)
+        /// A directory, a symlink, a device — or a path that cannot be
+        /// stat'ed for a reason other than "not there".
+        case notRegular
+
+        var regularSize: Int64? {
+            if case .regular(let size) = self { return size }
+            return nil
+        }
+    }
+
+    /// lstat, never following a symlink: a link at the destination is not a
+    /// copy of the file.
+    nonisolated static func entry(at path: String) -> DiskEntry {
+        var sb = stat()
+        guard lstat(path, &sb) == 0 else { return errno == ENOENT ? .absent : .notRegular }
+        return (sb.st_mode & S_IFMT) == S_IFREG ? .regular(Int64(sb.st_size)) : .notRegular
+    }
+
+    /// A tool's stderr as one bounded phrase: its non-blank lines joined
+    /// with " · ", at most 300 characters.
+    nonisolated static func flat(_ stderr: String) -> String {
+        let joined = stderr.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        return joined.count > 300 ? String(joined.prefix(300)) + "…" : joined
+    }
+
+    /// Why rsync did not copy: always its exit code (the runner reports a
+    /// signal death as the signal number), then its own words — or that it
+    /// printed none (GH #506 item 3: a SIGKILL used to read "rsync: " and
+    /// nothing after it).
+    nonisolated static func rsyncReason(exitCode: Int32, stderr: String) -> String {
+        let words = flat(stderr)
+        return words.isEmpty ? "rsync exit \(exitCode) (it printed no message)" : "rsync exit \(exitCode): \(words)"
+    }
+
+    /// What is at the destination after a transfer that failed or was
+    /// stopped. Nothing there is moved or removed: a file found at the
+    /// final name is reported, never touched and never counted.
+    nonisolated static func leftAtDestination(final: DiskEntry, partialBytes: Int64?, sourceSize: Int64?) -> String {
+        let parked: String? = partialBytes.map { bytes in
+            let of = sourceSize.map { " of \($0)" } ?? ""
+            return "\(bytes)\(of) bytes kept in \(partialDirName) for the next run"
+        }
+        switch final {
+        case .absent:
+            return parked.map { "nothing at the final name; \($0)." } ?? "nothing was left."
+        case .notRegular:
+            return "the final name is not a regular file; it was left untouched" + (parked.map { "; \($0)." } ?? ".")
+        case .regular(let bytes):
+            let source = sourceSize.map { "the source is \($0) bytes" } ?? "the source could not be measured"
+            return "a file of \(bytes) bytes is at the final name (\(source)) — it is not counted as a copy and was left untouched"
+                + (parked.map { "; \($0)." } ?? ".")
+        }
+    }
+
+    /// The line for a file rsync said it copied (exit 0) whose STAGED copy
+    /// the fresh lstat does not find as a regular file of the source's
+    /// size. Nothing is published; what is staged stays for the next run.
+    nonisolated static func notCopiedLine(relative: String, source: DiskEntry, staged: DiskEntry, stderr: String) -> String {
+        let what: String
+        switch (staged, source.regularSize) {
+        case (.absent, .some):
+            what = "nothing was staged"
+        case (.absent, .none):
+            what = "nothing was staged, and the source is not a regular file rsync would copy"
+        case (.notRegular, _):
+            what = "the staged copy is not a regular file; it was left in \(partialDirName)"
+        case (.regular(let bytes), .some(let size)):
+            what = "the staged copy is \(bytes) bytes, the source is \(size) bytes; it is kept in \(partialDirName) for the next run"
+        case (.regular(let bytes), .none):
+            what = "the staged copy is \(bytes) bytes but the source could not be measured to compare; it is kept in \(partialDirName)"
+        }
+        let said = flat(stderr)
+        return "\(relative) — rsync exited 0 but the copy is not whole: \(what); nothing was published at the final name"
+            + (said.isEmpty ? "." : " (rsync said: \(said)).")
     }
 
     // MARK: - Helpers
@@ -546,6 +947,133 @@ final class VolumeRescueOperation: ObservableObject {
             return String(fullPath[start...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         }
         return fallback
+    }
+}
+
+// MARK: - The rsync rescue's staging (Codex GH #501 r1 #1, #2)
+
+/// One file's staging for the rsync rescue: its destination folder and that
+/// folder's `.videoscan-partial`, both OPEN, every folder the rescue creates
+/// reached without following a link. rsync writes the staged copy; the app
+/// publishes it with one RENAME_EXCL relative to these descriptors, and
+/// removes only its own staged copy, relative to the staging descriptor and
+/// only while it is the same file (device + inode) rsync left.
+/// Residual, declared (GH #503): a swap inside one syscall window, and the
+/// staged PATH rsync is given (a component swapped for a link between the
+/// open here and rsync's own open is not seen).
+/// Memory: two descriptors per file in flight, closed at the end of its
+/// iteration. (For Rick: ≈ a pair of RAII dirfds without the destructor —
+/// `close()` is called from a `defer`.)
+struct RsyncStaging: Sendable {
+    let destDir: Int32
+    let stagingDir: Int32
+    let name: String
+    let stagedPath: String
+    let stagingPath: String
+    /// The destination folder's path as requested (`<rescueDir>/<relative folders>`).
+    let destPath: String
+
+    enum Opened { case ready(RsyncStaging), refused(String) }
+    enum Publish: Equatable { case published, nameTaken, failed(String) }
+    /// Whether the requested destination path still names the held folder;
+    /// when not, where the staged copy is now ("at <path>", or why unknown).
+    enum Place: Equatable { case here, moved(copyNow: String) }
+
+    private static let folderFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+
+    private static func errorText(_ code: Int32) -> String { String(cString: strerror(code)) }
+
+    /// Open `<rescueDir>/<relative folders>` component by component without
+    /// following a link (the user's destination volume itself may be
+    /// reached through one), then make/open `.videoscan-partial` in it.
+    /// Refuses, with the line for the user, before anything is written.
+    static func open(relative: String, rescueDir: String, destFile: String) -> Opened {
+        let base = (rescueDir as NSString).deletingLastPathComponent
+        let folders = [(rescueDir as NSString).lastPathComponent]
+            + (relative as NSString).deletingLastPathComponent.split(separator: "/").map(String.init)
+        var fd = Darwin.open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else { return .refused("\(relative) — the destination \(base) could not be opened (\(errorText(errno))) — nothing was touched.") }
+        var reached = base
+        for folder in folders {
+            reached = (reached as NSString).appendingPathComponent(folder)
+            let next = openat(fd, folder, folderFlags)
+            let code = errno
+            Darwin.close(fd)
+            guard next >= 0 else {
+                let why = code == ELOOP || code == ENOTDIR ? "is not a plain folder" : "could not be opened (\(errorText(code)))"
+                return .refused("\(relative) — the destination folder at \(reached) \(why) — nothing was touched, and the file is still on the source.")
+            }
+            fd = next
+        }
+        let destDir = fd
+        let stagingPath = (reached as NSString).appendingPathComponent(VolumeRescueOperation.partialDirName)
+        if mkdirat(destDir, VolumeRescueOperation.partialDirName, 0o755) != 0, errno != EEXIST {
+            let why = errorText(errno)
+            Darwin.close(destDir)
+            return .refused("\(relative) — the staging folder at \(stagingPath) could not be made (\(why)) — nothing was touched, and the file is still on the source.")
+        }
+        let stagingDir = openat(destDir, VolumeRescueOperation.partialDirName, folderFlags)
+        guard stagingDir >= 0 else {
+            Darwin.close(destDir)
+            return .refused("\(relative) — the staging folder at \(stagingPath) is not a plain folder — nothing was touched, and the file is still on the source.")
+        }
+        let name = (destFile as NSString).lastPathComponent
+        let staging = RsyncStaging(destDir: destDir, stagingDir: stagingDir, name: name,
+                                   stagedPath: (stagingPath as NSString).appendingPathComponent(name), stagingPath: stagingPath,
+                                   destPath: reached)
+        if case .notRegular = staging.stagedEntry() {
+            staging.close()
+            return .refused("\(relative) — the staged copy at \(staging.stagedPath) is not a plain file — nothing was touched, and the file is still on the source.")
+        }
+        return .ready(staging)
+    }
+
+    /// A fresh lstat of the staged copy, relative to the staging folder.
+    func stagedEntry() -> VolumeRescueOperation.DiskEntry {
+        var sb = stat()
+        guard fstatat(stagingDir, name, &sb, AT_SYMLINK_NOFOLLOW) == 0 else { return errno == ENOENT ? .absent : .notRegular }
+        return (sb.st_mode & S_IFMT) == S_IFREG ? .regular(Int64(sb.st_size)) : .notRegular
+    }
+
+    /// Does the requested destination path (followed as the user's path is:
+    /// the volume itself may be reached through a link) still name the
+    /// folder held open — same device and inode (Codex r2 #4)? When it does
+    /// not, `F_GETPATH` on the staging descriptor says where the staged copy
+    /// went with the moved folder. (≈ comparing `stat(path)` with
+    /// `fstat(fd)`, then asking the kernel for the fd's current path.)
+    func place() -> Place {
+        var held = stat(), named = stat()
+        if fstat(destDir, &held) == 0, stat(destPath, &named) == 0, held.st_dev == named.st_dev, held.st_ino == named.st_ino {
+            return .here
+        }
+        var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
+        let got = buffer.withUnsafeMutableBytes { raw in raw.baseAddress.map { fcntl(stagingDir, F_GETPATH, $0) } ?? -1 }
+        guard got != -1 else {
+            return .moved(copyNow: "in the moved folder's \(VolumeRescueOperation.partialDirName) (its new location could not be read: \(Self.errorText(errno)))")
+        }
+        let now = String(bytes: buffer.prefix { $0 != 0 }, encoding: .utf8) ?? "(a path that is not UTF-8)"
+        return .moved(copyNow: "at " + (now as NSString).appendingPathComponent(name))
+    }
+
+    /// The one publish: staged → final name, never replacing what is there.
+    func publish() -> Publish {
+        if renameatx_np(stagingDir, name, destDir, name, UInt32(RENAME_EXCL)) == 0 { return .published }
+        return errno == EEXIST ? .nameTaken : .failed(Self.errorText(errno))
+    }
+
+    /// Remove the app's OWN staged copy: a regular file in the staging
+    /// folder (reached through its descriptor). true when it is gone.
+    func removeStaged() -> Bool {
+        guard case .regular = stagedEntry() else { return stagedEntry() == .absent }
+        return unlinkat(stagingDir, name, 0) == 0 || errno == ENOENT
+    }
+
+    /// Close both folders; the staging folder is removed when empty (the
+    /// kernel refuses a non-empty one: a parked partial is never deleted).
+    func close() {
+        unlinkat(destDir, VolumeRescueOperation.partialDirName, AT_REMOVEDIR)
+        Darwin.close(stagingDir)
+        Darwin.close(destDir)
     }
 }
 
@@ -783,11 +1311,12 @@ struct VolumeCompareSheet: View {
                         .help("Hide this dialog and keep copying. Reopen Compare to check progress or cancel.")
                     Button("Cancel") { rescue.cancel() }
                         .buttonStyle(.bordered)
-                        .help("Stop the copy now. In-flight files will be aborted (rsync gets SIGTERM); partial copies are kept under the destination folder for resume.")
+                        .help("Stop the copy now. The file in flight is aborted (rsync gets SIGTERM); what it had written is kept in a .videoscan-partial folder beside the destination — never under the file's final name — and the next run resumes from it.")
                 } else if rescue.isDone {
                     HStack {
-                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                        Text("Done — \(rescue.filesCopied) copied, \(rescue.filesFailed) failed")
+                        Image(systemName: rescue.wasStopped || rescue.filesFailed > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                            .foregroundColor(rescue.wasStopped || rescue.filesFailed > 0 ? .orange : .green)
+                        Text(VolumeRescueOperation.doneTitle(stopped: rescue.wasStopped, failed: rescue.filesFailed))
                             .font(.callout)
                     }
                 } else {
@@ -1165,19 +1694,31 @@ struct VolumeCompareSheet: View {
     /// when combined with the running-state branch.
     @ViewBuilder
     private var doneBannerBody: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .foregroundColor(.green)
+        let attention = rescue.wasStopped || rescue.filesFailed > 0
+        Image(systemName: attention ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+            .foregroundColor(attention ? .orange : .green)
             .imageScale(.large)
         VStack(alignment: .leading, spacing: 2) {
-            Text("Copy finished")
+            Text(VolumeRescueOperation.doneTitle(stopped: rescue.wasStopped, failed: rescue.filesFailed))
                 .font(.callout.bold())
             Text(VolumeRescueOperation.doneSummary(safe: rescue.filesCopied,
                                                    failed: rescue.filesFailed,
                                                    bytesWritten: rescue.bytesWritten,
                                                    alreadyPresent: rescue.filesAlreadyPresent,
-                                                   repaired: rescue.filesRepaired))
+                                                   nameTaken: rescue.filesNameTaken,
+                                                   interrupted: rescue.filesInterrupted,
+                                                   notAttempted: rescue.filesNotAttempted))
                 .font(.caption)
                 .foregroundColor(.secondary)
+            // The user is told WHICH file and why, not only a count.
+            if let detail = VolumeRescueOperation.doneDetail(errors: rescue.errors) {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
         }
         Spacer()
         // Catalog gap: the rescue wrote files to disk but the catalog

@@ -36,12 +36,19 @@ struct FullHashBackfillRunRecord: Codable, Equatable, Sendable {
 @MainActor
 final class FullHashBackfillResumeMarker: ObservableObject {
 
-    static let fileName = "fullhash-backfill.json"
+    nonisolated static let fileName = "fullhash-backfill.json"
 
-    /// Non-nil when the last run started and did not finish.
+    /// Non-nil when the last run started and has no finish on record.
     @Published private(set) var unfinished: FullHashBackfillRunRecord?
     private var current: FullHashBackfillRunRecord?
     private(set) var fileURL: URL?
+    /// Where a marker that could not be written is said (the app's one log
+    /// sink). An instance property so a test reads the line without
+    /// swapping the global sink — as CatalogAuditRunMarker does.
+    var log: (String) -> Void = { appLog.write($0) }
+    /// True from a failed publish until the next one that lands — the
+    /// failure is said once, not at every checkpoint of a run on a full disk.
+    private var publishFailing = false
 
     init() {}
 
@@ -52,7 +59,7 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         let url = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
             .appendingPathComponent(Self.fileName)
         fileURL = url
-        let record = (try? Data(contentsOf: url)).flatMap { try? Self.decoder.decode(FullHashBackfillRunRecord.self, from: $0) }
+        let record = Self.read(url).record
         unfinished = record?.isFinished == false ? record : nil
         return unfinished
     }
@@ -76,12 +83,62 @@ final class FullHashBackfillResumeMarker: ObservableObject {
     }
 
     /// The run reached its end (stopped or failed runs stay unfinished).
+    /// When the finish cannot be written, what the next launch offers is
+    /// whatever the FILE still says — read back now and SAID (the launch
+    /// cannot know the run finished). THE BUG (Codex r1 #9): the line always
+    /// promised Resume, also when no marker of this run had ever landed and
+    /// the file held nothing unfinished, so nothing would be offered.
     func noteFinished(hashed: Int, at date: Date = Date()) {
         guard current != nil else { return }
         current?.hashedSoFar = hashed
         current?.finishedAt = date
-        persist()
+        if !persist() {
+            log(Self.lostFinishLine(hashed: hashed, onDisk: fileURL.map(Self.read) ?? .absent))
+        }
         unfinished = nil
+    }
+
+    /// The line for a finish that could not be written, from what is on
+    /// disk now: an unfinished record → Resume will be offered; no file or
+    /// an earlier finished run → nothing; a file that could not be read
+    /// back → NO prediction. THE BUG (Codex r2 #7, P1): a failed read was
+    /// taken for "no unfinished run" and promised nothing would be offered —
+    /// once the file read again, the next launch offered Resume.
+    nonisolated static func lostFinishLine(hashed: Int, onDisk: OnDisk) -> String {
+        let head = "Fill in full hashes: \(fileName) could not record that the run finished (\(hashed.formatted()) hashes are saved in the catalog). "
+        if case .unreadable(let why) = onDisk {
+            return head + "VideoScan could not read back \(fileName) (\(why)), so the next launch may or may not offer Resume Filling In Full Hashes…; "
+                + "if it does, it will find nothing left to hash, say so, and record the finish."
+        }
+        guard onDisk.record?.isFinished == false else {
+            return head + "The file holds no unfinished run, so the next launch will offer nothing; Fill In Full Hashes… would find nothing left to hash."
+        }
+        return head + "The file still shows a run with no finish, so the next launch will offer Resume Filling In Full Hashes…; "
+            + "it will find nothing left to hash, say so, and record the finish."
+    }
+
+    /// What a read of the marker file found.
+    enum OnDisk: Equatable, Sendable {
+        case absent
+        case decoded(FullHashBackfillRunRecord)
+        /// The file is there (or may be) but could not be read or decoded: why.
+        case unreadable(String)
+
+        var record: FullHashBackfillRunRecord? {
+            if case .decoded(let record) = self { return record }
+            return nil
+        }
+    }
+
+    nonisolated private static func read(_ url: URL) -> OnDisk {
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch {
+            let code = (error as NSError).code
+            return code == NSFileReadNoSuchFileError || code == NSFileNoSuchFileError ? .absent : .unreadable(error.localizedDescription)
+        }
+        do { return .decoded(try decoder.decode(FullHashBackfillRunRecord.self, from: data)) } catch {
+            return .unreadable("it could not be decoded: \(error.localizedDescription)")
+        }
     }
 
     /// The run ended without finishing: offer Resume from now on.
@@ -89,26 +146,46 @@ final class FullHashBackfillResumeMarker: ObservableObject {
         if let current { unfinished = current }
     }
 
-    /// The launch line for an unfinished run.
+    /// The launch line for a run with no finish on record. It says what the
+    /// FILE shows and no more (2026-11-21: it said "did not finish", which
+    /// is false for a run that finished and whose finish could not be
+    /// written — the file cannot tell the two apart).
     nonisolated static func launchLine(_ r: FullHashBackfillRunRecord) -> String {
         let started = r.startedAt.formatted(date: .abbreviated, time: .shortened)
-        return "Fill in full hashes: the run started \(started) did not finish (\(r.hashedSoFar.formatted()) hashes saved). "
-            + "Catalog ▸ Resume Filling In Full Hashes… continues where it stopped; nothing was started."
+        return "Fill in full hashes: the run started \(started) has no finish on record (\(r.hashedSoFar.formatted()) hashes saved) — "
+            + "it stopped early, or its finish could not be written. Catalog ▸ Resume Filling In Full Hashes… continues where it stopped, "
+            + "or confirms there is nothing left to hash; nothing was started."
     }
 
-    private func persist() {
-        guard let fileURL, let current, let data = try? Self.encoder.encode(current) else { return }
-        try? AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+    /// Publish the marker; false when it could not be written. A failure is
+    /// SAID (it used to be `try?`), once per outage: the file then still
+    /// holds the last publish that landed.
+    @discardableResult
+    private func persist() -> Bool {
+        guard let fileURL, let current else { return true }
+        do {
+            let data = try Self.encoder.encode(current)
+            try AtomicFilePublish.write(data, to: fileURL, durability: .fast)
+            publishFailing = false
+            return true
+        } catch {
+            if !publishFailing {
+                publishFailing = true
+                log("Fill in full hashes: \(Self.fileName) could not be written (\(error.localizedDescription)) — the file keeps what was last "
+                    + "saved. The hashes themselves are saved in the catalog, not in this file.")
+            }
+            return false
+        }
     }
 
-    private static let encoder: JSONEncoder = {
+    nonisolated private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
     }()
 
-    private static let decoder: JSONDecoder = {
+    nonisolated private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d

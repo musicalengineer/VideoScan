@@ -564,6 +564,12 @@ struct RemoteViewerReadOnlySensorTests {
         "People/POIStorage.swift": (1, nil, nil), "People/PersonFinderCompilation.swift": (7, nil, nil),
         "People/RecipeGenderAgeGate.swift": (1, nil, nil),
         "Volumes/ScanCheckpoint.swift": (1, nil, nil), "Volumes/ScanJobsStorage.swift": (2, nil, nil),
+        // Volume rescue 2 → 0 (Codex GH #501 r1 #1/#2, 2026-11-21): its
+        // removals are now dirfd-relative `unlinkat` (its own staged copy;
+        // its EMPTY `.videoscan-partial`), which this scan does not count —
+        // as for ArchivePromoteEngine. Inventoried, with the reason, in
+        // ArchiveVolumeProtectionSourceSensor. The rescue never runs in
+        // viewer mode on a catalog record's file: it writes a destination.
     ]
 
     private static var appSourceRoot: URL {

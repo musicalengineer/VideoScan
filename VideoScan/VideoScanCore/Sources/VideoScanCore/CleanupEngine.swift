@@ -82,12 +82,17 @@ public struct CleanupProgress: Sendable {
     public var passIndex: Int
     /// Total passes this engine will run for this recipe.
     public var passCount: Int
+    /// Something the user must be told about the RESULT (e.g. "Length not
+    /// compared: the source has no readable duration."). The job appends
+    /// the last non-nil note to its summary. nil on ordinary beats.
+    public var note: String?
 
-    public init(phase: String, fraction: Double?, passIndex: Int = 1, passCount: Int = 1) {
+    public init(phase: String, fraction: Double?, passIndex: Int = 1, passCount: Int = 1, note: String? = nil) {
         self.phase = phase
         self.fraction = fraction
         self.passIndex = passIndex
         self.passCount = passCount
+        self.note = note
     }
 }
 
@@ -128,10 +133,29 @@ public protocol CleanupRecipeEngine: Sendable {
     func canExecute(_ recipe: CleanupRecipe) -> Bool
 
     /// Render `recipe` applied to `source` into `scratchDirectory` and
-    /// return the finished file's URL (inside that directory). Throws
-    /// `CleanupEngineError` / `CancellationError` on failure.
+    /// return the finished file (inside that directory) with the identity
+    /// it had when the engine verified it. Throws `CleanupEngineError` /
+    /// `CancellationError` on failure.
     func render(recipe: CleanupRecipe,
                 source: CleanupSource,
                 scratchDirectory: URL,
-                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> URL
+                progress: @escaping @Sendable (CleanupProgress) -> Void) async throws -> CleanupRender
+}
+
+/// A finished render and the stamp (device, inode, size, mtime, ctime) of
+/// the file the engine verified. The caller publishes the file only while
+/// it still has that stamp: a length measured on one file never vouches for
+/// another put at its name (Codex GH #501 r1 #4, as GH #500 did for
+/// Transcode). (For Rick: a POD pair — path + `struct stat` snapshot.)
+public struct CleanupRender: Sendable, Equatable {
+    public let url: URL
+    public let verified: FileIdentityStamp
+
+    public init(url: URL, verified: FileIdentityStamp) {
+        self.url = url
+        self.verified = verified
+    }
+
+    /// True while the file at `url` is still the verified one.
+    public var isUnchanged: Bool { FileIdentityStamp.capture(path: url.path) == verified }
 }
