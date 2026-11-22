@@ -7,7 +7,7 @@ Read first: `docs/Purpose-and-Charter.md` (Rick's purpose, workflow and process 
 ## Who owns what
 - **Rick** (director): workflow and UI/UX, checked against Apple HIG and best-in-class apps; product and archival policy; anything irreversible against real data.
 - **Claude**: implementation, data models, algorithms, code quality, tests. For module-internal design (schema, algorithms, concurrency, storage) research the domain's best practice, propose with trade-offs, then proceed. Do not ask Rick to pick internals; he weighs in after.
-- **Codex**: independent adversarial reviewer for data-risk paths; helps with tests. One command: `tools/codex_review.py`. Scope rules in `docs/PROCESS.md` §Review.
+- **Codex**: independent adversarial reviewer for data-risk paths; helps with tests. One command: `tools/codex_review.py`. Scope rules in `docs/PROCESS.md` §Review. Also an implementer of scoped tasks under Claude's or Rick's supervision (Rick 2026-11-22); then the roles swap — Claude reviews (the `reviewer` agent), and data-risk work also gets a fresh, independent Codex review session. Nobody reviews their own code.
 
 ## Hard rules
 1. **Integrity first.** A shown fact comes from evidence (stat, SHA-256, fixity, decode), never from a field that was once written. An unverified fact in the UI is a P0.
