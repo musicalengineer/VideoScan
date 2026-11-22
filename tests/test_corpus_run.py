@@ -4730,3 +4730,54 @@ class ParallelDriverSourceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CorpusSigningTests(unittest.TestCase):
+    """GH #498: the corpus test host is signed with the Mac's Apple Development identity so one macOS
+    'access files on a removable volume' Allow lasts across builds (an ad-hoc cdhash changes every build)."""
+
+    class Runner:
+        def __init__(self, identities: str, subject: str):
+            self.identities, self.subject = identities, subject
+
+        def __call__(self, cmd, **kw):
+            out = {"find-identity": self.identities, "find-certificate": "-----BEGIN CERTIFICATE-----",
+                   "x509": self.subject}
+            key = next(k for k in out if k in cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=out[key], stderr="")
+
+    def test_the_build_signs_with_the_team_identity_when_the_keychain_has_it(self):
+        args = cr.corpus_signing(available=lambda: True)
+        self.assertEqual(args, ["CODE_SIGN_IDENTITY=Apple Development", "DEVELOPMENT_TEAM=V9SVEQF26M",
+                                "CODE_SIGN_STYLE=Manual"])
+
+    def test_without_the_identity_the_build_stays_ad_hoc_and_says_why(self):
+        import contextlib, io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            args = cr.corpus_signing(available=lambda: False)
+        self.assertEqual(args, ["CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"])
+        self.assertIn("GH #498", err.getvalue())
+
+    def test_an_override_forces_the_ad_hoc_build(self):
+        import contextlib, io
+        os.environ["VIDEOSCAN_CORPUS_SIGN"] = "adhoc"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cr.corpus_signing(available=lambda: True)[0], "CODE_SIGN_IDENTITY=-")
+        finally:
+            os.environ.pop("VIDEOSCAN_CORPUS_SIGN", None)
+
+    def test_the_identity_must_belong_to_the_projects_team(self):
+        listed = '  1) 17EC05AB "Apple Development: someone@example.com (5XG4PKX8LF)"\n     1 valid identities found\n'
+        mine = "subject= /UID=HZ99/CN=Apple Development: someone (5XG4PKX8LF)/OU=V9SVEQF26M/O=Someone/C=US"
+        other = "subject= /UID=HZ99/CN=Apple Development: someone (5XG4PKX8LF)/OU=AAAAAAAAAA/O=Someone/C=US"
+        self.assertTrue(cr.has_signing_identity(runner=self.Runner(listed, mine)))
+        self.assertFalse(cr.has_signing_identity(runner=self.Runner(listed, other)))
+        self.assertFalse(cr.has_signing_identity(runner=self.Runner("     0 valid identities found\n", mine)))
+
+    def test_the_corpus_build_takes_its_signing_from_the_one_helper(self):
+        src = (SCRIPTS / "corpus_run.py").read_text()
+        build = src[src.index("    def build(self) -> int:"):src.index("    def launch(")]
+        self.assertIn("*corpus_signing(", build)
+        self.assertNotIn('"CODE_SIGN_IDENTITY=-"', build)

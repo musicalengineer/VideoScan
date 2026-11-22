@@ -345,6 +345,46 @@ sys.exit(0)
 """
 
 
+# GH #498 (2026-11-21): the corpus test host reads the external volume, so macOS asks it for Removable
+# Volumes access. An ad-hoc signature (CODE_SIGN_IDENTITY=-) gives every build a new identity (cdhash),
+# so the M4 asked again after every build, on a screen nobody watches. Signed with the Mac's own
+# Apple Development identity (the project's team), the designated requirement stays the same across
+# builds and one Allow lasts. A Mac without that identity keeps the ad-hoc build and says why.
+CORPUS_SIGN_TEAM = "V9SVEQF26M"                  # the project's DEVELOPMENT_TEAM (project.pbxproj)
+CORPUS_SIGN_IDENTITY = "Apple Development"
+
+
+def has_signing_identity(team: str = CORPUS_SIGN_TEAM, runner=subprocess.run) -> bool:
+    """True when the login keychain holds a valid Apple Development identity of `team`."""
+    try:
+        listed = runner(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"],
+                        capture_output=True, text=True, timeout=30).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if CORPUS_SIGN_IDENTITY not in listed:
+        return False
+    try:
+        pem = runner(["/usr/bin/security", "find-certificate", "-c", CORPUS_SIGN_IDENTITY, "-p"],
+                     capture_output=True, text=True, timeout=30).stdout or ""
+        subject = runner(["/usr/bin/openssl", "x509", "-noout", "-subject"], input=pem,
+                         capture_output=True, text=True, timeout=30).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return f"OU={team}" in subject.replace(" ", "")
+
+
+def corpus_signing(out: Optional[Path] = None, available=has_signing_identity) -> List[str]:
+    """The build settings that sign the corpus test host. VIDEOSCAN_CORPUS_SIGN=adhoc forces the old build."""
+    if os.environ.get("VIDEOSCAN_CORPUS_SIGN") != "adhoc" and available():
+        return [f"CODE_SIGN_IDENTITY={CORPUS_SIGN_IDENTITY}", f"DEVELOPMENT_TEAM={CORPUS_SIGN_TEAM}",
+                "CODE_SIGN_STYLE=Manual"]
+    note = ("corpus: building the test host ad hoc (no Apple Development identity of team "
+            f"{CORPUS_SIGN_TEAM} in the keychain) — macOS will ask it for access to the external "
+            "volume again after every build (GH #498)")
+    print(note, file=sys.stderr, flush=True)
+    return ["CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"]
+
+
 def access_probe_command(mount: str) -> List[str]:
     """The probe child's command line: THIS interpreter (TCC grants per executable path), isolated.
     A seam: the tests put a child that sleeps past the timeout or is refused in its place."""
@@ -1637,7 +1677,7 @@ class Lane:
         coverage = ["-enableCodeCoverage", "YES"] if self.profiles is not None else []
         rc = _run([self.xcodebuild, "build-for-testing", "-project", str(self.worktree / "VideoScan/VideoScan.xcodeproj"),
                    "-scheme", "VideoScan", "-configuration", "Debug", "-destination", "platform=macOS",
-                   "-derivedDataPath", str(self.derived_data), *coverage, "CODE_SIGN_IDENTITY=-", "CODE_SIGN_STYLE=Manual"],
+                   "-derivedDataPath", str(self.derived_data), *coverage, *corpus_signing(self.out)],
                   self.seal, self.out, "corpus-build.log", dict(os.environ), self.worktree)
         self.build_seconds = time.time() - t0
         return rc
