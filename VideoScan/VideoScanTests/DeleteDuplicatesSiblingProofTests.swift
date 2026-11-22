@@ -212,7 +212,8 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(row.tierReason?.contains("sibling a-sib1.mov on ") == true && row.tierReason?.contains("not verified yet") == true,
                 Comment(rawValue: row.tierReason ?? ""))
         #expect(probe.blocks("sibling") == 0 && probe.opens("a-sib1.mov") == 0, "no sibling is read under keep one")
-        #expect(probe.blocks("keeper") == 0, "the keeper is never read (its stored fixity is current)")
+        #expect(probe.blocks("keeper") == 3 && job.runTally.keeperRereads == 1,
+                "the keeper is read once to confirm its stored fixity before the copy goes (GH #504 D4)")
         #expect(fam.siblings[0].contentFixity == nil, "nothing was read, nothing stored")
         #expect(FileManager.default.fileExists(atPath: fam.siblings[0].fullPath), "the sibling is never touched")
         #expect(job.runTally.siblingReads == 0)
@@ -356,20 +357,25 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(quarantineFolders(in: dir).isEmpty)
     }
 
-    /// Two SSD pairs naming one unproven sibling: nothing waits on a claim
-    /// (no sibling is read), both go.
+    /// SSD pairs naming one unproven sibling: nothing waits on a SIBLING
+    /// claim (no sibling is read), all go, and two overlap. Three copies
+    /// since GH #504 D4: the family's first pair reads the keeper to confirm
+    /// its stored fixity and the second waits for that one read; the second
+    /// and third then overlap.
     @Test func twoPairsNamingOneUnprovenSiblingNeitherReadsIt() async throws {
         let dir = tempDir("dedup"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "u", copies: 2, siblings: 1)
+        let fam = addFamily(to: model, in: dir, name: "u", copies: 3, siblings: 1)
         let probe = Probe(); probe.quarantineHold = 0.3
         let job = makeJob(model, dir, probe, sink: InMemoryLogSink())
         job.mediaTechForPath = { _ in .ssd }
         job.start(); await job.task?.value
 
-        #expect(job.plan?.entries.map(\.status) == [.trashed, .trashed], "\(job.plan?.entries.map(\.note) ?? [])")
+        #expect(job.plan?.entries.map(\.status) == [.trashed, .trashed, .trashed], "\(job.plan?.entries.map(\.note) ?? [])")
         #expect(probe.opens("u-sib1.mov") == 0 && job.siblingReadWaits == 0 && job.runTally.siblingReads == 0)
-        #expect(job.peakInFlight == 2, "two SSD pairs overlap")
+        #expect(job.keeperReadWaits == 1 && job.runTally.keeperRereads == 1 && probe.blocks("keeper") == 3,
+                "one confirming keeper read for the family; the second pair waited for it: waits \(job.keeperReadWaits), re-reads \(job.runTally.keeperRereads)")
+        #expect(job.peakInFlight == 2, "two SSD pairs overlap once the keeper is confirmed")
         #expect(FileManager.default.fileExists(atPath: fam.siblings[0].fullPath))
     }
 
@@ -572,8 +578,13 @@ struct DeleteDuplicatesRowLoggingTests {
         let refused = try #require(one("[dupjob] refused x-copy1.mov (\(sizeText)) — content differs from keeper x-keeper.mov"))
         #expect(refused.hasSuffix("NOT a duplicate"))
         #expect(notDup.copies[0].duplicateDisposition == .review, "the refused pair is flagged for Review")
-        #expect(lines.filter { $0.hasPrefix("[dupjob] ") && !$0.hasPrefix("[dupjob] audit: ") }.count == 5,
-                "one line per decided row, no sibling reads: \(lines)")
+        // GH #504 D4: one line per keeper read to confirm its stored fixity
+        // (five families, five keepers — the refused family's included).
+        let confirms = lines.filter { $0.hasPrefix("[dupjob] read keeper ") }
+        #expect(confirms.count == 5 && confirms.allSatisfy { $0.hasSuffix("to confirm its stored fingerprint before trusting it — matches") },
+                "\(confirms)")
+        #expect(lines.filter { $0.hasPrefix("[dupjob] ") && !$0.hasPrefix("[dupjob] audit: ") }.count == 5 + 5,
+                "one line per decided row + one per confirming keeper read, no sibling reads: \(lines)")
         // G2: the audit — START, one line per requested copy, OUTCOME with the receipt.
         let audit = lines.filter { $0.hasPrefix("[dupjob] audit: ") }
         #expect(audit.count == 5 + 2, "\(audit)")
@@ -581,8 +592,10 @@ struct DeleteDuplicatesRowLoggingTests {
         #expect(audit.last?.contains("· receipt: ") == true)
 
         let fourBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 4), countStyle: .file)
+        let fiveBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 5), countStyle: .file)
         let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(zero)) · trashed 4 (\(fourBytes)) · "
             + "left alone 0 (\(zero)) · refused 1 (\(sizeText)) · freed \(zero) · 0 sibling copies read (\(zero))"
+            + " · 5 keepers re-read to confirm (\(fiveBytes))"
         #expect(lines.contains(summary), "expected \(summary)\n got \(lines.filter { $0.hasPrefix("delete duplicates") })")
         #expect(lines.filter { $0.hasPrefix("delete duplicates done: ") }.count == 1)
         #expect(job.wroteOwnTerminalLine, "the MFO center's generic outcome line is skipped — one final line per run")
@@ -608,7 +621,7 @@ struct DeleteDuplicatesRowLoggingTests {
         await waitUntil({ job.isQuiescentForQuit })
         let volume = dir.lastPathComponent
         let paused = "delete duplicates paused: \(volume) — deleted 0 (\(zero)) · trashed 1 (\(sizeText)) · left alone 0 (\(zero)) · "
-            + "refused 0 (\(zero)) · freed \(zero) · 0 sibling copies read (\(zero))"
+            + "refused 0 (\(zero)) · freed \(zero) · 0 sibling copies read (\(zero)) · 1 keeper re-read to confirm (\(sizeText))"
         #expect(sink.lines.contains(paused), "\(sink.lines.filter { $0.hasPrefix("delete duplicates") })")
         #expect(!job.wroteOwnTerminalLine, "a pause is not the end of the run")
 
@@ -621,7 +634,8 @@ struct DeleteDuplicatesRowLoggingTests {
         let cancelled = try #require(sink.lines.first { $0.hasPrefix("delete duplicates cancelled: ") })
         let two = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
         #expect(cancelled == "delete duplicates cancelled: \(volume) — deleted 0 (\(zero)) · trashed 1 (\(sizeText)) · "
-                + "left alone 0 (\(zero)) · refused 0 (\(zero)) · not done 2 (\(two)) · freed \(zero) · 0 sibling copies read (\(zero))",
+                + "left alone 0 (\(zero)) · refused 0 (\(zero)) · not done 2 (\(two)) · freed \(zero) · 0 sibling copies read (\(zero))"
+                + " · 2 keepers re-read to confirm (\(two))",
                 Comment(rawValue: cancelled))
     }
 }

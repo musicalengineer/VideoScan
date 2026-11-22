@@ -71,6 +71,22 @@
 // Either way the file that gets deleted is read end to end at the moment
 // of deletion. Nothing stored — not `contentHash`, not `partialMD5`, not
 // a fixity — ever authorises a delete on its own.
+//
+// NO SINGLE READ IS THE ONLY WITNESS (GH #504, 2026-11-21 — D3a / D4). One
+// wrong read (a flipped bit that lands on the one difference between two
+// files) used to be able to send a file to the Trash. So:
+//   * path 1: the KEEPER — the file that stays, read by nothing else — is
+//     read a SECOND time when the pair would verify; the two reads must
+//     agree (the duplicate already had two: at its path and in quarantine);
+//   * path 3: the HELD file is read TWICE in quarantine and the reads must
+//     agree; and the keeper's stored fixity is CONFIRMED BY ONE FRESH READ
+//     of the keeper before the first hold of a run that stands on it
+//     (`keeperConfirmedThisRun` false) — a stored digest a fresh read
+//     contradicts is not used: the caller takes path 1.
+// A disagreement is `.readsDisagree`: nothing is removed, the file is put
+// back. Every such read is a new open of the file — no result is reused.
+// Cost per pair: path 1 = 2 keeper + 2 duplicate reads (was 1 + 2); path 3 =
+// 2 reads of the duplicate (was 1) + 1 keeper read per keeper per run.
 
 import Foundation
 import Darwin
@@ -216,12 +232,22 @@ enum SignatureVerification {
         /// inject a move into a scratch folder so no fixture ever lands
         /// in Rick's real Trash.
         var trashItem: ((URL) throws -> URL)?
-        /// Called the moment `verify` (path 1) has hashed the KEEPER in
-        /// full and re-stat'ed it — before the pair's verdict. The job
-        /// stores that fixity on the keeper at once, so a refused first
-        /// pair (a look-alike) does not cost the next pair a second read
-        /// of the same keeper (codex follow-up P2 #6).
+        /// Called when `verify` (path 1) has read the KEEPER in full and the
+        /// pair VERIFIED — the duplicate's own full read produced the same
+        /// digest. The job stores that fixity on the keeper. Never called
+        /// for a pair that was refused (GH #504 D2): a digest from a
+        /// comparison that did not verify is one unconfirmed read, and a
+        /// stored, stamp-bound keeper digest is removal authority for every
+        /// later pair. The price: a keeper whose first pair is a same-size,
+        /// same-head look-alike is read again for its next pair (this
+        /// replaces codex follow-up P2 #6, which stored it regardless).
         var didComputeKeeperFixity: ((ContentFixity) -> Void)?
+        /// Called when `holdForSingleRead` has read the KEEPER in full to
+        /// confirm its stored fixity (GH #504 D4), with the fresh fixity —
+        /// whether or not it reproduced the stored digest. The job uses it
+        /// to remember "confirmed this run" (equal digests) or to say that
+        /// the stored fingerprint was contradicted and not used.
+        var didRereadKeeper: ((ContentFixity) -> Void)?
         /// TEST SEAM, nil in production (DedupeHashReadSeamSensorTests): the
         /// read-fault hook `cancellableFullHash` consults once per block —
         /// the SAME `ArchivePromoteEngine.ReadHook` the archive hashers use.
@@ -258,6 +284,10 @@ enum SignatureVerification {
         /// A path was replaced or rewritten while/after it was verified.
         /// The caller must start over rather than act on stale proof.
         case changedSinceVerification(String)
+        /// Two fresh, complete reads of this ONE file produced different
+        /// digests while its stat stamp held (GH #504 D3a): one of them was
+        /// wrong, and nothing may be removed on either.
+        case readsDisagree(String)
         case cancelled
     }
 
@@ -322,34 +352,82 @@ enum SignatureVerification {
 
         guard !hooks.shouldCancel() else { return .failure(.cancelled) }
 
-        guard let keeperAfter = FileIdentityStamp.capture(path: keeperPath),
-              keeperAfter == keeperBefore else {
-            return .failure(.changedSinceVerification(keeperPath))
+        return pairVerdict(PairRead(keeperPath: keeperPath, duplicatePath: duplicatePath,
+                                    keeperHash: keeperHash, duplicateHash: duplicateHash,
+                                    keeperBefore: keeperBefore, duplicateBefore: duplicateBefore),
+                           hooks: hooks)
+    }
+
+    /// Both files of a pair, each read once in full: the digests and the
+    /// stamps taken before the reads.
+    private struct PairRead {
+        let keeperPath: String
+        let duplicatePath: String
+        let keeperHash: String
+        let duplicateHash: String
+        let keeperBefore: FileIdentityStamp
+        let duplicateBefore: FileIdentityStamp
+    }
+
+    /// The verdict on a pair that was read (path 1). When the two digests
+    /// are equal the keeper is read a SECOND time first (GH #504 D3a): it is
+    /// the file that stays, and on this path nothing else ever reads it —
+    /// one flipped read of it must not be what sends the other file to the
+    /// Trash. Then both stamps must still be the ones taken before any read
+    /// (so they cover every read made here), and only a pair that verified
+    /// publishes the keeper's fixity (D2).
+    private static func pairVerdict(_ read: PairRead, hooks: Hooks) -> Result<VerifiedDuplicate, Failure> {
+        if read.keeperHash == read.duplicateHash,
+           let failure = secondReadFailure(of: read.keeperPath, reportedAs: read.keeperPath,
+                                           first: read.keeperHash, label: "keeper", hooks: hooks) {
+            return .failure(failure)
         }
-        // The keeper's whole-file fixity is knowledge worth keeping whatever
-        // this pair's verdict turns out to be.
+        guard let keeperAfter = FileIdentityStamp.capture(path: read.keeperPath),
+              keeperAfter == read.keeperBefore else {
+            return .failure(.changedSinceVerification(read.keeperPath))
+        }
         let now = Date()
-        let keeperFixity = ContentFixity(digest: keeperHash, byteCount: keeperAfter.size,
+        let keeperFixity = ContentFixity(digest: read.keeperHash, byteCount: keeperAfter.size,
                                          stamp: keeperAfter, computedAt: now)
-        hooks.didComputeKeeperFixity?(keeperFixity)
-        guard let duplicateAfter = FileIdentityStamp.capture(path: duplicatePath),
-              duplicateAfter == duplicateBefore else {
-            return .failure(.changedSinceVerification(duplicatePath))
+        guard let duplicateAfter = FileIdentityStamp.capture(path: read.duplicatePath),
+              duplicateAfter == read.duplicateBefore else {
+            return .failure(.changedSinceVerification(read.duplicatePath))
         }
 
-        guard keeperHash == duplicateHash else { return .failure(.contentDiffers) }
+        guard read.keeperHash == read.duplicateHash else { return .failure(.contentDiffers) }
+        // Published only now, from a pair that verified (GH #504 D2): two
+        // files' full reads agreed — and the keeper's two reads agreed. A
+        // refused pair publishes nothing.
+        hooks.didComputeKeeperFixity?(keeperFixity)
 
         return .success(VerifiedDuplicate(
-            keeperPath: keeperPath,
-            duplicatePath: duplicatePath,
-            fullHash: keeperHash,
+            keeperPath: read.keeperPath,
+            duplicatePath: read.duplicatePath,
+            fullHash: read.keeperHash,
             verifiedAt: now,
             keeperIdentity: keeperAfter,
             duplicateIdentity: duplicateAfter,
             keeperFixity: keeperFixity,
-            duplicateFixity: ContentFixity(digest: duplicateHash, byteCount: duplicateAfter.size,
+            duplicateFixity: ContentFixity(digest: read.duplicateHash, byteCount: duplicateAfter.size,
                                            stamp: duplicateAfter, computedAt: now),
             keeperReadInFull: true))
+    }
+
+    /// THE second read (GH #504 D3a): read `path` in full once more — a new
+    /// open, nothing reused from the first read — and require the digest to
+    /// be `first`. nil = the two reads agree. Otherwise what stops the
+    /// removal: `.cancelled` (a Stop before or during the read — nothing has
+    /// changed), `.unreadable`, or `.readsDisagree`. `reportedAs` is the
+    /// path the failure names (a held file is named by its public path).
+    /// Cancellable per block like every full read; cost = one more full read
+    /// of the file (served from the page cache when the file fits in RAM).
+    private static func secondReadFailure(of path: String, reportedAs: String, first: String,
+                                          label: String, hooks: Hooks) -> Failure? {
+        guard !hooks.shouldCancel() else { return .cancelled }
+        let again = cancellableFullHash(path: path, label: label, hooks: hooks)
+        guard !hooks.shouldCancel() else { return .cancelled }
+        guard !again.isEmpty else { return .unreadable(reportedAs) }
+        return again == first ? nil : .readsDisagree(reportedAs)
     }
 
     // MARK: Path 2 — keeper by stored fixity, duplicate read in full
@@ -364,6 +442,10 @@ enum SignatureVerification {
     /// the fixity is not sha256, or the keeper's stamp changed — the
     /// returned proof then carries the keeper's FRESH fixity
     /// (`keeperReadInFull == true`) for the caller to store.
+    ///
+    /// NOT USED BY THE APP (the job takes path 3; test callers only). It
+    /// trusts the stored keeper fixity WITHOUT the fresh confirming read
+    /// path 3 makes (GH #504 D4) — do not wire it to a removal without one.
     static func verifyAgainstStoredKeeper(keeperPath: String,
                                           keeperFixity: ContentFixity?,
                                           duplicatePath: String,
@@ -448,9 +530,20 @@ enum SignatureVerification {
     /// keeper's stored fixity to describe the keeper NOW (verification
     /// grade, ctime included) and the sizes to agree, then moves the
     /// duplicate into its owner-only quarantine folder and captures its
-    /// full identity there. Nothing is read. The keeper is never read.
+    /// full identity there. The duplicate is not read here.
+    ///
+    /// THE KEEPER (GH #504 D4): a stored fixity is one earlier read's word.
+    /// Unless the caller says this run already confirmed it
+    /// (`keeperConfirmedThisRun` — a fresh read earlier in the run, or a
+    /// two-file comparison in this run produced it), the keeper is read in
+    /// full ONCE here, BEFORE anything moves, and its digest must be the
+    /// stored one. A fresh read that contradicts the stored digest makes the
+    /// fixity unusable (`.keeperFixityUnusable` — the caller takes path 1,
+    /// which reads both files); an unreadable or changing keeper refuses.
+    /// The fresh fixity is reported through `hooks.didRereadKeeper`.
     static func holdForSingleRead(keeperPath: String, keeperFixity: ContentFixity?,
                                   duplicatePath: String, directoryName: String? = nil,
+                                  keeperConfirmedThisRun: Bool = false,
                                   hooks: Hooks = .live) -> HoldOutcome {
         guard keeperPath != duplicatePath else { return .refused(.samePath) }
         guard let keeperBefore = FileIdentityStamp.capture(path: keeperPath)
@@ -467,6 +560,10 @@ enum SignatureVerification {
         // moving anything.
         guard duplicateBefore.size == fixity.byteCount else { return .refused(.contentDiffers) }
         guard !hooks.shouldCancel() else { return .refused(.cancelled) }
+        if !keeperConfirmedThisRun,
+           let stop = storedKeeperFixityProblem(fixity, keeperPath: keeperPath, stamp: keeperBefore, hooks: hooks) {
+            return stop
+        }
 
         switch moveIntoQuarantine(originalPath: duplicatePath, directoryName: directoryName,
                                   expected: duplicateBefore, hooks: hooks) {
@@ -482,6 +579,25 @@ enum SignatureVerification {
         }
     }
 
+    /// D4: one fresh, full read of the keeper against its stored fixity,
+    /// before the first hold of a run that stands on it. nil = the fresh
+    /// read reproduced the stored digest under an unchanged stamp — the
+    /// hold may go on. Otherwise the outcome the hold returns: the fixity
+    /// is unusable (a fresh read says other bytes), or the keeper cannot
+    /// stand as one right now (unreadable / changing / a Stop). Nothing has
+    /// moved when this runs.
+    private static func storedKeeperFixityProblem(_ stored: ContentFixity, keeperPath: String,
+                                                  stamp: FileIdentityStamp, hooks: Hooks) -> HoldOutcome? {
+        switch wholeFileFixity(path: keeperPath, label: "keeper", hooks: hooks, before: stamp) {
+        case .fixity(let fresh):
+            hooks.didRereadKeeper?(fresh)
+            return fresh.digest == stored.digest ? nil : .keeperFixityUnusable
+        case .cancelled: return .refused(.cancelled)
+        case .unavailable, .unreadable: return .refused(.unreadable(keeperPath))
+        case .changedDuringRead: return .refused(.changedSinceVerification(keeperPath))
+        }
+    }
+
     enum HeldVerification: Equatable {
         case verified(QuarantineTicket)
         /// Refused and put back at its original path.
@@ -490,11 +606,15 @@ enum SignatureVerification {
         case retainedQuarantine(path: String, reason: String)
     }
 
-    /// Step (e)–(f) of the single-read path: hash the held file ONCE in
-    /// full, in quarantine; require the digest to equal the keeper's
-    /// stored one, the keeper's stamp to still reproduce, and the held
-    /// file's full identity (ctime included) to equal the post-move
-    /// baseline. Any doubt puts the file back at its public path.
+    /// Step (e)–(f) of the single-read path: hash the held file in full,
+    /// in quarantine; require the digest to equal the keeper's stored one;
+    /// then hash it a SECOND time and require the same digest (GH #504 D3a:
+    /// one read that happens to match the stored digest is not enough to
+    /// send the file to the Trash); then the keeper's stamp must still
+    /// reproduce and the held file's full identity (ctime included) must
+    /// equal the post-move baseline — checked after BOTH reads. Any doubt
+    /// puts the file back at its public path. (The path keeps its name;
+    /// "single read" now means: the file is read only where it is held.)
     static func verifyHeld(_ hold: QuarantineHold, hooks: Hooks = .live) -> HeldVerification {
         let quarantined = URL(fileURLWithPath: hold.quarantinedPath)
         let original = URL(fileURLWithPath: hold.originalPath)
@@ -518,6 +638,11 @@ enum SignatureVerification {
         }
         guard digest == hold.keeperFixity.digest else {
             return putBack(.contentDiffers, reason: "content differs from the keeper")
+        }
+        // The second witness: the same file, read again from the top.
+        if let failure = secondReadFailure(of: quarantined.path, reportedAs: hold.originalPath,
+                                           first: digest, label: "quarantine", hooks: hooks) {
+            return putBack(failure, reason: "the second read of the quarantined file did not confirm the first")
         }
         // The keeper must still be the file the fixity describes.
         guard let keeperNow = FileIdentityStamp.capture(path: hold.keeperPath), keeperNow == hold.keeperIdentity else {
@@ -723,12 +848,20 @@ enum SignatureVerification {
                                        quarantineDirectory: quarantineDirectory,
                                        reason: "cancelled after quarantine", cancelled: true)
             }
-            guard !rehash.isEmpty, rehash == proof.fullHash else {
+            // A re-read that FAILED (I/O error, ended early) is not a changed
+            // file: it is put back and named unreadable (GH #504, the P3
+            // wording item). A re-read that completed with another digest is
+            // "changed during verification", as before.
+            guard !rehash.isEmpty else {
                 return restoreOrRetain(quarantined: quarantined, original: original,
                                        quarantineDirectory: quarantineDirectory,
-                                       reason: rehash.isEmpty
-                                           ? "quarantined file could not be re-read before removal"
-                                           : "quarantined file content no longer matches what was verified")
+                                       reason: "quarantined file could not be re-read before removal",
+                                       failure: .unreadable(ticket.originalPath))
+            }
+            guard rehash == proof.fullHash else {
+                return restoreOrRetain(quarantined: quarantined, original: original,
+                                       quarantineDirectory: quarantineDirectory,
+                                       reason: "quarantined file content no longer matches what was verified")
             }
         }
 

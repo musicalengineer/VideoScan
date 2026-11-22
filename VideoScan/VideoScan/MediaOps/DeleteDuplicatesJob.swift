@@ -117,147 +117,9 @@ import VideoScanCore
 
 private let deleteDupLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "deleteDuplicates")
 
-// MARK: - Off-main work item + outcome
-
-struct DeleteDuplicatesWorkItem: Sendable {
-    let path: String
-    let keeperPath: String
-    let keeperFilename: String
-    /// The keeper's stored whole-file fixity, if it has one.
-    let keeperFixity: ContentFixity?
-    /// The quarantine folder name for THIS row (plan + row ids), so a
-    /// crash leaves a folder the plan can name even before it is saved.
-    let quarantineDirectoryName: String
-    /// The family's other copies, for the copy-count tier.
-    let tierCandidates: DeletionTierCandidates
-    /// Which siblings the worker may READ to prove them (2026-09-21), and
-    /// when to stop. `.none` = stat only, as before.
-    var siblingAllowance: SiblingProver.Allowance = .none
-    /// R4 — the NETWORK gate: a copy on a network share is never a target
-    /// (no reliable Trash, no reliable identity). Asked before the move and
-    /// again at the removal. Tests inject; production asks statfs.
-    var isNetworkMount: @Sendable (String) -> Bool = DeleteDuplicatesTargetGate.liveIsNetworkMount
-    /// R4 — a CATALOG target gate that holds this copy (half of a recovered
-    /// A/V pair; longer than an archive master, or not comparable with
-    /// one), found at the copy's turn (`duplicateTargetHold`). nil = none.
-    var targetHold: String? = nil
-    /// The drive the plan cleans — so a copy not on disk at its turn can be
-    /// told MISSING (drive here, file gone) from OFFLINE (drive away). R6.
-    var volumePath: String = ""
-    /// The Master Archive VOLUME re-check (2026-09-22 follow-up, QA
-    /// MINOR 3), captured on the main actor: the snapshot plus the UUID
-    /// probe. Asked of the file's OWN volume before it is moved into
-    /// quarantine and again as the final verdict before removal — so a
-    /// symlinked scan root or custom mount path to FamilyArchive, whose
-    /// path text says "boot disk", is still refused (as Junk does).
-    /// nil = no Master Archive designated.
-    var archiveCheck: ArchiveRemovalCheck? = nil
-    /// THE REMOVAL BOUNDARY (codex #258 F6, r3, r4): asked ONCE by the final
-    /// verdict, immediately before the unlink / the move to the Trash —
-    /// everything it reads is read there and then, and the model's part
-    /// comes over in ONE synchronous hop to the main actor
-    /// (`DeleteDuplicatesJob.removalBoundary`). Built per row at dispatch;
-    /// it is handed the path the file is at when it is asked (its
-    /// quarantine path). nil only for hand-built items in tests.
-    var boundary: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil
-    /// REVIEWED plans (codex delete-engines F4): the target and keeper Rick
-    /// reviewed. The bytes phase one PROVED must be those files — the
-    /// quarantine baseline and the proof's keeper — else the copy is put
-    /// back and held. nil for bulk plans.
-    var reviewed: ReviewedIdentity? = nil
-}
-
-/// What the final verdict learns at the removal boundary, all of it read
-/// immediately before the removal (MOPS-2).
-struct RemovalBoundaryAnswer: Sendable {
-    /// The copy is HELD now (in use by the Archive Angel, the Angel's
-    /// buffer unreadable, on a drive marked Read only, the catalog gone):
-    /// the row's note. The file is put back; the row is a skip.
-    var holdNote: String?
-    /// The Master Archive rule, from the designation as it is NOW, refuses
-    /// the file (asked only when nothing holds it): its note, and whether
-    /// the refusal is only transient (the drive list is being rebuilt).
-    var archive: (note: String, transient: Bool)?
-}
-
-enum DeleteDuplicatesDiskOutcome: Sendable {
-    /// Phase 1 done: verified and in quarantine, not yet removed; the
-    /// tier facts were gathered with the file's digest in hand.
-    case quarantined(QuarantineTicket, facts: DeletionTierFacts)
-    /// UNLINKED. Never requested since Trash only (2026-10-09): the job
-    /// hands the verifier `.trash` and nothing else. Kept so that if the
-    /// verifier ever reported an unlink, the row would say what really
-    /// happened (the file is gone) instead of a comfortable lie.
-    case deleted(bytes: Int64, proof: VerifiedDuplicate)
-    case trashed(bytes: Int64, location: String, proof: VerifiedDuplicate)
-    case refused(reason: String, cancelled: Bool)
-    /// The tier said too few verified copies would remain: put back
-    /// untouched (or never moved), not a refusal, the row keeps its
-    /// disposition. `facts` carry the count for the row.
-    case leftAlone(reason: String, facts: DeletionTierFacts)
-    case failed(reason: String)
-    case retained(path: String, reason: String)
-    /// R6: not on disk at its turn, its drive connected — nothing to move.
-    case missing(reason: String)
-    /// R6: its drive is not connected at its turn.
-    case offline(reason: String)
-}
-
-/// Phase 1's result: the outcome, plus the keeper's fresh whole-file
-/// fixity when path 1 read it — WHATEVER the verdict. A refused first
-/// pair (a look-alike) must not cost the next pair a second read of the
-/// same keeper (codex follow-up P2 #6).
-struct DeleteDuplicatesPhaseOne: Sendable {
-    let outcome: DeleteDuplicatesDiskOutcome
-    let learnedKeeperFixity: ContentFixity?
-    /// When phase one ended `.retained` with the file still inside a
-    /// quarantine folder (the single-read path moves BEFORE it hashes, and
-    /// the put-back after a doubt can fail — drive dropped, original path
-    /// re-occupied): that folder, and the file's stamp there taken on the
-    /// disk thread right after (nil when it could not be stat'ed, e.g. the
-    /// drive is gone). The row records both so the plan owes a put-back
-    /// (QA 2026-09-21 F1). nil for every other outcome.
-    var retainedInQuarantine: RetainedInQuarantine? = nil
-    /// Every sibling this pair read in full to prove it (2026-09-21),
-    /// WHATEVER the verdict — each fresh fixity is stored on the
-    /// sibling's record so no later row or run reads it again while its
-    /// stamp holds.
-    var siblingReads: [SiblingRead] = []
-    /// Set when the worker left the copy alone for a PROTECTION it found
-    /// itself (a drive marked Read only, seen only by the file's own
-    /// identity): the why. The row is then never counted as a surviving
-    /// copy for another copy of this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
-    var notCountedWhy: String? = nil
-
-    struct RetainedInQuarantine: Sendable, Equatable {
-        let directory: String
-        let stamp: FileIdentityStamp?
-    }
-}
-
-/// Phase 2's result: the outcome, the decision the file ACTUALLY went by
-/// and the facts behind it. When the removal boundary's re-check dropped
-/// a counted copy (codex 1611), `evidenceChanged` is true, `decision` is
-/// the re-decided tier (reason naming the copy) and `facts` is what still
-/// held — the row and the ledger take these over the ones saved with the
-/// ticket. Otherwise they are the phase-one values, untouched.
-struct DeleteDuplicatesPhaseTwo: Sendable {
-    let outcome: DeleteDuplicatesDiskOutcome
-    let decision: DeletionTierDecision
-    let facts: DeletionTierFacts
-    let evidenceChanged: Bool
-    /// Set when the removal boundary found the copy HELD (in use by the
-    /// Archive Angel, on a drive marked Read only since its turn): the note.
-    /// The file was put back; the row is a skip, never a refusal.
-    var heldNote: String? = nil
-    /// Set when the copy was RETAINED for a protection found at the removal
-    /// boundary — a hold (the why of `heldNote`), or the Master Archive rule
-    /// refusing it from TODAY's designation where the check captured at its
-    /// turn had let it go (codex #258 r4-1). Main would have removed this
-    /// file; so it is never counted as a surviving copy for another copy of
-    /// this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
-    var notCountedWhy: String? = nil
-}
+// MARK: - Off-main work
+//
+// The work item and the two phases' outcomes: DeleteDuplicatesWorkTypes.swift.
 
 /// A locked slot for the reason the Trash step gave when it refused.
 private final class ReasonBox: @unchecked Sendable {
@@ -358,11 +220,17 @@ enum DeleteDuplicatesDiskWorker {
     private static func proveAndQuarantine(_ item: DeleteDuplicatesWorkItem,
                                            hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseOne {
         let box = FixityBox()
+        let reread = FixityBox()
         var observing = hooks
         let downstream = hooks.didComputeKeeperFixity
         observing.didComputeKeeperFixity = { fixity in
             box.set(fixity)
             downstream?(fixity)
+        }
+        let downstreamReread = hooks.didRereadKeeper
+        observing.didRereadKeeper = { fixity in
+            reread.set(fixity)
+            downstreamReread?(fixity)
         }
         var reads: [SiblingRead] = []
         var outcome = phaseOne(item, hooks: observing, siblingReads: &reads)
@@ -373,6 +241,7 @@ enum DeleteDuplicatesDiskWorker {
             outcome = release(ticket, reason: why, keeperFilename: item.keeperFilename, leftAlone: facts)
         }
         return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
+                                        keeperReread: reread.value,
                                         retainedInQuarantine: retainedInQuarantine(outcome),
                                         siblingReads: reads)
     }
@@ -450,7 +319,9 @@ enum DeleteDuplicatesDiskWorker {
         }
         switch SignatureVerification.holdForSingleRead(keeperPath: item.keeperPath, keeperFixity: item.keeperFixity,
                                                        duplicatePath: item.path,
-                                                       directoryName: item.quarantineDirectoryName, hooks: hooks) {
+                                                       directoryName: item.quarantineDirectoryName,
+                                                       keeperConfirmedThisRun: item.keeperConfirmedThisRun,
+                                                       hooks: hooks) {
         case .held(let hold):
             switch SignatureVerification.verifyHeld(hold, hooks: hooks) {
             case .verified(let ticket):
@@ -768,6 +639,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// Sibling path → the pair in flight that may be reading it (one read
     /// per sibling per run; cleared when that pair settles).
     private var siblingReaders: [String: UUID] = [:]
+    /// Keeper record → the pair in flight that is reading it to confirm its
+    /// stored fixity (GH #504 D4; cleared when that pair settles). A second
+    /// pair of the same keeper waits for it instead of reading the keeper
+    /// again beside it.
+    private var keeperReaders: [UUID: UUID] = [:]
+    /// Pairs that waited for another pair's confirming keeper read (tests read it).
+    private(set) var keeperReadWaits = 0
+    /// Keeper record → the stored fixity THIS RUN has fresh evidence for
+    /// (GH #504 D4): a confirming re-read reproduced it, or a verified
+    /// two-file comparison in this run produced it. A job object is one
+    /// run, so this never outlives it. Bounded by the keepers of the plan
+    /// (one small value each).
+    private var keeperFixityConfirmedThisRun: [UUID: ContentFixity] = [:]
     /// Pairs that waited for another pair's sibling read (tests read it).
     private(set) var siblingReadWaits = 0
     /// The most pairs that were ever in flight together (tests read it).
@@ -1210,12 +1094,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             if entry.status.isSettled { cursor += 1; continue }
             await waitWhilePaused()
             if stopRequested || planSaveFailed { break }
-            // A keeper without a usable stored fixity is read in full by
-            // its first pair; that pair runs ALONE (both slots) so a
-            // second pair cannot read the same keeper again beside it.
-            // Every later pair of that keeper stats it and may overlap.
-            let keeperHasFixity = model.record(forID: entry.keeperID)?.contentFixity?.isUsableForVerification == true
-            var weight = keeperHasFixity ? Self.slotWeight(for: mediaTech(for: entry.path)) : Self.slotCapacity
+            // The slots this pair needs — see `pairWeight`: alone when the
+            // keeper has no usable fixity; the heavier of the two drives
+            // when the keeper must be read once to confirm its fixity (D4).
+            var weight = pairWeight(for: entry, model: model)
             await acquireSlots(weight)
             if pauseRequested || stopRequested || planSaveFailed {
                 // Asked to hold / stop while waiting for a slot: give it
@@ -1285,11 +1167,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // row gives its slots back, waits for that pair to settle (its
             // fixity is then on the sibling's record) and is re-checked
             // from the top with the fresh catalog.
-            if let owner = candidates.otherCopies.lazy.compactMap({ self.siblingReaders[$0.path] })
-                .first(where: { $0 != entry.id }), let running = pairTasks[owner] {
+            // The same holds for the KEEPER while another pair in flight is
+            // reading it to confirm its stored fixity (GH #504 D4): one
+            // confirming read per keeper per run, not one per pair.
+            if let running = pairAlreadyReading(for: entry, candidates: candidates, keeper: keeper) {
                 releaseSlots(weight)
                 cursor -= 1
-                siblingReadWaits += 1
                 await running.value
                 continue
             }
@@ -1330,6 +1213,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // Claim the siblings this pair may read (no usable stored
             // evidence, drive reserved) until it settles.
             for path in needy where allowance.readablePaths.contains(path) { siblingReaders[path] = entry.id }
+            // …and the keeper, when this pair is the one that reads it (D4).
+            claimKeeperRead(keeper, by: entry.id)
 
             // The pair's removal-time check must come from a FRESH
             // snapshot; awaits above (slots, a sibling's pair) may have
@@ -1342,6 +1227,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let item = DeleteDuplicatesWorkItem(
                 path: entry.path, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
                 keeperFixity: keeper.contentFixity,
+                keeperConfirmedThisRun: keeperIsConfirmedThisRun(keeper),
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
                 tierCandidates: candidates, siblingAllowance: allowance,
                 // R4: the target gates travel with the pair — the network
@@ -1512,6 +1398,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         defer {
             pairTasks[entry.id] = nil
             siblingReaders = siblingReaders.filter { $0.value != entry.id }
+            keeperReaders = keeperReaders.filter { $0.value != entry.id }
         }
         guard let model, plan != nil else {
             inFlight.remove(entry.id); releaseSlots(weight); return
@@ -1550,17 +1437,16 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let stamp = retained.stamp.flatMap { $0.size == entry.sizeBytes ? $0 : nil }
             mutatePlan { $0.setRetainedInQuarantine(entry.id, directory: retained.directory, stamp: stamp) }
         }
-        // The keeper was read in full by this pair: publish its fixity to
-        // the catalog NOW, whatever this pair's verdict, so the next pair
-        // with this keeper only stats it (P2 #6).
-        if let learned = phaseOne.learnedKeeperFixity, keeper.contentFixity != learned,
-           model.storeContentFixity(recordID: keeper.id, path: keeper.fullPath, fixity: learned) {
-            tally.catalogMutated = true
-        }
-        // Every sibling read to prove it: its fresh fixity goes on ITS
-        // record now (where the keeper's goes), whatever it said and
-        // whatever this pair's verdict — the next row naming it, or the
-        // next run, only stats it (2026-09-21).
+        // The keeper was read in full by this pair and the pair VERIFIED
+        // (GH #504 D2 — never from a refused pair): publish its fixity to
+        // the catalog now, so the next pair with this keeper need not read
+        // it against its duplicate again.
+        noteKeeperEvidence(phaseOne, keeper: keeper, stored: item.keeperFixity, for: entry, model: model)
+        // Every sibling read that MATCHED the duplicate's digest: its fresh
+        // fixity goes on ITS record now (where the keeper's goes), whatever
+        // this pair's verdict — the next row naming it, or the next run,
+        // only stats it (2026-09-21). A sibling that differed carries no
+        // fixity to store (GH #504 D2).
         noteSiblingReads(phaseOne.siblingReads, for: entry, model: model)
         var finalFacts: DeletionTierFacts?
         if case .quarantined(let ticket, let facts) = outcome {
@@ -1723,6 +1609,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         /// Siblings read in full to prove them, and the bytes read.
         var siblingReads = 0
         var siblingBytes: Int64 = 0
+        /// Keepers read in full to confirm a stored fixity before a pair
+        /// stood on it (GH #504 D4: once per keeper per run), and the bytes.
+        var keeperRereads = 0
+        var keeperRereadBytes: Int64 = 0
         var catalogMutated = false
         var removed: Int { deleted + trashed }
     }
@@ -2038,9 +1928,100 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         return reason
     }
 
-    /// Sibling reads of one pair: store each fresh fixity on the
-    /// sibling's record (id AND path must still match), count them, and
-    /// log one line each.
+    /// The slots one pair needs before it may start.
+    ///   * A keeper without a usable stored fixity is read in full by its
+    ///     first pair; that pair runs ALONE (both slots) so a second pair
+    ///     cannot read the same keeper again beside it.
+    ///   * A keeper whose stored fixity this run has not confirmed yet is
+    ///     read once by this pair (GH #504 D4): the read occupies the
+    ///     KEEPER's drive, so the pair weighs as the heavier of its two
+    ///     drives (a keeper on a spinning disk → the pair runs alone).
+    ///   * Otherwise the keeper is only stat'ed: the copy's own drive.
+    private func pairWeight(for entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) -> Int {
+        guard let keeper = model.record(forID: entry.keeperID),
+              keeper.contentFixity?.isUsableForVerification == true else { return Self.slotCapacity }
+        let own = Self.slotWeight(for: mediaTech(for: entry.path))
+        if keeperIsConfirmedThisRun(keeper) { return own }
+        return max(own, Self.slotWeight(for: mediaTech(for: keeper.fullPath)))
+    }
+
+    /// The pair in flight this row must wait for, if any: one that may be
+    /// reading one of this row's SIBLINGS (one read per sibling per run), or
+    /// one that is reading this row's KEEPER to confirm its stored fixity
+    /// (GH #504 D4 — one confirming read per keeper per run). Counts the
+    /// wait. The caller gives its slots back, awaits the task and re-checks
+    /// the row from the top with the fresh catalog.
+    private func pairAlreadyReading(for entry: DeleteDuplicatesPlan.Entry, candidates: DeletionTierCandidates,
+                                    keeper: VideoRecord) -> Task<Void, Never>? {
+        if let owner = candidates.otherCopies.lazy.compactMap({ self.siblingReaders[$0.path] })
+            .first(where: { $0 != entry.id }), let running = pairTasks[owner] {
+            siblingReadWaits += 1
+            return running
+        }
+        if let owner = keeperReaders[keeper.id], owner != entry.id, let running = pairTasks[owner] {
+            keeperReadWaits += 1
+            return running
+        }
+        return nil
+    }
+
+    /// This pair makes the keeper's confirming read (its stored fixity has
+    /// no fresh evidence in this run yet): claimed until the pair settles.
+    private func claimKeeperRead(_ keeper: VideoRecord, by entryID: UUID) {
+        if !keeperIsConfirmedThisRun(keeper) { keeperReaders[keeper.id] = entryID }
+    }
+
+    /// Has this run fresh evidence for the fixity the keeper carries NOW
+    /// (GH #504 D4)? Only then may a pair stand on it without reading the
+    /// keeper. A fixity changed since (another job, a rescan) is not it.
+    private func keeperIsConfirmedThisRun(_ keeper: VideoRecord) -> Bool {
+        guard let stored = keeper.contentFixity else { return false }
+        return keeperFixityConfirmedThisRun[keeper.id] == stored
+    }
+
+    /// What one pair learned about its KEEPER, applied on the main actor:
+    ///   * a fixity from a two-file comparison that VERIFIED (D2) is stored
+    ///     on the keeper and is fresh evidence for the rest of the run;
+    ///   * a confirming re-read (D4) that reproduced the stored digest makes
+    ///     the stored fixity fresh evidence for the rest of the run — one
+    ///     keeper read per keeper per run, not per pair;
+    ///   * a confirming re-read that CONTRADICTED the stored digest is said,
+    ///     once per pair, in the console and both logs. Nothing is stored
+    ///     from it (one read never replaces a digest); the pair went on to
+    ///     read both files.
+    private func noteKeeperEvidence(_ phaseOne: DeleteDuplicatesPhaseOne, keeper: VideoRecord,
+                                    stored: ContentFixity?, for entry: DeleteDuplicatesPlan.Entry,
+                                    model: VideoScanModel) {
+        if let fresh = phaseOne.keeperReread, let stored {
+            let size = Self.sizeText(fresh.byteCount)
+            tally.keeperRereads += 1
+            tally.keeperRereadBytes += fresh.byteCount
+            if fresh.digest == stored.digest {
+                keeperFixityConfirmedThisRun[keeper.id] = stored
+                let line = "[dupjob] read keeper \(keeper.filename) (\(size)) to confirm its stored fingerprint before trusting it — matches"
+                jobLog(line)
+                deleteDupLog.info("\(line, privacy: .public)")
+            } else {
+                let line = "[dupjob] keeper \(keeper.filename) (\(size)): its stored fingerprint (sha256 \(stored.digest.prefix(12))…) "
+                    + "does NOT match a fresh read (sha256 \(fresh.digest.prefix(12))…) — the stored one was not used; "
+                    + "both files were read in full for \(entry.filename)"
+                jobLog(line)
+                model.log("  ⚠️ Keeper \(keeper.filename): its stored fingerprint does not match a fresh read — not used for \(entry.filename)")
+                deleteDupLog.warning("\(line, privacy: .public)")
+            }
+        }
+        if let learned = phaseOne.learnedKeeperFixity {
+            if keeper.contentFixity != learned,
+               model.storeContentFixity(recordID: keeper.id, path: keeper.fullPath, fixity: learned) {
+                tally.catalogMutated = true
+            }
+            if keeper.contentFixity == learned { keeperFixityConfirmedThisRun[keeper.id] = learned }
+        }
+    }
+
+    /// Sibling reads of one pair: store the fresh fixity of each sibling
+    /// that matched on its record (id AND path must still match), count
+    /// them, and log one line each.
     private func noteSiblingReads(_ reads: [SiblingRead], for entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {
         for read in reads {
             if read.bytes > 0 {
@@ -2074,6 +2055,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if t.skipped > 0 { parts.append("skipped \(t.skipped) (\(sizeText(t.bytesSkipped)))") }
         parts.append("freed \(sizeText(t.bytesFreed))")
         parts.append("\(t.siblingReads) sibling cop\(t.siblingReads == 1 ? "y" : "ies") read (\(sizeText(t.siblingBytes)))")
+        if t.keeperRereads > 0 {
+            parts.append("\(t.keeperRereads) keeper\(t.keeperRereads == 1 ? "" : "s") re-read to confirm (\(sizeText(t.keeperRereadBytes)))")
+        }
         return "delete duplicates \(how): \(volume) — " + parts.joined(separator: " · ")
     }
 

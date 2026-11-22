@@ -14499,7 +14499,7 @@
         "removedSiblingDowngradesOrPutsBack",
         "rewrittenArchiveCopyDowngradesPermanentToTrash",
         "rewrittenSiblingDowngradesPermanentToTrash",
-        "unchangedEvidenceKeepsTheTierAndNeverReadsTheKeeper"
+        "unchangedEvidenceKeepsTheTierAndTheKeeperIsReadOnlyToConfirm"
       ]
     },
     {
@@ -14658,7 +14658,7 @@
       "tests": [
         "cancelLeavesTheRestAndFilesTheCancelledPlan",
         "centerRefusesASecondConcurrentRun",
-        "deletesOnlyVerifiedPairsReadsKeeperOnceLedgersAndNamesKeeper",
+        "deletesOnlyVerifiedPairsReadsKeeperOnlyInItsFirstPairLedgersAndNamesKeeper",
         "discardFilesThePlanUnderDoneWithoutTouchingFiles",
         "modelVerbStillReturnsTheTuple",
         "offersOldestUnfinishedPlanFirst",
@@ -14989,6 +14989,8 @@
         "DeleteDuplicatesCodexFollowupTests"
       ],
       "tests": [
+        "aStopBetweenTheHeldFilesTwoReadsPutsItBackUnchanged",
+        "aStoredKeeperFixityAFreshReadContradictsIsUnusableAndNothingMoves",
         "aStrandedQuarantineKeepsThePlanOutOfDone",
         "aTwoCopyGroupsExtraIsTrashedByTheBulkRunKeeperProven",
         "anArchiveCopyHoldingDifferentBytesIsNamedAndTheKeeperAloneSuffices",
@@ -14997,15 +14999,15 @@
         "exactlyArchiveAndKeeperRemainingGoesToTheTrash",
         "finishThisFileThenQuitLandsThePairAndSuspendsThePlan",
         "gatherCountsOnlyCopiesThatHoldTheseBytes",
-        "holdMovesBeforeReadingAndTheKeeperIsNeverRead",
+        "holdConfirmsTheKeeperThenMovesBeforeReadingTheDuplicate",
         "keeperStampChangeBetweenHoldAndCompareIsRefusedAndRestored",
-        "keeperWithoutFixityIsReadOnceThenEveryPairIsSingleRead",
+        "keeperWithoutFixityIsReadByItsFirstPairOnlyThenNeverAgainThisRun",
         "noUsableFixityMovesNothingAndSizeMismatchRefusesBeforeMoving",
         "oldPlansDecodeWithNoTierAndTrashedRowsCountApart",
         "pausedAtABoundaryIsQuietForQuitAndThePlanIsOnDisk",
         "preferTrashSettingRoundTripsThroughInjectedDefaults",
         "rateDividesWallClockByPairsInFlight",
-        "refusedFirstPairStillPublishesTheKeeperFixityForTheNext",
+        "refusedFirstPairPublishesNoKeeperFixityTheNextVerifiedPairDoes",
         "resumePutsAQuarantinedFileBackBeforeDecidingEligibility",
         "rewriteBetweenHashAndUnlinkIsRefusedAndRestored",
         "stopBetweenTheTicketSaveAndPhaseTwoPutsTheFileBack",
@@ -15907,55 +15909,6 @@
       "tests": [
         "backfillEndToEnd",
         "scanParserCaptures"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/EncodeSourceWithoutDurationMatrixTests.swift",
-      "stage": "regression",
-      "suites": [
-        "EncodeSourceWithoutDurationMatrixTests"
-      ],
-      "tests": [
-        "aCleanupRenderIsReturned",
-        "aFallbackMeasureStillCatchesAShortOutput",
-        "aMalformedReplyIsUnreadable",
-        "aMixedRateStreamIsNotGivenALength",
-        "aPlainTranscodeIsPublishedWithTheNote",
-        "aProvenMasterStillCarriesTheNote",
-        "aProvenMasterStillReplaces",
-        "aReformatIsPublishedWithTheNote",
-        "aReplaceIsRefused",
-        "aStreamDurationMeasuresTheSource",
-        "anOutputMeasuredByItsStreamsIsVerified",
-        "anOutputWithNoDurationIsStillFailed",
-        "anUnprovenMasterStillNeverReplaces",
-        "realElementaryStreams",
-        "theChainsParsing",
-        "theFourAnswersAndTheLogLine"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/EncodeVerifyReformatCleanupMatrixTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ReformatUnverifiedOutputMatrixTests",
-        "CleanupUnverifiedRenderMatrixTests"
-      ],
-      "tests": [
-        "aRenderChangedAfterVerificationIsNeverPublished",
-        "aRenderSwappedDuringVerificationIsNeverReturned",
-        "aScratchRemovalIsRemovedOnlyWhenConfirmedAbsent",
-        "aShortReformatIsStillRefused",
-        "anUnmeasurableReformatIsNeverAdopted",
-        "anUnmeasurableRenderIsNeverReturned",
-        "controlAVerifiedReformatPublishes",
-        "controlAVerifiedRenderIsReturned",
-        "stopDuringTheProbesNeverPublishes",
-        "stopDuringTheProbesNeverReturnsARender",
-        "theJobPublishesOnlyAReturnedRender",
-        "theScratchFoldersFateIsSaid"
       ]
     },
     {
@@ -31040,36 +30993,6 @@
     },
     {
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/TranscodePreservationProofMatrixTests.swift",
-      "stage": "regression",
-      "suites": [
-        "TranscodePreservationProofMatrixTests"
-      ],
-      "tests": [
-        "aMasterDecodeThatMisbehavesIsNeverAPass",
-        "aMatchingProofPublishesAndReplaces",
-        "aProofThatHangsIsStalled",
-        "aRealMasterIsProvenThenReplaces",
-        "aShortMasterIsNotProven",
-        "aSourceDecodeThatMisbehavesIsNeverAPass",
-        "aVideoMismatchIsNotPublishedWithoutReplace",
-        "aVideoMismatchNeverReplaces",
-        "anAudioDecodeThatMisbehavesIsNeverAPass",
-        "anAudioMismatchNeverReplaces",
-        "carriageReturnSeparatedRecordsAreComparedOneByOne",
-        "garbageIsBoundedToo",
-        "identicalGarbageAudioProofsAreNotAMatch",
-        "identicalGarbageVideoProofsAreNotAMatch",
-        "stopAfterTheProofAnsweredNeverPublishes",
-        "stopDuringTheProofNeverPublishes",
-        "theEvidenceForALongTapeIsComputedInBudget",
-        "theEvidenceIsBounded",
-        "theEvidenceSentences",
-        "theProofPrecedesThePublishInTheSource"
-      ]
-    },
-    {
-      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TranscodeReplaceNegativeMatrixTests.swift",
       "stage": "regression",
       "suites": [
@@ -32545,28 +32468,6 @@
         "spotCheckSamplingIsDeterministicAndBounded",
         "undoFromAJSONSafetyCopyIsRefusedAndChangesNothing",
         "uuidMatchWithZeroCleanSamplesAsksInsteadOfActing"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/VolumeRescueNeverReplacesTests.swift",
-      "stage": "regression",
-      "suites": [
-        "VolumeRescueNeverReplacesTests"
-      ],
-      "tests": [
-        "aDestinationMovedDuringTheRescueIsNeverPublishedInto",
-        "aDifferentSizeFileIsNeverReplaced",
-        "aDirectoryAtTheNameIsNeverReplaced",
-        "aFileArrivingDuringTheRealTransferSurvives",
-        "aFileThatAppearsBeforeRsyncRunsIsNotReplaced",
-        "aFileThatAppearsDuringTheFastCopyIsNotReplaced",
-        "aSameSizeFileIsCountedAndLeftUntouched",
-        "aSameSizeFileThatAppearsIsAlreadyThereNotWritten",
-        "aSymlinkAtTheNameIsNeverReplaced",
-        "aSymlinkedStagingFolderIsNeverFollowed",
-        "theCopiersOwnPartialIsStillResumed",
-        "twoCameraCardsIntoOneFolder"
       ]
     },
     {
@@ -37063,7 +36964,9 @@
       "tests": [
         "backfillStoresAnotherFilesDigest",
         "backfillStoresNothingFromAFailedRead",
+        "bindKeepsTheStoredDigestWhenTheSecondReadFails",
         "bindOverwritesATrueDigestOnOneDisagreeingRead",
+        "bindStoresAChangedDigestOnlyAfterTwoAgreeingReads",
         "bindStoresNothingFromAFailedRead",
         "deletionTierFactsCountTheFalseCopy",
         "promoteBelievesTheFalseDigest"
@@ -37077,8 +36980,13 @@
         "HashReadFaultPromoteTests"
       ],
       "tests": [
+        "aFlippedDestinationReadAdoptsNothing",
+        "aFlippedDestinationReadOnTheManifestLegLinksNothing",
+        "aFlippedDestinationReadOnTheReconcileLegIndexesNothing",
         "aFlippedProvingReadAdoptsAnotherFile",
+        "aFlippedSourceReadOnTheReconcileLegIndexesNothing",
         "nothingIsPromoted",
+        "theConfirmingReadBeforeAnAdoption",
         "theThreeReads"
       ]
     },
@@ -37090,9 +36998,12 @@
         "HashReadFaultPruneTests"
       ],
       "tests": [
+        "aFaultInTheCopysSecondReadHoldsIt",
+        "aFaultedReadInTheJobMovesNothing",
+        "aFlippedReadOfACopyOneBitApartMakesNoProof",
+        "aFlippedReadOfACopyOneBitApartMovesNothingInTheJob",
         "aShortReadOfALongerCopyMakesAFalseProof",
-        "anUnprovenReadMakesNoProof",
-        "theJobsReadsAreOutOfReach"
+        "anUnprovenReadMakesNoProof"
       ]
     },
     {
@@ -37103,8 +37014,15 @@
         "HashReadFaultVerifyArchiveTests"
       ],
       "tests": [
+        "aFailedSecondReadKeepsTheStoredFingerprint",
         "aFaultedReadNeverVerifies",
-        "aShortReadOfALongerArchiveFileVerifies"
+        "aFileThatShrinksUnderTheReadIsNeverRestored",
+        "aShortReadOfALongerArchiveFileVerifies",
+        "oneFlippedReadDoesNotClearATrueFingerprint",
+        "oneReadDoesNotReplaceAStoredContentFixity",
+        "oneReadThatMatchesTheManifestDoesNotReplaceAStoredFingerprint",
+        "twoReadsThatAgreeReplaceAStaleContentFixity",
+        "twoReadsThatAgreeWithTheManifestReplaceAStaleFingerprintAndSayIt"
       ]
     },
     {
@@ -37116,6 +37034,7 @@
         "HashReadSeamSensorTests"
       ],
       "tests": [
+        "aFileWhoseSizeMovesUnderTheReadYieldsNoDigest",
         "bitFlipChangesTheDigest",
         "containedReadIsSeamed",
         "copyVerifyPublishRefuses",
@@ -37128,6 +37047,7 @@
         "promoteAlwaysPassesTheExpectedDigest",
         "theEngineReadsItOnce",
         "theHookIsTaskLocal",
+        "theWholeReadRule",
         "withoutAReferenceASourceFlipIsInvisible"
       ]
     },
@@ -37150,7 +37070,8 @@
         "theCarriersAreInPlace",
         "theGateConsultsOnce",
         "theHookIsTaskLocal",
-        "theProofConsultsOnce"
+        "theProofConsultsOnce",
+        "theSecondReadsAreInOnePlaceEach"
       ]
     },
     {
@@ -37166,6 +37087,7 @@
         "shapeB_theProofStandsOnOneRead",
         "theAdoptionProofUnderEachFault",
         "theGuardHoldsOnAnUnprovenRead",
+        "theGuardHoldsWhenTheSecondReadDoesNotConfirm",
         "theProvenBackupCountReadsNothing"
       ]
     },
@@ -38647,6 +38569,107 @@
         "rosterIsPerTaskTree",
         "rosterReachesChildTasksOnly",
         "unboundTheModelsDirIsProductions"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeSourceWithoutDurationMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EncodeSourceWithoutDurationMatrixTests"
+      ],
+      "tests": [
+        "aCleanupRenderIsReturned",
+        "aFallbackMeasureStillCatchesAShortOutput",
+        "aMalformedReplyIsUnreadable",
+        "aMixedRateStreamIsNotGivenALength",
+        "aPlainTranscodeIsPublishedWithTheNote",
+        "aProvenMasterStillCarriesTheNote",
+        "aProvenMasterStillReplaces",
+        "aReformatIsPublishedWithTheNote",
+        "aReplaceIsRefused",
+        "aStreamDurationMeasuresTheSource",
+        "anOutputMeasuredByItsStreamsIsVerified",
+        "anOutputWithNoDurationIsStillFailed",
+        "anUnprovenMasterStillNeverReplaces",
+        "realElementaryStreams",
+        "theChainsParsing",
+        "theFourAnswersAndTheLogLine"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EncodeVerifyReformatCleanupMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ReformatUnverifiedOutputMatrixTests",
+        "CleanupUnverifiedRenderMatrixTests"
+      ],
+      "tests": [
+        "aRenderChangedAfterVerificationIsNeverPublished",
+        "aRenderSwappedDuringVerificationIsNeverReturned",
+        "aScratchRemovalIsRemovedOnlyWhenConfirmedAbsent",
+        "aShortReformatIsStillRefused",
+        "anUnmeasurableReformatIsNeverAdopted",
+        "anUnmeasurableRenderIsNeverReturned",
+        "controlAVerifiedReformatPublishes",
+        "controlAVerifiedRenderIsReturned",
+        "stopDuringTheProbesNeverPublishes",
+        "stopDuringTheProbesNeverReturnsARender",
+        "theJobPublishesOnlyAReturnedRender",
+        "theScratchFoldersFateIsSaid"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TranscodePreservationProofMatrixTests.swift",
+      "stage": "regression",
+      "suites": [
+        "TranscodePreservationProofMatrixTests"
+      ],
+      "tests": [
+        "aMasterDecodeThatMisbehavesIsNeverAPass",
+        "aMatchingProofPublishesAndReplaces",
+        "aProofThatHangsIsStalled",
+        "aRealMasterIsProvenThenReplaces",
+        "aShortMasterIsNotProven",
+        "aSourceDecodeThatMisbehavesIsNeverAPass",
+        "aVideoMismatchIsNotPublishedWithoutReplace",
+        "aVideoMismatchNeverReplaces",
+        "anAudioDecodeThatMisbehavesIsNeverAPass",
+        "anAudioMismatchNeverReplaces",
+        "carriageReturnSeparatedRecordsAreComparedOneByOne",
+        "garbageIsBoundedToo",
+        "identicalGarbageAudioProofsAreNotAMatch",
+        "identicalGarbageVideoProofsAreNotAMatch",
+        "stopAfterTheProofAnsweredNeverPublishes",
+        "stopDuringTheProofNeverPublishes",
+        "theEvidenceForALongTapeIsComputedInBudget",
+        "theEvidenceIsBounded",
+        "theEvidenceSentences",
+        "theProofPrecedesThePublishInTheSource"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeRescueNeverReplacesTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VolumeRescueNeverReplacesTests"
+      ],
+      "tests": [
+        "aDestinationMovedDuringTheRescueIsNeverPublishedInto",
+        "aDifferentSizeFileIsNeverReplaced",
+        "aDirectoryAtTheNameIsNeverReplaced",
+        "aFileArrivingDuringTheRealTransferSurvives",
+        "aFileThatAppearsBeforeRsyncRunsIsNotReplaced",
+        "aFileThatAppearsDuringTheFastCopyIsNotReplaced",
+        "aSameSizeFileIsCountedAndLeftUntouched",
+        "aSameSizeFileThatAppearsIsAlreadyThereNotWritten",
+        "aSymlinkAtTheNameIsNeverReplaced",
+        "aSymlinkedStagingFolderIsNeverFollowed",
+        "theCopiersOwnPartialIsStillResumed",
+        "twoCameraCardsIntoOneFolder"
       ]
     }
   ],
@@ -42651,7 +42674,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1034,
+      "expected_floor": 1055,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [

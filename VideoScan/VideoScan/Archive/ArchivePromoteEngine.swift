@@ -164,6 +164,18 @@ enum ArchivePromoteEngine {
         case partialExists(String)
         case createFailed(String, errno: Int32)
         case writeFailed(String)
+        /// A READ of a file that opened did not deliver the whole file: a
+        /// read error ("read errno 5") or a read that ended before the
+        /// file's size ("N of M bytes"). Never a digest (GH #504, D1).
+        case readFailed(String)
+        /// The file's SIZE moved while it was being read (it was truncated
+        /// or appended to): what was read is not the file from end to end.
+        /// The file changed — it is not unreadable and not corrupt.
+        case changedDuringRead(String)
+        /// Two fresh, complete reads of ONE file produced different digests
+        /// (GH #504 D3): one of them was wrong. Nothing may be adopted or
+        /// recorded on either. The payload names the file.
+        case readsDisagree(String)
         case verifyMismatch(expected: String, actual: String)
         case renameFailed(String, errno: Int32)
         case publishedIdentityMismatch(String)
@@ -180,14 +192,27 @@ enum ArchivePromoteEngine {
             case .symlinkInArchivePath(let p): return "a symlink sits inside the archive path — refused: \(p)"
             case .notADirectory(let p): return "expected a directory inside the archive tree: \(p)"
             case .partialExists(let p): return "a partial for this destination already exists (another job?): \(p)"
+            case .verifyMismatch(let e, let a): return "verification failed — copy \(a.prefix(12))… ≠ source \(e.prefix(12))…; partial removed"
+            case .publishedIdentityMismatch(let p): return "the published file is not the file that was verified — refused: \(p)"
+            case .manifestInvalid(let why): return "archive manifest refused: \(why) — run Initialize Master Archive again"
+            case .changedDuringRead(let how): return "changed while it was read (\(how))"
+            case .readsDisagree(let what): return "two reads of \(what) disagreed — nothing was recorded"
+            case .cancelled: return "cancelled"
+            case .createFailed, .writeFailed, .readFailed, .renameFailed, .durabilityBarrierFailed:
+                return syscallFailureDescription
+            }
+        }
+
+        /// The words for the failures where a SYSCALL failed (create, write,
+        /// read, rename, fsync) — as opposed to a rule refusing the file.
+        private var syscallFailureDescription: String {
+            switch self {
             case .createFailed(let p, let e): return "could not create \(p) (errno \(e))"
             case .writeFailed(let p): return "write failed: \(p)"
-            case .verifyMismatch(let e, let a): return "verification failed — copy \(a.prefix(12))… ≠ source \(e.prefix(12))…; partial removed"
+            case .readFailed(let why): return "could not be read in full (\(why))"
             case .renameFailed(let p, let e): return "could not publish \(p) (errno \(e))"
-            case .publishedIdentityMismatch(let p): return "the published file is not the file that was verified — refused: \(p)"
             case .durabilityBarrierFailed(let what): return "durability barrier failed (\(what)) — the step was not made durable and is not recorded"
-            case .manifestInvalid(let why): return "archive manifest refused: \(why) — run Initialize Master Archive again"
-            case .cancelled: return "cancelled"
+            default: return ""   // not a syscall failure; `description` never asks
             }
         }
     }
@@ -274,18 +299,26 @@ enum ArchivePromoteEngine {
 
     /// Streamed SHA-256 through an already-open descriptor, from offset 0.
     /// `shouldCancel` is polled per chunk. Returns nil on cancel.
+    /// A read error, or a read that ends before the file's size, throws
+    /// `Failure.readFailed` — a digest is only ever of the WHOLE file
+    /// (GH #504, D1; the check lives in `pipelinedRead`).
     /// Pipelined: a reader thread preads ahead while this thread hashes;
     /// byte order, digest, progress and error surfaces are identical to
     /// the old serial loop (lseek guard kept as the same fd-validity
     /// check and error even though pread no longer needs the offset).
+    ///
+    /// `readHook`: the read-fault TEST seam, defaulting to the calling task's
+    /// task-local (nil in production). A caller that hops to `Task.detached`
+    /// — which inherits no task-locals — reads it before the hop and passes
+    /// it in (the prune job, like Relocate's proofs).
     static func sha256(fd: Int32, shouldCancel: () -> Bool = { false },
-                       progress: (Int64) -> Void = { _ in }) throws -> String? {
+                       progress: (Int64) -> Void = { _ in },
+                       readHook: ReadHook? = readHook) throws -> String? {
         guard lseek(fd, 0, SEEK_SET) == 0 else { throw Failure.writeFailed("lseek") }
         var hasher = SHA256()
         var seen: Int64 = 0
         do {
-            _ = try pipelinedRead(fd: fd,
-                                  onReadError: { e in Failure.writeFailed("read errno \(e)") },
+            _ = try pipelinedRead(fd: fd, hook: readHook,
                                   shouldCancel: shouldCancel) { buf, n in
                 hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
                 seen += Int64(n)
@@ -298,10 +331,11 @@ enum ArchivePromoteEngine {
     }
 
     /// Streamed SHA-256 of a path (O_NOFOLLOW, regular file only).
-    static func sha256(path: String, shouldCancel: () -> Bool = { false }) throws -> String? {
+    static func sha256(path: String, shouldCancel: () -> Bool = { false },
+                       readHook: ReadHook? = readHook) throws -> String? {
         let h = try openSource(path: path)
         defer { h.close() }
-        return try sha256(fd: h.fd, shouldCancel: shouldCancel)
+        return try sha256(fd: h.fd, shouldCancel: shouldCancel, readHook: readHook)
     }
 
     // MARK: Descriptor-relative tree walk
@@ -460,6 +494,34 @@ enum ArchivePromoteEngine {
         return try sha256(fd: fd, shouldCancel: shouldCancel)
     }
 
+    /// The digest of a contained archive file that is about to be ADOPTED on
+    /// the strength of `expected` (GH #504 D3c, Codex r1 P1): when the first
+    /// read produces `expected`, the file is read in full a SECOND time and
+    /// must produce it again — one read that happens to match must never be
+    /// the only witness that ties a source to a file already in the archive.
+    /// Returns the first digest (the caller refuses a mismatch as before);
+    /// nil ⇒ absent or cancelled; two reads that disagree throw
+    /// `Failure.readsDisagree`. Cost: one more full read, only on a match.
+    static func sha256(root: String, relativePath: String, confirmingWhenEqualTo expected: String,
+                       shouldCancel: () -> Bool = { false }) throws -> String? {
+        guard let fd = try openContainedFile(root: root, relativePath: relativePath) else { return nil }
+        defer { Darwin.close(fd) }
+        guard let first = try sha256(fd: fd, shouldCancel: shouldCancel) else { return nil }
+        guard first == expected else { return first }
+        return try secondRead(fd: fd, mustEqual: first, what: relativePath, shouldCancel: shouldCancel)
+    }
+
+    /// THE second read of an archive file about to be adopted: `fd` hashed
+    /// again from the top (a fresh pass of the one reader; nothing reused).
+    /// Returns `first` when the two agree, nil when cancelled; throws
+    /// `Failure.readsDisagree(what)` when they do not.
+    private static func secondRead(fd: Int32, mustEqual first: String, what: String,
+                                   shouldCancel: () -> Bool) throws -> String? {
+        guard let again = try sha256(fd: fd, shouldCancel: shouldCancel) else { return nil }
+        guard again == first else { throw Failure.readsDisagree(what) }
+        return first
+    }
+
     /// Remove `<relativePath>.partial` if present — via the dirfd chain,
     /// unlinkat, never through a symlink. Non-contained ⇒ throws (nothing
     /// removed). Returns true when something was removed.
@@ -545,6 +607,15 @@ enum ArchivePromoteEngine {
             // The partial is already gone (publishIntoDirectory's defer).
             removeCreatedDirectories(root: root, created: createdDirs)
             throw Failure.sourceChangedDuringCopy(path)
+        } catch Failure.readFailed(let why) {
+            // A read that failed or ended early (GH #504, D1) is refused the
+            // same way: no partial, no new folder left behind.
+            removeCreatedDirectories(root: root, created: createdDirs)
+            throw Failure.readFailed(why)
+        } catch Failure.changedDuringRead(let how) {
+            // The `.partial` itself changed size under its read-back.
+            removeCreatedDirectories(root: root, created: createdDirs)
+            throw Failure.changedDuringRead(how)
         }
     }
 
@@ -645,13 +716,20 @@ enum ArchivePromoteEngine {
         guard lseek(source.fd, 0, SEEK_SET) == 0 else { throw Failure.sourceUnreadable(source.path) }
         var hasher = SHA256()
         var copied: Int64 = 0
-        _ = try pipelinedRead(fd: source.fd,
-                              onReadError: { _ in Failure.sourceUnreadable(source.path) },
-                              shouldCancel: shouldCancel) { buf, n in
-            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
-            try writeAll(dfd, buf, n, label: partialPath)
-            copied += Int64(n)
-            progress(copied)
+        // A read error or a read that ends early throws `.readFailed` (D1):
+        // the file opened; what failed was a read.
+        do {
+            _ = try pipelinedRead(fd: source.fd, hook: readHook,
+                                  shouldCancel: shouldCancel) { buf, n in
+                hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
+                try writeAll(dfd, buf, n, label: partialPath)
+                copied += Int64(n)
+                progress(copied)
+            }
+        } catch Failure.changedDuringRead {
+            // The source's size moved under the copy: the failure this pass
+            // has always named (partial and created folders are rolled back).
+            throw Failure.sourceChangedDuringCopy(source.path)
         }
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), copied)
     }
@@ -774,17 +852,34 @@ enum ArchivePromoteEngine {
     /// calling `consume` once per chunk IN FILE ORDER on the calling
     /// thread. `shouldCancel` is polled once per chunk (same granularity
     /// as the old serial loops) and surfaces as `Failure.cancelled`;
-    /// a read error surfaces as `onReadError(errno)` — callers keep
-    /// their historical error types. Returns total bytes consumed.
+    /// a read error surfaces as `Failure.readFailed("read errno N")`.
+    /// Returns total bytes consumed.
+    ///
+    /// WHOLE FILE OR NOTHING (GH #504, D1 — made strict after Codex r1): the
+    /// size is taken from the descriptor before the first read and again
+    /// after the last, and the read is whole ONLY when size-before ==
+    /// size-after == bytes consumed (`wholeReadFailure`). Otherwise it
+    /// throws — never a digest, a copy or a comparison of something that was
+    /// not the file from end to end:
+    ///   * the size moved under the read → `Failure.changedDuringRead`
+    ///     ("N bytes before, M after") — the file CHANGED; it is not
+    ///     unreadable and not corrupt. (The first rule compared with the
+    ///     smaller of the two sizes and so let a file that shrank after it
+    ///     had been buffered return its former digest.)
+    ///   * the size held and the read ended short → `Failure.readFailed`
+    ///     ("N of M bytes").
+    /// Cost: two fstat calls per pass.
     /// F_RDAHEAD is a best-effort hint; failure is ignored.
     private static func pipelinedRead(fd: Int32,
-                                      onReadError: (Int32) -> Failure,
+                                      hook: ReadHook?,
                                       shouldCancel: () -> Bool,
                                       consume: (UnsafeRawPointer, Int) throws -> Void) throws -> Int64 {
         _ = fcntl(fd, F_RDAHEAD, 1)
+        let sizeBefore = FileIdentity.of(fd: fd)?.0.size
         let ring = ChunkRing(depth: pipelineDepth, slotSize: pipelineChunkSize)
-        // Read on the calling task: the reader thread cannot see task-locals.
-        ring.startReader(fd: fd, hook: readHook)
+        // `hook` was read on the calling task (or handed in by a caller that
+        // hopped to a detached task): the reader thread cannot see task-locals.
+        ring.startReader(fd: fd, hook: hook)
         defer { ring.shutdown() }
         var total: Int64 = 0
         var slot = 0
@@ -793,13 +888,30 @@ enum ArchivePromoteEngine {
             ring.filled.wait()
             let n = ring.counts[slot]
             if n == 0 { break }
-            if n < 0 { throw onReadError(ring.errnos[slot]) }
+            if n < 0 { throw Failure.readFailed("read errno \(ring.errnos[slot])") }
             try consume(ring.buffers[slot], n)
             total += Int64(n)
             ring.free.signal()
             slot = (slot + 1) % ring.depth
         }
+        if let failure = wholeReadFailure(consumed: total, sizeBefore: sizeBefore,
+                                          sizeAfter: FileIdentity.of(fd: fd)?.0.size) {
+            throw failure
+        }
         return total
+    }
+
+    /// D1's rule, pure: nil = the read was the whole file (size before ==
+    /// size after == bytes consumed). A size that could not be taken is a
+    /// read failure — wholeness cannot be shown.
+    static func wholeReadFailure(consumed: Int64, sizeBefore: Int64?, sizeAfter: Int64?) -> Failure? {
+        guard let sizeBefore, let sizeAfter else { return .readFailed("its size could not be read") }
+        guard sizeBefore == sizeAfter else {
+            return .changedDuringRead("\(sizeBefore) bytes before, \(sizeAfter) after")
+        }
+        if consumed == sizeBefore { return nil }
+        return consumed < sizeBefore ? .readFailed("\(consumed) of \(sizeBefore) bytes")
+                                     : .changedDuringRead("\(consumed) bytes read, \(sizeBefore) bytes long")
     }
 
     /// write(2) until every byte of the buffer is out (EINTR-safe).
@@ -913,14 +1025,20 @@ enum ArchivePromoteEngine {
     /// Descriptor-based on purpose (codex R5 blocker 2): the caller
     /// obtained `fd` through the dirfd O_NOFOLLOW chain, so a symlinked
     /// intermediate can never make an outside file look adoptable.
+    ///
+    /// A match is confirmed by a SECOND full read of the existing file
+    /// (GH #504 D3c, Codex r1 P1 — the source is confirmed by the job): two
+    /// reads that disagree throw `Failure.readsDisagree(what)`; `what` names
+    /// the file for the row. A cancelled second read is "not identical".
     static func identicalDigest(fd: Int32,
                                 sourceSize: Int64,
+                                what: String,
                                 sourceSHA: () throws -> String?,
                                 shouldCancel: () -> Bool = { false }) throws -> String? {
         guard let (existing, _) = FileIdentity.of(fd: fd), existing.size == sourceSize else { return nil }
         guard let theirs = try sha256(fd: fd, shouldCancel: shouldCancel),
               let ours = try sourceSHA(), theirs == ours else { return nil }
-        return ours
+        return try secondRead(fd: fd, mustEqual: theirs, what: what, shouldCancel: shouldCancel)
     }
 
     /// Whole contents of an already-open (validated) descriptor via pread

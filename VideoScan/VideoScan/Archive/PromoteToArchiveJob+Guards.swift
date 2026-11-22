@@ -287,6 +287,45 @@ extension PromoteToArchiveJob {
         return try await Self.hashSourceOffMain(path: source.fullPath, progress: proofProgress)
     }
 
+    /// GH #504 D3c — the confirming read before an ADOPTION. The file
+    /// already at `relPath` hashed to `digest`, the source's proving digest
+    /// from ONE read of the source; adopting records that relationship in
+    /// the journal, the manifest and the catalog with no copy pass to
+    /// re-prove it. So the source is read in full a second time (a fresh
+    /// open; cancellable; its progress shows in the row like the first
+    /// read's) and must produce `digest` again. Returns = confirmed, adopt
+    /// (or `choice` is a fresh copy: nothing to do — the copy pass re-proves
+    /// the source). Throws `CancellationError` on Stop, `RefusedByGuard` when
+    /// the two reads disagree — nothing has been written to the archive, the
+    /// journal or the catalog at this point.
+    func confirmSourceIfAdopting(_ choice: DestinationChoice, source: VideoRecord,
+                                 entry: ArchivePromotePlan.Entry, digest: String) async throws {
+        guard choice.identicalExistingSHA != nil else { return }
+        let relPath = choice.relPath
+        model?.log("Promote: \(currentOpLabel) — an identical file is already at the destination; reading the source (\(Self.promoteByteText(max(1, source.sizeBytes)))) a second time before adopting it…")
+        let reporter = PromoteProgressReporter()
+        let fileBytes = max(1, source.sizeBytes)
+        let filename = source.filename
+        let progress: @Sendable (Int64) -> Void = { [weak self] done in
+            guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
+            let sub = "Reading \(filename) again before adopting · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+            Task { @MainActor [weak self] in self?.applyPhaseSubtitle(sub) }
+        }
+        guard let again = try await Self.hashSourceOffMain(path: source.fullPath, progress: progress),
+              !Task.isCancelled else { throw CancellationError() }
+        guard again != digest else { return }
+        throw RefusedByGuard(refusal: Refusal(
+            code: .readsDisagree, kind: .failed,
+            detail: Self.adoptionReadsDisagree(filename: filename, relPath: relPath),
+            logFacts: "two reads of the source disagreed (sha256 \(digest.prefix(12))… then \(again.prefix(12))…); "
+                + "the file already at the destination was not adopted; nothing written"))
+    }
+
+    /// The outcome row's words for that refusal. Pure.
+    nonisolated static func adoptionReadsDisagree(filename: String, relPath: String) -> String {
+        "two reads of \(filename) disagreed — nothing was recorded: the file already at \(relPath) was not adopted and nothing was copied. Check the source file (and its drive) before promoting it again"
+    }
+
     /// The refusal when a stored fixity does not describe the bytes it is
     /// stamped to (codex 2026-10-02 #1). Pure. Digest prefixes only.
     nonisolated static func storedDigestMismatch(recorded: String, actual: String) -> String {

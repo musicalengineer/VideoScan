@@ -86,7 +86,7 @@ struct HashReadFaultContentCopyProofTests {
     /// the fault; here because "proven at the move" rests on ONE read.
     /// PROPOSED FIX: none cheap (a second read doubles the cost). Rick's call,
     /// with GH #504's "second read" question.
-    @Test("🔴 P0 (parked): the surviving copy is ONE BIT apart and the guard's one read of it flips that bit → the selected file is sent to the Trash although no copy of its bytes was proven")
+    @Test("was 🔴 P0 (D3a, fixed): the surviving copy is ONE BIT apart and the guard's first read of it flips that bit → the SECOND read disagrees: the selected file is held, 'two reads of <copy> disagreed — nothing was removed'")
     func p0_aFlippedReadOfTheSurvivingCopyLetsTheLastGoodCopyGo() async throws {
         let (rig, a, b, bytes) = try onlyCopyRig { var d = $0; d[Int(Self.at)] ^= 0x01; return d }
         defer { rig.cleanup() }
@@ -99,15 +99,17 @@ struct HashReadFaultContentCopyProofTests {
 
         let fault = DedupeReadFault(.bitFlip, pathSuffix: "test_clip_b.mov", atByte: Self.at)
         let again = rig.model.catalogTrashPlan(for: [a])
-        let succeeded = await fault.run {
-            await rig.model.trashSelectedRecords([a], confirmed: again, fileOperation: rig.trash.operation).succeeded
+        let (succeeded, reasons) = await fault.run { () -> (Int, [String]) in
+            let result = await rig.model.trashSelectedRecords([a], confirmed: again, fileOperation: rig.trash.operation)
+            return (result.succeeded, result.refused.map(\.reason))
         }
         #expect(fault.firedCount == 1, "the flip never reached the guard's read of B")
-        print("[hash-matrix] trash only-copy guard | shape B: flip on the differing bit in the surviving copy's read | \(succeeded == 1 ? "A MOVED TO THE TRASH" : "A held")")
-        withKnownIssue("🔴 P0 PARKED 2026-11-21 (⌘⌫ Trash, the 'only copy' guard): one flipped bit in the guard's single read of the surviving archive-only copy makes a copy that is one bit apart 'proven' → the selected file moves to the Trash (recoverable) with no copy of its bytes proven. ContentCopyProof.Claim.holdsNow hashes once and compares with the digest on record. Proposed (Rick's call — the cost of a second read): a second fresh read must agree before a stamp-less copy vouches for a removal.") {
-            #expect(exists(a), "A IS IN THE TRASH on one faulted read of its only other copy")
-            #expect(succeeded == 0 && rig.trash.attempts.isEmpty, "\(rig.trash.attempts)")
-        }
+        #expect(fault.passCount == 2, "the surviving copy was read twice — \(fault.passCount)")
+        print("[hash-matrix] trash only-copy guard | shape B: flip on the differing bit in the surviving copy's read | \(succeeded == 1 ? "A MOVED TO THE TRASH" : "A held") | \(reasons)")
+        // Seen RED 2026-11-21: A was in the Trash.
+        #expect(exists(a), "A IS IN THE TRASH on one faulted read of its only other copy")
+        #expect(succeeded == 0 && rig.trash.attempts.isEmpty, "\(rig.trash.attempts)")
+        #expect(reasons == ["two reads of test_clip_b.mov disagreed — nothing was removed"], "\(reasons)")
         #expect(try Data(contentsOf: URL(fileURLWithPath: b.fullPath)) != bytes, "B never held A's bytes")
     }
 
@@ -152,6 +154,38 @@ struct HashReadFaultContentCopyProofTests {
         #expect(clean.succeeded == 1 && !exists(a), "\(kind): the clean re-run: \(clean.refused.map(\.reason))")
     }
 
+    /// GH #504 D3a — the read that was added: a fault in the SECOND read of
+    /// the surviving copy (the first was clean and matched).
+    @Test("MATRIX, the guard's SECOND read: EIO or a premature EOF → A is held ('copy not proven'); a flipped bit → A is held, 'two reads of <copy> disagreed — nothing was removed'; a partial read proves the copy and A moves",
+          arguments: DedupeFaultKind.allCases)
+    func theGuardHoldsWhenTheSecondReadDoesNotConfirm(_ kind: DedupeFaultKind) async throws {
+        let (rig, a, b, bytes) = try onlyCopyRig(); defer { rig.cleanup() }
+        let confirmed = rig.model.catalogTrashPlan(for: [a])
+        let fault = DedupeReadFault(kind, pathSuffix: "test_clip_b.mov", atByte: Self.at, onPass: 2)
+        let sink = InMemoryLogSink()
+        let (succeeded, reasons) = await withAppLog(sink) {
+            await fault.run { () -> (Int, [String]) in
+                let result = await rig.model.trashSelectedRecords([a], confirmed: confirmed, fileOperation: rig.trash.operation)
+                return (result.succeeded, result.refused.map(\.reason))
+            }
+        }
+        #expect(fault.firedCount == 1 && fault.passCount == 2, "\(kind): the fault never reached the second read (passes \(fault.passCount))")
+        print("[hash-matrix] trash only-copy guard | \(kind) in the surviving copy's SECOND read | \(succeeded == 1 ? "moved" : "held") | \(reasons)")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: b.fullPath)) == bytes, "the copy is never touched")
+        if kind == .partialRead {
+            #expect(succeeded == 1 && !exists(a) && rig.trash.attempts.count == 1, "\(kind): \(reasons)")
+            return
+        }
+        #expect(exists(a) && rig.trash.attempts.isEmpty && succeeded == 0, "\(kind): A MOVED on a second read that did not confirm the first")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: a.fullPath)) == bytes)
+        let expected = kind == .bitFlip ? "two reads of test_clip_b.mov disagreed — nothing was removed"
+                                        : VideoScanModel.copyNotProvenAtTheMoveNote
+        #expect(reasons == [expected], "\(kind): \(reasons)")
+        let auditLine = sink.lines.first { $0.hasPrefix("[junk] ") && $0.contains("test_clip_a.mov") } ?? ""
+        #expect(auditLine.hasPrefix("[junk] held ") && auditLine.contains(expected), "\(kind): \(sink.joined)")
+        #expect(sink.lines.contains { $0.contains("OUTCOME") && $0.contains("held 1") }, "\(kind): \(sink.joined)")
+    }
+
     @Test("Codex shape A at the guard (CLOSED): the surviving copy is A's bytes + a tail → refused on size before any read; A is held")
     func shapeA_aLongerCopyIsNeverReadAndNeverProves() async throws {
         let (rig, a, _, _) = try onlyCopyRig { $0 + Data(repeating: 0x5A, count: 512) }
@@ -168,7 +202,7 @@ struct HashReadFaultContentCopyProofTests {
 
     // MARK: The proof itself (what Relocate's counts call)
 
-    @Test("the proof, Codex shape B (P1, parked): a stamp-less copy ONE BIT apart whose one read flips that bit is 'proven'; with a stamp-bound copy no read is made at all")
+    @Test("the proof, Codex shape B (was P1; D3a, fixed): a stamp-less copy ONE BIT apart whose first read flips that bit is NOT proven — its second read disagrees; with a stamp-bound copy no read is made at all")
     func shapeB_theProofStandsOnOneRead() throws {
         let dir = dedupeSeamTempDir("proofB"); defer { try? FileManager.default.removeItem(at: dir) }
         let data = hashSeamBlob(bytes: 300_000, seed: 31)
@@ -185,9 +219,17 @@ struct HashReadFaultContentCopyProofTests {
         let proven = fault.runSync { ContentCopyProof.proven(source: sourceClaim, copies: [copyClaim]) }
         #expect(fault.firedCount == 1)
         print("[hash-matrix] ContentCopyProof.proven | shape B: flip on the differing bit in the copy's read | proven = \(proven)")
-        withKnownIssue("PARKED 2026-11-21 (P1 truth, GH #504 root cause B): ContentCopyProof.proven is true for a stamp-less copy one bit apart when its single fresh read flips that bit. Relocate's adoption count (provenAdoptedCount) stands on this call, and with it the summary's 'Your files are safe — you can retire <drive>'. No media moves on the count itself; retiring a drive is Rick's own act. Proposed: with the Trash guard's P0 — a second fresh read must agree before a stamp-less copy vouches.") {
-            #expect(!proven)
-        }
+        // Seen RED 2026-11-21: proven == true on the one flipped read.
+        #expect(!proven)
+        #expect(fault.passCount == 2, "the stamp-less copy was read twice — \(fault.passCount)")
+        let again = DedupeReadFault(.bitFlip, pathSuffix: "test_copy.mov", atByte: Self.at)
+        #expect(again.runSync { ContentCopyProof.verdict(source: sourceClaim, copies: [copyClaim]) } == .readsDisagreed(path: copy.path))
+        // A copy that really holds the bytes is proven by two agreeing reads.
+        try data.write(to: copy)
+        let clean = DedupeReadCounter(where: { $0.hasSuffix("test_copy.mov") })
+        #expect(ArchivePromoteEngine.$readHook.withValue(clean.hook) { ContentCopyProof.proven(source: sourceClaim, copies: [copyClaim]) })
+        #expect(clean.passCount == 2, "two fresh reads, both through the seam — \(clean.passCount)")
+        try other.write(to: copy)
 
         // A stamp-bound copy is never read: stat only (the persistent digest policy).
         let stamped = ContentCopyProof.Claim(path: copy.path, fixity: try #require(
@@ -203,7 +245,7 @@ struct HashReadFaultContentCopyProofTests {
     // MARK: Relocate
 
     @Test("MATRIX, Relocate's adoption proof (a real Migrate): EIO, a premature EOF or a flipped bit in the fresh read of the adopted destination file → the adoption is NOT proven and the summary does not invite retiring the drive; a partial read proves it",
-          .timeLimit(.minutes(2)), arguments: DedupeFaultKind.allCases)
+          .timeLimit(.minutes(HashReadFaultLimits.hangGuardMinutes)), arguments: DedupeFaultKind.allCases)
     func theAdoptionProofUnderEachFault(_ kind: DedupeFaultKind) async throws {
         let fault = DedupeReadFault(kind, where: { $0.contains("/dest/") && $0.hasSuffix("/a.mov") }, atByte: Self.at, onPass: 0)
         let (adopted, proven, invites, headline) = try await fault.run { () -> (Int, Int, Bool, String) in

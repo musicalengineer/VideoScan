@@ -59,11 +59,23 @@ extension VideoScanModel {
 
     /// Read `path` end to end; the digest is bound to the stat taken before
     /// the read, which the stat after it must reproduce. Never on main.
-    private nonisolated static func pruneFullRead(_ path: String, hooks: PruneVerifyHooks) -> Result<ContentFixity, PruneHold> {
+    /// `readHook`: the read-fault TEST seam (nil in production) — the
+    /// calling task's task-local by default; the job reads it before its
+    /// `Task.detached` hop and passes it in.
+    private nonisolated static func pruneFullRead(_ path: String, hooks: PruneVerifyHooks,
+                                                  readHook: ArchivePromoteEngine.ReadHook?) -> Result<ContentFixity, PruneHold> {
         guard !hooks.shouldCancel() else { return .failure(PruneHold("the check was cancelled")) }
         guard let before = FileIdentityStamp.capture(path: path) else { return .failure(PruneHold(PruneReason.missing.text)) }
         hooks.didOpen?(path)
-        let digest = try? ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel)
+        let digest: String?
+        do {
+            digest = try ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel, readHook: readHook)
+        } catch ArchivePromoteEngine.Failure.changedDuringRead {
+            // Its size moved under the read: changed, not unreadable.
+            return .failure(PruneHold("changed while it was being read"))
+        } catch {
+            digest = nil
+        }
         guard let digest, !digest.isEmpty else {
             return .failure(PruneHold(hooks.shouldCancel() ? "the check was cancelled" : "could not be read in full"))
         }
@@ -91,8 +103,10 @@ extension VideoScanModel {
         + "nothing in this family may go until Verify Archive Copies has looked at it"
 
     nonisolated static func readArchiveInFull(id: UUID, path: String, digest: String,
-                                              hooks: PruneVerifyHooks) -> Result<PruneArchiveReading, PruneHold> {
-        switch pruneFullRead(path, hooks: hooks) {
+                                              hooks: PruneVerifyHooks,
+                                              readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook)
+        -> Result<PruneArchiveReading, PruneHold> {
+        switch pruneFullRead(path, hooks: hooks, readHook: readHook) {
         case .failure(let hold):
             return .failure(PruneHold("its archive copy: \(hold.text)"))
         case .success(let fixity):
@@ -117,10 +131,25 @@ extension VideoScanModel {
     }
 
     /// Read the candidate in full; it must be a different file from the
-    /// archive and carry the archive's digest. The ONLY place a proof is made.
+    /// archive and carry the archive's digest — and then be read in full a
+    /// SECOND time with the same digest and the same stamp (GH #504 D3a,
+    /// Codex r1 P0): the copy goes to the Trash on this proof, and one read
+    /// that happens to match (a flip landing on the one bit by which the copy
+    /// differs) must never be its only witness. The ONLY place a proof is made.
+    ///
+    /// The ARCHIVE side needs no second read: `readArchiveInFull` is itself a
+    /// fresh read, once per batch, that must reproduce the archive record's
+    /// STORED verified digest — a stored digest confirmed by one fresh read
+    /// in this run, the same rule as Delete Duplicates' keeper (D4).
+    ///
+    /// Cost: one more full read of each copy that matches (from the page
+    /// cache when the file fits in RAM); a copy that does not match is still
+    /// read once. Memory: the engine's 24 MiB of chunk buffers per pass.
     nonisolated static func pruneCandidateProof(_ item: PruneItem, archive: PruneArchiveReading,
-                                                hooks: PruneVerifyHooks) -> Result<PruneProof, PruneHold> {
-        switch pruneFullRead(item.path, hooks: hooks) {
+                                                hooks: PruneVerifyHooks,
+                                                readHook: ArchivePromoteEngine.ReadHook? = ArchivePromoteEngine.readHook)
+        -> Result<PruneProof, PruneHold> {
+        switch pruneFullRead(item.path, hooks: hooks, readHook: readHook) {
         case .failure(let hold):
             return .failure(hold)
         case .success(let fixity):
@@ -130,9 +159,29 @@ extension VideoScanModel {
             guard fixity.digest == archive.digest, item.archiveDigest == archive.digest else {
                 return .failure(PruneHold(PruneReason.mismatchAtMove.text))
             }
+            if let hold = secondReadHold(of: item.path, first: fixity, hooks: hooks, readHook: readHook) {
+                return .failure(hold)
+            }
             return .success(PruneProof(copyID: item.copyID, path: item.path, targetStamp: fixity.stamp,
                                        archiveID: archive.archiveID, archivePath: archive.path,
                                        archiveStamp: archive.stamp, archiveDigest: archive.digest))
+        }
+    }
+
+    /// The second witness (D3a): `path` read in full once more — a new open,
+    /// nothing reused, cancellable like the first. nil = same digest under
+    /// the same stat stamp. Otherwise why the copy is held: the second read's
+    /// own failure, a stamp that moved between the reads, or two reads that
+    /// disagree.
+    private nonisolated static func secondReadHold(of path: String, first: ContentFixity, hooks: PruneVerifyHooks,
+                                                   readHook: ArchivePromoteEngine.ReadHook?) -> PruneHold? {
+        switch pruneFullRead(path, hooks: hooks, readHook: readHook) {
+        case .failure(let hold):
+            return hold
+        case .success(let again):
+            guard again.stamp == first.stamp else { return PruneHold("changed while it was being read") }
+            if again.digest == first.digest { return nil }
+            return PruneHold("two reads of \((path as NSString).lastPathComponent) disagreed — nothing was removed")
         }
     }
 

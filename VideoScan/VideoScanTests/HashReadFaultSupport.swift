@@ -18,6 +18,19 @@ import Darwin
 import Foundation
 @testable import VideoScan
 
+/// The hang guard on the fault suites' job-running tests. It is NOT a time
+/// budget (no test here asserts on speed): it exists so a test that never
+/// finishes is reported instead of stalling the run. Under the lane that
+/// runs these suites (`-parallel-testing-enabled YES -test-iterations 5`,
+/// every HashRead*/Dedupe* suite in ONE process) all job tests share the
+/// main actor, and the last of them legitimately finishes ~120 s after the
+/// run starts (measured 2026-11-21 on the M5 Ultra once GH #504's second
+/// reads and Codex r1 closure tests landed), while each one alone takes
+/// 2–21 s. Two minutes was then measuring the lane, not the test.
+enum HashReadFaultLimits {
+    static let hangGuardMinutes = 5
+}
+
 final class HashReadFault: @unchecked Sendable {
 
     enum Kind: String, Sendable, CaseIterable, CustomStringConvertible {

@@ -34,9 +34,14 @@
 //     job, UNDOES the unsaved bindings (compare-and-set, codex #1721 r2 #1)
 //     so the next run re-reads those files, and says so on the row and in
 //     the log; refused on a read-only catalog;
-//   • a digest that CHANGES on the re-read is stored (it is what the file
-//     holds now — the old one was unprovable) and named in the log once
-//     the save holding it is acknowledged (codex #1721 r2 #2);
+//   • a digest that CHANGES on the re-read is not believed on one read
+//     (GH #504 D3b, 2026-11-21): the file is read a SECOND time, and only
+//     when the two fresh reads agree is the new digest stored (it is what
+//     the file holds now) and named in the log once the save holding it is
+//     acknowledged (codex #1721 r2 #2). When they disagree the stored
+//     digest is kept exactly as it was — "read twice, disagreed" — and the
+//     file stays a candidate for the next run. The second read is counted
+//     in the progress (the total grows by the file's size);
 //   • one START line (the Center), one summary line (console, videoscan.log,
 //     os_log), and one os_log line per refused file.
 
@@ -61,9 +66,13 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         var unreadable = 0
         var noVolumeIdentity = 0
         var changedDuringRead = 0
+        /// The first read disagreed with the stored digest and a second
+        /// fresh read did not confirm the first (GH #504 D3b): the stored
+        /// digest was kept.
+        var readsDisagreed = 0
         /// The record changed under the run (rescan, other job) — skipped.
         var recordChanged = 0
-        var refused: Int { offline + unreadable + noVolumeIdentity + changedDuringRead + recordChanged }
+        var refused: Int { offline + unreadable + noVolumeIdentity + changedDuringRead + readsDisagreed + recordChanged }
     }
 
     let id = UUID()
@@ -227,22 +236,20 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
             finish(success: "Nothing to do — every stored digest here already carries its volume identity")
             return
         }
-        let total = max(tally.plannedBytes, 1)
+        let progress = ByteProgress(total: max(tally.plannedBytes, 1))
         bindFixityLog.notice("bind fixity \(self.scopeLabel, privacy: .public): \(items.count) file(s), \(self.tally.plannedBytes) bytes to read")
         guard await acquireGates() else { await releaseGates(); finish(cancelled: ()); return }
 
-        var doneBytes: Int64 = 0
         for (i, item) in items.enumerated() {
-            guard let outcome = await readOne(item, index: i, count: items.count, doneBytes: doneBytes, total: total)
+            guard let outcome = await readToAStorableOutcome(item, index: i, count: items.count, progress: progress)
             else { break }
-            doneBytes += item.bytes
-            fractionValue = Double(doneBytes) / Double(total)
+            fractionValue = progress.fraction
             record(outcome, for: item, model: model)
             if unsaved >= checkpointEvery || (unsaved > 0 && Date().timeIntervalSince(lastSave) >= 60) {
                 guard await persist(model: model) else { await failSave(model: model); return }
             }
             // The whole volume went away — not a verdict on its files.
-            if outcome == .offline, !FileManager.default.fileExists(atPath: scopePath) {
+            if outcome == .read(.offline), !FileManager.default.fileExists(atPath: scopePath) {
                 await releaseGates()
                 guard await persist(model: model) else { await failSave(model: model); return }
                 finishSummary(model: model, ending: "stopped — \(scopeLabel) disconnected")
@@ -312,15 +319,57 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         finish(failed: message)
     }
 
+    /// Bytes read so far against the bytes this run will read. A reference
+    /// type so the per-file reader can advance it across its awaits. The
+    /// total GROWS when a file has to be read a second time (D3b), so the
+    /// bar and "X of Y" stay true.
+    @MainActor
+    private final class ByteProgress {
+        var done: Int64 = 0
+        var total: Int64
+        init(total: Int64) { self.total = total }
+        var fraction: Double { Double(done) / Double(total) }
+    }
+
+    /// What reading one planned file may be recorded as.
+    private enum StorableOutcome: Equatable {
+        /// Record it as `FixityRebind` reported it.
+        case read(FixityRebind.Outcome)
+        /// D3b: the first read disagreed with the stored digest and the
+        /// second read disagreed with the first — the stored digest stays.
+        case readsDisagreed(first: String, second: String)
+    }
+
+    /// Read one planned file until there is something that may be recorded.
+    /// GH #504 D3b: a read whose digest DIFFERS from the stored one never
+    /// replaces it alone — the file is read a second time (a fresh read,
+    /// pausable and stoppable like the first, its bytes added to the run's
+    /// total); the new digest goes on only when both reads produced it. A
+    /// second read that failed is recorded as its own failure. nil = stopped
+    /// (nothing recorded, nothing stored).
+    private func readToAStorableOutcome(_ item: FixityRebindItem, index i: Int, count: Int,
+                                        progress: ByteProgress) async -> StorableOutcome? {
+        guard let first = await readOne(item, index: i, count: count, progress: progress) else { return nil }
+        progress.done += item.bytes
+        guard case .bound(let fresh) = first, fresh.digest != item.fixity.digest else { return .read(first) }
+        progress.total += item.bytes
+        guard let second = await readOne(item, index: i, count: count, progress: progress, again: true) else { return nil }
+        progress.done += item.bytes
+        guard case .bound(let again) = second, again.digest != fresh.digest else { return .read(second) }
+        return .readsDisagreed(first: fresh.digest, second: again.digest)
+    }
+
     /// Read one file, restarting it after a pause (the disk slot is given
-    /// back meanwhile). nil when stopped.
+    /// back meanwhile). nil when stopped. `again` = the confirming second
+    /// read of a file whose first read disagreed with its stored digest.
     private func readOne(_ item: FixityRebindItem, index i: Int, count: Int,
-                         doneBytes: Int64, total: Int64) async -> FixityRebind.Outcome? {
+                         progress: ByteProgress, again: Bool = false) async -> FixityRebind.Outcome? {
+        let doneBytes = progress.done, total = progress.total
         while true {
             guard await waitOutPause() else { return nil }
-            subtitleText = "Reading \(i + 1) of \(count) — \((item.path as NSString).lastPathComponent) · "
+            subtitleText = "Reading \(i + 1) of \(count)\(again ? " again (its first read did not match its stored digest)" : "") — \((item.path as NSString).lastPathComponent) · "
                 + "\(ByteCountFormatter.string(fromByteCount: doneBytes, countStyle: .file)) of "
-                + "\(ByteCountFormatter.string(fromByteCount: tally.plannedBytes, countStyle: .file))"
+                + "\(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
             let ticker = Task { @MainActor [weak self] in
                 while !Task.isCancelled, let self {
                     self.fractionValue = Double(doneBytes + self.control.bytesRead) / Double(total)
@@ -334,7 +383,11 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         }
     }
 
-    private func record(_ outcome: FixityRebind.Outcome, for item: FixityRebindItem, model: VideoScanModel) {
+    private func record(_ storable: StorableOutcome, for item: FixityRebindItem, model: VideoScanModel) {
+        guard case .read(let outcome) = storable else {
+            noteReadsDisagreed(storable, for: item, model: model)
+            return
+        }
         switch outcome {
         case .bound(let fixity):
             switch model.applyFixityRebind(item, fixity: fixity) {
@@ -366,6 +419,16 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         }
     }
 
+    /// D3b: "read twice, disagreed" — counted, logged, and the stored digest
+    /// is left exactly as it was (the file stays a candidate for the next run).
+    private func noteReadsDisagreed(_ storable: StorableOutcome, for item: FixityRebindItem, model: VideoScanModel) {
+        guard case .readsDisagreed(let first, let second) = storable else { return }
+        tally.readsDisagreed += 1
+        let name = (item.path as NSString).lastPathComponent
+        bindFixityLog.warning("bind fixity: \(item.path, privacy: .public) — read twice, the reads disagreed (sha256 \(first.prefix(12), privacy: .public)… then \(second.prefix(12), privacy: .public)…; stored \(item.fixity.digest.prefix(12), privacy: .public)…) — the stored digest was kept")
+        model.log("  ⚠️ \(name): read twice, the two reads disagreed — its stored digest was kept, nothing was changed")
+    }
+
     private func finishSummary(model: VideoScanModel, ending: String) {
         let t = tally
         let read = ByteCountFormatter.string(fromByteCount: t.boundBytes, countStyle: .file)
@@ -376,6 +439,7 @@ final class BindFixityToVolumeJob: @MainActor MediaFileOperationJob {
         var notes: [String] = []
         if t.digestChanged > 0 { notes.append("\(t.digestChanged) held different bytes than before") }
         if t.changedDuringRead > 0 { notes.append("\(t.changedDuringRead) changed during the read") }
+        if t.readsDisagreed > 0 { notes.append("\(t.readsDisagreed) read twice, disagreed (stored digest kept)") }
         if t.offline > 0 { notes.append("\(t.offline) not found") }
         if t.unreadable > 0 { notes.append("\(t.unreadable) unreadable") }
         if t.noVolumeIdentity > 0 { notes.append("\(t.noVolumeIdentity) on a volume with no UUID") }

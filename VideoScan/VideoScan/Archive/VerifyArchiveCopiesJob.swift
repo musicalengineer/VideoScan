@@ -185,6 +185,12 @@ struct VerifyArchivePlan: Sendable {
         /// conditional-write guard: a write lands only if the live
         /// record still carries exactly this.
         let recordDigest: String?
+        /// The record's general `contentFixity` digest as observed when the
+        /// plan was built (lowercased), nil when it has none. A fixity write
+        /// (`restoreArchiveFixity`) or clear overwrites it too, so it is a
+        /// stored fingerprint for GH #504 D3b: a read that disagrees with it
+        /// is made a second time before anything is replaced (Codex r2 P1).
+        var contentDigest: String? = nil
         /// Bytes this item contributes to the progress denominator.
         let expectedBytes: Int64
     }
@@ -491,6 +497,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                                manifestSHA: row?.sha256,
                                manifestBytes: row?.sizeBytes,
                                recordDigest: rec.archiveFixity?.digest.lowercased(),
+                               contentDigest: rec.contentFixity?.digest.lowercased(),
                                expectedBytes: max(0, bytes)))
             total += max(0, bytes)
         }
@@ -611,30 +618,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         let hashedPath = item.fullPath
         let stampBefore = await Task.detached { FileIdentityStamp.capture(path: hashedPath) }.value
         do {
-            let reporter = PromoteProgressReporter()
-            let fileBytes = max(1, item.expectedBytes)
-            let baseDone = tally.bytesDone
-            let filename = item.filename
-            let denominator = max(1, totalBytes)
-            // Throttled to ~4 UI updates/s — a 40 GB tape posts ~40k
-            // 1 MB chunk callbacks otherwise (Promote's reporter, reused).
-            let progress: @Sendable (Int64) -> Void = { [weak self] done in
-                guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
-                let overall = Double(baseDone + min(done, fileBytes)) / Double(denominator)
-                let sub = "Verifying \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
-                Task { @MainActor [weak self] in
-                    guard let self, self.state.isActive else { return }
-                    self.fractionValue = min(1, max(self.fractionValue, overall))
-                    self.subtitleText = sub
-                }
-            }
-            if let rel = item.relPath {
-                actualOrNil = try await Self.hashContainedOffMain(root: root, relPath: rel, progress: progress)
-            } else if FileManager.default.fileExists(atPath: item.fullPath) {
-                actualOrNil = try await Self.hashPathOffMain(path: item.fullPath, progress: progress)
-            } else {
-                actualOrNil = nil
-            }
+            actualOrNil = try await readInFull(item, root: root, totalBytes: totalBytes)
         } catch {
             // A read error from a volume that is no longer there is not a
             // verdict on this file. In-root items use the archive root;
@@ -642,9 +626,16 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             guard Self.itemVolumeIsReachable(item, archiveRoot: root) else {
                 return abortRootUnreachable(name: name, item: item)
             }
+            // A read that failed or ended early is not a verdict on the
+            // bytes (GH #504, D1): the row fails, the record's fixity is
+            // left exactly as it was, and the file and the reason are in
+            // the console and the app log — not only in a count.
             tally.failed += 1
-            record(.failed, name, PromoteToArchiveJob.describe(error))
-            verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(PromoteToArchiveJob.describe(error), privacy: .public)")
+            let why = PromoteToArchiveJob.describe(error)
+            record(.failed, name, why)
+            model.log("Verify Archive: FAILED \(name) — \(why). Its fixity record was left as it was; nothing was changed.")
+            appLog.write("verify archive FAILED: \(name) — \(why); fixity record untouched")
+            verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(why, privacy: .public)")
             return true
         }
         // `sha256` returns nil on cancel as well as on absence.
@@ -672,6 +663,11 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             }
             flagMissing(item: item, name: name, model: model)
             return true
+        }
+        // GH #504 D3b: a read that DISAGREES with the fingerprint the record
+        // already carries never replaces or clears it alone.
+        guard await aSecondReadBacks(actual, against: item, name: name, root: root, totalBytes: totalBytes, model: model) else {
+            return !(Task.isCancelled || state == .cancelling)
         }
 
         if let expected = item.manifestSHA {
@@ -757,7 +753,15 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                                    expected: digest, actual: digest)
             return
         }
-        if hadFixity {
+        if let old = item.recordDigest?.lowercased(), old != digest {
+            // D3b: two fresh reads agreed with the manifest and disagreed
+            // with the fingerprint the record carried — replaced, and SAID.
+            tally.restored += 1
+            record(.restored, name, "matches the manifest on two reads — the record's fingerprint was REPLACED: sha256 \(old.prefix(12))… → \(digest.prefix(12))…",
+                   expected: digest, actual: digest)
+            model.log("Verify Archive: REPLACED the fingerprint on \(name) — sha256 \(old.prefix(12))… → \(digest.prefix(12))… (two reads agreed with the manifest).")
+            appLog.write("verify archive REPLACED fixity: \(name) — \(old) → \(digest) (two reads agreed with the manifest)")
+        } else if hadFixity {
             tally.verified += 1
             record(.verified, name, "matches the manifest (sha256 \(digest.prefix(12))…)",
                    expected: digest, actual: digest)
@@ -767,6 +771,77 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
                    expected: digest, actual: digest)
             model.log("Verify Archive: restored fixity on \(name) from the manifest.")
         }
+    }
+
+    /// One full read of the item's file, with the row's progress: the
+    /// contained dirfd chain when the path is under the root, a plain
+    /// O_NOFOLLOW read otherwise. nil ⇒ absent or cancelled. `again` = the
+    /// confirming second read (D3b): the subtitle says so; the bar holds
+    /// where the first read left it (it never runs backwards).
+    private func readInFull(_ item: VerifyArchivePlan.Item, root: String, totalBytes: Int64,
+                            again: Bool = false) async throws -> String? {
+        let reporter = PromoteProgressReporter()
+        let fileBytes = max(1, item.expectedBytes)
+        let baseDone = tally.bytesDone
+        let filename = item.filename
+        let denominator = max(1, totalBytes)
+        let verb = again ? "Verifying \(filename) again (its first read did not match its stored fingerprint)" : "Verifying \(filename)"
+        // Throttled to ~4 UI updates/s — a 40 GB tape posts ~40k
+        // 1 MB chunk callbacks otherwise (Promote's reporter, reused).
+        let progress: @Sendable (Int64) -> Void = { [weak self] done in
+            guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
+            let overall = Double(baseDone + min(done, fileBytes)) / Double(denominator)
+            let sub = "\(verb) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+            Task { @MainActor [weak self] in
+                guard let self, self.state.isActive else { return }
+                self.fractionValue = min(1, max(self.fractionValue, overall))
+                self.subtitleText = sub
+            }
+        }
+        if let rel = item.relPath {
+            return try await Self.hashContainedOffMain(root: root, relPath: rel, progress: progress)
+        }
+        guard FileManager.default.fileExists(atPath: item.fullPath) else { return nil }
+        return try await Self.hashPathOffMain(path: item.fullPath, progress: progress)
+    }
+
+    /// GH #504 D3b at Verify (Codex r1 P1, r2 P1). The record already
+    /// carries a fingerprint — archiveFixity OR contentFixity, both of which
+    /// a fixity write or clear overwrites — and this read's digest is
+    /// DIFFERENT from either — whether it matches the manifest (the stored
+    /// one would be REPLACED) or matches nothing (it would be CLEARED as a
+    /// mismatch). One read is not enough for either: the file is read in full
+    /// a second time (a fresh, cancellable read with its own subtitle).
+    ///   * true — nothing stored disagrees with the read, or the second read
+    ///     produced the same digest: go on and judge it (a replacement is
+    ///     then SAID, old → new, by `applyMatch`).
+    ///   * false — the row is settled here as FAILED with the stored
+    ///     fingerprint kept ("read twice, disagreed", or the second read's
+    ///     own failure), or the run is stopping (nothing recorded).
+    private func aSecondReadBacks(_ first: String, against item: VerifyArchivePlan.Item, name: String,
+                                  root: String, totalBytes: Int64, model: VideoScanModel) async -> Bool {
+        // The first stored fingerprint this read disagrees with (archive
+        // first: it is the one the row's words name).
+        guard let stored = [item.recordDigest, item.contentDigest]
+            .compactMap({ $0?.lowercased() }).first(where: { $0 != first }) else { return true }
+        let why: String
+        do {
+            let second = try await readInFull(item, root: root, totalBytes: totalBytes, again: true)?.lowercased()
+            if second == first { return true }
+            if Task.isCancelled || state == .cancelling { return false }
+            why = second.map {
+                "read twice, disagreed (stored fingerprint kept) — sha256 \(first.prefix(12))… then \($0.prefix(12))…; "
+                    + "the record keeps sha256 \(stored.prefix(12))…. Run Verify again; if it repeats, check this file and its drive by hand"
+            } ?? "read twice: the second read found no file (stored fingerprint kept)"
+        } catch {
+            why = "\(PromoteToArchiveJob.describe(error)) on the second read (stored fingerprint kept)"
+        }
+        tally.failed += 1
+        record(.failed, name, why)
+        model.log("Verify Archive: FAILED \(name) — \(why). Nothing was changed.")
+        appLog.write("verify archive FAILED: \(name) — \(why); fixity record untouched")
+        verifyArchiveLog.error("verify archive: \(name, privacy: .public) — \(why, privacy: .public)")
+        return false
     }
 
     /// The loud path. Fixity is NEVER written here — a mismatch must

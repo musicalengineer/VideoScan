@@ -239,7 +239,8 @@ struct DeleteDuplicatesFallbackBoundaryCodex1619Tests {
 
         #expect(tierWhenSaved == .trash, "three verified copies at the save: recorded as the Trash (Trash only)")
         #expect(readsWhenSaved == 0 && probe.blocks("quarantine") == 3, "the fallback's re-read happened in phase two")
-        #expect(probe.blocks("keeper") == 3 && probe.blocks("duplicate") == 3, "the fallback: both read once in place")
+        #expect(probe.blocks("keeper") == 6 && probe.blocks("duplicate") == 3,
+                "the fallback: the duplicate read once in place, the keeper twice (its second read, GH #504 D3a)")
         #expect(probe.didFire("quarantine"), "the sibling was rewritten mid-read")
         #expect(sibling.contentFixity?.stampMatches(path: sibling.fullPath) == true, "only the kernel ctime tells")
         let plan = try #require(job.plan)
