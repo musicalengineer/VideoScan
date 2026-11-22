@@ -72,6 +72,9 @@ case "$VERB" in
     run)
         LANE="${1:-}"; [ $# -gt 0 ] && shift
         case "$LANE" in check|proof|verbs|coverage) ;; *) echo "corpus_run: run wants check|proof|verbs|coverage" >&2; exit 2 ;; esac
+        # Without --ref, test the commit this script is typed from (m4_run's own default is the M4's
+        # main, which ran an older commit than the one being worked on: 2026-11-21).
+        case " $* " in *" --ref "*) ;; *) set -- --ref HEAD "$@" ;; esac
         exec /bin/bash "$SCRIPT_DIR/m4_run.sh" corpus --host m4 --corpus-lane "$LANE" "$@" ;;
     status)
         if [ "${1:-}" = --dry-run ]; then

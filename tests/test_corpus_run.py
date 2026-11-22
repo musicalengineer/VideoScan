@@ -4781,3 +4781,27 @@ class CorpusSigningTests(unittest.TestCase):
         build = src[src.index("    def build(self) -> int:"):src.index("    def launch(")]
         self.assertIn("*corpus_signing(", build)
         self.assertNotIn('"CODE_SIGN_IDENTITY=-"', build)
+
+
+class ShippedHarnessTests(unittest.TestCase):
+    """2026-11-22: the first corpus run after the parallel pool merged died on the M4 with
+    FileNotFoundError: …/m4run/bin/<run>/CorpusPool.swift — m4_run.sh ships a list of harness files and
+    the new driver was not on it. The tests ran the harness from the repo, where every file exists."""
+
+    def dry_run(self, *args):
+        return subprocess.run(['/bin/bash', str(SCRIPTS / 'corpus_run.sh'), 'run', 'check', *args, '--dry-run'],
+                              capture_output=True, text=True, timeout=60)
+
+    def test_every_driver_the_harness_overlays_is_shipped_to_the_m4(self):
+        p = self.dry_run('--ref', 'HEAD')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        swift_in_repo = sorted(f.name for f in (SCRIPTS / 'corpus').glob('*.swift'))
+        for name in sorted(set(cr.ALL_DRIVERS) | set(swift_in_repo)):
+            self.assertRegex(p.stdout, rf'install .*{name} -> ricksm4\.local:.*/m4run/bin/\d{{8}}_\d{{6}}_\d+/{name}',
+                             f"{name} is used by the harness but not shipped to the M4")
+
+    def test_run_without_a_ref_tests_the_commit_it_is_typed_from(self):
+        sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        p = self.dry_run()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f'<string>{sha}</string>', p.stdout, "without --ref the run must test HEAD, not the M4's main")
