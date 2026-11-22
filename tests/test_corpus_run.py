@@ -2909,6 +2909,133 @@ class ProofChoiceTests(TwoRootTestCase):
         self.assertEqual([c for c in self.scene.recorded_calls() if 'config' in c], [])
 
 
+UNREAD = dict(probe='unopenable', check='error:couldNotRead', audio='error:probeFailed')     # 2026-11-22 on the M4, every external file
+ACCESS_RED = 'RED the test app could not read any file on the external volume (2 of 2 unreadable)'
+ACCESS_HOW = ("most likely macOS is asking for access on the M4's screen (VideoScan → Files and Folders / Removable Volumes) "
+              "— click Allow and run again; nothing was judged")
+
+
+class ExternalUnreadableTests(TwoRootTestCase):
+    """GH #498 (c), seen 2026-11-20 (GREEN) and 2026-11-22 (AMBER) on the M4: the test host waited on macOS's
+    Removable Volumes prompt, so EVERY external file came back unopenable / couldNotRead / probeFailed while the
+    harness itself had hashed them. A privacy refusal is the whole process's: that is an environment failure —
+    RED with the reason, never a corpus finding and never a baseline. Counts only; no file is named."""
+
+    def scene_options(self):
+        return dict(with_proof_engine=True)
+
+    def facts(self):
+        return json.loads((self.scene.out / cr.VERDICT_FILE).read_text())
+
+    def unreadable_externals(self, **extra):
+        self.scene.plan['files'] = {sha_of(n): dict(UNREAD, **extra) for n, *_ in self.scene.V2_EXTERNAL}
+
+    def assert_access_red(self, lane='check'):
+        summary = self.summary()
+        first = summary.splitlines()[0]
+        self.assertTrue(first.startswith(f'corpus {lane}: {ACCESS_RED}'), first)
+        self.assertIn(ACCESS_HOW, first)
+        facts = self.facts()
+        self.assertEqual(facts['verdict'], 'RED')
+        self.assertTrue(facts['notes'][0].startswith('the test app could not read any file on the external volume (2 of 2'), facts['notes'])
+        leaves = self.scene.everything_that_leaves() + json.dumps(facts)
+        for name in SECRET_NAMES + ('clip 1', 'clip 2', 'OtherDrive'):
+            self.assertNotIn(name, leaves)
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, lane, 'x')
+        self.assertIn('could not read the external volume', str(refused.exception))
+
+    def test_every_external_file_unreadable_on_a_first_run_is_red_not_green_and_never_the_baseline(self):
+        self.scene.grow()
+        self.unreadable_externals()
+        self.assertEqual(self.scene.run('check', stamp='20261120_114620_1'), cr.EXIT_RED, self.summary())
+        self.assert_access_red()
+        summary = self.summary()
+        self.assertIn('probe: OK 4, unopenable 2', summary, 'the counts are still said')
+        self.assertIn('check: OK 4, error:couldNotRead 2', summary)
+        self.assertIn('audio: OK 4, error:probeFailed 2', summary)
+        self.assertIn('RED the test app could not read', '\n'.join(cr.status(self.scene.seal)), 'status reads it back RED')
+        self.scene.plan['files'] = {}
+        self.assertEqual(self.scene.run('check', stamp='20261120_130000_2'), cr.EXIT_GREEN, self.summary())
+        self.assertIn('baseline: this run', self.summary(), 'the refused run is never the implicit baseline')
+
+    def test_against_an_accepted_baseline_it_is_red_with_the_reason_not_amber(self):
+        self.scene.grow()
+        self.assertEqual(self.scene.run('check', stamp='20261121_100000_1'), cr.EXIT_GREEN, self.summary())
+        cr.accept(self.scene.seal, 'check', 'x')
+        self.unreadable_externals()
+        self.assertEqual(self.scene.run('check', stamp='20261122_100000_2'), cr.EXIT_RED, self.summary())
+        self.assert_access_red()
+        self.assertIn('2 of 6 files changed', self.summary(), 'the diff is still counted')
+
+    def test_some_external_files_unreadable_and_the_rest_read_is_a_corpus_fact_as_before(self):
+        self.scene.grow()
+        self.scene.plan['files'] = {sha_of(11): dict(UNREAD)}           # one real damaged file; its neighbour reads
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        self.assertNotIn('could not read any file', self.summary())
+        self.assertEqual(self.facts()['verdict'], 'GREEN')
+
+    def test_an_external_file_the_host_opened_is_never_counted_unreadable(self):
+        self.scene.grow()
+        self.unreadable_externals(check='Problem')                       # header unprobeable, but Check Media read it
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        self.assertNotIn('could not read any file', self.summary())
+
+    def test_no_external_file_in_the_run_changes_nothing(self):
+        self.scene.plan['files'] = {sha_of(n): dict(UNREAD) for n, *_ in self.scene.files}    # v1: internal only
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        self.assertNotIn('could not read any file', self.summary())
+        self.scene.grow()
+        self.volume.detach()
+        self.scene.seal._external = None
+        self.assertEqual(self.scene.run('check', stamp='20261122_110000_2'), cr.EXIT_AMBER, self.summary())
+        self.assertIn('external volume NOT MOUNTED: 2 files on it NOT RUN — AMBER', self.summary())
+        self.assertNotIn('could not read any file', self.summary())
+
+    def test_the_proof_lane_reading_only_unreadable_external_files_is_red_too(self):
+        self.scene.grow()
+        self.scene.plan['engines'] = ['probe', 'check', 'audio', 'pair']
+        self.scene.plan['files'] = {sha: dict(audio='ok_with_findings', audio_kinds=['channelImbalance:leftOnly'])
+                                    for sha in (sha_of(11), sha_of(12))}
+        self.assertEqual(self.scene.run('check', stamp='20261122_100000_1'), cr.EXIT_GREEN, self.summary())
+        self.scene.plan['engines'] = ['balance', 'proof']
+        self.scene.plan['files'] = {sha: dict(balance='error:probeFailed', proof='not_run') for sha in (sha_of(11), sha_of(12))}
+        self.assertEqual(self.scene.run('proof', stamp='20261122_110000_2'), cr.EXIT_RED, self.summary())
+        self.assertEqual(sorted(i['sha'] for i in self.driver_config()['pending']), sorted([sha_of(0), sha_of(11), sha_of(12)]))
+        self.assert_access_red('proof')
+        self.assertIn('balance: error:probeFailed 2, OK 1', self.summary())
+
+    def test_the_verbs_lane_reads_no_external_file_through_the_host_so_it_never_applies(self):
+        self.scene.grow()
+        self.scene.plan['engines'] = VERBS
+        self.scene.plan['files'] = {sha_of(n): {e: 'error:probeFailed' for e in VERBS} for n, *_ in self.scene.V2_EXTERNAL}
+        self.scene.run('verbs')
+        report = json.loads((self.scene.report_dir('verbs') / 'report.json').read_text())
+        self.assertEqual((report['external_ran'], report['external_unreadable']), (0, 0))
+        self.assertNotIn('could not read any file', self.summary())
+
+
+class ExternalUnreadableScaleTests(unittest.TestCase):
+
+    def test_the_unreadable_count_over_100k_files_stays_inside_the_budget(self):
+        unread = dict(UNREAD, pair='unpaired')
+        results = {sha_of(n): dict(stratum='s', size=1, root='external' if n % 2 else 'internal',
+                                   **(unread if n % 2 else dict(probe='probed', check='OK', audio='healthy', pair='unpaired')))
+                   for n in range(100_000)}
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = CorpusScene(tmp)
+            lane = cr.Lane(scene.seal, 'check', 'c' * 40, 's', pathlib.Path(tmp), pathlib.Path(tmp), pathlib.Path(tmp),
+                           pathlib.Path(tmp))
+            t0 = time.monotonic()
+            report = lane.report(results, {}, 1.0)
+            verdict = cr.verdict_of(report, None)
+            elapsed = time.monotonic() - t0
+        self.assertEqual((report['external_ran'], report['external_unreadable'], verdict), (50_000, 50_000, 'RED'))
+        self.assertLess(elapsed, 5.0, f'{elapsed:.2f}s for 100k files')
+        results[sha_of(1)].update(probe='probed', check='OK', audio='healthy')     # one external file read: a corpus fact
+        self.assertEqual(cr.verdict_of(lane.report(results, {}, 1.0), None), 'GREEN')
+
+
 class TwoRootScaleTests(unittest.TestCase):
 
     def test_a_100k_file_manifest_over_two_roots_loads_and_checks_inside_the_budget(self):

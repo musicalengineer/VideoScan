@@ -66,7 +66,9 @@ THE VERDICT OF A LANE IS THE DIFF. A run is compared, file by file (by SHA-256),
 with the lane's BASELINE: the run `accept` blessed (reports/<lane>/baseline.json),
 or — until one is accepted — the lane's first whole clean run.
   RED    a file crashed an engine or ran past its deadline (never acceptable,
-         whatever the baseline holds), or the accepted baseline cannot be read back;
+         whatever the baseline holds), or the accepted baseline cannot be read back, or the
+         test host could read NO external file of the run (`host_refused`, GH #498: macOS's
+         privacy prompt, an environment failure — the reason is said first; never a baseline);
   AMBER  some file's outcome word differs from the baseline — each is listed by
          SHA-256 prefix with `engine: old -> new`; or a file is mismatched, vanished or
          changed (named by SHA-256 prefix; "ingest" below), or the external volume is away;
@@ -248,6 +250,18 @@ LOSS_WORDS = ("LOST", "MISMATCH")                # a clone that is gone or no lo
 # came to it (the driver's word, CorpusSeal.mayOpen; or the lane's, between launches): NOT RUN, AMBER.
 EXTERNAL_GONE = "external_volume_not_proven"
 HARNESS_WORDS = ("crash", "timeout", "not_run", "no_record")       # outcomes the harness itself assigns
+# GH #498 (c), seen 2026-11-20 (reported GREEN) and 2026-11-22 (AMBER) on the M4: the test host waited on macOS's
+# Removable Volumes prompt and EVERY external file came back unopenable. A privacy refusal applies to the whole
+# process, and `prepare` had hashed those files, so "every external file in the run unreadable by the host" is an
+# ENVIRONMENT failure: RED, with the reason, never a corpus finding and never a baseline. A file counts as unread
+# when every engine below that ran on it gave one of these words (the engines that open the file; `pair` and the
+# proof step read nothing new). Only lanes whose host reads the external volume have such engines: check and
+# proof. The verbs lane runs clones of internal files only (the harness sweeps the volume, the host never reads it).
+UNREAD_WORDS = {"probe": ("unopenable",), "check": ("unopenable", "error:couldNotRead"),
+                "audio": ("error:probeFailed",), "balance": ("error:probeFailed",)}
+ACCESS_REASON = ("the test app could not read any file on the external volume ({n} of {n} unreadable) — most likely "
+                 "macOS is asking for access on the M4's screen (VideoScan → Files and Folders / Removable Volumes) — "
+                 "click Allow and run again; nothing was judged")
 
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
 BASELINE, BASELINE_LOG = "baseline.json", "baseline-history.jsonl"     # in reports/<lane>/
@@ -1756,7 +1770,8 @@ class Lane:
         """After the launches, before the report is stored."""
 
     def run_files(self, entries: List[Entry], database: Path) -> Tuple[Dict[str, dict], Dict[str, object]]:
-        results = {e.sha: {"stratum": stratum_word(e.stratum), "size": e.size, **self.record_extra(e)} for e in entries}
+        results = {e.sha: {"stratum": stratum_word(e.stratum), "size": e.size, "root": e.root, **self.record_extra(e)}
+                   for e in entries}
         hello: Dict[str, object] = {}
         xctestrun = find_xctestrun(self.derived_data)
         self.seal.mkdir(self.work / "tmp")
@@ -1844,6 +1859,7 @@ class Lane:
         by_format: Dict[str, dict] = {}
         failures = Counter()
         gone = 0                                             # external files the run came to and could not prove
+        external_ran = external_unreadable = 0               # external files the host ran an engine on; of them, unread (UNREAD_WORDS)
         for record in results.values():
             fmt = "{} | {} | {}".format(record.get("container", "unknown"), record.get("vcodec", "unknown"),
                                         record.get("acodec", "unknown"))
@@ -1861,6 +1877,10 @@ class Lane:
                 failures["end:crash"] += 1                   # RED: a file that began and never ended
             if any(record.get(e) == EXTERNAL_GONE for e in engines):
                 gone += 1
+            elif record.get("root") == "external" and any(record.get(e, "not_run") not in ("not_run", "no_record") for e in engines):
+                external_ran += 1
+                if unread(record, engines):
+                    external_unreadable += 1
         return {"lane": self.lane, "sha": self.sha, "stamp": self.stamp, "host": self.seal.hostname,
                 "engine_present": engine_present, "files": len(results),
                 "bytes": sum(r.get("size", 0) for r in results.values()),
@@ -1872,6 +1892,7 @@ class Lane:
                 "failed_alone": sum(1 for sha in self.ran_alone if sha in results and (
                     results[sha].get("unfinished") or any(results[sha].get(e) in CUT_WORDS for e in engines))),
                 "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
+                "external_ran": external_ran, "external_unreadable": external_unreadable,
                 "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
                 "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
                 "deadline_s": self.deadline, "engines": {e: dict(c) for e, c in totals.items()},
@@ -2102,7 +2123,8 @@ def proof_files(seal: Seal, entries: List[Entry], cap: int = PROOF_CAP) -> Tuple
     fixed = [e for e in entries if e.stratum == PROOF_STRATUM]
     heard, source = set(), "none"
     runs = [run for run, report in usable_runs(seal, "check")
-            if not report.get("limit") and not report.get("not_run_external") and not report.get("smoke")]
+            if not report.get("limit") and not report.get("not_run_external") and not report.get("smoke")
+            and not host_refused(report)]
     if runs:
         try:
             heard = {sha for sha, record in _outcomes(runs[-1]).items()
@@ -2268,11 +2290,25 @@ def cut_count(report: dict) -> int:
                if key.split(":", 1)[-1] in CUT_WORDS or any(w in key for w in LOSS_WORDS))
 
 
+def unread(record: dict, engines: List[str]) -> bool:
+    """Every file-opening engine (UNREAD_WORDS) that ran on this file said it could not read it — and one did."""
+    said = [(e, record.get(e, "not_run")) for e in engines if e in UNREAD_WORDS]
+    said = [(e, outcome) for e, outcome in said if outcome != "not_run"]
+    return bool(said) and all(outcome in UNREAD_WORDS[e] for e, outcome in said)
+
+
+def host_refused(report: dict) -> int:
+    """How many external files the test host could not read, when it could read NONE of them (GH #498 (c)):
+    the environment failed, not the corpus. 0 otherwise — some unreadable and the rest read is a corpus fact."""
+    ran, unreadable = report.get("external_ran") or 0, report.get("external_unreadable") or 0
+    return unreadable if ran and unreadable == ran else 0
+
+
 def verdict_of(report: dict, against: Optional[dict]) -> str:
     """The lane's verdict (the module docstring's rule): `against` is its diff with the baseline."""
     if not report.get("engine_present", True):
         return "NORUN"
-    if cut_count(report) or (against or {}).get("problem"):
+    if cut_count(report) or (against or {}).get("problem") or host_refused(report):
         return "RED"
     # Files NOT RUN because the external volume is not mounted: AMBER, never GREEN (the run proves
     # nothing about them) and never RED (no engine failed and no copy is at risk; the count is said).
@@ -2313,13 +2349,17 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
         return [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: NOT RUN at {report['sha'][:9]} — this ref has no balanced-copy proof engine "
                 "(MediaOps/BalancedCopyProof*.swift); run it with a --ref that contains it"]
     failed = sum(report["failures"].values())
-    lines = [f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: {verdict_of(report, against)} {report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
-             f"{report['media_seconds'] / 3600:.1f} h of media) at {report['sha'][:9]} — wall {report['wall_s']:.0f}s "
-             + ("(the build reused: same commit, same drivers)" if report.get("build_reused") else f"(build {report['build_s']:.0f}s)")
-             + f", {report['launches']} launch(es)"
-             + (f", {report['jobs']} file{'s' if report['jobs'] != 1 else ''} at a time" if report.get("jobs") else "")
-             + f", per-file deadline {report['deadline_s']}s"
-             + (f", limited to {report['limit']} files" if report.get("limit") else "")]
+    ran = (f"{report['files']} files ({report['bytes'] / 1e9:.1f} GB, "
+           f"{report['media_seconds'] / 3600:.1f} h of media) at {report['sha'][:9]} — wall {report['wall_s']:.0f}s "
+           + ("(the build reused: same commit, same drivers)" if report.get("build_reused") else f"(build {report['build_s']:.0f}s)")
+           + f", {report['launches']} launch(es)"
+           + (f", {report['jobs']} file{'s' if report['jobs'] != 1 else ''} at a time" if report.get("jobs") else "")
+           + f", per-file deadline {report['deadline_s']}s"
+           + (f", limited to {report['limit']} files" if report.get("limit") else ""))
+    head = f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: "
+    refused = host_refused(report)
+    lines = ([head + "RED " + ACCESS_REASON.format(n=refused), "  ran " + ran] if refused
+             else [head + f"{verdict_of(report, against)} " + ran])
     for e in engines:
         lines.append(f"  {e}: {_counts(report['engines'][e])}")
     cut = cut_count(report)
@@ -2406,6 +2446,8 @@ def verdict_facts(report: dict) -> dict:
     if report.get("smoke"):
         facts["smoke"] = True
         facts["notes"].insert(0, SMOKE_NOTE)
+    if host_refused(report):                                 # the one thing to act on comes first
+        facts["notes"].insert(0, ACCESS_REASON.format(n=host_refused(report)))
     if report.get("inventory"):
         facts["notes"].append("files: " + inventory_line(report["inventory"]))
     if report.get("problem_count"):
@@ -2511,7 +2553,7 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
     for run, report in usable_runs(seal, lane):
         if (run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external")
                 and not report.get("problem_count") and not report.get("smoke") and not report.get("launches_cut_short")
-                and report.get("files")):
+                and not host_refused(report) and report.get("files")):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
     return None, {}, None
 
@@ -2750,6 +2792,9 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
     if report.get("launches_cut_short"):
         raise Refused(f"refused: in the newest {lane} run a launch of files in flight together was cut short "
                       f"({report['launches_cut_short']}) — an AMBER finding is never the baseline; run it again")
+    if host_refused(report):
+        raise Refused(f"refused: in the newest {lane} run the test app could not read the external volume "
+                      f"({host_refused(report)} of {host_refused(report)} files unreadable) — a RED run is never the baseline")
     if report.get("not_run_external"):
         raise Refused(f"refused: the newest {lane} run did not run {report['not_run_external']} files (the external volume "
                       "was not mounted) — a partial run is never the baseline")
@@ -2837,6 +2882,8 @@ def clean_report(report) -> dict:
             "failed_alone": int(number(report.get("failed_alone"))),
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
+            "external_ran": int(number(report.get("external_ran"))),
+            "external_unreadable": int(number(report.get("external_unreadable"))),
             "problem_count": int(number(report.get("problem_count"))),
             "smoke": report.get("smoke") is True,
             "build_reused": report.get("build_reused") is True,
