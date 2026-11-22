@@ -26,8 +26,10 @@ two are different rulers: for one bundle this tool prints both (`report_*` is th
 summed with the same file filter), so a series can be compared like with like.
 
 usage:
-  xccov_union.py --target VideoScan.app [--logic] [--json OUT] BUNDLE.xcresult [BUNDLE.xcresult …]
+  xccov_union.py --target VideoScan.app [--logic] [--json OUT] [--html DIR] BUNDLE.xcresult [BUNDLE.xcresult …]
   --logic   leave out SwiftUI-shaped files by name, exactly the nightly's filter (LOGIC_EXCLUDE)
+  --html    also a static report (run_tests.py --coverage): DIR/index.html, files by lines never run, and
+            one page per file with its source shaded ran / never ran / not code (2026-11-22)
 Output: one line "coverage-union: …" on stdout (and OUT as JSON). Exit 0 a number · 1 refused · 2 usage.
 
 Memory: one bundle's archive at a time. Its JSON is ~38 MB (1.6 M line records over ~2,500 files); each
@@ -130,9 +132,9 @@ class BundleCoverage:
             self.executable[path] = ran | frozenset(-n for n in lines if isinstance(n, int) and n < 0)
 
 
-def union(bundles: Sequence[Path], target: str, xcrun: Sequence[str] = ("xcrun",)) -> dict:
-    """The union over the bundles, checked (a) and (b), as {files: {path: [covered, executable]}, …}.
-    Raises Refused."""
+def union(bundles: Sequence[Path], target: str, xcrun: Sequence[str] = ("xcrun",), keep_lines: bool = False) -> dict:
+    """The union over the bundles, checked (a) and (b), as {files: {path: [covered, executable]}, …};
+    keep_lines: also {lines: {path: (covered set, executable set)}} for the HTML report. Raises Refused."""
     if not bundles:
         raise Refused("no result bundle to read")
     executable: Dict[str, FrozenSet[int]] = {}
@@ -168,7 +170,75 @@ def union(bundles: Sequence[Path], target: str, xcrun: Sequence[str] = ("xcrun",
         if len(covered[path]) < best[path]:
             raise Refused(f"{path}: the union covers {len(covered[path])} lines, one bundle alone {best[path]}")
         files[path] = [len(covered[path]), len(lines)]
-    return {"target": target, "bundles": len(bundles), "files": files, "report": report}
+    u = {"target": target, "bundles": len(bundles), "files": files, "report": report}
+    if keep_lines:
+        u["lines"] = {p: (frozenset(covered[p]), executable[p]) for p in executable}
+    return u
+
+
+HTML_CSS = """
+body{font:13px -apple-system,system-ui,sans-serif;margin:24px;color:#1d1d1f;background:#fff}
+h1{font-size:18px;margin:0 0 4px}p.sub{color:#6e6e73;margin:0 0 16px}
+table{border-collapse:collapse;width:100%}th,td{padding:3px 8px;text-align:right;border-bottom:1px solid #e5e5ea}
+th:first-child,td:first-child{text-align:left}th{position:sticky;top:0;background:#f5f5f7}
+a{color:#0066cc;text-decoration:none}a:hover{text-decoration:underline}
+.bar{display:inline-block;width:80px;height:8px;background:#e5e5ea;vertical-align:middle}
+.bar i{display:block;height:8px;background:#34c759}
+pre{font:12px ui-monospace,Menlo,monospace;margin:0}
+pre span{display:block;white-space:pre}pre b{display:inline-block;width:5em;color:#8e8e93;font-weight:normal;user-select:none}
+.c{background:#e6f6ea}.u{background:#fde8e7}
+@media (prefers-color-scheme:dark){body{color:#f5f5f7;background:#1c1c1e}th{background:#2c2c2e}
+th,td{border-color:#3a3a3c}.bar{background:#3a3a3c}.c{background:#1f3a26}.u{background:#4a2020}a{color:#4da3ff}}
+"""
+
+
+def write_html(u: dict, out_dir: Path, logic: bool, title: str) -> Path:
+    """A static report: index.html (every file, most uncovered lines first) and one page per file with
+    its source shaded covered / never ran / not code. The source is read from the paths the bundles name
+    (the build's checkout); a file that cannot be read gets a page that says so. No JS, no network."""
+    import html as h
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lines = u["lines"]
+    rows = sorted(((p, v[0], v[1]) for p, v in u["files"].items() if not (logic and LOGIC_EXCLUDE.search(p))),
+                  key=lambda r: (-(r[2] - r[1]), r[0]))
+    common = ""
+    if rows:
+        import os.path
+        common = os.path.commonpath([r[0] for r in rows]) if len(rows) > 1 else str(Path(rows[0][0]).parent)
+    cov, exe = total(u["files"], logic)
+    body = []
+    for i, (path, c, e) in enumerate(rows):
+        name = f"f{i:04d}.html"
+        rel = path[len(common):].lstrip("/") if common and path.startswith(common) else path
+        per = pct(c, e)
+        body.append(f'<tr><td><a href="{name}">{h.escape(rel)}</a></td><td>{e - c}</td><td>{c}</td><td>{e}</td>'
+                    f'<td>{"" if per is None else f"{per:.1f}%"}</td>'
+                    f'<td><span class="bar"><i style="width:{0 if per is None else per:.0f}%"></i></span></td></tr>')
+        ran, code = lines[path]
+        try:
+            src = Path(path).read_text(errors="replace").splitlines()
+            spans = []
+            for n, text in enumerate(src, 1):
+                cls = "c" if n in ran else ("u" if n in code else "")
+                spans.append(f'<span class="{cls}"><b>{n}</b>{h.escape(text)}</span>')
+            shown = "<pre>" + "".join(spans) + "</pre>"
+        except OSError as ex:
+            shown = f"<p>source not readable here: {h.escape(str(ex))}</p>"
+        (out_dir / name).write_text(
+            f"<!doctype html><meta charset=utf-8><title>{h.escape(rel)}</title><style>{HTML_CSS}</style>"
+            f'<p><a href="index.html">&larr; {h.escape(title)}</a></p><h1>{h.escape(rel)}</h1>'
+            f'<p class="sub">{c} of {e} executable lines ran ({"" if per is None else f"{per:.1f}%"}) · '
+            f"green ran · red never ran · plain not code</p>{shown}", encoding="utf-8")
+    overall = pct(cov, exe)
+    (out_dir / "index.html").write_text(
+        f"<!doctype html><meta charset=utf-8><title>{h.escape(title)}</title><style>{HTML_CSS}</style>"
+        f"<h1>{h.escape(title)}</h1><p class=sub>{'' if overall is None else f'{overall:.2f}%'} — {cov} of {exe} "
+        f"distinct executable lines of {h.escape(u['target'])} ran{' (logic only)' if logic else ''}; union of "
+        f"{u['bundles']} result bundle(s); {len(rows)} files under {h.escape(common)}. Only the tests that ran "
+        f"count: a smoke or filtered run is a partial number.</p>"
+        f"<table><tr><th>file</th><th>not run</th><th>ran</th><th>lines</th><th>%</th><th></th></tr>"
+        + "".join(body) + "</table>", encoding="utf-8")
+    return out_dir / "index.html"
 
 
 def total(files: Dict[str, Sequence[int]], logic: bool) -> Tuple[int, int]:
@@ -185,11 +255,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--target", required=True, help="the coverage target, e.g. VideoScan.app")
     ap.add_argument("--logic", action="store_true", help="leave out SwiftUI-shaped files (the nightly's filter)")
     ap.add_argument("--json", type=Path, default=None, metavar="OUT", help="also write the result as JSON")
+    ap.add_argument("--html", type=Path, default=None, metavar="DIR",
+                    help="also write a browsable report: DIR/index.html and one shaded source page per file")
+    ap.add_argument("--title", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--xcrun", default="xcrun", help=argparse.SUPPRESS)
     ap.add_argument("bundles", nargs="+", type=Path)
     a = ap.parse_args(argv)
     try:
-        u = union(a.bundles, a.target, shlex.split(a.xcrun))
+        u = union(a.bundles, a.target, shlex.split(a.xcrun), keep_lines=a.html is not None)
         covered, executable = total(u["files"], a.logic)
         number = pct(covered, executable)
         if number is None:
@@ -209,6 +282,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out.update(report_pct=pct(rc, rx), report_covered=rc, report_executable=rx)
         words += f" · the bundle's own report (function-summed): {pct(rc, rx)}% ({rc}/{rx})"
     print(PREFIX + words, flush=True)
+    if a.html is not None:
+        index = write_html(u, a.html, a.logic, a.title or f"{a.target} line coverage")
+        print(f"coverage-html: {index}", flush=True)
     if a.json:
         a.json.write_text(json.dumps(out, sort_keys=True) + "\n")
     return 0

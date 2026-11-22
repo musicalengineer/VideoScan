@@ -617,17 +617,22 @@ def test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebui
         "B": {"tests": ["f(x:)", "testG"], "fail": ["testG"]}}))
     monkeypatch.setenv("FAKE_SCENARIO", str(tmp_path / "scenario.json"))
     monkeypatch.setenv("FAKE_STAMPS", str(tmp_path / "stamps"))
+    # Under ssh, Runner sends a gui lane through a launchd job whose plist keeps only PATH/HOME/USER/
+    # LANG/TMPDIR, so FAKE_SCENARIO would never reach the fake xcodebuild (2026-11-22: this test was red
+    # on every run over ssh — the fleet's normal way in). This test is about the shard stream, not ssh.
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
     real = rt.app_shards_cmd
 
-    def with_fakes(wt_, plan, jobs, shard_dir, dd=None):
+    def with_fakes(wt_, plan, jobs, shard_dir, dd=None, v=rt.DEBUG):
         (tmp_path / "x.xctestrun").write_text("")
-        cmd = real(wt_, plan, jobs, shard_dir, dd)
+        cmd = real(wt_, plan, jobs, shard_dir, dd, v)
         i = cmd.index("--products")
         cmd[i:i + 2] = ["--xctestrun", str(tmp_path / "x.xctestrun")]
         return cmd + ["--timings", str(b.timings), "--xcodebuild", f"{sys.executable} {tmp_path / 'fake_xcodebuild.py'}",
                       "--xcresulttool", f"{sys.executable} {tmp_path / 'fake_xcresulttool.py'}"]
     monkeypatch.setattr(rt, "app_shards_cmd", with_fakes)
-    monkeypatch.setattr(rt, "app_build_cmd", lambda wt_, dd=None: ["/usr/bin/true"])
+    monkeypatch.setattr(rt, "app_build_cmd", lambda wt_, dd=None, v=rt.DEBUG: ["/usr/bin/true"])
     a = rt.parse_args(["--jobs", "2"])
     a.kinds, a.stages_label = {"app"}, ["unit"]
     import io

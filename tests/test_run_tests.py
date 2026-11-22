@@ -9,6 +9,7 @@ No build and no host here: the live run is exercised by running the script."""
 from __future__ import annotations
 
 import importlib.util
+import contextlib
 import io
 import json
 import fcntl
@@ -670,6 +671,79 @@ def test_full_passes_jobs_to_the_nightly_runner_and_leaves_its_default_alone_oth
     assert len(seen) == 2 and all("--on-demand" in cmd for cmd, _ in seen), seen
     assert seen[0][1].get("NIGHTLY_APP_JOBS") == "1"
     assert "NIGHTLY_APP_JOBS" not in seen[1][1]
+
+
+def _full_with_runner_output(monkeypatch, tmp_path, row, suite_log, py_log="", py_rc=0, runner_rc=1):
+    """--full with fakes: the nightly runner writes `row`/`suite_log` into <run>/full; the python lane
+    writes `py_log` and exits `py_rc`. Returns (lanes, summary text)."""
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if any(str(c).endswith("nightly_local_tests.sh") for c in cmd):
+            full = self.run_dir / "full"
+            full.mkdir(exist_ok=True)
+            if row is not None:
+                (full / "suite-row.json").write_text(json.dumps(row))
+            (full / "suite.log").write_text(suite_log)
+            return runner_rc, 1.0
+        (self.run_dir / log_name).write_text(py_log)
+        return py_rc, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    monkeypatch.setattr(rt, "python_for_tests", lambda repos: (["/some/venv/bin/python"], "/some/venv/bin/python"))
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    lanes = rt.run_full(rt.parse_args(["--full"]), quiet_out(), tmp_path, "ultra")
+    buf = io.StringIO()
+    rt.summary(rt.Out(False, buf), lanes, 1.0, tmp_path)
+    return lanes, buf.getvalue()
+
+
+SETUP_LOG = ("[13:08:01] MACHINE SETUP: Xcode's first launch is not done (xcodebuild -checkFirstLaunchStatus failed)\n"
+             "[13:08:01]   fix (once, at the Mac): sudo xcodebuild -runFirstLaunch\n"
+             "[13:08:01] FATAL: this Mac is not set up to host the tests (machine-setup:xcode-first-launch)\n")
+
+
+def test_full_app_core_lane_says_the_runners_reason_not_no_test_counted(monkeypatch, tmp_path):
+    # RED 2026-11-22 (M5 Pro, Xcode 27.2 first launch not done): the summary said only
+    # "app+core (nightly runner, Release): no test counted"; the reason and its fix were in full/.
+    row = {"passed": 0, "failed": 0, "skipped": 0, "status": "failed", "reason": "machine-setup:xcode-first-launch",
+           "core_status": "not-run"}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, SETUP_LOG, "5 passed in 1.0s\n")
+    app = lanes[0]
+    assert app.word == "RED"
+    assert "machine-setup:xcode-first-launch" in app.reason, app.reason
+    assert "sudo xcodebuild -runFirstLaunch" in app.reason, app.reason
+    assert "no test counted" not in shown and "sudo xcodebuild -runFirstLaunch" in shown, shown
+
+
+def test_full_app_core_lane_takes_counts_and_names_from_the_runners_row(monkeypatch, tmp_path):
+    # the live tail can miss lines (it polls); the runner's own row is the count of record
+    row = {"passed": 140, "failed": 1, "skipped": 6, "failed_names": ["testAppBroke"], "status": "failed",
+           "reason": "failed-tests:1", "core_passed": 50, "core_failed": 1, "core_skipped": 2,
+           "core_failed_names": ["coreBroke()"]}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, "[02:00] runner log\n", "5 passed in 1.0s\n")
+    app = lanes[0]
+    assert (app.passed, app.failed, app.skipped) == (190, 2, 8), (app.passed, app.failed, app.skipped)
+    assert sorted(e.name for e in app.failures) == ["coreBroke()", "testAppBroke"]
+    assert app.word == "RED" and "testAppBroke" in shown and "coreBroke()" in shown
+
+
+def test_full_python_lane_counts_and_names_a_red_run(monkeypatch, tmp_path):
+    # RED 2026-11-22: the log ended "1 failed, 2855 passed, …" with the FAILED node id, and the summary
+    # said "python (run_python_tests.sh): no test counted" — the summary line was read only on exit 0.
+    py_log = ("short test summary (all strands)\n"
+              "FAILED tests/test_xctest_shards.py::test_end_to_end\n"
+              "1 failed, 2855 passed, 21 skipped, 1 warning, 280 subtests passed in 143.45s\n")
+    row = {"passed": 10, "failed": 0, "skipped": 0, "status": "ok", "reason": ""}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, "", py_log, py_rc=1, runner_rc=0)
+    py = lanes[1]
+    assert (py.passed, py.failed, py.skipped) == (2855, 1, 21), (py.passed, py.failed, py.skipped)
+    assert [e.name for e in py.failures] == ["tests/test_xctest_shards.py::test_end_to_end"]
+    assert "no test counted" not in shown and "test_end_to_end" in shown, shown
+
+
+def test_full_python_lane_never_reads_subtests_as_tests(monkeypatch, tmp_path):
+    row = {"passed": 10, "failed": 0, "skipped": 0, "status": "ok", "reason": ""}
+    lanes, _ = _full_with_runner_output(monkeypatch, tmp_path, row, "",
+                                        "2872 passed, 4 skipped, 280 subtests passed in 154.70s\n", runner_rc=0)
+    assert (lanes[1].passed, lanes[1].skipped, lanes[1].word) == (2872, 4, "GREEN")
 
 
 def test_r5_full_python_lane_without_pytest_anywhere_is_not_run_with_the_reason(monkeypatch, tmp_path):
@@ -1776,3 +1850,114 @@ def test_every_dirty_slot_refuses_with_each_reason_and_status_shows_it(slots, re
     with pytest.raises(rt.Refused, match="(?s)no usable side worktree: slot 1: .*local changes.*slot 2: "):
         rt.acquire_slot(repo, sha(repo))
     assert all("REFUSED (skipped)" in line for line in rt.slot_lines([], disk=False))
+
+
+# ── --config / --coverage (2026-11-22) ──────────────────────────────────────────────────────────
+
+def test_config_defaults_debug_for_the_smoke_and_release_for_full_and_full_refuses_debug_and_coverage(capsys):
+    assert rt.parse_args([]).config == "debug"
+    assert rt.parse_args(["--config", "release"]).config == "release"
+    assert rt.parse_args(["--full"]).config == "release"
+    for bad, why in ((["--full", "--config", "debug"], "always Release"), (["--full", "--coverage"], "records coverage")):
+        with pytest.raises(SystemExit) as e:
+            rt.parse_args(bad)
+        assert e.value.code == 2 and why in capsys.readouterr().err
+
+
+def test_each_variant_builds_into_its_own_products_and_plain_debug_keeps_todays_paths(tmp_path):
+    dd, wt = tmp_path / "dd", tmp_path / "wt"
+    debug, rel, cov, relcov = rt.Variant(), rt.Variant("release"), rt.Variant("debug", True), rt.Variant("release", True)
+    assert [v.dd(dd) for v in (debug, rel, cov, relcov)] == \
+        [dd, Path(f"{dd}-release"), Path(f"{dd}-cov"), Path(f"{dd}-release-cov")]
+    b = rt.app_build_cmd(wt, dd, relcov)
+    assert b[b.index("-configuration") + 1] == "Release" and b[b.index("-derivedDataPath") + 1] == f"{dd}-release-cov"
+    assert b[-2:] == ["-enableCodeCoverage", "YES"]
+    # RED 2026-11-22 (first real --config release run): without ENABLE_TESTABILITY=YES the optimised
+    # build cannot resolve VideoScanCore for the tests' @testable imports (exit 65). The nightly sets it.
+    assert "ENABLE_TESTABILITY=YES" in b and "ENABLE_TESTABILITY=YES" in rt.app_build_cmd(wt, dd, rel)
+    assert "ENABLE_TESTABILITY=YES" not in rt.app_build_cmd(wt, dd), "plain Debug: today's command, unchanged"
+    assert "-enableCodeCoverage" not in rt.app_build_cmd(wt, dd)
+    assert rt.app_build_cmd(wt, dd)[rt.app_build_cmd(wt, dd).index("-configuration") + 1] == "Debug"
+    s = rt.app_shards_cmd(wt, tmp_path / "p.json", 4, tmp_path / "sh", dd, cov)
+    assert s[s.index("--products") + 1] == f"{dd}-cov/Build/Products" and s[-1] == "--coverage"
+    t = rt.app_test_cmd(wt, ["S"], dd, tmp_path / "a.xcresult", cov)
+    assert "-enableCodeCoverage" in t
+    # Core: release adds -c release + -enable-testing; coverage its own .build; plain unchanged
+    assert rt.core_build_cmd(wt) == ["swift", "build", "--build-tests", "--package-path", str(rt.core_package(wt))]
+    c = rt.core_build_cmd(wt, relcov)
+    assert "--enable-code-coverage" in c and c[c.index("--scratch-path") + 1].endswith(".build/coverage")
+    assert c[-4:] == ["-c", "release", "-Xswiftc", "-enable-testing"]
+    assert rt.core_products(wt) == rt.core_package(wt) / ".build" / "debug"
+    assert rt.core_products(wt, relcov) == rt.core_package(wt) / ".build" / "coverage" / "release"
+    assert str(rt.core_products(wt, relcov)) in rt.core_test_cmd(wt, "x", relcov)
+
+
+def test_a_variant_has_its_own_build_stamp_so_already_built_is_never_the_other_configuration(monkeypatch, tmp_path):
+    kinds = []
+
+    @contextlib.contextmanager
+    def fake_lock(slot, kind, sha, out, live=None):
+        kinds.append(kind)
+        yield
+    monkeypatch.setattr(rt, "build_lock", fake_lock)
+    monkeypatch.setattr(rt.Runner, "stream", lambda self, *a, **k: (1, 0.0))   # the build fails: stop there
+    picks = [rt.Pick("app", "App/X", "unit", "x/ATests.swift", ("ATests",), 3),
+             rt.Pick("core", "Core/X", "unit", "x/BTests.swift", ("BTests",), 3)]
+    for argv in ([], ["--config", "release"], ["--coverage"], ["--config", "release", "--coverage"]):
+        a = rt.parse_args(argv + ["--unit"])
+        a.kinds, a.stages_label = {"app", "core"}, ["unit"]
+        rt.run_lanes(a, picks, tmp_path, tmp_path, quiet_out(), tmp_path, "smoke")
+    assert kinds == ["app", "core", "app-release", "core-release", "app-cov", "core-cov",
+                     "app-release-cov", "core-release-cov"]
+
+
+def test_app_coverage_reports_the_union_and_its_html_and_the_summary_names_it(tmp_path):
+    wt, run_dir = tmp_path / "wt", tmp_path / "run"
+    (wt / "scripts").mkdir(parents=True)
+    for n in ("0000", "0001"):
+        (run_dir / "app-shards" / n / "shard.xcresult").mkdir(parents=True)
+    # a fake xccov_union.py: records its argv, writes the report, prints the line
+    (wt / "scripts" / "xccov_union.py").write_text(
+        "import sys, json, pathlib\n"
+        "a = sys.argv[1:]\n"
+        "pathlib.Path(a[a.index('--html') + 1]).mkdir(parents=True, exist_ok=True)\n"
+        "(pathlib.Path(a[a.index('--html') + 1]) / 'index.html').write_text('x')\n"
+        "pathlib.Path(sys.argv[0]).with_name('argv.json').write_text(json.dumps(a))\n"
+        "print('coverage-union: 41.250% (825/2000 distinct lines of VideoScan.app, logic only; union of 2 bundle(s))')\n")
+    lane = rt.LaneResult("app", ran=True, passed=10, rc=0)
+    buf = io.StringIO()
+    rt.app_coverage(None, rt.Out(False, buf), wt, run_dir, lane)
+    argv = json.loads((wt / "scripts" / "argv.json").read_text())
+    assert sum(x.endswith("shard.xcresult") for x in argv) == 2 and "--logic" in argv
+    assert lane.coverage == "app 41.250% (825/2000 lines, logic only)"
+    assert lane.coverage_html == run_dir / "coverage" / "app" / "index.html"
+    out = io.StringIO()
+    rt.summary(rt.Out(False, out), [lane], 1.0, run_dir)
+    assert "app 41.250%" in out.getvalue() and "open " + str(lane.coverage_html) in out.getvalue()
+    assert "partial" in out.getvalue(), "a smoke's coverage must say it is partial"
+
+
+def test_coverage_is_not_measured_when_nothing_ran_and_says_why(tmp_path):
+    buf = io.StringIO()
+    lane = rt.LaneResult("app", ran=True)
+    rt.app_coverage(None, rt.Out(False, buf), tmp_path, tmp_path, lane)
+    assert lane.coverage == "" and "not measured — no app test ran" in buf.getvalue()
+    lane = rt.LaneResult("core", ran=True, passed=3)
+    rt.core_coverage(None, rt.Out(False, buf), tmp_path, tmp_path, lane, rt.Variant("debug", True))
+    assert lane.coverage == "" and "core: not measured — no profile was written" in buf.getvalue()
+
+
+def test_each_variant_stamp_lives_with_its_own_products_and_never_vouches_for_another(monkeypatch, tmp_path):
+    # RED 2026-11-22 (first real --coverage run): _stamp() knew only "app"; "app-cov" was written into
+    # Core's .build, so "core-cov" read "already built" and the Core lane ran zero tests.
+    monkeypatch.setattr(rt, "checkout_token", lambda wt: "abc123 7 1.0")
+    slot = rt.Slot(0, tmp_path / "wt", tmp_path / "dd")
+    kinds = ["app", "core", "app-release", "core-release", "app-cov", "core-cov", "app-release-cov", "core-release-cov"]
+    for k in kinds:
+        rt.mark_built(slot, k, "abc123")
+        assert [x for x in kinds if rt.built_at(slot, x) == "abc123"] == kinds[:kinds.index(k) + 1], k
+    # each stamp is INSIDE its own products (deleting them drops it, review F4); plain names unchanged
+    assert rt._stamp(slot, "app") == slot.dd / ".run_tests-built-app"
+    assert rt._stamp(slot, "core") == rt.core_package(slot.wt) / ".build" / ".run_tests-built-core"
+    assert rt._stamp(slot, "app-release-cov").parent == Path(f"{slot.dd}-release-cov")
+    assert rt._stamp(slot, "core-cov").parent == rt.core_scratch(slot.wt, rt.Variant("debug", True))
