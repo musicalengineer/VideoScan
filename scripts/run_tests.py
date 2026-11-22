@@ -782,7 +782,10 @@ SIGN = ["CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEME
 
 
 def app_build_cmd(wt: Path, dd: Optional[Path] = None, v: Variant = DEBUG) -> List[str]:
+    # Release: ENABLE_TESTABILITY=YES, as the nightly and the gauntlet build it — an optimised build
+    # otherwise cannot serve the tests' @testable imports (2026-11-22: exit 65, VideoScanCore unresolved)
     return (["xcodebuild", "build-for-testing"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v) + SIGN
+            + (["ENABLE_TESTABILITY=YES"] if v.config == "release" else [])
             + (["-enableCodeCoverage", "YES"] if v.coverage else []))
 
 

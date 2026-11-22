@@ -1872,6 +1872,10 @@ def test_each_variant_builds_into_its_own_products_and_plain_debug_keeps_todays_
     b = rt.app_build_cmd(wt, dd, relcov)
     assert b[b.index("-configuration") + 1] == "Release" and b[b.index("-derivedDataPath") + 1] == f"{dd}-release-cov"
     assert b[-2:] == ["-enableCodeCoverage", "YES"]
+    # RED 2026-11-22 (first real --config release run): without ENABLE_TESTABILITY=YES the optimised
+    # build cannot resolve VideoScanCore for the tests' @testable imports (exit 65). The nightly sets it.
+    assert "ENABLE_TESTABILITY=YES" in b and "ENABLE_TESTABILITY=YES" in rt.app_build_cmd(wt, dd, rel)
+    assert "ENABLE_TESTABILITY=YES" not in rt.app_build_cmd(wt, dd), "plain Debug: today's command, unchanged"
     assert "-enableCodeCoverage" not in rt.app_build_cmd(wt, dd)
     assert rt.app_build_cmd(wt, dd)[rt.app_build_cmd(wt, dd).index("-configuration") + 1] == "Debug"
     s = rt.app_shards_cmd(wt, tmp_path / "p.json", 4, tmp_path / "sh", dd, cov)
