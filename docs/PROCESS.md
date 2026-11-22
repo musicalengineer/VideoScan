@@ -80,7 +80,7 @@ New dependencies · any schema change (additive only, through a migration; Rick 
 
 - **Weekly theme.** One `theme:` label and one tracker issue per week; Monday triage picks it from the trackers. Ideas filed mid-week get the label or wait for Monday. `docs/STATUS.md` names the theme.
 - **Zero P0 by Friday noon**, every Friday (fix it, prove it is not P0, or say by noon it will miss). **Monday:** every P1 triaged (fix this week or schedule). P0 = integrity loss or an unverified fact shown as truth; P1 = triaged weekly.
-- **Modes.** Normal: small steps with tests. **RD** (Rick says "RD"): build-only fast iteration on UI, full suite as the day's bookends. **Night shift:** one theme, one owner, worktrees only, the checkout on `main` by 02:00, nothing deletes overnight except scratch.
+- **Modes.** Normal: small steps with tests. **RD** (Rick says "RD"): build-only fast iteration on UI, full suite as the day's bookends. **Night shift:** one theme, one owner, worktrees only, the checkout on `main` by 02:00, nothing deletes overnight except scratch. **End of day** (Rick 2026-11-22: "I'm done for today"): Claude proposes ONE night theme — why tonight, the measurable goal, the scope cap, the stop rule — chosen by: the day's red first, data safety over speed or tidiness, what unblocks the next theme, a bug-sweep night once or twice a week, then the best one-night value in BACKLOG; never one that needs Rick's ruling mid-way. Rick says "very good" or names another; the morning brief reports against the goal.
 - **Session start** shows `docs/STATUS.md`'s header, P0/P1 counts and last night's lane results (`.claude/scripts/session_start.sh`). No ritual questions.
 
 ## 8. Machines
