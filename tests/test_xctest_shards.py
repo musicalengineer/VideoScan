@@ -624,15 +624,15 @@ def test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebui
     monkeypatch.delenv("SSH_TTY", raising=False)
     real = rt.app_shards_cmd
 
-    def with_fakes(wt_, plan, jobs, shard_dir, dd=None):
+    def with_fakes(wt_, plan, jobs, shard_dir, dd=None, v=rt.DEBUG):
         (tmp_path / "x.xctestrun").write_text("")
-        cmd = real(wt_, plan, jobs, shard_dir, dd)
+        cmd = real(wt_, plan, jobs, shard_dir, dd, v)
         i = cmd.index("--products")
         cmd[i:i + 2] = ["--xctestrun", str(tmp_path / "x.xctestrun")]
         return cmd + ["--timings", str(b.timings), "--xcodebuild", f"{sys.executable} {tmp_path / 'fake_xcodebuild.py'}",
                       "--xcresulttool", f"{sys.executable} {tmp_path / 'fake_xcresulttool.py'}"]
     monkeypatch.setattr(rt, "app_shards_cmd", with_fakes)
-    monkeypatch.setattr(rt, "app_build_cmd", lambda wt_, dd=None: ["/usr/bin/true"])
+    monkeypatch.setattr(rt, "app_build_cmd", lambda wt_, dd=None, v=rt.DEBUG: ["/usr/bin/true"])
     a = rt.parse_args(["--jobs", "2"])
     a.kinds, a.stages_label = {"app"}, ["unit"]
     import io

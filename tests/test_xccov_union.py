@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import os
 import subprocess
 import sys
@@ -97,6 +98,34 @@ def test_a_line_is_covered_when_it_ran_in_any_bundle_and_the_denominator_is_the_
     assert u["report"] == {}, "Xcode's function-summed number exists for one bundle only"
     # the other target's file never enters, and order does not matter
     assert xu.union([c, a, b], "VideoScan.app", xcrun)["files"] == u["files"]
+
+
+def test_the_html_report_shades_each_line_from_the_union_and_lists_files_by_lines_never_run(tmp_path, xcrun):
+    src = tmp_path / "src"
+    src.mkdir()
+    ledger, view = src / "Ledger.swift", src / "LedgerView.swift"
+    ledger.write_text("\n".join(f"let l{n} = {n} // <&>" for n in range(1, 13)) + "\n")
+    view.write_text("struct V {}\n")
+    a = bundle(tmp_path, "a.xcresult", {str(ledger): (EX, {2, 3}), str(view): ({1, 2}, {1})})
+    b = bundle(tmp_path, "b.xcresult", {str(ledger): (EX, {3, 8}), str(view): ({1, 2}, set())})
+    code, out = cli(xcrun, "--target", "VideoScan.app", "--html", tmp_path / "html", a, b)
+    assert code == 0 and "coverage-html: " in out, out
+    index = (tmp_path / "html" / "index.html").read_text()
+    assert "50.00%" in index and "4 of 8" in index, index            # {2,3,8} of 6 + {1} of 2
+    assert index.index("Ledger.swift") < index.index("LedgerView.swift"), "most lines never run comes first"
+    page = (tmp_path / "html" / "f0000.html").read_text()
+    shade = {n: cls for cls, n in re.findall(r'<span class="(\w*)"><b>(\d+)</b>', page)}
+    assert [shade[str(n)] for n in (2, 3, 8)] == ["c", "c", "c"]       # ran in either bundle
+    assert [shade[str(n)] for n in (4, 5, 9)] == ["u", "u", "u"]       # executable, never ran
+    assert [shade[str(n)] for n in (1, 6, 7, 10)] == ["", "", "", ""]  # not code
+    assert "&lt;&amp;&gt;" in page and "<&>" not in page, "source text is escaped"
+    # a source file that is not on this Mac still gets a page that says so; the number stands
+    view.unlink()
+    code, _ = cli(xcrun, "--target", "VideoScan.app", "--html", tmp_path / "html2", a, b)
+    assert code == 0 and "source not readable here" in (tmp_path / "html2" / "f0001.html").read_text()
+    # --logic leaves the View file out of the report too
+    code, _ = cli(xcrun, "--target", "VideoScan.app", "--logic", "--html", tmp_path / "html3", a, b)
+    assert code == 0 and "LedgerView" not in (tmp_path / "html3" / "index.html").read_text()
 
 
 def test_the_logic_filter_is_the_nightlys_awk_pattern():

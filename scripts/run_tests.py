@@ -229,6 +229,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     ap.add_argument("--jobs", type=int, default=None, metavar="N",
                     help="app test hosts at once (default: half the cores; 1 = the single host). With --full: "
                          "the nightly runner's NIGHTLY_APP_JOBS")
+    ap.add_argument("--config", choices=("debug", "release"), default=None,
+                    help="build configuration of the smoke's app and Core builds (default debug). Release builds "
+                         "into its own DerivedData beside the Debug one. --full is always Release (the nightly's)")
+    ap.add_argument("--coverage", action="store_true",
+                    help="measure line coverage of the tests that ran and write an HTML report (app: union of the "
+                         "test hosts' bundles, scripts/xccov_union.py; Core: llvm-cov). Builds instrumented "
+                         "products into their own DerivedData/.build; slower. Smoke and --filter runs only")
     ap.add_argument("--status", action="store_true", help="what run_tests is running on this Mac (and the M4 lock), then stop")
     ap.add_argument("--on-host", action="store_true", help=argparse.SUPPRESS)   # set by the ssh caller
     a = ap.parse_args(list(argv))                    # exits 2 on a usage error
@@ -252,6 +259,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         (list(STAGES) if (a.mode == "full" or a.test_filter) else list(SMOKE_STAGES))
     if a.full and a.stage_flags:
         ap.error("--full runs every stage; a stage flag (--unit, --regression, …) narrows a --smoke only")
+    if a.full and a.config == "debug":
+        ap.error("--full is the nightly's own run, always Release; --config debug is for a --smoke")
+    if a.full and a.coverage:
+        ap.error("--coverage measures a --smoke or --filter run; --full's nightly runner records coverage "
+                 "itself (its 'Coverage:' line in full/suite.log)")
+    a.config = a.config or ("release" if a.full else "debug")
     # Kinds: --python / --corpus pick those; with a stage flag the Swift lanes come too.
     if a.python or a.corpus:
         kinds = set()
@@ -713,23 +726,59 @@ def cat_files(repo: Path, sha: str, paths: Sequence[str]) -> Dict[str, str]:
 
 # ───────────────────────────────────────────────────────────── commands
 
-def xcode_flags(project: Path, dd: Optional[Path] = None) -> List[str]:
-    return ["-project", str(project), "-scheme", "VideoScan", "-configuration", "Debug",
-            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(dd or DD)]
+@dataclass(frozen=True)
+class Variant:
+    """What the smoke builds: the configuration and whether it is instrumented for coverage. Each
+    variant other than plain Debug has its own DerivedData (and Core .build): the products folder holds
+    ONE .xctestrun for whichever configuration built last, and an instrumented build replaces the plain
+    one in place — sharing would make 'already built at <sha>' a lie (2026-11-22, --config/--coverage)."""
+    config: str = "debug"                  # debug | release
+    coverage: bool = False
+
+    @property
+    def xcode(self) -> str:
+        return "Release" if self.config == "release" else "Debug"
+
+    @property
+    def suffix(self) -> str:               # "" for plain Debug: the slots' existing products stay valid
+        return ("-release" if self.config == "release" else "") + ("-cov" if self.coverage else "")
+
+    def dd(self, dd: Optional[Path]) -> Path:
+        base = dd or DD
+        return Path(str(base) + self.suffix) if self.suffix else base
+
+    @property
+    def label(self) -> str:
+        return self.xcode + (", coverage" if self.coverage else "")
+
+
+DEBUG = Variant()
+
+
+def variant_of(a) -> Variant:
+    return Variant(getattr(a, "config", None) or "debug", bool(getattr(a, "coverage", False)))
+
+
+def xcode_flags(project: Path, dd: Optional[Path] = None, v: Variant = DEBUG) -> List[str]:
+    return ["-project", str(project), "-scheme", "VideoScan", "-configuration", v.xcode,
+            "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(v.dd(dd))]
 
 
 SIGN = ["CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS=", "ONLY_ACTIVE_ARCH=YES"]
 
 
-def app_build_cmd(wt: Path, dd: Optional[Path] = None) -> List[str]:
-    return ["xcodebuild", "build-for-testing"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd) + SIGN
+def app_build_cmd(wt: Path, dd: Optional[Path] = None, v: Variant = DEBUG) -> List[str]:
+    return (["xcodebuild", "build-for-testing"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v) + SIGN
+            + (["-enableCodeCoverage", "YES"] if v.coverage else []))
 
 
-def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, result: Optional[Path] = None) -> List[str]:
+def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, result: Optional[Path] = None,
+                 v: Variant = DEBUG) -> List[str]:
     """suites: `Suite` or `Suite/test` selectors (app_selectors). Each run its own -resultBundlePath:
     two runs from one DerivedData must not race for xcodebuild's default result bundle name."""
-    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd)
+    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v)
             + ["-parallel-testing-enabled", "NO"] + (["-resultBundlePath", str(result)] if result else [])
+            + (["-enableCodeCoverage", "YES"] if v.coverage else [])
             + [f"-only-testing:VideoScanTests/{s}" for s in suites])
 
 
@@ -750,10 +799,13 @@ def shard_plan(picks: Sequence[Pick]) -> dict:
                         "exact": p.exact, "stage": p.stage, "path": p.path} for p in picks if p.kind == "app"]}
 
 
-def app_shards_cmd(wt: Path, plan: Path, jobs: int, shard_dir: Path, dd: Optional[Path] = None) -> List[str]:
-    """The app test phase as `jobs` concurrent test hosts (one child: it fans out, streams and fans in)."""
-    return [sys.executable, str(shards_script(wt)), "--products", str((dd or DD) / "Build" / "Products"),
-            "--plan", str(plan), "--jobs", str(jobs), "--run-dir", str(shard_dir), "--stream"]
+def app_shards_cmd(wt: Path, plan: Path, jobs: int, shard_dir: Path, dd: Optional[Path] = None,
+                   v: Variant = DEBUG) -> List[str]:
+    """The app test phase as `jobs` concurrent test hosts (one child: it fans out, streams and fans in).
+    coverage: each host records into its own result bundle, kept for the union (xctest_shards --coverage)."""
+    return ([sys.executable, str(shards_script(wt)), "--products", str(v.dd(dd) / "Build" / "Products"),
+             "--plan", str(plan), "--jobs", str(jobs), "--run-dir", str(shard_dir), "--stream"]
+            + (["--coverage"] if v.coverage else []))
 
 
 SHARD_LINE = "xctest-shards: "
@@ -811,16 +863,26 @@ def core_package(wt: Path) -> Path:
     return wt / "VideoScan" / "VideoScanCore"
 
 
-def core_build_cmd(wt: Path) -> List[str]:
-    return ["swift", "build", "--build-tests", "--package-path", str(core_package(wt))]
+def core_scratch(wt: Path, v: Variant = DEBUG) -> Path:
+    # an instrumented build has its own .build (it would replace the plain products in place)
+    return core_package(wt) / (".build-cov" if v.coverage else ".build")
 
 
-def core_products(wt: Path) -> Path:
-    # .build/debug is SwiftPM's link to the products in both build systems (native, swiftbuild's out/Products)
-    return core_package(wt) / ".build" / "debug"
+def core_build_cmd(wt: Path, v: Variant = DEBUG) -> List[str]:
+    cmd = ["swift", "build", "--build-tests", "--package-path", str(core_package(wt))]
+    if v.coverage:
+        cmd += ["--scratch-path", str(core_scratch(wt, v)), "--enable-code-coverage"]
+    if v.config == "release":
+        cmd += ["-c", "release", "-Xswiftc", "-enable-testing"]      # @testable import (core_lane.py does the same)
+    return cmd
 
 
-def core_test_cmd(wt: Path, regex: str) -> List[str]:
+def core_products(wt: Path, v: Variant = DEBUG) -> Path:
+    # .build/<config> is SwiftPM's link to the products in both build systems (native, swiftbuild's out/Products)
+    return core_scratch(wt, v) / v.config
+
+
+def core_test_cmd(wt: Path, regex: str, v: Variant = DEBUG) -> List[str]:
     """The Core test phase, run as one child on the built bundle — no `swift test`, so no SwiftPM .build
     lock, so runs at one commit go side by side. The engine is the checkout-under-test's own
     scripts/core_lane.py (2026-11-20; the nightly's Core lane runs the same script): phase A, every test
@@ -829,8 +891,8 @@ def core_test_cmd(wt: Path, regex: str) -> List[str]:
     before core_lane.py keeps the old single pass (this file's --core-exec, core_exec below)."""
     lane = wt / "scripts" / "core_lane.py"
     if lane.exists():
-        return [sys.executable, "-u", str(lane), "run", "--products", str(core_products(wt)), "--filter", regex]
-    return [sys.executable, str(SELF), "--core-exec", str(core_products(wt)), regex]
+        return [sys.executable, "-u", str(lane), "run", "--products", str(core_products(wt, v)), "--filter", regex]
+    return [sys.executable, str(SELF), "--core-exec", str(core_products(wt, v)), regex]
 
 
 def pytest_cmd(py: List[str], files: Sequence[str], basetemp: Optional[Path] = None) -> List[str]:
@@ -1017,6 +1079,8 @@ class LaneResult:
     expected: int = 0                      # tests the selection planned (0: unknown, no floor)
     exact: bool = False                    # a --filter's plan is exact: ANY shortfall is RED, not under half
     setup: List[str] = field(default_factory=list)   # missing tools (preflight): NOT RUN, not RED
+    coverage: str = ""                     # --coverage: "app 41.2% (…)" — the lane's measured line coverage
+    coverage_html: Optional[Path] = None   # --coverage: the report to open
 
     @property
     def total(self) -> int:
@@ -1924,6 +1988,7 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
     py_env = dict(env, TMPDIR=str(run_dir / "tmp") + "/", PYTHONDONTWRITEBYTECODE="1")
     rp = Runner(out, run_dir, py_env)
     dd = slot.dd if slot is not None else None
+    v = variant_of(a)
     lanes: List[LaneResult] = []
     app = [p for p in picks if p.kind == "app"]
     core = [p for p in picks if p.kind == "core"]
@@ -1957,14 +2022,15 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
             if not app:
                 lane.reason = "no app suites selected"
             else:
-                rc, el = build("app", app_build_cmd(wt, dd), "app-build.log", "VideoScan Debug build-for-testing")
+                what = f"VideoScan {v.label} build-for-testing"
+                rc, el = build("app" + v.suffix, app_build_cmd(wt, dd, v), "app-build.log", what)
                 if rc != 0:
                     lane.ran, lane.rc, lane.seconds = True, rc, el
                     lane.reason = f"build failed (exit {rc}) — see {run_dir}/app-build.log"
-                    out.line("FAILED", f"VideoScan Debug build-for-testing {fmt_secs(el)}: exit {rc}", "FAILED")
+                    out.line("FAILED", f"{what} {fmt_secs(el)}: exit {rc}", "FAILED")
                 else:
                     if el:
-                        out.line("BUILD", f"VideoScan Debug build-for-testing {'.' * 8} {fmt_secs(el)}", "BUILD")
+                        out.line("BUILD", f"{what} {'.' * 8} {fmt_secs(el)}", "BUILD")
                     sel = app_selectors(app)
                     out.line("RUN", f"app {'+'.join(a.stages_label)} ({len({s for p in app for s in p.suites})} suites, "
                                     f"~{sum(p.tests for p in app)} tests)")
@@ -1988,16 +2054,18 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                                     red.append(text)
                                 if not text.startswith("failed: "):      # the test's own line already said it
                                     out.plain(" " * 13 + text)
-                        lane.rc, lane.seconds = r.stream(app_shards_cmd(wt, plan, jobs, run_dir / "app-shards", dd),
+                        lane.rc, lane.seconds = r.stream(app_shards_cmd(wt, plan, jobs, run_dir / "app-shards", dd, v),
                                                          "app-test.log", LANE_BUDGET["app"], parser=LineParser(),
                                                          lane=lane, gui=True, on_line=shard_line)
                         adopt_shard_verdict(lane, said)
                         if lane.rc not in (0, None) and not lane.failed and red:
                             lane.reason = _short("; ".join(red[:3]))
                     else:
-                        lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult"), "app-test.log",
+                        lane.rc, lane.seconds = r.stream(app_test_cmd(wt, sel, dd, run_dir / "app.xcresult", v), "app-test.log",
                                                          LANE_BUDGET["app"], parser=LineParser(), lane=lane, gui=True)
                     lane_end(out, lane, run_dir / "app-test.log")
+                    if v.coverage:
+                        app_coverage(r, out, wt, run_dir, lane)
         if "core" in a.kinds and core and "core" in missing:
             lanes.append(setup_lane("core", missing["core"]))
         elif "core" in a.kinds:
@@ -2007,7 +2075,8 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 lane.reason = "no Core suites selected"
             else:
                 suites = sorted({s for p in core for s in p.suites})
-                rc, el = build("core", core_build_cmd(wt), "core-build.log", "VideoScanCore swift build --build-tests")
+                rc, el = build("core" + v.suffix, core_build_cmd(wt, v), "core-build.log",
+                               f"VideoScanCore {v.label} swift build --build-tests")
                 if rc != 0:
                     lane.ran, lane.rc, lane.seconds = True, rc, el
                     lane.reason = f"build failed (exit {rc}) — see {run_dir}/core-build.log"
@@ -2015,14 +2084,25 @@ def run_lanes(a, picks: List[Pick], wt: Path, base: Path, out: Out, run_dir: Pat
                 else:
                     if el:
                         out.line("BUILD", f"VideoScanCore (swift build --build-tests) {'.' * 8} {fmt_secs(el)}", "BUILD")
-                    out.line("RUN", f"core, Debug, from the built bundle, two phases ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
+                    out.line("RUN", f"core, {v.label}, from the built bundle, two phases ({len(suites)} suites, ~{sum(p.tests for p in core)} tests)")
                     lane.ran, lane.expected = True, sum(p.tests for p in core)
                     lane.exact = exact(core)
                     phase(phase="core: testing", done=out.done, total=out.expected)
                     cases = [c for p in core for c in p.cases]
-                    lane.rc, lane.seconds = r.stream(core_test_cmd(wt, core_filter(suites, cases)), "core.log",
-                                                     LANE_BUDGET["core"], parser=LineParser(), lane=lane)
+                    rc_env = r.env
+                    if v.coverage:          # each test process writes its own profile (llvm %p: the pid)
+                        prof = run_dir / "core-prof"
+                        shutil.rmtree(prof, ignore_errors=True)
+                        prof.mkdir(parents=True)
+                        r.env = dict(rc_env, LLVM_PROFILE_FILE=str(prof / "%p.profraw"))
+                    try:
+                        lane.rc, lane.seconds = r.stream(core_test_cmd(wt, core_filter(suites, cases), v), "core.log",
+                                                         LANE_BUDGET["core"], parser=LineParser(), lane=lane)
+                    finally:
+                        r.env = rc_env
                     lane_end(out, lane, run_dir / "core.log")
+                    if v.coverage:
+                        core_coverage(r, out, wt, run_dir, lane, v)
         if "python" in a.kinds and py and "python" in missing:
             lanes.append(setup_lane("python", missing["python"]))
         elif "python" in a.kinds:
@@ -2121,6 +2201,10 @@ def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional
     for l in lanes:
         if l.ran and l.word == "RED" and not l.failures:
             out.line("FAILED", f"{l.name}: {l.reason or 'no test counted'}", "FAILED")
+    for l in lanes:
+        if l.coverage:
+            out.line("COVERAGE", f"{l.coverage} (partial: only the tests this run ran)"
+                                 + (f" — open {l.coverage_html}" if l.coverage_html else ""), "OK")
     if run_dir is not None:
         out.plain(f"logs: {run_dir}")
     if any(l.name == "interrupted" for l in lanes):
@@ -2293,7 +2377,7 @@ def plan_line(a, host_label: str, ref_label: str, sha: str, picks: List[Pick], c
     kinds = [k for k in ("app", "core", "python") if k in a.kinds]
     n = f"~{sum(p.tests for p in picks)} tests" if a.mode == "smoke" else "all suites (nightly runners)"
     est = "~10 min with a warm build" if a.mode == "smoke" else "1–2 h"
-    s = (f"{a.mode} · {host_label} · {ref_label} {sha[:9]} · {', '.join(kinds) or '—'}"
+    s = (f"{a.mode} · {variant_of(a).label} · {host_label} · {ref_label} {sha[:9]} · {', '.join(kinds) or '—'}"
          f"{f' ({corpus_note})' if corpus_note else ''} · {n} · {est}")
     if getattr(a, "test_filter", None):
         s += f" · --filter {a.filter!r}"
@@ -2524,18 +2608,23 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         app = [p for p in picks if p.kind == "app"]
         core = [p for p in picks if p.kind == "core"]
+        v = variant_of(a)
         if app:
-            print("+ " + " ".join(shlex.quote(x) for x in app_build_cmd(wt, dd)))
+            print("+ " + " ".join(shlex.quote(x) for x in app_build_cmd(wt, dd, v)))
             if app_jobs(a) > 1:
                 print("+ " + " ".join(shlex.quote(x) for x in app_shards_cmd(
-                    wt, Path("<run>/app-shards-plan.json"), app_jobs(a), Path("<run>/app-shards"), dd))
+                    wt, Path("<run>/app-shards-plan.json"), app_jobs(a), Path("<run>/app-shards"), dd, v))
                       + f"   # {app_jobs(a)} test hosts at once; --jobs 1 = one host")
             else:
-                print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(wt, app_selectors(app), dd, Path("<run>/app.xcresult"))))
+                print("+ " + " ".join(shlex.quote(x) for x in app_test_cmd(wt, app_selectors(app), dd, Path("<run>/app.xcresult"), v)))
         if core:
-            print("+ " + " ".join(shlex.quote(x) for x in core_build_cmd(wt)))
+            print("+ " + " ".join(shlex.quote(x) for x in core_build_cmd(wt, v)))
             print("+ " + " ".join(shlex.quote(x) for x in core_test_cmd(
-                wt, core_filter(sorted({s for p in core for s in p.suites}), [c for p in core for c in p.cases]))))
+                wt, core_filter(sorted({s for p in core for s in p.suites}), [c for p in core for c in p.cases]), v))
+                  + ("   # LLVM_PROFILE_FILE=<run>/core-prof/%p.profraw" if v.coverage else ""))
+        if v.coverage:
+            print("+ scripts/xccov_union.py --target VideoScan.app --logic --html <run>/coverage/app <the hosts' bundles>")
+            print("+ xcrun llvm-profdata merge … ; xcrun llvm-cov show -format=html -output-dir=<run>/coverage/core …")
         pyf = python_targets(picks)
         if pyf:
             print("+ " + " ".join(shlex.quote(x) for x in pytest_cmd(["<python>"], pyf, Path("<run>/pytest-tmp"))))
@@ -2609,7 +2698,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             nlanes = len([k for k in ("app", "core", "python") if k in a.kinds])
             flt = f" · --filter {a.filter!r}" if a.filter else ""
-            header = (f"smoke · {host_label} · {ref_label} {sha[:9]} · slot {slot.label} · {nlanes} lanes, "
+            header = (f"smoke · {variant_of(a).label} · {host_label} · {ref_label} {sha[:9]} · slot {slot.label} · {nlanes} lanes, "
                       f"~{sum(p.tests for p in picks)} tests{flt}")
             lanes = run_lanes(a, picks, slot.wt, base, out, run_dir, header, missing, slot=slot, live=live, sha=sha)
         if "corpus" in a.kinds and not a.on_host:
@@ -2709,6 +2798,75 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
         if full_fd is not None:
             _close(full_fd)
     return lanes
+
+
+# ───────────────────────────────────────────────────────────── --coverage
+
+def app_coverage(r: Runner, out: "Out", wt: Path, run_dir: Path, lane: LaneResult) -> None:
+    """The union of the app test hosts' coverage (scripts/xccov_union.py: never xcresulttool merge, which
+    miscounts a union) and its HTML report at <run>/coverage/app/index.html. A partial number — only the
+    tests this run ran — labelled so, never compared with the nightly's."""
+    if lane.total == 0:
+        out.line("COVERAGE", "app: not measured — no app test ran", "NOT RUN")
+        return
+    bundles = sorted((run_dir / "app-shards").glob("*/shard.xcresult")) or \
+        ([run_dir / "app.xcresult"] if (run_dir / "app.xcresult").exists() else [])
+    tool = wt / "scripts" / "xccov_union.py"
+    if not bundles or not tool.exists():
+        out.line("COVERAGE", f"app: not measured — {'no result bundle kept' if not bundles else 'no xccov_union.py at this commit'}",
+                 "NOT RUN")
+        return
+    html = run_dir / "coverage" / "app"
+    log = run_dir / "coverage-app.log"
+    with open(log, "w") as fh:
+        p = subprocess.run([sys.executable, str(tool), "--target", "VideoScan.app", "--logic", "--html", str(html),
+                            "--title", f"VideoScan.app coverage — {run_dir.name} (partial: only the tests this run ran)",
+                            "--json", str(run_dir / "coverage" / "app.json")] + [str(b) for b in bundles],
+                           stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=1800)
+    said = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("coverage-union: ")]
+    if p.returncode == 0 and said and (html / "index.html").exists():
+        num = re.search(r"coverage-union: ([\d.]+%) \((\d+)/(\d+)", said[-1])
+        lane.coverage = f"app {num.group(1)} ({num.group(2)}/{num.group(3)} lines, logic only)" if num else said[-1]
+        lane.coverage_html = html / "index.html"
+        out.line("COVERAGE", f"{lane.coverage} — partial: only the tests that ran · {lane.coverage_html}", "OK")
+    else:
+        out.line("COVERAGE", f"app: not measured — {(said[-1] if said else 'xccov_union.py failed')} (log {log})", "NOT RUN")
+
+
+def core_coverage(r: Runner, out: "Out", wt: Path, run_dir: Path, lane: LaneResult, v: Variant) -> None:
+    """Core: merge the test processes' profiles (llvm-profdata) and report on the test bundle's binary
+    (llvm-cov), the package's own sources only; HTML at <run>/coverage/core/index.html."""
+    prof = sorted((run_dir / "core-prof").glob("*.profraw"))
+    binary = next(iter(sorted(core_products(wt, v).glob("*.xctest/Contents/MacOS/*"))), None)
+    if lane.total == 0 or not prof or binary is None:
+        why = "no Core test ran" if lane.total == 0 else ("no profile was written" if not prof else "no test bundle binary")
+        out.line("COVERAGE", f"core: not measured — {why}", "NOT RUN")
+        return
+    data = run_dir / "coverage" / "core.profdata"
+    data.parent.mkdir(parents=True, exist_ok=True)
+    ignore = r"(/Tests/|/\.build[^/]*/|/checkouts/)"
+    log = run_dir / "coverage-core.log"
+    with open(log, "w") as fh:
+        steps = [["xcrun", "llvm-profdata", "merge", "-sparse", "-o", str(data)] + [str(x) for x in prof],
+                 ["xcrun", "llvm-cov", "show", "-format=html", "-show-line-counts-or-regions",
+                  f"-output-dir={run_dir / 'coverage' / 'core'}", f"-instr-profile={data}",
+                  f"-ignore-filename-regex={ignore}", str(binary)]]
+        for cmd in steps:
+            fh.write("$ " + " ".join(shlex.quote(c) for c in cmd) + "\n")
+            fh.flush()
+            if subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=1800).returncode:
+                out.line("COVERAGE", f"core: not measured — {cmd[1]} failed (log {log})", "NOT RUN")
+                return
+    p = subprocess.run(["xcrun", "llvm-cov", "export", "-summary-only", f"-instr-profile={data}",
+                        f"-ignore-filename-regex={ignore}", str(binary)], capture_output=True, text=True, timeout=1800)
+    try:
+        lines = json.loads(p.stdout)["data"][0]["totals"]["lines"]
+        lane.coverage = f"core {lines['percent']:.3f}% ({lines['covered']}/{lines['count']} lines)"
+    except (ValueError, KeyError, IndexError, TypeError):
+        out.line("COVERAGE", f"core: not measured — llvm-cov export printed no totals (exit {p.returncode})", "NOT RUN")
+        return
+    lane.coverage_html = run_dir / "coverage" / "core" / "index.html"
+    out.line("COVERAGE", f"{lane.coverage} — partial: only the tests that ran · {lane.coverage_html}", "OK")
 
 
 def apply_runner_row(lane: LaneResult, full_dir: Path) -> None:

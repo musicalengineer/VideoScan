@@ -9,6 +9,7 @@ No build and no host here: the live run is exercised by running the script."""
 from __future__ import annotations
 
 import importlib.util
+import contextlib
 import io
 import json
 import fcntl
@@ -1849,3 +1850,94 @@ def test_every_dirty_slot_refuses_with_each_reason_and_status_shows_it(slots, re
     with pytest.raises(rt.Refused, match="(?s)no usable side worktree: slot 1: .*local changes.*slot 2: "):
         rt.acquire_slot(repo, sha(repo))
     assert all("REFUSED (skipped)" in line for line in rt.slot_lines([], disk=False))
+
+
+# ── --config / --coverage (2026-11-22) ──────────────────────────────────────────────────────────
+
+def test_config_defaults_debug_for_the_smoke_and_release_for_full_and_full_refuses_debug_and_coverage(capsys):
+    assert rt.parse_args([]).config == "debug"
+    assert rt.parse_args(["--config", "release"]).config == "release"
+    assert rt.parse_args(["--full"]).config == "release"
+    for bad, why in ((["--full", "--config", "debug"], "always Release"), (["--full", "--coverage"], "records coverage")):
+        with pytest.raises(SystemExit) as e:
+            rt.parse_args(bad)
+        assert e.value.code == 2 and why in capsys.readouterr().err
+
+
+def test_each_variant_builds_into_its_own_products_and_plain_debug_keeps_todays_paths(tmp_path):
+    dd, wt = tmp_path / "dd", tmp_path / "wt"
+    debug, rel, cov, relcov = rt.Variant(), rt.Variant("release"), rt.Variant("debug", True), rt.Variant("release", True)
+    assert [v.dd(dd) for v in (debug, rel, cov, relcov)] == \
+        [dd, Path(f"{dd}-release"), Path(f"{dd}-cov"), Path(f"{dd}-release-cov")]
+    b = rt.app_build_cmd(wt, dd, relcov)
+    assert b[b.index("-configuration") + 1] == "Release" and b[b.index("-derivedDataPath") + 1] == f"{dd}-release-cov"
+    assert b[-2:] == ["-enableCodeCoverage", "YES"]
+    assert "-enableCodeCoverage" not in rt.app_build_cmd(wt, dd)
+    assert rt.app_build_cmd(wt, dd)[rt.app_build_cmd(wt, dd).index("-configuration") + 1] == "Debug"
+    s = rt.app_shards_cmd(wt, tmp_path / "p.json", 4, tmp_path / "sh", dd, cov)
+    assert s[s.index("--products") + 1] == f"{dd}-cov/Build/Products" and s[-1] == "--coverage"
+    t = rt.app_test_cmd(wt, ["S"], dd, tmp_path / "a.xcresult", cov)
+    assert "-enableCodeCoverage" in t
+    # Core: release adds -c release + -enable-testing; coverage its own .build; plain unchanged
+    assert rt.core_build_cmd(wt) == ["swift", "build", "--build-tests", "--package-path", str(rt.core_package(wt))]
+    c = rt.core_build_cmd(wt, relcov)
+    assert "--enable-code-coverage" in c and c[c.index("--scratch-path") + 1].endswith(".build-cov")
+    assert c[-4:] == ["-c", "release", "-Xswiftc", "-enable-testing"]
+    assert rt.core_products(wt) == rt.core_package(wt) / ".build" / "debug"
+    assert rt.core_products(wt, relcov) == rt.core_package(wt) / ".build-cov" / "release"
+    assert str(rt.core_products(wt, relcov)) in rt.core_test_cmd(wt, "x", relcov)
+
+
+def test_a_variant_has_its_own_build_stamp_so_already_built_is_never_the_other_configuration(monkeypatch, tmp_path):
+    kinds = []
+
+    @contextlib.contextmanager
+    def fake_lock(slot, kind, sha, out, live=None):
+        kinds.append(kind)
+        yield
+    monkeypatch.setattr(rt, "build_lock", fake_lock)
+    monkeypatch.setattr(rt.Runner, "stream", lambda self, *a, **k: (1, 0.0))   # the build fails: stop there
+    picks = [rt.Pick("app", "App/X", "unit", "x/ATests.swift", ("ATests",), 3),
+             rt.Pick("core", "Core/X", "unit", "x/BTests.swift", ("BTests",), 3)]
+    for argv in ([], ["--config", "release"], ["--coverage"], ["--config", "release", "--coverage"]):
+        a = rt.parse_args(argv + ["--unit"])
+        a.kinds, a.stages_label = {"app", "core"}, ["unit"]
+        rt.run_lanes(a, picks, tmp_path, tmp_path, quiet_out(), tmp_path, "smoke")
+    assert kinds == ["app", "core", "app-release", "core-release", "app-cov", "core-cov",
+                     "app-release-cov", "core-release-cov"]
+
+
+def test_app_coverage_reports_the_union_and_its_html_and_the_summary_names_it(tmp_path):
+    wt, run_dir = tmp_path / "wt", tmp_path / "run"
+    (wt / "scripts").mkdir(parents=True)
+    for n in ("0000", "0001"):
+        (run_dir / "app-shards" / n / "shard.xcresult").mkdir(parents=True)
+    # a fake xccov_union.py: records its argv, writes the report, prints the line
+    (wt / "scripts" / "xccov_union.py").write_text(
+        "import sys, json, pathlib\n"
+        "a = sys.argv[1:]\n"
+        "pathlib.Path(a[a.index('--html') + 1]).mkdir(parents=True, exist_ok=True)\n"
+        "(pathlib.Path(a[a.index('--html') + 1]) / 'index.html').write_text('x')\n"
+        "pathlib.Path(sys.argv[0]).with_name('argv.json').write_text(json.dumps(a))\n"
+        "print('coverage-union: 41.250% (825/2000 distinct lines of VideoScan.app, logic only; union of 2 bundle(s))')\n")
+    lane = rt.LaneResult("app", ran=True, passed=10, rc=0)
+    buf = io.StringIO()
+    rt.app_coverage(None, rt.Out(False, buf), wt, run_dir, lane)
+    argv = json.loads((wt / "scripts" / "argv.json").read_text())
+    assert sum(x.endswith("shard.xcresult") for x in argv) == 2 and "--logic" in argv
+    assert lane.coverage == "app 41.250% (825/2000 lines, logic only)"
+    assert lane.coverage_html == run_dir / "coverage" / "app" / "index.html"
+    out = io.StringIO()
+    rt.summary(rt.Out(False, out), [lane], 1.0, run_dir)
+    assert "app 41.250%" in out.getvalue() and "open " + str(lane.coverage_html) in out.getvalue()
+    assert "partial" in out.getvalue(), "a smoke's coverage must say it is partial"
+
+
+def test_coverage_is_not_measured_when_nothing_ran_and_says_why(tmp_path):
+    buf = io.StringIO()
+    lane = rt.LaneResult("app", ran=True)
+    rt.app_coverage(None, rt.Out(False, buf), tmp_path, tmp_path, lane)
+    assert lane.coverage == "" and "not measured — no app test ran" in buf.getvalue()
+    lane = rt.LaneResult("core", ran=True, passed=3)
+    rt.core_coverage(None, rt.Out(False, buf), tmp_path, tmp_path, lane, rt.Variant("debug", True))
+    assert lane.coverage == "" and "core: not measured — no profile was written" in buf.getvalue()
