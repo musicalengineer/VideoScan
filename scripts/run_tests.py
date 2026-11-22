@@ -2678,6 +2678,7 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
             # The runner writes its test output to files, not stdout: tail them live.
             lane.rc, lane.seconds = tail_while(r, cmd, [run_dir / "full" / "suite-core-test.log",
                                                         run_dir / "full" / "suite-app-test.log"], lane)
+            apply_runner_row(lane, run_dir / "full")
             lane_end(out, lane, run_dir / "full" / "suite.log")
         if "python" in a.kinds and "python" in missing:
             lanes.append(setup_lane("python (run_python_tests.sh)", missing["python"]))
@@ -2695,11 +2696,11 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
                 out.line("RUN", f"{lane.name} via {interp[0]}")
                 lane.rc, lane.seconds = r.stream(["/bin/bash", str(wt / "scripts" / "run_python_tests.sh")],
                                                  "python-full.log", 3600, cwd=wt, parser=LineParser(), lane=lane)
-                if lane.total == 0 and lane.rc == 0:
-                    # run_python_tests.sh uses -q (dots, not names): trust its own summary line
-                    txt = (run_dir / "python-full.log").read_text(errors="replace")
-                    m = re.findall(r"(\d+) passed", txt)
-                    lane.passed = int(m[-1]) if m else 0
+                # run_python_tests.sh uses -q (dots, not names): its own summary is the count, green or red
+                try:
+                    apply_pytest_summary(lane, (run_dir / "python-full.log").read_text(errors="replace"))
+                except OSError:
+                    pass
                 lane_end(out, lane, run_dir / "python-full.log")
     except KeyboardInterrupt as e:
         r.stop()
@@ -2708,6 +2709,69 @@ def run_full(a, out: Out, run_dir: Path, local_key: Optional[str],
         if full_fd is not None:
             _close(full_fd)
     return lanes
+
+
+def apply_runner_row(lane: LaneResult, full_dir: Path) -> None:
+    """--full app+core: the nightly runner's own row (full/suite-row.json) is the count of record — the
+    live tail polls and can miss lines — and its `reason` (with the MACHINE SETUP fix line from suite.log)
+    says why a run counted nothing. Before 2026-11-22 a Mac whose Xcode first launch was not done read
+    only "no test counted"."""
+    try:
+        row = json.loads((full_dir / "suite-row.json").read_text(errors="replace"))
+    except (OSError, ValueError):
+        row = None
+    if isinstance(row, dict):
+        def n(k: str) -> int:
+            v = row.get(k)
+            return v if isinstance(v, int) else 0
+        passed, failed = n("passed") + n("core_passed"), n("failed") + n("core_failed")
+        skipped = n("skipped") + n("core_skipped")
+        if passed + failed + skipped > lane.total:
+            lane.passed, lane.failed, lane.skipped = passed, failed, skipped
+        have = {e.name for e in lane.failures}
+        for k in ("failed_names", "core_failed_names"):
+            for name in row.get(k) or []:
+                if isinstance(name, str) and name not in have:
+                    lane.failures.append(Event("FAILED", name))
+                    have.add(name)
+        why = row.get("reason") if isinstance(row.get("reason"), str) else ""
+    else:
+        why = "the nightly runner wrote no suite-row.json"
+    if lane.total == 0 or (lane.word == "RED" and not lane.failures):
+        try:
+            log = (full_dir / "suite.log").read_text(errors="replace")
+        except OSError:
+            log = ""
+        setup = [re.sub(r"^\[[\d:]+\]\s*", "", ln).strip() for ln in log.splitlines()
+                 if "MACHINE SETUP:" in ln or "fix (once" in ln]
+        lane.reason = " — ".join(x for x in [why, *setup] if x) or lane.reason
+
+
+PYTEST_SUMMARY = re.compile(r"^=*\s*(?:\d+ (?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)"
+                            r"(?:, |\s))+.*\bin [\d.]+s")
+
+
+def apply_pytest_summary(lane: LaneResult, text: str) -> None:
+    """The python lane's counts from pytest's LAST summary line ('1 failed, 2855 passed, 21 skipped, …,
+    280 subtests passed in 143.45s' — subtests are not tests) and each 'FAILED <node id>' as a failure,
+    whatever the exit code (before 2026-11-22 it was read only on exit 0: a red run said 'no test counted')."""
+    last = None
+    for ln in text.splitlines():
+        if PYTEST_SUMMARY.match(ln.strip()):
+            last = ln
+    if last is not None and lane.total == 0:
+        tests_only = re.sub(r"\d+ subtests \w+", "", last)
+
+        def count(word: str) -> int:
+            m = re.search(rf"\b(\d+) {word}\b", tests_only)
+            return int(m.group(1)) if m else 0
+        lane.passed, lane.failed, lane.skipped = count("passed"), count("failed") + count("errors?"), count("skipped")
+    have = {e.name for e in lane.failures}
+    for ln in text.splitlines():
+        m = re.match(r"^(?:FAILED|ERROR) (\S+)", ln.strip())
+        if m and m.group(1) not in have:
+            lane.failures.append(Event("FAILED", m.group(1)))
+            have.add(m.group(1))
 
 
 def tail_while(r: Runner, cmd: List[str], logs: List[Path], lane: LaneResult) -> Tuple[int, float]:

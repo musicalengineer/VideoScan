@@ -672,6 +672,79 @@ def test_full_passes_jobs_to_the_nightly_runner_and_leaves_its_default_alone_oth
     assert "NIGHTLY_APP_JOBS" not in seen[1][1]
 
 
+def _full_with_runner_output(monkeypatch, tmp_path, row, suite_log, py_log="", py_rc=0, runner_rc=1):
+    """--full with fakes: the nightly runner writes `row`/`suite_log` into <run>/full; the python lane
+    writes `py_log` and exits `py_rc`. Returns (lanes, summary text)."""
+    def fake_stream(self, cmd, log_name, budget, cwd=None, parser=None, on_line=None, lane=None, gui=False):
+        if any(str(c).endswith("nightly_local_tests.sh") for c in cmd):
+            full = self.run_dir / "full"
+            full.mkdir(exist_ok=True)
+            if row is not None:
+                (full / "suite-row.json").write_text(json.dumps(row))
+            (full / "suite.log").write_text(suite_log)
+            return runner_rc, 1.0
+        (self.run_dir / log_name).write_text(py_log)
+        return py_rc, 1.0
+    monkeypatch.setattr(rt.Runner, "stream", fake_stream)
+    monkeypatch.setattr(rt, "python_for_tests", lambda repos: (["/some/venv/bin/python"], "/some/venv/bin/python"))
+    monkeypatch.setattr(rt.time, "sleep", lambda s: None)
+    lanes = rt.run_full(rt.parse_args(["--full"]), quiet_out(), tmp_path, "ultra")
+    buf = io.StringIO()
+    rt.summary(rt.Out(False, buf), lanes, 1.0, tmp_path)
+    return lanes, buf.getvalue()
+
+
+SETUP_LOG = ("[13:08:01] MACHINE SETUP: Xcode's first launch is not done (xcodebuild -checkFirstLaunchStatus failed)\n"
+             "[13:08:01]   fix (once, at the Mac): sudo xcodebuild -runFirstLaunch\n"
+             "[13:08:01] FATAL: this Mac is not set up to host the tests (machine-setup:xcode-first-launch)\n")
+
+
+def test_full_app_core_lane_says_the_runners_reason_not_no_test_counted(monkeypatch, tmp_path):
+    # RED 2026-11-22 (M5 Pro, Xcode 27.2 first launch not done): the summary said only
+    # "app+core (nightly runner, Release): no test counted"; the reason and its fix were in full/.
+    row = {"passed": 0, "failed": 0, "skipped": 0, "status": "failed", "reason": "machine-setup:xcode-first-launch",
+           "core_status": "not-run"}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, SETUP_LOG, "5 passed in 1.0s\n")
+    app = lanes[0]
+    assert app.word == "RED"
+    assert "machine-setup:xcode-first-launch" in app.reason, app.reason
+    assert "sudo xcodebuild -runFirstLaunch" in app.reason, app.reason
+    assert "no test counted" not in shown and "sudo xcodebuild -runFirstLaunch" in shown, shown
+
+
+def test_full_app_core_lane_takes_counts_and_names_from_the_runners_row(monkeypatch, tmp_path):
+    # the live tail can miss lines (it polls); the runner's own row is the count of record
+    row = {"passed": 140, "failed": 1, "skipped": 6, "failed_names": ["testAppBroke"], "status": "failed",
+           "reason": "failed-tests:1", "core_passed": 50, "core_failed": 1, "core_skipped": 2,
+           "core_failed_names": ["coreBroke()"]}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, "[02:00] runner log\n", "5 passed in 1.0s\n")
+    app = lanes[0]
+    assert (app.passed, app.failed, app.skipped) == (190, 2, 8), (app.passed, app.failed, app.skipped)
+    assert sorted(e.name for e in app.failures) == ["coreBroke()", "testAppBroke"]
+    assert app.word == "RED" and "testAppBroke" in shown and "coreBroke()" in shown
+
+
+def test_full_python_lane_counts_and_names_a_red_run(monkeypatch, tmp_path):
+    # RED 2026-11-22: the log ended "1 failed, 2855 passed, …" with the FAILED node id, and the summary
+    # said "python (run_python_tests.sh): no test counted" — the summary line was read only on exit 0.
+    py_log = ("short test summary (all strands)\n"
+              "FAILED tests/test_xctest_shards.py::test_end_to_end\n"
+              "1 failed, 2855 passed, 21 skipped, 1 warning, 280 subtests passed in 143.45s\n")
+    row = {"passed": 10, "failed": 0, "skipped": 0, "status": "ok", "reason": ""}
+    lanes, shown = _full_with_runner_output(monkeypatch, tmp_path, row, "", py_log, py_rc=1, runner_rc=0)
+    py = lanes[1]
+    assert (py.passed, py.failed, py.skipped) == (2855, 1, 21), (py.passed, py.failed, py.skipped)
+    assert [e.name for e in py.failures] == ["tests/test_xctest_shards.py::test_end_to_end"]
+    assert "no test counted" not in shown and "test_end_to_end" in shown, shown
+
+
+def test_full_python_lane_never_reads_subtests_as_tests(monkeypatch, tmp_path):
+    row = {"passed": 10, "failed": 0, "skipped": 0, "status": "ok", "reason": ""}
+    lanes, _ = _full_with_runner_output(monkeypatch, tmp_path, row, "",
+                                        "2872 passed, 4 skipped, 280 subtests passed in 154.70s\n", runner_rc=0)
+    assert (lanes[1].passed, lanes[1].skipped, lanes[1].word) == (2872, 4, "GREEN")
+
+
 def test_r5_full_python_lane_without_pytest_anywhere_is_not_run_with_the_reason(monkeypatch, tmp_path):
     monkeypatch.setattr(rt.Runner, "stream", lambda *a, **k: pytest.fail("ran without pytest"))
     monkeypatch.setattr(rt, "python_for_tests", lambda repos: (None, "no pytest in x"))
