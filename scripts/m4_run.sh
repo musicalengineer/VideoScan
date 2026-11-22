@@ -416,7 +416,10 @@ start_run() {
     if [ "$LANE" = corpus ] || [ "$LANE" = testbed ]; then
         # The harness's host side and its driver sources, per run like the runner itself.
         local f
-        for f in corpus_run.py corpus_coverage.py catalog_db.py corpus/CorpusSeal.swift corpus/CorpusDriverSupport.swift corpus/CorpusCheckDriver.swift corpus/CorpusProofDriver.swift corpus/CorpusVerbsDriver.swift; do
+        # Every driver source in scripts/corpus/ goes, by glob: a fixed list missed CorpusPool.swift when the
+        # parallel pool merged and every corpus run died at its overlay step (2026-11-22).
+        for f in corpus_run.py corpus_coverage.py catalog_db.py "$SCRIPT_DIR"/corpus/*.swift; do
+            f="${f#"$SCRIPT_DIR"/}"
             copy_to_host "$SCRIPT_DIR/$f" "$bin/$(basename "$f")" || die "could not install $f on $H_NAME"
         done
     fi
