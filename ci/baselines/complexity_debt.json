@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 350,
+ "entry_count": 349,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -66,10 +66,6 @@
    "ccn": 16,
    "nloc": 57
   },
-  "VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift::Failure.description": {
-   "ccn": 16,
-   "nloc": 19
-  },
   "VideoScan/VideoScan/Archive/ArchiveRefile.swift::ArchiveRefileEngine.preflight": {
    "ccn": 17,
    "nloc": 54
@@ -84,7 +80,7 @@
   },
   "VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift::BindFixityToVolumeJob.run": {
    "ccn": 16,
-   "nloc": 52
+   "nloc": 50
   },
   "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift::CopyFamilyAssessor.codecClass": {
    "ccn": 16,
@@ -111,8 +107,8 @@
    "nloc": 40
   },
   "VideoScan/VideoScan/Archive/VerifyArchiveCopiesJob.swift::VerifyArchiveCopiesJob.verifyOne": {
-   "ccn": 20,
-   "nloc": 99
+   "ccn": 18,
+   "nloc": 84
   },
   "VideoScan/VideoScan/Archive/VideoScanModel+ArchiveUpdate.swift::ArchiveUpdatePreview.plan": {
    "ccn": 18,
@@ -903,7 +899,7 @@
    "nloc": 55
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.dispatchPairs": {
-   "ccn": 25,
+   "ccn": 23,
    "nloc": 103
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.revalidateForResume": {
@@ -911,8 +907,8 @@
    "nloc": 95
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.runPair": {
-   "ccn": 24,
-   "nloc": 120
+   "ccn": 23,
+   "nloc": 118
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift::DeletionTierFacts.gather": {
    "ccn": 18,
@@ -947,16 +943,16 @@
    "nloc": 98
   },
   "VideoScan/VideoScan/MediaOps/RescueFileCopier.swift::RescueFileCopier.copy": {
-   "ccn": 24,
-   "nloc": 95
+   "ccn": 21,
+   "nloc": 85
   },
   "VideoScan/VideoScan/MediaOps/SignatureVerification.swift::SignatureVerification.verify": {
-   "ccn": 20,
-   "nloc": 54
+   "ccn": 17,
+   "nloc": 34
   },
   "VideoScan/VideoScan/MediaOps/TranscodeJob.swift::TranscodeJob.runTranscode": {
-   "ccn": 20,
-   "nloc": 117
+   "ccn": 18,
+   "nloc": 99
   },
   "VideoScan/VideoScan/MediaOps/TranscodeSheet.swift::TranscodeSheet.body": {
    "ccn": 4,
