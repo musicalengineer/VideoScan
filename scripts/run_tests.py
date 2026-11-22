@@ -864,8 +864,9 @@ def core_package(wt: Path) -> Path:
 
 
 def core_scratch(wt: Path, v: Variant = DEBUG) -> Path:
-    # an instrumented build has its own .build (it would replace the plain products in place)
-    return core_package(wt) / (".build-cov" if v.coverage else ".build")
+    # an instrumented build has its own scratch (it would replace the plain products in place), inside
+    # the ignored .build so the slot's worktree stays clean at any commit
+    return core_package(wt) / ".build" / "coverage" if v.coverage else core_package(wt) / ".build"
 
 
 def core_build_cmd(wt: Path, v: Variant = DEBUG) -> List[str]:

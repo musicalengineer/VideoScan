@@ -1881,10 +1881,10 @@ def test_each_variant_builds_into_its_own_products_and_plain_debug_keeps_todays_
     # Core: release adds -c release + -enable-testing; coverage its own .build; plain unchanged
     assert rt.core_build_cmd(wt) == ["swift", "build", "--build-tests", "--package-path", str(rt.core_package(wt))]
     c = rt.core_build_cmd(wt, relcov)
-    assert "--enable-code-coverage" in c and c[c.index("--scratch-path") + 1].endswith(".build-cov")
+    assert "--enable-code-coverage" in c and c[c.index("--scratch-path") + 1].endswith(".build/coverage")
     assert c[-4:] == ["-c", "release", "-Xswiftc", "-enable-testing"]
     assert rt.core_products(wt) == rt.core_package(wt) / ".build" / "debug"
-    assert rt.core_products(wt, relcov) == rt.core_package(wt) / ".build-cov" / "release"
+    assert rt.core_products(wt, relcov) == rt.core_package(wt) / ".build" / "coverage" / "release"
     assert str(rt.core_products(wt, relcov)) in rt.core_test_cmd(wt, "x", relcov)
 
 
