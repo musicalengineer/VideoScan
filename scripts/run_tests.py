@@ -4,6 +4,7 @@
     scripts/run_tests.sh [--smoke | --full] [--unit] [--regression] [--integration] [--perf]
                          [--stress] [--python] [--corpus] [--verbose] [--host m4|ultra|m5pro|m1]
                          [--ref <rev>] [--filter PATTERNS] [--jobs N] [--list] [--dry-run] [--yes] [--force]
+                         [--config debug|release] [--coverage]
     scripts/run_tests.sh --status
 
 A THIN layer over the runners that already exist (Rick 2026-11-19: TestDriver was retired
@@ -27,6 +28,19 @@ because it could not keep up with features). It adds only SELECTION and DISPLAY:
     with --verbose (coloured on a TTY), one line per lane otherwise plus a live [ n/N ] counter.
     The parser reads the three line shapes our runners print (XCTest, Swift Testing, pytest -v)
     and xcodebuild's parallel "Test case '…' passed on" form; nothing to install (no xcbeautify).
+
+  * --config debug|release, --coverage (2026-11-22, Rick). --config picks the smoke's build
+    configuration (default debug; --full is always the nightly's Release and refuses debug). Each
+    variant other than plain Debug builds into its own DerivedData (<dd>-release, <dd>-cov,
+    <dd>-release-cov) and Core scratch (.build/coverage): the products folder holds ONE .xctestrun
+    for whichever configuration built last, so sharing would make "already built" a lie. Build stamps
+    and locks are per variant. --coverage instruments both builds (-enableCodeCoverage YES; SwiftPM
+    --enable-code-coverage), keeps the app hosts' result bundles and reports: app = the exact union
+    over the hosts (scripts/xccov_union.py --logic --html; xcresulttool merge miscounts a union),
+    Core = llvm-profdata merge of each test process's profile (LLVM_PROFILE_FILE=<run>/core-prof/%p)
+    + llvm-cov on the test bundle, package sources only. Reports: <run>/coverage/{app,core}/index.html;
+    the number is PARTIAL (only the tests that ran) and the summary says so. --full --coverage is
+    refused: the nightly runner measures coverage itself.
 
   * --filter PATTERNS (2026-11-20, Rick: "like gtest — module.*") — googletest's grammar,
     `Pos1:Pos2-Neg1:Neg2`: ':'-separated globs, the part after the first '-' excludes, matched
@@ -1403,8 +1417,13 @@ def build_lock(slot: Optional[Slot], kind: str, sha: str, out: "Out", live: Opti
 
 
 def _stamp(slot: Slot, kind: str) -> Path:
-    """INSIDE what it describes: deleting the DerivedData (or .build) drops it (review F4)."""
-    return (slot.dd / ".run_tests-built-app") if kind == "app" else (core_package(slot.wt) / ".build" / ".run_tests-built-core")
+    """INSIDE what it describes: deleting the DerivedData (or .build) drops it (review F4). `kind` is
+    app|core + the Variant suffix (-release, -cov): each variant's stamp sits in that variant's own
+    products and is named for it (2026-11-22: a suffix-blind stamp let app-cov vouch for core-cov)."""
+    base, _, rest = kind.partition("-")
+    v = Variant("release" if "release" in rest.split("-") else "debug", "cov" in rest.split("-"))
+    where = v.dd(slot.dd) if base == "app" else core_scratch(slot.wt, v)
+    return where / f".run_tests-built-{kind}"
 
 
 def checkout_token(wt: Path) -> str:

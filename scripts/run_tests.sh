@@ -4,6 +4,10 @@
 #   scripts/run_tests.sh [--smoke | --full] [--unit] [--regression] [--integration] [--perf]
 #                        [--stress] [--python] [--corpus] [--verbose] [--host m4|ultra|m5pro|m1]
 #                        [--ref <rev>] [--filter 'Pos1:Pos2-Neg1'] [--jobs N] [--list] [--dry-run] [--yes] [--force]
+#                        [--config debug|release] [--coverage]
+#   --config     the smoke's build configuration (default debug; release builds into its own DerivedData)
+#   --coverage   line coverage of the tests that ran + HTML reports: <run>/coverage/app/index.html (union of
+#                the test hosts, logic only) and <run>/coverage/core/index.html (llvm-cov); partial by nature
 #   scripts/run_tests.sh --status       # every live run on this Mac, the slots, the M4 lock holder
 #
 # All the logic is in scripts/run_tests.py (its docstring is the reference), run with Apple's

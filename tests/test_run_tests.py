@@ -1941,3 +1941,19 @@ def test_coverage_is_not_measured_when_nothing_ran_and_says_why(tmp_path):
     lane = rt.LaneResult("core", ran=True, passed=3)
     rt.core_coverage(None, rt.Out(False, buf), tmp_path, tmp_path, lane, rt.Variant("debug", True))
     assert lane.coverage == "" and "core: not measured — no profile was written" in buf.getvalue()
+
+
+def test_each_variant_stamp_lives_with_its_own_products_and_never_vouches_for_another(monkeypatch, tmp_path):
+    # RED 2026-11-22 (first real --coverage run): _stamp() knew only "app"; "app-cov" was written into
+    # Core's .build, so "core-cov" read "already built" and the Core lane ran zero tests.
+    monkeypatch.setattr(rt, "checkout_token", lambda wt: "abc123 7 1.0")
+    slot = rt.Slot(0, tmp_path / "wt", tmp_path / "dd")
+    kinds = ["app", "core", "app-release", "core-release", "app-cov", "core-cov", "app-release-cov", "core-release-cov"]
+    for k in kinds:
+        rt.mark_built(slot, k, "abc123")
+        assert [x for x in kinds if rt.built_at(slot, x) == "abc123"] == kinds[:kinds.index(k) + 1], k
+    # each stamp is INSIDE its own products (deleting them drops it, review F4); plain names unchanged
+    assert rt._stamp(slot, "app") == slot.dd / ".run_tests-built-app"
+    assert rt._stamp(slot, "core") == rt.core_package(slot.wt) / ".build" / ".run_tests-built-core"
+    assert rt._stamp(slot, "app-release-cov").parent == Path(f"{slot.dd}-release-cov")
+    assert rt._stamp(slot, "core-cov").parent == rt.core_scratch(slot.wt, rt.Variant("debug", True))
