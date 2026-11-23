@@ -1282,3 +1282,17 @@ def test_strands_the_marker_is_the_one_the_swift_helpers_write():
     for name in ("TimingBudgetExpectations.swift", "TimingBudgetXCTestSupport.swift"):
         assert "quietBudgetMarker" in (cl.CORE_TESTS / name).read_text(), name
     assert {"expectBudget", "XCTAssertBudget"} <= set(cl.JUDGING_HELPERS), "a test that calls them must carry the mark"
+
+
+def test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one(tmp_path):
+    # DECISIONS 2026-11-22: tests never open the real catalog. Core tests that resolve App Support,
+    # Logs or Preferences through FileManager land in a scratch home made for this run.
+    exe = tmp_path / "products" / cl.BUNDLE / "Contents" / "MacOS" / "VideoScanCoreTests"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    real = os.path.expanduser("~")
+    b = cl.open_bundle(str(tmp_path / "products"), {"HOME": real, "PATH": "/usr/bin:/bin"})
+    home = b.env["HOME"]
+    assert home == b.env["CFFIXED_USER_HOME"] and home != real and not home.startswith(real + "/Library"), b.env
+    assert os.path.isdir(os.path.join(home, "Library", "Application Support")), "the sealed home is not prepared"
+    assert b.env["PATH"] == "/usr/bin:/bin", "the rest of the caller's environment is kept"
