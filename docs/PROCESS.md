@@ -28,6 +28,13 @@ A branch merges to `main` when all of these hold (Rick may waive any to break a 
 
 Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Everything that touches code takes the gate.
 
+**The merge loop (Rick 2026-11-23).** When Rick says "merge to main", for one branch or several, Claude works down the
+queue without him: prove the branch (the gate above, with judgement about which suites and whether review comes before
+or after) → merge → next branch. After 3–4 merges that each passed alone, run a larger lane (`run_tests --full`)
+on the combined `main` before going on. If it is red, revert merges (`git revert -m 1`, newest first) until `main`
+is green again, then fix the reverted branch and requeue it. Rick's spot test and the nightly and afternoon runs
+are the backstop, not the gate.
+
 ## 2a. The change checklist (Rick 2026-11-03)
 
 Pre-flight questions before a code commit, not a gate: asked so an interruption can't make us skip one, because
