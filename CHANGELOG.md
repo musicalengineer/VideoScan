@@ -2,6 +2,60 @@
 
 One entry per version, newest first. Plain words: what changed for the person using the app,
 then what changed underneath. A version is bumped when it ships to Rick's daily build.
+(5.4 and 5.5 got no entry; `git log` holds them.)
+
+## 5.6 — the testbed release (since the 5.5 bump, 2026-11-15)
+
+**Catalog view**
+- Show menu down to five ticks: Audio Only, Videos Missing Sound, Not Yet Archived, Needs a
+  Date, Hide Other Versions (nothing ticked = everything). Show ▸ Videos with Sound is back.
+  Every filter change is logged.
+- One Show ▸ Folders switch in place of the three folder modes: your folders, then the
+  machine's grey estimates, then loose files, in one list.
+- The Showing box ends with the count: "… · 1,247 of 18,903".
+- Not Yet Archived and Has Master Copy no longer go stale after Analyze Duplicates (#481).
+- The thumbnail cache is sized from RAM (25 %, 8–32 GB) instead of a fixed 8 GB.
+
+**Repair, sound and archive safety: verify first, then act**
+- Transcode with Replace swaps in the new file only after it is verified (#500, P0).
+- Preservation proves the master lossless BEFORE the replace; nothing is published, replaced
+  or counted unverified (#501, #502, #506).
+- A full-file hash is trusted only when the whole file was read (#504).
+- Raw DV: Repair's combined rebuild works (#484); Balance and Rebuild Audio no longer write
+  sound the copy stores but does not play (#482).
+- New balanced-copy proof: it compares what plays (every frame, the kept sound) and runs after
+  Prepare, report only.
+- Promote sheet: mono is not a problem; one-sided sound goes through Prepare; the sound line
+  follows the gate.
+
+**Observations and Hallie**
+- A newly indexed video is searchable without reopening the window; a refused Index Frames
+  says why.
+- Hallie cloud: a reply cut off at the token limit is not an answer; empty replies are fixed;
+  the testbed compares several brains side by side.
+
+**Underneath (refactoring)**
+- External commands (ffmpeg and friends) go through one mockable `CommandExecutor` seam. The ten
+  hand-rolled `Process()` sites moved onto it, and a sensor forbids new ones.
+- Log capture is task-local (`LogScope`/`LogCapture`), and tests can state expectations on the
+  log (`.once`, `.never`, `.inOrder`).
+- Four process-global test hooks became task-local; there are fault seams for hash reads and
+  atomic publish.
+
+**Testbed**
+- Tests never open the real catalog or real logs: each test host runs in a sealed home with a
+  COPY of App Support.
+- Tests free the disk they take, and can never trash real data.
+- Faster: everything runs in parallel (app hosts, Core, Python, corpus). Ultra nightly went
+  from 70 to 27 min; M4 full testbed from ~2 h 10 to 1 h 23.
+- `scripts/run_tests.sh` runs on any fleet Mac, with `--config debug|release` and `--coverage`
+  (HTML).
+- The M4 real-data corpus has 6,351 files (~1.95 TB) on two roots.
+- Fixed: a 117 GB leak of Swift module caches from the gauntlet.
+
+**Known, not in 5.6**
+- The app still logs "Volume mounted" for the testbed's disk images (fix is next).
+- Two Archive Angel timestamp tests flake under heavy load (#509).
 
 ## Unreleased — 5.3 (the SQLite cutover)
 
