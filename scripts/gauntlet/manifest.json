@@ -36440,7 +36440,8 @@
         "test_the_model_cache_is_cloned_into_the_sealed_home",
         "test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix",
         "test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written",
-        "test_the_sealed_home_is_refused_inside_the_real_home_library"
+        "test_the_sealed_home_is_refused_inside_the_real_home_library",
+        "test_the_sealed_tmp_carries_the_runners_marker_and_the_report_ignores_it"
       ]
     },
     {

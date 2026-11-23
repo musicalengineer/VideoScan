@@ -38,6 +38,9 @@ import catalog_db  # noqa: E402  (the one read-only door to the catalog)
 SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches", "tmp")
 APP = Path("Library") / "Application Support" / "VideoScan"
 DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
+# The marker a test process requires before it trusts VIDEOSCAN_TEST_TMP as the root it may remove scratch from
+# (VideoScanCore TestHostScratch.rootMarkerName; Codex 2026-11-23 #352 P1-1).
+TMP_MARKER = ".videoscan-test-tmp"
 MODEL_CACHES = (Path(".cache") / "huggingface",)     # read by the app from the home; public weights
 
 
@@ -113,6 +116,7 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
         raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
     for sub in SUBDIRS:
         (home / sub).mkdir(parents=True, exist_ok=True)
+    (home / "tmp" / TMP_MARKER).write_text("the runner's sealed test temp root (scripts/sealed_home.py)\n")
     # public model caches the app reads from the home (SigLIP's weights: ~/.cache/huggingface) — cloned
     for rel in MODEL_CACHES:
         m_src, m_dst = real / rel, home / rel
@@ -166,6 +170,8 @@ def leftovers(tmp: Path) -> List[Leftover]:
         return []
     acc: Dict[str, List[int]] = {}
     for e in tmp.iterdir():
+        if e.name == TMP_MARKER:
+            continue
         size = 0
         try:
             size = sum(f.stat().st_size for f in ([e] if e.is_file() else e.rglob("*")) if f.is_file() and not f.is_symlink())

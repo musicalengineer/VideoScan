@@ -154,3 +154,11 @@ def test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix(tm
     assert {r.prefix for r in report} == {"SigVerify-<id>", "test_media_repair_repeated_<id>", "VideoScanTestLogs-<id>"}
     assert report[0].bytes >= 2048
     assert sh.leftovers(tmp_path / "absent") == []
+
+
+def test_the_sealed_tmp_carries_the_runners_marker_and_the_report_ignores_it(tmp_path):
+    # Codex 2026-11-23 #352 P1-1: TestHostScratch trusts VIDEOSCAN_TEST_TMP as a removal root only when it carries
+    # the runner's marker (.videoscan-test-tmp) — the sealed tmp must carry it, and it is not a leftover.
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    assert (home / "tmp" / ".videoscan-test-tmp").is_file()
+    assert sh.leftovers(home / "tmp") == [], "the marker is reported as a test's leftover"
