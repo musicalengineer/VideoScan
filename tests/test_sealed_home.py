@@ -136,3 +136,77 @@ def test_the_model_cache_is_cloned_into_the_sealed_home(tmp_path):
     assert copy.read_bytes() == b"weights"
     copy.write_bytes(b"changed")
     assert w.read_bytes() == b"weights", "a write to the clone reached the real model cache"
+
+
+def test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix(tmp_path):
+    # 2026-11-23: test hosts used the system temp dir; tests that never removed their folders left
+    # ~18 GB there (MediaRepairEngineTests, SigVerify-…, CouplePortraitTests-…). The sealed home has its own
+    # tmp (removed with it), and what a run leaves there is REPORTED by prefix — a leak is a bug.
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    tmp = home / "tmp"
+    assert tmp.is_dir()
+    for name in ("SigVerify-8F0C2E4B-1111-2222-3333-444455556666", "SigVerify-0A0B0C0D-1111-2222-3333-444455556666",
+                 "test_media_repair_repeated_9D9D9D9D-1111-2222-3333-444455556666", "VideoScanTestLogs-31337"):
+        (tmp / name).mkdir()
+    (tmp / "SigVerify-8F0C2E4B-1111-2222-3333-444455556666" / "duplicate.mov").write_bytes(b"x" * 2048)
+    report = sh.leftovers(tmp)
+    assert [(r.prefix, r.count) for r in report][:1] == [("SigVerify-<id>", 2)], report
+    assert {r.prefix for r in report} == {"SigVerify-<id>", "test_media_repair_repeated_<id>", "VideoScanTestLogs-<id>"}
+    assert report[0].bytes >= 2048
+    assert sh.leftovers(tmp_path / "absent") == []
+
+
+def test_the_sealed_tmp_carries_the_runners_marker_and_the_report_ignores_it(tmp_path):
+    # Codex 2026-11-23 #352 P1-1: TestHostScratch trusts VIDEOSCAN_TEST_TMP as a removal root only when it carries
+    # the runner's marker (.videoscan-test-tmp) — the sealed tmp must carry it, and it is not a leftover.
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    assert (home / "tmp" / ".videoscan-test-tmp").is_file()
+    assert sh.leftovers(home / "tmp") == [], "the marker is reported as a test's leftover"
+
+
+def test_the_marker_never_follows_a_symlink_and_a_symlinked_tmp_is_refused(tmp_path):
+    # Codex 2026-11-23 (runner deletion review) P1: write_text on an existing symlinked marker truncated its target.
+    outside = tmp_path / "outside.txt"
+    outside.write_text("precious")
+    home = tmp_path / "home"
+    (home / "tmp").mkdir(parents=True)
+    (home / "tmp" / ".videoscan-test-tmp").symlink_to(outside)
+    try:
+        sh.prepare(home, real_home=tmp_path / "nobody")
+        refused = False
+    except sh.Refused:
+        refused = True
+    assert outside.read_text() == "precious", "the marker write followed a symlink and truncated its target"
+    assert refused
+    home2 = tmp_path / "home2"
+    home2.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (home2 / "tmp").symlink_to(tmp_path / "elsewhere")
+    try:
+        sh.prepare(home2, real_home=tmp_path / "nobody")
+        raise AssertionError("a symlinked tmp was accepted")
+    except sh.Refused:
+        pass
+    assert not (tmp_path / "elsewhere" / ".videoscan-test-tmp").exists()
+
+
+def test_a_prepared_home_carries_its_owner_proof(tmp_path):
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    owner = home / ".videoscan-sealed-home"
+    assert owner.is_file() and not owner.is_symlink()
+    assert owner.read_text().split()[0] == str(os.getpid())
+
+
+def test_a_home_that_is_itself_a_symlink_is_refused_and_nothing_is_written_through_it(tmp_path):
+    # Codex 2026-11-23 (runner deletion review, round 2) P1: only components BENEATH home were checked.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_text("keep")
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "home").symlink_to(outside)
+    try:
+        sh.prepare(tmp_path / "run" / "home", real_home=tmp_path / "nobody")
+        raise AssertionError("a symlinked home was accepted")
+    except sh.Refused:
+        pass
+    assert sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"], "something was written through the link"
