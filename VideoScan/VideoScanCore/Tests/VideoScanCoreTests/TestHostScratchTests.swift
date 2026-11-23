@@ -74,9 +74,9 @@ struct TestHostScratchTests {
 
     @Test("this process's root follows its own environment, and is a directory")
     func thisProcessRootMatchesItsEnvironment() {
-        let env = ProcessInfo.processInfo.environment[TestHostScratch.rootEnvironmentKey]
-        let expected = (env?.hasPrefix("/") == true)
-            ? URL(fileURLWithPath: env!, isDirectory: true).standardizedFileURL
+        let env = ProcessInfo.processInfo.environment[TestHostScratch.rootEnvironmentKey] ?? ""
+        let expected = env.hasPrefix("/")
+            ? URL(fileURLWithPath: env, isDirectory: true).standardizedFileURL
             : URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         #expect(TestHostScratch.testTempRoot == expected)
         var isDir: ObjCBool = false

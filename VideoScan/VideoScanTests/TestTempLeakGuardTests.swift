@@ -65,8 +65,8 @@ struct TestTempLeakGuardTests {
 
     @Test("the app's scratch honours the runner's VIDEOSCAN_TEST_TMP (else the user temp dir)")
     func scratchHonoursTheRunnersRoot() throws {
-        let env = ProcessInfo.processInfo.environment["VIDEOSCAN_TEST_TMP"]
-        let expected = (env?.hasPrefix("/") == true) ? URL(fileURLWithPath: env!).standardizedFileURL.path
+        let env = ProcessInfo.processInfo.environment["VIDEOSCAN_TEST_TMP"] ?? ""
+        let expected = env.hasPrefix("/") ? URL(fileURLWithPath: env).standardizedFileURL.path
             : URL(fileURLWithPath: NSTemporaryDirectory()).path
         #expect(TestScratch.tempRoot.path == expected)
         #expect(PersistentLog.testHostLogDir.deletingLastPathComponent().path == expected)
