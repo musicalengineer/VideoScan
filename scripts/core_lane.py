@@ -121,6 +121,7 @@ import os
 import re
 import resource
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -164,10 +165,26 @@ def open_bundle(products: str, environ: Optional[Dict[str, str]] = None) -> Opti
     xrun = lambda *a: subprocess.run(["xcrun"] + list(a), capture_output=True, text=True).stdout.strip()
     plat = xrun("--sdk", "macosx", "--show-sdk-platform-path")
     pm = Path(xrun("--find", "swift")).parent.parent / "libexec" / "swift" / "pm"
+    home = sealed_home()
     env = dict(os.environ if environ is None else environ, NO_COLOR="1",
                DYLD_FRAMEWORK_PATH=f"{plat}/Developer/Library/Frameworks:{plat}/Developer/Library/PrivateFrameworks",
-               DYLD_LIBRARY_PATH=f"{prod.resolve()}:{plat}/Developer/usr/lib")
+               DYLD_LIBRARY_PATH=f"{prod.resolve()}:{plat}/Developer/usr/lib",
+               HOME=home, CFFIXED_USER_HOME=home)
     return Bundle(prod, bundle, exe, pm, env)
+
+
+def sealed_home() -> str:
+    """A fresh scratch home for this lane's test processes (DECISIONS 2026-11-22: tests never open the
+    real catalog): FileManager's App Support, Logs and Preferences resolve inside it, never to Rick's —
+    it holds a COPY of App Support (scripts/sealed_home.py). Removed when this process exits. ≈ C++: a chroot for the user's dotfiles, not the filesystem."""
+    import atexit
+    import tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import sealed_home
+    home = tempfile.mkdtemp(prefix="videoscan-core-home-")
+    atexit.register(shutil.rmtree, home, True)
+    src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
+    return str(sealed_home.prepare(Path(home), Path(src) if src else None))
 
 
 # ───────────────────────────────────────────────────────────── the listing → the plan
