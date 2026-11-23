@@ -22,6 +22,7 @@
 // fails is proving nothing.
 
 import Foundation
+import VideoScanCore
 import Testing
 @testable import VideoScan
 
@@ -160,9 +161,8 @@ struct AppSupportSnapshotTests {
     @MainActor
     func evidenceStoreAndBufferArePinnedUnderTemp() throws {
         #expect(TestEnvironment.isTestHost, "test host detection broke — every default path below would be Rick's")
-        let temp = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.resolvingSymlinksInPath().path
         let evidence = ArchiveAngelEvidenceStore.defaultDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        #expect(evidence.hasPrefix(temp), "evidence store default: \(evidence)")
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: evidence)), "evidence store default: \(evidence)")   // test temp root (the runner's sealed tmp, or the user temp dir)
         #expect(evidence.contains("archive-angel-\(ProcessInfo.processInfo.processIdentifier)"), "one folder per test process: \(evidence)")
         #expect(!evidence.contains("/Library/Application Support/"))
         if let real = AppSupportSnapshot.realVideoScanRoot {
@@ -171,6 +171,6 @@ struct AppSupportSnapshotTests {
         // And the store built with no argument really lands there.
         #expect(ArchiveAngelEvidenceStore().directory.path == ArchiveAngelEvidenceStore.defaultDirectory.path)
         let buffer = ArchiveAngelPlanStore.defaultBufferRoot.standardizedFileURL.resolvingSymlinksInPath().path
-        #expect(buffer.hasPrefix(temp) && !buffer.contains("/Movies/VideoScan Buffer"), "buffer root default: \(buffer)")
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: buffer)) && !buffer.contains("/Movies/VideoScan Buffer"), "buffer root default: \(buffer)")
     }
 }

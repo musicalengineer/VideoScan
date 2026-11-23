@@ -14,6 +14,13 @@ import Testing
 @Suite("Test temp folders are freed — per process and per test (Core)")
 struct TestHostScratchTests {
 
+    /// Rick's REAL home from the account database — under the runner NSHomeDirectory() is the sealed home
+    /// (HOME = CFFIXED_USER_HOME), and "the real home is never scratch" must test the real one.
+    static var realHome: URL {
+        guard let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir else { return URL(fileURLWithPath: "/nonexistent") }
+        return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+    }
+
     /// Under the process's test temp root (VIDEOSCAN_TEST_TMP when the runner
     /// sets it, else the user temp dir).
     private static func tmp(_ name: String) -> URL {
@@ -63,10 +70,10 @@ struct TestHostScratchTests {
         defer { try? FileManager.default.removeItem(at: base) }
         try FileManager.default.createDirectory(at: base.appendingPathComponent("a"), withIntermediateDirectories: true)
         #expect(TestHostScratch.isScratch(base.appendingPathComponent("a")))
-        #expect(!TestHostScratch.isScratch(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies")))
+        #expect(!TestHostScratch.isScratch(Self.realHome.appendingPathComponent("Movies")))
         #expect(!TestHostScratch.isScratch(URL(fileURLWithPath: "/")))
         try FileManager.default.createSymbolicLink(at: base.appendingPathComponent("out"),
-                                                   withDestinationURL: URL(fileURLWithPath: NSHomeDirectory()))
+                                                   withDestinationURL: Self.realHome)
         #expect(!TestHostScratch.isScratch(base.appendingPathComponent("out/Movies")), "a symlink out of temp is not scratch")
     }
 

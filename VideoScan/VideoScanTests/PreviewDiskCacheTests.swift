@@ -19,6 +19,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -403,8 +404,7 @@ struct PreviewDiskCacheTests {
         // writing JPEGs into Rick's real App Support cache (the
         // Settings-pollution incident class, disk edition).
         let url = PreviewDiskCache.productionRootURL
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path
-        #expect(url.standardizedFileURL.path.hasPrefix(tmp),
+        #expect(TestHostScratch.isScratch(url),     // the test temp root (the runner's sealed tmp, or the user temp dir)
                 "test-host productionRootURL escaped the temp sandbox: \(url.path)")
         #expect(!url.path.contains("Application Support"),
                 "test-host productionRootURL points at real App Support: \(url.path)")

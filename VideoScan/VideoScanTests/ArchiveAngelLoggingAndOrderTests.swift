@@ -4,6 +4,7 @@
 // media journeys".
 
 import Foundation
+import VideoScanCore
 import Testing
 @testable import VideoScan
 
@@ -111,6 +112,6 @@ struct ArchiveAngelLoggingAndOrderTests {
         let root = ArchiveAngelPlanStore.defaultBufferRoot.path
         #expect(TestEnvironment.isTestHost)
         #expect(!root.contains("/Movies/VideoScan Buffer"), "\(root)")
-        #expect(root.hasPrefix(FileManager.default.temporaryDirectory.path))
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: root)), "\(root)")   // the test temp root (runner's sealed tmp or the user temp dir)
     }
 }
