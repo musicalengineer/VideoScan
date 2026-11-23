@@ -231,6 +231,9 @@ enum POIStorage {
         let label = sanitize(displayName)
         let src = (storeOverride ?? storeDir)
             .appendingPathComponent(folderName(for: uuid), isDirectory: true)
+        // Under a test host the default trash is emptied at exit: only test scratch may enter it (Codex 2026-11-23
+        // #352 P1-3 — a real person folder moved there would be erased).
+        if trashOverride == nil, TestEnvironment.isTestHost, !TestHostScratch.isScratch(src) { return nil }
         guard fm.fileExists(atPath: src.path) else { return nil }
 
         let trashRoot = trashOverride ?? trashDir

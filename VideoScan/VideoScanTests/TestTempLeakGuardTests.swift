@@ -66,11 +66,36 @@ struct TestTempLeakGuardTests {
     @Test("the app's scratch honours the runner's VIDEOSCAN_TEST_TMP (else the user temp dir)")
     func scratchHonoursTheRunnersRoot() throws {
         let env = ProcessInfo.processInfo.environment["VIDEOSCAN_TEST_TMP"] ?? ""
-        let expected = env.hasPrefix("/") ? URL(fileURLWithPath: env).standardizedFileURL.path
+        let marked = env.hasPrefix("/") && env != "/"
+            && FileManager.default.fileExists(atPath: (env as NSString).appendingPathComponent(TestHostScratch.rootMarkerName))
+        let expected = marked ? URL(fileURLWithPath: env).standardizedFileURL.path
             : URL(fileURLWithPath: NSTemporaryDirectory()).path
         #expect(TestScratch.tempRoot.path == expected)
         #expect(PersistentLog.testHostLogDir.deletingLastPathComponent().path == expected)
         #expect(MediaLedger.defaultDirectory.deletingLastPathComponent().deletingLastPathComponent().path == expected)
+    }
+
+    // Codex 2026-11-23 #352 P1-3: the test-host trash is EMPTIED at exit, so a real input moved there would be
+    // erased. Under a test host it refuses any source that is not test scratch. The probe is a path that does not
+    // exist under the home folder: nothing real is touched, and the refusal must be the guard's, not "no such file".
+    @Test("under a test host, MediaTrash refuses a source outside test scratch (the test trash is emptied at exit)")
+    func theTestTrashRefusesNonScratchSources() {
+        let notScratch = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Movies/never-a-real-file-\(UUID().uuidString).mov")
+        #expect(!FileManager.default.fileExists(atPath: notScratch.path))
+        #expect(throws: MediaTrash.TestHostRefusal.self) { _ = try MediaTrash.move(notScratch) }
+    }
+
+    @Test("under a test host, a scratch source still goes to the test trash")
+    func theTestTrashTakesScratchSources() throws {
+        let dir = TestHostScratch.testTempRoot.appendingPathComponent("trash-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = dir.appendingPathComponent("a.mov")
+        try Data([1, 2, 3]).write(to: f)
+        let landed = try MediaTrash.move(f)
+        #expect(FileManager.default.fileExists(atPath: landed.path) && !FileManager.default.fileExists(atPath: f.path))
+        try? FileManager.default.removeItem(at: landed)
     }
 
     // MARK: 2 — per process

@@ -5125,10 +5125,13 @@
       "tests": [
         "backgroundScratchIsGoneWhenTheTestEnds",
         "coreStoresRecordTheirFolders",
+        "isScratchIsResolvedAndBounded",
         "perProcessIsRecordedUnderATestProcess",
         "privateSpellingIsInside",
         "registryRemovesOnlyInsideTheTempDir",
         "rootHonorsTheRunnersVariable",
+        "rootRequiresTheRunnersMarker",
+        "symlinkedParentIsRefusedAtRemoval",
         "thisProcessRootMatchesItsEnvironment"
       ],
       "stage": "unit"
@@ -30973,7 +30976,9 @@
         "aScopeRemovesOnlyInsideTheTempRoot",
         "deletingAPersonInATestNeverReachesTheRealTrash",
         "everyPerProcessFolderIsFreedAtExit",
-        "scratchHonoursTheRunnersRoot"
+        "scratchHonoursTheRunnersRoot",
+        "theTestTrashRefusesNonScratchSources",
+        "theTestTrashTakesScratchSources"
       ],
       "stage": "unit"
     },
@@ -41534,9 +41539,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3983,
+      "expected_floor": 3985,
       "name": "unit",
-      "package_expected_floor": 1025,
+      "package_expected_floor": 1028,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",

@@ -16,6 +16,7 @@
 
 import Foundation
 import AppKit
+import VideoScanCore
 
 // MARK: - Importer
 
@@ -443,6 +444,11 @@ enum BundleImporter {
 
         // Swap. Move-aside (NOT rm -rf) any existing dest, then move temp into place.
         if fm.fileExists(atPath: dest.path) {
+            // Under a test host the default trash is emptied at exit: never move a non-scratch folder into it
+            // (Codex 2026-11-23 #352 P1-3).
+            if trashDir == nil, TestEnvironment.isTestHost, !TestHostScratch.isScratch(dest) {
+                throw BundleError.validationFailed("test host: refusing to move \(dest.path) into the test trash — not test scratch")
+            }
             let trashURL = trashTarget(forPOI: folderName, trashDir: trashDir)
             try fm.createDirectory(at: trashURL.deletingLastPathComponent(),
                                    withIntermediateDirectories: true)

@@ -50,13 +50,51 @@ public enum TestHostScratch {
     /// their own temp root.
     public static let rootEnvironmentKey = "VIDEOSCAN_TEST_TMP"
 
-    /// Pure: the root `environment` names for a process that is (or is not) a
-    /// test, else `fallback`. Only an absolute path counts.
-    public static func root(environment: [String: String], isTestProcess: Bool, fallback: URL) -> URL {
+    /// The file a runner puts in the root it hands over (scripts/sealed_home.py). A root WITHOUT it is never
+    /// trusted for removal (Codex 2026-11-23 #352 P1-1: an arbitrary absolute VIDEOSCAN_TEST_TMP — "/", /Users,
+    /// a real Application Support — was accepted as the deletion boundary).
+    public static let rootMarkerName = ".videoscan-test-tmp"
+
+    /// Pure: the root `environment` names for a process that is (or is not) a test, else `fallback`. Only an
+    /// absolute path other than "/" that carries the runner's marker (`isMarked`) counts.
+    public static func root(environment: [String: String], isTestProcess: Bool, fallback: URL,
+                            isMarked: (URL) -> Bool = TestHostScratch.carriesMarker) -> URL {
         guard isTestProcess,
               let value = environment[rootEnvironmentKey], value.hasPrefix("/")
         else { return fallback }
-        return URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+        let url = URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+        guard url.path != "/", isMarked(url) else { return fallback }
+        return url
+    }
+
+    public static func carriesMarker(_ root: URL) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(rootMarkerName).path)
+    }
+
+    /// True when `url`, with every symlink resolved, lies strictly inside this process's test temp root or the
+    /// user temp dir — i.e. it is test scratch. Under a test host, nothing else may enter a trash that is emptied
+    /// at exit (Codex 2026-11-23 #352 P1-3: a real input moved there would be erased).
+    public static func isScratch(_ url: URL) -> Bool {
+        let resolved = resolvedPath(url)
+        return [testTempRoot, URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)].contains { root in
+            let base = resolvedPath(root)
+            return base != "/" && resolved.hasPrefix(base + "/")
+        }
+    }
+
+    /// The path with every symlink in its existing ancestors resolved (realpath of the deepest existing
+    /// ancestor, then the rest appended), spelled without the /private prefix.
+    static func resolvedPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var tail: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path) && existing.path != "/" {
+            tail.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let real = realpath(existing.path, &buf) != nil ? String(cString: buf) : existing.path
+        let joined = tail.reduce(real) { ($0 as NSString).appendingPathComponent($1) }
+        return Registry.canonical(joined)
     }
 
     /// The temp root for test scratch in THIS process (computed once; created
@@ -112,7 +150,10 @@ public enum TestHostScratch {
             var removed = 0
             for path in all {
                 let url = URL(fileURLWithPath: path)
-                guard Self.isStrictlyInside(url, root),
+                // At the moment of removal: the spelling AND the resolved path must be inside the root — a
+                // symlinked parent (root/link → elsewhere) resolves outside and is refused (Codex 2026-11-23
+                // #352 P1-2: S/link/victim removed the outside victim). A symlink LEAF is removed as a link.
+                guard Self.isStrictlyInside(url, root), Self.resolvesInside(url, root),
                       FileManager.default.fileExists(atPath: path) else { continue }
                 if (try? FileManager.default.removeItem(at: url)) != nil { removed += 1 }
             }
@@ -131,6 +172,13 @@ public enum TestHostScratch {
             let parent = canonical(leaf.deletingLastPathComponent().path)
             let base = canonical(root.path)
             return parent == base || parent.hasPrefix(base + "/")
+        }
+
+        /// The leaf's PARENT, every symlink resolved, lies inside the resolved root.
+        static func resolvesInside(_ url: URL, _ root: URL) -> Bool {
+            let parent = TestHostScratch.resolvedPath(url.standardizedFileURL.deletingLastPathComponent())
+            let base = TestHostScratch.resolvedPath(root)
+            return base != "/" && (parent == base || parent.hasPrefix(base + "/"))
         }
 
         static func canonical(_ path: String) -> String {

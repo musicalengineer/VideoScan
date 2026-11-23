@@ -36,6 +36,13 @@ enum MediaTrash {
         return (resulting as URL?) ?? url
     }
 
+    /// Under a test host, a source that is not test scratch (TestHostScratch.isScratch) is refused: the test
+    /// trash is emptied at exit, so a real input moved into it would be erased (Codex 2026-11-23 #352 P1-3).
+    struct TestHostRefusal: Error, CustomStringConvertible {
+        let path: String
+        var description: String { "test host: refusing to trash \(path) — not test scratch (the test trash is emptied at exit)" }
+    }
+
     /// Removed when the test host exits (TestHostScratch).
     nonisolated static let testHostTrash = TestHostScratch.perProcess("VideoScan-tests/trash")
 
@@ -54,6 +61,7 @@ enum MediaTrash {
     }
 
     private nonisolated static func moveToTestHostTrashLocked(_ url: URL) throws -> URL {
+        guard TestHostScratch.isScratch(url) else { throw TestHostRefusal(path: url.path) }
         let fm = FileManager.default
         try fm.createDirectory(at: testHostTrash, withIntermediateDirectories: true)
         let stem = url.deletingPathExtension().lastPathComponent
