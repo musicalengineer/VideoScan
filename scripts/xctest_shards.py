@@ -852,7 +852,9 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
     import sealed_home
     src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
     try:
-        home = sealed_home.prepare((run_dir / "home").resolve(), Path(src) if src else None)
+        # NOT resolved first: prepare must see a symlinked run_dir/home to refuse it, and the cleanup below removes
+        # this same unresolved path (rmtree refuses a symlink) — never a link's external target (Codex 2026-11-23 r2)
+        home = sealed_home.prepare(run_dir.resolve() / "home", Path(src) if src else None)
     except (sealed_home.Refused, OSError, sqlite3_error()) as e:
         raise SealRefused(f"cannot prepare the sealed home ({type(e).__name__}: {e})")
     # Temp folders: the test host is launched from this file, not from xcodebuild's environment. TMPDIR reaches

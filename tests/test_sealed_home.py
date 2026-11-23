@@ -195,3 +195,18 @@ def test_a_prepared_home_carries_its_owner_proof(tmp_path):
     owner = home / ".videoscan-sealed-home"
     assert owner.is_file() and not owner.is_symlink()
     assert owner.read_text().split()[0] == str(os.getpid())
+
+
+def test_a_home_that_is_itself_a_symlink_is_refused_and_nothing_is_written_through_it(tmp_path):
+    # Codex 2026-11-23 (runner deletion review, round 2) P1: only components BENEATH home were checked.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_text("keep")
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "home").symlink_to(outside)
+    try:
+        sh.prepare(tmp_path / "run" / "home", real_home=tmp_path / "nobody")
+        raise AssertionError("a symlinked home was accepted")
+    except sh.Refused:
+        pass
+    assert sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"], "something was written through the link"

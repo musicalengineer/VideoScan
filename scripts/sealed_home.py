@@ -134,6 +134,8 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
     guarded = [real / "Library" / sub for sub in ("Application Support", "Logs", "Preferences")]
     if home.resolve() == real.resolve() or any(_inside(home, g) for g in guarded):
         raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
+    if home.is_symlink():                    # the home itself, not only what is beneath it (Codex 2026-11-23 r2)
+        raise Refused(f"{home} is a symlink — a sealed home is never prepared (or later freed) through a link")
     home.mkdir(parents=True, exist_ok=True)
     for sub in SUBDIRS:                      # no part of the sealed home may be a symlink out of it
         if any((home / Path(*Path(sub).parts[:i + 1])).is_symlink() for i in range(len(Path(sub).parts))):
