@@ -201,7 +201,11 @@ enum POIStorage {
     /// guard against test bugs, not an adversary.
     static func testHostRefusesTrashing(source: URL, into trash: URL,
                                         isTestHost: Bool = TestEnvironment.isTestHost) -> Bool {
-        guard isTestHost, TestHostScratch.isScratch(trash) else { return false }
+        // Under a test host the SOURCE decides, whatever the destination (Codex 2026-11-23 round 3: the scratch root
+        // itself, or a sibling such as <sealed home>/trash, is not "scratch" yet is deleted with the run). No test has
+        // a reason to trash anything that is not its own scratch. `trash` is kept for the callers' readability.
+        _ = trash
+        guard isTestHost else { return false }
         return !TestHostScratch.isScratch(source)
     }
 

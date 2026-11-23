@@ -151,7 +151,7 @@ struct TestTempLeakGuardTests {
 
     // The one decision behind the POI trash and the bundle importer's swap (the importer's swap needs a full
     // bundle install to reach, so its path is pinned here through the shared decision).
-    @Test("the test-trash decision: under a test host a scratch trash takes only scratch; production never refuses")
+    @Test("the test-trash decision: under a test host every trash takes only scratch; production never refuses")
     func testTrashDecision() throws {
         let outside = try Self.outsideScratch("decision")
         defer { try? FileManager.default.removeItem(at: outside) }
@@ -163,8 +163,14 @@ struct TestTempLeakGuardTests {
             #expect(!POIStorage.testHostRefusesTrashing(source: scratchSource, into: trash, isTestHost: true))
             #expect(!POIStorage.testHostRefusesTrashing(source: realSource, into: trash, isTestHost: false), "production")
         }
-        #expect(!POIStorage.testHostRefusesTrashing(source: realSource, into: outside.appendingPathComponent("trash"),
-                                                    isTestHost: true), "a trash outside scratch is not deleted with the run")
+        // Codex 2026-11-23 round 3: the destination is not a safe test — the scratch ROOT itself and a sibling of it
+        // (<sealed home>/trash) are inside what the runner deletes. Under a test host a non-scratch source is refused
+        // whatever the destination.
+        for trash in [TestHostScratch.testTempRoot,
+                      TestHostScratch.testTempRoot.deletingLastPathComponent().appendingPathComponent("trash"),
+                      outside.appendingPathComponent("trash")] {
+            #expect(POIStorage.testHostRefusesTrashing(source: realSource, into: trash, isTestHost: true), "\(trash.path)")
+        }
     }
 
     // Codex 2026-11-23 round 2 #3 (app copy of TestScratch).
