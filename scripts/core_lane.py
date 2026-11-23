@@ -175,15 +175,16 @@ def open_bundle(products: str, environ: Optional[Dict[str, str]] = None) -> Opti
 
 def sealed_home() -> str:
     """A fresh scratch home for this lane's test processes (DECISIONS 2026-11-22: tests never open the
-    real catalog): FileManager's App Support, Logs and Preferences resolve inside it, never to Rick's.
-    Removed when this process exits. ≈ C++: a chroot for the user's dotfiles, not the filesystem."""
+    real catalog): FileManager's App Support, Logs and Preferences resolve inside it, never to Rick's —
+    it holds a COPY of App Support (scripts/sealed_home.py). Removed when this process exits. ≈ C++: a chroot for the user's dotfiles, not the filesystem."""
     import atexit
     import tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import sealed_home
     home = tempfile.mkdtemp(prefix="videoscan-core-home-")
-    for sub in ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches"):
-        os.makedirs(os.path.join(home, sub), exist_ok=True)
     atexit.register(shutil.rmtree, home, True)
-    return home
+    src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
+    return str(sealed_home.prepare(Path(home), Path(src) if src else None))
 
 
 # ───────────────────────────────────────────────────────────── the listing → the plan

@@ -825,6 +825,11 @@ def write_summary(path: Optional[Path], data: dict) -> None:
     os.replace(tmp, path)
 
 
+def sqlite3_error():
+    import sqlite3
+    return sqlite3.Error
+
+
 class SealRefused(Exception):
     """The test hosts' home could not be sealed: nothing runs (never unsealed)."""
 
@@ -844,9 +849,12 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
             plan = plistlib.load(f)
     except (OSError, ValueError, plistlib.InvalidFileException) as e:
         raise SealRefused(f"cannot read {xctestrun} to seal the test hosts' home ({type(e).__name__})")
-    home = (run_dir / "home").resolve()
-    for sub in ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches"):
-        (home / sub).mkdir(parents=True, exist_ok=True)
+    import sealed_home
+    src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
+    try:
+        home = sealed_home.prepare((run_dir / "home").resolve(), Path(src) if src else None)
+    except (sealed_home.Refused, OSError, sqlite3_error()) as e:
+        raise SealRefused(f"cannot prepare the sealed home ({type(e).__name__}: {e})")
     sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home)}
     targets = [0]
 
@@ -891,13 +899,14 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         say(f"REFUSED: {e} — no test host is started unsealed")
         write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED", planned=0))
         return 1
-    say(f"sealed home: every test host runs with HOME = CFFIXED_USER_HOME = {home}")
+    say(f"sealed home: every test host runs with HOME = CFFIXED_USER_HOME = {home} (a copy of App Support)")
     try:
         return _run_sealed(groups, shards, held, lost, sealed_run, jobs, run_dir, timings_path, timeout, xcodebuild,
                            xcresulttool, stream, target, keep_results, coverage, summary)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(sealed_run)
+        shutil.rmtree(home, ignore_errors=True)       # a copy: the database backups are ~1 GB a run
 
 
 def _run_sealed(groups, shards, held, lost, xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path, timeout: float,

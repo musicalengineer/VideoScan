@@ -36102,8 +36102,10 @@
         "test_a_test_inside_if_debug_is_not_expected_of_a_release_build",
         "test_a_test_that_passed_with_a_known_issue_is_a_pass_and_is_counted_as_known",
         "test_all_leaves_the_performance_and_stress_stages_out_unless_asked",
+        "test_an_unreadable_xctestrun_is_refused_and_nothing_runs_unsealed",
         "test_coverage_makes_every_host_record_into_its_own_bundle_and_keeps_them_all",
         "test_every_failure_is_listed_with_its_message_and_its_shards_log",
+        "test_every_test_host_runs_with_a_sealed_home_and_the_built_xctestrun_is_untouched",
         "test_run_tests_app_lane_runs_as_shards_by_default_and_as_one_host_with_jobs_1",
         "test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebuild",
         "test_run_tests_shows_the_shard_lines_and_a_red_shard_is_the_lanes_reason",
@@ -36414,10 +36416,25 @@
         "test_strands_the_event_stream_parse_reads_ids_failures_and_seconds_and_skips_a_torn_line",
         "test_strands_the_marker_is_the_one_the_swift_helpers_write",
         "test_strands_the_nightly_logs_the_amber_lines_and_the_decision_is_recorded",
+        "test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one",
         "test_the_mark_is_declared_once_and_names_what_the_lane_reads",
         "test_the_sensor_lane_runs_the_check_and_the_nightly_and_run_tests_run_this_lane",
         "test_the_two_plans_are_disjoint_and_together_are_every_test",
         "test_truth_the_lane_and_the_nightly_count_the_same_log_the_same"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_sealed_home.py",
+      "stage": "unit",
+      "suites": [
+        "test_sealed_home.py"
+      ],
+      "tests": [
+        "test_no_real_app_support_gives_an_empty_sealed_home",
+        "test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written",
+        "test_the_sealed_home_is_refused_inside_the_real_home_library"
       ]
     },
     {
@@ -41286,6 +41303,10 @@
         },
         {
           "name": "tests/test_core_lane.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_sealed_home.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

@@ -626,7 +626,7 @@ def test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebui
     are the parsed stream's, and a failing test in one shard makes the lane RED with its name."""
     wt = tmp_path / "wt"
     (wt / "scripts" / "gauntlet").mkdir(parents=True)
-    for name in ("xctest_shards.py", "testbed_strands.py", "run_tests.py"):
+    for name in ("xctest_shards.py", "testbed_strands.py", "run_tests.py", "sealed_home.py"):
         (wt / "scripts" / name).write_text((ROOT / "scripts" / name).read_text())
     b = Bench(tmp_path)
     (tmp_path / "scenario.json").write_text(json.dumps({
@@ -1014,7 +1014,7 @@ def test_every_test_host_runs_with_a_sealed_home_and_the_built_xctestrun_is_unto
         for env in st["host_env"]:
             assert env["HOME"] == env["CFFIXED_USER_HOME"] == str(home), env
             assert env["KEEP_ME"] == "1", "the build's own test environment is kept"
-    assert home.is_dir() and (home / "Library").is_dir()
+    assert not home.exists(), "the sealed home (a copy of App Support) was left behind after the run"
     assert (bench.tmp / "x.xctestrun").read_bytes() == original, "the build's .xctestrun was modified"
     assert not list(bench.tmp.glob("*.sealed-*.xctestrun")), "the sealed copy was left beside the build"
     assert "sealed home" in out
