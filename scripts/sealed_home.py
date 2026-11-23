@@ -90,6 +90,11 @@ def _backup(src: Path, dst: Path) -> None:
         d = sqlite3.connect(str(dst))
         try:
             s.backup(d)
+            # Rollback-journal mode: the copy keeps the source's WAL flag, and a WAL file with no -shm
+            # cannot be opened READ-ONLY (the production-shape tests' `sqlite3 file:…?mode=ro .backup`:
+            # "unable to open database file", 13 tests RED 2026-11-22). Data and schema are unchanged;
+            # a writer that wants WAL switches it back on open, as the app does.
+            d.execute("PRAGMA journal_mode=DELETE")
         finally:
             d.close()
     finally:

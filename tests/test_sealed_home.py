@@ -96,3 +96,29 @@ def test_a_sealed_home_under_the_real_caches_is_allowed(tmp_path):
         except sh.Refused:
             continue
         raise AssertionError(f"a sealed home at {bad} was accepted")
+
+
+def test_the_copied_catalog_opens_read_only_as_the_production_shape_tests_open_it(tmp_path):
+    # RED 2026-11-22 (full run with the copy, c6bbe6765): 13 production-shape tests take a .backup of
+    # "the live catalog" through a READ-ONLY open; a WAL-mode copy with no -shm cannot be opened read-only
+    # ("unable to open database file", sqlite3_backup_step 14). The copy is left in rollback-journal mode.
+    real = tmp_path / "real" / "Library" / "Application Support" / "VideoScan"
+    keep = live_db(real / "catalog.sqlite", 9)
+    (real / "catalog.cutover").write_text("")
+    home = sh.prepare(tmp_path / "run" / "home", real_home=tmp_path / "real")
+    keep.close()
+    copy = home / "Library" / "Application Support" / "VideoScan" / "catalog.sqlite"
+    assert list(copy.read_bytes()[18:20]) == [1, 1], "the copy is left in WAL mode (header bytes 18-19)"
+    import subprocess
+    p = subprocess.run(["/usr/bin/sqlite3", f"file:{copy}?mode=ro", f".backup '{tmp_path / 'cli.sqlite'}'"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, f"the system sqlite3 cannot back up the copy read-only: {p.stderr.strip()}"
+    ro = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    try:
+        assert ro.execute("SELECT count(*) FROM r").fetchone()[0] == 9
+        out = sqlite3.connect(str(tmp_path / "b.sqlite"))
+        ro.backup(out)                                   # what the tests' sqlite3 .backup does
+        assert out.execute("SELECT count(*) FROM r").fetchone()[0] == 9
+        out.close()
+    finally:
+        ro.close()
