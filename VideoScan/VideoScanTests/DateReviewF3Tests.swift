@@ -7,7 +7,7 @@ import Foundation
 // 2000" from the reason, failed the equality guard and wrote again.
 
 @MainActor
-@Suite("Codex F3 — footage sharing is idempotent and keeps the recorded disagreement")
+@Suite("Codex F3 — footage sharing is idempotent and keeps the recorded disagreement", .scratchCleanup)
 struct DateReviewF3Tests {
     typealias F = DateReviewFixtures
 

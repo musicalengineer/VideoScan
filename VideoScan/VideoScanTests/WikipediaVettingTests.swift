@@ -156,7 +156,7 @@ private func nearMissLabels(_ findings: [ResearchFinding]) -> [String] {
     findings.filter(\.isNearMiss).map { "\($0.title) — \($0.screening?.reason ?? "?")" }
 }
 
-@Suite("Research Person — Wikipedia screening (fixtures only)")
+@Suite("Research Person — Wikipedia screening (fixtures only)", .scratchCleanup)
 struct ResearchWikipediaVettingTests {
 
     // MARK: The four cases from the bug report, per Rick's ruling
@@ -432,14 +432,13 @@ private func amos() throws -> ResearchSubject {
 }
 
 private func tempPeopleRoot() throws -> URL {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("WikipediaScreening-\(UUID().uuidString)", isDirectory: true)
+    let root = TestScratch.reserved("WikipediaScreening-")
         .appendingPathComponent("People", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
 }
 
-@Suite("Research Person — near-miss group in the pane")
+@Suite("Research Person — near-miss group in the pane", .scratchCleanup)
 struct ResearchNearMissPaneTests {
 
     private func finding(_ title: String, _ screening: ResearchScreening?, source: ResearchSourceKind = .wikipedia)

@@ -4,7 +4,7 @@ import Testing
 
 /// Pure production projection used to build the model's cached bookmark rows.
 /// These run without an app host; discovery model wiring is tested separately.
-@Suite("Family Tree — bookmark row projection")
+@Suite("Family Tree — bookmark row projection", .scratchCleanup)
 struct FamilyTreeBookmarkProjectionTests {
     private struct Person: Equatable {
         let id: String
@@ -49,8 +49,7 @@ struct FamilyTreeBookmarkProjectionTests {
     }
 
     @Test func projectionUsesOnlyTheExplicitBookmarkStoreDespitePoisonedNeighbour() throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("FTBookmarkProjection-\(UUID().uuidString)")
+        let root = TestScratch.reserved("FTBookmarkProjection-")
         let selected = root.appendingPathComponent("selected")
         let neighbour = root.appendingPathComponent("poison")
         let rows = [Person(id: "selected", name: "Alex"), Person(id: "poison", name: "Donna")]

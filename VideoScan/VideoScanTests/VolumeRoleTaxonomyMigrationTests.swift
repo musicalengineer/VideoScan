@@ -29,7 +29,7 @@ import Foundation
 //   Bundle round-trip                                bundleSnapshot_roundTripPreservesEveryRole / bundleSnapshot_legacyStringsMigrate
 //   Symlink in ~/Movies pin                          symlinkInHomeMovies_resolvesToRealVolume_isWorkspaceNotSystem
 
-@Suite("Volume role taxonomy migration") @MainActor
+@Suite("Volume role taxonomy migration", .scratchCleanup) @MainActor
 struct VolumeRoleTaxonomyMigrationTests {
 
     // MARK: - Fixtures
@@ -38,8 +38,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         let m = VideoScanModel()
         // Own catalog store so `masterArchive` never mirrors into the
         // shared process-wide store (see VideoScanModel.init note).
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_roletax_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = TestScratch.reserved("test_roletax_")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         m.catalogStore = CatalogStore(directory: dir)
         m.scanTargets = []
@@ -580,8 +579,7 @@ struct VolumeRoleTaxonomyMigrationTests {
     @Test func m3_clearMasterArchive_demotesExMaster_noQueue() {
         let m = makeModel()
         // A temp path, never a real volume name (it does not need to exist).
-        let archive = FileManager.default.temporaryDirectory
-            .appendingPathComponent("roletax-m3-\(UUID().uuidString.prefix(8))/FamilyArchive").path
+        let archive = TestScratch.reserved("roletax-m3-").appendingPathComponent("FamilyArchive").path
         let master = CatalogScanTarget(searchPath: archive)
         master.role = .archive; master.isReachable = true
         m.scanTargets = [master]
@@ -631,8 +629,7 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// `<temp>/victim`, but the filesystem follows `link` out first and
     /// lands on `<outside>/victim`. Both trees live in one disposable fixture.
     @Test func iconGuard_symlinkThenDotDotIsRefused() throws {
-        let fixture = FileManager.default.temporaryDirectory
-            .appendingPathComponent("roletax-dotdot-\(UUID().uuidString.prefix(8))")
+        let fixture = TestScratch.reserved("roletax-dotdot-")
         defer { try? FileManager.default.removeItem(at: fixture) }
         let fakeTemp = fixture.appendingPathComponent("temp")
         let outside = fixture.appendingPathComponent("outside")
@@ -871,8 +868,7 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// the real ~/Movies is untouched.
     @Test func symlinkInHomeMovies_resolvesToRealVolume_isWorkspaceNotSystem() throws {
         let fm = FileManager.default
-        let base = fm.temporaryDirectory
-            .appendingPathComponent("test_roletax_symlink_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let base = TestScratch.reserved("test_roletax_symlink_")
         let fakeHome = base.appendingPathComponent("Users/rickb", isDirectory: true)
         let movies = fakeHome.appendingPathComponent("Movies", isDirectory: true)
         let external = base.appendingPathComponent("ExternalVolume/Footage", isDirectory: true)

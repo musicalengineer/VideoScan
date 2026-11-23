@@ -35,8 +35,7 @@ import VideoScanCore
 @MainActor
 private func isolatedModel() -> VideoScanModel {
     let model = VideoScanModel()
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_steward_offmain_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_steward_offmain_")
     model.catalogStore = CatalogStore(directory: dir)
     return model
 }
@@ -101,7 +100,7 @@ enum StewardOffMainState: CaseIterable, Sendable {
     case bare, marksOnly, archiveOnly, archiveAndMarksProvisional, archiveAndMarksBuilt
 }
 
-@Suite("Bulk-delete gate as a value — same refusal as the instance rule", .serialized)
+@Suite("Bulk-delete gate as a value — same refusal as the instance rule", .serialized, .scratchCleanup)
 @MainActor
 struct BulkDeleteGateEquivalenceTests {
 
@@ -234,7 +233,7 @@ struct BulkDeleteGateEquivalenceTests {
     }
 }
 
-@Suite("Steward off-main rule 2 — scale", .serialized)
+@Suite("Steward off-main rule 2 — scale", .serialized, .scratchCleanup)
 @MainActor
 struct StewardOffMainScaleTests {
 
@@ -283,7 +282,7 @@ struct StewardOffMainScaleTests {
     }
 }
 
-@Suite("Steward off-main rule 2 — sensors")
+@Suite("Steward off-main rule 2 — sensors", .scratchCleanup)
 struct StewardOffMainSensorTests {
 
     private func code(_ name: String) throws -> String {

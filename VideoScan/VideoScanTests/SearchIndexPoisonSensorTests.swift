@@ -24,7 +24,7 @@ import Foundation
 @testable import VideoScan
 
 @MainActor
-@Suite("SearchIndexPoisonSensors")
+@Suite("SearchIndexPoisonSensors", .scratchCleanup)
 struct SearchIndexPoisonSensorTests {
 
     // MARK: - Helpers
@@ -41,9 +41,7 @@ struct SearchIndexPoisonSensorTests {
     }
 
     private func makeTempURL(name: String) -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_poison_sensor_\(UUID().uuidString.prefix(8))",
-                                    isDirectory: true)
+        let dir = TestScratch.reserved("vs_poison_sensor_")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent(name)
     }

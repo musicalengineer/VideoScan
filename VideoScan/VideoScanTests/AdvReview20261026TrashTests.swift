@@ -16,7 +16,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 @MainActor
 struct CatalogTrashOnlyCopyAtTheMoveTests {
 
@@ -31,8 +31,7 @@ struct CatalogTrashOnlyCopyAtTheMoveTests {
 
         init() throws {
             let fm = FileManager.default
-            root = fm.temporaryDirectory
-                .appendingPathComponent("test_onlycopy_atmove_\(UUID().uuidString.prefix(8))", isDirectory: true)
+            root = TestScratch.reserved("test_onlycopy_atmove_")
             folder = root.appendingPathComponent("Sources", isDirectory: true)
             let trashDir = root.appendingPathComponent("trash", isDirectory: true)
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)

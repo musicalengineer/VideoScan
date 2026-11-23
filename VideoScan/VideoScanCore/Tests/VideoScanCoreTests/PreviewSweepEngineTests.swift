@@ -51,9 +51,11 @@ final class PreviewSweepEngineTests: XCTestCase {
     }
 
     private func makeFiles(_ n: Int) -> [String] {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = TestHostScratch.testTempRoot
             .appendingPathComponent("engine-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // XCTest: removed when this test ends (≈ a scope guard registered on the test case).
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         return (0..<n).map { i in
             let p = dir.appendingPathComponent("clip\(i).mp4").path
             try? Data("x\(i)".utf8).write(to: URL(fileURLWithPath: p))

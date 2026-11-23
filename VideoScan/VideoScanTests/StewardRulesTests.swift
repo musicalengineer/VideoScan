@@ -31,8 +31,7 @@ import VideoScanCore
 @MainActor
 private func isolatedModel() -> VideoScanModel {
     let model = VideoScanModel()
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_steward_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_steward_")
     model.catalogStore = CatalogStore(directory: dir)
     return model
 }
@@ -63,7 +62,7 @@ private func queue(_ model: VideoScanModel, crossMode: Bool = false) -> StewardQ
 
 // MARK: - Rule 1
 
-@Suite("Steward rule 1 — the card's proof IS the Delete planner's", .serialized)
+@Suite("Steward rule 1 — the card's proof IS the Delete planner's", .serialized, .scratchCleanup)
 @MainActor
 struct StewardProofRuleTests {
 
@@ -78,8 +77,7 @@ struct StewardProofRuleTests {
     }
 
     private func rig() throws -> Rig {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_steward_proof_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = TestScratch.reserved("test_steward_proof_")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("here"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("elsewhere"), withIntermediateDirectories: true)
         return Rig(dir: dir, model: isolatedModel())
@@ -383,7 +381,7 @@ struct StewardProofRuleTests {
 
 // MARK: - Rule 2
 
-@Suite("Steward rule 2 — never another steward's loss", .serialized)
+@Suite("Steward rule 2 — never another steward's loss", .serialized, .scratchCleanup)
 @MainActor
 struct StewardExclusionRuleTests {
 

@@ -135,7 +135,7 @@ extension ShowAgainSandbox {
 
 // MARK: - Logic
 
-@Suite("Audit catalog — logic")
+@Suite("Audit catalog — logic", .scratchCleanup)
 @MainActor
 struct CatalogAuditJobLogicTests {
 
@@ -428,7 +428,7 @@ struct CatalogAuditJobLogicTests {
 
 // MARK: - Scale
 
-@Suite("Audit catalog — scale (100k rows)")
+@Suite("Audit catalog — scale (100k rows)", .scratchCleanup)
 @MainActor
 struct CatalogAuditJobScaleTests {
 
@@ -483,7 +483,7 @@ struct CatalogAuditJobScaleTests {
 
 // MARK: - Isolation
 
-@Suite("Audit catalog — isolation: poisoned marker, refusals")
+@Suite("Audit catalog — isolation: poisoned marker, refusals", .scratchCleanup)
 @MainActor
 struct CatalogAuditJobIsolationTests {
 
@@ -528,8 +528,7 @@ struct CatalogAuditJobIsolationTests {
 
     @Test("the shared App Support store refuses from a test host")
     func sharedStoreRefusesUnderTestHost() async throws {
-        let model = VideoScanModel(logDirectory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_ca_shared_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        let model = VideoScanModel(logDirectory: TestScratch.reserved("test_ca_shared_"))
         #expect(model.catalogStore === CatalogStore.shared)
         let stats = CallCounter()
         let job = await runAudit(model, configure: { j in j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } } })
@@ -553,7 +552,7 @@ struct CatalogAuditJobIsolationTests {
 
 // MARK: - Sensor
 
-@Suite("Audit catalog — sensor: one mark path, nothing on media")
+@Suite("Audit catalog — sensor: one mark path, nothing on media", .scratchCleanup)
 @MainActor
 struct CatalogAuditJobSensorTests {
 
@@ -768,7 +767,7 @@ extension ShowAgainSandbox {
     }
 }
 
-@Suite("Audit catalog — prove at the mark (codex 2026-10-16)")
+@Suite("Audit catalog — prove at the mark (codex 2026-10-16)", .scratchCleanup)
 @MainActor
 struct CatalogAuditProveAtTheMarkTests {
 

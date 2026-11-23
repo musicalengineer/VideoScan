@@ -13,6 +13,7 @@
 //
 
 import AppKit
+import VideoScanCore
 
 // @MainActor: it draws with lockFocus and reads NSApp, both main-thread
 // AppKit; its only callers (VideoScanModel+MasterArchive) already run there.
@@ -90,6 +91,8 @@ enum MasterArchiveIcon {
     private static func mayTouch(_ path: String) -> Bool {
         guard TestEnvironment.isTestHost else { return true }
         if isInsideTemporaryDirectory(path, temporaryDirectory: FileManager.default.temporaryDirectory) { return true }
+        // The runner's test temp root (VIDEOSCAN_TEST_TMP) is test scratch too (TestHostScratch).
+        if isInsideTemporaryDirectory(path, temporaryDirectory: TestHostScratch.testTempRoot) { return true }
         testHostRefusals.append(path)
         NSLog("TEST-ISOLATION: MasterArchiveIcon refused %@ — a test host may only badge paths inside the temp folder", path)
         return false

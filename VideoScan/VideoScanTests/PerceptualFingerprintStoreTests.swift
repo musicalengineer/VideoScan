@@ -43,12 +43,11 @@ private func hashes(_ seed: UInt64, count: Int = 32) -> [UInt64] {
 @MainActor
 private func isolatedModel(_ label: String) -> VideoScanModel {
     let m = VideoScanModel()
-    m.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-        .appendingPathComponent("FingerprintStore-\(label)-\(UUID().uuidString)", isDirectory: true))
+    m.catalogStore = CatalogStore(directory: TestScratch.reserved("FingerprintStore-\(label)-"))
     return m
 }
 
-@Suite("GH #293 — stored perceptual fingerprint (logic)")
+@Suite("GH #293 — stored perceptual fingerprint (logic)", .scratchCleanup)
 struct StoredPerceptualFingerprintLogicTests {
 
     @Test("round trip keeps every bit (incl. values above 2^53) in PerceptualHash's designed persisted form")
@@ -131,7 +130,7 @@ struct StoredPerceptualFingerprintLogicTests {
 }
 
 @MainActor
-@Suite("GH #293 — fingerprint plan, writes and the compare write-back")
+@Suite("GH #293 — fingerprint plan, writes and the compare write-back", .scratchCleanup)
 struct PerceptualFingerprintPlanTests {
 
     @Test("archived files first, then the rest, each in path order; only videos that need one")
@@ -216,7 +215,7 @@ struct PerceptualFingerprintPlanTests {
 }
 
 @MainActor
-@Suite("GH #293 — fingerprint backfill job (stubbed pass)")
+@Suite("GH #293 — fingerprint backfill job (stubbed pass)", .scratchCleanup)
 struct PerceptualFingerprintBackfillJobTests {
 
     private func job(_ m: VideoScanModel, pass: @escaping PerceptualFingerprintBackfillJob.Fingerprinter,
@@ -354,7 +353,7 @@ private actor OrderBox {
 }
 
 @MainActor
-@Suite("GH #293 — fingerprint lookup at scale")
+@Suite("GH #293 — fingerprint lookup at scale", .scratchCleanup)
 struct PerceptualFingerprintScaleTests {
 
     @Test("100k records: the plan and 100k stored-fingerprint lookups stay in budget")
@@ -389,7 +388,7 @@ struct PerceptualFingerprintScaleTests {
 }
 
 @MainActor
-@Suite("GH #293 — media matrix through the real backfill job")
+@Suite("GH #293 — media matrix through the real backfill job", .scratchCleanup)
 struct PerceptualFingerprintMediaMatrixTests {
 
     private static let fixtures: [(name: String, args: [String])] = [
@@ -408,7 +407,7 @@ struct PerceptualFingerprintMediaMatrixTests {
 
     @Test("five containers / codecs fingerprinted and kept; media bytes and mtimes untouched; a rerun recomputes nothing")
     func mediaMatrix() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vs-fp293-\(UUID().uuidString)")
+        let dir = TestScratch.reserved("vs-fp293-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         var records: [VideoRecord] = []
@@ -449,7 +448,7 @@ struct PerceptualFingerprintMediaMatrixTests {
 }
 
 @MainActor
-@Suite("GH #293 — isolation: poisoned stored fingerprints are never trusted")
+@Suite("GH #293 — isolation: poisoned stored fingerprints are never trusted", .scratchCleanup)
 struct PerceptualFingerprintIsolationTests {
 
     @Test("damaged text, an old recipe, or another file's size → recomputed and replaced")

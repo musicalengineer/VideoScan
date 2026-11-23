@@ -7,7 +7,7 @@ import Foundation
 // without the stamp the same inference read "2003–2004".
 
 @MainActor
-@Suite("Codex F4 — a ranged inference reads the same with or without a displaced stamp; files under its point's UTC year")
+@Suite("Codex F4 — a ranged inference reads the same with or without a displaced stamp; files under its point's UTC year", .scratchCleanup)
 struct DateReviewF4Tests {
     typealias F = DateReviewFixtures
 

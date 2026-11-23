@@ -25,7 +25,7 @@ private func utc(_ y: Int, _ mo: Int, _ d: Int, _ h: Int = 0, _ mi: Int = 0, _ s
 
 // MARK: - Parser matrix
 
-@Suite("Embedded date — parser matrix")
+@Suite("Embedded date — parser matrix", .scratchCleanup)
 struct EmbeddedDateParserTests {
 
     @Test("ISO-8601 variants: Z, fractional seconds, offsets with and without colon, space separator, date-only, EXIF colons",
@@ -59,7 +59,7 @@ struct EmbeddedDateParserTests {
 
 // MARK: - Sanity filter
 
-@Suite("Embedded date — sanity filter")
+@Suite("Embedded date — sanity filter", .scratchCleanup)
 struct EmbeddedDateSanityTests {
 
     let now = utc(2026, 8, 16, 12, 0, 0)
@@ -87,7 +87,7 @@ struct EmbeddedDateSanityTests {
 
 // MARK: - Entry point (tags → capture)
 
-@Suite("Embedded date — tags → capture")
+@Suite("Embedded date — tags → capture", .scratchCleanup)
 struct EmbeddedCreationDateExtractTests {
 
     let now = utc(2026, 8, 16)
@@ -127,7 +127,7 @@ struct EmbeddedCreationDateExtractTests {
 
 // MARK: - Origin tags
 
-@Suite("Embedded origin — make / model / encoder matrix")
+@Suite("Embedded origin — make / model / encoder matrix", .scratchCleanup)
 struct EmbeddedOriginTagsTests {
 
     @Test("iPhone: com.apple.quicktime.make/model; the OS version in .software is not an encoder")
@@ -200,7 +200,7 @@ struct EmbeddedOriginTagsTests {
 
 // MARK: - Schema contract
 
-@Suite("Embedded date — schema (Codable / DTO / ProbeResult)")
+@Suite("Embedded date — schema (Codable / DTO / ProbeResult)", .scratchCleanup)
 struct EmbeddedDateSchemaTests {
 
     private static func decoder() -> JSONDecoder { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }
@@ -276,12 +276,13 @@ struct EmbeddedDateSchemaTests {
 
 // MARK: - Probe cache (SQLite, isolated temp path)
 
-@Suite("Probe cache — embedded date columns")
+@Suite("Probe cache — embedded date columns", .scratchCleanup)
 struct MetadataCacheEmbeddedDateTests {
 
+    /// In a scratch folder removed when the test ends (.scratchCleanup): the .sqlite AND its -wal/-shm.
     private func tempCachePath() -> String {
-        URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("test_mc_embedded-\(UUID().uuidString).sqlite").path
+        ((try? TestScratch.unique("test_mc_embedded-")) ?? TestScratch.tempRoot)
+            .appendingPathComponent("cache-\(UUID().uuidString).sqlite").path
     }
 
     /// THE regression the columns prevent: a cache hit returns before

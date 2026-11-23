@@ -82,7 +82,7 @@ private func mixedCatalog(scale: Int = 1) -> [VideoRecord] {
     return out
 }
 
-@Suite("Catalog totals off the main actor — same answers")
+@Suite("Catalog totals off the main actor — same answers", .scratchCleanup)
 @MainActor
 struct CatalogOffMainTotalsEquivalenceTests {
 
@@ -116,8 +116,7 @@ struct CatalogOffMainTotalsEquivalenceTests {
     /// `isProvenArchived` (GH #327: ARCHIVED counts proven copies only).
     @Test func theSplitArchivedPredicateIsIsArchived() async {
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_offmain_totals_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("test_offmain_totals_"))
         model.masterArchive = MasterArchiveDesignation(
             targetPath: "/Volumes/FamilyArchive", rootPath: "/Volumes/FamilyArchive/Test_Family_Archive", volumeUUID: nil)
         var records = mixedCatalog(scale: 4)
@@ -148,7 +147,7 @@ struct CatalogOffMainTotalsEquivalenceTests {
     }
 }
 
-@Suite("Catalog totals off the main actor — scale", .serialized)
+@Suite("Catalog totals off the main actor — scale", .serialized, .scratchCleanup)
 @MainActor
 struct CatalogOffMainTotalsScaleTests {
 
@@ -175,8 +174,7 @@ struct CatalogOffMainTotalsScaleTests {
         #expect(offMain == reference)
 
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_offmain_totals_scale_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("test_offmain_totals_scale_"))
         model.masterArchive = MasterArchiveDesignation(
             targetPath: "/Volumes/LaCie", rootPath: "/Volumes/LaCie/Family", volumeUUID: nil)
         model.records = records
@@ -199,7 +197,7 @@ struct CatalogOffMainTotalsScaleTests {
     }
 }
 
-@Suite("Catalog totals off the main actor — sensors")
+@Suite("Catalog totals off the main actor — sensors", .scratchCleanup)
 struct CatalogOffMainTotalsSensorTests {
 
     private func code(_ name: String) throws -> String {

@@ -67,7 +67,7 @@ private func row(_ cycler: AnalyzeCycler, in rows: [FreshnessRow]) -> FreshnessR
 
 // MARK: - Rows
 
-@Suite("Catalog Status — freshness rows from the coverage pass")
+@Suite("Catalog Status — freshness rows from the coverage pass", .scratchCleanup)
 struct CatalogFreshnessRowsTests {
 
     /// A whole-file SHA-256 covering exactly the record's size counts; a
@@ -193,12 +193,11 @@ struct CatalogFreshnessRowsTests {
 
 // MARK: - Facts (the two small files)
 
-@Suite("Catalog Status — audit marker and sidecar facts")
+@Suite("Catalog Status — audit marker and sidecar facts", .scratchCleanup)
 struct CatalogFreshnessFactsTests {
 
     private func scratch() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("catalog-status-facts-\(UUID().uuidString)", isDirectory: true)
+        let dir = TestScratch.reserved("catalog-status-facts-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -348,7 +347,7 @@ struct CatalogFreshnessFactsTests {
 
 // MARK: - Words: chip, menu, door, launch line
 
-@Suite("Catalog Status — chip, menu and door words")
+@Suite("Catalog Status — chip, menu and door words", .scratchCleanup)
 struct CatalogStatusWordsTests {
 
     // Rick 2026-10-20: the band's colour answers "does the catalog reflect
@@ -426,7 +425,7 @@ struct CatalogStatusWordsTests {
 
 // MARK: - Scale
 
-@Suite("Catalog Status — scale")
+@Suite("Catalog Status — scale", .scratchCleanup)
 struct CatalogFreshnessScaleTests {
 
     /// The coverage harness's 100k rows, plus the freshness rows and their
@@ -469,7 +468,7 @@ struct CatalogFreshnessScaleTests {
 
 // MARK: - The snapshot (equality-gated; re-reads facts when a job stops)
 
-@Suite("Catalog Status — the one snapshot", .serialized)
+@Suite("Catalog Status — the one snapshot", .serialized, .scratchCleanup)
 @MainActor
 struct CatalogFreshnessSnapshotTests {
 
@@ -490,8 +489,7 @@ struct CatalogFreshnessSnapshotTests {
     }
 
     @Test func aKindThatStopsRereadsTheMarker() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("catalog-status-snapshot-\(UUID().uuidString)", isDirectory: true)
+        let dir = TestScratch.reserved("catalog-status-snapshot-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let catalogFile = dir.appendingPathComponent("catalog.json").path
         let snapshot = CatalogFreshnessSnapshot()
@@ -612,7 +610,7 @@ struct CatalogFreshnessSnapshotTests {
 
 // MARK: - The update queue
 
-@Suite("Catalog Status — update everything stale", .serialized)
+@Suite("Catalog Status — update everything stale", .serialized, .scratchCleanup)
 @MainActor
 struct CatalogStatusUpdateQueueTests {
 
@@ -663,7 +661,7 @@ struct CatalogStatusUpdateQueueTests {
 
 // MARK: - Source sensors
 
-@Suite("Catalog Status — source sensors")
+@Suite("Catalog Status — source sensors", .scratchCleanup)
 struct CatalogStatusSensorTests {
 
     private func source(_ file: String) throws -> String { try SourceTree.appSource(named: file) }
@@ -770,7 +768,7 @@ struct CatalogStatusSensorTests {
 
 // MARK: - Structure
 
-@Suite("Catalog Status — structure")
+@Suite("Catalog Status — structure", .scratchCleanup)
 struct CatalogStatusStructureTests {
 
     @Test func theThreeIntegrityRowsComeFirst() {

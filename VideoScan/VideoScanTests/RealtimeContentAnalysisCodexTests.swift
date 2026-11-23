@@ -51,13 +51,13 @@ private final class FIFOReadBox: @unchecked Sendable {
 }
 
 private func scratch(_ label: String) throws -> String {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("realtime-ca-codex-\(label)-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.reserved("realtime-ca-codex-\(label)-")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.path
 }
 
 @MainActor
-@Suite("Realtime Content Analysis — Codex findings, red first")
+@Suite("Realtime Content Analysis — Codex findings, red first", .scratchCleanup)
 struct RealtimeContentAnalysisCodexTests {
 
     // F2
@@ -258,7 +258,7 @@ struct RealtimeContentAnalysisCodexTests {
 
 // MARK: - The rules that needed new shapes (F1 banked, F6 counter, F7, F9 attempts, labels)
 
-@Suite("Realtime Content Analysis — Codex findings, the new rules")
+@Suite("Realtime Content Analysis — Codex findings, the new rules", .scratchCleanup)
 struct RealtimeContentAnalysisCodexRuleTests {
 
     // F1: a lane's words never claim banking; a finished row claims it only on applyDossier's yes
@@ -335,7 +335,7 @@ struct RealtimeContentAnalysisCodexRuleTests {
 // MARK: - Re-review (codex-review-re-review-…-2026-11-05.md): findings 3, 4, 5 and the "trying" tile
 
 @MainActor
-@Suite("Realtime Content Analysis — Codex re-review, red first")
+@Suite("Realtime Content Analysis — Codex re-review, red first", .scratchCleanup)
 struct RealtimeContentAnalysisCodexRoundTwoTests {
 
     private func line(_ i: Int) throws -> ObservationLine {
@@ -405,6 +405,7 @@ struct RealtimeContentAnalysisCodexRoundTwoTests {
     }
 }
 
+@Suite(.scratchCleanup)
 struct RealtimeContentAnalysisCodexRoundTwoSensorTests {
     private func code(_ file: String) throws -> String { try SourceTree.appCode(named: file) }
 
@@ -434,7 +435,7 @@ actor EmptyDossierRunner: CaptionRunner {
 }
 
 @MainActor
-@Suite("Realtime Content Analysis — Codex re-review 2, red first")
+@Suite("Realtime Content Analysis — Codex re-review 2, red first", .scratchCleanup)
 struct RealtimeContentAnalysisCodexRoundThreeTests {
 
     private func line(_ i: Int) throws -> ObservationLine {
@@ -553,6 +554,7 @@ struct RealtimeContentAnalysisCodexRoundThreeTests {
 
 // MARK: - Sensors on the window's words (F1, F6 wiring, labels)
 
+@Suite(.scratchCleanup)
 struct RealtimeContentAnalysisCodexSensorTests {
     private func code(_ file: String) throws -> String { try SourceTree.appCode(named: file) }
 

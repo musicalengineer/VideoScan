@@ -77,6 +77,33 @@ struct TestTempLeakGuardTests {
         #expect(listing(root).subtracting(beforeRoot).isEmpty, "left in the test temp root")
     }
 
+    // Slice 4: the long tail — fixtures that hand a catalog store a folder named on the system temp dir
+    // (DateReview-f2 ×8 per full run, and the same shape in ~40 files: CatalogStore(directory:) creates it at
+    // init). The representative: DateReviewFixtures.model. Same before/after listing as above.
+    @MainActor
+    @Test("GUARD: a fixture whose catalog store makes its own folder leaves nothing in the system temp dir or the test root")
+    func aCatalogStoreFixtureLeavesNothingInTheSystemTemp() throws {
+        let prefix = "DateReview-leakguard-"
+        func listing(_ dir: String) -> Set<String> {
+            Set(((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasPrefix(prefix) })
+        }
+        let system = NSTemporaryDirectory(), root = TestHostScratch.testTempRoot.path
+        let beforeSystem = listing(system), beforeRoot = listing(root)
+        defer {   // the guard must not itself leak when it is red
+            for name in listing(system).subtracting(beforeSystem) {
+                try? FileManager.default.removeItem(atPath: (system as NSString).appendingPathComponent(name))
+            }
+        }
+        let scope = TestScratch.Scope()
+        TestScratch.$current.withValue(scope) {
+            let model = DateReviewFixtures.model("leakguard")
+            #expect(FileManager.default.fileExists(atPath: (model.catalogStore.fileLocation as NSString).deletingLastPathComponent))
+        }
+        scope.removeAll()   // what .scratchCleanup does when a test case ends
+        #expect(listing(system).subtracting(beforeSystem).isEmpty, "left in the system temp dir")
+        #expect(listing(root).subtracting(beforeRoot).isEmpty, "left in the test temp root")
+    }
+
     @Test("a scope never removes anything outside the test temp root")
     func aScopeRemovesOnlyInsideTheTempRoot() throws {
         let root = TestHostScratch.testTempRoot

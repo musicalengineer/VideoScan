@@ -9,8 +9,7 @@ import Testing
 @testable import VideoScan
 
 private func tempDir(_ label: String) -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_angel_evidence_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let url = TestScratch.reserved("test_angel_evidence_\(label)_")
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
@@ -21,7 +20,7 @@ private func rec(_ score: Int, rejection: ArchiveAngelRejection? = nil,
           useCount: 0, lastUsed: nil, computedAt: at)
 }
 
-@Suite("Archive Angel Assessment — grade bands")
+@Suite("Archive Angel Assessment — grade bands", .scratchCleanup)
 struct ArchiveAngelGradeTests {
 
     @Test("band edges", arguments: [
@@ -53,7 +52,7 @@ struct ArchiveAngelGradeTests {
     }
 }
 
-@Suite("Archive Angel Assessment — store")
+@Suite("Archive Angel Assessment — store", .scratchCleanup)
 struct ArchiveAngelEvidenceStoreTests {
 
     @Test("candidate set is A+B; eligible ranking is score-desc over A–D")

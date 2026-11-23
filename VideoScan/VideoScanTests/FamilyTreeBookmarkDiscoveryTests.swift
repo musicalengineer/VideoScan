@@ -7,7 +7,7 @@ import VideoScanCore
 // stable-ID navigation or hiding the selected person's family on the canvas.
 // Logic/isolation/sensor coverage below; the 100k case is the scale sensor.
 // No media files are opened, so the media matrix does not apply.
-@Suite("Family Tree — find bookmarked people")
+@Suite("Family Tree — find bookmarked people", .scratchCleanup)
 @MainActor
 struct FamilyTreeBookmarkDiscoveryTests {
     private static let settings = FamilyTreeLaunchBundle.Settings(
@@ -46,8 +46,7 @@ struct FamilyTreeBookmarkDiscoveryTests {
     }
 
     private func scratch() throws -> URL {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("FTBookmarkDiscovery-\(UUID().uuidString)", isDirectory: true)
+        let root = TestScratch.reserved("FTBookmarkDiscovery-")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }

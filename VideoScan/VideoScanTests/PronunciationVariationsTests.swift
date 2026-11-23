@@ -8,7 +8,7 @@ import VideoScanCore
 /// the rhyme path through a gold-lexicon fixture, scale, and — when the
 /// Kokoro helper is installed — that the Latta variants synthesize to
 /// distinct audio.
-@Suite("Pronunciation variations")
+@Suite("Pronunciation variations", .scratchCleanup)
 struct PronunciationVariationsTests {
 
     /// No gold lexicon: the respelling rules alone decide.
@@ -79,8 +79,7 @@ struct PronunciationVariationsTests {
     }
 
     @Test func exemplarTeachingUsesOnlyTheExplicitGoldSource() throws {
-        let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("missing-exemplar-gold-\(UUID().uuidString).json")
+        let missing = TestScratch.reserved("missing-exemplar-gold-", suffix: ".json")
         let noGold = MisakiGoldLexicon(url: missing)
         let hint = HalliePronunciationHint.syllables([
             .init(text: "La", exemplar: "Velvet"),
@@ -235,8 +234,7 @@ struct PronunciationVariationsTests {
 
     /// A tiny us_gold.json in the temp dir (never the real bundle).
     private static func goldFixture(_ table: [String: String]) throws -> MisakiGoldLexicon {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("us_gold-\(UUID().uuidString).json")
+        let url = TestScratch.reserved("us_gold-", suffix: ".json")
         try JSONSerialization.data(withJSONObject: table).write(to: url)
         return MisakiGoldLexicon(url: url)
     }

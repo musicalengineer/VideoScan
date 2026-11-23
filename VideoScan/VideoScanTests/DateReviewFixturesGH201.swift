@@ -19,8 +19,7 @@ enum DateReviewFixtures {
     @MainActor
     static func model(_ label: String) -> VideoScanModel {
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateReview-\(label)-\(UUID().uuidString)", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("DateReview-\(label)-"))
         model.dateInferencePeople = []
         return model
     }

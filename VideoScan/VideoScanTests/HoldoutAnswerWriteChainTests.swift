@@ -45,7 +45,7 @@ private final class ErrorBox: @unchecked Sendable {
     var all: [String] { lock.lock(); defer { lock.unlock() }; return stored }
 }
 
-@Suite("Holdout Answer Write Chain")
+@Suite("Holdout Answer Write Chain", .scratchCleanup)
 struct HoldoutAnswerWriteChainTests {
 
     // MARK: - Fixture helpers (same conventions as HoldoutReviewQueueTests)
@@ -56,9 +56,7 @@ struct HoldoutAnswerWriteChainTests {
     }
 
     private func makeTempDir() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("holdout-chain-tests-\(UUID().uuidString)",
-                                    isDirectory: true)
+        let dir = TestScratch.reserved("holdout-chain-tests-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

@@ -39,8 +39,7 @@ import VideoScanCore
 @testable import VideoScan
 
 private func tempDir(_ label: String) -> URL {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("test_duphold_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_duphold_\(label)_")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
@@ -90,7 +89,7 @@ private func sha256(_ bytes: [UInt8]) -> String {
     SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
 }
 
-@Suite("Delete Duplicates leaves the Archive Angel's copies alone (GH #258)", .serialized)
+@Suite("Delete Duplicates leaves the Archive Angel's copies alone (GH #258)", .serialized, .scratchCleanup)
 @MainActor
 struct DeleteDuplicatesAngelHoldTests {
 
