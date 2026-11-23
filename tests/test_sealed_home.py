@@ -162,3 +162,36 @@ def test_the_sealed_tmp_carries_the_runners_marker_and_the_report_ignores_it(tmp
     home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
     assert (home / "tmp" / ".videoscan-test-tmp").is_file()
     assert sh.leftovers(home / "tmp") == [], "the marker is reported as a test's leftover"
+
+
+def test_the_marker_never_follows_a_symlink_and_a_symlinked_tmp_is_refused(tmp_path):
+    # Codex 2026-11-23 (runner deletion review) P1: write_text on an existing symlinked marker truncated its target.
+    outside = tmp_path / "outside.txt"
+    outside.write_text("precious")
+    home = tmp_path / "home"
+    (home / "tmp").mkdir(parents=True)
+    (home / "tmp" / ".videoscan-test-tmp").symlink_to(outside)
+    try:
+        sh.prepare(home, real_home=tmp_path / "nobody")
+        refused = False
+    except sh.Refused:
+        refused = True
+    assert outside.read_text() == "precious", "the marker write followed a symlink and truncated its target"
+    assert refused
+    home2 = tmp_path / "home2"
+    home2.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (home2 / "tmp").symlink_to(tmp_path / "elsewhere")
+    try:
+        sh.prepare(home2, real_home=tmp_path / "nobody")
+        raise AssertionError("a symlinked tmp was accepted")
+    except sh.Refused:
+        pass
+    assert not (tmp_path / "elsewhere" / ".videoscan-test-tmp").exists()
+
+
+def test_a_prepared_home_carries_its_owner_proof(tmp_path):
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    owner = home / ".videoscan-sealed-home"
+    assert owner.is_file() and not owner.is_symlink()
+    assert owner.read_text().split()[0] == str(os.getpid())

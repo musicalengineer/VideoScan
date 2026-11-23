@@ -1314,8 +1314,10 @@ def test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_i
     dead = gone.pid                                   # a lane that has exited (reaped: its pid is free)
     stale = tmp_path / f"videoscan-core-home-{dead}-abc123"
     (stale / "Library" / "Application Support").mkdir(parents=True)
+    (stale / ".videoscan-sealed-home").write_text(f"{dead} sealed home\n")          # a real lane home's owner proof
     alive = tmp_path / f"videoscan-core-home-{os.getppid()}-def456"
     (alive / "Library").mkdir(parents=True)
+    (alive / ".videoscan-sealed-home").write_text(f"{os.getppid()} sealed home\n")
     unrelated = tmp_path / "videoscan-core-home-notapid"
     unrelated.mkdir()
     home = cl.sealed_home()
@@ -1331,3 +1333,15 @@ def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monk
     assert os.path.isdir(home)
     cl.free_sealed_homes()                 # what the stop handler calls before it re-raises the signal
     assert not os.path.exists(home)
+
+
+def test_a_folder_named_like_a_dead_lanes_home_but_not_proven_one_is_kept(tmp_path, monkeypatch):
+    # Codex 2026-11-23 (runner deletion review) P1: a matching NAME was treated as ownership proof.
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    import subprocess as sp
+    gone = sp.Popen(["/usr/bin/true"]); gone.wait()
+    unowned = tmp_path / f"videoscan-core-home-{gone.pid}-archive"
+    (unowned / "precious").mkdir(parents=True)
+    (unowned / "precious" / "sentinel.txt").write_text("keep me")
+    cl.sealed_home()
+    assert (unowned / "precious" / "sentinel.txt").read_text() == "keep me", "an unproven folder was deleted"

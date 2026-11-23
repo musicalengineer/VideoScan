@@ -41,6 +41,26 @@ DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
 # The marker a test process requires before it trusts VIDEOSCAN_TEST_TMP as the root it may remove scratch from
 # (VideoScanCore TestHostScratch.rootMarkerName; Codex 2026-11-23 #352 P1-1).
 TMP_MARKER = ".videoscan-test-tmp"
+# Proof a folder is a sealed home THIS script made (its pid on the first line). A sweep that frees dead lanes' homes
+# deletes only a folder carrying it — a matching folder NAME is not proof (Codex 2026-11-23, runner deletion review).
+OWNER_FILE = ".videoscan-sealed-home"
+
+
+def _create_exclusive(path: Path, text: str) -> None:
+    """Create `path` as a NEW regular file — never through a symlink, never truncating an existing file."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def _ensure_regular_file(path: Path, text: str) -> None:
+    """The file exists as a regular file (left from an earlier prepare of the same home), or is created. A symlink
+    or anything else at that name is REFUSED (Codex 2026-11-23: write_text through a symlink truncated its target)."""
+    if os.path.lexists(path):
+        if path.is_symlink() or not path.is_file():
+            raise Refused(f"{path} exists and is not a regular file (a symlink?) — not writing through it")
+        return
+    _create_exclusive(path, text)
 MODEL_CACHES = (Path(".cache") / "huggingface",)     # read by the app from the home; public weights
 
 
@@ -114,9 +134,13 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
     guarded = [real / "Library" / sub for sub in ("Application Support", "Logs", "Preferences")]
     if home.resolve() == real.resolve() or any(_inside(home, g) for g in guarded):
         raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
-    for sub in SUBDIRS:
+    home.mkdir(parents=True, exist_ok=True)
+    for sub in SUBDIRS:                      # no part of the sealed home may be a symlink out of it
+        if any((home / Path(*Path(sub).parts[:i + 1])).is_symlink() for i in range(len(Path(sub).parts))):
+            raise Refused(f"{home / sub} is (or passes through) a symlink — not preparing a sealed home through it")
         (home / sub).mkdir(parents=True, exist_ok=True)
-    (home / "tmp" / TMP_MARKER).write_text("the runner's sealed test temp root (scripts/sealed_home.py)\n")
+    _ensure_regular_file(home / OWNER_FILE, f"{os.getpid()} sealed home made by scripts/sealed_home.py\n")
+    _ensure_regular_file(home / "tmp" / TMP_MARKER, "the runner's sealed test temp root (scripts/sealed_home.py)\n")
     # public model caches the app reads from the home (SigLIP's weights: ~/.cache/huggingface) — cloned
     for rel in MODEL_CACHES:
         m_src, m_dst = real / rel, home / rel
@@ -170,7 +194,7 @@ def leftovers(tmp: Path) -> List[Leftover]:
         return []
     acc: Dict[str, List[int]] = {}
     for e in tmp.iterdir():
-        if e.name == TMP_MARKER:
+        if e.name in (TMP_MARKER, OWNER_FILE):
             continue
         size = 0
         try:

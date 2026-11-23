@@ -197,6 +197,14 @@ def free_dead_lanes_homes() -> None:
         pid = int(m.group(1))
         if pid == os.getpid():
             continue
+        # ownership proof, not a name (Codex 2026-11-23): sealed_home.prepare's owner file, a regular file whose first
+        # word is this folder's pid — anything else is kept
+        owner = d / ".videoscan-sealed-home"
+        try:
+            if owner.is_symlink() or not owner.is_file() or owner.read_text(errors="replace").split()[:1] != [str(pid)]:
+                continue
+        except OSError:
+            continue
         try:
             os.kill(pid, 0)                  # signal 0: existence check only
             continue                         # alive (or not ours to signal): keep

@@ -36385,6 +36385,7 @@
         "test_a_failure_names_its_phase_and_the_lane_is_red",
         "test_a_filter_narrows_both_phases_and_a_part_class_is_named_by_method",
         "test_a_filter_that_selects_only_loud_xctest_runs_no_other_process_and_is_green",
+        "test_a_folder_named_like_a_dead_lanes_home_but_not_proven_one_is_kept",
         "test_a_listing_without_tags_is_refused_never_read_as_nothing_is_quiet",
         "test_a_phase_that_ran_fewer_or_more_than_its_plan_is_red",
         "test_a_phase_that_ran_zero_tests_is_red_even_when_every_child_exited_zero",
@@ -36437,9 +36438,11 @@
         "test_sealed_home.py"
       ],
       "tests": [
+        "test_a_prepared_home_carries_its_owner_proof",
         "test_a_sealed_home_under_the_real_caches_is_allowed",
         "test_no_real_app_support_gives_an_empty_sealed_home",
         "test_the_copied_catalog_opens_read_only_as_the_production_shape_tests_open_it",
+        "test_the_marker_never_follows_a_symlink_and_a_symlinked_tmp_is_refused",
         "test_the_model_cache_is_cloned_into_the_sealed_home",
         "test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix",
         "test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written",
