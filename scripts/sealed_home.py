@@ -31,6 +31,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import catalog_db  # noqa: E402  (the one read-only door to the catalog)
+
 SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches")
 APP = Path("Library") / "Application Support" / "VideoScan"
 DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
@@ -53,19 +56,36 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
+def _is_catalog(p: Path) -> bool:
+    return p.name == catalog_db.DATABASE_FILE_NAME
+
+
 def _is_live_db(p: Path) -> bool:
-    return p.suffix in DB_SUFFIXES and (p.name == "catalog.sqlite" or
-                                        p.with_name(p.name + "-wal").exists() or p.with_name(p.name + "-shm").exists())
+    """A database a running app may hold open: one with a -wal/-shm beside it, or THE catalog (its cutover
+    latch beside it). A static backup copy (no latch, no -wal) is safe to clone as it is."""
+    if p.suffix not in DB_SUFFIXES:
+        return False
+    if p.with_name(p.name + "-wal").exists() or p.with_name(p.name + "-shm").exists():
+        return True
+    return _is_catalog(p) and (p.parent / catalog_db.LATCH_FILE_NAME).exists()
+
+
+def _open_source(src: Path) -> sqlite3.Connection:
+    """Read-only. The catalog only through its one door, scripts/catalog_db.connect (mode=ro + query_only;
+    tests/test_no_script_writes_catalog.py); catalog_db.CatalogUnavailable when the door refuses it."""
+    if _is_catalog(src):
+        return catalog_db.connect(src)
+    return sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
 
 
 def _backup(src: Path, dst: Path) -> None:
     """SQLite's online backup from a read-only connection: a consistent copy including committed WAL frames."""
+    s = _open_source(src)                  # first: a refused source leaves the clone in place
     dst.parent.mkdir(parents=True, exist_ok=True)
     for extra in ("", "-wal", "-shm", "-journal"):
         with_extra = Path(str(dst) + extra)
         if with_extra.exists() or with_extra.is_symlink():
             with_extra.unlink()
-    s = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
     try:
         d = sqlite3.connect(str(dst))
         try:
@@ -80,8 +100,10 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
     """Make `home` a sealed home holding a copy of the real App Support (if there is one). Returns it."""
     real = real_home or _real_home()
     home = Path(home)
-    if _inside(home, real / "Library") or home.resolve() == real.resolve():
-        raise Refused(f"a sealed home at {home} would be inside the real home's Library")
+    # what the seal protects: the real App Support, Logs and Preferences (a run folder under ~/Library/Caches is fine)
+    guarded = [real / "Library" / sub for sub in ("Application Support", "Logs", "Preferences")]
+    if home.resolve() == real.resolve() or any(_inside(home, g) for g in guarded):
+        raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
     for sub in SUBDIRS:
         (home / sub).mkdir(parents=True, exist_ok=True)
     src = real / APP
@@ -99,7 +121,13 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
     # the live databases: replace each clone with an online backup
     for p in sorted(src.rglob("*")):
         if p.is_file() and not p.is_symlink() and _is_live_db(p):
-            _backup(p, dst / p.relative_to(src))
+            try:
+                _backup(p, dst / p.relative_to(src))
+            except catalog_db.CatalogUnavailable as e:
+                # e.g. the viewer's synced copy has no cutover latch: it keeps its clone (-wal included)
+                print(f"sealed_home: {p.relative_to(src)} kept as a clone (no {catalog_db.LATCH_FILE_NAME} beside it)",
+                      file=sys.stderr)
+                del e
     return home
 
 

@@ -35,6 +35,7 @@ def snapshot(root: Path) -> dict:
 def test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written(tmp_path):
     real = tmp_path / "real" / "Library" / "Application Support" / "VideoScan"
     keep = live_db(real / "catalog.sqlite", 50)
+    (real / "catalog.cutover").write_text("")          # the latch the catalog door requires (catalog_db.preflight)
     live_db(real / "viewer-catalog" / "catalog.sqlite", 7).close()
     (real / "family-tree" / "compiled").mkdir(parents=True)
     (real / "family-tree" / "compiled" / "tree.json").write_text('{"people": 3}')
@@ -75,6 +76,21 @@ def test_the_sealed_home_is_refused_inside_the_real_home_library(tmp_path):
     real = tmp_path / "real"
     (real / "Library" / "Application Support" / "VideoScan").mkdir(parents=True)
     for bad in (real / "Library" / "Application Support" / "x", real):
+        try:
+            sh.prepare(bad, real_home=real)
+        except sh.Refused:
+            continue
+        raise AssertionError(f"a sealed home at {bad} was accepted")
+
+
+def test_a_sealed_home_under_the_real_caches_is_allowed(tmp_path):
+    # RED 2026-11-22 (the first full run with the copy): run_tests keeps its runs in ~/Library/Caches;
+    # "anywhere inside ~/Library" was refused, the app phase started no host and ran zero tests.
+    real = tmp_path / "real"
+    (real / "Library" / "Application Support" / "VideoScan").mkdir(parents=True)
+    home = sh.prepare(real / "Library" / "Caches" / "videoscan-runall" / "runs" / "r1" / "home", real_home=real)
+    assert (home / "Library" / "Application Support").is_dir()
+    for bad in (real / "Library" / "Logs" / "x", real / "Library" / "Preferences" / "x"):
         try:
             sh.prepare(bad, real_home=real)
         except sh.Refused:

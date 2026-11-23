@@ -626,7 +626,7 @@ def test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebui
     are the parsed stream's, and a failing test in one shard makes the lane RED with its name."""
     wt = tmp_path / "wt"
     (wt / "scripts" / "gauntlet").mkdir(parents=True)
-    for name in ("xctest_shards.py", "testbed_strands.py", "run_tests.py", "sealed_home.py"):
+    for name in ("xctest_shards.py", "testbed_strands.py", "run_tests.py", "sealed_home.py", "catalog_db.py"):
         (wt / "scripts" / name).write_text((ROOT / "scripts" / name).read_text())
     b = Bench(tmp_path)
     (tmp_path / "scenario.json").write_text(json.dumps({
