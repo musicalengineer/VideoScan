@@ -36381,6 +36381,7 @@
         "test_R3_the_default_k_fits_the_machines_memory",
         "test_R4_view_a_failure_that_is_not_a_timing_budget_is_not_given_a_second_run",
         "test_a_child_that_dies_without_a_failed_test_is_red_by_phase",
+        "test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_is_kept",
         "test_a_failure_names_its_phase_and_the_lane_is_red",
         "test_a_filter_narrows_both_phases_and_a_part_class_is_named_by_method",
         "test_a_filter_that_selects_only_loud_xctest_runs_no_other_process_and_is_green",
@@ -36422,6 +36423,7 @@
         "test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one",
         "test_the_mark_is_declared_once_and_names_what_the_lane_reads",
         "test_the_sensor_lane_runs_the_check_and_the_nightly_and_run_tests_run_this_lane",
+        "test_the_stop_handler_frees_the_sealed_home_before_re_raising",
         "test_the_two_plans_are_disjoint_and_together_are_every_test",
         "test_truth_the_lane_and_the_nightly_count_the_same_log_the_same"
       ]

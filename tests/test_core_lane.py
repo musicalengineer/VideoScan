@@ -1301,3 +1301,33 @@ def test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one(tmp_path):
     assert b.env["TMPDIR"] == b.env["VIDEOSCAN_TEST_TMP"] == os.path.join(home, "tmp") + "/" and os.path.isdir(b.env["TMPDIR"]), \
         "Core test processes use the system temp dir (2026-11-23: tests' leftovers outlived the run)"
     assert b.env["PATH"] == "/usr/bin:/bin", "the rest of the caller's environment is kept"
+
+
+def test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_is_kept(tmp_path, monkeypatch):
+    # RED 2026-11-23: a videoscan-core-home-* was left in the user temp dir — the stop handler re-raises the signal
+    # (atexit never runs) and a SIGKILL can never be caught. Homes are named for their lane's pid; a new lane frees
+    # every home whose pid is gone, and never one whose lane is alive.
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    import subprocess as sp
+    gone = sp.Popen(["/usr/bin/true"])
+    gone.wait()
+    dead = gone.pid                                   # a lane that has exited (reaped: its pid is free)
+    stale = tmp_path / f"videoscan-core-home-{dead}-abc123"
+    (stale / "Library" / "Application Support").mkdir(parents=True)
+    alive = tmp_path / f"videoscan-core-home-{os.getppid()}-def456"
+    (alive / "Library").mkdir(parents=True)
+    unrelated = tmp_path / "videoscan-core-home-notapid"
+    unrelated.mkdir()
+    home = cl.sealed_home()
+    assert not stale.exists(), "a dead lane's sealed home was not freed"
+    assert alive.exists(), "a LIVE lane's sealed home was removed"
+    assert unrelated.exists(), "a folder that is not a lane home by name was touched"
+    assert os.path.basename(home).startswith(f"videoscan-core-home-{os.getpid()}-"), home
+
+
+def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monkeypatch):
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    home = cl.sealed_home()
+    assert os.path.isdir(home)
+    cl.free_sealed_homes()                 # what the stop handler calls before it re-raises the signal
+    assert not os.path.exists(home)
