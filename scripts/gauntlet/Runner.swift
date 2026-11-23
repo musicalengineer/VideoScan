@@ -788,8 +788,16 @@ struct GauntletRunner {
         stages = declaredStages
         stageMap = Dictionary(uniqueKeysWithValues: stages.map { ($0["name"] as! String, $0) })
         signal(SIGINT, onSignal); signal(SIGTERM, onSignal); signal(SIGHUP, onSignal)
-        let validationLog = URL(fileURLWithPath: "/private/tmp/gauntlet-inventory-\(UUID().uuidString).json")
-        let validationCache = "/private/tmp/gauntlet-inventory-cache-\(UUID().uuidString)"
+        // The inventory check's scratch: a fresh Swift module cache (~30 MB) and its log, REMOVED when this
+        // returns (2026-11-23: never removed before — 3,608 caches, 117 GB in /private/tmp on the Ultra).
+        // GAUNTLET_INVENTORY_TMP moves it (tests: a folder of their own); default /private/tmp.
+        let scratchRoot = ProcessInfo.processInfo.environment["GAUNTLET_INVENTORY_TMP"] ?? "/private/tmp"
+        let validationLog = URL(fileURLWithPath: scratchRoot).appendingPathComponent("gauntlet-inventory-\(UUID().uuidString).json")
+        let validationCache = URL(fileURLWithPath: scratchRoot).appendingPathComponent("gauntlet-inventory-cache-\(UUID().uuidString)").path
+        defer {
+            try? FileManager.default.removeItem(atPath: validationCache)
+            try? FileManager.default.removeItem(at: validationLog)
+        }
         let validationRun = try command(["/usr/bin/swift", "-module-cache-path", validationCache, repo.appendingPathComponent("scripts/gauntlet/inventory.swift").path, "--validate", repo.path, manifestPath.path], log: validationLog, timeout: 120)
         guard !validationRun.timedOut && !validationRun.contaminated else { throw RunError("inventory watchdog failure") }
         let validation = (try? String(contentsOf: validationLog, encoding: .utf8)) ?? ""

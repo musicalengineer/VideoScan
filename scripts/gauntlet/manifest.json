@@ -34189,6 +34189,7 @@
         "test_poisoned_home_and_roots_replaced_in_child_and_xctestrun",
         "test_skipping_under_the_floor_is_still_red",
         "test_symlink_results_root_refused_before_build",
+        "test_the_inventory_check_leaves_no_module_cache_behind",
         "test_timeout_preserves_124_and_cannot_pass",
         "test_ui_not_run_cannot_be_reported_as_pass",
         "test_unassigned_test_fails_before_build",

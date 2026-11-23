@@ -168,6 +168,20 @@ else:
         self.assertIn('Build: ONE xcodebuild build-for-testing', self.completed.stdout)
         self.assertIn('UI not run (phase 2)', self.completed.stdout)
 
+    def test_the_inventory_check_leaves_no_module_cache_behind(self):
+        # RED 2026-11-23: each run's inventory check made /private/tmp/gauntlet-inventory-cache-<uuid>
+        # (~30 MB of Swift modules) and never removed it — 3,608 of them, 117 GB, on the Ultra since 11/19.
+        scratch = self.root / 'inventory-tmp'
+        scratch.mkdir()
+        before = {p.name for p in Path('/private/tmp').glob('gauntlet-inventory-cache-*')}
+        self.run_runner('--dry-run', environment={'GAUNTLET_INVENTORY_TMP': str(scratch)})
+        leaked = {p.name for p in Path('/private/tmp').glob('gauntlet-inventory-cache-*')} - before
+        self.assertEqual(leaked, set(), 'the inventory check wrote its module cache into /private/tmp, not its scratch')
+        self.assertEqual(self.completed.returncode, 0, self.completed.stdout + self.completed.stderr)
+        self.assertIn('Inventory:', self.completed.stdout)
+        self.assertEqual(sorted(p.name for p in scratch.iterdir()), [],
+                         'the inventory check left its module cache or log behind')
+
     def test_symlink_results_root_refused_before_build(self):
         target = self.root / 'outside'
         target.mkdir()
