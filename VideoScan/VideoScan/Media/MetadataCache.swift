@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 import SQLite3
 import os
 
@@ -46,11 +47,7 @@ final class MetadataCache: Sendable {
     static var defaultPath: String {
         let base: URL
         if isRunningTests {
-            base = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent(
-                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true
-                )
+            base = TestHostScratch.perProcess("VideoScanTests")   // under the test temp root (the runner frees it)
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

@@ -19,7 +19,7 @@ import UniformTypeIdentifiers
 // App Support folder.
 
 // Serialized: two cases touch the process-wide decoded-image cache.
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct CouplePortraitTests {
 
     // MARK: Fixtures
@@ -29,11 +29,9 @@ struct CouplePortraitTests {
         UserDefaults(suiteName: "CouplePortraitTests.\(UUID().uuidString)")!
     }
 
+    /// Removed when the test ends (.scratchCleanup on the suite).
     private func tempDirectory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CouplePortraitTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestScratch.unique("CouplePortraitTests-")
     }
 
     /// A synthetic photo of the given pixel size, encoded as `type`

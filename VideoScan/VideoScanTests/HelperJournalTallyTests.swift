@@ -49,13 +49,12 @@ private func window(_ i: Int, at: Int64 = 1_793_925_003) throws -> ObservationLi
                         confidence: 0.5, evidence: ["window": [0.0, 60.0]], job: "TEST", unit: i)
 }
 
+/// Removed when the calling test ends (.scratchCleanup on the suite).
 private func scratchDirectory(_ label: String) throws -> URL {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("realtime-ca-tally-\(label)-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
+    try TestScratch.unique("realtime-ca-tally-\(label)-")
 }
 
-@Suite("Realtime Content Analysis — the helper's journal, counted read-only")
+@Suite("Realtime Content Analysis — the helper's journal, counted read-only", .scratchCleanup)
 struct HelperJournalTallyTests {
 
     @Test func theCountsAndTheWordsAreTheJournalsOwn() async throws {

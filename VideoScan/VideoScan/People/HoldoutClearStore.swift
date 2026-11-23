@@ -143,9 +143,7 @@ final class HoldoutClearStore: ObservableObject {
     /// from Rick's real badge.
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/holdout-clears-\(ProcessInfo.processInfo.processIdentifier)",
-                                        isDirectory: true)
+            return TestHostScratch.perProcess("VideoScan-tests/holdout-clears")   // under the test temp root (the runner frees it)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")

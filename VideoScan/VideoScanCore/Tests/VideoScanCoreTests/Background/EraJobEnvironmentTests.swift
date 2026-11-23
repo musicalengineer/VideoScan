@@ -55,7 +55,7 @@ enum EraEnvironmentFixture {
     }
 }
 
-@Suite("EraJob — under launchd's environment (2026-11-03)", .serialized)
+@Suite("EraJob — under launchd's environment (2026-11-03)", .serialized, .scratchCleanup)
 struct EraJobEnvironmentTests {
 
     /// Red on main 6f2934a8: the worker inherited the helper's PATH and the
@@ -131,7 +131,7 @@ struct EraJobEnvironmentTests {
     }
 }
 
-@Suite("Background menu bar item — a failed job says so (2026-11-03)")
+@Suite("Background menu bar item — a failed job says so (2026-11-03)", .scratchCleanup)
 struct BackgroundMenuFailedJobTests {
 
     /// Red on main 6f2934a8: a failed job left the menu with no line at all.

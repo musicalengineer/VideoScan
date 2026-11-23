@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 import SQLite3
 import os
 
@@ -60,10 +61,7 @@ final class PersonFinderCache: Sendable {
         // personfinder_cache.sqlite (settings-pollution class; same gate as
         // MetadataCache / ScanJobsStorage / POIStorage).
         if TestEnvironment.isTestHost {
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "VideoScanTestPFCache-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true)
+            let dir = TestHostScratch.perProcess("VideoScanTestPFCache")   // under the test temp root (the runner frees it)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir.appendingPathComponent("personfinder_cache.sqlite").path
         }

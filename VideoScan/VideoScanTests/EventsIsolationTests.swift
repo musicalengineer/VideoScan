@@ -21,11 +21,10 @@ struct EventsIsolationTests {
 
     @Test("the default store under the test host is a temp folder; a confirm + save never touches real Application Support")
     func storeUnderTestHostNeverTouchesRealAppSupport() async throws {
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath().path
         let dir = EventsDecisionStore.defaultDirectory.resolvingSymlinksInPath().path
-        #expect(dir.hasPrefix(tempRoot), "default directory escaped temp: \(dir)")
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: dir)), "default directory escaped the test temp root: \(dir)")
         #expect(!dir.contains("/Library/Application Support/"))
-        #expect(EventsStore.shared.decisions.directory.resolvingSymlinksInPath().path.hasPrefix(tempRoot),
+        #expect(TestHostScratch.isScratch(EventsStore.shared.decisions.directory),
                 "the shared store (what the page uses) is the temp one too")
 
         let before = AppSupportSnapshot.take()
@@ -36,7 +35,7 @@ struct EventsIsolationTests {
         let stats = EventsStats(plan: .empty, decisions: store.snapshot(), now: Date())
         #expect(await EventsStats.write(stats, to: store.statsURL))
         #expect(FileManager.default.fileExists(atPath: store.fileURL.path))
-        #expect(store.fileURL.resolvingSymlinksInPath().path.hasPrefix(tempRoot))
+        #expect(TestHostScratch.isScratch(store.fileURL))
         #expect(AppSupportSnapshot.take() == before, "Events wrote into the REAL ~/Library/Application Support/VideoScan")
     }
 

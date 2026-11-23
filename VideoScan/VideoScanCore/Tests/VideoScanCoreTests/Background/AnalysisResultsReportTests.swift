@@ -27,7 +27,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("AnalysisResultsReport")
+@Suite("AnalysisResultsReport", .scratchCleanup)
 struct AnalysisResultsReportTests {
 
     static let seated = SeatedApproach.eraA2.signer

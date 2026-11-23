@@ -17,7 +17,7 @@ final class NoExecutablesFileManager: FileManager, @unchecked Sendable {
     override func isExecutableFile(atPath path: String) -> Bool { false }
 }
 
-@Suite("SubprocessEnvironment — the one PATH rule for child processes")
+@Suite("SubprocessEnvironment — the one PATH rule for child processes", .scratchCleanup)
 struct SubprocessEnvironmentTests {
 
     @Test func augmentedPathPutsHomebrewFirstAndNeverEndsInAColon() {

@@ -7,7 +7,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("AnalysisResultsReport — review (red on f2b42abd0)")
+@Suite("AnalysisResultsReport — review (red on f2b42abd0)", .scratchCleanup)
 struct AnalysisResultsReportReviewTests {
     typealias T = AnalysisResultsReportTests
 

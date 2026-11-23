@@ -18,6 +18,7 @@ import Foundation
 // These tests use POIStorage's storeOverride/trashOverride parameters
 // to redirect both ends into a per-test sandbox so we never touch the
 // real Application Support / .trash directories on the dev machine.
+@Suite(.scratchCleanup)
 struct POIDeletionTests {
 
     // MARK: - Sandbox helpers
@@ -60,9 +61,7 @@ struct POIDeletionTests {
     }
 
     private func makeSandbox() throws -> Sandbox {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("poi-deletion-\(UUID().uuidString)",
-                                    isDirectory: true)
+        let base = try TestScratch.unique("poi-deletion-")   // removed when the test ends (cleanup() left it)
         let store = base.appendingPathComponent("store", isDirectory: true)
         let trash = base.appendingPathComponent("trash", isDirectory: true)
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)

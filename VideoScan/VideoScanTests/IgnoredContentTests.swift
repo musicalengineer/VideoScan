@@ -21,16 +21,16 @@
 // RescanPreservationTests (sensor_setAsideContentAtNewPathIsNotReingested).
 
 import Foundation
+import VideoScanCore
 import Testing
 @testable import VideoScan
 
 // MARK: - Fixtures
 
 private func tempDir(_ label: String) -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_ignored_content_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
-    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
+    // Removed when the test ends (.scratchCleanup on the file's suites).
+    (try? TestScratch.unique("test_ignored_content_\(label)_"))
+        ?? TestScratch.tempRoot.appendingPathComponent("test_ignored_content_\(label)_\(UUID().uuidString)", isDirectory: true)
 }
 
 @MainActor
@@ -67,7 +67,7 @@ private func makeModel(_ label: String) -> VideoScanModel {
 
 // MARK: - Store logic
 
-@Suite("Ignored content — store")
+@Suite("Ignored content — store", .scratchCleanup)
 struct IgnoredContentStoreTests {
 
     @Test("key: content key when hashed, name key as fallback, nothing for empty files")
@@ -187,7 +187,7 @@ struct IgnoredContentStoreTests {
 // MARK: - Writers + scan gate
 
 @MainActor
-@Suite("Ignored content — writers and scan gate")
+@Suite("Ignored content — writers and scan gate", .scratchCleanup)
 struct IgnoredContentWriterTests {
 
     @Test("Remove from Catalog remembers the content; Put Back forgets it (the override)")
@@ -279,7 +279,7 @@ struct IgnoredContentWriterTests {
 // MARK: - Tidy categories
 
 @MainActor
-@Suite("Tidy Catalog — junk that came back + copies of archived media")
+@Suite("Tidy Catalog — junk that came back + copies of archived media", .scratchCleanup)
 struct TidyIgnoredContentCategoryTests {
 
     @Test("Junk that came back: store entries, set-aside rows and purged tombstones all count; the original reason is kept")
@@ -432,7 +432,7 @@ struct TidyIgnoredContentCategoryTests {
 // MARK: - Scale
 
 @MainActor
-@Suite("Ignored content — scale")
+@Suite("Ignored content — scale", .scratchCleanup)
 struct IgnoredContentScaleTests {
 
     @Test("100k records + 100k-entry store through the Tidy plan within budget")
@@ -490,7 +490,7 @@ struct IgnoredContentScaleTests {
 
 // MARK: - Isolation
 
-@Suite("Ignored content — isolation")
+@Suite("Ignored content — isolation", .scratchCleanup)
 struct IgnoredContentIsolationTests {
 
     private static var realFile: URL {
@@ -504,7 +504,8 @@ struct IgnoredContentIsolationTests {
         #expect(TestEnvironment.isTestHost)
         let dir = IgnoredContentStore.defaultDirectory.path
         #expect(!dir.contains("Application Support"), "default directory was \(dir)")
-        #expect(dir.hasPrefix(NSTemporaryDirectory()) || dir.hasPrefix("/private" + NSTemporaryDirectory()))
+        let root = TestHostScratch.testTempRoot.path   // VIDEOSCAN_TEST_TMP, else the user temp dir
+        #expect(dir.hasPrefix(root) || dir.hasPrefix("/private" + root))
         let model = VideoScanModel()
         #expect(!model.ignoredContentStore.directory.path.contains("Application Support"))
         #expect(!model.ignoredContentStore.fileURL.path.contains("Application Support"))
@@ -534,7 +535,7 @@ struct IgnoredContentIsolationTests {
 // MARK: - Sensor
 
 @MainActor
-@Suite("Ignored content — sensor")
+@Suite("Ignored content — sensor", .scratchCleanup)
 struct IgnoredContentSensorTests {
 
     /// The 2026-09-11 finding at production scale: 100k records; a record

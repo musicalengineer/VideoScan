@@ -16,6 +16,7 @@
 // save test refuses before saving if the directory is not sandboxed).
 
 import Foundation
+import VideoScanCore
 import Testing
 @testable import VideoScan
 
@@ -52,13 +53,12 @@ struct ScanCheckpointIsolationTests {
     func checkpointDirectoryUnderTestIsSandboxed() throws {
         #expect(TestEnvironment.isTestHost, "test-host detection broke — every default path would be Rick's")
         let dir = Self.canonical(ScanCheckpoint.directory)
-        let temp = Self.canonical(URL(fileURLWithPath: NSTemporaryDirectory()))
         let appSupport = try #require(
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
         #expect(!dir.hasPrefix(Self.canonical(appSupport)),
                 "checkpoint folder leaked into Application Support: \(dir)")
         #expect(!dir.contains("/Library/Application Support/"), "\(dir)")
-        #expect(dir.hasPrefix(temp), "checkpoint folder is not under the test temp dir: \(dir)")
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: dir)), "checkpoint folder is not under the test temp root: \(dir)")
         #expect(dir.contains("VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)"),
                 "checkpoint folder missing the per-PID sandbox marker: \(dir)")
         #expect(dir.hasSuffix("/VideoScan/scan_checkpoints"), "same layout as production, inside the sandbox: \(dir)")

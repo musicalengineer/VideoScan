@@ -5,13 +5,11 @@ import Foundation
 // GH #151 — adding photos to an existing person. The copy routine used to
 // be a private view method that swallowed errors and dropped same-named
 // files; these pin the extracted, reporting importer. Temp dirs only.
+@Suite(.scratchCleanup)
 struct ReferencePhotoImporterTests {
 
     private func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ReferencePhotoImporterTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestScratch.unique("ReferencePhotoImporterTests-")   // removed when the test ends
     }
 
     private func write(_ name: String, _ bytes: String, in dir: URL) throws -> URL {

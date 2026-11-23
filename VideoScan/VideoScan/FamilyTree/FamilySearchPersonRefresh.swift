@@ -47,9 +47,7 @@ enum PersonRefreshPaths {
     /// (the MediaLedger / POIProfileAudit discipline).
     nonisolated static var defaultRoot: URL {
         if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/person-refresh-\(ProcessInfo.processInfo.processIdentifier)",
-                                        isDirectory: true)
+            return TestHostScratch.perProcess("VideoScan-tests/person-refresh")   // under the test temp root (the runner frees it)
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser

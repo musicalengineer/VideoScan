@@ -53,8 +53,9 @@ private func record(_ path: String, group: UUID? = nil,
 @MainActor
 private func isolatedModel() -> VideoScanModel {
     let model = VideoScanModel()
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_archvol_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    // Removed when the test ends (.scratchCleanup on the file's suites).
+    let dir = (try? TestScratch.unique("test_archvol_"))
+        ?? TestScratch.tempRoot.appendingPathComponent("test_archvol_\(UUID().uuidString)", isDirectory: true)
     model.catalogStore = CatalogStore(directory: dir)
     return model
 }
@@ -73,7 +74,7 @@ private let inTree = "/Volumes/FamilyArchive/Breen_Family_Archive/1990s/1994 Chr
 private let elsewhere = "/Volumes/CrucialX10/1994 Christmas.mov"
 private let prefixTrap = "/Volumes/FamilyArchiveOld/1994 Christmas.mov"
 
-@Suite("Archive volume protection — every disk verb", .serialized)
+@Suite("Archive volume protection — every disk verb", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveVolumeProtectionTests {
 
@@ -346,7 +347,7 @@ private func withVolumes<T>(mounted: [String], uuids: [String: String],
     }
 }
 
-@Suite("Archive volume protection — identity", .serialized)
+@Suite("Archive volume protection — identity", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveVolumeProtectionIdentityTests {
 
@@ -450,10 +451,7 @@ struct ArchiveVolumeProtectionIdentityTests {
         // offline); at the moment of removal the file's OWN volume reads
         // back the archive's UUID — as if FamilyArchive had been mounted
         // there since. The engine must refuse, name it, and move nothing.
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_archvol_removal_\(UUID().uuidString.prefix(8))", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = try TestScratch.unique("test_archvol_removal_")   // removed when the test ends
         let file = dir.appendingPathComponent("test_keep.mov")
         FileManager.default.createFile(atPath: file.path, contents: Data([1, 2, 3]))
         let model = isolatedModel()
@@ -479,7 +477,7 @@ struct ArchiveVolumeProtectionIdentityTests {
 
 // MARK: - Sensor: every file-removal call site is reviewed
 
-@Suite("Archive volume protection — source sensor")
+@Suite("Archive volume protection — source sensor", .scratchCleanup)
 struct ArchiveVolumeProtectionSourceSensor {
 
     /// The reviewed inventory (2026-09-22) of file-removal primitives —

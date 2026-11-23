@@ -655,7 +655,7 @@ enum FindSimilarFootageFixtures {
 
 // MARK: - The crowd
 
-@Suite("MFO verbs — every verb at once through one Center, same outcome as alone")
+@Suite("MFO verbs — every verb at once through one Center, same outcome as alone", .scratchCleanup)
 @MainActor
 struct MFOVerbsParallelTests {
 
@@ -705,7 +705,7 @@ struct MFOVerbsParallelTests {
 
 // MARK: - Sensor: the inventory covers every kind
 
-@Suite("MFO verbs — parallelism inventory sensor")
+@Suite("MFO verbs — parallelism inventory sensor", .scratchCleanup)
 struct MFOVerbsParallelInventorySensorTests {
 
     @Test("SENSOR: every MediaFileOperationKind has a parallelism verdict, and no verdict names a kind that is gone")

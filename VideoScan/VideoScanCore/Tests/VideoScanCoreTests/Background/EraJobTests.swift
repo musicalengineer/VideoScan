@@ -58,7 +58,7 @@ final class LogLines: BackgroundLogSink, @unchecked Sendable {
     var lines: [String] { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
-@Suite("EraJob — logic")
+@Suite("EraJob — logic", .scratchCleanup)
 struct EraJobLogicTests {
 
     @Test func orderIsOldestFirstByTheBestBoundUnknownLast() {
@@ -230,7 +230,7 @@ struct EraJobLogicTests {
     }
 }
 
-@Suite("EraJob — the planner honours era.none")
+@Suite("EraJob — the planner honours era.none", .scratchCleanup)
 struct EraPlannerEraNoneTests {
 
     static func noneLine(_ n: Int, by: String = SeatedApproach.eraA2.signer) throws -> ObservationLine {
@@ -277,7 +277,7 @@ struct EraPlannerEraNoneTests {
     }
 }
 
-@Suite("EraJob — plan, run, isolation", .serialized)
+@Suite("EraJob — plan, run, isolation", .serialized, .scratchCleanup)
 struct EraJobRunTests {
 
     static let files: [EraFixture.File] = [
@@ -593,7 +593,7 @@ final class ReadableCalls: @unchecked Sendable {
     func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
 }
 
-@Suite("EraJob — the CLI's words and the factory's refusals")
+@Suite("EraJob — the CLI's words and the factory's refusals", .scratchCleanup)
 struct EraJobCLITests {
 
     @Test func theCLIWordsParseAndRefuseInWords() throws {

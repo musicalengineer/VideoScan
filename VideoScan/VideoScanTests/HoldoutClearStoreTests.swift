@@ -22,17 +22,14 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-@Suite("Holdout Clear Store")
+@Suite("Holdout Clear Store", .scratchCleanup)
 @MainActor
 struct HoldoutClearStoreTests {
 
     // MARK: Fixtures
 
     private func tempDir() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("holdout-clears-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("holdout-clears-tests-")   // removed when the test ends
     }
 
     private func store(in dir: URL) -> HoldoutClearStore {

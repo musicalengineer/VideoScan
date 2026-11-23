@@ -24,6 +24,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 import CoreGraphics
 import AppKit
 @testable import VideoScan
@@ -483,8 +484,7 @@ struct FilmstripGenerationIsolationTests {
         // suite the same way productionRootRedirectsForTests guards the
         // single-frame tiers).
         let rootPath = model.previewDiskCache.rootURL.standardizedFileURL.path
-        try #require(rootPath.hasPrefix(
-            URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path))
+        try #require(TestHostScratch.isScratch(URL(fileURLWithPath: rootPath)))   // the test temp root
         try #require(!rootPath.contains("Application Support"))
 
         model.previewRequestPath = path

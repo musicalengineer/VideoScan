@@ -79,7 +79,7 @@ enum Convergence {
     }
 }
 
-@Suite("EraJob — every planned file reaches a verdict", .serialized)
+@Suite("EraJob — every planned file reaches a verdict", .serialized, .scratchCleanup)
 struct EraJobConvergenceTests {
 
     /// The 2026-11-04 loop, as a test: three runs, then one give-up line, then nothing to plan.
@@ -375,7 +375,7 @@ enum MediaMatrix {
     }
 }
 
-@Suite("EraJob — real frames from real files (media matrix)", .serialized)
+@Suite("EraJob — real frames from real files (media matrix)", .serialized, .scratchCleanup)
 struct EraJobMediaMatrixTests {
 
     @Test("MEDIA: every container's good file gets an era; undecodable files are given up with ffmpeg's words; the next plan is empty",

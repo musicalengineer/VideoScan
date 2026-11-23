@@ -93,11 +93,9 @@ struct RecordingFactory: JobFactory {
 }
 
 enum BackgroundFixtures {
+    /// Removed when the calling test ends (its suite carries .scratchCleanup).
     static func scratch(_ name: String) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("BackgroundTests-\(name)-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("BackgroundTests-\(name)-")
     }
 
     static func fullBackoff() -> Backoff {

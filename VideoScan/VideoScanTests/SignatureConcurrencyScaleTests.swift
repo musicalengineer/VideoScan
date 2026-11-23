@@ -30,7 +30,7 @@ private let volumeOfPath: @Sendable (String) -> String = { path in
     path.split(separator: "/").dropFirst().first.map(String.init) ?? ""
 }
 
-@Suite("Signature lanes — scale and hard cap")
+@Suite("Signature lanes — scale and hard cap", .scratchCleanup)
 struct SignatureConcurrencyScaleTests {
 
     /// THE invariant. Every item lands in exactly one lane, at every
@@ -130,7 +130,7 @@ struct SignatureConcurrencyScaleTests {
 
 // MARK: - Delete safety (codex #320 blocker)
 
-@Suite("Signature verification — the delete gate")
+@Suite("Signature verification — the delete gate", .scratchCleanup)
 struct SignatureVerificationTests {
 
     // Refusal accelerators (2026-08-17). Both may only make REFUSALS
@@ -175,10 +175,12 @@ struct SignatureVerificationTests {
         }
     }
 
+    /// In a folder removed when the test ends (.scratchCleanup on the suite).
     private func tempFile(_ name: String, _ bytes: [UInt8]) -> String {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("SigVerify-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // `try?` keeps the callers non-throwing as before; a folder that cannot
+        // be made makes the file write below fail, and the test with it.
+        let dir = (try? TestScratch.unique("SigVerify-"))
+            ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SigVerify-unmade", isDirectory: true)
         let url = dir.appendingPathComponent(name)
         FileManager.default.createFile(atPath: url.path, contents: Data(bytes))
         return url.path

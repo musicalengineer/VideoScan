@@ -1213,9 +1213,8 @@ enum DeleteDuplicatesPlanStore {
             .appendingPathComponent("delete-duplicates", isDirectory: true)
     }
 
-    nonisolated static let testHostRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("VideoScan-tests/delete-duplicates-\(ProcessInfo.processInfo.processIdentifier)",
-                                isDirectory: true)
+    /// Under the test temp root; the runner frees it (TestHostScratch).
+    nonisolated static let testHostRoot = TestHostScratch.perProcess("VideoScan-tests/delete-duplicates")
 
     static let doneFolder = "done"
 

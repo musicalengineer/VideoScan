@@ -23,6 +23,7 @@
 // main-actor turns while the file is open for appending.)
 
 import Foundation
+import VideoScanCore
 
 /// One requested file's outcome, in the audit's six words.
 enum DeletionAuditOutcome: String, Sendable, CaseIterable {
@@ -81,8 +82,7 @@ final class DeletionReceipt: @unchecked Sendable {
     /// per-process scratch folder (no test writes Rick's logs).
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/deletions-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            return TestHostScratch.perProcess("VideoScan-tests/deletions")   // under the test temp root (the runner frees it)
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/VideoScan/deletions", isDirectory: true)

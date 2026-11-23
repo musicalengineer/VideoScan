@@ -22,7 +22,7 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite("Holdout Review Queue")
+@Suite("Holdout Review Queue", .scratchCleanup)
 struct HoldoutReviewQueueTests {
 
     // MARK: - Fixture helpers
@@ -36,12 +36,10 @@ struct HoldoutReviewQueueTests {
         ([Self.header] + dataLines).map { $0 + "\r\n" }.joined()
     }
 
-    /// Fresh temp dir per call — cleaned up by the OS, never a real path.
+    /// Fresh temp dir per call, never a real path; removed when the test
+    /// ends (.scratchCleanup on the suite — the OS never cleaned it up).
     private func makeTempDir() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("holdout-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("holdout-tests-")
     }
 
     /// Write a queue CSV into <dir> and return its URL.

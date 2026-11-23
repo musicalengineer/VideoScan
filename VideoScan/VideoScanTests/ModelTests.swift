@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - ToolLocator Tests
@@ -416,7 +417,8 @@ struct POIStorageTests {
         #expect(dir.lastPathComponent.hasPrefix("VideoScanTestPOI-"))
         #expect(dir.lastPathComponent
             .contains("\(ProcessInfo.processInfo.processIdentifier)"))
-        #expect(dir.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        // The test temp root: the runner's VIDEOSCAN_TEST_TMP, else the user temp dir.
+        #expect(dir.path.hasPrefix(TestHostScratch.testTempRoot.path))
         #expect(!dir.path.contains("Application Support"))
         // Created on access (same side-effect the production path has).
         var isDir: ObjCBool = false

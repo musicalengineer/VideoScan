@@ -56,7 +56,7 @@ struct ScheduleFactory: JobFactory {
     }
 }
 
-@Suite("JobSchedule — the helper plans, holds and releases by itself", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — the helper plans, holds and releases by itself", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleTests {
 
     static func schedule(_ probe: ScheduleProbe, root: URL, build: String = "b1",
@@ -312,7 +312,7 @@ struct JobScheduleTests {
     }
 }
 
-@Suite("JobSchedule — re-entrancy", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — re-entrancy", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleReentrancyTests {
     @Test("RED→GREEN: two ticks interleaved across a slow plan queue the kind once")
     func interleavedTicksEnqueueOnce() async throws {
@@ -372,7 +372,7 @@ struct AlreadyRecordedFactory: JobFactory {
     func makeJob(for request: JobRequest) throws -> any BackgroundJob { AlreadyRecordedJob(recorder: recorder) }
 }
 
-@Suite("JobSchedule — Codex #235 closing reds", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — Codex #235 closing reds", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleCodex235Tests {
     typealias T = JobScheduleTests
 
@@ -519,7 +519,7 @@ struct RefuseThenGateFactory: JobFactory {
     }
 }
 
-@Suite("JobSchedule — Codex #236 closing reds", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — Codex #236 closing reds", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleCodex236Tests {
     typealias T = JobScheduleTests
 
@@ -608,7 +608,7 @@ struct JobScheduleCodex236Tests {
     }
 }
 
-@Suite("JobSchedule — Codex #237 closing reds", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — Codex #237 closing reds", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleCodex237Tests {
     typealias T = JobScheduleTests
 
@@ -661,7 +661,7 @@ struct JobScheduleCodex237Tests {
 
 }
 
-@Suite("JobSchedule — Codex #238 closing reds", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — Codex #238 closing reds", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleCodex238Tests {
     typealias T = JobScheduleTests
 
@@ -746,7 +746,7 @@ struct JobScheduleCodex238Tests {
     }
 }
 
-@Suite("JobSchedule — Codex #239 closing reds", .serialized, .tags(.quietMachine))
+@Suite("JobSchedule — Codex #239 closing reds", .serialized, .tags(.quietMachine), .scratchCleanup)
 struct JobScheduleCodex239Tests {
     typealias T = JobScheduleTests
 

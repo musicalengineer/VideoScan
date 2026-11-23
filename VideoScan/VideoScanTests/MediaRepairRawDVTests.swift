@@ -26,7 +26,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-@Suite("Repair Now — raw DV (GH #484)", .serialized)
+@Suite("Repair Now — raw DV (GH #484)", .serialized, .scratchCleanup)
 struct MediaRepairRawDVTests {
 
     typealias Media = UnlockedDVMedia

@@ -4,6 +4,7 @@
 // completes and deleted on successful scan completion.
 
 import Foundation
+import VideoScanCore
 
 struct ScanCheckpoint: Codable {
     let volumePath: String
@@ -39,11 +40,7 @@ struct ScanCheckpoint: Codable {
     static func resolveDirectory(testHost: Bool) -> URL {
         let base: URL
         if testHost {
-            base = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent(
-                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true
-                )
+            base = TestHostScratch.perProcess("VideoScanTests")   // under the test temp root (the runner frees it)
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

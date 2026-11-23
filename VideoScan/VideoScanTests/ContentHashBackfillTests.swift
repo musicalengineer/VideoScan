@@ -44,7 +44,7 @@ private func bfRec(
 
 private let allReachable: @Sendable (String) -> Bool = { _ in true }
 
-@Suite("Content-hash backfill — candidate selection")
+@Suite("Content-hash backfill — candidate selection", .scratchCleanup)
 struct ContentHashBackfillSelectionTests {
 
     @Test func unhashedLiveRecordIsACandidate() {
@@ -81,7 +81,7 @@ struct ContentHashBackfillSelectionTests {
     }
 }
 
-@Suite("Content-hash backfill — plan")
+@Suite("Content-hash backfill — plan", .scratchCleanup)
 struct ContentHashBackfillPlanTests {
 
     /// Offline drives are counted separately rather than as candidates:
@@ -149,11 +149,12 @@ struct ContentHashBackfillPlanTests {
     }
 }
 
-@Suite("Probe cache — content_hash column")
+@Suite("Probe cache — content_hash column", .scratchCleanup)
 struct MetadataCacheContentHashTests {
 
+    /// In a scratch folder removed when the test ends (.scratchCleanup): the .sqlite AND its -wal/-shm.
     private func tempCachePath() -> String {
-        URL(fileURLWithPath: NSTemporaryDirectory())
+        ((try? TestScratch.unique("mc-")) ?? TestScratch.tempRoot)
             .appendingPathComponent("mc-\(UUID().uuidString).sqlite").path
     }
 
@@ -215,7 +216,7 @@ struct MetadataCacheContentHashTests {
 // was never scanned has no records, and a signature has nowhere to live
 // without one.
 
-@Suite("File signatures — timestamp")
+@Suite("File signatures — timestamp", .scratchCleanup)
 struct ContentHashDateTests {
 
     /// The date round-trips, so "when were these signed?" survives a
@@ -253,7 +254,7 @@ struct ContentHashDateTests {
     }
 }
 
-@Suite("File signatures — scope")
+@Suite("File signatures — scope", .scratchCleanup)
 struct ContentHashScopeTests {
 
     private let reachable: (String) -> Bool = { _ in true }
@@ -327,11 +328,12 @@ struct ContentHashScopeTests {
 
 // MARK: - Cache write-through + real legacy migration (codex #320.1, #330)
 
-@Suite("File signatures — surviving a rescan")
+@Suite("File signatures — surviving a rescan", .scratchCleanup)
 struct SignatureRescueSurvivalTests {
 
+    /// In a scratch folder removed when the test ends (.scratchCleanup): the .sqlite AND its -wal/-shm.
     private func tempPath() -> String {
-        URL(fileURLWithPath: NSTemporaryDirectory())
+        ((try? TestScratch.unique("mc-")) ?? TestScratch.tempRoot)
             .appendingPathComponent("mc-\(UUID().uuidString).sqlite").path
     }
 

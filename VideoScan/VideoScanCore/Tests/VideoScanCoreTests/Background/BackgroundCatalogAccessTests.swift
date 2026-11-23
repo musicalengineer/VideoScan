@@ -10,7 +10,7 @@ import SQLite3
 import Testing
 @testable import VideoScanCore
 
-@Suite("BackgroundCatalogAccess — read-only by construction")
+@Suite("BackgroundCatalogAccess — read-only by construction", .scratchCleanup)
 struct BackgroundCatalogAccessTests {
 
     /// A small SQLite file with a catalog_state row, made with the C API.

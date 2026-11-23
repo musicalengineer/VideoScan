@@ -9,7 +9,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("Background — a late pre-run measurement never overwrites the post-run plan (Codex sweep 11/09 F4)", .tags(.quietMachine))
+@Suite("Background — a late pre-run measurement never overwrites the post-run plan (Codex sweep 11/09 F4)", .tags(.quietMachine), .scratchCleanup)
 struct LateMeasurementAfterFinishTests {
 
     @Test("RED: a measurement begun under hold H1, released after the job ran and the post-run plan said 0, leaves the plan at 0")

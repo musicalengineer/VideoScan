@@ -3,12 +3,14 @@ import Foundation
 import os
 @testable import VideoScan
 
-@Suite("PersonFinderCache")
+@Suite("PersonFinderCache", .scratchCleanup)
 struct PersonFinderCacheTests {
 
-    private func makeTempCache() -> PersonFinderCache {
-        let path = NSTemporaryDirectory() + "pf_cache_test_\(UUID().uuidString).sqlite"
-        return PersonFinderCache(path: path)
+    /// Internal (not private) so the leak guard can run it (TestTempLeakGuardTests).
+    static func makeTempCache() -> PersonFinderCache {
+        // In a scratch folder removed when the test ends (.scratchCleanup): the .sqlite AND its -wal/-shm.
+        let dir = (try? TestScratch.unique("pf_cache_test_")) ?? TestScratch.tempRoot
+        return PersonFinderCache(path: dir.appendingPathComponent("cache-\(UUID().uuidString).sqlite").path)
     }
 
     private func sampleResult(hits: Int = 3) -> pfVideoResult {
@@ -54,7 +56,7 @@ struct PersonFinderCacheTests {
 
     @Test("Store and lookup returns cached result")
     func storeAndLookup() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let key = makeKey()
         let result = sampleResult(hits: 3)
 
@@ -72,7 +74,7 @@ struct PersonFinderCacheTests {
 
     @Test("Segment round-trip preserves values")
     func segmentRoundTrip() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let key = makeKey()
         let result = sampleResult(hits: 2)
 
@@ -89,7 +91,7 @@ struct PersonFinderCacheTests {
 
     @Test("Zero-hit result is cached and retrievable")
     func zeroHitsCached() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let key = makeKey()
         let result = sampleResult(hits: 0)
 
@@ -105,7 +107,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different videoPath → miss")
     func differentPath() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(videoPath: "/Volumes/TestDrive/clip.MTS")
         cache.store(key: storeKey, result: sampleResult())
 
@@ -115,7 +117,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different fileSize → miss")
     func differentSize() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(fileSize: 500_000_000)
         cache.store(key: storeKey, result: sampleResult())
 
@@ -125,7 +127,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different modDate → miss")
     func differentModDate() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(modDate: Date(timeIntervalSince1970: 1260665694.0))
         cache.store(key: storeKey, result: sampleResult())
 
@@ -135,7 +137,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different personName → miss")
     func differentPerson() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(personName: "donna")
         cache.store(key: storeKey, result: sampleResult())
 
@@ -145,7 +147,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different engine → miss")
     func differentEngine() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(engine: "ArcFace (CoreML)")
         cache.store(key: storeKey, result: sampleResult())
 
@@ -155,7 +157,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different threshold → miss")
     func differentThreshold() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(threshold: 0.4)
         cache.store(key: storeKey, result: sampleResult())
 
@@ -165,7 +167,7 @@ struct PersonFinderCacheTests {
 
     @Test("Different refHash → miss")
     func differentRefHash() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let storeKey = makeKey(refHash: "18511299587774b7")
         cache.store(key: storeKey, result: sampleResult())
 
@@ -177,7 +179,7 @@ struct PersonFinderCacheTests {
 
     @Test("Float threshold round-trips through Double without precision loss")
     func thresholdPrecision() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let key = makeKey(threshold: 0.4)
         cache.store(key: key, result: sampleResult())
 
@@ -192,7 +194,7 @@ struct PersonFinderCacheTests {
 
     @Test("Re-storing with same key overwrites result")
     func overwrite() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let key = makeKey()
 
         cache.store(key: key, result: sampleResult(hits: 1))
@@ -209,7 +211,7 @@ struct PersonFinderCacheTests {
 
     @Test("clearAll removes all entries")
     func clearAll() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         cache.store(key: makeKey(videoPath: "/a"), result: sampleResult())
         cache.store(key: makeKey(videoPath: "/b"), result: sampleResult())
         #expect(cache.count == 2)
@@ -280,7 +282,7 @@ struct PersonFinderCacheTests {
 
     @Test("cachedRowsForVideo returns empty when nothing stored for the file")
     func diagnoseRowsEmpty() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let rows = cache.cachedRowsForVideo(
             videoPath: "/Volumes/TestDrive/never_cached.MTS",
             fileSize: 12345,
@@ -291,7 +293,7 @@ struct PersonFinderCacheTests {
 
     @Test("cachedRowsForVideo returns the stored key components")
     func diagnoseRowsReturnsStoredMetadata() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let mod = Date(timeIntervalSince1970: 1_260_000_000)
         let storeKey = makeKey(
             videoPath: "/Volumes/T/clip.MTS",
@@ -315,7 +317,7 @@ struct PersonFinderCacheTests {
 
     @Test("cachedRowsForVideo returns multiple rows when same file cached under different params")
     func diagnoseRowsMultipleParamSets() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let mod = Date(timeIntervalSince1970: 1_260_000_000)
         cache.store(
             key: makeKey(videoPath: "/x/c.MTS", fileSize: 1, modDate: mod, refHash: "h1"),
@@ -335,7 +337,7 @@ struct PersonFinderCacheTests {
 
     @Test("cachedRowsForVideo does not bleed across video paths")
     func diagnoseRowsScopedToVideo() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let mod = Date(timeIntervalSince1970: 1_260_000_000)
         cache.store(
             key: makeKey(videoPath: "/x/a.MTS", fileSize: 1, modDate: mod),
@@ -483,7 +485,7 @@ struct PersonFinderCacheTests {
                 #expect(firstKey != nil)
                 guard let firstKey else { return }
 
-                let cache = makeTempCache()
+                let cache = Self.makeTempCache()
                 cache.store(key: firstKey, result: sampleResult(hits: 1))
 
                 try replacementBytes.write(to: refURL)
@@ -541,7 +543,7 @@ struct PersonFinderCacheTests {
     /// hit, and the summary counters must add up — no lost update.
     @Test("store/lookup from 8 concurrent threads: every key hits, counters add up")
     func concurrentStoreAndLookupLoseNothing() {
-        let cache = makeTempCache()
+        let cache = Self.makeTempCache()
         let keys = (0..<64).map { i in makeKey(videoPath: "/Volumes/T/clip\(i).MTS") }
         DispatchQueue.concurrentPerform(iterations: 8) { lane in
             for i in stride(from: lane, to: keys.count, by: 8) {

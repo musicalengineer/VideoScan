@@ -17,7 +17,7 @@ import VideoScanCore
 
 // MARK: - Through the real engine (media matrix)
 
-@Suite("Repair add sound — real engine, media matrix", .serialized)
+@Suite("Repair add sound — real engine, media matrix", .serialized, .scratchCleanup)
 struct MediaRepairAddSoundEngineTests {
 
     typealias R = RepairFixtures
@@ -118,7 +118,7 @@ extension MediaRepairAddSoundEngineTests {
 
 // MARK: - SENSOR: Verify → banner → Repair, end to end
 
-@Suite("Diagnostic banner — Verify to Repair sensor", .serialized)
+@Suite("Diagnostic banner — Verify to Repair sensor", .serialized, .scratchCleanup)
 @MainActor
 struct DiagnosticBannerVerifySensorTests {
 

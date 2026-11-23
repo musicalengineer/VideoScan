@@ -74,7 +74,9 @@ struct AngelEnvironment {
     /// live buffer — a test that starts a job through the normal entry
     /// point would otherwise write batches (and settle his!) there. One
     /// folder per test process, like CatalogStore.shared's guard.
-    nonisolated static let testHostBufferRoot = FileManager.default.temporaryDirectory
+    /// Under the test temp root (the runner frees it); the name keeps its
+    /// historical `pid<N>` spelling.
+    nonisolated static let testHostBufferRoot = TestHostScratch.testTempRoot
         .appendingPathComponent("test_angel_buffer_pid\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
 
     /// App Support/VideoScan/archive-angel/ — the production home of
@@ -91,9 +93,8 @@ struct AngelEnvironment {
     /// the 15 min periodic run wrote a 1.7 KB evidence.json over Rick's
     /// real one from inside the unit suite (CleanupIsolationTests caught
     /// the write; the nightly had been doing it since 09-14).
-    nonisolated static let testHostEvidenceDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("VideoScan-tests/archive-angel-\(ProcessInfo.processInfo.processIdentifier)",
-                                isDirectory: true)
+    /// Under the test temp root; the runner frees it (TestHostScratch).
+    nonisolated static let testHostEvidenceDirectory = TestHostScratch.perProcess("VideoScan-tests/archive-angel")
 
     nonisolated static var testHostScratch: URL { testHostEvidenceDirectory }
 

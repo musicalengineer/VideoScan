@@ -712,7 +712,7 @@ struct PersonRefreshSharedCacheTests {
 struct PersonRefreshIsolationTests {
     @Test @MainActor func aTestHostNeverResolvesTheRealFolder() {
         let root = PersonRefreshPaths.defaultRoot.standardizedFileURL.path
-        #expect(root.hasPrefix(URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path))
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: root)), "\(root)")   // the test temp root
         #expect(!root.contains("Application Support"))
         #expect(FamilyGraphSharedCache.shared.overlayStore?.directory.standardizedFileURL.path == root)
         #expect(PersonRefreshCenter.shared.root.standardizedFileURL.path == root)

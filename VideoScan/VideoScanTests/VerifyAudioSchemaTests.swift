@@ -21,6 +21,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - DTO byte-identity + lossless round-trip
@@ -295,8 +296,7 @@ struct VerifyAudioIsolationTests {
         // Explicit-directory tests bypass the default; this pins the
         // default itself (codex review 2026-09-20, test integrity).
         let dir = ArchiveAngelEvidenceStore.defaultDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        let temp = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.resolvingSymlinksInPath().path
-        #expect(dir.hasPrefix(temp), "\(dir)")
+        #expect(TestHostScratch.isScratch(URL(fileURLWithPath: dir)), "\(dir)")   // the test temp root
         #expect(!dir.contains("/Library/Application Support/"), "\(dir)")
     }
 }

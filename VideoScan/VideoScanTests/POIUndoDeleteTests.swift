@@ -15,6 +15,7 @@ import Foundation
 // drives in production (it just passes nil overrides to use real paths).
 //
 // 2026-09-12: folders are keyed by uuid; restore lands at `storeDir/<UUID>/`.
+@Suite(.scratchCleanup)
 struct POIUndoDeleteTests {
 
     // MARK: - Sandbox helpers (mirror POIDeletionTests)
@@ -56,9 +57,7 @@ struct POIUndoDeleteTests {
     }
 
     private func makeSandbox() throws -> Sandbox {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("poi-undo-\(UUID().uuidString)",
-                                    isDirectory: true)
+        let base = try TestScratch.unique("poi-undo-")   // removed when the test ends (cleanup() left it)
         let store = base.appendingPathComponent("store", isDirectory: true)
         let trash = base.appendingPathComponent("trash", isDirectory: true)
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
