@@ -61,7 +61,7 @@ final class PersonFinderCache: Sendable {
         // personfinder_cache.sqlite (settings-pollution class; same gate as
         // MetadataCache / ScanJobsStorage / POIStorage).
         if TestEnvironment.isTestHost {
-            let dir = TestHostScratch.perProcess("VideoScanTestPFCache")   // removed at exit
+            let dir = TestHostScratch.perProcess("VideoScanTestPFCache")   // under the test temp root (the runner frees it)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir.appendingPathComponent("personfinder_cache.sqlite").path
         }

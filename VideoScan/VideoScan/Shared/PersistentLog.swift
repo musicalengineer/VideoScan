@@ -24,7 +24,7 @@ final class PersistentLog: LogSink, @unchecked Sendable {
 
     /// Per-process scratch directory used when the binary is a unit-test
     /// host. Process-unique so parallel test hosts never clobber each other;
-    /// removed when the host exits (TestHostScratch).
+    /// under the test temp root, which the runner frees (TestHostScratch).
     static let testHostLogDir: URL = TestHostScratch.perProcess("VideoScanTestLogs")
 
     /// Routing default for every log-dir consumer (PersistentLog itself,

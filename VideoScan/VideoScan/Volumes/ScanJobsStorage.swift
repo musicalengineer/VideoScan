@@ -136,7 +136,7 @@ enum ScanJobsStorage {
     static var storeDir: URL {
         let base: URL
         if isRunningTests {
-            base = TestHostScratch.perProcess("VideoScanTests")   // removed at exit
+            base = TestHostScratch.perProcess("VideoScanTests")   // under the test temp root (the runner frees it)
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

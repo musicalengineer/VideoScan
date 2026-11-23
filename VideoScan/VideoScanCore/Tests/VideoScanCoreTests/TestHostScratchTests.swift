@@ -1,8 +1,8 @@
-// TestHostScratchTests.swift — a test process frees the temp folders it took
-// (Rick 2026-11-23; DECISIONS 2026-11-23). Two halves:
+// TestHostScratchTests.swift — test scratch lives where it is freed (Rick
+// 2026-11-23; DECISIONS 2026-11-23). Two halves:
 //   * TestHostScratch — the per-PROCESS folders (`VideoScan-test-appsupport-
-//     <pid>`, …) are recorded and removed by one exit handler; the removal
-//     never reaches outside the temp dir;
+//     <pid>`, …) lie under the test temp root, which the RUNNER deletes; a test
+//     process deletes none of them. `isScratch` resolves symlinks before `..`;
 //   * TestScratch — a per-TEST fixture folder (BackgroundFixtures.scratch,
 //     2,358 `BackgroundTests-era-*` left on the Ultra) is gone when its test
 //     case's scope ends.
@@ -18,43 +18,6 @@ struct TestHostScratchTests {
     /// sets it, else the user temp dir).
     private static func tmp(_ name: String) -> URL {
         TestHostScratch.testTempRoot.appendingPathComponent(name, isDirectory: true)
-    }
-
-    @Test("a registry removes what it recorded inside the temp dir, and only that")
-    func registryRemovesOnlyInsideTheTempDir() throws {
-        let registry = TestHostScratch.Registry()
-        let inside = Self.tmp("TestHostScratchTests-\(UUID().uuidString)")
-        let nested = Self.tmp("TestHostScratchTests-sub-\(UUID().uuidString)").appendingPathComponent("x-123", isDirectory: true)
-        defer {
-            try? FileManager.default.removeItem(at: inside)
-            try? FileManager.default.removeItem(at: nested.deletingLastPathComponent())
-        }
-        try FileManager.default.createDirectory(at: inside.appendingPathComponent("deep"), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
-
-        #expect(registry.register(inside))
-        #expect(registry.register(nested))
-        #expect(!registry.register(URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)), "home is never removable")
-        #expect(!registry.register(URL(fileURLWithPath: "/", isDirectory: true)))
-        #expect(!registry.register(TestHostScratch.testTempRoot), "the root itself is not")
-        #expect(!registry.register(Self.tmp("..")), "nor its parent")
-        #expect(!registry.register(Self.tmp("a/../../escape")))
-        #expect(registry.isRegistered(inside))
-
-        #expect(registry.removeAll() == 2)
-        #expect(!FileManager.default.fileExists(atPath: inside.path))
-        #expect(!FileManager.default.fileExists(atPath: nested.path))
-        #expect(FileManager.default.fileExists(atPath: NSHomeDirectory()))
-        #expect(!registry.isRegistered(inside), "drained")
-        #expect(registry.removeAll() == 0, "a second drain removes nothing")
-    }
-
-    @Test("the /private spelling of the temp dir is the same place")
-    func privateSpellingIsInside() {
-        let registry = TestHostScratch.Registry()
-        let root = TestHostScratch.testTempRoot.path
-        let spelled = root.hasPrefix("/private/") ? String(root.dropFirst("/private".count)) : "/private" + root
-        #expect(registry.register(URL(fileURLWithPath: spelled).appendingPathComponent("y-1")))
     }
 
     @Test("VIDEOSCAN_TEST_TMP names the root in a test process; unset, relative or in production it is the fallback")
@@ -92,25 +55,6 @@ struct TestHostScratchTests {
                 == marked.standardizedFileURL.path)
     }
 
-    // Codex 2026-11-23 #352 P1-2: the inside-the-root check compared spellings; S/link/victim with link → outside
-    // removed the outside victim. Removal now compares RESOLVED paths.
-    @Test("a registered path through a symlinked parent is never removed")
-    func symlinkedParentIsRefusedAtRemoval() throws {
-        let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("THS-symlink-\(UUID().uuidString)", isDirectory: true)
-        let root = base.appendingPathComponent("root", isDirectory: true)
-        let outside = base.appendingPathComponent("outside", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: base) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: outside.appendingPathComponent("victim"), withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: outside)
-        let registry = TestHostScratch.Registry(root: root)
-        _ = registry.register(root.appendingPathComponent("link/victim", isDirectory: true))
-        _ = registry.removeAll()
-        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("victim").path),
-                "a folder outside the root was removed through a symlinked parent")
-    }
-
     // Codex 2026-11-23 #352 P1-3: what enters an auto-emptied test trash must itself be scratch.
     @Test("isScratch: inside the test temp root or the temp dir, resolved; never home, never through a symlink out")
     func isScratchIsResolvedAndBounded() throws {
@@ -124,6 +68,46 @@ struct TestHostScratchTests {
         try FileManager.default.createSymbolicLink(at: base.appendingPathComponent("out"),
                                                    withDestinationURL: URL(fileURLWithPath: NSHomeDirectory()))
         #expect(!TestHostScratch.isScratch(base.appendingPathComponent("out/Movies")), "a symlink out of temp is not scratch")
+    }
+
+    // Codex 2026-11-23 round 2 #2: isScratch folded `..` BEFORE resolving symlinks. With S/link → O/child,
+    // S/link/../victim.mov names O/victim.mov, but standardizing first made it S/victim.mov — "scratch".
+    @Test("isScratch resolves symlinks before `..`: S/link/../victim.mov (really O/victim.mov) is not scratch")
+    func isScratchResolvesSymlinksBeforeDotDot() throws {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("THS-dotdot-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("root", isDirectory: true)          // the synthetic scratch root
+        let s = root.appendingPathComponent("S", isDirectory: true)
+        let o = base.appendingPathComponent("O", isDirectory: true)                // OUTSIDE the root
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: s, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: o.appendingPathComponent("child"), withIntermediateDirectories: true)
+        try Data([1]).write(to: o.appendingPathComponent("victim.mov"))
+        try FileManager.default.createSymbolicLink(at: s.appendingPathComponent("link"),
+                                                   withDestinationURL: o.appendingPathComponent("child"))
+        let source = URL(fileURLWithPath: s.path + "/link/../victim.mov")
+        #expect(!TestHostScratch.isScratch(source, roots: [root]), "\(source.path) is \(o.path)/victim.mov")
+        #expect(TestHostScratch.isScratch(s.appendingPathComponent("plain.mov"), roots: [root]), "a plain child still is")
+        #expect(!TestHostScratch.isScratch(URL(fileURLWithPath: s.path + "/missing/../x.mov"), roots: [root]),
+                "`..` in the part that does not exist is refused")
+        #expect(!TestHostScratch.isScratch(root, roots: [root]), "the root itself is not scratch")
+    }
+
+    // Codex 2026-11-23 round 2 #3: a TestScratch scope removed what it recorded after a LEXICAL inside-the-root
+    // check, so root/link/victim with link → outside removed the outside victim.
+    @Test("a scope never removes through a symlinked parent (only direct children of the root)")
+    func scopeNeverRemovesThroughASymlink() throws {
+        let root = TestScratch.tempRoot
+        let outside = root.appendingPathComponent("THS-outside-\(UUID().uuidString)", isDirectory: true)
+        let link = root.appendingPathComponent("THS-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: link); try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("victim"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let scope = TestScratch.Scope()
+        scope.record(link.appendingPathComponent("victim", isDirectory: true))
+        scope.removeAll()
+        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("victim").path),
+                "removed through a symlinked parent")
     }
 
     @Test("this process's root follows its own environment, and is a directory")
@@ -141,23 +125,30 @@ struct TestHostScratchTests {
                 == TestHostScratch.testTempRoot.path)
     }
 
-    @Test("under a test process, a per-process folder is recorded for removal at exit")
-    func perProcessIsRecordedUnderATestProcess() {
-        #expect(TestHostDetection.isTestHost)
-        let url = TestHostScratch.perProcess("TestHostScratchTests-probe")
-        #expect(url.lastPathComponent == "TestHostScratchTests-probe-\(ProcessInfo.processInfo.processIdentifier)")
-        #expect(TestHostScratch.shared.isRegistered(url))
+    // Codex 2026-11-23 rounds 1–2: deleting by path at exit was bypassable, so test processes no longer delete
+    // per-process folders at all — they live under the test temp root, which the runner deletes.
+    @Test("perProcess only names <testTempRoot>/<name>-<pid>: it creates and deletes nothing")
+    func perProcessDeletesNothing() throws {
+        let name = "TestHostScratchTests-probe-\(UUID().uuidString)"
+        let url = TestHostScratch.perProcess(name)
+        #expect(url.lastPathComponent == "\(name)-\(ProcessInfo.processInfo.processIdentifier)")
+        #expect(url.deletingLastPathComponent().path == TestHostScratch.testTempRoot.path)
+        #expect(!FileManager.default.fileExists(atPath: url.path), "not created")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        _ = TestHostScratch.perProcess(name)
+        #expect(FileManager.default.fileExists(atPath: url.path), "an existing folder is left alone")
     }
 
-    @Test("Core's own per-process test folders are recorded for removal at exit")
-    func coreStoresRecordTheirFolders() {
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let appSupport = TestHostDetection.sandboxedApplicationSupportRoot(for: "TestHostScratchTests")
-        _ = FamilyGraphCompiledStore.production
-        _ = PreviewDiskCache.productionRootURL
-        #expect(appSupport.map { TestHostScratch.shared.isRegistered($0) } == true)
-        #expect(TestHostScratch.shared.isRegistered(Self.tmp("VideoScan-test-compiled-\(pid)")))
-        #expect(TestHostScratch.shared.isRegistered(Self.tmp("VideoScanTests-\(pid)")))
+    @Test("every Core per-process test folder lies under the test temp root (so the runner frees it)")
+    func everyCorePerProcessFolderIsUnderTheRoot() throws {
+        let root = TestHostScratch.testTempRoot.path
+        let appSupport = try #require(TestHostDetection.sandboxedApplicationSupportRoot(for: "TestHostScratchTests"))
+        let folders = [appSupport, FamilyGraphCompiledStore.production.root,
+                       PreviewDiskCache.productionRootURL]
+        for url in folders {
+            #expect(url.path.hasPrefix(root + "/"), "\(url.path) is not under \(root)")
+        }
     }
 
     @Test("GUARD: a BackgroundFixtures scratch folder is gone when its test's scope ends (before/after listing)")

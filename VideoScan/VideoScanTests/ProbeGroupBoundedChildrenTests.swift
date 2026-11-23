@@ -48,8 +48,8 @@ private enum BoundedChildrenFixture {
     /// then say "gated lines == completed" exactly. Files are created with
     /// open(2) — FileManager.createFile is ~5× slower at this count.
     static let root: URL = {
-        // Shared by the suite's tests, so per PROCESS: removed when the test
-        // host exits (TestHostScratch), not when one test ends.
+        // Shared by the suite's tests, so per PROCESS, under the test temp
+        // root (TestHostScratch; the runner frees it), not per test.
         let dir = TestHostScratch.perProcess("vs-gh163-100k")
         try? FileManager.default.removeItem(at: dir)
         try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

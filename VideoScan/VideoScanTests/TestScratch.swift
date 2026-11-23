@@ -31,8 +31,7 @@
 // follows the test's async work across threads, which thread_local would not).
 //
 // Worst-case memory: one URL per folder a test case makes, freed when the
-// case ends, plus one path per folder in the process's exit registry (~100
-// bytes each; a whole app test host makes a few thousand).
+// case ends.
 
 import Foundation
 import Testing
@@ -49,15 +48,25 @@ enum TestScratch {
 
         var recorded: [URL] { urls.withLock { $0 } }
 
-        /// Remove every recorded folder that is inside the temp dir. Deleted,
-        /// not trashed: test scratch is regenerable (DECISIONS 2026-11-23).
+        /// Remove every recorded folder that is a DIRECT child of the root:
+        /// realpath(its parent) == realpath(root), exactly — a symlinked
+        /// parent cannot match (Codex 2026-11-23 r2 #3: root/link/victim with
+        /// link → outside removed the outside victim). Deleted, not trashed:
+        /// test scratch is regenerable (DECISIONS 2026-11-23). Residual: a
+        /// parent swapped between this check and removeItem — a guard against
+        /// test bugs, not an adversary; the runner's rmtree is the backstop.
         func removeAll() {
             let all = urls.withLock { list -> [URL] in
                 let copy = list
                 list.removeAll()
                 return copy
             }
-            for url in all where TestScratch.isInsideTemp(url) {
+            guard let root = TestHostScratch.realPath(TestScratch.tempRoot) else { return }
+            for url in all {
+                let name = url.lastPathComponent
+                guard !name.isEmpty, name != ".", name != "..", name != "/",
+                      let parent = TestHostScratch.realPath(url.deletingLastPathComponent()),
+                      parent == root else { continue }
                 try? FileManager.default.removeItem(at: url)
             }
         }
@@ -71,17 +80,25 @@ enum TestScratch {
     /// (TestHostScratch.testTempRoot — one definition for both kinds of scratch).
     static var tempRoot: URL { TestHostScratch.testTempRoot }
 
-    /// Make `<root>/<name>` (with intermediate folders) and record it for
-    /// removal when the current test case ends.
+    /// A name `directory(named:)` refuses: not one plain path component.
+    struct NotAFlatName: Error, CustomStringConvertible {
+        let name: String
+        var description: String { "TestScratch: \(name) is not a direct child of the root (one component, no '/')" }
+    }
+
+    /// Make `<root>/<name>` — a DIRECT child of the root, so the scope's
+    /// removal can prove what it removes — and record it for removal when the
+    /// current test case ends. Work a test leaves running (an abandoned
+    /// supervisor that rewrites holds.json — JobScheduleTests) can re-create
+    /// it afterwards; under the runner the sealed tmp is deleted after the run.
     @discardableResult
     static func directory(named name: String) throws -> URL {
+        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else {
+            Issue.record("\(NotAFlatName(name: name))")
+            throw NotAFlatName(name: name)
+        }
         let url = tempRoot.appendingPathComponent(name, isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        // Backstop: work a test leaves running (an abandoned supervisor that
-        // writes holds.json after the test returned — JobScheduleTests) can
-        // re-create the folder after the scope removed it; the process's exit
-        // handler removes it again.
-        TestHostScratch.removeAtExit(url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         if let scope = current {
             scope.record(url)
         } else {
@@ -93,21 +110,6 @@ enum TestScratch {
     /// `<root>/<prefix><UUID>` — the usual unique-per-call shape.
     static func unique(_ prefix: String) throws -> URL {
         try directory(named: prefix + UUID().uuidString)
-    }
-
-    /// True when `url` lies strictly inside the temp dir; a scope never
-    /// removes anything else, whatever was recorded.
-    static func isInsideTemp(_ url: URL) -> Bool {
-        func canonical(_ path: String) -> String {
-            var p = path
-            while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-            return p.hasPrefix("/private/") ? String(p.dropFirst("/private".count)) : p
-        }
-        let leaf = url.standardizedFileURL
-        guard !leaf.lastPathComponent.isEmpty, leaf.lastPathComponent != "/" else { return false }
-        let path = canonical(leaf.path)
-        let root = canonical(tempRoot.standardizedFileURL.path)
-        return path.hasPrefix(root + "/")
     }
 }
 

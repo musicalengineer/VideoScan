@@ -47,7 +47,7 @@ final class MetadataCache: Sendable {
     static var defaultPath: String {
         let base: URL
         if isRunningTests {
-            base = TestHostScratch.perProcess("VideoScanTests")   // removed at exit
+            base = TestHostScratch.perProcess("VideoScanTests")   // under the test temp root (the runner frees it)
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

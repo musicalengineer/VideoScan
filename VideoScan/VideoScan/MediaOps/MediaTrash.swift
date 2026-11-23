@@ -36,14 +36,17 @@ enum MediaTrash {
         return (resulting as URL?) ?? url
     }
 
-    /// Under a test host, a source that is not test scratch (TestHostScratch.isScratch) is refused: the test
-    /// trash is emptied at exit, so a real input moved into it would be erased (Codex 2026-11-23 #352 P1-3).
+    /// Under a test host, a source that is not test scratch (TestHostScratch.isScratch, symlinks resolved before
+    /// `..`) is refused: the test trash lives in the test temp root, which the runner deletes after the run, so a
+    /// real input moved into it would be erased (Codex 2026-11-23 #352 P1-3, r2 #2). Residual (Codex r2 #5): the
+    /// check and the move are two system calls; a tree rewritten between them could still redirect the move. This
+    /// stops test BUGS, not an adversary racing the test — the deletion that matters is the runner's rmtree.
     struct TestHostRefusal: Error, CustomStringConvertible {
         let path: String
-        var description: String { "test host: refusing to trash \(path) — not test scratch (the test trash is emptied at exit)" }
+        var description: String { "test host: refusing to trash \(path) — not test scratch (the test trash is deleted with the run)" }
     }
 
-    /// Removed when the test host exits (TestHostScratch).
+    /// Under the test temp root; the runner frees it (TestHostScratch).
     nonisolated static let testHostTrash = TestHostScratch.perProcess("VideoScan-tests/trash")
 
     /// Serializes the name pick and the move below. Test host only: the

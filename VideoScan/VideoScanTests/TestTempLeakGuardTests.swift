@@ -7,10 +7,9 @@
 //      and nothing with its prefix may be left in the temp dir afterwards;
 //   2. per-PROCESS folders the stores redirect to under a test host
 //      (`VideoScanTestLogs-<pid>`, `VideoScan-tests/ledger-<pid>`, …): every
-//      one must be recorded with TestHostScratch, whose exit handler removes
-//      them (one entry per store here — a new store that names its own
-//      per-process folder without TestHostScratch is caught by review, and
-//      by the temp-dir count, not by this list);
+//      one lies under the test temp root, which the RUNNER deletes after the
+//      run — the test host deletes none of them (one entry per store here; a
+//      new store is caught by review and by the runner's leftover report);
 //   3. a test's "Delete person" moved the profile into the REAL
 //      ~/dev/VideoScan/.trash (51 `POI-zztestperson-*` since 11/09): under a
 //      test host the POI trash must be inside the temp dir.
@@ -58,9 +57,13 @@ struct TestTempLeakGuardTests {
         scope.removeAll()
         #expect(FileManager.default.fileExists(atPath: outside.path))
         #expect(FileManager.default.fileExists(atPath: root.path))
-        #expect(!TestScratch.isInsideTemp(root))
-        #expect(!TestScratch.isInsideTemp(root.appendingPathComponent("..")))
-        #expect(TestScratch.isInsideTemp(root.appendingPathComponent("x")))
+        // Only direct children of the root are made (Codex 2026-11-23 r2 #3); the Issue it records is expected.
+        var refused = false
+        withKnownIssue {
+            do { _ = try TestScratch.directory(named: "a/b") } catch is TestScratch.NotAFlatName { refused = true }
+        }
+        #expect(refused)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("a").path))
     }
 
     @Test("the app's scratch honours the runner's VIDEOSCAN_TEST_TMP (else the user temp dir)")
@@ -98,72 +101,127 @@ struct TestTempLeakGuardTests {
         try? FileManager.default.removeItem(at: landed)
     }
 
-    // MARK: 2 — per process
-
-    /// The per-process folders, named here by hand (not through
-    /// TestHostScratch, which would record them and make this pass by itself).
-    private static func perProcess(_ name: String) -> URL {
-        TestHostScratch.testTempRoot
-            .appendingPathComponent("\(name)-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    /// A synthetic folder OUTSIDE both scratch roots (the test temp root and the user temp dir): /private/tmp.
+    /// Only the fixture the test makes there is ever at stake.
+    private static func outsideScratch(_ tag: String) throws -> URL {
+        let dir = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("videoscan-leakguard-\(tag)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        #expect(!TestHostScratch.isScratch(dir))
+        return dir
     }
 
-    @Test("every store's per-process test folder is recorded for removal when the test host exits")
-    func everyPerProcessFolderIsFreedAtExit() {
-        // Touch each accessor first: a folder is recorded when it is named.
-        _ = PersistentLog.testHostLogDir
-        _ = PersistentLog.logDir
-        _ = POIStorage.storeDir
-        _ = POIStorage.trashDir
-        _ = POIStorage.defaultBackupParent(for: POIStorage.storeDir)
-        _ = MediaLedger.defaultDirectory
-        _ = IgnoredContentStore.defaultDirectory
-        _ = ArchiveAuditStore.defaultDirectory
-        _ = HoldoutClearStore.defaultDirectory
-        _ = PersonRefreshPaths.defaultRoot
-        _ = POIProfileAudit.defaultDirectory
-        _ = DeleteDuplicatesPlanStore.defaultRoot
-        _ = MediaTrash.testHostTrash
-        _ = AngelEnvironment.testHostBufferRoot
-        _ = AngelEnvironment.testHostEvidenceDirectory
-        _ = HallieKindWordsStore.defaultDirectory
-        _ = DeletionReceipt.defaultDirectory
-        _ = EventsDecisionStore.defaultDirectory
-        _ = CatalogSearchIndex.defaultPersistenceURL()
-        _ = ScanCheckpoint.directory
-        _ = ScanJobsStorage.storeDir
-        _ = MetadataCache.defaultPath
-        _ = TestHostDetection.sandboxedApplicationSupportRoot(for: "TestTempLeakGuardTests")
-        _ = FamilyGraphCompiledStore.production
-        _ = PreviewDiskCache.productionRootURL
+    // Codex 2026-11-23 round 2 #2: isScratch folded `..` before resolving symlinks, so S/link/../victim.mov with
+    // S/link → O/child was approved as S/victim.mov while the move took O/victim.mov.
+    @Test("REGRESSION: MediaTrash refuses S/link/../victim.mov when the link leads out of scratch")
+    func theTestTrashRefusesADotDotThroughASymlink() throws {
+        let o = try Self.outsideScratch("dotdot")
+        let s = TestHostScratch.testTempRoot.appendingPathComponent("leakguard-S-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: o); try? FileManager.default.removeItem(at: s) }
+        try FileManager.default.createDirectory(at: o.appendingPathComponent("child"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: s, withIntermediateDirectories: true)
+        let victim = o.appendingPathComponent("victim.mov")
+        try Data([1, 2, 3]).write(to: victim)
+        try FileManager.default.createSymbolicLink(at: s.appendingPathComponent("link"),
+                                                   withDestinationURL: o.appendingPathComponent("child"))
+        let source = URL(fileURLWithPath: s.path + "/link/../victim.mov")
+        #expect(!TestHostScratch.isScratch(source))
+        var landed: URL?
+        #expect(throws: MediaTrash.TestHostRefusal.self) { landed = try MediaTrash.move(source) }
+        if let landed { try? FileManager.default.removeItem(at: landed) }   // red only: the fixture was moved
+        #expect(FileManager.default.fileExists(atPath: victim.path), "the outside file was moved into the test trash")
+    }
 
-        let expected: [URL] = [
-            Self.perProcess("VideoScanTestLogs"),
-            Self.perProcess("VideoScanTestPOI"),
-            Self.perProcess("VideoScanTestPOI").deletingLastPathComponent()
-                .appendingPathComponent("VideoScanTestPOI-\(ProcessInfo.processInfo.processIdentifier)-backups", isDirectory: true),
-            Self.perProcess("VideoScan-tests/poi-trash"),
-            Self.perProcess("VideoScan-tests/ledger"),
-            Self.perProcess("VideoScan-tests/ignored-content"),
-            Self.perProcess("VideoScan-tests/archive-audit"),
-            Self.perProcess("VideoScan-tests/holdout-clears"),
-            Self.perProcess("VideoScan-tests/person-refresh"),
-            Self.perProcess("VideoScan-tests/people-audit"),
-            Self.perProcess("VideoScan-tests/delete-duplicates"),
-            Self.perProcess("VideoScan-tests/trash"),
-            TestHostScratch.testTempRoot.appendingPathComponent(   // its historical spelling
-                "test_angel_buffer_pid\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true),
-            Self.perProcess("VideoScan-tests/archive-angel"),
-            Self.perProcess("VideoScan-tests/hallie-kind"),
-            Self.perProcess("VideoScan-tests/deletions"),
-            Self.perProcess("VideoScan-tests/events"),
-            Self.perProcess("VideoScanTestSearchIndex"),
-            Self.perProcess("VideoScanTests"),
-            Self.perProcess("VideoScan-test-appsupport"),
-            Self.perProcess("VideoScan-test-compiled"),
+    // Codex 2026-11-23 round 2 #4: passing the default test trash EXPLICITLY skipped the guard (it only ran when
+    // the override was nil). The guard now follows the effective destination.
+    @Test("REGRESSION: Delete person with the default test trash passed explicitly still refuses a non-scratch store")
+    func explicitDefaultTrashStillRefusesANonScratchSource() throws {
+        let store = try Self.outsideScratch("poi-store")
+        defer { try? FileManager.default.removeItem(at: store) }
+        let uuid = UUID()
+        let folder = store.appendingPathComponent(POIStorage.folderName(for: uuid), isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: folder.appendingPathComponent("profile.json"))
+        let moved = POIStorage.trashPOIFolder(uuid: uuid, displayName: "ZZTestPerson-explicit",
+                                              storeOverride: store, trashOverride: POIStorage.trashDir)
+        if let moved { try? FileManager.default.removeItem(at: moved) }      // red only
+        #expect(moved == nil, "moved a non-scratch folder into the test trash")
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    // The one decision behind the POI trash and the bundle importer's swap (the importer's swap needs a full
+    // bundle install to reach, so its path is pinned here through the shared decision).
+    @Test("the test-trash decision: under a test host a scratch trash takes only scratch; production never refuses")
+    func testTrashDecision() throws {
+        let outside = try Self.outsideScratch("decision")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let scratchSource = TestHostScratch.testTempRoot.appendingPathComponent("decision-\(UUID().uuidString)")
+        let realSource = outside.appendingPathComponent("person")
+        for trash in [POIStorage.trashDir, MediaTrash.testHostTrash,
+                      URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("any-temp-trash")] {
+            #expect(POIStorage.testHostRefusesTrashing(source: realSource, into: trash, isTestHost: true), "\(trash.path)")
+            #expect(!POIStorage.testHostRefusesTrashing(source: scratchSource, into: trash, isTestHost: true))
+            #expect(!POIStorage.testHostRefusesTrashing(source: realSource, into: trash, isTestHost: false), "production")
+        }
+        #expect(!POIStorage.testHostRefusesTrashing(source: realSource, into: outside.appendingPathComponent("trash"),
+                                                    isTestHost: true), "a trash outside scratch is not deleted with the run")
+    }
+
+    // Codex 2026-11-23 round 2 #3 (app copy of TestScratch).
+    @Test("a scope never removes through a symlinked parent (only direct children of the root)")
+    func scopeNeverRemovesThroughASymlink() throws {
+        let root = TestScratch.tempRoot
+        let outside = root.appendingPathComponent("leakguard-outside-\(UUID().uuidString)", isDirectory: true)
+        let link = root.appendingPathComponent("leakguard-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: link); try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("victim"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let scope = TestScratch.Scope()
+        scope.record(link.appendingPathComponent("victim", isDirectory: true))
+        scope.removeAll()
+        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("victim").path),
+                "removed through a symlinked parent")
+    }
+
+    // MARK: 2 — per process
+
+    // Codex 2026-11-23 rounds 1–2: deleting by path at exit was bypassable, so the test host deletes none of
+    // these — each lies under the test temp root, which the runner deletes after the run (by hand: the user temp
+    // dir, which macOS clears).
+    @Test("every store's per-process test folder lies under the test temp root (so the runner frees it)")
+    func everyPerProcessFolderIsUnderTheTestTempRoot() throws {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let folders: [URL] = [
+            PersistentLog.testHostLogDir,
+            PersistentLog.logDir,
+            POIStorage.storeDir,
+            POIStorage.trashDir,
+            POIStorage.defaultBackupParent(for: POIStorage.storeDir),
+            MediaLedger.defaultDirectory,
+            IgnoredContentStore.defaultDirectory,
+            ArchiveAuditStore.defaultDirectory,
+            HoldoutClearStore.defaultDirectory,
+            PersonRefreshPaths.defaultRoot,
+            POIProfileAudit.defaultDirectory,
+            DeleteDuplicatesPlanStore.defaultRoot,
+            MediaTrash.testHostTrash,
+            AngelEnvironment.testHostBufferRoot,
+            AngelEnvironment.testHostEvidenceDirectory,
+            HallieKindWordsStore.defaultDirectory,
+            DeletionReceipt.defaultDirectory,
+            EventsDecisionStore.defaultDirectory,
+            CatalogSearchIndex.defaultPersistenceURL(),
+            ScanCheckpoint.directory,
+            ScanJobsStorage.storeDir,
+            URL(fileURLWithPath: MetadataCache.defaultPath),
+            try #require(TestHostDetection.sandboxedApplicationSupportRoot(for: "TestTempLeakGuardTests")),
+            FamilyGraphCompiledStore.production.root,
+            PreviewDiskCache.productionRootURL,
         ]
-        for url in expected {
-            #expect(TestHostScratch.shared.isRegistered(url),
-                    "\(url.lastPathComponent) is never removed: name it with TestHostScratch.perProcess")
+        let root = TestHostScratch.testTempRoot.path
+        for url in folders {
+            #expect(url.path.hasPrefix(root + "/"), "\(url.path) is not under the test temp root \(root)")
+            #expect(url.path.contains("\(pid)"), "\(url.path) is not per process")
         }
     }
 
@@ -172,7 +230,7 @@ struct TestTempLeakGuardTests {
     @Test("REGRESSION: Delete person under a test host moves the profile into the temp dir, never ~/dev/VideoScan/.trash")
     func deletingAPersonInATestNeverReachesTheRealTrash() throws {
         // Checked BEFORE any move, so this test cannot itself write the real trash.
-        try #require(TestScratch.isInsideTemp(POIStorage.trashDir),
+        try #require(TestHostScratch.isScratch(POIStorage.trashDir),
                      "POI trash under a test host is \(POIStorage.trashDir.path)")
         let uuid = UUID()
         let folder = POIStorage.folder(forUUID: uuid)
@@ -181,7 +239,7 @@ struct TestTempLeakGuardTests {
 
         let dest = try #require(POIStorage.trashPOIFolder(uuid: uuid, displayName: "ZZTestPerson-leakguard"))
         defer { try? FileManager.default.removeItem(at: dest) }
-        #expect(TestScratch.isInsideTemp(dest), "\(dest.path)")
+        #expect(TestHostScratch.isScratch(dest), "\(dest.path)")
         #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 }

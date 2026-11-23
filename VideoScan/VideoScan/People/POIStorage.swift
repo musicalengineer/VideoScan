@@ -56,7 +56,7 @@ enum POIStorage {
     /// as MetadataCache / ScanJobsStorage / PersistentLog.logDir).
     static var storeDir: URL {
         if TestEnvironment.isTestHost {
-            let dir = TestHostScratch.perProcess("VideoScanTestPOI")   // removed at exit
+            let dir = TestHostScratch.perProcess("VideoScanTestPOI")   // under the test temp root (the runner frees it)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }
@@ -182,7 +182,7 @@ enum POIStorage {
     /// `git status` makes it findable, but the path is .gitignore'd via the
     /// leading dot. The bundle importer's displaced folders land here too.
     ///
-    /// Under a test host: a per-process scratch folder, removed at exit. A
+    /// Under a test host: a per-process scratch folder (the runner frees it). A
     /// test's "Delete person" used to move `POI-zztestperson-*` into the REAL
     /// ~/dev/VideoScan/.trash (51 since 11/09; BACKLOG 2026-11-23) — the
     /// store was redirected, its trash was not.
@@ -192,6 +192,17 @@ enum POIStorage {
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
+    }
+
+    /// Under a test host, may `source` be moved into `trash`? A trash that is itself test scratch (the default
+    /// test trash, or any folder in the test temp root / user temp dir) is deleted with the run, so it takes
+    /// only test scratch. True = refuse. Always false in production. One decision for the POI trash and the
+    /// bundle importer's swap. Residual (Codex r2 #5): a tree rewritten between this check and the move — a
+    /// guard against test bugs, not an adversary.
+    static func testHostRefusesTrashing(source: URL, into trash: URL,
+                                        isTestHost: Bool = TestEnvironment.isTestHost) -> Bool {
+        guard isTestHost, TestHostScratch.isScratch(trash) else { return false }
+        return !TestHostScratch.isScratch(source)
     }
 
     /// Filename-safe UTC timestamp (no colons — Finder dislikes them).
@@ -231,12 +242,13 @@ enum POIStorage {
         let label = sanitize(displayName)
         let src = (storeOverride ?? storeDir)
             .appendingPathComponent(folderName(for: uuid), isDirectory: true)
-        // Under a test host the default trash is emptied at exit: only test scratch may enter it (Codex 2026-11-23
-        // #352 P1-3 — a real person folder moved there would be erased).
-        if trashOverride == nil, TestEnvironment.isTestHost, !TestHostScratch.isScratch(src) { return nil }
+        let trashRoot = trashOverride ?? trashDir
+        // Under a test host a trash in scratch is deleted with the run: only test scratch may enter it. Gated on the
+        // EFFECTIVE destination, not on the override being nil (Codex 2026-11-23 r2 #4: passing the default test
+        // trash explicitly skipped the check).
+        if testHostRefusesTrashing(source: src, into: trashRoot) { return nil }
         guard fm.fileExists(atPath: src.path) else { return nil }
 
-        let trashRoot = trashOverride ?? trashDir
         let stamp = trashTimestamp(now)
         let dest = trashRoot.appendingPathComponent("POI-\(label)-\(stamp)",
                                                     isDirectory: true)
@@ -1206,9 +1218,7 @@ enum POIStorage {
     static func defaultBackupParent(for root: URL) -> URL {
         let parent = root.deletingLastPathComponent()
         guard TestEnvironment.isTestHost else { return parent }
-        let backups = parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
-        TestHostScratch.removeAtExit(backups)   // a no-op unless it is test scratch
-        return backups
+        return parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
     }
 
     /// Clone a directory hierarchy with `clonefile(2)` (APFS: shares blocks,

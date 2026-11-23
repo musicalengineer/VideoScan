@@ -1213,7 +1213,7 @@ enum DeleteDuplicatesPlanStore {
             .appendingPathComponent("delete-duplicates", isDirectory: true)
     }
 
-    /// Removed when the test host exits (TestHostScratch).
+    /// Under the test temp root; the runner frees it (TestHostScratch).
     nonisolated static let testHostRoot = TestHostScratch.perProcess("VideoScan-tests/delete-duplicates")
 
     static let doneFolder = "done"

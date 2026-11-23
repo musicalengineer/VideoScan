@@ -1,48 +1,44 @@
 // TestHostScratch.swift
 //
-// THE one owner of a test process's PER-PROCESS temp folders (Rick
-// 2026-11-23: "it is lazy programming to take disk space then not free it";
-// DECISIONS 2026-11-23, disk is a resource: allocate, then free).
+// WHERE a test process's scratch lives — never who deletes it (Rick 2026-11-23:
+// "it is lazy programming to take disk space then not free it"; DECISIONS
+// 2026-11-23, disk is a resource: allocate, then free).
 //
 // Under a test host, two dozen stores redirect their real root to a folder
-// named for the process — `<tmp>/VideoScanTestLogs-<pid>`,
-// `<tmp>/VideoScan-tests/ledger-<pid>`, … — so parallel hosts never share
-// one. Nothing ever removed them: measured on the Ultra 2026-11-23, ~970
-// host launches had left ~970 of each (VideoScan-tests alone 6.6 GB).
+// named for the process — `<root>/VideoScanTestLogs-<pid>`,
+// `<root>/VideoScan-tests/ledger-<pid>`, … — so parallel hosts never share
+// one. `perProcess(name)` is that one spelling: `<testTempRoot>/<name>-<pid>`.
 //
-// The fix keeps the folders per process (parallel shards still never collide)
-// and has the process remove its own at exit: whoever names a per-process
-// folder asks HERE, which records it; one `atexit` handler, installed on the
-// first registration, removes every recorded folder when the process exits
-// normally (XCTest and swift test both end the run with exit()). Why not the
-// runner's TMPDIR: xcodebuild launches the test host through testmanagerd,
-// which does not pass the runner's environment on, so the host's temp dir is
-// the user temp dir whatever the runner sets (that is where the leaks were).
-// A host that crashes or is SIGKILLed still leaves its folders; that is the
-// weekly prune's job (BACKLOG 2026-11-23 item 3), not this file's.
+// THE ROOT. Foundation on macOS ignores $TMPDIR (measured 2026-11-23), so the
+// runner sets `VIDEOSCAN_TEST_TMP` = <sealed home>/tmp and marks it with
+// `.videoscan-test-tmp` (scripts/xctest_shards.py, core_lane.py,
+// sealed_home.py). `testTempRoot` is that directory when the variable names a
+// marked absolute path (never "/") in a test process, else the user temp dir.
 //
-// THE ROOT. Foundation on macOS ignores $TMPDIR (measured 2026-11-23:
-// NSTemporaryDirectory() and FileManager.temporaryDirectory both stay
-// /var/folders/…/T with TMPDIR=/x), so a runner cannot move a test's temp
-// folders with TMPDIR. It sets `VIDEOSCAN_TEST_TMP` instead (scripts/
-// xctest_shards.py, core_lane.py: <sealed home>/tmp, reported by prefix and
-// freed after the run). `testTempRoot` is that directory when the variable
-// names an absolute path in a test process, else the user temp dir. Every
-// per-process folder here and every per-test TestScratch folder lives under
-// it, so the runner's root is the backstop for whatever a crash leaves.
+// WHO FREES IT. Under the runner, the sealed tmp: the RUNNER reports what is
+// left there by prefix and deletes the whole sealed home after the run
+// (shutil.rmtree, which resists symlink attacks). Run by hand (Xcode ⌘U), the
+// folders land in the user temp dir, which macOS clears. NO deletion happens
+// inside a test process except TestScratch's per-test scope (a direct child
+// of the root, resolved). An earlier version removed per-process folders from
+// an atexit handler, guarded by path checks; Codex (2026-11-23, rounds 1–2)
+// showed those checks bypassable (a root swapped for a symlink after init,
+// `..` folded before symlinks resolved, check/use races) — deleting by path
+// at exit was the design flaw, so it is gone.
 //
-// Production is untouched: outside a test process the variable is ignored,
-// `perProcess` returns the same URL as before but records nothing and installs
-// no handler.
+// `isScratch` remains: under a test host the test trashes (MediaTrash, the POI
+// trash) live in the root the runner deletes, so nothing that is not scratch
+// may be moved into them. Residual (Codex r2 #5): a check and the move that
+// follows are two system calls, so a process rewriting the tree between them
+// could still redirect the move. These guards stop test BUGS, not an
+// adversary racing the test; the deletion that matters is the runner's rmtree.
 //
-// ≈ C++: a process-wide registry of temp paths plus one std::atexit callback
-// that walks it — RAII for things whose lifetime is the whole process.
+// Production is untouched: outside a test process the variable is ignored and
+// `perProcess` returns the same URL as before.
 //
-// Worst-case memory: one URL per distinct registered folder (~25 per
-// process), held until exit.
+// Memory: none held (no registry).
 
 import Foundation
-import os
 
 public enum TestHostScratch {
 
@@ -51,8 +47,8 @@ public enum TestHostScratch {
     public static let rootEnvironmentKey = "VIDEOSCAN_TEST_TMP"
 
     /// The file a runner puts in the root it hands over (scripts/sealed_home.py). A root WITHOUT it is never
-    /// trusted for removal (Codex 2026-11-23 #352 P1-1: an arbitrary absolute VIDEOSCAN_TEST_TMP — "/", /Users,
-    /// a real Application Support — was accepted as the deletion boundary).
+    /// taken as the test temp root (Codex 2026-11-23 #352 P1-1: an arbitrary absolute VIDEOSCAN_TEST_TMP — "/",
+    /// /Users, a real Application Support — was accepted).
     public static let rootMarkerName = ".videoscan-test-tmp"
 
     /// Pure: the root `environment` names for a process that is (or is not) a test, else `fallback`. Only an
@@ -71,30 +67,49 @@ public enum TestHostScratch {
         FileManager.default.fileExists(atPath: root.appendingPathComponent(rootMarkerName).path)
     }
 
-    /// True when `url`, with every symlink resolved, lies strictly inside this process's test temp root or the
-    /// user temp dir — i.e. it is test scratch. Under a test host, nothing else may enter a trash that is emptied
-    /// at exit (Codex 2026-11-23 #352 P1-3: a real input moved there would be erased).
+    /// True when `url` is test scratch: with every symlink resolved, strictly inside this process's test temp root
+    /// or the user temp dir. Under a test host nothing else may enter a test trash (it lives in what the runner
+    /// deletes).
     public static func isScratch(_ url: URL) -> Bool {
-        let resolved = resolvedPath(url)
-        return [testTempRoot, URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)].contains { root in
-            let base = resolvedPath(root)
-            return base != "/" && resolved.hasPrefix(base + "/")
+        isScratch(url, roots: [testTempRoot, URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)])
+    }
+
+    /// `isScratch` against explicit roots (a test passes a synthetic one). Symlinks are resolved BEFORE any `..`
+    /// is interpreted (Codex 2026-11-23 r2 #2: folding `..` first turned S/link/../victim — really O/victim — into
+    /// S/victim): the raw path is never standardized; the deepest EXISTING ancestor is realpath'd (the kernel
+    /// resolves `..` after the symlinks before it), and a non-existent remainder holding `.` or `..` is refused.
+    public static func isScratch(_ url: URL, roots: [URL]) -> Bool {
+        guard let resolved = resolvedPath(rawPath: url.path) else { return false }
+        return roots.contains { root in
+            guard let base = resolvedPath(rawPath: root.path), base != "/" else { return false }
+            return resolved.hasPrefix(base + "/")
         }
     }
 
-    /// The path with every symlink in its existing ancestors resolved (realpath of the deepest existing
-    /// ancestor, then the rest appended), spelled without the /private prefix.
-    static func resolvedPath(_ url: URL) -> String {
-        var existing = url.standardizedFileURL
+    /// realpath() of the deepest existing ancestor of `rawPath`, with the non-existent remainder appended; nil when
+    /// that remainder contains `.` or `..` (it cannot be resolved honestly) or the path is not absolute.
+    static func resolvedPath(rawPath: String) -> String? {
+        guard rawPath.hasPrefix("/") else { return nil }
+        var existing = rawPath
         var tail: [String] = []
-        while !FileManager.default.fileExists(atPath: existing.path) && existing.path != "/" {
-            tail.insert(existing.lastPathComponent, at: 0)
-            existing = existing.deletingLastPathComponent()
+        while existing != "/" && !FileManager.default.fileExists(atPath: existing) {
+            let name = (existing as NSString).lastPathComponent
+            if name == "." || name == ".." { return nil }
+            if !name.isEmpty { tail.insert(name, at: 0) }
+            existing = (existing as NSString).deletingLastPathComponent
         }
-        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let real = realpath(existing.path, &buf) != nil ? String(cString: buf) : existing.path
-        let joined = tail.reduce(real) { ($0 as NSString).appendingPathComponent($1) }
-        return Registry.canonical(joined)
+        guard let real = realPath(existing) else { return nil }
+        return tail.reduce(real) { ($0 as NSString).appendingPathComponent($1) }
+    }
+
+    /// realpath() of an existing path; nil if it does not exist.
+    public static func realPath(_ url: URL) -> String? { realPath(url.path) }
+
+    static func realPath(_ path: String) -> String? {
+        // realpath(3) with a nil buffer mallocs the result (≈ C++: a char* we own and must free()).
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// The temp root for test scratch in THIS process (computed once; created
@@ -109,114 +124,9 @@ public enum TestHostScratch {
         return url
     }()
 
-    /// A set of folders to remove, and the removal. An instance so a test can
-    /// exercise the removal on its own folders without touching the live
-    /// process's (the shared one is only ever drained by the exit handler).
-    public final class Registry: Sendable {
-        private let paths = OSAllocatedUnfairLock(initialState: Set<String>())
-        /// The only tree a registry will remove from: the temp dir it was
-        /// made with (`testTempRoot` by default).
-        public let root: URL
-
-        public init(root: URL = TestHostScratch.testTempRoot) {
-            self.root = root.standardizedFileURL
-        }
-
-        /// Record `url` for removal. Refused (false) unless it lies strictly
-        /// inside `root` — a registry never removes anything outside the temp
-        /// dir, whatever a caller passes.
-        @discardableResult
-        public func register(_ url: URL) -> Bool {
-            guard Self.isStrictlyInside(url, root) else { return false }
-            paths.withLock { _ = $0.insert(url.standardizedFileURL.path) }
-            return true
-        }
-
-        public func isRegistered(_ url: URL) -> Bool {
-            paths.withLock { $0.contains(url.standardizedFileURL.path) }
-        }
-
-        /// Remove every registered folder that exists; returns how many were
-        /// removed. Deleted, not trashed: test scratch is regenerable
-        /// (DECISIONS 2026-11-23). The inside-root check is repeated here, at
-        /// the moment of removal.
-        @discardableResult
-        public func removeAll() -> Int {
-            let all = paths.withLock { set -> Set<String> in
-                let copy = set
-                set.removeAll()
-                return copy
-            }
-            var removed = 0
-            for path in all {
-                let url = URL(fileURLWithPath: path)
-                // At the moment of removal: the spelling AND the resolved path must be inside the root — a
-                // symlinked parent (root/link → elsewhere) resolves outside and is refused (Codex 2026-11-23
-                // #352 P1-2: S/link/victim removed the outside victim). A symlink LEAF is removed as a link.
-                guard Self.isStrictlyInside(url, root), Self.resolvesInside(url, root),
-                      FileManager.default.fileExists(atPath: path) else { continue }
-                if (try? FileManager.default.removeItem(at: url)) != nil { removed += 1 }
-            }
-            return removed
-        }
-
-        static func isStrictlyInside(_ url: URL, _ root: URL) -> Bool {
-            // Resolve the parent, not the leaf: the leaf may not exist yet,
-            // and /var → /private/var must match on both sides.
-            let leaf = url.standardizedFileURL     // ".." and "." folded away
-            let name = leaf.lastPathComponent
-            guard !name.isEmpty, name != "/", name != ".", name != ".." else { return false }
-            // /var is a symlink to /private/var and Foundation spells the temp
-            // dir either way; the leaf may not exist yet, so compare spellings
-            // rather than resolve.
-            let parent = canonical(leaf.deletingLastPathComponent().path)
-            let base = canonical(root.path)
-            return parent == base || parent.hasPrefix(base + "/")
-        }
-
-        /// The leaf's PARENT, every symlink resolved, lies inside the resolved root.
-        static func resolvesInside(_ url: URL, _ root: URL) -> Bool {
-            let parent = TestHostScratch.resolvedPath(url.standardizedFileURL.deletingLastPathComponent())
-            let base = TestHostScratch.resolvedPath(root)
-            return base != "/" && (parent == base || parent.hasPrefix(base + "/"))
-        }
-
-        static func canonical(_ path: String) -> String {
-            var p = path
-            while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-            return p.hasPrefix("/private/") ? String(p.dropFirst("/private".count)) : p
-        }
-    }
-
-    /// The process's registry, drained by the exit handler.
-    public static let shared = Registry()
-
-    /// `<testTempRoot>/<name>-<pid>` — the per-process folder for `name`
-    /// (which may contain a subfolder, e.g. "VideoScan-tests/ledger"). Not
-    /// created here. Under a test process it is recorded for removal at exit.
+    /// `<testTempRoot>/<name>-<pid>` — the per-process folder for `name` (which may contain a subfolder, e.g.
+    /// "VideoScan-tests/ledger"). Not created, recorded or removed here: the runner frees the root.
     public static func perProcess(_ name: String) -> URL {
-        let url = testTempRoot
-            .appendingPathComponent("\(name)-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        removeAtExit(url)
-        return url
+        testTempRoot.appendingPathComponent("\(name)-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
     }
-
-    /// Record a folder a test process made outside `perProcess`'s naming
-    /// (a sibling such as `<store>-backups`) for removal at exit. A no-op
-    /// outside a test process.
-    public static func removeAtExit(_ url: URL) {
-        guard TestHostDetection.isTestHost else { return }
-        guard shared.register(url) else { return }
-        installExitHandlerOnce()
-    }
-
-    /// `static let` initialisers run exactly once, thread-safely (≈ a C++
-    /// function-local static), so `atexit` is called once per process.
-    private static let exitHandler: Void = {
-        // A C function pointer: the closure captures nothing (≈ a plain
-        // `extern "C" void f()` handed to std::atexit).
-        atexit { _ = TestHostScratch.shared.removeAll() }
-    }()
-
-    private static func installExitHandlerOnce() { _ = exitHandler }
 }

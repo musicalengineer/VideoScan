@@ -95,7 +95,7 @@ final class ArchiveAuditStore: ObservableObject {
     /// under a unit-test host, so no test can write Rick's real decisions.
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return TestHostScratch.perProcess("VideoScan-tests/archive-audit")   // removed at exit
+            return TestHostScratch.perProcess("VideoScan-tests/archive-audit")   // under the test temp root (the runner frees it)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")

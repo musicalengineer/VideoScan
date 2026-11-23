@@ -82,7 +82,7 @@ final class DeletionReceipt: @unchecked Sendable {
     /// per-process scratch folder (no test writes Rick's logs).
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return TestHostScratch.perProcess("VideoScan-tests/deletions")   // removed at exit
+            return TestHostScratch.perProcess("VideoScan-tests/deletions")   // under the test temp root (the runner frees it)
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/VideoScan/deletions", isDirectory: true)

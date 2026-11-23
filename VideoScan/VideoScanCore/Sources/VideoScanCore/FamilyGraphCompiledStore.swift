@@ -264,7 +264,7 @@ public struct FamilyGraphCompiledStore: Sendable {
         guard isRunningInATestHost,
               ProcessInfo.processInfo.environment[compiledRootEnvironmentKey]?.isEmpty != false
         else { return FamilyGraphCompiledStore(root: productionRoot) }
-        let sandbox = TestHostScratch.perProcess("VideoScan-test-compiled")   // removed at exit
+        let sandbox = TestHostScratch.perProcess("VideoScan-test-compiled")   // under the test temp root (the runner frees it)
         TestHostDetection.reportSandboxedProductionStore(
             "FamilyGraphCompiledStore.production", sandbox: sandbox, overrideKey: compiledRootEnvironmentKey)
         var store = FamilyGraphCompiledStore(root: sandbox)

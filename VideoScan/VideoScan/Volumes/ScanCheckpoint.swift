@@ -40,7 +40,7 @@ struct ScanCheckpoint: Codable {
     static func resolveDirectory(testHost: Bool) -> URL {
         let base: URL
         if testHost {
-            base = TestHostScratch.perProcess("VideoScanTests")   // removed at exit
+            base = TestHostScratch.perProcess("VideoScanTests")   // under the test temp root (the runner frees it)
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

@@ -135,7 +135,7 @@ final class HallieKindWordsStore: @unchecked Sendable {
     /// POIProfileAudit.defaultDirectory).
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return TestHostScratch.perProcess("VideoScan-tests/hallie-kind")   // removed at exit
+            return TestHostScratch.perProcess("VideoScan-tests/hallie-kind")   // under the test temp root (the runner frees it)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
