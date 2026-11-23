@@ -855,9 +855,11 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
         home = sealed_home.prepare((run_dir / "home").resolve(), Path(src) if src else None)
     except (sealed_home.Refused, OSError, sqlite3_error()) as e:
         raise SealRefused(f"cannot prepare the sealed home ({type(e).__name__}: {e})")
-    # TMPDIR too: the test host is launched from this file, not from xcodebuild's environment, so without it
-    # every test's temp folder lands in the system temp dir and outlives the run (2026-11-23: ~18 GB left there)
-    sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home), "TMPDIR": str(home / "tmp") + "/"}
+    # Temp folders: the test host is launched from this file, not from xcodebuild's environment. TMPDIR reaches
+    # child processes (python, shell); Foundation on macOS IGNORES TMPDIR (NSTemporaryDirectory is the system
+    # per-user dir — measured 2026-11-23), so the tests' scratch helpers take their root from VIDEOSCAN_TEST_TMP.
+    tmp = str(home / "tmp") + "/"
+    sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home), "TMPDIR": tmp, "VIDEOSCAN_TEST_TMP": tmp}
     targets = [0]
 
     def patch(value):

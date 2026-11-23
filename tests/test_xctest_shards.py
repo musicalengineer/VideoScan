@@ -1038,6 +1038,6 @@ def test_test_hosts_get_their_own_tmp_and_what_they_leave_is_reported_then_freed
     home = bench.run_dir / "home"
     for st in bench.stamps():
         for env in st["host_env"]:
-            assert env["TMPDIR"] == str(home / "tmp") + "/", env
+            assert env["TMPDIR"] == env["VIDEOSCAN_TEST_TMP"] == str(home / "tmp") + "/", env
     assert "left behind by tests: 2 folder(s)" in out and "SigVerify-<id> ×2" in out, out
     assert not home.exists(), "the sealed home (and its tmp) was not freed"

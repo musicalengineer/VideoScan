@@ -169,7 +169,8 @@ def open_bundle(products: str, environ: Optional[Dict[str, str]] = None) -> Opti
     env = dict(os.environ if environ is None else environ, NO_COLOR="1",
                DYLD_FRAMEWORK_PATH=f"{plat}/Developer/Library/Frameworks:{plat}/Developer/Library/PrivateFrameworks",
                DYLD_LIBRARY_PATH=f"{prod.resolve()}:{plat}/Developer/usr/lib",
-               HOME=home, CFFIXED_USER_HOME=home, TMPDIR=os.path.join(home, "tmp") + "/")
+               HOME=home, CFFIXED_USER_HOME=home, TMPDIR=os.path.join(home, "tmp") + "/",
+               VIDEOSCAN_TEST_TMP=os.path.join(home, "tmp") + "/")     # Foundation ignores TMPDIR: the helpers read this
     return Bundle(prod, bundle, exe, pm, env)
 
 
