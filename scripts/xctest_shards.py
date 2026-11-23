@@ -855,7 +855,9 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
         home = sealed_home.prepare((run_dir / "home").resolve(), Path(src) if src else None)
     except (sealed_home.Refused, OSError, sqlite3_error()) as e:
         raise SealRefused(f"cannot prepare the sealed home ({type(e).__name__}: {e})")
-    sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home)}
+    # TMPDIR too: the test host is launched from this file, not from xcodebuild's environment, so without it
+    # every test's temp folder lands in the system temp dir and outlives the run (2026-11-23: ~18 GB left there)
+    sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home), "TMPDIR": str(home / "tmp") + "/"}
     targets = [0]
 
     def patch(value):
@@ -906,6 +908,10 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
     finally:
         with contextlib.suppress(OSError):
             os.unlink(sealed_run)
+        import sealed_home
+        line = sealed_home.leftovers_line(home / "tmp")
+        if line:
+            say(line)
         shutil.rmtree(home, ignore_errors=True)       # a copy: the database backups are ~1 GB a run
 
 

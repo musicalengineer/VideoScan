@@ -1295,4 +1295,6 @@ def test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one(tmp_path):
     home = b.env["HOME"]
     assert home == b.env["CFFIXED_USER_HOME"] and home != real and not home.startswith(real + "/Library"), b.env
     assert os.path.isdir(os.path.join(home, "Library", "Application Support")), "the sealed home is not prepared"
+    assert b.env["TMPDIR"] == os.path.join(home, "tmp") + "/" and os.path.isdir(b.env["TMPDIR"]), \
+        "Core test processes use the system temp dir (2026-11-23: tests' leftovers outlived the run)"
     assert b.env["PATH"] == "/usr/bin:/bin", "the rest of the caller's environment is kept"

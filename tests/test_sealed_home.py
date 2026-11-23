@@ -136,3 +136,21 @@ def test_the_model_cache_is_cloned_into_the_sealed_home(tmp_path):
     assert copy.read_bytes() == b"weights"
     copy.write_bytes(b"changed")
     assert w.read_bytes() == b"weights", "a write to the clone reached the real model cache"
+
+
+def test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix(tmp_path):
+    # 2026-11-23: test hosts used the system temp dir; tests that never removed their folders left
+    # ~18 GB there (MediaRepairEngineTests, SigVerify-…, CouplePortraitTests-…). The sealed home has its own
+    # tmp (removed with it), and what a run leaves there is REPORTED by prefix — a leak is a bug.
+    home = sh.prepare(tmp_path / "home", real_home=tmp_path / "nobody")
+    tmp = home / "tmp"
+    assert tmp.is_dir()
+    for name in ("SigVerify-8F0C2E4B-1111-2222-3333-444455556666", "SigVerify-0A0B0C0D-1111-2222-3333-444455556666",
+                 "test_media_repair_repeated_9D9D9D9D-1111-2222-3333-444455556666", "VideoScanTestLogs-31337"):
+        (tmp / name).mkdir()
+    (tmp / "SigVerify-8F0C2E4B-1111-2222-3333-444455556666" / "duplicate.mov").write_bytes(b"x" * 2048)
+    report = sh.leftovers(tmp)
+    assert [(r.prefix, r.count) for r in report][:1] == [("SigVerify-<id>", 2)], report
+    assert {r.prefix for r in report} == {"SigVerify-<id>", "test_media_repair_repeated_<id>", "VideoScanTestLogs-<id>"}
+    assert report[0].bytes >= 2048
+    assert sh.leftovers(tmp_path / "absent") == []

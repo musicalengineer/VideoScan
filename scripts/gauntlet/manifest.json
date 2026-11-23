@@ -36114,6 +36114,7 @@
         "test_sigterm_during_the_serial_tail_stops_its_test_host_too",
         "test_sigterm_stops_every_test_host_and_the_run_says_it_is_incomplete",
         "test_stop_is_one_grace_period_even_when_the_strands_ignore_term",
+        "test_test_hosts_get_their_own_tmp_and_what_they_leave_is_reported_then_freed",
         "test_the_configuration_is_read_from_the_xctestrun_and_the_two_trim_files_lose_one_test_each_in_release",
         "test_the_count_is_the_result_bundles_when_a_verdict_line_is_glued_into_a_log_line",
         "test_the_deal_balances_by_recorded_seconds_and_is_deterministic",
@@ -36437,6 +36438,7 @@
         "test_no_real_app_support_gives_an_empty_sealed_home",
         "test_the_copied_catalog_opens_read_only_as_the_production_shape_tests_open_it",
         "test_the_model_cache_is_cloned_into_the_sealed_home",
+        "test_the_sealed_home_has_its_own_tmp_and_leftovers_are_reported_by_prefix",
         "test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written",
         "test_the_sealed_home_is_refused_inside_the_real_home_library"
       ]

@@ -103,6 +103,8 @@ FAKE_XCODEBUILD = textwrap.dedent('''\
                           "result": res, "durationInSeconds": sc.get("seconds", sec),
                           "children": [{"nodeType": "Arguments", "name": "arg %d" % i, "result": res,
                                         "durationInSeconds": sc.get("seconds", sec)} for i in range(sc.get("args", 0))]})
+    for leak in [s for sel in sels for s in scenario.get(sel.partition("/")[0], {}).get("leak", [])]:
+        os.makedirs(os.path.join(host_env[0]["TMPDIR"], leak), exist_ok=True)     # a test that never cleans up
     sys.stdout.flush()
     os.makedirs(bundle)
     json.dump({"testNodes": [{"nodeType": "Test Plan", "name": "P", "children": [
@@ -1025,3 +1027,17 @@ def test_an_unreadable_xctestrun_is_refused_and_nothing_runs_unsealed(bench):
     code, out = bench.go({"A": {"tests": ["a1()"]}}, [grp("A", 1)], jobs=1)
     assert code == 1 and "REFUSED" in out and "seal" in out, out
     assert bench.stamps() == [], "a test host ran although the home could not be sealed"
+
+
+
+def test_test_hosts_get_their_own_tmp_and_what_they_leave_is_reported_then_freed(bench):
+    code, out = bench.go({"A": {"tests": ["a1()"], "leak": ["SigVerify-8F0C2E4B-1111-2222-3333-444455556666"]},
+                          "B": {"tests": ["b1()"], "leak": ["SigVerify-0A0B0C0D-1111-2222-3333-444455556666"]}},
+                         [grp("A", 1), grp("B", 1)], jobs=2)
+    assert code == 0, out
+    home = bench.run_dir / "home"
+    for st in bench.stamps():
+        for env in st["host_env"]:
+            assert env["TMPDIR"] == str(home / "tmp") + "/", env
+    assert "left behind by tests: 2 folder(s)" in out and "SigVerify-<id> ×2" in out, out
+    assert not home.exists(), "the sealed home (and its tmp) was not freed"

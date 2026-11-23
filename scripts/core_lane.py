@@ -169,7 +169,7 @@ def open_bundle(products: str, environ: Optional[Dict[str, str]] = None) -> Opti
     env = dict(os.environ if environ is None else environ, NO_COLOR="1",
                DYLD_FRAMEWORK_PATH=f"{plat}/Developer/Library/Frameworks:{plat}/Developer/Library/PrivateFrameworks",
                DYLD_LIBRARY_PATH=f"{prod.resolve()}:{plat}/Developer/usr/lib",
-               HOME=home, CFFIXED_USER_HOME=home)
+               HOME=home, CFFIXED_USER_HOME=home, TMPDIR=os.path.join(home, "tmp") + "/")
     return Bundle(prod, bundle, exe, pm, env)
 
 
@@ -184,7 +184,14 @@ def sealed_home() -> str:
     home = tempfile.mkdtemp(prefix="videoscan-core-home-")
     atexit.register(shutil.rmtree, home, True)
     src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
-    return str(sealed_home.prepare(Path(home), Path(src) if src else None))
+    prepared = sealed_home.prepare(Path(home), Path(src) if src else None)
+
+    def report() -> None:                                    # before the home is freed: who did not clean up
+        line = sealed_home.leftovers_line(prepared / "tmp")
+        if line:
+            print(f"core-lane: {line}", file=sys.stderr, flush=True)
+    atexit.register(report)                                  # atexit runs LIFO: the report, then the rmtree
+    return str(prepared)
 
 
 # ───────────────────────────────────────────────────────────── the listing → the plan

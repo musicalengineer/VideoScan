@@ -24,17 +24,18 @@ a pointer to it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, NamedTuple, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import catalog_db  # noqa: E402  (the one read-only door to the catalog)
 
-SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches")
+SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches", "tmp")
 APP = Path("Library") / "Application Support" / "VideoScan"
 DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
 MODEL_CACHES = (Path(".cache") / "huggingface",)     # read by the app from the home; public weights
@@ -143,6 +144,48 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
                       file=sys.stderr)
                 del e
     return home
+
+
+class Leftover(NamedTuple):
+    prefix: str        # the folder name with its UUID / pid / random tail replaced by <id>
+    count: int
+    bytes: int
+
+
+def _prefix(name: str) -> str:
+    name = re.sub(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}.*$", "<id>", name)
+    name = re.sub(r"(?<=[-_.])\d{2,}([-_.][A-Za-z0-9]+)?$", "<id>", name)
+    return re.sub(r"(?<=[-_.])[A-Za-z0-9]{6,10}$", "<id>", name) if "<id>" not in name else name
+
+
+def leftovers(tmp: Path) -> List[Leftover]:
+    """What the tests left in the sealed tmp, by prefix, biggest count first. Each line is a test that took
+    disk and did not give it back (DECISIONS 2026-11-23: a leak is a bug) — reported, then freed with the home."""
+    tmp = Path(tmp)
+    if not tmp.is_dir():
+        return []
+    acc: Dict[str, List[int]] = {}
+    for e in tmp.iterdir():
+        size = 0
+        try:
+            size = sum(f.stat().st_size for f in ([e] if e.is_file() else e.rglob("*")) if f.is_file() and not f.is_symlink())
+        except OSError:
+            pass
+        a = acc.setdefault(_prefix(e.name), [0, 0])
+        a[0] += 1
+        a[1] += size
+    return sorted((Leftover(k, c, b) for k, (c, b) in acc.items()), key=lambda r: (-r.count, -r.bytes, r.prefix))
+
+
+def leftovers_line(tmp: Path, top: int = 6) -> Optional[str]:
+    rows = leftovers(tmp)
+    if not rows:
+        return None
+    total = sum(r.count for r in rows)
+    mb = sum(r.bytes for r in rows) / 1e6
+    return (f"left behind by tests: {total} folder(s), {mb:.1f} MB — " +
+            ", ".join(f"{r.prefix} ×{r.count}" for r in rows[:top]) + (" …" if len(rows) > top else "") +
+            " (freed with the sealed home; each is a test that does not clean up)")
 
 
 def main(argv=None) -> int:
