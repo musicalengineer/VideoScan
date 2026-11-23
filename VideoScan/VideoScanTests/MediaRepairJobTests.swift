@@ -12,7 +12,7 @@ import Testing
 // temp dirs (RepairFixtures, MediaRepairEngineTests.swift). The model's
 // shared catalog store is inert under the test host (CatalogStore guard).
 
-@Suite(.timeLimit(.minutes(3))) @MainActor
+@Suite(.timeLimit(.minutes(3)), .scratchCleanup) @MainActor
 struct MediaRepairJobTests {
 
     typealias F = RepairFixtures
@@ -191,7 +191,7 @@ struct MediaRepairJobTests {
 
 // MARK: - The sheet's plan (pure)
 
-@Suite struct MediaRepairSelectionTests {
+@Suite(.scratchCleanup) struct MediaRepairSelectionTests {
 
     private let offers = [
         MediaRepairOffer(fix: .removeRepeatedFrames, answers: .distinctFrames, unavailableReason: nil),
@@ -260,7 +260,7 @@ struct MediaRepairJobTests {
 
 // MARK: - The sheet's plan-time count: cancellable, cached, with progress
 
-@Suite(.timeLimit(.minutes(2))) @MainActor
+@Suite(.timeLimit(.minutes(2)), .scratchCleanup) @MainActor
 struct MediaRepairPlanTimeCountTests {
 
     typealias F = RepairFixtures

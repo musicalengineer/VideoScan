@@ -186,10 +186,7 @@ public enum TestHostDetection {
     /// `store` names the caller in the once-per-store fail-safe log line.
     public static func sandboxedApplicationSupportRoot(for store: String) -> URL? {
         guard isTestHost else { return nil }
-        let sandbox = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "VideoScan-test-appsupport-\(ProcessInfo.processInfo.processIdentifier)",
-                isDirectory: true)
+        let sandbox = TestHostScratch.perProcess("VideoScan-test-appsupport")   // removed at exit
         reportSandboxedProductionStore(store, sandbox: sandbox, overrideKey: nil)
         return sandbox
     }

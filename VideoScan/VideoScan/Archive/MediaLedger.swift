@@ -36,6 +36,7 @@
 // queue object.)
 
 import Foundation
+import VideoScanCore
 import os
 
 let mediaLedgerLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "ledger")
@@ -62,9 +63,7 @@ final class MediaLedger: @unchecked Sendable {
     /// host: a per-process scratch folder (never the real file).
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/ledger-\(ProcessInfo.processInfo.processIdentifier)",
-                                        isDirectory: true)
+            return TestHostScratch.perProcess("VideoScan-tests/ledger")   // removed at exit
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")

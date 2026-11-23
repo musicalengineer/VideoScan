@@ -579,10 +579,7 @@ final class CatalogSearchIndex {
     /// index poisoning — keep every persistence caller on this default.
     nonisolated static func defaultPersistenceURL() -> URL {
         if TestEnvironment.isTestHost {
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "VideoScanTestSearchIndex-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true)
+            let dir = TestHostScratch.perProcess("VideoScanTestSearchIndex")   // removed at exit
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir.appendingPathComponent("catalog.search-index.v1.plist")
         }

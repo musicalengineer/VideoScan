@@ -23,9 +23,9 @@ final class PersistentLog: LogSink, @unchecked Sendable {
         .appendingPathComponent("Library/Logs/VideoScan")
 
     /// Per-process scratch directory used when the binary is a unit-test
-    /// host. Process-unique so parallel test hosts never clobber each other.
-    static let testHostLogDir: URL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("VideoScanTestLogs-\(ProcessInfo.processInfo.processIdentifier)")
+    /// host. Process-unique so parallel test hosts never clobber each other;
+    /// removed when the host exits (TestHostScratch).
+    static let testHostLogDir: URL = TestHostScratch.perProcess("VideoScanTestLogs")
 
     /// Routing default for every log-dir consumer (PersistentLog itself,
     /// discovery-audit sidecars, dossier smear quarantine, bundle import

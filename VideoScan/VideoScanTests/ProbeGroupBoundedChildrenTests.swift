@@ -32,6 +32,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - Shared 100k fixture (built once per test process)
@@ -47,8 +48,9 @@ private enum BoundedChildrenFixture {
     /// then say "gated lines == completed" exactly. Files are created with
     /// open(2) — FileManager.createFile is ~5× slower at this count.
     static let root: URL = {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-gh163-100k-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        // Shared by the suite's tests, so per PROCESS: removed when the test
+        // host exits (TestHostScratch), not when one test ends.
+        let dir = TestHostScratch.perProcess("vs-gh163-100k")
         try? FileManager.default.removeItem(at: dir)
         try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var n = 0
@@ -92,7 +94,7 @@ private final class MainActorPinger {
 }
 
 @MainActor
-@Suite("Probe group — bounded live children + batched gated log (GH #163)", .serialized)
+@Suite("Probe group — bounded live children + batched gated log (GH #163)", .serialized, .scratchCleanup)
 struct ProbeGroupBoundedChildrenTests {
 
     /// Stubbed probe: 1 ms of real suspension per file — deliberately
@@ -143,9 +145,7 @@ struct ProbeGroupBoundedChildrenTests {
     }
 
     private func makeLog(_ tag: String) throws -> PersistentLog {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-gh163-log-\(tag)-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = try TestScratch.unique("vs-gh163-log-\(tag)-")   // removed when the test ends
         let log = PersistentLog(name: "catalog", directory: dir)
         log.start(append: false)
         return log

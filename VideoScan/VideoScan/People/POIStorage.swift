@@ -39,6 +39,7 @@
 // name-folder → uuid-folder move that followed.
 
 import Foundation
+import VideoScanCore
 import Darwin
 import os
 
@@ -55,10 +56,7 @@ enum POIStorage {
     /// as MetadataCache / ScanJobsStorage / PersistentLog.logDir).
     static var storeDir: URL {
         if TestEnvironment.isTestHost {
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "VideoScanTestPOI-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true)
+            let dir = TestHostScratch.perProcess("VideoScanTestPOI")   // removed at exit
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }
@@ -182,9 +180,17 @@ enum POIStorage {
 
     /// Root for "soft-deleted" POI folders. Lives inside the working tree so
     /// `git status` makes it findable, but the path is .gitignore'd via the
-    /// leading dot. Mirrors the trashTarget used by the bundle importer.
+    /// leading dot. The bundle importer's displaced folders land here too.
+    ///
+    /// Under a test host: a per-process scratch folder, removed at exit. A
+    /// test's "Delete person" used to move `POI-zztestperson-*` into the REAL
+    /// ~/dev/VideoScan/.trash (51 since 11/09; BACKLOG 2026-11-23) — the
+    /// store was redirected, its trash was not.
     static var trashDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if TestEnvironment.isTestHost {
+            return TestHostScratch.perProcess("VideoScan-tests/poi-trash")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
     }
 
@@ -1197,7 +1203,9 @@ enum POIStorage {
     static func defaultBackupParent(for root: URL) -> URL {
         let parent = root.deletingLastPathComponent()
         guard TestEnvironment.isTestHost else { return parent }
-        return parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
+        let backups = parent.appendingPathComponent("\(root.lastPathComponent)-backups", isDirectory: true)
+        TestHostScratch.removeAtExit(backups)   // a no-op unless it is test scratch
+        return backups
     }
 
     /// Clone a directory hierarchy with `clonefile(2)` (APFS: shares blocks,

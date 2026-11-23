@@ -11,7 +11,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("AnalysisResultsReport — Rick's rejection (Codex 11/05)")
+@Suite("AnalysisResultsReport — Rick's rejection (Codex 11/05)", .scratchCleanup)
 struct AnalysisResultsRejectionTests {
     typealias T = AnalysisResultsReportTests
 

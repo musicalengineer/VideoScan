@@ -264,9 +264,7 @@ public struct FamilyGraphCompiledStore: Sendable {
         guard isRunningInATestHost,
               ProcessInfo.processInfo.environment[compiledRootEnvironmentKey]?.isEmpty != false
         else { return FamilyGraphCompiledStore(root: productionRoot) }
-        let sandbox = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VideoScan-test-compiled-\(ProcessInfo.processInfo.processIdentifier)",
-                                    isDirectory: true)
+        let sandbox = TestHostScratch.perProcess("VideoScan-test-compiled")   // removed at exit
         TestHostDetection.reportSandboxedProductionStore(
             "FamilyGraphCompiledStore.production", sandbox: sandbox, overrideKey: compiledRootEnvironmentKey)
         var store = FamilyGraphCompiledStore(root: sandbox)

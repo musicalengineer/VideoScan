@@ -5117,6 +5117,23 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TestHostScratchTests.swift",
+      "suites": [
+        "TestHostScratchTests"
+      ],
+      "tests": [
+        "backgroundScratchIsGoneWhenTheTestEnds",
+        "coreStoresRecordTheirFolders",
+        "perProcessIsRecordedUnderATestProcess",
+        "privateSpellingIsInside",
+        "registryRemovesOnlyInsideTheTempDir",
+        "rootHonorsTheRunnersVariable",
+        "thisProcessRootMatchesItsEnvironment"
+      ],
+      "stage": "unit"
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TestHostStoreIsolationTests.swift",
@@ -30947,6 +30964,21 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TestTempLeakGuardTests.swift",
+      "suites": [
+        "TestTempLeakGuardTests"
+      ],
+      "tests": [
+        "aRepairFixtureFolderIsGoneWhenTheTestEnds",
+        "aScopeRemovesOnlyInsideTheTempRoot",
+        "deletingAPersonInATestNeverReachesTheRealTrash",
+        "everyPerProcessFolderIsFreedAtExit",
+        "scratchHonoursTheRunnersRoot"
+      ],
+      "stage": "unit"
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ThumbnailPrecacheTests.swift",
       "stage": "unit",
       "suites": [
@@ -41502,9 +41534,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3978,
+      "expected_floor": 3983,
       "name": "unit",
-      "package_expected_floor": 1018,
+      "package_expected_floor": 1025,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -41627,7 +41659,8 @@
         "VideoScanCoreTests.AtomicFilePublishFaultTests",
         "VideoScanCoreTests.CatalogHighWaterPublishFaultTests",
         "VideoScanCoreTests.ContainedLogWriteTests",
-        "VideoScanCoreTests.TimingBudgetNanosecondsTests"
+        "VideoScanCoreTests.TimingBudgetNanosecondsTests",
+        "VideoScanCoreTests.TestHostScratchTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -42279,7 +42312,8 @@
         "VideoScanTests/PersistentLogWriteFailureTests",
         "VideoScanTests/ArchiveAngelSeamScopeTests",
         "VideoScanTests/GlobalTestHookRetiredSensorTests",
-        "VideoScanTests/PeopleSeamScopeTests"
+        "VideoScanTests/PeopleSeamScopeTests",
+        "VideoScanTests/TestTempLeakGuardTests"
       ]
     },
     {

@@ -30,6 +30,7 @@
 // before it, so order is submission order, whatever the scheduler does.)
 
 import Foundation
+import VideoScanCore
 
 enum POIProfileAudit {
 
@@ -60,9 +61,7 @@ enum POIProfileAudit {
     /// test host: a per-process scratch folder (never the real journal).
     nonisolated static var defaultDirectory: URL {
         if TestEnvironment.isTestHost {
-            return URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VideoScan-tests/people-audit-\(ProcessInfo.processInfo.processIdentifier)",
-                                        isDirectory: true)
+            return TestHostScratch.perProcess("VideoScan-tests/people-audit")   // removed at exit
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")

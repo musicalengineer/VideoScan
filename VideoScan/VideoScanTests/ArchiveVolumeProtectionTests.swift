@@ -625,6 +625,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScanCore/CyberBrainWriter+Persistence.swift": 3,
         "VideoScanCore/FFmpegFrameRip.swift": 1, "VideoScanCore/FamilyGraphCompiledStore.swift": 5,
         "VideoScanCore/PreviewDiskCache.swift": 4,
+        // NEW 1 (2026-11-23, test temp leaks): TestHostScratch.Registry.removeAll — at a TEST
+        // process's exit, its own per-process scratch folders (VideoScanTestLogs-<pid>, …), each
+        // re-checked to lie strictly inside the test temp root at the moment of removal. Records
+        // nothing outside a test process, so production never reaches it.
+        "VideoScanCore/TestHostScratch.swift": 1,
     ]
 
     /// A second family of ways to make a file disappear, each with a

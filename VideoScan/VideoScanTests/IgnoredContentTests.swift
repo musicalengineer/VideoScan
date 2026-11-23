@@ -21,6 +21,7 @@
 // RescanPreservationTests (sensor_setAsideContentAtNewPathIsNotReingested).
 
 import Foundation
+import VideoScanCore
 import Testing
 @testable import VideoScan
 
@@ -504,7 +505,8 @@ struct IgnoredContentIsolationTests {
         #expect(TestEnvironment.isTestHost)
         let dir = IgnoredContentStore.defaultDirectory.path
         #expect(!dir.contains("Application Support"), "default directory was \(dir)")
-        #expect(dir.hasPrefix(NSTemporaryDirectory()) || dir.hasPrefix("/private" + NSTemporaryDirectory()))
+        let root = TestHostScratch.testTempRoot.path   // VIDEOSCAN_TEST_TMP, else the user temp dir
+        #expect(dir.hasPrefix(root) || dir.hasPrefix("/private" + root))
         let model = VideoScanModel()
         #expect(!model.ignoredContentStore.directory.path.contains("Application Support"))
         #expect(!model.ignoredContentStore.fileURL.path.contains("Application Support"))

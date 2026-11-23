@@ -19,6 +19,7 @@
 // completions and lets us look up a specific descriptor without parsing.
 
 import Foundation
+import VideoScanCore
 
 /// Snapshot of a completed scan job, written to disk so it survives app
 /// restart. Result rows are NOT included here — they're rehydrated from
@@ -135,11 +136,7 @@ enum ScanJobsStorage {
     static var storeDir: URL {
         let base: URL
         if isRunningTests {
-            base = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent(
-                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true
-                )
+            base = TestHostScratch.perProcess("VideoScanTests")   // removed at exit
         } else {
             base = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

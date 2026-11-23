@@ -36,8 +36,8 @@ enum MediaTrash {
         return (resulting as URL?) ?? url
     }
 
-    nonisolated static let testHostTrash = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("VideoScan-tests/trash-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    /// Removed when the test host exits (TestHostScratch).
+    nonisolated static let testHostTrash = TestHostScratch.perProcess("VideoScan-tests/trash")
 
     /// Serializes the name pick and the move below. Test host only: the
     /// "exists? → move" pair is two steps, and parallel tests or jobs

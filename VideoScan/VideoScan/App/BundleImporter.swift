@@ -501,8 +501,9 @@ enum BundleImporter {
     /// Tests pass an explicit `trashDir` so displaced fixtures stay in temp.
     private static func trashTarget(forPOI folderName: String,
                                     trashDir: URL? = nil) -> URL {
-        let root = trashDir ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
+        // One definition of the POI trash (the same path in production; a
+        // per-process scratch folder under a test host).
+        let root = trashDir ?? POIStorage.trashDir
         let stamp = isoStamp(Date())
         return root
             .appendingPathComponent("POI-\(folderName)-\(stamp)", isDirectory: true)

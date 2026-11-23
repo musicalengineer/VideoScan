@@ -42,7 +42,7 @@ struct ScriptedFailureFactory: JobFactory {
     }
 }
 
-@Suite("JobSupervisor — fail fast (2026-11-03)")
+@Suite("JobSupervisor — fail fast (2026-11-03)", .scratchCleanup)
 struct JobSupervisorFailFastTests {
 
     static func run(_ script: [String?], systemic: Bool = true) async -> (log: InMemoryBackgroundLog, recorder: UnitRecorder,
@@ -116,7 +116,7 @@ struct JobSupervisorFailFastTests {
     }
 }
 
-@Suite("EraJob — what can stop it, and a Mac with no ffmpeg", .serialized)
+@Suite("EraJob — what can stop it, and a Mac with no ffmpeg", .serialized, .scratchCleanup)
 struct EraJobFailFastTests {
 
     @Test func timeoutsAndWorkerDeathsArePerFileEverythingElseIsSystemic() async throws {

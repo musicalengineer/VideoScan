@@ -14,7 +14,7 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("StateRootLock — one supervisor per state root")
+@Suite("StateRootLock — one supervisor per state root", .scratchCleanup)
 struct StateRootLockTests {
 
     @Test("a second supervisor over the same root adopts nothing while the first is alive, then takes over when it dies")

@@ -56,7 +56,7 @@ enum RetryReview {
     }
 }
 
-@Suite("EraJob — retry-limit review (Fable 2026-11-04)", .serialized)
+@Suite("EraJob — retry-limit review (Fable 2026-11-04)", .serialized, .scratchCleanup)
 struct EraJobRetryReviewTests {
 
     @Test("RED: a tool broken for every file must not give up decodable files — EraJob.swift:229-233 counts a systemic rip failure as a try",

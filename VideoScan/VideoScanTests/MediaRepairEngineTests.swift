@@ -24,11 +24,9 @@ import Testing
 
 enum RepairFixtures {
 
+    /// Removed when the calling test ends (its suite carries .scratchCleanup).
     static func makeDir(_ purpose: String) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_media_repair_\(purpose)_\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("test_media_repair_\(purpose)_")
     }
 
     static func ffmpeg(_ args: [String]) throws {
@@ -139,7 +137,7 @@ enum RepairFixtures {
 
 // MARK: - Refusals (pure)
 
-@Suite struct MediaRepairRefusalTests {
+@Suite(.scratchCleanup) struct MediaRepairRefusalTests {
 
     private let src = URL(fileURLWithPath: "/tmp/test_src/test_clip.mp4")
     private let out = URL(fileURLWithPath: "/tmp/test_src/test_clip_repaired.mp4")
@@ -261,7 +259,7 @@ enum RepairFixtures {
 
 // MARK: - Outcomes on disk
 
-@Suite(.timeLimit(.minutes(3)))
+@Suite(.timeLimit(.minutes(3)), .scratchCleanup)
 struct MediaRepairEngineTests {
 
     typealias F = RepairFixtures
@@ -562,7 +560,7 @@ struct MediaRepairEngineTests {
 
 // MARK: - Media matrix (lossless remux)
 
-@Suite(.serialized, .timeLimit(.minutes(3)))
+@Suite(.serialized, .timeLimit(.minutes(3)), .scratchCleanup)
 struct MediaRepairMediaMatrixTests {
 
     @Test(arguments: RepairFixtures.Container.allCases)
