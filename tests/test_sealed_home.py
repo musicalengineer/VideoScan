@@ -122,3 +122,17 @@ def test_the_copied_catalog_opens_read_only_as_the_production_shape_tests_open_i
         out.close()
     finally:
         ro.close()
+
+
+def test_the_model_cache_is_cloned_into_the_sealed_home(tmp_path):
+    # 2026-11-22 (full sealed run 8ad9b0c7e: GREEN, but 2 SigLIP tests skipped — their weights live in
+    # ~/.cache/huggingface, outside App Support). Public model files: cloned, never written back.
+    real = tmp_path / "real"
+    w = real / ".cache" / "huggingface" / "hub" / "models--google--siglip2" / "model.safetensors"
+    w.parent.mkdir(parents=True)
+    w.write_bytes(b"weights")
+    home = sh.prepare(tmp_path / "home", real_home=real)
+    copy = home / ".cache" / "huggingface" / "hub" / "models--google--siglip2" / "model.safetensors"
+    assert copy.read_bytes() == b"weights"
+    copy.write_bytes(b"changed")
+    assert w.read_bytes() == b"weights", "a write to the clone reached the real model cache"

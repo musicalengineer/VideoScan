@@ -37,6 +37,7 @@ import catalog_db  # noqa: E402  (the one read-only door to the catalog)
 SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches")
 APP = Path("Library") / "Application Support" / "VideoScan"
 DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
+MODEL_CACHES = (Path(".cache") / "huggingface",)     # read by the app from the home; public weights
 
 
 class Refused(Exception):
@@ -111,6 +112,14 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
         raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
     for sub in SUBDIRS:
         (home / sub).mkdir(parents=True, exist_ok=True)
+    # public model caches the app reads from the home (SigLIP's weights: ~/.cache/huggingface) — cloned
+    for rel in MODEL_CACHES:
+        m_src, m_dst = real / rel, home / rel
+        if m_src.is_dir() and not m_dst.exists():
+            m_dst.parent.mkdir(parents=True, exist_ok=True)
+            if subprocess.run(["/bin/cp", "-cR", str(m_src), str(m_dst)], capture_output=True).returncode != 0:
+                shutil.rmtree(m_dst, ignore_errors=True)
+                shutil.copytree(m_src, m_dst, symlinks=True)
     src = real / APP
     if not src.is_dir():
         return home

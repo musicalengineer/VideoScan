@@ -36435,6 +36435,7 @@
         "test_a_sealed_home_under_the_real_caches_is_allowed",
         "test_no_real_app_support_gives_an_empty_sealed_home",
         "test_the_copied_catalog_opens_read_only_as_the_production_shape_tests_open_it",
+        "test_the_model_cache_is_cloned_into_the_sealed_home",
         "test_the_sealed_home_holds_a_copy_of_app_support_and_the_real_one_is_never_written",
         "test_the_sealed_home_is_refused_inside_the_real_home_library"
       ]
