@@ -46,9 +46,15 @@ G = xs.Group
 #  "silent": bool, "hang": bool}}), prints the lines the real hosts print, writes a "result bundle"
 # (a folder with tests.json in xcresulttool's shape) and a start/end stamp per invocation.
 FAKE_XCODEBUILD = textwrap.dedent('''\
-    import json, os, sys, time
+    import json, os, plistlib, sys, time
     args = sys.argv[1:]
     scenario = json.load(open(os.environ["FAKE_SCENARIO"]))
+    xr = args[args.index("-xctestrun") + 1]
+    try:
+        plan = plistlib.load(open(xr, "rb"))
+        host_env = [t.get("EnvironmentVariables") or {} for c in plan.get("TestConfigurations", []) for t in c.get("TestTargets", [])]
+    except Exception as e:
+        host_env = "unreadable: %s" % e
     bundle = args[args.index("-resultBundlePath") + 1]
     sels = [a.split("/", 1)[1] for a in args if a.startswith("-only-testing:")]
     stamp = os.path.join(os.environ["FAKE_STAMPS"], "%d.json" % os.getpid())
@@ -102,7 +108,7 @@ FAKE_XCODEBUILD = textwrap.dedent('''\
     json.dump({"testNodes": [{"nodeType": "Test Plan", "name": "P", "children": [
         {"nodeType": "Unit test bundle", "name": "VideoScanTests", "children": nodes}]}]},
         open(os.path.join(bundle, "tests.json"), "w"))
-    json.dump({"start": t0, "end": time.time(), "suites": sels}, open(stamp, "w"))
+    json.dump({"start": t0, "end": time.time(), "suites": sels, "xctestrun": xr, "host_env": host_env}, open(stamp, "w"))
     sys.exit(65 if bad else 0)
 ''')
 FAKE_XCRESULTTOOL = textwrap.dedent('''\
@@ -113,12 +119,23 @@ FAKE_XCRESULTTOOL = textwrap.dedent('''\
 ''')
 
 
+def write_xctestrun(path: Path) -> None:
+    """A minimal .xctestrun (format v2): one configuration, the unit-test target with an environment."""
+    import plistlib
+    with open(path, "wb") as f:
+        plistlib.dump({"__xctestrun_metadata__": {"FormatVersion": 2},
+                       "TestConfigurations": [{"Name": "Test Scheme Action", "TestTargets": [
+                           {"BlueprintName": "VideoScanTests", "TestBundlePath": "__TESTROOT__/Debug/VideoScanTests.xctest",
+                            "EnvironmentVariables": {"KEEP_ME": "1", "HOME": "/Users/someone"}}]}]}, f)
+
+
 class Bench:
     def __init__(self, tmp: Path) -> None:
         self.tmp = tmp
         (tmp / "fake_xcodebuild.py").write_text(FAKE_XCODEBUILD)
         (tmp / "fake_xcresulttool.py").write_text(FAKE_XCRESULTTOOL)
         (tmp / "stamps").mkdir()
+        write_xctestrun(tmp / "x.xctestrun")
         self.timings = tmp / "timings.json"
         self.run_dir = tmp / "run"
 
@@ -428,7 +445,7 @@ def test_a_shard_past_its_timeout_is_stopped_and_red(bench):
 def test_a_run_where_no_test_ran_is_red_and_usage_errors_exit_2(bench, tmp_path):
     code, out = bench.go({"A": {"tests": [], "silent": True}}, [{"name": "F", "selectors": ["A"], "tests": 0, "exact": False}])
     assert code == 1 and "RED" in last(out), out
-    p = subprocess.run([sys.executable, str(SCRIPT), "--xctestrun", "x", "--jobs", "0", "--all"], capture_output=True, text=True)
+    p = subprocess.run([sys.executable, str(SCRIPT), "--xctestrun", str(bench.tmp / "x.xctestrun"), "--jobs", "0", "--all"], capture_output=True, text=True)
     assert p.returncode == 2 and "--jobs must be at least 1" in p.stderr
     p = subprocess.run([sys.executable, str(SCRIPT), "--xctestrun", "x"], capture_output=True, text=True)
     assert p.returncode == 2 and "name what to run" in p.stderr
@@ -625,7 +642,7 @@ def test_run_tests_end_to_end_through_the_real_shard_script_with_a_fake_xcodebui
     real = rt.app_shards_cmd
 
     def with_fakes(wt_, plan, jobs, shard_dir, dd=None, v=rt.DEBUG):
-        (tmp_path / "x.xctestrun").write_text("")
+        write_xctestrun(tmp_path / "x.xctestrun")
         cmd = real(wt_, plan, jobs, shard_dir, dd, v)
         i = cmd.index("--products")
         cmd[i:i + 2] = ["--xctestrun", str(tmp_path / "x.xctestrun")]
@@ -655,7 +672,7 @@ def test_sigterm_stops_every_test_host_and_the_run_says_it_is_incomplete(bench):
     (bench.tmp / "scenario.json").write_text(json.dumps(scenario))
     (bench.tmp / "plan.json").write_text(json.dumps({"groups": [grp("A", 1), grp("B", 1), grp("C", 1)]}))
     env = dict(os.environ, FAKE_SCENARIO=str(bench.tmp / "scenario.json"), FAKE_STAMPS=str(bench.tmp / "stamps"))
-    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", "x", "--plan", str(bench.tmp / "plan.json"),
+    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", str(bench.tmp / "x.xctestrun"), "--plan", str(bench.tmp / "plan.json"),
                           "--jobs", "3", "--run-dir", str(bench.run_dir), "--timings", str(bench.timings),
                           "--xcodebuild", f"{sys.executable} {bench.tmp / 'fake_xcodebuild.py'}"],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
@@ -679,7 +696,7 @@ def test_sigterm_during_the_serial_tail_stops_its_test_host_too(bench):
     (bench.tmp / "scenario.json").write_text(json.dumps(scenario))
     (bench.tmp / "plan.json").write_text(json.dumps({"groups": [grp("T", 1, stage="performance")]}))
     env = dict(os.environ, FAKE_SCENARIO=str(bench.tmp / "scenario.json"), FAKE_STAMPS=str(bench.tmp / "stamps"))
-    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", "x", "--plan", str(bench.tmp / "plan.json"),
+    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", str(bench.tmp / "x.xctestrun"), "--plan", str(bench.tmp / "plan.json"),
                           "--jobs", "3", "--run-dir", str(bench.run_dir), "--timings", str(bench.timings),
                           "--xcodebuild", f"{sys.executable} {bench.tmp / 'fake_xcodebuild.py'}"],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
@@ -978,3 +995,33 @@ def test_the_configuration_is_read_from_the_xctestrun_and_the_two_trim_files_los
     debug, release = count(True), count(False)
     assert set(debug) == {"TrimSensorTests", "TrimMediaMatrixTests"}
     assert all(release[n] == debug[n] - 1 for n in debug), (debug, release)
+
+
+
+# ───────────────────────────── the sealed home (DECISIONS 2026-11-22: tests never open the real catalog)
+
+def test_every_test_host_runs_with_a_sealed_home_and_the_built_xctestrun_is_untouched(bench):
+    original = (bench.tmp / "x.xctestrun").read_bytes()
+    code, out = bench.go({"A": {"tests": ["a1()"]}, "B": {"tests": ["b1()"]}, "C": {"tests": ["c1()"]}},
+                         [grp("A", 1), grp("B", 1), grp("C", 1)], jobs=2)
+    assert code == 0, out
+    home = bench.run_dir / "home"
+    stamps = bench.stamps()
+    assert len(stamps) >= 2
+    for st in stamps:
+        assert st["xctestrun"] != str(bench.tmp / "x.xctestrun"), "a host ran from the unsealed .xctestrun"
+        assert Path(st["xctestrun"]).parent == bench.tmp, "the sealed copy sits beside the original (__TESTROOT__)"
+        for env in st["host_env"]:
+            assert env["HOME"] == env["CFFIXED_USER_HOME"] == str(home), env
+            assert env["KEEP_ME"] == "1", "the build's own test environment is kept"
+    assert home.is_dir() and (home / "Library").is_dir()
+    assert (bench.tmp / "x.xctestrun").read_bytes() == original, "the build's .xctestrun was modified"
+    assert not list(bench.tmp.glob("*.sealed-*.xctestrun")), "the sealed copy was left beside the build"
+    assert "sealed home" in out
+
+
+def test_an_unreadable_xctestrun_is_refused_and_nothing_runs_unsealed(bench):
+    (bench.tmp / "x.xctestrun").write_text("not a plist")
+    code, out = bench.go({"A": {"tests": ["a1()"]}}, [grp("A", 1)], jobs=1)
+    assert code == 1 and "REFUSED" in out and "seal" in out, out
+    assert bench.stamps() == [], "a test host ran although the home could not be sealed"

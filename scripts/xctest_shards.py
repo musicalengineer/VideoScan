@@ -61,6 +61,7 @@ Tests: tests/test_xctest_shards.py.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import heapq
 import json
 import os
@@ -824,6 +825,56 @@ def write_summary(path: Optional[Path], data: dict) -> None:
     os.replace(tmp, path)
 
 
+class SealRefused(Exception):
+    """The test hosts' home could not be sealed: nothing runs (never unsealed)."""
+
+
+def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
+    """(the sealed copy of the .xctestrun, the home it points at). Every test target's host gets
+    HOME = CFFIXED_USER_HOME = <run_dir>/home — a fresh scratch home, so ~/Library/Application Support,
+    ~/Library/Logs and ~/Library/Preferences resolve inside the run, never to Rick's real catalog, logs
+    or defaults (DECISIONS 2026-11-22: tests never open the real catalog; the corpus runner's and the
+    gauntlet's seal, applied to every app test run). The copy sits BESIDE the original (its paths are
+    __TESTROOT__-relative), is a new file (O_EXCL, never through a link) and is removed by the caller;
+    the build's own .xctestrun is never modified. xcodebuild itself keeps the real home (its caches).
+    Raises SealRefused when the file cannot be read or names no test target."""
+    import plistlib
+    try:
+        with open(xctestrun, "rb") as f:
+            plan = plistlib.load(f)
+    except (OSError, ValueError, plistlib.InvalidFileException) as e:
+        raise SealRefused(f"cannot read {xctestrun} to seal the test hosts' home ({type(e).__name__})")
+    home = (run_dir / "home").resolve()
+    for sub in ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches"):
+        (home / sub).mkdir(parents=True, exist_ok=True)
+    sealed = {"HOME": str(home), "CFFIXED_USER_HOME": str(home)}
+    targets = [0]
+
+    def patch(value):
+        if isinstance(value, list):
+            return [patch(v) for v in value]
+        if isinstance(value, dict):
+            out = {k: patch(v) for k, v in value.items()}
+            if "TestBundlePath" in out:
+                env = dict(out.get("EnvironmentVariables") or {})
+                env.update(sealed)
+                out["EnvironmentVariables"] = env
+                targets[0] += 1
+            return out
+        return value
+    patched = patch(plan)
+    if targets[0] == 0:
+        raise SealRefused(f"{xctestrun} names no test target: nothing to seal")
+    dest = xctestrun.with_name(f"{xctestrun.stem}.sealed-{os.getpid()}-{run_dir.name}.xctestrun")
+    try:
+        fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except OSError as e:
+        raise SealRefused(f"cannot write the sealed copy beside {xctestrun} ({e.strerror})")
+    with os.fdopen(fd, "wb") as f:
+        plistlib.dump(patched, f)
+    return dest, home
+
+
 def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path = DEFAULT_TIMINGS,
         timeout: float = SHARD_TIMEOUT, xcodebuild: Sequence[str] = ("xcodebuild",),
         xcresulttool: Sequence[str] = ("xcrun", "xcresulttool"), stream: bool = False, tail: bool = True,
@@ -834,6 +885,25 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
     shards, held = plan_shards(groups, jobs, timings, tail, root)
     lost = say_undealable(groups)
     run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        sealed_run, home = seal_xctestrun(xctestrun, run_dir)
+    except SealRefused as e:
+        say(f"REFUSED: {e} — no test host is started unsealed")
+        write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED", planned=0))
+        return 1
+    say(f"sealed home: every test host runs with HOME = CFFIXED_USER_HOME = {home}")
+    try:
+        return _run_sealed(groups, shards, held, lost, sealed_run, jobs, run_dir, timings_path, timeout, xcodebuild,
+                           xcresulttool, stream, target, keep_results, coverage, summary)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(sealed_run)
+
+
+def _run_sealed(groups, shards, held, lost, xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path, timeout: float,
+                xcodebuild: Sequence[str], xcresulttool: Sequence[str], stream: bool, target: str, keep_results: bool,
+                coverage: bool, summary: Optional[Path]) -> int:
+    timings = strands.load_timings(timings_path)
     work: List[strands.Strand] = []
     dealt: List[List[Group]] = []
     for i, gs in enumerate(shards):
