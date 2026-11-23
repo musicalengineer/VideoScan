@@ -84,7 +84,7 @@ docs/history.jsonl
 # Safety-swap destination for the .videoscanbundle importer and the
 # "Delete person" UI. Contains real archived POI data the user may
 # want to recover. Never commit.
-/.trash/
+/.trash
 .dd-gauntlet/
 tests/fixtures/perf/
 *.local.md
