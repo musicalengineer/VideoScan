@@ -20,9 +20,11 @@ import argparse
 import os
 import re
 import sys
+import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import List
 from typing import Dict, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -91,28 +93,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"pytest strands: {len(work)} modules, {min(a.jobs, len(work))} at a time "
           f"(scripts/testbed_strands.py; longest first by the last run)", flush=True)
     t0 = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="pytest-strands-") as tmp:
-        results = strands.Runner(Path(tmp), jobs=a.jobs, timings_path=a.timings).run(work)
-        elapsed = time.monotonic() - t0
-        counts, fails, worst, empty = [], [], 0, []
-        for r in results:
-            text = r.text()
-            c = summary_counts(text)
-            counts.append(c)
-            fails += [l for l in text.splitlines() if FAIL_LINE.match(l)]
-            if r.rc == NO_TESTS_COLLECTED and not r.timed_out:
-                # One file pytest found no test in (the tracked-file glob also matches helpers such as
-                # scripts/ci_test_verdict.py). Not a failure of that file; an import error is exit 2
-                # and stays RED, and a lane that ran no test at all is still RED by its total.
-                empty.append(r.strand.name)
-                continue
-            if not r.ok:
-                worst = worst or (r.rc if r.rc > 0 else 1)
-                why = "TIMEOUT" if r.timed_out else f"exit {r.rc}"
-                print(f"\n----- {r.strand.name}: {why} ({r.seconds:.1f}s) — its own output -----")
-                print(text.rstrip())
-                if not c:
-                    fails.append(f"ERROR {r.strand.name}: {why} with no pytest summary")
+    # Not a TemporaryDirectory: its cleanup RAISES when a test left a process still writing into its strand's TMPDIR
+    # ("Directory not empty"), and the lane then printed no summary at all — 2,900 tests read as 'ZERO tests ran'
+    # (2026-11-23). The summary is printed first; the folder is freed after, and a strand that kept writing is named.
+    tmp = tempfile.mkdtemp(prefix="pytest-strands-")
+    try:
+        return _run_and_report(a, work, Path(tmp), t0)
+    finally:
+        _free(Path(tmp), [w.name for w in work])
+
+
+def _free(tmp: Path, names: List[str]) -> None:
+    """Remove the strands' folder; retry briefly while a lingering writer finishes; then name who is still writing."""
+    for _ in range(6):
+        shutil.rmtree(tmp, ignore_errors=True)
+        if not tmp.exists():
+            return
+        time.sleep(0.5)
+    still = sorted(names[int(d.name)] for d in tmp.iterdir()
+                   if d.is_dir() and d.name.isdigit() and int(d.name) < len(names) and any(d.rglob("*")))
+    print(f"note: {tmp} could not be freed — a test left a process writing after its strand ended: "
+          f"{', '.join(still) or 'unknown strand'} (a leak: that test should stop what it started)", flush=True)
+
+
+def _run_and_report(a, work, tmp: Path, t0: float) -> int:
+    results = strands.Runner(tmp, jobs=a.jobs, timings_path=a.timings).run(work)
+    elapsed = time.monotonic() - t0
+    counts, fails, worst, empty = [], [], 0, []
+    for r in results:
+        text = r.text()
+        c = summary_counts(text)
+        counts.append(c)
+        fails += [l for l in text.splitlines() if FAIL_LINE.match(l)]
+        if r.rc == NO_TESTS_COLLECTED and not r.timed_out:
+            # One file pytest found no test in (the tracked-file glob also matches helpers such as
+            # scripts/ci_test_verdict.py). Not a failure of that file; an import error is exit 2
+            # and stays RED, and a lane that ran no test at all is still RED by its total.
+            empty.append(r.strand.name)
+            continue
+        if not r.ok:
+            worst = worst or (r.rc if r.rc > 0 else 1)
+            why = "TIMEOUT" if r.timed_out else f"exit {r.rc}"
+            print(f"\n----- {r.strand.name}: {why} ({r.seconds:.1f}s) — its own output -----")
+            print(text.rstrip())
+            if not c:
+                fails.append(f"ERROR {r.strand.name}: {why} with no pytest summary")
     if empty:
         print(f"no tests in {len(empty)} file(s): {', '.join(sorted(empty))}")
     slowest = sorted(results, key=lambda r: -r.seconds)[:3]

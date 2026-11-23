@@ -36069,6 +36069,7 @@
       "tests": [
         "test_a_file_with_no_tests_is_named_not_failed_but_a_lane_of_no_tests_is_red",
         "test_a_shard_that_dies_without_a_summary_is_red_never_green",
+        "test_a_test_that_keeps_writing_after_its_strand_is_named_and_the_summary_still_prints",
         "test_shards_run_at_once_a_failure_is_shown_and_the_exit_is_nonzero",
         "test_the_summary_sums_shards_in_pytests_own_grammar_and_the_lane_reads_it"
       ]
