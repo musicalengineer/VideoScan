@@ -13,13 +13,11 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("BackgroundQuitMarker")
+@Suite("BackgroundQuitMarker", .scratchCleanup)
 struct BackgroundQuitMarkerTests {
 
     private func root() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quit-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("quit-")   // removed when the test ends (.scratchCleanup)
     }
 
     @Test func noFileReadsNone() throws {

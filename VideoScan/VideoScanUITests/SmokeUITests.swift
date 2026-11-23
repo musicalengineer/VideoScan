@@ -51,6 +51,10 @@ final class SmokeUITests: XCTestCase {
         // Isolation switch — see file header. Without this the real app
         // would load Rick's 100k-record catalog and touch real prefs.
         app.launchEnvironment["VS_UI_TEST"] = "1"
+        // Hand on the runner's test temp root (see GauntletBase.launchGauntletApp).
+        if let root = ProcessInfo.processInfo.environment["VIDEOSCAN_TEST_TMP"] {
+            app.launchEnvironment["VIDEOSCAN_TEST_TMP"] = root
+        }
         app.launch()
 
         // 1. Main window appears. First any window at all, then the tab

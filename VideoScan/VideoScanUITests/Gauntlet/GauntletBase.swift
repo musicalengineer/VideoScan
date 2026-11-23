@@ -101,6 +101,12 @@ class GauntletTestCase: XCTestCase {
             "HOME": fakeHome.path,
             "CFFIXED_USER_HOME": fakeHome.path
         ]
+        // The app under test is launched by XCUITest with ONLY this environment: hand on the runner's test
+        // temp root (VIDEOSCAN_TEST_TMP, the sealed tmp it frees) — without it the app's per-process test
+        // folders (VideoScanTestSearchIndex-<pid>, VideoScanTests-<pid>, …) landed in the system temp dir.
+        if let root = ProcessInfo.processInfo.environment["VIDEOSCAN_TEST_TMP"] {
+            app.launchEnvironment["VIDEOSCAN_TEST_TMP"] = root
+        }
         app.launch()
         self.app = app
         return app

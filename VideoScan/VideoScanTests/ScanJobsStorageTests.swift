@@ -2,16 +2,15 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite("ScanJobsStorage")
+@Suite("ScanJobsStorage", .scratchCleanup)
 struct ScanJobsStorageTests {
 
     // MARK: - Helpers
 
     private func makeSandbox() -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("scanjobs_test_\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        // Removed when the test ends (.scratchCleanup).
+        (try? TestScratch.unique("scanjobs_test_"))
+            ?? TestScratch.tempRoot.appendingPathComponent("scanjobs_test_\(UUID().uuidString)", isDirectory: true)
     }
 
     private func sampleDescriptor(

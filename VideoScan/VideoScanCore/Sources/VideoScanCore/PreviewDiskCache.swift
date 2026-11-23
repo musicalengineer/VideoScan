@@ -179,11 +179,14 @@ public final class PreviewDiskCache: @unchecked Sendable {
     /// Deterministic per-root lock path in the OS temp dir. Reuses
     /// `previewCacheKey` purely as a stable digest of the root path (the
     /// mtime/size args are fixed placeholders) — same root ⇒ same lockfile
-    /// for every process, without polluting the cache directory.
+    /// for every process, without polluting the cache directory. Under a
+    /// test host the lock lives in the test temp root instead (each test's
+    /// cache root is unique, so every test left a lock file in the system
+    /// temp dir; the runner frees its root — Rick 2026-11-23).
     private var writeLockURL: URL {
         let token = previewCacheKey(path: rootURL.standardizedFileURL.path, mtime: 0, size: 0)
-        return URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("videoscan-preview-cache-\(token).lock")
+        let dir = Self.isRunningTests ? TestHostScratch.testTempRoot : URL(fileURLWithPath: NSTemporaryDirectory())
+        return dir.appendingPathComponent("videoscan-preview-cache-\(token).lock")
     }
 
     /// Run `body` while holding the advisory cross-process write lock (and

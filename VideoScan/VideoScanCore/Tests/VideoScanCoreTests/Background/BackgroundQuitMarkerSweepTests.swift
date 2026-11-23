@@ -12,13 +12,11 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("BackgroundQuitMarker — Codex sweep 11/09")
+@Suite("BackgroundQuitMarker — Codex sweep 11/09", .scratchCleanup)
 struct BackgroundQuitMarkerSweepTests {
 
     private func root() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quit-sweep-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("quit-sweep-")   // removed when the test ends (.scratchCleanup)
     }
 
     @Test("RED F2: quit.json is a directory → clear() removes nothing inside it and says why")

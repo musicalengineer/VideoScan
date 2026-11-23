@@ -6,14 +6,12 @@ import UniformTypeIdentifiers
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Family asset store")
+@Suite("Family asset store", .scratchCleanup)
 struct FamilyAssetStoreTests {
     private let fileManager = FileManager.default
 
     private func temporaryStore() throws -> (base: URL, store: FamilyAssetStore) {
-        let base = fileManager.temporaryDirectory
-            .appendingPathComponent("FamilyAssetStoreTests-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: base, withIntermediateDirectories: true)
+        let base = try TestScratch.unique("FamilyAssetStoreTests-")   // removed when the test ends
         return (
             base,
             FamilyAssetStore(

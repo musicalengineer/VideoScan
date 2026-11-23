@@ -24,7 +24,7 @@ import VideoScanCore
 /// the 100k pins live in ArchiveAngelScaleCharacterizationTests.nudgeCounts,
 /// and the ArchiveNudgeTests cases are below with the expectations they
 /// asserted on the old function, unchanged.
-@Suite("Archive Angel recommendations — the legacy rule set holds the retired ArchiveNudge's frozen answers", .serialized)
+@Suite("Archive Angel recommendations — the legacy rule set holds the retired ArchiveNudge's frozen answers", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveAngelRecommendationsLegacyParityTests {
 
@@ -178,7 +178,7 @@ struct ArchiveAngelRecommendationsLegacyParityTests {
 
 // MARK: - The rule language
 
-@Suite("Archive Angel rule language — fields, operators, any, validation")
+@Suite("Archive Angel rule language — fields, operators, any, validation", .scratchCleanup)
 struct AngelRuleLanguageTests {
 
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
@@ -323,7 +323,7 @@ struct AngelRuleLanguageTests {
 
 // MARK: - The classifier's own logic
 
-@Suite("Archive Angel recommendations — classes, vouches, copies")
+@Suite("Archive Angel recommendations — classes, vouches, copies", .scratchCleanup)
 struct ArchiveAngelClassifierLogicTests {
 
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
@@ -373,7 +373,7 @@ struct ArchiveAngelClassifierLogicTests {
 
 // MARK: - The unified rules (S3b)
 
-@Suite("Archive Angel recommendations — the unified default rules (S3b)")
+@Suite("Archive Angel recommendations — the unified default rules (S3b)", .scratchCleanup)
 struct ArchiveAngelUnifiedRulesTests {
 
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
@@ -464,7 +464,7 @@ struct ArchiveAngelUnifiedRulesTests {
 
 // MARK: - ONE set of numbers (the façade)
 
-@Suite("Archive Angel — one set of numbers: strip headline, badge and filter agree", .serialized)
+@Suite("Archive Angel — one set of numbers: strip headline, badge and filter agree", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveAngelOneSetOfNumbersTests {
 
@@ -554,7 +554,7 @@ struct ArchiveAngelOneSetOfNumbersTests {
 
 // MARK: - QA on S3 (2026-09-22) — red first
 
-@Suite("Archive Angel S3 QA — safety floors, Extra copy, live guard, regex, schema", .serialized)
+@Suite("Archive Angel S3 QA — safety floors, Extra copy, live guard, regex, schema", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveAngelS3QATests {
 
@@ -647,9 +647,9 @@ struct ArchiveAngelS3QATests {
     }
 
     @Test("the evidence pick follows the classes too (tier, then score); unclassified evidence comes last")
-    func evidencePickByClass() {
+    func evidencePickByClass() throws {
         let now = Date()
-        let store = ArchiveAngelEvidenceStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let store = ArchiveAngelEvidenceStore(directory: try TestScratch.unique("angel-evidence-"))   // removed when the test ends
         let a = UUID(), b = UUID(), c = UUID(), d = UUID()
         store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, complete: true, considered: 4, eligible: 4, records: [
             a: rec(40, .ready), b: rec(90, .worthALook), c: rec(160, .needsDate), d: rec(30, nil),

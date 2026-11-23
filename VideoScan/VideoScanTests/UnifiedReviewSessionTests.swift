@@ -26,17 +26,13 @@ import Testing
 import Foundation
 @testable import VideoScan
 
-@Suite("Unified Review Session")
+@Suite("Unified Review Session", .scratchCleanup)
 struct UnifiedReviewSessionTests {
 
     // MARK: - Fixtures
 
     private func makeTempDir() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("unified-review-tests-\(UUID().uuidString)",
-                                    isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try TestScratch.unique("unified-review-tests-")   // removed when the test ends
     }
 
     private func csvText(_ dataLines: [String]) -> String {

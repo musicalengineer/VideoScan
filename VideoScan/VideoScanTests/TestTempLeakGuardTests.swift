@@ -47,6 +47,36 @@ struct TestTempLeakGuardTests {
         #expect(Self.entries(withPrefix: prefix).subtracting(before).isEmpty)
     }
 
+    // Rick 2026-11-23 (slice 3): a full sealed run still left 815 entries in the SYSTEM temp dir from fixtures
+    // that built paths on NSTemporaryDirectory() directly. The representative: the person-finder cache
+    // fixture (57 `pf_cache_test_*` per run). Its database must live in test scratch and be gone when the
+    // test's scope ends — nothing new in the system temp dir, nothing left in the test temp root.
+    @Test("GUARD: a fixture that opens a database leaves nothing in the system temp dir or the test root once its test ends")
+    func aDatabaseFixtureLeavesNothingInTheSystemTemp() throws {
+        let prefix = "pf_cache_test_"
+        func listing(_ dir: String) -> Set<String> {
+            Set(((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasPrefix(prefix) })
+        }
+        let system = NSTemporaryDirectory(), root = TestHostScratch.testTempRoot.path
+        let beforeSystem = listing(system), beforeRoot = listing(root)
+        // The guard must not itself leak when it is red.
+        defer {
+            for name in listing(system).subtracting(beforeSystem) {
+                try? FileManager.default.removeItem(atPath: (system as NSString).appendingPathComponent(name))
+            }
+        }
+        let scope = TestScratch.Scope()
+        TestScratch.$current.withValue(scope) {
+            let cache = PersonFinderCacheTests.makeTempCache()
+            _ = cache.lookup(key: PersonFinderCache.CacheKey(videoPath: "/x/test.mov", fileSize: 1,
+                                                              modDate: Date(timeIntervalSince1970: 1), personName: "test",
+                                                              engine: "test", threshold: 0.5, refHash: "leakguard"))
+        }
+        scope.removeAll()   // what .scratchCleanup does when a test case ends
+        #expect(listing(system).subtracting(beforeSystem).isEmpty, "left in the system temp dir")
+        #expect(listing(root).subtracting(beforeRoot).isEmpty, "left in the test temp root")
+    }
+
     @Test("a scope never removes anything outside the test temp root")
     func aScopeRemovesOnlyInsideTheTempRoot() throws {
         let root = TestHostScratch.testTempRoot

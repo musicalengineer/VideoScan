@@ -10,7 +10,7 @@ import VideoScanCore
 // person in 2k of them, built in a time budget from the index — never a
 // catalog pass), and a sensor that the view keeps it that way.
 
-@Suite("People — videos of a person")
+@Suite("People — videos of a person", .scratchCleanup)
 @MainActor
 struct PersonVideosTests {
 
@@ -106,7 +106,7 @@ struct PersonVideosTests {
 
 // MARK: - Hand-picked videos (2026-10-04) + the born-before guard
 
-@Suite("People — hand-picked videos")
+@Suite("People — hand-picked videos", .scratchCleanup)
 @MainActor
 struct FeaturedVideosTests {
 
@@ -184,7 +184,7 @@ struct FeaturedVideosTests {
 
 // MARK: - Family groups (2026-10-04)
 
-@Suite("People — family groups")
+@Suite("People — family groups", .scratchCleanup)
 @MainActor
 struct FamilyGroupTests {
 
@@ -230,7 +230,7 @@ struct FamilyGroupTests {
     }
 }
 
-@Suite("People — family photo")
+@Suite("People — family photo", .scratchCleanup)
 @MainActor
 struct FamilyPhotoTests {
     @Test func aPhotoIsCopiedInDownsizedAndRemembered() throws {
@@ -241,7 +241,7 @@ struct FamilyPhotoTests {
         ctx.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 2000, height: 1500))
         let image = try #require(ctx.makeImage())
-        let src = FileManager.default.temporaryDirectory.appendingPathComponent("family-\(UUID().uuidString).png")
+        let src = try TestScratch.unique("family-photo-src-").appendingPathComponent("family.png")   // removed when the test ends
         let dest = try #require(CGImageDestinationCreateWithURL(src as CFURL, "public.png" as CFString, 1, nil))
         CGImageDestinationAddImage(dest, image, nil)
         #expect(CGImageDestinationFinalize(dest))
@@ -261,7 +261,7 @@ struct FamilyPhotoTests {
 
 // MARK: - Picks survive a stale profile save (overnight 2026-10-04)
 
-@Suite("People — picks survive other profile saves")
+@Suite("People — picks survive other profile saves", .scratchCleanup)
 @MainActor
 struct FeaturedVideosSurviveSavesTests {
     /// The People tab keeps in-memory profile copies that predate a pick;
@@ -299,7 +299,7 @@ struct FeaturedVideosSurviveSavesTests {
 
 // MARK: - Codex overnight review 2026-10-04 (3 × P1), each pinned
 
-@Suite("People — codex 10/4 P1s")
+@Suite("People — codex 10/4 P1s", .scratchCleanup)
 @MainActor
 struct PeopleCodexOvernightTests {
 
@@ -378,7 +378,7 @@ struct PeopleCodexOvernightTests {
     }
 }
 
-@Suite("People — family photo crop")
+@Suite("People — family photo crop", .scratchCleanup)
 struct FamilyPhotoCropTests {
     @Test func cropRoundTripsAndOldFilesDefaultToUncropped() throws {
         var family = FamilyGroup(name: "Crop Family")
