@@ -35,7 +35,7 @@ extension VideoScanModel {
             for t in scanTargets where t.searchPath.hasPrefix(volumeRoot) {
                 t.isReachable = VolumeReachability.isReachable(path: t.searchPath)
             }
-            log("Volume mounted: \(url.lastPathComponent) (not auto-added — use Add Scan Target to catalog)")
+            if let line = VolumeMountLog.line(for: url) { log(line) }
         }
         // A fresh mount is exactly when a RENAMED volume shows up (same
         // UUID, new /Volumes path) — re-run the rename detection so the
