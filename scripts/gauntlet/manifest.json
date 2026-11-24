@@ -34179,6 +34179,9 @@
         "test_a_package_build_that_leaves_a_child_behind_is_red_not_amber",
         "test_a_printed_lookalike_result_line_is_never_counted",
         "test_a_printed_swift_testing_lookalike_is_never_counted",
+        "test_a_quiet_listing_that_fails_is_red_in_its_words_and_runs_no_package_test",
+        "test_a_quiet_test_that_fails_alone_fails_the_stage_by_name",
+        "test_a_skip_that_did_not_skip_is_red_never_a_quiet_test_counted_twice",
         "test_an_unfiltered_listing_is_filtered_by_the_stages_own_selectors",
         "test_an_xctest_body_cannot_forge_a_ghost_or_its_own_result",
         "test_below_package_floor_fails",
@@ -34189,6 +34192,7 @@
         "test_package_failure_fails_a_stage_whose_xcode_part_passed",
         "test_package_known_issue_and_missing_summary_are_not_passes",
         "test_package_only_stage_runs",
+        "test_quiet_machine_tests_run_alone_after_the_parallel_pass_never_beside_it",
         "test_unblocked_package_suite_without_selectors_fails_preflight"
       ]
     },
