@@ -792,8 +792,10 @@ def app_build_cmd(wt: Path, dd: Optional[Path] = None, v: Variant = DEBUG) -> Li
 def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, result: Optional[Path] = None,
                  v: Variant = DEBUG) -> List[str]:
     """suites: `Suite` or `Suite/test` selectors (app_selectors). Each run its own -resultBundlePath:
-    two runs from one DerivedData must not race for xcodebuild's default result bundle name."""
-    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v)
+    two runs from one DerivedData must not race for xcodebuild's default result bundle name. The single
+    host runs in a sealed home holding a copy of App Support, freed after (this runner's own
+    scripts/sealed_home.py run; DECISIONS 2026-11-22 — the K hosts are sealed by xctest_shards.py)."""
+    return ([sys.executable, str(SELF.parent / "sealed_home.py"), "run", "--", "xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v)
             + ["-parallel-testing-enabled", "NO"] + (["-resultBundlePath", str(result)] if result else [])
             + (["-enableCodeCoverage", "YES"] if v.coverage else [])
             + [f"-only-testing:VideoScanTests/{s}" for s in suites])

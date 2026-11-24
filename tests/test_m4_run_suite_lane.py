@@ -59,7 +59,12 @@ case " $* " in
     fi
     exit 0 ;;
   *" build-for-testing "*) echo "fake build"; exit "$(cat "$SUITE_FAKE/build_rc")" ;;
-  *" test-without-building "*) cat "$SUITE_FAKE/app.log"; exit "$(cat "$SUITE_FAKE/test_rc")" ;;
+  *" test-without-building "*)
+    # what the test host would be given (xcodebuild strips TEST_RUNNER_), and whether that home exists now
+    { echo "home=${TEST_RUNNER_HOME:-}"; echo "cfhome=${TEST_RUNNER_CFFIXED_USER_HOME:-}"
+      echo "tmp=${TEST_RUNNER_VIDEOSCAN_TEST_TMP:-}"
+      [ -n "${TEST_RUNNER_HOME:-}" ] && [ -d "$TEST_RUNNER_HOME/Library/Logs" ] && echo "logs=yes"; } > "$SUITE_FAKE/runner_env"
+    cat "$SUITE_FAKE/app.log"; exit "$(cat "$SUITE_FAKE/test_rc")" ;;
 esac
 exit 0
 '''
@@ -369,6 +374,13 @@ sys.exit(0 if d["verdict"] == "GREEN" else 1)
         self.assertEqual((row['status'], row['passed']), ('ok', 5))
         self.assertNotIn('app_test_hosts', row)
         self.assertIn('one test host (NIGHTLY_APP_JOBS=1)', (out / 'suite.log').read_text())
+        # Sealed (DECISIONS 2026-11-22): the single host's test host gets a scratch home, never the real one,
+        # and the home is freed after the run.
+        got = dict(line.split('=', 1) for line in (self.fake / 'runner_env').read_text().splitlines())
+        self.assertTrue(got.get('home'), 'the single host ran with the real home')
+        self.assertNotEqual(got['home'], str(self.home))
+        self.assertEqual((got['cfhome'], got['tmp'], got.get('logs')), (got['home'], got['home'] + '/tmp/', 'yes'))
+        self.assertFalse(pathlib.Path(got['home']).exists(), 'the sealed home was not freed')
 
     def test_a_shard_that_came_up_short_is_red_by_name_though_every_test_passed(self):
         self.commit_sharder()

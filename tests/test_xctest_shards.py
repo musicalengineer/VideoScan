@@ -585,13 +585,14 @@ def test_run_tests_app_lane_runs_as_shards_by_default_and_as_one_host_with_jobs_
     cmd = seen[-1][0]
     if (os.cpu_count() or 2) >= 4:
         assert cmd[cmd.index("--jobs") + 1] == str((os.cpu_count() or 2) // 2)
-    # --jobs 1: the single host, as before
+    # --jobs 1: the single host, as before — in a sealed home (scripts/sealed_home.py run, 2026-11-23)
+    single = [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--", "xcodebuild", "test-without-building"]
     lanes_with(monkeypatch, tmp_path, ["--jobs", "1"], wt, fake_stream)
     cmd = seen[-1][0]
-    assert cmd[:2] == ["xcodebuild", "test-without-building"] and "-only-testing:VideoScanTests/A1" in cmd
+    assert cmd[:6] == single and "-only-testing:VideoScanTests/A1" in cmd
     # a commit whose worktree has no xctest_shards.py (an older ref): the single host
     lanes_with(monkeypatch, tmp_path, ["--jobs", "6"], tmp_path / "old-wt", fake_stream)
-    assert seen[-1][0][:2] == ["xcodebuild", "test-without-building"]
+    assert seen[-1][0][:6] == single
     with pytest.raises(SystemExit):
         rt.parse_args(["--jobs", "0"])
 

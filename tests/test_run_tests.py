@@ -1961,3 +1961,12 @@ def test_each_variant_stamp_lives_with_its_own_products_and_never_vouches_for_an
     assert rt._stamp(slot, "core") == rt.core_package(slot.wt) / ".build" / ".run_tests-built-core"
     assert rt._stamp(slot, "app-release-cov").parent == Path(f"{slot.dd}-release-cov")
     assert rt._stamp(slot, "core-cov").parent == rt.core_scratch(slot.wt, rt.Variant("debug", True))
+
+
+def test_the_single_app_host_runs_in_a_sealed_home():
+    # --jobs 1 (and a commit without xctest_shards.py): one `xcodebuild test-without-building`, its test host
+    # pointed at a sealed home with a copy of App Support by scripts/sealed_home.py run (DECISIONS 2026-11-22).
+    t = rt.app_test_cmd(Path("/wt"), ["S"], Path("/dd"))
+    assert t[:6] == [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--", "xcodebuild",
+                     "test-without-building"], t
+    assert "--empty" not in t, "the full suite's real-data tests need the copy"

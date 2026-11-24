@@ -20,6 +20,16 @@ real ~/Library (refused otherwise). ≈ C++: handing the test a deep copy of the
 a pointer to it.
 
     sealed_home.py prepare <home>      # print the prepared home's path
+    sealed_home.py run [--empty] [--plain] -- <command> [args…]
+
+`run` (2026-11-23, every lane sealed): allocate a fresh home in the temp dir, run <command> with the
+test process's HOME / CFFIXED_USER_HOME / TMPDIR / VIDEOSCAN_TEST_TMP pointing into it, report what the
+tests left in its tmp, free it (also on TERM/HUP/Ctrl-C), exit with the command's code. By default the
+variables are TEST_RUNNER_-prefixed: `xcodebuild test` keeps the real home for its own caches and hands
+them, prefix stripped, to the test host (`man xcodebuild`, TEST_RUNNER_<VAR>). --plain sets them unprefixed,
+for a command that IS the test process (`swift test --skip-build`). --empty: no copy of App Support (a
+source-scan lane needs no data; nothing to copy, nothing to free but folders). Worst case on disk: one
+App Support copy (clones + ~1 GB of database backups) for the length of the command.
 """
 from __future__ import annotations
 
@@ -126,8 +136,9 @@ def _backup(src: Path, dst: Path) -> None:
         s.close()
 
 
-def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
-    """Make `home` a sealed home holding a copy of the real App Support (if there is one). Returns it."""
+def prepare(home: Path, real_home: Optional[Path] = None, copy: bool = True) -> Path:
+    """Make `home` a sealed home holding a copy of the real App Support (if there is one; copy=False: an
+    empty home, nothing copied). Returns it."""
     real = real_home or _real_home()
     home = Path(home)
     # what the seal protects: the real App Support, Logs and Preferences (a run folder under ~/Library/Caches is fine)
@@ -143,6 +154,8 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
         (home / sub).mkdir(parents=True, exist_ok=True)
     _ensure_regular_file(home / OWNER_FILE, f"{os.getpid()} sealed home made by scripts/sealed_home.py\n")
     _ensure_regular_file(home / "tmp" / TMP_MARKER, "the runner's sealed test temp root (scripts/sealed_home.py)\n")
+    if not copy:
+        return home
     # public model caches the app reads from the home (SigLIP's weights: ~/.cache/huggingface) — cloned
     for rel in MODEL_CACHES:
         m_src, m_dst = real / rel, home / rel
@@ -220,13 +233,63 @@ def leftovers_line(tmp: Path, top: int = 6) -> Optional[str]:
             " (freed with the sealed home; each is a test that does not clean up)")
 
 
+def test_env(home: Path, runner: bool = True) -> Dict[str, str]:
+    """What points a test process at `home`. runner=True: TEST_RUNNER_-prefixed, for xcodebuild to hand on."""
+    tmp = str(Path(home) / "tmp") + "/"      # Foundation ignores TMPDIR: the tests' scratch helpers read VIDEOSCAN_TEST_TMP
+    env = {"HOME": str(home), "CFFIXED_USER_HOME": str(home), "TMPDIR": tmp, "VIDEOSCAN_TEST_TMP": tmp}
+    return {f"TEST_RUNNER_{k}": v for k, v in env.items()} if runner else env
+
+
+def run(cmd: List[str], copy: bool = True, plain: bool = False) -> int:
+    """Allocate a sealed home, run `cmd` pointed at it, free it (whoever allocates frees). The command's exit
+    code; 128+N when a signal N ended it or this runner. ≈ C++: an RAII guard around one child process."""
+    import signal
+    import tempfile
+    home = Path(tempfile.mkdtemp(prefix="videoscan-sealed-home-"))
+
+    def stop(signum, frame):                 # TERM/HUP become an exception, so `finally` frees the home
+        raise SystemExit(128 + signum)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop)
+    child = None
+    try:
+        src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
+        prepare(home, Path(src) if src else None, copy=copy)
+        print(f"sealed-home: the test process runs with HOME = {home} ({'a copy of App Support' if copy else 'empty'}; "
+              f"freed after)", file=sys.stderr, flush=True)
+        try:
+            child = subprocess.Popen(cmd, env=dict(os.environ, **test_env(home, runner=not plain)))
+        except OSError as e:
+            print(f"sealed-home: cannot run {cmd[0]}: {e}", file=sys.stderr)
+            return 127
+        rc = child.wait()
+        return 128 - rc if rc < 0 else rc
+    finally:
+        if child is not None and child.poll() is None:            # we were stopped: the child goes too
+            child.terminate()
+            try:
+                child.wait(30)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        line = leftovers_line(home / "tmp")
+        if line:
+            print(f"sealed-home: {line}", file=sys.stderr, flush=True)
+        shutil.rmtree(home, ignore_errors=True)    # never follows a symlink out of the home
+
+
 def main(argv=None) -> int:
     a = list(sys.argv[1:] if argv is None else argv)
+    if a[:1] == ["run"] and "--" in a:
+        opts, cmd = a[1:a.index("--")], a[a.index("--") + 1:]
+        if cmd and set(opts) <= {"--empty", "--plain"}:
+            return run(cmd, copy="--empty" not in opts, plain="--plain" in opts)
     if len(a) != 2 or a[0] != "prepare":
-        print(__doc__.strip().splitlines()[-1], file=sys.stderr)
+        print("usage: sealed_home.py prepare <home> | run [--empty] [--plain] -- <command> [args…]", file=sys.stderr)
         return 2
     try:
-        print(prepare(Path(a[1])))
+        src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")
+        print(prepare(Path(a[1]), Path(src) if src else None))
     except Refused as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 1

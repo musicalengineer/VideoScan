@@ -1929,12 +1929,27 @@ if [ "$APP_JOBS" -gt 1 ]; then
 else
     log "  one test host (NIGHTLY_APP_JOBS=1)"
 fi
+# The single host runs sealed (DECISIONS 2026-11-22: tests never open the real
+# catalog): its test host's HOME / CFFIXED_USER_HOME / TMPDIR point into a scratch
+# home, handed on by xcodebuild's TEST_RUNNER_ variables (xcodebuild keeps the
+# real home for its caches). It holds a copy of App Support when the commit has
+# scripts/sealed_home.py (as the K hosts' does), else it is empty. Freed after.
+APP_HOME=$(mktemp -d "${TMPDIR:-/tmp}/videoscan-app-home.XXXXXX")
+mkdir -p "$APP_HOME/Library/Application Support" "$APP_HOME/Library/Logs" \
+    "$APP_HOME/Library/Preferences" "$APP_HOME/Library/Caches" "$APP_HOME/tmp"
+if [ -f "$REPO/scripts/sealed_home.py" ]; then
+    python3 "$REPO/scripts/sealed_home.py" prepare "$APP_HOME" >/dev/null \
+        || log "  sealed home: no copy of App Support (sealed_home.py prepare failed) — the host runs with an empty home"
+fi
+log "  sealed home for the test host: $APP_HOME (freed after)"
 # A private-process-group watchdog guarantees this call returns to the
 # publication path even if xcodebuild or a test blocks in a kernel read.
 run_with_process_group_watchdog \
     "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
     "$NIGHTLY_TEST_LOG" \
+    env TEST_RUNNER_HOME="$APP_HOME" TEST_RUNNER_CFFIXED_USER_HOME="$APP_HOME" \
+    TEST_RUNNER_TMPDIR="$APP_HOME/tmp/" TEST_RUNNER_VIDEOSCAN_TEST_TMP="$APP_HOME/tmp/" \
     xcodebuild test-without-building \
     -project VideoScan/VideoScan.xcodeproj \
     -scheme VideoScan \
@@ -1947,6 +1962,7 @@ run_with_process_group_watchdog \
     ENABLE_TESTABILITY=YES \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=
 TEST_RC=$?
+rm -rf "$APP_HOME"
 fi
 TEST_TIMED_OUT=$NIGHTLY_WATCHDOG_DID_TIMEOUT
 cat "$NIGHTLY_TEST_LOG" 2>/dev/null || true
