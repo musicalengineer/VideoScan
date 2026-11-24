@@ -696,39 +696,100 @@ func entryNames(_ folder: Int32) throws -> [String] {
     return names
 }
 
+/// Opens the folder `name` of the open folder `parent` for removal, by descriptor only: it gets owner rwx
+/// FIRST with fchmodat(AT_SYMLINK_NOFOLLOW) (a folder a test left 0000 or 0100 cannot be opened otherwise;
+/// re-review 2026-11-24), then opened O_NOFOLLOW|O_DIRECTORY, and must be the folder `expected` describes
+/// (no swap in between) on `device` (a disk image a test left mounted is never entered). nil: left as it is.
+func openForRemoval(parent: Int32, name: String, expected: stat, device: dev_t) -> Int32? {
+    guard expected.st_dev == device else { return nil }
+    _ = fchmodat(parent, name, (expected.st_mode & 0o7777) | S_IRWXU, AT_SYMLINK_NOFOLLOW)
+    let folder = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard folder >= 0 else { return nil }
+    var opened = stat()
+    guard fstat(folder, &opened) == 0, opened.st_ino == expected.st_ino, opened.st_dev == device else { close(folder); return nil }
+    return folder
+}
+
 /// Removes the entry `name` of the open folder `parent`, a whole tree when it is one, by descriptor only
 /// (Codex #360 F4: a path-based lstat-then-chmod could follow a symlink swapped in between): a symlink or
-/// file is unlinked as itself; a folder is opened O_NOFOLLOW|O_DIRECTORY, must be the one just inspected and
-/// on `device` (a disk image a test left mounted under the sealed tmp is never entered: it, and the folders
-/// holding it, stay and this throws), gets owner rwx with fchmod (a folder a test left 0500/0000), is
-/// emptied through its descriptor, then removed. (C++: fstatat/openat/fchmod/unlinkat on a dirfd.)
+/// file is unlinked as itself; each folder goes through openForRemoval. The walk is an explicit stack that
+/// holds ONE open folder at a time (re-review 2026-11-24: one per level hit EMFILE past RLIMIT_NOFILE
+/// levels): it descends into a folder's first sub-folder, and once a folder is empty climbs back through
+/// "..", checked to be the folder it came from, and removes it there. What cannot go (another volume, a
+/// swap, a folder that will not open or list) stays with every folder holding it, and the call throws.
+/// Memory: one frame per level of the tree, each with the names of its sub-folders still to go (listed once).
+/// (C++: fstatat/fchmodat/openat/unlinkat on dirfds, an explicit std::vector stack.)
 func removeEntry(parent: Int32, name: String, device: dev_t) throws {
-    var st = stat()
-    guard fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+    var top = stat()
+    guard fstatat(parent, name, &top, AT_SYMLINK_NOFOLLOW) == 0 else {
         if errno == ENOENT { return }
         throw posixError("inspect \(name)")
     }
-    guard (st.st_mode & S_IFMT) == S_IFDIR else {
+    guard (top.st_mode & S_IFMT) == S_IFDIR else {
         guard unlinkat(parent, name, 0) == 0 || errno == ENOENT else { throw posixError("unlink \(name)") }
         return
     }
-    let folder = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    guard folder >= 0 else { throw posixError("open \(name)") }
-    var opened = stat()
-    guard fstat(folder, &opened) == 0, opened.st_ino == st.st_ino, opened.st_dev == st.st_dev else {
-        close(folder); throw RunError("\(name) changed while it was being removed: left as it is")
+    var parentStat = stat()
+    guard fstat(parent, &parentStat) == 0 else { throw posixError("inspect the folder holding \(name)") }
+    guard var current = openForRemoval(parent: parent, name: name, expected: top, device: device) else {
+        throw RunError("\(name) is on another volume, changed while it was being removed, or cannot be opened: left as it is")
     }
-    guard opened.st_dev == device else { close(folder); throw RunError("\(name) is on another volume (a mount): left as it is") }
-    _ = fchmod(folder, (opened.st_mode & 0o7777) | S_IRWXU)
-    var firstError: Error?
-    do {
-        for child in try entryNames(folder) {
-            do { try removeEntry(parent: folder, name: child, device: device) } catch { firstError = firstError ?? error }
+    // A frame per folder on the way down: its name in its parent, the parent's inode (checked on the way
+    // back up), the sub-folders still to remove (listed ONCE, on the first visit), and whether anything
+    // in it had to be left alone (then it, and every folder holding it, stays).
+    struct Frame { let name: String; let parentInode: ino_t; var pending: [String]? = nil; var leftAlone = false }
+    var frames = [Frame(name: name, parentInode: parentStat.st_ino)]
+    var problem: String?
+    func leave(_ why: String) { frames[frames.count - 1].leftAlone = true; problem = problem ?? why }
+    while !frames.isEmpty {
+        let last = frames.count - 1
+        if frames[last].pending == nil {
+            var folders: [String] = []
+            do {
+                for child in try entryNames(current) {
+                    var st = stat()
+                    guard fstatat(current, child, &st, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+                    if (st.st_mode & S_IFMT) == S_IFDIR { folders.append(child); continue }
+                    if unlinkat(current, child, 0) != 0 && errno != ENOENT { leave("unlink \(child): \(String(cString: strerror(errno)))") }
+                }
+            } catch { leave("\(error)") }
+            frames[last].pending = folders
         }
-    } catch { firstError = firstError ?? error }
-    close(folder)
-    if let firstError { throw firstError }
-    guard unlinkat(parent, name, AT_REMOVEDIR) == 0 else { throw posixError("remove \(name)") }
+        if let child = frames[last].pending?.popLast() {
+            var st = stat()
+            guard fstatat(current, child, &st, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+            guard (st.st_mode & S_IFMT) == S_IFDIR else {
+                if unlinkat(current, child, 0) != 0 && errno != ENOENT { leave("unlink \(child): \(String(cString: strerror(errno)))") }
+                continue
+            }
+            guard let opened = openForRemoval(parent: current, name: child, expected: st, device: device) else {
+                leave("\(child) is on another volume, changed, or cannot be opened: left as it is")
+                continue
+            }
+            var here = stat(); _ = fstat(current, &here)
+            frames.append(Frame(name: child, parentInode: here.st_ino))
+            close(current); current = opened
+            continue
+        }
+        // The folder is as empty as it will get: climb to its parent (checked) and remove it there.
+        let frame = frames.removeLast()
+        let up: Int32 = frames.isEmpty ? dup(parent) : openat(current, "..", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        close(current)
+        var upStat = stat()
+        guard up >= 0, fstat(up, &upStat) == 0, upStat.st_ino == frame.parentInode else {
+            if up >= 0 { close(up) }
+            throw RunError("the folder holding \(frame.name) changed while it was being removed: left as it is")
+        }
+        var removed = false
+        if !frame.leftAlone {
+            removed = unlinkat(up, frame.name, AT_REMOVEDIR) == 0
+            if !removed { problem = problem ?? "remove \(frame.name): \(String(cString: strerror(errno)))" }
+        }
+        if frames.isEmpty { close(up); break }
+        if !removed { frames[frames.count - 1].leftAlone = true }
+        current = up
+    }
+    if let problem { throw RunError(problem) }
 }
 
 /// Removes a run's folder or one of its regenerable folders: through the folder holding it, opened as
@@ -761,8 +822,13 @@ func tidyRun(run: URL, publish: String, keepRun: Bool, publishReaped: Bool) -> [
             return ["GAUNTLET TIDY removed run \(run.path) (\(String(format: "%.2f", Double(size) / 1e9)) GB); summary in history.jsonl"]
         } catch { return ["GAUNTLET TIDY warning: could not remove \(run.path): \(error)"] }
     }
-    if keepRun { try? write(Data("--keep-run\n".utf8), to: run.appendingPathComponent(keepRunMarkerName), root: run) }
-    return [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
+    var markerLine: [String] = []
+    if keepRun {
+        do { try write(Data("--keep-run\n".utf8), to: run.appendingPathComponent(keepRunMarkerName), root: run) } catch {
+            markerLine = ["GAUNTLET TIDY warning: the \(keepRunMarkerName) marker was not written (\(error)); the next run's retention may tidy \(run.path)"]
+        }
+    }
+    return markerLine + [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
 }
 
 /// Removes the run's regenerable folders when buildScratchToRemove allows it; returns the one line to print.

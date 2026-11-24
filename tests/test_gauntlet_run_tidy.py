@@ -166,6 +166,48 @@ class GauntletRunTidyTests(unittest.TestCase):
         subprocess.run([str(self.binary), '--tidy-run', str(run), 'queued'], text=True, capture_output=True, timeout=60)
         self.assertTrue((mnt / 'on-the-volume.bin').exists(), 'the tidy crossed into a mounted volume and emptied it')
 
+    def test_rereview_a_folder_a_test_left_0000_or_0100_does_not_keep_the_run(self):
+        # Re-review 2026-11-24 of 8856be49a. RED: scripts/gauntlet/Runner.swift:715 removeEntry opens a
+        # folder O_RDONLY BEFORE it fchmods it (:722), and open(2) needs read permission: a folder a test left
+        # 0000 (or 0100, search only) fails EACCES, so the run is never removed - the leak this branch fixes.
+        # The old path-based makeOwnerWritable chmod-ed first and handled it; the doc comment (:703) still
+        # promises 0000. The no-follow way to chmod first: fchmodat(parent, name, mode, AT_SYMLINK_NOFOLLOW).
+        for mode in (0o000, 0o100):
+            root = self.case_dir()
+            run = make_run(root, '2026-11-08T19-19-00Z-AAAA0031')
+            locked = run / 'DerivedData' / 'locked'
+            locked.mkdir()
+            (locked / 'inside.bin').write_bytes(b'q' * 1000)
+            locked.chmod(mode)
+            self.addCleanup(lambda p=locked: p.exists() and p.chmod(0o700))
+            write_history(root, run.name)
+            out = self.seam('--tidy-run', run, 'published')
+            self.assertNotIn('warning', out, oct(mode))
+            self.assertFalse(run.exists(), oct(mode) + ': ' + out)
+
+    def test_rereview_a_tree_deeper_than_the_open_file_limit_is_removed(self):
+        # Re-review 2026-11-24 of 8856be49a. RED: scripts/gauntlet/Runner.swift:725-727 removeEntry recurses
+        # holding one open folder per level, so a tree deeper than RLIMIT_NOFILE (macOS default soft limit
+        # 256) fails EMFILE at :715 and the run stays (fails safe, but the leak returns). FileManager.removeItem
+        # (removefile/fts) had no depth limit. 300 levels of "d/" is a ~700-byte path: any test can make it.
+        import resource
+        root = self.case_dir()
+        run = make_run(root, '2026-11-08T19-19-00Z-AAAA0032')
+        deep = run / 'DerivedData'
+        for _ in range(300):
+            deep = deep / 'd'
+        deep.mkdir(parents=True)
+        write_history(root, run.name)
+
+        def macos_default_limit():
+            hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256 if hard == resource.RLIM_INFINITY else min(256, hard), hard))
+        done = subprocess.run([str(self.binary), '--tidy-run', str(run), 'published'], text=True,
+                              capture_output=True, timeout=60, preexec_fn=macos_default_limit)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn('warning', done.stdout, done.stdout)
+        self.assertFalse(run.exists(), done.stdout)
+
     def test_tidy_refuses_before_result_json_exists(self):
         run = make_run(self.case_dir(), '2026-11-08T19-19-00Z-AAAA0002', finished=False)
         write_history(run.parent, run.name)

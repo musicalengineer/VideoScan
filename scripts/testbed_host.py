@@ -936,6 +936,7 @@ def disk_mark(roots, disk=None, probes=(), since=None) -> dict:
     if since is not None and not _worst_fall(since, mark):
         return mark
     uid, started = os.getuid(), float((since or {}).get("at") or 0)
+    budget = [STALE_SCAN_ENTRIES, time.monotonic() + STALE_SCAN_SECONDS]      # ONE scan budget for the whole check
     for root in roots:
         try:
             if not stat.S_ISDIR(os.lstat(root).st_mode):
@@ -956,16 +957,19 @@ def disk_mark(roots, disk=None, probes=(), since=None) -> dict:
         try:
             for name in names:
                 path = os.path.join(root, name)
-                info = _lstat_at(root_fd, name)
+                try:                                         # an entry that cannot be inspected is skipped, not the rest
+                    info = _lstat_at(root_fd, name)
+                except Refused:
+                    continue
                 if (info is None or stat.S_ISLNK(info.st_mode) or info.st_uid != uid
                         or (ours_only and not name.lower().startswith("videoscan"))):
                     continue
                 if name not in known:
                     mark["sizes"][path] = _tree_size(path, info.st_dev)
-                elif not temp and _touched_since(root_fd, name, info.st_dev, started):
+                elif (not temp and budget[0] > 0 and time.monotonic() < budget[1]
+                      and _touched_since(root_fd, name, info.st_dev, started, budget)
+                      and budget[0] >= 0 and time.monotonic() < budget[1]):     # past the budget: not known, not named
                     mark["changed"][path] = _tree_size(path, info.st_dev)
-        except Refused:
-            pass
         finally:
             os.close(root_fd)
     return mark

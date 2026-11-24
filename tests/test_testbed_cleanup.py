@@ -601,6 +601,30 @@ class DiskLeakTests(CleanCase):
         self.assertIn('grew: ~/Library/Caches/videoscan-m4run-dd 0.5 MB now, changed', row)
         self.assertNotIn('videoscan-sensor-dd', row, 'an untouched cache is not named')
 
+    def test_rereview_the_end_check_has_one_scan_budget_for_all_entries(self):
+        # Re-review 2026-11-24 of 8856be49a: the end-of-run "changed" check gave each entry a fresh scan
+        # budget, so many large caches could cost many budgets. One budget for the whole check; past it,
+        # the remaining entries are not named (the row is AMBER information, never a deletion).
+        caches = self.s.home / 'Library/Caches'
+        for i in range(6):
+            (caches / f'videoscan-c{i}-dd').mkdir(parents=True)
+            (caches / f'videoscan-c{i}-dd' / 'blob').write_bytes(b'c' * 1000)
+        age(caches, 2)
+        roots = [str(caches)]
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        for i in range(6):
+            (caches / f'videoscan-c{i}-dd' / 'blob').write_bytes(b'n' * 2000)
+        disk.other += 3 * GB
+        saved = th.STALE_SCAN_ENTRIES
+        th.STALE_SCAN_ENTRIES = 4
+        try:
+            end = th.disk_mark(roots, disk=disk, since=start)
+        finally:
+            th.STALE_SCAN_ENTRIES = saved
+        self.assertLess(len(end['changed']), 6, 'each entry had its own budget')
+        self.assertGreater(len(end['changed']), 0)
+
     def test_a_run_within_the_threshold_says_nothing(self):
         roots = [str(self.tmp_root)]
         disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
