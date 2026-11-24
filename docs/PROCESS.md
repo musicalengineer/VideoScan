@@ -28,6 +28,13 @@ A branch merges to `main` when all of these hold (Rick may waive any to break a 
 
 Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Everything that touches code takes the gate.
 
+**The merge loop (Rick 2026-11-23).** When Rick says "merge to main", for one branch or several, Claude works down the
+queue without him: prove the branch (the gate above, with judgement about which suites and whether review comes before
+or after) → merge → next branch. After 3–4 merges that each passed alone, run a larger lane (`run_tests --full`)
+on the combined `main` before going on. If it is red, revert merges (`git revert -m 1`, newest first) until `main`
+is green again, then fix the reverted branch and requeue it. Rick's spot test and the nightly and afternoon runs
+are the backstop, not the gate.
+
 ## 2a. The change checklist (Rick 2026-11-03)
 
 Pre-flight questions before a code commit, not a gate: asked so an interruption can't make us skip one, because
@@ -80,7 +87,7 @@ New dependencies · any schema change (additive only, through a migration; Rick 
 
 - **Weekly theme.** One `theme:` label and one tracker issue per week; Monday triage picks it from the trackers. Ideas filed mid-week get the label or wait for Monday. `docs/STATUS.md` names the theme.
 - **Zero P0 by Friday noon**, every Friday (fix it, prove it is not P0, or say by noon it will miss). **Monday:** every P1 triaged (fix this week or schedule). P0 = integrity loss or an unverified fact shown as truth; P1 = triaged weekly.
-- **Modes.** Normal: small steps with tests. **RD** (Rick says "RD"): build-only fast iteration on UI, full suite as the day's bookends. **Night shift:** one theme, one owner, worktrees only, the checkout on `main` by 02:00, nothing deletes overnight except scratch. **End of day** (Rick 2026-11-22: "I'm done for today"): Claude proposes ONE night theme — why tonight, the measurable goal, the scope cap, the stop rule — chosen by: the day's red first, data safety over speed or tidiness, what unblocks the next theme, a bug-sweep night once or twice a week, then the best one-night value in BACKLOG; never one that needs Rick's ruling mid-way. Rick says "very good" or names another; the morning brief reports against the goal.
+- **Modes.** Normal: small steps with tests. **RD** (Rick says "RD"): build-only fast iteration on UI, full suite as the day's bookends. **Night shift:** one theme, one owner, worktrees only, the checkout on `main` by 02:00, nothing deletes overnight except scratch. **End of day** (Rick 2026-11-22: "I'm done for today"): Claude proposes ONE night theme — why tonight, the measurable goal, the scope cap, the stop rule — chosen by: the day's red first, data safety over speed or tidiness, what unblocks the next theme, a bug-sweep night once or twice a week, then the best one-night value in BACKLOG; never one that needs Rick's ruling mid-way. Rick says "very good" or names another; the morning brief reports against the goal. **Prove the day first (Rick 2026-11-23):** when the day's last merge lands, Claude kicks the M4 full testbed on that commit and starts the theme beside it on its branch. Nothing from the theme merges until `main` is green. Green → the theme goes on. Red and simple (clear, local) → a worker fixes it red-first through the gate and the failed lane reruns. Red and flaky → issue, rerun, go on. Red and structural, or the fix would touch data-risk code → no overnight fix: revert the merge that caused it if it is clear, so `main` is green for the morning, and put it in STATUS under 🔴 for review with Rick. A green `main` outranks the theme. This needs the session left open overnight.
 - **Session start** shows `docs/STATUS.md`'s header, P0/P1 counts and last night's lane results (`.claude/scripts/session_start.sh`). No ritual questions.
 
 ## 8. Machines

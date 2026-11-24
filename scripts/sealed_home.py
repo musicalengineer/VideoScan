@@ -24,19 +24,43 @@ a pointer to it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, NamedTuple, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import catalog_db  # noqa: E402  (the one read-only door to the catalog)
 
-SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches")
+SUBDIRS = ("Library/Application Support", "Library/Logs", "Library/Preferences", "Library/Caches", "tmp")
 APP = Path("Library") / "Application Support" / "VideoScan"
 DB_SUFFIXES = (".sqlite", ".sqlite3", ".db")
+# The marker a test process requires before it trusts VIDEOSCAN_TEST_TMP as the root it may remove scratch from
+# (VideoScanCore TestHostScratch.rootMarkerName; Codex 2026-11-23 #352 P1-1).
+TMP_MARKER = ".videoscan-test-tmp"
+# Proof a folder is a sealed home THIS script made (its pid on the first line). A sweep that frees dead lanes' homes
+# deletes only a folder carrying it — a matching folder NAME is not proof (Codex 2026-11-23, runner deletion review).
+OWNER_FILE = ".videoscan-sealed-home"
+
+
+def _create_exclusive(path: Path, text: str) -> None:
+    """Create `path` as a NEW regular file — never through a symlink, never truncating an existing file."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def _ensure_regular_file(path: Path, text: str) -> None:
+    """The file exists as a regular file (left from an earlier prepare of the same home), or is created. A symlink
+    or anything else at that name is REFUSED (Codex 2026-11-23: write_text through a symlink truncated its target)."""
+    if os.path.lexists(path):
+        if path.is_symlink() or not path.is_file():
+            raise Refused(f"{path} exists and is not a regular file (a symlink?) — not writing through it")
+        return
+    _create_exclusive(path, text)
 MODEL_CACHES = (Path(".cache") / "huggingface",)     # read by the app from the home; public weights
 
 
@@ -110,8 +134,15 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
     guarded = [real / "Library" / sub for sub in ("Application Support", "Logs", "Preferences")]
     if home.resolve() == real.resolve() or any(_inside(home, g) for g in guarded):
         raise Refused(f"a sealed home at {home} would be inside the real home's App Support, Logs or Preferences")
-    for sub in SUBDIRS:
+    if home.is_symlink():                    # the home itself, not only what is beneath it (Codex 2026-11-23 r2)
+        raise Refused(f"{home} is a symlink — a sealed home is never prepared (or later freed) through a link")
+    home.mkdir(parents=True, exist_ok=True)
+    for sub in SUBDIRS:                      # no part of the sealed home may be a symlink out of it
+        if any((home / Path(*Path(sub).parts[:i + 1])).is_symlink() for i in range(len(Path(sub).parts))):
+            raise Refused(f"{home / sub} is (or passes through) a symlink — not preparing a sealed home through it")
         (home / sub).mkdir(parents=True, exist_ok=True)
+    _ensure_regular_file(home / OWNER_FILE, f"{os.getpid()} sealed home made by scripts/sealed_home.py\n")
+    _ensure_regular_file(home / "tmp" / TMP_MARKER, "the runner's sealed test temp root (scripts/sealed_home.py)\n")
     # public model caches the app reads from the home (SigLIP's weights: ~/.cache/huggingface) — cloned
     for rel in MODEL_CACHES:
         m_src, m_dst = real / rel, home / rel
@@ -143,6 +174,50 @@ def prepare(home: Path, real_home: Optional[Path] = None) -> Path:
                       file=sys.stderr)
                 del e
     return home
+
+
+class Leftover(NamedTuple):
+    prefix: str        # the folder name with its UUID / pid / random tail replaced by <id>
+    count: int
+    bytes: int
+
+
+def _prefix(name: str) -> str:
+    name = re.sub(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}.*$", "<id>", name)
+    name = re.sub(r"(?<=[-_.])\d{2,}([-_.][A-Za-z0-9]+)?$", "<id>", name)
+    return re.sub(r"(?<=[-_.])[A-Za-z0-9]{6,10}$", "<id>", name) if "<id>" not in name else name
+
+
+def leftovers(tmp: Path) -> List[Leftover]:
+    """What the tests left in the sealed tmp, by prefix, biggest count first. Each line is a test that took
+    disk and did not give it back (DECISIONS 2026-11-23: a leak is a bug) — reported, then freed with the home."""
+    tmp = Path(tmp)
+    if not tmp.is_dir():
+        return []
+    acc: Dict[str, List[int]] = {}
+    for e in tmp.iterdir():
+        if e.name in (TMP_MARKER, OWNER_FILE):
+            continue
+        size = 0
+        try:
+            size = sum(f.stat().st_size for f in ([e] if e.is_file() else e.rglob("*")) if f.is_file() and not f.is_symlink())
+        except OSError:
+            pass
+        a = acc.setdefault(_prefix(e.name), [0, 0])
+        a[0] += 1
+        a[1] += size
+    return sorted((Leftover(k, c, b) for k, (c, b) in acc.items()), key=lambda r: (-r.count, -r.bytes, r.prefix))
+
+
+def leftovers_line(tmp: Path, top: int = 6) -> Optional[str]:
+    rows = leftovers(tmp)
+    if not rows:
+        return None
+    total = sum(r.count for r in rows)
+    mb = sum(r.bytes for r in rows) / 1e6
+    return (f"left behind by tests: {total} folder(s), {mb:.1f} MB — " +
+            ", ".join(f"{r.prefix} ×{r.count}" for r in rows[:top]) + (" …" if len(rows) > top else "") +
+            " (freed with the sealed home; each is a test that does not clean up)")
 
 
 def main(argv=None) -> int:

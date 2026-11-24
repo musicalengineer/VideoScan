@@ -169,8 +169,49 @@ def open_bundle(products: str, environ: Optional[Dict[str, str]] = None) -> Opti
     env = dict(os.environ if environ is None else environ, NO_COLOR="1",
                DYLD_FRAMEWORK_PATH=f"{plat}/Developer/Library/Frameworks:{plat}/Developer/Library/PrivateFrameworks",
                DYLD_LIBRARY_PATH=f"{prod.resolve()}:{plat}/Developer/usr/lib",
-               HOME=home, CFFIXED_USER_HOME=home)
+               HOME=home, CFFIXED_USER_HOME=home, TMPDIR=os.path.join(home, "tmp") + "/",
+               VIDEOSCAN_TEST_TMP=os.path.join(home, "tmp") + "/")     # Foundation ignores TMPDIR: the helpers read this
     return Bundle(prod, bundle, exe, pm, env)
+
+
+HOME_PREFIX = "videoscan-core-home-"
+_HOMES: List[str] = []          # this lane's sealed homes, freed at exit AND by the stop handler
+
+
+def free_sealed_homes() -> None:
+    """Free this lane's sealed homes (a copy of App Support each). Called at exit and by the stop handler BEFORE it
+    re-raises the signal — a re-raised signal ends the process without atexit (2026-11-23: a home was left behind).
+    shutil.rmtree does not follow symlinks (avoids_symlink_attacks)."""
+    while _HOMES:
+        shutil.rmtree(_HOMES.pop(), ignore_errors=True)
+
+
+def free_dead_lanes_homes() -> None:
+    """Free every `videoscan-core-home-<pid>-…` in the temp dir whose lane (pid) is no longer running — what a
+    SIGKILLed lane leaves. A live lane's home, and anything not named like a lane home, are never touched."""
+    root = Path(tempfile.gettempdir())
+    for d in root.glob(f"{HOME_PREFIX}*"):
+        m = re.fullmatch(re.escape(HOME_PREFIX) + r"(\d+)-[A-Za-z0-9_]+", d.name)
+        if not m or not d.is_dir() or d.is_symlink():
+            continue
+        pid = int(m.group(1))
+        if pid == os.getpid():
+            continue
+        # ownership proof, not a name (Codex 2026-11-23): sealed_home.prepare's owner file, a regular file whose first
+        # word is this folder's pid — anything else is kept
+        owner = d / ".videoscan-sealed-home"
+        try:
+            if owner.is_symlink() or not owner.is_file() or owner.read_text(errors="replace").split()[:1] != [str(pid)]:
+                continue
+        except OSError:
+            continue
+        try:
+            os.kill(pid, 0)                  # signal 0: existence check only
+            continue                         # alive (or not ours to signal): keep
+        except ProcessLookupError:
+            shutil.rmtree(d, ignore_errors=True)
+        except PermissionError:
+            continue
 
 
 def sealed_home() -> str:
@@ -181,10 +222,20 @@ def sealed_home() -> str:
     import tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import sealed_home
-    home = tempfile.mkdtemp(prefix="videoscan-core-home-")
-    atexit.register(shutil.rmtree, home, True)
+    free_dead_lanes_homes()
+    # named for this lane's pid: a later lane frees it if this one dies without its exit handlers (SIGKILL)
+    home = tempfile.mkdtemp(prefix=f"{HOME_PREFIX}{os.getpid()}-")
+    _HOMES.append(home)
+    atexit.register(free_sealed_homes)
     src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
-    return str(sealed_home.prepare(Path(home), Path(src) if src else None))
+    prepared = sealed_home.prepare(Path(home), Path(src) if src else None)
+
+    def report() -> None:                                    # before the home is freed: who did not clean up
+        line = sealed_home.leftovers_line(prepared / "tmp")
+        if line:
+            print(f"core-lane: {line}", file=sys.stderr, flush=True)
+    atexit.register(report)                                  # atexit runs LIFO: the report, then the rmtree
+    return str(prepared)
 
 
 # ───────────────────────────────────────────────────────────── the listing → the plan
@@ -1485,6 +1536,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def stopped(signum: int, _frame: object) -> None:
         say_what_was_running(live, out)
+        free_sealed_homes()                  # re-raising below skips atexit
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 

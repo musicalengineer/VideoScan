@@ -80,3 +80,27 @@ def test_a_file_with_no_tests_is_named_not_failed_but_a_lane_of_no_tests_is_red(
     (tmp_path / "test_broken.py").write_text("import no_such_module_xyz\ndef test_a():\n    pass\n")
     p = run("test_ok.py", "test_broken.py")
     assert p.returncode != 0 and "test_broken.py" in p.stdout, "an import error is never 'no tests'"
+
+
+def test_a_test_that_keeps_writing_after_its_strand_is_named_and_the_summary_still_prints(tmp_path):
+    # RED 2026-11-23 (full proof run): a test left a background process writing into its strand's TMPDIR; the
+    # runner's TemporaryDirectory cleanup raised 'Directory not empty' and the lane printed NO summary — 2,900 tests
+    # read as 'ZERO tests ran'. Now the summary always prints and the strand that kept writing is named.
+    (tmp_path / "test_lingering.py").write_text(
+        "import os, subprocess, sys, tempfile\n"
+        "def test_spawns_a_writer():\n"
+        "    d = tempfile.gettempdir()\n"
+        "    subprocess.Popen([sys.executable, '-c', 'import os,time,sys\\n'\n"
+        "                      't0=time.time(); i=0\\n'\n"
+        "                      'while time.time()-t0 < 3:\\n'\n"
+        "                      '    p=os.path.join(sys.argv[1], \"late\", \"d%d\" % (i % 50)); os.makedirs(p, exist_ok=True)\\n'\n"
+        "                      '    open(os.path.join(p, \"f%d\" % i), \"w\").close(); i+=1', d],\n"
+        "                     start_new_session=True)\n")
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    pass\n")
+    p = subprocess.run([sys.executable, str(ROOT / "scripts" / "pytest_shards.py"), "--python", sys.executable,
+                        "--jobs", "2", "--timings", str(tmp_path / "t.json"), "--", "test_lingering.py", "test_ok.py"],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    out = p.stdout + p.stderr
+    assert "Traceback" not in out, out
+    assert re.search(r"^2 passed in \d+\.\d+s$", p.stdout.strip().splitlines()[-1]), out
+    assert p.returncode == 0, out

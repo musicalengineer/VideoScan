@@ -1293,6 +1293,55 @@ def test_the_core_bundle_runs_with_a_sealed_home_never_the_real_one(tmp_path):
     real = os.path.expanduser("~")
     b = cl.open_bundle(str(tmp_path / "products"), {"HOME": real, "PATH": "/usr/bin:/bin"})
     home = b.env["HOME"]
-    assert home == b.env["CFFIXED_USER_HOME"] and home != real and not home.startswith(real + "/Library"), b.env
+    # a run's scratch home may sit under ~/Library/Caches (run_tests' runs); never under the real App Support,
+    # Logs or Preferences (2026-11-23: '~/Library' was too strict — red inside a real run_tests smoke)
+    assert home == b.env["CFFIXED_USER_HOME"] and home != real, b.env
+    assert not any(home.startswith(os.path.join(real, "Library", sub)) for sub in ("Application Support", "Logs", "Preferences"))
     assert os.path.isdir(os.path.join(home, "Library", "Application Support")), "the sealed home is not prepared"
+    assert b.env["TMPDIR"] == b.env["VIDEOSCAN_TEST_TMP"] == os.path.join(home, "tmp") + "/" and os.path.isdir(b.env["TMPDIR"]), \
+        "Core test processes use the system temp dir (2026-11-23: tests' leftovers outlived the run)"
     assert b.env["PATH"] == "/usr/bin:/bin", "the rest of the caller's environment is kept"
+
+
+def test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_is_kept(tmp_path, monkeypatch):
+    # RED 2026-11-23: a videoscan-core-home-* was left in the user temp dir — the stop handler re-raises the signal
+    # (atexit never runs) and a SIGKILL can never be caught. Homes are named for their lane's pid; a new lane frees
+    # every home whose pid is gone, and never one whose lane is alive.
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    import subprocess as sp
+    gone = sp.Popen(["/usr/bin/true"])
+    gone.wait()
+    dead = gone.pid                                   # a lane that has exited (reaped: its pid is free)
+    stale = tmp_path / f"videoscan-core-home-{dead}-abc123"
+    (stale / "Library" / "Application Support").mkdir(parents=True)
+    (stale / ".videoscan-sealed-home").write_text(f"{dead} sealed home\n")          # a real lane home's owner proof
+    alive = tmp_path / f"videoscan-core-home-{os.getppid()}-def456"
+    (alive / "Library").mkdir(parents=True)
+    (alive / ".videoscan-sealed-home").write_text(f"{os.getppid()} sealed home\n")
+    unrelated = tmp_path / "videoscan-core-home-notapid"
+    unrelated.mkdir()
+    home = cl.sealed_home()
+    assert not stale.exists(), "a dead lane's sealed home was not freed"
+    assert alive.exists(), "a LIVE lane's sealed home was removed"
+    assert unrelated.exists(), "a folder that is not a lane home by name was touched"
+    assert os.path.basename(home).startswith(f"videoscan-core-home-{os.getpid()}-"), home
+
+
+def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monkeypatch):
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    home = cl.sealed_home()
+    assert os.path.isdir(home)
+    cl.free_sealed_homes()                 # what the stop handler calls before it re-raises the signal
+    assert not os.path.exists(home)
+
+
+def test_a_folder_named_like_a_dead_lanes_home_but_not_proven_one_is_kept(tmp_path, monkeypatch):
+    # Codex 2026-11-23 (runner deletion review) P1: a matching NAME was treated as ownership proof.
+    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    import subprocess as sp
+    gone = sp.Popen(["/usr/bin/true"]); gone.wait()
+    unowned = tmp_path / f"videoscan-core-home-{gone.pid}-archive"
+    (unowned / "precious").mkdir(parents=True)
+    (unowned / "precious" / "sentinel.txt").write_text("keep me")
+    cl.sealed_home()
+    assert (unowned / "precious" / "sentinel.txt").read_text() == "keep me", "an unproven folder was deleted"
