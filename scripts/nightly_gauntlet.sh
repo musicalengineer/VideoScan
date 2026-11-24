@@ -22,6 +22,10 @@
 #      days unseen). RED fails the run and the done line names the tests;
 #   3b. runs tools/publish_metrics.py --no-events, so the page's summary
 #      (Last night's tests) shows this run before the done line points at it;
+#   3c. checks the disk (Rick 2026-11-24, scripts/testbed_host.py disk-mark before step 2 and
+#      disk-check here): free space lower than at the start by more than max(2 GB, 0.5% of the
+#      volume) puts "DISK LEAK (AMBER): ..." in the done line, naming the 5 scratch paths that
+#      grew; AMBER only, never the exit code;
 #   4. writes the done line to ~/Library/Logs/VideoScan/testbed_latest.txt,
 #      appends it to testbed_history.log, and posts it as a notification on
 #      Rick's Mac (VIDEOSCAN_NOTIFY_HOST, default ricksultra.local; best
@@ -93,6 +97,11 @@ trap drop_lock EXIT
 BUSY=""
 take_lock "nightly testbed (suite + gauntlet) since $(date '+%H:%M')" \
     || log "testbed lock held (${BUSY}) — the suite runs, the gauntlet is skipped"
+
+# ── 0. the disk mark: free space and scratch sizes before anything runs ──
+DISK_TOOL="$REPO_ROOT/scripts/testbed_host.py"
+DISK_MARK="$LOGDIR/testbed-disk-mark.json"
+[ -f "$DISK_TOOL" ] && python3 "$DISK_TOOL" disk-mark "$DISK_MARK" 2>>"$G_LOG"
 
 # ── 1. the nightly suite ─────────────────────────────────────────────
 SUITE_TOTAL=""
@@ -192,9 +201,16 @@ else
     log "publish: skipped ($PUBLISHER not found)"
 fi
 
+# ── 2c. the disk check: every run has freed what it allocated (AMBER, never the exit code) ──
+D_TEXT=""
+if [ -f "$DISK_TOOL" ]; then
+    D_TEXT="$(python3 "$DISK_TOOL" disk-check "$DISK_MARK" 2>>"$G_LOG")"
+    log "disk: ${D_TEXT:-no leak (free space back where it started, within the threshold)}"
+fi
+
 # ── 3. the done line ────────────────────────────────────────────────
 SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-DONE="${LAB:-$HOST} full testbed done $(date '+%Y-%m-%d %H:%M') (main ${SHA}): nightly suite ${SUITE_WORD}${SUITE_TOTAL:+ ${SUITE_TOTAL}} · ${G_TEXT}${S_TEXT:+ · $S_TEXT} · results ${PAGE_URL}"
+DONE="${LAB:-$HOST} full testbed done $(date '+%Y-%m-%d %H:%M') (main ${SHA}): nightly suite ${SUITE_WORD}${SUITE_TOTAL:+ ${SUITE_TOTAL}} · ${G_TEXT}${S_TEXT:+ · $S_TEXT}${D_TEXT:+ · $D_TEXT} · results ${PAGE_URL}"
 printf '%s\n' "$DONE" >"$LOGDIR/testbed_latest.txt"
 printf '%s\n' "$DONE" >>"$LOGDIR/testbed_history.log"
 log "$DONE"

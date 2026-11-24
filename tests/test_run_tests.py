@@ -1970,3 +1970,30 @@ def test_the_single_app_host_runs_in_a_sealed_home():
     assert t[:6] == [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--", "xcodebuild",
                      "test-without-building"], t
     assert "--empty" not in t, "the full suite's real-data tests need the copy"
+
+
+def test_full_run_marks_the_disk_and_says_disk_leak_amber_without_changing_the_verdict(monkeypatch, tmp_path):
+    # Rick 2026-11-24: run_tests --full checks that it freed what it allocated. Free space lower after the run
+    # than before by more than the threshold is one DISK LEAK line (AMBER): named, never a RED verdict.
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("VIDEOSCAN_DISK_LEAK_ROOTS", str(scratch))
+    monkeypatch.setenv("VIDEOSCAN_TESTBED_FAKE_DISK", f"{10 ** 9}:0")
+    monkeypatch.setenv("VIDEOSCAN_DISK_LEAK_THRESHOLD", "300000")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    state = rt.disk_mark(run_dir)
+    assert state == run_dir / "disk-mark.json" and state.exists()
+    assert rt.disk_leak_row(state) == ""
+    (scratch / "left-behind").mkdir()
+    (scratch / "left-behind" / "blob").write_bytes(b"x" * 600_000)
+    row = rt.disk_leak_row(state)
+    assert row.startswith("DISK LEAK (AMBER): free fell") and "~/scratch/left-behind +0.6 MB" in row, row
+    buf = io.StringIO()
+    lanes = [rt.LaneResult("core", ran=True, rc=0, passed=3)]
+    code = rt.summary(rt.Out(False, buf), lanes, 1.0, None, leak=row)
+    assert code == 0, "a DISK LEAK never changes the verdict"
+    text = buf.getvalue()
+    assert "GREEN · lanes: GREEN 1" in text and "[DISK LEAK ] " + row in text, text
+    assert rt.disk_leak_row(None) == "" and rt.disk_leak_row(tmp_path / "missing.json") == ""

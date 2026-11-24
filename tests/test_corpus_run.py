@@ -84,6 +84,8 @@ if args[0] == "build-for-testing":
         f.write("built " + ",".join(sorted(os.listdir(overlay))) if os.path.isdir(overlay) else "built without drivers")
     sys.exit(0)
 run = plistlib.load(open(args[args.index("-xctestrun") + 1], "rb"))
+if "-derivedDataPath" in args:                            # what the real one leaves there: its Logs/Test
+    os.makedirs(args[args.index("-derivedDataPath") + 1] + "/Logs/Test", exist_ok=True)
 env = run["TestConfigurations"][0]["TestTargets"][0]["EnvironmentVariables"]
 config = json.load(open(env["VS_CORPUS_CONFIG"]))
 target = run["TestConfigurations"][0]["TestTargets"][0]
@@ -678,6 +680,11 @@ class LaneTests(unittest.TestCase):
         self.assertNotIn('SkipTestIdentifiers', driver['target_keys'])
         self.assertNotIn('OS_ACTIVITY_DT_MODE', env, "the engines' os_log lines name files; they stay out of the test log")
         self.assertIn('-test-timeouts-enabled', test['args'])
+        # RED 2026-11-24: no -derivedDataPath made ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash of
+        # the patched .xctestrun path> per launch, with xcodebuild's default result bundle in it, never removed.
+        dd = test['args'][test['args'].index('-derivedDataPath') + 1]
+        self.assertTrue(dd.startswith(str(self.scene.seal.work_root) + '/'), dd)
+        self.assertFalse(os.path.lexists(dd), 'the launch left its DerivedData behind')
 
     def test_a_crash_in_one_file_does_not_stop_the_run(self):
         self.scene.plan['files'] = {sha_of(1): dict(crash='check')}

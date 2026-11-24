@@ -70,6 +70,8 @@ exit 0
 '''
 FAKE_SWIFT = r'''#!/bin/sh
 echo "swift $*" >> "$SUITE_FAKE/calls"
+# A lane that leaves scratch behind (the DISK LEAK check): $SUITE_FAKE/leak names the folder to fill.
+if [ -s "$SUITE_FAKE/leak" ]; then d="$(cat "$SUITE_FAKE/leak")"; mkdir -p "$d"; head -c 600000 /dev/zero > "$d/blob"; fi
 cat "$SUITE_FAKE/core.log"
 exit "$(cat "$SUITE_FAKE/core_rc")"
 '''
@@ -165,7 +167,9 @@ class Testbed(unittest.TestCase):
         self.git_env = dict(os.environ, HOME=str(self.home), GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
                             GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
         self.env = dict(os.environ, HOME=str(self.home), SUITE_FAKE=str(self.fake),
-                        VIDEOSCAN_M4RUN_TEST_PATH=str(self.bin), VIDEOSCAN_M4RUN_WAIT_POLL='1')
+                        VIDEOSCAN_M4RUN_TEST_PATH=str(self.bin), VIDEOSCAN_M4RUN_WAIT_POLL='1',
+                        # the host cleanup's disk mark measures the fake home's scratch only, never the real temp folders
+                        VIDEOSCAN_DISK_LEAK_ROOTS=f'{self.home}/Library/Caches:{self.home}/m4run/out')
 
     def tearDown(self):
         self.home_dir.cleanup()

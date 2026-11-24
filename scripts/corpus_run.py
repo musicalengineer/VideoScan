@@ -1757,15 +1757,20 @@ class Lane:
         coverage = (["-enableCodeCoverage", "YES",
                      "-resultBundlePath", str(seal.writable(self.profiles / f"result-{self.launches}.xcresult"))]
                     if self.profiles is not None else [])
+        # The launch's own DerivedData, in the lane's work folder and removed after it: with no -derivedDataPath
+        # xcodebuild makes ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash of the patched path> per launch
+        # (its default result bundle inside) and nothing removes it (2026-11-24: 729 folders, 25 GB on the Ultra).
+        launch_dd = self.seal.writable(self.work / "xcode-dd")
         try:
-            _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination",
-                  "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
+            _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-derivedDataPath", str(launch_dd),
+                  "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
                   "-test-timeouts-enabled", "NO",            # one test method walks every file; the per-file deadline is the driver's
                   f"-only-testing:VideoScanTests/{self.test_class}", *coverage],
                  self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
                 move_file(self.seal, patched, self.out / patched.name)
+            remove_tree(self.seal, launch_dd)
         return read_events(progress)
 
     # -- what a lane may change about a launch (VerbsLane does)
