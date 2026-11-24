@@ -2515,12 +2515,15 @@ printf 'import sys\nprint("an xctest_shards.py from before the nightly wiring")\
 got="$(usable "$SH/bin/xctest_shards.py")|$(usable "$SH/old_shards.py")|$(usable "$SH/no-such.py")|$(usable "$SCRIPT_DIR/xctest_shards.py")"
 [ "$got" = "yes|no|no|yes" ] && pass "only a sharder that writes the nightly summary is used: an older copy or none is the single host; this checkout's qualifies" \
     || fail "app_shards_usable: got '$got' want 'yes|no|no|yes'"
-# The single host is the command it always was, byte for byte.
+# The single host is the command it always was, byte for byte — plus the sealed
+# home (TEST_RUNNER_*, 72cc6ee4e): the test host never sees the real App Support.
 SINGLE=$(awk '/^# ── Test ──/ {seen=1} seen && /^run_with_process_group_watchdog \\$/ {on=1} on {print} on && /^    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=$/ {exit}' "$NIGHTLY")
 WANT_SINGLE='run_with_process_group_watchdog \
     "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS" \
     "$NIGHTLY_TEST_LOG" \
+    env TEST_RUNNER_HOME="$APP_HOME" TEST_RUNNER_CFFIXED_USER_HOME="$APP_HOME" \
+    TEST_RUNNER_TMPDIR="$APP_HOME/tmp/" TEST_RUNNER_VIDEOSCAN_TEST_TMP="$APP_HOME/tmp/" \
     xcodebuild test-without-building \
     -project VideoScan/VideoScan.xcodeproj \
     -scheme VideoScan \
