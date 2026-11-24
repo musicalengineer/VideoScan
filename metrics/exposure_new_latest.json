@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-23T15:32:51Z",
- "sha": "df7ef5ca",
+ "ts": "2026-11-24T15:26:27Z",
+ "sha": "9cc50a6e",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -5331,13 +5331,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/DeletionAudit.swift::DeletionReceipt.init",
-   "file": "VideoScan/VideoScan/MediaOps/DeletionAudit.swift",
-   "name": "DeletionReceipt.init",
-   "kind": "init",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/DuplicateGroupDigestSplit+Likeness.swift::DuplicateGroupDigestSplit.LikenessPair.hubFilename",
    "file": "VideoScan/VideoScan/MediaOps/DuplicateGroupDigestSplit+Likeness.swift",
    "name": "DuplicateGroupDigestSplit.LikenessPair.hubFilename",
@@ -8929,8 +8922,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 193,
+ "fixed": 195,
  "baseline_before": 2456,
- "baseline_after": 2263,
+ "baseline_after": 2261,
  "shrink_skipped": false
 }
