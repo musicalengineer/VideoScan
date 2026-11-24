@@ -681,23 +681,70 @@ func allocatedBytes(_ url: URL) -> Int64 {
     return total
 }
 
-/// Give the owner write+search permission on every real folder of the tree (never through a symlink),
-/// so a folder a test left 0500 or 0000 can be emptied. (C++: a recursive lstat + chmod, no follow.)
-func makeOwnerWritable(_ url: URL) {
-    var st = stat()
-    guard lstat(url.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return }
-    _ = chmod(url.path, (st.st_mode & 0o7777) | S_IRWXU)
-    for name in (try? fm.contentsOfDirectory(atPath: url.path)) ?? [] { makeOwnerWritable(url.appendingPathComponent(name)) }
+func posixError(_ what: String) -> RunError { RunError("\(what): \(String(cString: strerror(errno)))") }
+
+/// The names in an open folder (not "." or ".."), read through a duplicate of its descriptor.
+func entryNames(_ folder: Int32) throws -> [String] {
+    let copy = dup(folder)
+    guard copy >= 0, let stream = fdopendir(copy) else { if copy >= 0 { close(copy) }; throw posixError("list a folder") }
+    defer { closedir(stream) }
+    var names: [String] = []
+    while let entry = readdir(stream) {
+        let name = withUnsafePointer(to: &entry.pointee.d_name) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
+        if name != "." && name != ".." { names.append(name) }
+    }
+    return names
 }
 
-/// FileManager.removeItem (it removes a symlink inside, never its target), and once more after
-/// makeOwnerWritable when a read-only folder stopped it (2026-11-24).
-func removeTree(_ url: URL) throws {
-    do { try fm.removeItem(at: url) } catch {
-        makeOwnerWritable(url)
-        try fm.removeItem(at: url)
+/// Removes the entry `name` of the open folder `parent`, a whole tree when it is one, by descriptor only
+/// (Codex #360 F4: a path-based lstat-then-chmod could follow a symlink swapped in between): a symlink or
+/// file is unlinked as itself; a folder is opened O_NOFOLLOW|O_DIRECTORY, must be the one just inspected and
+/// on `device` (a disk image a test left mounted under the sealed tmp is never entered: it, and the folders
+/// holding it, stay and this throws), gets owner rwx with fchmod (a folder a test left 0500/0000), is
+/// emptied through its descriptor, then removed. (C++: fstatat/openat/fchmod/unlinkat on a dirfd.)
+func removeEntry(parent: Int32, name: String, device: dev_t) throws {
+    var st = stat()
+    guard fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+        if errno == ENOENT { return }
+        throw posixError("inspect \(name)")
     }
+    guard (st.st_mode & S_IFMT) == S_IFDIR else {
+        guard unlinkat(parent, name, 0) == 0 || errno == ENOENT else { throw posixError("unlink \(name)") }
+        return
+    }
+    let folder = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard folder >= 0 else { throw posixError("open \(name)") }
+    var opened = stat()
+    guard fstat(folder, &opened) == 0, opened.st_ino == st.st_ino, opened.st_dev == st.st_dev else {
+        close(folder); throw RunError("\(name) changed while it was being removed: left as it is")
+    }
+    guard opened.st_dev == device else { close(folder); throw RunError("\(name) is on another volume (a mount): left as it is") }
+    _ = fchmod(folder, (opened.st_mode & 0o7777) | S_IRWXU)
+    var firstError: Error?
+    do {
+        for child in try entryNames(folder) {
+            do { try removeEntry(parent: folder, name: child, device: device) } catch { firstError = firstError ?? error }
+        }
+    } catch { firstError = firstError ?? error }
+    close(folder)
+    if let firstError { throw firstError }
+    guard unlinkat(parent, name, AT_REMOVEDIR) == 0 else { throw posixError("remove \(name)") }
 }
+
+/// Removes a run's folder or one of its regenerable folders: through the folder holding it, opened as
+/// itself, and only on that folder's volume.
+func removeTree(_ url: URL) throws {
+    let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard parent >= 0 else { throw posixError("open the folder holding \(url.path)") }
+    defer { close(parent) }
+    var st = stat()
+    guard fstat(parent, &st) == 0 else { throw posixError("inspect the folder holding \(url.path)") }
+    try removeEntry(parent: parent, name: url.lastPathComponent, device: st.st_dev)
+}
+
+/// `--keep-run` leaves this marker, so a later run's retention does not tidy what was asked to be kept
+/// (review 2026-11-24). Such a run still goes once it is beyond the newest `keepRuns` or older than `retentionDays`.
+let keepRunMarkerName = ".keep-run"
 
 /// The end-of-run tidy: the whole run once its summary is safe (keepRunReason), else its
 /// regenerable folders. Returns the lines to print.
@@ -714,6 +761,7 @@ func tidyRun(run: URL, publish: String, keepRun: Bool, publishReaped: Bool) -> [
             return ["GAUNTLET TIDY removed run \(run.path) (\(String(format: "%.2f", Double(size) / 1e9)) GB); summary in history.jsonl"]
         } catch { return ["GAUNTLET TIDY warning: could not remove \(run.path): \(error)"] }
     }
+    if keepRun { try? write(Data("--keep-run\n".utf8), to: run.appendingPathComponent(keepRunMarkerName), root: run) }
     return [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
 }
 
@@ -774,14 +822,16 @@ func retainFinishedRuns(resultsRoot: URL, now: Date, current: String = "") -> [S
     return entries.compactMap { entry -> String? in
         let dir = resultsRoot.appendingPathComponent(entry.name)
         guard entry.name != current else { return nil }
+        let started = runDate(fromName: entry.name) ?? now
+        let mayBeLive = !entry.finished && now.timeIntervalSince(started) <= liveRunHours * 3600
         guard candidates.contains(entry.name) else {
-            let started = runDate(fromName: entry.name) ?? now
-            guard entry.finished || now.timeIntervalSince(started) > liveRunHours * 3600,
+            guard !mayBeLive, !isRegularFile(dir.appendingPathComponent(keepRunMarkerName)),
                   !regenerableFolders(run: dir).isEmpty else { return nil }
             return "GAUNTLET RETENTION tidied \(dir.path) (" + (entry.finished ? "finished" : "unfinished, older than \(Int(liveRunHours)) h") + "); "
                 + removeBuildScratch(run: dir)
         }
         guard historyHasRun(history, runID: entry.name) else {
+            guard !mayBeLive else { return nil }          // no summary row yet: it may still be running
             return "GAUNTLET RETENTION kept \(dir.path) (no summary row in history.jsonl — its logs are the only record); "
                 + removeBuildScratch(run: dir)
         }

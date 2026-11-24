@@ -401,6 +401,60 @@ class AgePruneTests(CleanCase):
             self.assertTrue(path.exists(), f'{path.name} was removed')
         self.assertRegex(line, r'stale build caches [\d.]+ GB \(5\)')
 
+    def test_codex_360_3_only_dd_caches_take_a_suffix(self):
+        # Codex #360 F3 RED: the optional -<y> suffix applied to core-build too, so an 8-day-old
+        # videoscan-nightly-core-build-wt (a worktree, say) was taken for a build cache and deleted.
+        wt = self.cache_dir('videoscan-nightly-core-build-wt')
+        (wt / 'uncommitted.swift').write_text('// work')
+        age(wt, 8)
+        suffixed = self.cache_dir('videoscan-runall-dd-3')                  # -dd-<y> is a cache
+        run = self.current()
+        self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertTrue((wt / 'uncommitted.swift').exists(), 'a -core-build-<y> folder is not a build cache')
+        self.assertFalse(suffixed.exists())
+
+    def test_codex_360_6_a_cache_rewritten_deep_down_is_not_stale(self):
+        # Codex #360 F6 RED: "untouched" looked two levels down; rewriting an existing deep file does not
+        # touch its ancestors, so a cache in use was deleted.
+        cache = self.cache_dir('videoscan-nightly-core-build')
+        deep = cache / 'arm64-apple-macosx' / 'debug' / 'Widget.build'
+        deep.mkdir(parents=True)
+        (deep / 'main.o').write_bytes(b'o' * 100)
+        age(cache, 8)
+        os.utime(deep / 'main.o')                                           # rewritten just now
+        run = self.current()
+        self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertTrue((deep / 'main.o').exists(), 'a cache written today was deleted')
+
+    def test_codex_360_6_a_scan_past_its_budget_counts_as_fresh(self):
+        # Never delete on doubt: a cache too large to scan whole within the budget stays.
+        cache = self.cache_dir('videoscan-huge-dd')
+        for i in range(20):
+            (cache / f'f{i}').write_text('x')
+        age(cache, 30)
+        saved = th.STALE_SCAN_ENTRIES
+        th.STALE_SCAN_ENTRIES = 5
+        try:
+            run = self.current()
+            self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        finally:
+            th.STALE_SCAN_ENTRIES = saved
+        self.assertTrue(cache.exists(), 'a scan that ran out of budget deleted the cache')
+
+    def test_codex_360_2_the_disk_mark_never_writes_through_a_hard_link(self):
+        # Codex #360 F2 RED: disk-mark opened its state file with O_TRUNC; a hard link to another file
+        # had that file's contents replaced.
+        victim = pathlib.Path(self.tmp.name, 'valuable.txt')
+        victim.write_text('precious')
+        state = pathlib.Path(self.tmp.name, 'mark.json')
+        os.link(victim, state)
+        env = dict(os.environ, HOME=str(self.s.home), VIDEOSCAN_DISK_LEAK_ROOTS=str(self.tmp_root))
+        done = subprocess.run([sys.executable, str(SCRIPTS / 'testbed_host.py'), 'disk-mark', str(state)],
+                              capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(victim.read_text(), 'precious')
+        self.assertIn('refused', done.stderr)
+
     def test_a_stale_cache_that_is_a_link_is_never_followed(self):
         outside = pathlib.Path(self.tmp.name, 'outside-dd')
         (outside / 'Build').mkdir(parents=True)
@@ -526,6 +580,26 @@ class DiskLeakTests(CleanCase):
         disk.other += 3 * GB
         end = th.disk_mark([str(self.tmp_root)], disk=disk, since=start)
         self.assertEqual(list(end['sizes']), [str(self.tmp_root / 'new')])
+
+    def test_a_cache_that_was_there_at_the_start_and_was_written_is_named_as_changed(self):
+        # Review 2026-11-24 item 6: the start only lists the warm caches; one that grew is named by its size now.
+        cache = self.s.home / 'Library/Caches/videoscan-m4run-dd'
+        (cache / 'Build').mkdir(parents=True)
+        (cache / 'Build' / 'old').write_bytes(b'o' * 100_000)
+        age(cache, 2)
+        idle = self.s.home / 'Library/Caches/videoscan-sensor-dd'
+        idle.mkdir()
+        (idle / 'blob').write_bytes(b'i' * 300_000)
+        age(idle, 2)
+        roots = [str(self.s.home / 'Library/Caches')]
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        self.assertEqual(start['sizes'], {}, 'the start measures nothing')
+        (cache / 'Build' / 'new').write_bytes(b'n' * 400_000)
+        disk.other += 3 * GB
+        row = th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start))
+        self.assertIn('grew: ~/Library/Caches/videoscan-m4run-dd 0.5 MB now, changed', row)
+        self.assertNotIn('videoscan-sensor-dd', row, 'an untouched cache is not named')
 
     def test_a_run_within_the_threshold_says_nothing(self):
         roots = [str(self.tmp_root)]
@@ -1300,6 +1374,34 @@ class RunnerCleanupTests(TestbedScene):
         self.assertEqual(summary.count('disk: cleanup failed (ZeroDivisionError)'), 1)
         self.assertTrue((out / 'suite-app.xcresult').exists() or not (out / 'tidy.txt').exists(), 'nothing was tidied')
         self.assertEqual(probe(self.root / 'lock'), 'FREE')
+
+
+class ReviewDiskLeakProbeTests(CleanCase):
+    """Review 2026-11-24 (reviewer agent). RED: scripts/testbed_host.py:429-436 keys a volume's free space
+    by the FIRST root that exists on it, and :470-471 compares only probes present in both marks. A root
+    that appears during the run (or vanishes) re-keys the volume, the comparison finds no common probe,
+    and a real leak is silently not reported (the since= fast path then measures nothing either)."""
+
+    def test_a_root_that_appears_during_the_run_does_not_hide_the_leak(self):
+        late = self.s.home / 'created-by-the-run'                     # e.g. ~/corpus/work or ~/m4run/out made mid-run
+        roots = [str(late), str(self.tmp_root)]                       # same volume, the late one listed first
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        late.mkdir()
+        disk.other += 5 * GB                                          # 5 GB never given back
+        row = th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start))
+        self.assertTrue(row.startswith('DISK LEAK (AMBER): free fell 5.0 GB'), repr(row))
+
+    def test_a_root_that_vanishes_during_the_run_does_not_hide_the_leak(self):
+        early = self.s.home / 'removed-by-the-run'
+        early.mkdir()
+        roots = [str(early), str(self.tmp_root)]
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        early.rmdir()
+        disk.other += 5 * GB
+        row = th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start))
+        self.assertTrue(row.startswith('DISK LEAK (AMBER): free fell 5.0 GB'), repr(row))
 
 
 if __name__ == '__main__':

@@ -69,6 +69,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -481,7 +482,7 @@ def shard_cmd(xcodebuild: Sequence[str], xctestrun: Path, selectors: Sequence[st
     host writes its profile into its own result bundle (the caller merges the K bundles).
     -derivedDataPath <shard folder>/xcode-dd: without it xcodebuild makes ~/Library/Developer/Xcode/
     DerivedData/VideoScan-<hash of the sealed .xctestrun path> per run and nothing removes it (2026-11-24:
-    729 folders, 25 GB on the Ultra). _run_sealed removes it once the shard is read."""
+    729 folders, 25 GB on the Ultra). run() removes it when the run ends, however it ends."""
     return (list(xcodebuild) + ["test-without-building", "-xctestrun", str(xctestrun),
                                 "-derivedDataPath", str(result.parent / "xcode-dd"), "-destination", DESTINATION,
                                 "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result)]
@@ -893,6 +894,43 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
     return dest, home
 
 
+def claim_derived_data(run_dir: Path, index: int) -> Tuple[Path, Tuple[int, int]]:
+    """<run>/<NNNN>/xcode-dd, made HERE before the shard starts (Codex #360 F1: the cleanup used to remove
+    whatever sat at that name, through a symlinked shard folder too): the shard folder is a real folder of
+    the run folder's volume (made now or already ours), and xcode-dd is created exclusively. Returns the
+    path and its (device, inode), the identity the cleanup checks; SealRefused otherwise."""
+    shard = run_dir / f"{index:04d}"
+    try:
+        root = os.lstat(run_dir)
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(shard)
+        folder = os.lstat(shard)
+        if (stat.S_ISLNK(root.st_mode) or not stat.S_ISDIR(folder.st_mode) or folder.st_dev != root.st_dev):
+            raise SealRefused(f"{shard} is not a real folder of the run folder's volume: its DerivedData is not made")
+        dd = shard / "xcode-dd"
+        os.mkdir(dd)                                       # exclusive: a name already there is not ours
+        made = os.lstat(dd)
+    except OSError as e:
+        raise SealRefused(f"cannot make {shard}/xcode-dd as a new folder of its own ({e.strerror})")
+    if not stat.S_ISDIR(made.st_mode) or made.st_dev != root.st_dev:
+        raise SealRefused(f"{shard}/xcode-dd is not the folder just made")
+    return dd, (made.st_dev, made.st_ino)
+
+
+def free_derived_data(claimed: Sequence[Tuple[Path, Tuple[int, int]]]) -> None:
+    """Remove each xcode-dd claim_derived_data made, and only while it is still that folder, reached
+    through a shard folder that is not a link (rmtree itself never follows a link inside: fd-based)."""
+    for dd, identity in claimed:
+        try:
+            if stat.S_ISLNK(os.lstat(dd.parent).st_mode):
+                continue
+            info = os.lstat(dd)
+        except OSError:
+            continue
+        if stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == identity:
+            shutil.rmtree(dd, ignore_errors=True)
+
+
 def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path = DEFAULT_TIMINGS,
         timeout: float = SHARD_TIMEOUT, xcodebuild: Sequence[str] = ("xcodebuild",),
         xcresulttool: Sequence[str] = ("xcrun", "xcresulttool"), stream: bool = False, tail: bool = True,
@@ -910,10 +948,18 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
         write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED", planned=0))
         return 1
     say(f"sealed home: every test host runs with HOME = CFFIXED_USER_HOME = {home} (a copy of App Support)")
+    claimed: List[Tuple[Path, Tuple[int, int]]] = []
     try:
         return _run_sealed(groups, shards, held, lost, sealed_run, jobs, run_dir, timings_path, timeout, xcodebuild,
-                           xcresulttool, stream, target, keep_results, coverage, summary)
+                           xcresulttool, stream, target, keep_results, coverage, summary, claimed)
+    except SealRefused as e:
+        say(f"REFUSED: {e} — no test host is started")
+        write_summary(summary, summary_dict([], [], jobs, 0.0, lost, "RED", planned=0))
+        return 1
     finally:
+        # Each shard's own DerivedData (xcodebuild's Logs, shard_cmd) is regenerable: what this run made goes,
+        # whatever the run's end, an interrupt included (review 2026-11-24), and nothing else (Codex #360 F1).
+        free_derived_data(claimed)
         with contextlib.suppress(OSError):
             os.unlink(sealed_run)
         import sealed_home
@@ -925,8 +971,10 @@ def run(groups: Sequence[Group], xctestrun: Path, jobs: int, run_dir: Path, timi
 
 def _run_sealed(groups, shards, held, lost, xctestrun: Path, jobs: int, run_dir: Path, timings_path: Path, timeout: float,
                 xcodebuild: Sequence[str], xcresulttool: Sequence[str], stream: bool, target: str, keep_results: bool,
-                coverage: bool, summary: Optional[Path]) -> int:
+                coverage: bool, summary: Optional[Path], claimed: List[Tuple[Path, Tuple[int, int]]]) -> int:
     timings = strands.load_timings(timings_path)
+    for i in range(len(shards) + (1 if held else 0)):            # each shard's DerivedData, made before any starts
+        claimed.append(claim_derived_data(run_dir, i))
     work: List[strands.Strand] = []
     dealt: List[List[Group]] = []
     for i, gs in enumerate(shards):
@@ -983,8 +1031,6 @@ def _run_sealed(groups, shards, held, lost, xctestrun: Path, jobs: int, run_dir:
 
     bundles = [run_dir / f"{i:04d}" / "shard.xcresult" for i in range(len(work))]
     reports = [fan_in(w.name, gs, r, b, xcresulttool) for w, gs, r, b in zip(work, dealt, results, bundles)]
-    for i in range(len(work)):
-        shutil.rmtree(run_dir / f"{i:04d}" / "xcode-dd", ignore_errors=True)     # regenerable: xcodebuild's own Logs
     for i, rep in enumerate(reports):
         if rep.green and not keep_results:
             # Read and done: a green shard's result bundle is not evidence of anything (the whole suite's

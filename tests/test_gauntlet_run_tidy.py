@@ -132,6 +132,40 @@ class GauntletRunTidyTests(unittest.TestCase):
             if publish == 'published':
                 self.assertFalse(run.exists(), out)
 
+    def test_review_a_kept_run_keeps_its_build_through_the_next_runs_retention(self):
+        # Review 2026-11-24 (reviewer agent). RED: scripts/gauntlet/Runner.swift:776-782 tidies every
+        # finished run that is not a retention candidate, and a --keep-run run leaves no mark, so the next
+        # run (tonight's nightly) removes the DerivedData --keep-run was asked to keep. Before: kept 3 days.
+        root = self.case_dir() / 'gauntlet'
+        root.mkdir()
+        kept = make_run(root, '2026-11-08T14-00-00Z-KEEP0001')
+        write_history(root, kept.name)
+        self.seam('--tidy-run', kept, 'published', '--keep-run')
+        self.assertTrue((kept / 'DerivedData').exists(), 'precondition: --keep-run kept the build')
+        out = self.seam('--retain', root, NOW)
+        self.assertTrue((kept / 'DerivedData').exists(), '--keep-run lasted until the next run: ' + out)
+
+    def test_review_tidy_never_empties_a_volume_a_test_left_mounted_in_the_run(self):
+        # Review 2026-11-24 (reviewer agent). RED (expected; not run by the reviewer): Runner.swift:686-700
+        # makeOwnerWritable recurses and removeTree removes with no device check, and regenerableFolders
+        # (:655-662) now includes the sealed tmp, where CatalogDiskFullTests attaches a disk image under
+        # its own folder. A test that dies attached leaves a mount in <run>/tmp; the tidy empties it.
+        case = self.case_dir()
+        run = make_run(case, '2026-11-08T19-19-00Z-AAAA0021')
+        image = case / 'vol.dmg'
+        made = subprocess.run(['/usr/bin/hdiutil', 'create', '-size', '4m', '-fs', 'HFS+', '-volname', 'ReviewT',
+                               str(image)], capture_output=True, text=True)
+        mnt = run / 'tmp' / 'mnt'
+        mnt.mkdir(parents=True)
+        att = subprocess.run(['/usr/bin/hdiutil', 'attach', '-nobrowse', '-noautoopen', '-mountpoint', str(mnt), str(image)],
+                             capture_output=True, text=True) if made.returncode == 0 else made
+        if att.returncode:
+            self.skipTest('hdiutil not permitted here: ' + att.stderr)
+        self.addCleanup(subprocess.run, ['/usr/bin/hdiutil', 'detach', '-force', str(mnt)], capture_output=True)
+        (mnt / 'on-the-volume.bin').write_bytes(b'v' * 1000)
+        subprocess.run([str(self.binary), '--tidy-run', str(run), 'queued'], text=True, capture_output=True, timeout=60)
+        self.assertTrue((mnt / 'on-the-volume.bin').exists(), 'the tidy crossed into a mounted volume and emptied it')
+
     def test_tidy_refuses_before_result_json_exists(self):
         run = make_run(self.case_dir(), '2026-11-08T19-19-00Z-AAAA0002', finished=False)
         write_history(run.parent, run.name)
@@ -283,6 +317,19 @@ class GauntletRunTidyTests(unittest.TestCase):
         self.assertFalse((dead / 'DerivedData').exists(), out)
         self.assertTrue((dead / 'logs' / 'build.log').exists())
         self.assertTrue((live / 'DerivedData').exists(), 'a run that may still be live keeps its build')
+
+    def test_retain_never_tidies_a_run_that_may_still_be_live_even_beyond_the_newest_three(self):
+        # Review 2026-11-24 (nit): a retention candidate with no summary row got its build removed with no
+        # liveness check; a run started an hour ago, pushed past the newest three by later names, may be live.
+        root = self.case_dir() / 'gauntlet'
+        root.mkdir()
+        live = make_run(root, '2026-11-08T19-00-00Z-LIVE0003', finished=False)     # 1 h before NOW, no row
+        later = [f'2026-11-08T19-{m}-00Z-DONE00{m}' for m in ('10', '20', '30')]
+        for name in later:
+            make_run(root, name)
+        write_history(root, *later)
+        out = self.seam('--retain', root, NOW)
+        self.assertTrue((live / 'DerivedData').exists(), out)
 
     def test_retain_with_nothing_old_prints_nothing_and_removes_nothing(self):
         root = self.case_dir() / 'gauntlet'

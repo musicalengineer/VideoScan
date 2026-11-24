@@ -1073,3 +1073,41 @@ def test_a_symlinked_run_home_is_refused_and_its_target_never_removed(bench):
     assert code == 1 and "REFUSED" in out, out
     assert (outside / "sentinel.txt").read_text() == "keep" and sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"]
     assert bench.stamps() == [], "a test host ran"
+
+
+# Review 2026-11-24 (reviewer agent). RED: scripts/xctest_shards.py:975-979 returns 130 on an interrupt
+# before the xcode-dd removal at :986-987, so a stopped run (run_tests TERMs its lane) keeps every
+# shard's DerivedData in the run folder.
+def test_an_interrupted_run_leaves_no_shard_derived_data(bench):
+    import signal
+    scenario = {s: {"tests": ["a()"], "hang": True} for s in ("A", "B")}
+    (bench.tmp / "scenario.json").write_text(json.dumps(scenario))
+    (bench.tmp / "plan.json").write_text(json.dumps({"groups": [grp("A", 1), grp("B", 1)]}))
+    env = dict(os.environ, FAKE_SCENARIO=str(bench.tmp / "scenario.json"), FAKE_STAMPS=str(bench.tmp / "stamps"))
+    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", str(bench.tmp / "x.xctestrun"), "--plan", str(bench.tmp / "plan.json"),
+                          "--jobs", "2", "--run-dir", str(bench.run_dir), "--timings", str(bench.timings),
+                          "--xcodebuild", f"{sys.executable} {bench.tmp / 'fake_xcodebuild.py'}"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
+    pids, deadline = [], time.monotonic() + 30
+    while time.monotonic() < deadline and len(pids) < 2:
+        time.sleep(0.1)
+        pids = [int(m.group(1)) for log in bench.run_dir.glob("*/strand.log")
+                for m in [re.search(r"TEST_HOST_STARTED epoch=\S+ pid=(\d+)", log.read_text())] if m]
+    assert len(pids) == 2, "the two hosts never started"
+    assert len(list(bench.run_dir.glob("*/xcode-dd"))) == 2, "the fake did not make its DerivedData"
+    os.kill(p.pid, signal.SIGTERM)
+    out, _ = p.communicate(timeout=40)
+    assert p.returncode == 130, out
+    assert list(bench.run_dir.glob("*/xcode-dd")) == [], "an interrupted run kept its shards' DerivedData"
+
+
+def test_codex_360_1_cleanup_never_removes_derived_data_it_did_not_create(bench):
+    # Codex #360 F1 RED: a run folder whose 0000 is a link to elsewhere, holding an xcode-dd of its own:
+    # the cleanup rmtree-d run/0000/xcode-dd through the link. Only what this run made is removed.
+    outside = bench.tmp / "outside"
+    (outside / "xcode-dd").mkdir(parents=True)
+    (outside / "xcode-dd" / "precious").write_text("keep")
+    bench.run_dir.mkdir(parents=True, exist_ok=True)
+    os.symlink(outside, bench.run_dir / "0000")
+    bench.go({"A": {"tests": ["a()"]}}, [grp("A", 1)], jobs=1)
+    assert (outside / "xcode-dd" / "precious").read_text() == "keep"
