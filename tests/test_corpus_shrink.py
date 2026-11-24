@@ -585,6 +585,63 @@ class CodexRound359Tests(ShrinkCase):
         self.assertEqual(last['counts']['internal'].get('deleted'), 1)
 
 
+class ReviewerFollowUpTests(ShrinkCase):
+    """Reviewer, 2026-11-24: improvement 3 (a public re-proof) and corpus_shrink.py:344-352 (a file left under the
+    hidden name must be said in the receipt, with its digest prefix)."""
+
+    def setUp(self):
+        super().setUp()
+        self.s.make_plan()
+        self.s.store_run()
+
+    def test_the_seal_proves_the_external_volume_again_through_its_own_method(self):
+        answers = iter([cr.External('ok', self.s.mount, 'A'), cr.External('absent', self.s.mount)])
+        seal = cr.Seal(self.s.home, 'ricksm4')
+        seal.pin = lambda: None
+        seal._external = cr.External('ok', self.s.mount, 'cached')
+        seal.external = lambda: seal._external or next(answers)
+        self.assertEqual(seal.reprove_external().uuid, 'A', 'the cached proof was not dropped')
+
+    def test_a_file_left_under_the_hidden_name_is_counted_and_named_by_digest_prefix_in_the_receipt(self):
+        dropped = self.dropped()[0]
+        place = self.s.place(dropped)
+
+        def swap(name):
+            os.rename(str(place), str(place) + '.was')
+            place.write_bytes(b'q' * 7)                             # the inode renamed next is not the one proven
+
+        def retake(name):
+            place.write_bytes(b'r' * 3)                             # and the name is taken again at once
+        sh.BEFORE_UNLINK, sh.AFTER_RENAME = swap, retake
+        try:
+            _, counts = self.s.apply()
+        finally:
+            sh.BEFORE_UNLINK = sh.AFTER_RENAME = None
+            sh.BEFORE_UNLINK = None
+        self.assertEqual(counts['internal']['left_hidden'], 1)
+        hidden = [n for n in os.listdir(str(place.parent)) if n.startswith('.corpus-shrink-')]
+        self.assertEqual(len(hidden), 1, 'the swapped-in file is kept under the hidden name, not deleted')
+        end = json.loads((self.s.corpus / 'state' / sh.HISTORY).read_text().splitlines()[-1])
+        self.assertEqual(end['left_hidden'], [{'root': 'internal', 'sha256_prefix': dropped['sha256'][:12]}])
+
+    def test_an_unlink_that_fails_after_the_rename_leaves_the_file_said_hidden(self):
+        dropped = self.dropped()[0]
+        real = os.unlink
+
+        def failing(path, *args, **kwargs):
+            if str(path).startswith('.corpus-shrink-'):
+                raise PermissionError(1, 'Operation not permitted')
+            return real(path, *args, **kwargs)
+        sh.os.unlink = failing
+        try:
+            _, counts = self.s.apply()
+        finally:
+            sh.os.unlink = real
+        self.assertEqual(counts['internal']['left_hidden'], 2)
+        end = json.loads((self.s.corpus / 'state' / sh.HISTORY).read_text().splitlines()[-1])
+        self.assertIn({'root': 'internal', 'sha256_prefix': dropped['sha256'][:12]}, end['left_hidden'])
+
+
 class ScaleTests(unittest.TestCase):
 
     def test_a_plan_over_100k_rows_is_made_inside_the_time_budget(self):

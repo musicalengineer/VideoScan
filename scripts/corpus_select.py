@@ -21,8 +21,8 @@ select — THE RULES (each one is a test in tests/test_corpus_select.py):
      (`flags_of`): no_audio, sound_short, odd_rate, odd_size, damaged, very_short (< 5 s), very_long (> 2 h).
   3. per stratum: ceil(12%) of its members, at least 3; a stratum of 3 or fewer is taken whole (`quota`).
   4. the picks are SPREAD (`spread`): the stratum, smallest first, is cut into as many bins as picks are
-     wanted, one pick per bin; inside a bin the source volume picked least so far wins, then the member
-     nearest the bin's middle, then the smallest digest. Deterministic: the same catalog, the same sample.
+     wanted, one pick per bin; inside a bin the source volume picked least so far wins, then a member whose
+     copy is already made, then the member nearest the bin's middle, then the smallest digest. Deterministic: the same catalog, the same sample.
   5. ALWAYS taken, and counted toward their stratum's quota: every pin (--pins, default
      scripts/corpus_pins.json: files a bug or a regression test is tied to) and every current row whose
      `why` is a hand-curated case (v1's "one-sided sound", "raw DV", "Avid video half", …: anything but
@@ -81,11 +81,13 @@ STANDARD_SIZES = frozenset({"640x480", "704x480", "720x480", "720x486", "704x576
 DAMAGED_STREAMS = frozenset({"ffprobe failed", "No A/V streams"})          # files.stream_type
 DAMAGED_PLAYABLE = frozenset({"Damaged file", "No streams"})               # probe_extra.isPlayable
 DAMAGED_CHECKS = frozenset({"damaged", "broken"})                          # media_checks.status
-FLAGS = ("no_audio", "sound_short", "odd_rate", "odd_size", "damaged", "very_short", "very_long")
 WHY_SAMPLE, WHY_PINNED = "sample", "pinned"
+FLAGS = ("no_audio", "sound_short", "odd_rate", "odd_size", "damaged", "very_short", "very_long")
 # Rule 5: the whys that say "picked by a rule", not "picked by hand for what it is".
+# `pinned` is generic too: a pin is always taken while it is IN the pins file, and once taken out of it
+# the file is sampled like any other (reviewer 2026-11-24).
 GENERIC_WHYS = frozenset({"", "codec/container combo", "v2 every content under 8 GB",
-                          "v2 large, one per container and codecs", WHY_SAMPLE})
+                          "v2 large, one per container and codecs", WHY_SAMPLE, WHY_PINNED})
 REPO = Path(__file__).resolve().parents[1]
 PINS = REPO / "scripts" / "corpus_pins.json"
 
@@ -227,7 +229,8 @@ def quota(n: int) -> int:
 
 
 def spread(members: List[Candidate], k: int, taken: Iterable[Candidate] = ()) -> List[Candidate]:
-    """Rule 4: k picks in all (the `taken` ones count), spread over size bins and source volumes."""
+    """Rule 4: k picks in all (the `taken` ones count), spread over size bins and source volumes; inside a bin,
+    after the volume, a file whose copy is already made wins (a re-select over a newer catalog keeps it)."""
     taken = list(taken)
     held = {c.digest for c in taken}
     pool = sorted((c for c in members if c.digest not in held), key=lambda c: (c.size, c.digest))
@@ -241,7 +244,7 @@ def spread(members: List[Candidate], k: int, taken: Iterable[Candidate] = ()) ->
     for i in range(need):
         lo, hi = i * len(pool) // need, (i + 1) * len(pool) // need
         middle = (lo + hi - 1) / 2
-        best = min(range(lo, hi), key=lambda j: (uses[pool[j].volume], abs(j - middle), pool[j].digest))
+        best = min(range(lo, hi), key=lambda j: (uses[pool[j].volume], pool[j].root is None, abs(j - middle), pool[j].digest))
         picks.append(pool[best])
         uses[pool[best].volume] += 1
     return picks

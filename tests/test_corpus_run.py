@@ -4083,6 +4083,32 @@ class SampleRootsTests(unittest.TestCase):
         self.assertIn('disagree on 1', str(refused.exception))
 
 
+class ReviewerReRootTests(unittest.TestCase):
+    """Reviewer, 2026-11-24 (feat/corpus-sample). corpus_select.place re-roots a kept content when its old root's
+    budget no longer holds it (test_corpus_select Rule6PlaceTests.test_a_copy_in_place_keeps_its_root_while_the_root_has_room),
+    and plan-shrink plans its old copy (test_corpus_shrink test_a_digest_the_sample_moved_to_another_root_leaves_its_old_copy_planned).
+    The old root's SHA-256 list still names it at its old place: that line is a dropped copy ON THAT ROOT, not a
+    disagreement — else `prepare` refuses, no green run can be made, and apply-shrink can never free the old copy.
+    Pins scripts/corpus_run.py:804-819 (check_sha_list compares a line against the manifest place on ANY root)."""
+
+    def test_reviewer_a_content_the_sample_moved_to_the_x10_is_not_a_disagreement_on_the_ssd_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(os.path.realpath(tmp), 'home')
+            corpus = home / 'corpus'
+            corpus.mkdir(parents=True)
+            (corpus / cr.MARKER).write_text('test data\n')
+            (corpus / cr.VOLUME_PIN).write_text(json.dumps(dict(mount='/Volumes/NotHere',
+                                                                 volume_uuid='0' * 8 + '-0000-0000-0000-' + '0' * 12)))
+            moved = dict(sha256=sha_of(1), path='/Volumes/D1/f1.mov', size=1, why='sample', root='external')
+            (corpus / cr.MANIFEST_V2).write_text(json.dumps([moved]))
+            (corpus / cr.SHA_LIST).write_text('')
+            (corpus / cr.SHA_LIST_V2_INTERNAL).write_text(f"{moved['sha256']}  Volumes/D1/f1.mov\n")   # its old SSD copy
+            seal = cr.Seal(home, 'ricksm4')
+            entries = cr.load_manifest(seal)
+            self.assertEqual(cr.check_sha_list(seal, entries, seal.external()), 0,
+                             'the SSD list names the copy the sample moved off the SSD: a dropped copy there, not a disagreement')
+
+
 class WishListScaleTests(unittest.TestCase):
 
     def test_classifying_100k_files_against_the_ledger_stays_inside_the_budget(self):

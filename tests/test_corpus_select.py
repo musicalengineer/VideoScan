@@ -278,6 +278,39 @@ class Rule5AlwaysTakenTests(unittest.TestCase):
             self.assertEqual(cs.load_pins(bad), {sha(1): 'GH #3'})
 
 
+class ReviewerPinTests(unittest.TestCase):
+
+    def test_reviewer_a_pin_taken_out_of_the_pins_file_is_no_longer_always_taken(self):
+        """Reviewer, 2026-11-24. A new pin is written with why `pinned` (corpus_select.py:367); `pinned` is not in
+        GENERIC_WHYS (corpus_select.py:87-88), so the next select reads it as hand-curated (corpus_select.py:348)
+        and takes it forever: removing it from corpus_pins.json never takes effect."""
+        rows = [row(n, 10 + n) for n in range(10)]               # quota(10) = 3; the spread never takes the smallest
+        self.assertNotIn(sha(0), {r['sha256'] for r in cs.select(rows, [], can_read=everything)})
+        pinned = cs.select(rows, [], can_read=everything, pins={sha(0): 'GH #1'})
+        self.assertIn(sha(0), {r['sha256'] for r in pinned})
+        again = cs.select(rows, pinned, can_read=everything, pins={})
+        self.assertNotIn(sha(0), {r['sha256'] for r in again}, 'an unpinned file is still always taken')
+
+
+class ReviewerSpreadTests(unittest.TestCase):
+
+    def test_inside_a_size_bin_a_file_already_copied_wins_so_a_newer_catalog_does_not_swap_copies(self):
+        # One bin of two on the same volume: the uncopied one is nearer the bin's middle and has the smaller digest;
+        # the copied one is taken all the same (a re-select over a newer catalog keeps the copy it has).
+        pair = sorted([sha(1), sha(2)])
+        members = [cs.Candidate(pair[0], '/Volumes/A/new', 10, H264, 'A'),
+                   cs.Candidate(pair[1], '/Volumes/A/held', 10, H264, 'A', 'external')]
+        self.assertEqual([c.digest for c in cs.spread(members, 1)], [pair[1]])
+        self.assertEqual([c.digest for c in cs.spread([members[0], members[1]._replace(root=None)], 1)], [pair[0]],
+                         'without a copy the digest decides, as before')
+
+    def test_a_volume_not_yet_picked_still_outranks_a_copy(self):
+        taken = [cs.Candidate(sha(9), '/Volumes/A/t', 1, H264, 'A')]
+        members = [cs.Candidate(sha(1), '/Volumes/A/held', 10, H264, 'A', 'external'),
+                   cs.Candidate(sha(2), '/Volumes/B/new', 10, H264, 'B')]
+        self.assertEqual([c.volume for c in cs.spread(members + taken, 2, taken)], ['B'])
+
+
 class Rule6PlaceTests(unittest.TestCase):
 
     def cand(self, n, size, root=None):

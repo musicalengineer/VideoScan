@@ -96,3 +96,7 @@ Out of scope: the sampling percentages and budgets (Rick's ruling), the docs.
 ## Output contract
 First line of your answer exactly: `Credits spent: <amount> | Finding count: <N>`
 Then findings (file:line, failure scenario, severity), then a line `Verdict: <merge | fix | block>`.
+
+## Closed
+
+Closed by `1bdb50964` at 2026-11-24T17:52:36Z. 9 of 9 addressed, each with a red-first test; one round per brief, no second Codex pass

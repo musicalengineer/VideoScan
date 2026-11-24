@@ -599,6 +599,12 @@ class Seal:
         self._external = External("ok", Path(mount), pin["volume_uuid"])
         return self._external
 
+    def reprove_external(self) -> External:
+        """The external root proven AFRESH (the cached proof dropped): for a step that must know the volume
+        is still the adopted one at this moment (corpus_shrink.py, after it opened the X10's media folder)."""
+        self._external = None
+        return self.external()
+
     def pristine(self, path: Path) -> bool:
         """True when `path` resolves inside the parts of the corpus nothing may write: the media
         copies, the read-only mount, the adopted external volume (whole, mounted or not), or one
@@ -783,15 +789,16 @@ def load_manifest(seal: Seal, data: Optional[bytes] = None) -> List[Entry]:
     return sorted(entries, key=lambda e: e.sha)
 
 
-def sha_lists(seal: Seal, external: External) -> List[Tuple[Path, Path]]:
+def sha_lists(seal: Seal, external: External) -> List[Tuple[Path, Path, str]]:
     """The second documents (sha256 + relative path), each with the folder its paths are relative
-    to. v1: one, relative to ~/corpus. v2: that one, ~/corpus's list of the v2 internal files
-    (relative to ~/corpus/media), and — when the external volume is there — its own list."""
-    lists = [(seal.corpus / SHA_LIST, seal.corpus)]
+    to and the root whose copies it lists. v1: one, relative to ~/corpus (internal). v2: that one,
+    ~/corpus's list of the v2 internal files (relative to ~/corpus/media), and — when the external
+    volume is there — its own list (external)."""
+    lists = [(seal.corpus / SHA_LIST, seal.corpus, "internal")]
     if manifest_name(seal) == MANIFEST_V2:
-        lists.append((seal.corpus / SHA_LIST_V2_INTERNAL, seal.media))
+        lists.append((seal.corpus / SHA_LIST_V2_INTERNAL, seal.media, "internal"))
         if external.state == "ok":
-            lists.append((external.mount / "corpus" / SHA_LIST_V2_EXTERNAL, external.media))
+            lists.append((external.mount / "corpus" / SHA_LIST_V2_EXTERNAL, external.media, "external"))
     return lists
 
 
@@ -800,10 +807,12 @@ def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External
     content that IS a manifest entry must be at the manifest's place. A list may be shorter than the
     manifest (the manifest is the wish list; a copy list names what was sent so far), and may name
     content the manifest no longer holds (the sample dropped it, DECISIONS 2026-11-24: its copy waits
-    for `corpus_shrink.py apply`): that line is no longer the manifest's business."""
-    wanted = {e.sha: os.path.normpath(str(e.path)) for e in entries if e.root != "ro"}     # an ro file has no copy
+    for `corpus_shrink.py apply`): that line is no longer the manifest's business. Each list is held
+    only to the manifest's rows on ITS OWN root: a content the sample moved to the other drive leaves a
+    dropped copy on the old one, named by the old drive's list (reviewer 2026-11-24)."""
+    wanted = {(e.sha, e.root): os.path.normpath(str(e.path)) for e in entries if e.root != "ro"}  # ro: no copy
     wrong = 0
-    for document, base in sha_lists(seal, external or External("none")):
+    for document, base, root in sha_lists(seal, external or External("none")):
         if os.path.islink(str(document)):
             raise Refused("refused: a corpus SHA-256 list is a link")
         try:
@@ -815,7 +824,8 @@ def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External
         for line in text.splitlines():
             if line.strip():
                 sha, rel = line.split(None, 1)
-                if sha.lower() in wanted and wanted[sha.lower()] != os.path.normpath(str(base / rel.strip().lstrip("*"))):
+                key = (sha.lower(), root)
+                if key in wanted and wanted[key] != os.path.normpath(str(base / rel.strip().lstrip("*"))):
                     wrong += 1
     return wrong
 

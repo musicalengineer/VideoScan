@@ -41,6 +41,9 @@ apply — THE ONLY DELETION. Refused, with nothing deleted, unless ALL of:
                      not_a_file, other_volume, second_name (hard link), locked, size, digest (its bytes are
                      not the planned SHA-256: F4), changed (another file at that name by the time of the
                      unlink: F5), error (anything else the OS said): left as it is;
+     left_hidden     renamed to its hidden `.corpus-shrink-*` name and then neither unlinked nor renamed back
+                     (the name was taken again, or the unlink failed): the receipt names it by root and
+                     SHA-256 prefix so a person can find it;
      deleted         read whole and its SHA-256 proven to be the planned content, then RENAMED within its
                      folder to a random name, proven again to be the same inode, and only then unlinked by
                      that name (C++: openat / renameat / unlinkat). A file swapped in at any step is renamed
@@ -78,7 +81,8 @@ LOCK_FLAGS = getattr(stat, "UF_IMMUTABLE", 0x2) | getattr(stat, "SF_IMMUTABLE", 
     | getattr(stat, "UF_APPEND", 0x4) | getattr(stat, "SF_APPEND", 0x40000)
 NOT_RAN = frozenset(cr.HARNESS_WORDS) | {cr.EXTERNAL_GONE}
 CHUNK = 8 << 20
-BEFORE_UNLINK: Optional[Callable[[str], None]] = None      # a seam: the tests swap a file in at the last moment
+BEFORE_UNLINK: Optional[Callable[[str], None]] = None      # seams: the tests swap a file in at the last moment,
+AFTER_RENAME: Optional[Callable[[str], None]] = None       # or take the name again once it was renamed away
 Refused = cr.Refused
 
 
@@ -249,8 +253,7 @@ def _open_media(seal: cr.Seal, root: str) -> Optional[int]:
     # before and after a fresh UUID proof (a volume swapped in between is refused).
     try:
         before = os.lstat(mount).st_dev
-        seal._external = None
-        again = seal.external()
+        again = seal.reprove_external()
         after = os.lstat(mount).st_dev
         bound = (again.state == "ok" and str(again.mount) == mount and again.uuid == proven.uuid
                  and os.fstat(fd).st_dev == before == after)
@@ -291,6 +294,8 @@ def delete_copy(media_fd: int, rel: str, size: int, sha: str, protected: Set[Tup
     dev = os.fstat(media_fd).st_dev
     fds = [media_fd]
     leaf = -1
+    hidden = ""
+    folder = media_fd
     try:
         for name in parts[:-1]:
             try:
@@ -342,14 +347,18 @@ def delete_copy(media_fd: int, rel: str, size: int, sha: str, protected: Set[Tup
         # inode we hold, and only then unlink it. Anything else found there is renamed back, never deleted.
         hidden = f".corpus-shrink-{os.getpid()}-{secrets.token_hex(8)}"
         os.rename(name, hidden, src_dir_fd=folder, dst_dir_fd=folder)
+        if AFTER_RENAME is not None:
+            AFTER_RENAME(name)
         moved = os.stat(hidden, dir_fd=folder, follow_symlinks=False)
         if (moved.st_dev, moved.st_ino) != (held.st_dev, held.st_ino):
             try:
-                os.stat(name, dir_fd=folder, follow_symlinks=False)  # the name was taken again: leave it hidden
+                os.stat(name, dir_fd=folder, follow_symlinks=False)
+                return "left_hidden"                         # the name was taken again: the file stays hidden
             except FileNotFoundError:
                 os.rename(hidden, name, src_dir_fd=folder, dst_dir_fd=folder)
             return "refused_changed"
         os.unlink(hidden, dir_fd=folder)
+        hidden = ""
         for depth in range(len(fds) - 1, 0, -1):               # the folders it leaves empty, deepest first
             os.close(fds.pop())
             try:
@@ -358,6 +367,12 @@ def delete_copy(media_fd: int, rel: str, size: int, sha: str, protected: Set[Tup
                 break                                        # not empty: stop climbing
         return "deleted"
     except (OSError, ValueError):
+        if hidden:
+            try:
+                os.stat(hidden, dir_fd=folder, follow_symlinks=False)
+                return "left_hidden"                         # renamed away and never unlinked: said, by digest
+            except (OSError, ValueError):
+                pass
         return "refused_error"
     finally:
         if leaf >= 0:
@@ -414,6 +429,7 @@ def apply(seal: cr.Seal, plan_path: Path, stamp: str) -> Tuple[List[str], Dict[s
     record = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "after_green": run, "sample_sha256": sample_sha}
     os.write(receipt, (json.dumps(dict(record, step="start", planned=len(files)), sort_keys=True) + "\n").encode())
     opened: Dict[str, Optional[int]] = {}
+    hidden_left: List[dict] = []                             # a file left under a `.corpus-shrink-*` name
     try:
         for root in sorted({f["root"] for f in todo}):       # proven and opened BEFORE the first deletion (F2)
             opened[root] = _open_media(seal, root)
@@ -425,14 +441,16 @@ def apply(seal: cr.Seal, plan_path: Path, stamp: str) -> Tuple[List[str], Dict[s
                 continue
             outcome = delete_copy(opened[root], f["place"], f["size"], str(f["sha256"]).lower(), protected[root])
             counts[root][outcome] += 1
+            if outcome == "left_hidden":
+                hidden_left.append({"root": root, "sha256_prefix": str(f["sha256"]).lower()[:12]})
             if outcome == "deleted":
                 counts[root]["bytes"] += f["size"]
     finally:
         for fd in opened.values():
             if fd is not None:
                 os.close(fd)
-        os.write(receipt, (json.dumps(dict(record, step="end", counts={r: dict(c) for r, c in counts.items()}),
-                                      sort_keys=True) + "\n").encode())
+        os.write(receipt, (json.dumps(dict(record, step="end", counts={r: dict(c) for r, c in counts.items()},
+                                           left_hidden=hidden_left), sort_keys=True) + "\n").encode())
         os.close(receipt)
     lines = [f"corpus shrink: after the green check run {cr.word(run)} on the installed sample"]
     for root, c in counts.items():
