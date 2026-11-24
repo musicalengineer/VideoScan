@@ -124,10 +124,15 @@ struct RecordFinderFilingTests {
             return try CyberBrainWriter.record(t, rootURL: brain)
         }
         let now = fixedNow
-        return RecordFinderFiler(assetStore: sb.store, assetPerson: sb.person, researchStore: sb.research,
-                                 subject: sb.subject, speakerName: "Tester",
-                                 record: record ?? defaultRecord,
-                                 log: { lines.add($0) }, now: { now })
+        var filer = RecordFinderFiler(assetStore: sb.store, assetPerson: sb.person, researchStore: sb.research,
+                                      subject: sb.subject, speakerName: "Tester",
+                                      record: record ?? defaultRecord,
+                                      log: { lines.add($0) }, now: { now })
+        // The process-wide default reads the HOST's Master Archive state: on the M4 the sealed copy of
+        // App Support names an archive whose drive is not attached there, so all 26 filings were refused
+        // (M4 testbed 2026-11-24 00:26). The sandbox store's own `access` still drives the read-only cases.
+        filer.writeMode = { .full }
+        return filer
     }
 
     private func brainFile(_ sb: Sandbox) -> URL {
