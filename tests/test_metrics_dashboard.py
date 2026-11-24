@@ -1657,3 +1657,21 @@ def test_collect_metrics_emits_one_json_row_without_xcode_or_gh(tmp_path):
     assert row["app_swift_lines"] == 2 and row["app_source_lines"] == 2 and row["test_count"] == 1
     assert row["coverage_overall_pct"] is None and row["coverage_logic_pct"] is None
     assert row["swift_by_folder"]["Catalog"] == {"lines": 2, "files": 1}
+
+
+@needs_node
+def test_broken_sits_on_the_lane_that_broke_not_the_last_line(tmp_path):
+    """RED 2026-11-24 (Rick's screenshot): the M4 row read "Core 2,730 passed · 0 failed — broken"
+    when the APP suite had 26 failures and Core had none. "— broken" belongs beside the app count
+    when the app lane failed; a run broken by another lane alone keeps it after the lanes, with its reason."""
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    fx, _, _ = two_studio_fixture(now)
+    nights = fx["summary_latest.json"]["nightly"]["nights"]
+    m4 = next(n["hosts"]["M4"] for n in reversed(nights) if "M4" in n["hosts"])
+    m4.update(state="red", passed=14453, failed=26, total=14479, reason="failed-tests:26",
+              core_passed=2730, core_failed=0, core_status="passed", failed_tests=[])
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    _, _, words = card_tile(out["sections"]["head"])
+    line = dict(re.findall(r'<b>(M4 Max|M5 Ultra)</b>.*?<span class="hostline">(.*?)</span></span>', words, re.S))["M4 Max"]
+    assert "0 failed — broken" not in line, line
+    assert line.index("broken") < line.index("Core 2,730"), line

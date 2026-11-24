@@ -1019,7 +1019,11 @@ const runMissed = run => hoursSince(run.when) > STALE_HOURS + (/^\d{4}-\d{2}-\d{
 function runWords(cell, sep = " · ") {
   if (cell.state === "did_not_run") return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
   const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
-  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${laneWords(cell, sep)}${cell.state === "red" ? ` — broken${why}` : ""}`;
+  // "— broken" sits beside the lane that broke the run (Rick 2026-11-24): the app count when the
+  // app suite failed, else after the lanes with the reason — never on a green Core line.
+  const broken = cell.state === "red" ? ` — broken${why}` : "";
+  const appBroke = cell.failed > 0;
+  return `${n(cell.passed)} passed · ${n(cell.failed)} failed${appBroke ? broken : ""}${laneWords(cell, sep)}${appBroke ? "" : broken}`;
 }
 // The row's own "N failed" opens the failed tests of that Mac's newest run, by name (only
 // names the publisher proved against the repo's test sources), and how many more were not
