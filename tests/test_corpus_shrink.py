@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import stat
 import sys
 import tempfile
@@ -34,9 +35,17 @@ def sha(n):
     return hashlib.sha256(f'content-{n}'.encode()).hexdigest()
 
 
+def copy_bytes(n, size):
+    """A copy's bytes: its own content (apply hashes a file before it deletes it)."""
+    return (f'copy {n} '.encode() * size)[:size]
+
+
 def manifest_row(n, root, size=None, path=None):
-    return dict(sha256=sha(n), path=path or f'/Volumes/Drive{n % 2}/folder {n}/clip {n}.mov', size=size or 100 + n,
-                why='sample', root=root)
+    """A manifest row whose SHA-256 is that of copy_bytes(n, size) (an `ro` row: a made-up digest, nothing to hash)."""
+    size = size or 100 + n
+    digest = sha(n) if root == 'ro' else hashlib.sha256(copy_bytes(n, size)).hexdigest()
+    return dict(sha256=digest, path=path or f'/Volumes/Drive{n % 2}/folder {n}/clip {n}.mov', size=size,
+                why='sample', root=root, n=n)
 
 
 class Shrink:
@@ -56,10 +65,12 @@ class Shrink:
         self.mount = self.tmp / 'X10'
         (self.mount / 'corpus' / 'media').mkdir(parents=True)
         self.seal = cr.Seal(self.home, 'ricksm4')
-        self.seal._external = cr.External('ok', self.mount, '01B908EE-B91C-428F-879D-3D5EEAA3E0DE')
+        # The external root as Seal.external proves it; a fresh proof (apply asks again after it opens the
+        # media folder) answers whatever `self.ext` is then.
+        self.ext = cr.External('ok', self.mount, '01B908EE-B91C-428F-879D-3D5EEAA3E0DE')
+        self.seal.external = lambda: self.ext
         self.current = [manifest_row(n, root) for n, root, _ in self.ROWS]
         self.sample = [manifest_row(n, root) for n, root, keep in self.ROWS if keep]
-        self.sample.append(manifest_row(9, 'ro', size=10 ** 12))
         for r in self.current:
             self.put(r)
         self.install(self.sample)
@@ -71,10 +82,11 @@ class Shrink:
     def place(self, r):
         return self.media(r['root']) / r['path'].lstrip('/')
 
-    def put(self, r, size=None):
+    def put(self, r, size=None, data=None):
         path = self.place(r)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'x' * (size if size is not None else r['size']))
+        size = size if size is not None else r['size']
+        path.write_bytes(data if data is not None else copy_bytes(r.get('n', 0), size))
         return path
 
     def install(self, rows):
@@ -88,19 +100,27 @@ class Shrink:
         (self.out / sh.PLAN).write_text(json.dumps(the_plan))
         return the_plan, counts
 
-    def store_run(self, stamp=STAMP, **override):
-        """A check run as corpus_run stores it: GREEN, every sample file present, over the installed manifest."""
-        report = {'lane': 'check', 'sha': COMMIT, 'stamp': stamp, 'engine_present': True, 'files': 2, 'bytes': 205,
+    def store_run(self, stamp=STAMP, outcomes=None, **override):
+        """A check run as corpus_run stores it: GREEN, every sample file present and through every engine, over
+        the installed manifest."""
+        engines = cr.LANES['check'][1]
+        inventory = {}
+        for r in self.sample:
+            inventory.setdefault(r['root'], {}).setdefault('present', 0)
+            inventory[r['root']]['present'] += 1
+        report = {'lane': 'check', 'sha': COMMIT, 'stamp': stamp, 'engine_present': True, 'files': len(self.sample),
+                  'bytes': sum(r['size'] for r in self.sample),
                   'media_seconds': 1.0, 'wall_s': 1.0, 'build_s': 0, 'launches': 1, 'jobs': 1, 'limit': None,
                   'not_run_external': 0, 'not_run_ro': 0, 'manifest_sha256': self.sample_sha, 'smoke': False,
-                  'problem_count': 0, 'launches_cut_short': 0,
-                  'inventory': {'internal': {'present': 1}, 'external': {'present': 1}},
-                  'engines': {'probe': {'OK': 2}}, 'failures': {}, 'against': None}
+                  'problem_count': 0, 'launches_cut_short': 0, 'inventory': inventory,
+                  'engines': {e: {'OK': len(self.sample)} for e in engines}, 'failures': {}, 'against': None}
         report.update(override)
+        if outcomes is None:
+            outcomes = {r['sha256']: dict({e: 'OK' for e in engines}, root=r['root'], outcome='OK') for r in self.sample}
         run = self.corpus / 'reports' / 'check' / COMMIT / stamp
         run.mkdir(parents=True, exist_ok=True)
         (run / 'report.json').write_text(json.dumps(report))
-        (run / 'outcomes.json').write_text('{}')
+        (run / 'outcomes.json').write_text(json.dumps(outcomes))
         return run
 
     def tree(self):
@@ -170,7 +190,7 @@ class PlanTests(ShrinkCase):
         self.assertIn((moved['sha256'], 'internal'), [(f['sha256'], f['root']) for f in the_plan['files']])
 
     def test_with_the_external_volume_away_its_rows_are_counted_not_looked_at(self):
-        self.s.seal._external = cr.External('absent', self.s.mount)
+        self.s.ext = cr.External('absent', self.s.mount)
         the_plan, counts = self.s.make_plan()
         self.assertEqual({f['root'] for f in the_plan['files']}, {'internal'})
         self.assertEqual(counts['external']['not_mounted'], 2)
@@ -239,7 +259,7 @@ class ApplyRefusalTests(ShrinkCase):
 
     def test_an_amber_run(self):
         self.s.store_run(against={'changed': 3, 'compared': 2})
-        self.refused('verdict is AMBER')
+        self.refused('cannot be read back as a green run')
 
     def test_a_red_run(self):
         self.s.store_run(failures={'probe:crash': 1})
@@ -250,6 +270,15 @@ class ApplyRefusalTests(ShrinkCase):
         self.refused('verdict is AMBER')
         self.s.store_run(not_run_ro=1)
         self.refused('verdict is AMBER')
+
+    def test_a_sample_with_an_ro_row_cannot_pass_while_the_share_is_away(self):
+        # Codex #359 F6: the success fixture once omitted the installed ro row from the run's coverage.
+        self.s.sample.append(manifest_row(9, 'ro', size=10 ** 12))
+        self.s.install(self.s.sample)
+        self.s.make_plan()
+        self.before = self.s.tree()
+        self.s.store_run()                                          # claims GREEN and present, but never ran the ro file
+        self.refused('not every sample file')
 
     def test_a_smoke_or_limited_run(self):
         self.s.store_run(smoke=True)
@@ -269,7 +298,7 @@ class ApplyRefusalTests(ShrinkCase):
 
     def test_a_run_that_says_nothing_of_what_was_present(self):
         self.s.store_run(inventory={})
-        self.refused('says nothing')
+        self.refused('not every sample file')
 
     def test_an_installed_manifest_that_is_not_the_plans_sample(self):
         self.s.store_run()
@@ -380,7 +409,7 @@ class ApplyTests(ShrinkCase):
         self.assertEqual(counts['other']['refused_root'], 1)
 
     def test_with_the_external_volume_away_its_files_wait_and_the_internal_ones_go(self):
-        self.s.seal._external = cr.External('absent', self.s.mount)
+        self.s.ext = cr.External('absent', self.s.mount)
         _, counts = self.s.apply()
         self.assertEqual((counts['internal']['deleted'], counts['external']['not_mounted']), (2, 2))
         self.assertTrue(all(self.s.place(r).is_file() for r in self.dropped() if r['root'] == 'external'))
@@ -393,6 +422,167 @@ class ApplyTests(ShrinkCase):
         with self.assertRaises(cr.Refused):
             self.s.apply()
         self.assertEqual(self.s.tree(), before, 'the internal copies went before the external root was proven')
+
+
+class CodexRound359Tests(ShrinkCase):
+    """Codex review #359 (2026-11-24, verdict block, 9 findings). Each test was RED on ceba122f2."""
+
+    def setUp(self):
+        super().setUp()
+        self.s.make_plan()
+        self.s.store_run()
+
+    def plan_entries(self, entries):
+        plan = json.loads((self.s.out / sh.PLAN).read_text())
+        plan['files'] = entries
+        (self.s.out / sh.PLAN).write_text(json.dumps(plan))
+
+    def keeper(self, root='internal'):
+        return next(r for r in self.s.sample if r['root'] == root)
+
+    def test_f1_plan_shrink_never_writes_through_a_link_or_a_second_name(self):
+        keeper = self.s.place(self.keeper())
+        before = keeper.read_bytes()
+        args = types.SimpleNamespace(command='plan-shrink', sample=str(self.s.corpus / cr.MANIFEST_V2),
+                                     current=None, out=str(self.s.out))
+        (self.s.out / sh.PLAN).unlink()
+        os.symlink(str(keeper), str(self.s.out / sh.PLAN))
+        with redirect_stdout(StringIO()):
+            sh.main(args, seal=self.s.seal)
+        self.assertEqual(keeper.read_bytes(), before, 'the plan was written through a link into a kept copy')
+        (self.s.out / sh.PLAN).unlink()
+        os.link(str(keeper), str(self.s.out / sh.PLAN))
+        with redirect_stdout(StringIO()):
+            sh.main(args, seal=self.s.seal)
+        self.assertEqual(keeper.read_bytes(), before, 'the plan was written into a kept copy through a second name')
+
+    def test_f2_the_media_folder_is_opened_without_following_a_link_swapped_in_after_the_seal(self):
+        # ~/corpus itself becomes a link to a look-alike after the seal passed: media is a real folder THERE.
+        outside = self.s.tmp / 'elsewhere'
+        dropped = self.dropped()[0]
+        target = outside / 'media' / dropped['path'].lstrip('/')
+        target.parent.mkdir(parents=True)
+        target.write_bytes(copy_bytes(dropped['n'], dropped['size']))
+        real_check = self.s.seal.check
+
+        def check_then_swap():
+            sealed = real_check()
+            corpus = self.s.corpus
+            if not os.path.islink(str(corpus)):
+                os.rename(str(corpus), str(self.s.home / 'corpus-was'))
+                os.symlink(str(outside), str(corpus))
+                for name in (cr.MANIFEST_V2, cr.MARKER):
+                    shutil.copyfile(str(self.s.home / 'corpus-was' / name), str(outside / name))
+                shutil.copytree(str(self.s.home / 'corpus-was' / 'reports'), str(outside / 'reports'))
+                os.mkdir(str(outside / 'state'))
+            return sealed
+        self.s.seal.check = check_then_swap
+        try:
+            self.s.apply()
+        except cr.Refused:
+            pass
+        self.assertTrue(target.is_file(), 'a file outside the corpus was deleted through a swapped-in link')
+
+    def test_f2_a_volume_swapped_at_the_x10_mount_after_its_proof_is_caught(self):
+        proofs = iter([self.s.ext])
+
+        def external():
+            try:
+                return next(proofs)
+            except StopIteration:
+                raise cr.Refused('refused: the volume mounted at the external root is not the adopted one')
+        self.s.seal.external = external
+        before = self.s.tree()
+        with self.assertRaises(cr.Refused):
+            self.s.apply()
+        self.assertEqual(self.s.tree(), before, 'a file went although the volume was not proven after the open')
+
+    def test_f3_a_case_alias_of_a_kept_copy_is_never_deleted(self):
+        keeper = self.keeper()
+        data = self.s.place(keeper).read_bytes()
+        head, _, leaf = keeper['path'].lstrip('/').rpartition('/')
+        alias = head + '/' + leaf.upper()
+        if alias == keeper['path'].lstrip('/') or not (self.s.corpus / 'media' / alias).exists():
+            self.skipTest('this volume is case-sensitive')
+        self.plan_entries([{'sha256': sha(88), 'root': 'internal', 'place': alias, 'size': len(data)}])
+        _, counts = self.s.apply()
+        self.assertTrue(self.s.place(keeper).is_file(), 'a kept copy went through a case alias of its place')
+        self.assertEqual(counts['internal']['kept_in_sample'], 1)
+
+    def test_f4_a_file_whose_bytes_are_not_the_planned_content_is_left(self):
+        dropped = self.dropped()[0]
+        self.s.put(dropped, data=b'z' * dropped['size'])                # same size, other bytes
+        _, counts = self.s.apply()
+        self.assertTrue(self.s.place(dropped).is_file())
+        self.assertEqual(counts['internal']['refused_digest'], 1)
+
+    def test_f5_a_file_swapped_in_after_it_was_checked_is_not_the_one_unlinked(self):
+        dropped = self.dropped()[0]
+        place = self.s.place(dropped)
+        swapped = []
+
+        def swap(name):
+            if not swapped:
+                os.rename(str(place), str(place) + '.was')
+                place.write_bytes(b'q' * 7)                             # another file, another size
+                swapped.append(True)
+        sh.BEFORE_UNLINK = swap
+        try:
+            _, counts = self.s.apply()
+        finally:
+            sh.BEFORE_UNLINK = None
+        self.assertEqual(place.read_bytes(), b'q' * 7, 'the file swapped in was deleted')
+        self.assertEqual(counts['internal']['refused_changed'], 1)
+
+    def test_f6_a_report_of_another_lane_stored_under_check_is_not_a_check_run(self):
+        self.s.store_run(lane='verbs')
+        with self.assertRaises(cr.Refused):
+            self.s.apply()
+
+    def test_f6_counts_that_do_not_cover_the_installed_sample_are_not_green(self):
+        for override in (dict(inventory={'internal': {}}), dict(inventory={'internal': {'present': 1}})):
+            self.s.store_run(**override)
+            with self.assertRaises(cr.Refused, msg=override):
+                self.s.apply()
+
+    def test_f6_the_runs_own_outcomes_must_cover_every_sample_file_through_every_engine(self):
+        engines = cr.LANES['check'][1]
+        full = {r['sha256']: dict({e: 'OK' for e in engines}, root=r['root']) for r in self.s.sample}
+        missing_file = dict(list(full.items())[1:])
+        not_run = {k: dict(v, audio='not_run') for k, v in full.items()}
+        for outcomes in (missing_file, not_run, {}):
+            self.s.store_run(outcomes=outcomes)
+            with self.assertRaises(cr.Refused):
+                self.s.apply()
+        self.assertTrue(all(self.s.place(r).is_file() for r in self.s.current))
+
+    def test_f6_a_diff_that_contradicts_itself_or_is_not_a_diff_is_not_green(self):
+        for against in ({'changed': 0, 'transitions': {'check: OK -> Problem': 1}}, ['not', 'a', 'diff'], 'GREEN'):
+            self.s.store_run(against=against)
+            with self.assertRaises(cr.Refused, msg=against):
+                self.s.apply()
+
+    def test_f8_a_receipt_that_cannot_be_written_stops_the_step_before_any_deletion(self):
+        state = self.s.corpus / 'state'
+        state.mkdir(exist_ok=True)
+        os.symlink(str(self.s.tmp / 'somewhere'), str(state / sh.HISTORY))
+        before = self.s.tree()
+        with self.assertRaises(cr.Refused):
+            self.s.apply()
+        self.assertEqual(self.s.tree(), before)
+
+    def test_f8_a_bad_entry_after_a_deletion_still_leaves_the_receipt(self):
+        good = self.dropped()[0]
+        self.plan_entries([{'sha256': good['sha256'], 'root': 'internal', 'place': good['path'].lstrip('/'), 'size': good['size']},
+                           {'sha256': good['sha256'], 'root': 'internal', 'place': 'Volumes/a\u0000b', 'size': 1}])
+        try:
+            self.s.apply()
+        except Exception:
+            pass
+        receipt = (self.s.corpus / 'state' / sh.HISTORY)
+        self.assertTrue(receipt.is_file(), 'a deletion with no receipt')
+        last = json.loads(receipt.read_text().splitlines()[-1])
+        self.assertEqual(last['counts']['internal'].get('deleted'), 1)
 
 
 class ScaleTests(unittest.TestCase):

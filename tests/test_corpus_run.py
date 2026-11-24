@@ -4043,6 +4043,34 @@ class SampleRootsTests(unittest.TestCase):
                          hashlib.sha256((self.scene.corpus / cr.MANIFEST_V2).read_bytes()).hexdigest())
         self.assertEqual(cr.clean_report(report)['manifest_sha256'], report['manifest_sha256'])
 
+    def test_codex_359_f7_a_run_records_the_hash_of_the_manifest_bytes_it_parsed(self):
+        rows = self.sample(ro=False)
+        cr.prepare(self.scene.seal)
+        parsed = hashlib.sha256((self.scene.corpus / cr.MANIFEST_V2).read_bytes()).hexdigest()
+        real = cr.load_manifest
+
+        def load_then_swap(seal, *args, **kwargs):
+            entries = real(seal, *args, **kwargs)
+            (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows[:2]))      # B put in place after A was read
+            return entries
+        cr.load_manifest = load_then_swap
+        try:
+            self.scene.run('check')
+        finally:
+            cr.load_manifest = real
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['manifest_sha256'], parsed, "the run recorded a manifest it never read")
+
+    def test_codex_359_f9_a_content_moved_to_ro_is_never_built_into_the_sealed_catalog(self):
+        self.sample(ro=False)
+        cr.prepare(self.scene.seal)                                 # file 2 proven ok in the ledger
+        rows = json.loads((self.scene.corpus / cr.MANIFEST_V2).read_text())
+        rows[2]['root'] = 'ro'
+        (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows))
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 2 · missing 0 | ro present 0 · missing 0 · not_run 1', lines)
+
     def test_a_sha_list_naming_a_content_the_sample_dropped_is_not_a_disagreement(self):
         # The v1 list names all three files; the sample keeps two. Before 2026-11-24 prepare refused here.
         self.sample(keep=(0, 1), ro=False)

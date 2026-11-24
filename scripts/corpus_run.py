@@ -750,13 +750,14 @@ def manifest_name(seal: Seal) -> str:
     return MANIFEST_V2 if os.path.lexists(str(seal.corpus / MANIFEST_V2)) else MANIFEST
 
 
-def load_manifest(seal: Seal) -> List[Entry]:
+def load_manifest(seal: Seal, data: Optional[bytes] = None) -> List[Entry]:
     """Every corpus file, each with its root and the place its copy sits: an internal file under
     ~/corpus/media, an external one under <the adopted mount>/corpus/media (whether or not that is
-    mounted now: whether it may be run is the lane's question, `Seal.external`)."""
+    mounted now: whether it may be run is the lane's question, `Seal.external`). `data`: the manifest's
+    bytes as the caller already read them (a lane hashes the very bytes it parses: Codex #359 F7)."""
     name = manifest_name(seal)
     try:
-        rows = json.loads((seal.corpus / name).read_text(encoding="utf-8"))
+        rows = json.loads((data if data is not None else (seal.corpus / name).read_bytes()).decode("utf-8"))
     except (OSError, ValueError):
         raise Refused(f"refused: ~/corpus/{name} is missing or unreadable")
     pin = seal.pin()
@@ -800,7 +801,7 @@ def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External
     manifest (the manifest is the wish list; a copy list names what was sent so far), and may name
     content the manifest no longer holds (the sample dropped it, DECISIONS 2026-11-24: its copy waits
     for `corpus_shrink.py apply`): that line is no longer the manifest's business."""
-    wanted = {e.sha: os.path.normpath(str(e.path)) for e in entries}
+    wanted = {e.sha: os.path.normpath(str(e.path)) for e in entries if e.root != "ro"}     # an ro file has no copy
     wrong = 0
     for document, base in sha_lists(seal, external or External("none")):
         if os.path.islink(str(document)):
@@ -1306,8 +1307,9 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
     ingested = ingest(seal, entries, ledger, unavailable | ro, hasher=seal.hasher)
     states = classify(entries, ledger, unavailable | ro)
     # Built over every proven file that is there or merely unplugged (an unplugged drive does not shrink it).
-    build = [e for e in entries if states[e.sha] == "present"
-             or (states[e.sha] == "not_run" and (ledger.files.get(e.sha) or {}).get("status") == "ok")]
+    # Never an `ro` file, whatever an earlier ingest proved of it on another root (Codex #359 F9).
+    build = [e for e in entries if e.root != "ro" and (states[e.sha] == "present"
+             or (states[e.sha] == "not_run" and (ledger.files.get(e.sha) or {}).get("status") == "ok"))]
     built_over = sorted(e.sha for e in build)
     previous = prepared_record(seal) or {}
     database = seal.state / database_name
@@ -1941,8 +1943,12 @@ class Lane:
     def go(self) -> int:
         seal = self.seal.check()
         t0 = time.time()
-        entries = load_manifest(seal)
-        self.manifest_sha256 = hashlib.sha256((seal.corpus / manifest_name(seal)).read_bytes()).hexdigest()
+        try:
+            manifest_bytes = (seal.corpus / manifest_name(seal)).read_bytes()
+        except OSError:
+            raise Refused(f"refused: ~/corpus/{manifest_name(seal)} is missing or unreadable")
+        self.manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        entries = load_manifest(seal, manifest_bytes)
         # The external root: run when proven; NOT RUN (and said, with the count) when it is not mounted;
         # refused (exit 2, nothing run) when something else is mounted there.
         external = seal.external()
