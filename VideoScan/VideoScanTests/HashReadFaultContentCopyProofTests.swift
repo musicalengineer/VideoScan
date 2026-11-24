@@ -46,7 +46,7 @@ import VideoScanCore
 
 private func sha(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
-@Suite("Hash read fault × ContentCopyProof — the Trash 'only copy' guard and Relocate's proofs never stand on an unproven read")
+@Suite("Hash read fault × ContentCopyProof — the Trash 'only copy' guard and Relocate's proofs never stand on an unproven read", .scratchCleanup)
 @MainActor
 struct HashReadFaultContentCopyProofTests {
 
