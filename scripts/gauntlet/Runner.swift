@@ -196,6 +196,55 @@ func countsFromPackageRun(eventStream: String, console: String, xctestList: Stri
     return counts
 }
 
+// Quiet-machine tests in a package stage (2026-11-24). A Core test that judges
+// wall time, or waits on a job's progress, carries `.tags(.quietMachine)`; the
+// Core lane runs those one at a time after the rest (core_lane.py, phase B).
+// The gauntlet ran them beside ~1,000 parallel tests, so they starved: the M4
+// deep run of 2026-11-24 had 13 unit-stage failures, all quiet-tagged, all
+// green in the nightly. The stage now runs in two passes: the rest in parallel
+// with the quiet ids `--skip`ped, then the quiet ids `--no-parallel`. The ids
+// come from `core_lane.py list` (the ONE reader of the tag, from the built
+// bundle); `swift test` has no tag filter.
+
+/// The quiet Swift Testing ids in `core_lane.py list` output that the stage's
+/// `--filter` regexes select (the same unanchored search SwiftPM does), sorted.
+/// XCTest class lines are left out: `swift test` runs XCTest serially in its
+/// own process before Swift Testing, so they never run beside other tests.
+func quietMachineIDs(listing: String, filters: [String]) -> [String] {
+    let id = try! NSRegularExpression(pattern: #"^VideoScanCoreTests\.\S.*\.swift:\d+:\d+$"#)
+    let patterns = filters.compactMap { try? NSRegularExpression(pattern: $0) }
+    var out = Set<String>()
+    for raw in listing.split(separator: "\n", omittingEmptySubsequences: true) {
+        let line = String(raw)
+        let whole = NSRange(line.startIndex..., in: line)
+        guard id.firstMatch(in: line, range: whole) != nil,
+              patterns.isEmpty || patterns.contains(where: { $0.firstMatch(in: line, range: whole) != nil }) else { continue }
+        out.insert(line)
+    }
+    return out.sorted()
+}
+
+/// One regex matching exactly `ids`, in the dialect both Swift Regex (Swift
+/// Testing's --filter/--skip) and ICU read: core_lane.py's swift_id_regex.
+func swiftIDRegex(_ ids: [String]) -> String {
+    let meta = Set(#"\^$.|?*+()[]{}"#)
+    return "^(?:" + ids.map { id in id.map { meta.contains($0) ? "\\\($0)" : String($0) }.joined() }.joined(separator: "|") + ")$"
+}
+
+/// The two passes' counts, strictly: the parallel pass (P) must declare none of
+/// `quiet` and the serial pass (Q) exactly `quiet` — a `--skip` or `--filter`
+/// that did not do its job is unavailable (RED), never a quiet test run twice
+/// or not at all. No quiet ids: P alone, as before.
+func countsFromQuietSplit(parallel: [String: Int]?, parallelStream: String, quietStream: String, quiet: [String]) -> [String: Int]? {
+    guard var counts = parallel else { return nil }
+    if quiet.isEmpty { return counts }
+    guard let p = SwiftTestingTally(eventStream: parallelStream), let q = SwiftTestingTally(eventStream: quietStream) else { return nil }
+    let functions = { (t: SwiftTestingTally) in Set(t.kinds.filter { $0.value == "function" }.keys) }
+    guard functions(p).isDisjoint(with: quiet), functions(q) == Set(quiet) else { return nil }
+    for (key, value) in q.counts { counts[key, default: 0] += value }
+    return counts
+}
+
 /// Names for the summary row from the same two sources, read leniently (a
 /// killed run still names its failures and the tests left without a verdict).
 func packageNames(eventStream: String, console: String, xctestList: String?, filters: [String]) -> TestNames {
@@ -747,6 +796,9 @@ struct GauntletRunner {
     /// The package adapter's one build (nil = not needed / not attempted).
     var packageBuildOK: Bool?
     var packageBuildReason: String?
+    /// `core_lane.py list` output for the built package (nil = not listed); why it failed, if it did.
+    var quietListing: String?
+    var quietListingReason: String?
     var packagePath: URL { repo.appendingPathComponent("VideoScan/VideoScanCore") }
     var packageScratch: String { run.appendingPathComponent("PackageBuild").path }
 
@@ -810,7 +862,7 @@ struct GauntletRunner {
         print("Inventory: \(validationErrors.isEmpty ? "valid" : validationErrors.joined(separator: "; "))")
         print("Isolation: per-run home, App Support, catalog, preferences, caches, logs, archive, fixtures; canonical write allowlist")
         print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath <run>/DerivedData")
-        print("Package: ONE swift build --build-tests -c release -Xswiftc -enable-testing --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors")
+        print("Package: ONE swift build --build-tests -c release -Xswiftc -enable-testing --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors: the stage's quiet-machine tests (core_lane.py list) --skip'ped, then run --no-parallel")
         for name in stageOrder {
             let entry = stageMap[name]!
             let selectors = entry["selectors"] as? [String] ?? []
@@ -923,6 +975,18 @@ struct GauntletRunner {
             // RED, never AMBER (Codex 11/05): contamination blocks every stage
             // before runPackageSuites could fail one, so the run itself fails here.
             fatalReason = fatalReason ?? packageBuildReason
+            return
+        }
+        // The quiet-machine ids, read once from the bundle just built. A listing that
+        // fails leaves every package stage RED in its words, never all-parallel.
+        let listLog = run.appendingPathComponent("package-quiet-list.log")
+        let listing = try command(["python3", repo.appendingPathComponent("scripts/core_lane.py").path, "list",
+                                   "--products", packageScratch + "/release"], log: listLog, timeout: 600, environment: environment)
+        if listing.contaminated { contaminated = true }
+        if listing.code == 0, !listing.contaminated, let text = try? String(contentsOf: listLog, encoding: .utf8) {
+            quietListing = text
+        } else {
+            quietListingReason = "quiet-machine listing (core_lane.py list) exit \(listing.code)" + (listing.contaminated ? " (unreaped process contamination)" : "")
         }
     }
 
@@ -937,12 +1001,21 @@ struct GauntletRunner {
             output["status"] = "failed"; output["reason"] = packageBuildReason ?? "package build did not run"
             return (output, names)
         }
+        guard let quietListing else {
+            output["status"] = "failed"; output["reason"] = quietListingReason ?? "quiet-machine listing did not run"
+            return (output, names)
+        }
         let patterns = selectors.map { NSRegularExpression.escapedPattern(for: $0) + "/" }
         let filters = patterns.flatMap { ["--filter", $0] }
+        let quiet = quietMachineIDs(listing: quietListing, filters: patterns)
         let log = run.appendingPathComponent("\(name)-package.log")
         let events = run.appendingPathComponent("\(name)-package-events.jsonl")
-        let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch,
-                   "--event-stream-output-path", events.path] + filters
+        let base = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch]
+        let cmd = base + ["--event-stream-output-path", events.path] + filters + (quiet.isEmpty ? [] : ["--skip", swiftIDRegex(quiet)])
+        let quietLog = run.appendingPathComponent("\(name)-package-quiet.log")
+        let quietEvents = run.appendingPathComponent("\(name)-package-quiet-events.jsonl")
+        let quietCmd = base + ["--event-stream-output-path", quietEvents.path, "--no-parallel", "--filter", swiftIDRegex(quiet)]
+        output["quiet_machine"] = quiet.count
         // The independent XCTest count: the package listed, not run, then narrowed
         // by `patterns` here — `swift test list` ignores --filter (kept on the
         // command in case a later SwiftPM honours it; filtering twice is a no-op).
@@ -957,14 +1030,27 @@ struct GauntletRunner {
                 return (output, names)
             }
             let listed: String? = listing.code == 0 ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
-            let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
+            var execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
+            var quietStream = ""
+            if !quiet.isEmpty && !execution.contaminated {
+                // The quiet pass: one test at a time, nothing else of the stage beside it.
+                let serial = try command(quietCmd, log: quietLog, timeout: timeout, environment: environment)
+                if serial.contaminated { contaminated = true }
+                quietStream = (try? String(contentsOf: quietEvents, encoding: .utf8)) ?? ""
+                execution = CommandResult(code: execution.code != 0 ? execution.code : serial.code,
+                                          timedOut: execution.timedOut || serial.timedOut,
+                                          contaminated: execution.contaminated || serial.contaminated,
+                                          elapsed: execution.elapsed + serial.elapsed)
+            }
             output["exit_code"] = execution.code
             output["elapsed_s"] = execution.elapsed
             let stream = (try? String(contentsOf: events, encoding: .utf8)) ?? ""
             let console = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-            let counts = countsFromPackageRun(eventStream: stream, console: console, xctestList: listed, filters: patterns)
+            let counts = countsFromQuietSplit(parallel: countsFromPackageRun(eventStream: stream, console: console, xctestList: listed, filters: patterns),
+                                              parallelStream: stream, quietStream: quietStream, quiet: quiet)
             names = packageNames(eventStream: stream, console: console, xctestList: listed, filters: patterns)
+            if !quiet.isEmpty { names.merge(SwiftTestingTally(eventStream: quietStream, lenient: true)?.names ?? TestNames()) }
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -1055,7 +1141,8 @@ struct GauntletRunner {
                                            floor: entry["package_expected_floor"] as? Int ?? 1, timeout: timeout)
             mergePackage(package.row, into: &output, xcodeRan: !selectors.isEmpty)
             names.merge(package.names)
-            artifacts += ["package-build.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
+            artifacts += ["package-build.log", "package-quiet-list.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
+                + ((package.row["quiet_machine"] as? Int ?? 0) > 0 ? ["\(name)-package-quiet.log", "\(name)-package-quiet-events.jsonl"] : [])
         }
         // Safe subset passed, but the stage still holds unadapted suites
         // (AMBER-class); an AMBER stage keeps its status and says both.
