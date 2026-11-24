@@ -33,6 +33,16 @@ run is incremental) and `swift test --filter …` for VideoScanCore. It prints
 every failing test name and exits non-zero; a run where the lane executed ZERO
 tests is a failure too (an empty filter must never read as green).
 
+Sealed (DECISIONS 2026-11-22, tests never open the real catalog): every test process this lane starts
+runs through `scripts/sealed_home.py run --empty`, which allocates an empty home in the temp dir, points
+the test process's HOME / CFFIXED_USER_HOME / TMPDIR / VIDEOSCAN_TEST_TMP at it and frees it afterwards
+— the app half through xcodebuild's TEST_RUNNER_ variables (xcodebuild keeps the real home for its own
+caches), the Core half with `swift build --build-tests` under the real home, then
+`swift test --skip-build` as the sealed process. Source scans need no App Support data: nothing copied.
+
+DerivedData under /Volumes is refused (GH #510: unattended, the app test host hung before connecting
+3 runs of 4; on the internal disk it went GREEN first try). Use the default, or a path on the internal disk.
+
 `run` also validates the gauntlet manifest against the source inventory
 (`manifest_check`, GH #400): a stale scripts/gauntlet/manifest.json is RED here,
 at the desk, instead of BLOCKING every stage of the M4 gauntlet.
@@ -500,6 +510,14 @@ def checkout_key() -> str:
     return hashlib.sha1(str(REPO).encode()).hexdigest()[:10]
 
 
+SEALED_HOME = Path(__file__).resolve().parent / "sealed_home.py"
+
+
+def sealed(cmd: List[str], plain: bool = False) -> List[str]:
+    """`cmd` run in a fresh, empty sealed home that is freed when it ends (scripts/sealed_home.py run)."""
+    return [sys.executable, str(SEALED_HOME), "run", "--empty"] + (["--plain"] if plain else []) + ["--"] + cmd
+
+
 def run_app(sensors: List[Sensor], log_dir: Path, dd: Path) -> Tuple[int, int, List[str], int, float]:
     args = ["xcodebuild", "test", "-project", str(PROJECT), "-scheme", "VideoScan",
             "-configuration", "Debug", "-destination", "platform=macOS,arch=arm64",
@@ -511,23 +529,37 @@ def run_app(sensors: List[Sensor], log_dir: Path, dd: Path) -> Tuple[int, int, L
             "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS=",
             "ONLY_ACTIVE_ARCH=YES"]
     args += [f"-only-testing:{s.xcode_id}" for s in sensors]
-    return _run(args, log_dir / "sensor-lane-app.log")
+    return _run([sealed(args)], log_dir / "sensor-lane-app.log")
 
 
 def run_core(sensors: List[Sensor], log_dir: Path) -> Tuple[int, int, List[str], int, float]:
+    # Two steps: the build under the real home (SwiftPM's caches, GRDB's checkout), then the tests alone
+    # in the sealed home — `swift test --skip-build` compiles nothing, so its home is only the tests'.
     pattern = "|".join(s.core_filter for s in sensors)
-    args = ["swift", "test", "--package-path", str(CORE_PKG), "--filter", pattern]
-    return _run(args, log_dir / "sensor-lane-core.log")
+    build = ["swift", "build", "--build-tests", "--package-path", str(CORE_PKG)]
+    test = ["swift", "test", "--skip-build", "--package-path", str(CORE_PKG), "--filter", pattern]
+    return _run([build, sealed(test, plain=True)], log_dir / "sensor-lane-core.log")
 
 
-def _run(args: List[str], log_path: Path) -> Tuple[int, int, List[str], int, float]:
+def _run(cmds: List[List[str]], log_path: Path) -> Tuple[int, int, List[str], int, float]:
+    """Each command in turn into one log, stopping at the first that fails."""
     t0 = time.monotonic()
+    rc = 0
     with open(log_path, "w") as fh:
-        rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL).returncode
+        for args in cmds:
+            fh.flush()
+            rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL).returncode
+            if rc != 0:
+                break
     elapsed = time.monotonic() - t0
     log = log_path.read_text(errors="replace")
     passed, failed, names = count(log)
     return passed, failed, names, rc, elapsed
+
+
+def external_volume(dd: Path) -> bool:
+    """GH #510: DerivedData on a volume under /Volumes (the internal data volume's /Volumes alias resolves to /)."""
+    return dd.resolve().parts[1:2] == ("Volumes",)
 
 
 # ---------------------------------------------------------------- gauntlet manifest (GH #400)
@@ -600,6 +632,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     dd = Path(a.derived_data).expanduser() if a.derived_data else \
         Path.home() / "Library" / "Caches" / "videoscan-sensor-dd" / checkout_key()
+    if not a.core_only and external_volume(dd):
+        print(f"SENSOR LANE REFUSED: --derived-data {dd} is on an external volume — unattended, the app test host "
+              "hangs there before connecting (GH #510). Use the default (~/Library/Caches/videoscan-sensor-dd) or "
+              "another path on the internal disk, and delete it when you are done.", file=sys.stderr)
+        return 2
     print(f"sensor lane: {len(app)} app + {len(core)} core sensors (Debug) — logs in {log_dir}", flush=True)
 
     red: List[str] = []

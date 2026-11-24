@@ -210,3 +210,82 @@ def test_a_home_that_is_itself_a_symlink_is_refused_and_nothing_is_written_throu
     except sh.Refused:
         pass
     assert sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"], "something was written through the link"
+
+
+# ---- `run`: allocate a sealed home, run one command in it, free it (2026-11-23: every lane sealed) ----
+
+import json as _json
+import signal as _signal
+import subprocess as _subprocess
+import time as _time
+
+SCRIPT = ROOT / "scripts" / "sealed_home.py"
+# The child: records what it was given and whether the home it was pointed at exists and is a sealed home.
+PROBE = r'''
+import json, os, sys
+keys = ("HOME", "CFFIXED_USER_HOME", "TMPDIR", "VIDEOSCAN_TEST_TMP")
+env = {k: os.environ.get(k) for k in keys} | {"TEST_RUNNER_" + k: os.environ.get("TEST_RUNNER_" + k) for k in keys}
+home = env["TEST_RUNNER_HOME"] or env["HOME"]
+env["owner"] = os.path.isfile(os.path.join(home, ".videoscan-sealed-home"))
+env["logs"] = os.path.isdir(os.path.join(home, "Library", "Logs"))
+env["app"] = os.path.isdir(os.path.join(home, "Library", "Application Support", "VideoScan"))
+json.dump(env, open(sys.argv[1], "w"))
+sys.exit(int(sys.argv[2]))
+'''
+
+
+def _run(tmp_path, opts, rc=0, source=None):
+    out = tmp_path / "probe.json"
+    env = dict(os.environ, HOME="/Users/the-real-home", TMPDIR=str(tmp_path / "t") + "/")
+    (tmp_path / "t").mkdir(exist_ok=True)
+    if source:
+        env["VIDEOSCAN_SEAL_SOURCE_HOME"] = str(source)
+    p = _subprocess.run([sys.executable, str(SCRIPT), "run", *opts, "--", sys.executable, "-c", PROBE, str(out), str(rc)],
+                        env=env, capture_output=True, text=True, timeout=60)
+    return p, _json.loads(out.read_text())
+
+
+def test_run_hands_the_test_runner_a_sealed_home_keeps_its_own_home_and_frees_it(tmp_path):
+    p, got = _run(tmp_path, ["--empty"], rc=3)
+    assert p.returncode == 3, p.stderr                       # the command's code, unchanged
+    home = got["TEST_RUNNER_HOME"]
+    assert home and home != "/Users/the-real-home" and got["owner"] and got["logs"], got
+    assert got["TEST_RUNNER_CFFIXED_USER_HOME"] == home
+    assert got["TEST_RUNNER_TMPDIR"] == got["TEST_RUNNER_VIDEOSCAN_TEST_TMP"] == home + "/tmp/"
+    assert got["HOME"] == "/Users/the-real-home", "xcodebuild itself must keep the real home (its caches)"
+    assert not got["app"], "--empty copies nothing"
+    assert not Path(home).exists(), "the sealed home was not freed"
+    assert home.startswith(str(tmp_path / "t")), "allocated in the temp dir"
+
+
+def test_run_plain_points_the_process_itself_at_the_home_and_copies_app_support_by_default(tmp_path):
+    src = tmp_path / "src"
+    (src / "Library" / "Application Support" / "VideoScan").mkdir(parents=True)
+    p, got = _run(tmp_path, ["--plain"], source=src)
+    assert p.returncode == 0, p.stderr
+    home = got["HOME"]
+    assert home != "/Users/the-real-home" and got["CFFIXED_USER_HOME"] == home and got["owner"], got
+    assert got["VIDEOSCAN_TEST_TMP"] == home + "/tmp/" and got["TEST_RUNNER_HOME"] is None
+    assert got["app"], "a copy of App Support by default"
+    assert not Path(home).exists()
+
+
+def test_a_stopped_run_frees_its_home_and_stops_its_child(tmp_path):
+    marker = tmp_path / "home.txt"
+    child = f"import os, time; open({str(marker)!r}, 'w').write(os.environ['TEST_RUNNER_HOME']); time.sleep(60)"
+    p = _subprocess.Popen([sys.executable, str(SCRIPT), "run", "--empty", "--", sys.executable, "-c", child],
+                          stderr=_subprocess.PIPE, start_new_session=True)
+    for _ in range(200):
+        if marker.exists() and marker.read_text():
+            break
+        _time.sleep(0.05)
+    home = Path(marker.read_text())
+    assert home.is_dir()
+    os.kill(p.pid, _signal.SIGTERM)                          # the wrapper only, as a lane's watchdog would
+    assert p.wait(30) == 128 + _signal.SIGTERM
+    assert not home.exists(), "a stopped run left its sealed home behind"
+
+
+def test_run_without_a_command_is_a_usage_error(tmp_path):
+    p = _subprocess.run([sys.executable, str(SCRIPT), "run", "--"], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 2 and "usage" in p.stderr
