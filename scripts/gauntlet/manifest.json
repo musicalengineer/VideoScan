@@ -35387,6 +35387,7 @@
         "test_a_scoped_run_says_why_a_stage_failed_and_which_tests",
         "test_an_unsuppressed_ubsan_finding_is_red_and_a_skip_is_amber",
         "test_both_kinds_fresh_and_clean_is_green",
+        "test_broken_sits_on_the_lane_that_broke_not_the_last_line",
         "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
         "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
         "test_each_mac_row_keeps_its_newest_run_with_its_own_date",
