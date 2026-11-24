@@ -3974,6 +3974,87 @@ class WishListTests(unittest.TestCase):
         self.assertEqual(states[sha_of(1)], 'missing')
 
 
+class SampleRootsTests(unittest.TestCase):
+    """DECISIONS 2026-11-24: the corpus is a stratified sample (scripts/corpus_select.py). A sample file that fits
+    neither copy root is `ro`, read from the Ultra over a read-only share that is not mounted yet: in the manifest
+    and the inventory, NOT RUN in every run — AMBER, never a baseline — as an unplugged external volume's files.
+    A run records the manifest it read (corpus_shrink.py apply proves the green run ran the installed sample), and
+    a SHA-256 list that still names a content the sample dropped is not a disagreement."""
+
+    RO = (40, '/Volumes/UltraDrive/Grandma/too big for the M4.mxf', 9_000, 'sample')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)                 # v1: three internal files, prepared
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sample(self, keep=(0, 1, 2), ro=True):
+        """The sample installed as the v2 manifest (over the v1 backup, as v2's own)."""
+        rows = [dict(sha256=sha_of(n), path=o, size=s, why=w, root='internal') for n, o, s, w in self.scene.files if n in keep]
+        if ro:
+            n, o, s, w = self.RO
+            rows.append(dict(sha256=sha_of(n), path=o, size=s, why=w, root='ro'))
+        (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows))
+        if not (self.scene.corpus / cr.SOURCE_BACKUP_V2).exists():
+            shutil.copyfile(self.scene.corpus / cr.SOURCE_BACKUP, self.scene.corpus / cr.SOURCE_BACKUP_V2)
+        return rows
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def test_an_ro_row_is_a_manifest_row_and_its_file_is_never_looked_at(self):
+        self.sample()
+        entries = cr.load_manifest(self.scene.seal)
+        ro = [e for e in entries if e.root == 'ro']
+        self.assertEqual(len(ro), 1)
+        self.assertTrue(str(ro[0].path).startswith(str(cr.RO_NOT_MOUNTED) + '/'))
+        hashed = []
+        real = self.scene.seal.hasher
+        self.scene.seal.hasher = lambda path, size: (hashed.append(str(path)), real(path, size))[1]
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 3 · missing 0 | ro present 0 · missing 0 · not_run 1', lines)
+        self.assertIn('  read-only share NOT MOUNTED: its 1 files were not looked at', lines)
+        self.assertFalse(any('corpus-ro-share' in h for h in hashed))
+
+    def test_a_run_with_ro_files_counts_them_not_run_amber_and_never_a_baseline(self):
+        self.sample()
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual((report['files'], report['not_run_ro'], report['not_run_external']), (3, 1, 0))
+        self.assertIn('read-only share NOT MOUNTED: 1 files read from the Ultra', self.summary())
+        self.assertIn('1 files NOT RUN: the read-only share is not mounted',
+                      json.loads((self.scene.out / cr.VERDICT_FILE).read_text())['notes'])
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'tester')
+        self.assertIn('read-only share', str(refused.exception))
+        self.assertEqual(cr.baseline_of(self.scene.seal, 'check')[0], None, 'never the implicit first baseline')
+        self.assertNotIn('Grandma', self.scene.everything_that_leaves())
+
+    def test_a_run_records_the_sha256_of_the_manifest_it_read(self):
+        self.sample(ro=False)
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['manifest_sha256'],
+                         hashlib.sha256((self.scene.corpus / cr.MANIFEST_V2).read_bytes()).hexdigest())
+        self.assertEqual(cr.clean_report(report)['manifest_sha256'], report['manifest_sha256'])
+
+    def test_a_sha_list_naming_a_content_the_sample_dropped_is_not_a_disagreement(self):
+        # The v1 list names all three files; the sample keeps two. Before 2026-11-24 prepare refused here.
+        self.sample(keep=(0, 1), ro=False)
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 2 · missing 0', lines)
+        (self.scene.corpus / cr.SHA_LIST).write_text(f"{sha_of(0)}  media/Volumes/PrivateDrive/elsewhere.mov\n")
+        with self.assertRaises(cr.Refused) as refused:                           # a KEPT content elsewhere still is
+            cr.prepare(self.scene.seal)
+        self.assertIn('disagree on 1', str(refused.exception))
+
+
 class WishListScaleTests(unittest.TestCase):
 
     def test_classifying_100k_files_against_the_ledger_stays_inside_the_budget(self):

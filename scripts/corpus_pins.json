@@ -1,0 +1,4 @@
+{
+ "about": "Corpus files a bug or a regression test is tied to: always in the sample (scripts/corpus_select.py rule 5). One row per file: its whole-file SHA-256 and the test or issue that needs it (never a file name). DECISIONS 2026-11-24.",
+ "pins": []
+}

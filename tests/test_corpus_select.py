@@ -1,16 +1,24 @@
-"""scripts/corpus_select.py — the v2 corpus choice, rule by rule, on a synthetic catalog.
+"""scripts/corpus_select.py — the corpus as a stratified SAMPLE (DECISIONS 2026-11-24), rule by rule.
 
-No real path: every catalog here is built from the catalog's real DDL (catalog_sqlite_fixture)
-in a temporary folder, with made-up /Volumes paths; "readable" is a set the test hands in.
+No real path: every catalog here is built from the catalog's real DDL (catalog_sqlite_fixture) or a
+minimal table in a temporary folder, with made-up /Volumes paths; "readable" is a set the test hands in.
+The v2 rule this file pinned until 2026-11-24 (every content under 8 GB, one large file per codec mix,
+`grow` never removes) is retired by that ruling; its tests that still hold (one readable /Volumes path,
+the archive last, a WAL refused, nothing into the repository, a whole-or-nothing manifest write,
+counts-only output) are kept below in the new rule's terms.
 """
 import hashlib
 import json
 import os
 import pathlib
+import random
+import sqlite3
 import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'scripts'))
@@ -19,10 +27,32 @@ import corpus_select as cs  # noqa: E402
 from catalog_sqlite_fixture import Catalog  # noqa: E402
 
 GB = 1_000_000_000
+H264 = ('mov,mp4,m4a,3gp,3g2,mj2', 'h264', 'aac')
+PLAIN = json.dumps({'frameRate': '29.97', 'resolution': '1920x1080', 'isPlayable': 'Yes'})
 
 
 def sha(n):
     return hashlib.sha256(f'content-{n}'.encode()).hexdigest()
+
+
+def row(n, size, path=None, mix=H264, stream='Video+Audio', duration=60.0, probe=PLAIN, rowid=None):
+    """A catalog row as catalog_evidence returns it."""
+    return (rowid if rowid is not None else n, sha(n), path or f'/Volumes/A/{n}.mov', size, *mix, stream, duration, probe)
+
+
+def mrow(n, size, path=None, why='v2 every content under 8 GB', root='external'):
+    return dict(sha256=sha(n), path=path or f'/Volumes/A/{n}.mov', size=size, why=why, root=root)
+
+
+def everything(p):
+    return True
+
+
+def said(args):
+    buf = StringIO()
+    with redirect_stdout(buf):
+        code = cs.main(args)
+    return code, buf.getvalue()
 
 
 class Scene:
@@ -31,18 +61,13 @@ class Scene:
         self.folder.mkdir()
         self.db = Catalog(self.folder)
 
-    def add(self, path, n, size, container='mov,mp4', vcodec='h264', acodec='aac', removal=None):
+    def add(self, path, n, size, mix=H264, removal=None):
         rid = self.db.add(path, digest=sha(n), size=size, removal=removal)
-        self.db.conn.execute("UPDATE files SET container = ?, video_codec = ?, audio_codec = ? WHERE id = ?",
-                             (container, vcodec, acodec, rid))
+        self.db.conn.execute("UPDATE files SET container = ?, video_codec = ?, audio_codec = ? WHERE id = ?", (*mix, rid))
         return rid
 
-    def rows(self):
-        return cs.catalog_rows(self.close())
-
     def close(self):
-        """A finished backup: closed, and (as CorpusScene does) without the empty WAL sidecars Apple's
-        SQLite keeps after a close (persistent WAL) — a real `.backup` copy has none."""
+        """A finished backup: closed, without the empty WAL sidecars Apple's SQLite keeps after a close."""
         path = pathlib.Path(self.db.close())
         for suffix in ('-wal', '-shm'):
             side = pathlib.Path(str(path) + suffix)
@@ -52,70 +77,260 @@ class Scene:
         return path
 
 
-class SelectRuleTests(unittest.TestCase):
+def minimal_catalog(folder, rows):
+    """Only the columns the v2 rule read: no stream_type / duration_s / probe_extra, no evidence tables."""
+    path = pathlib.Path(folder, 'catalog.sqlite')
+    conn = sqlite3.connect(str(path))
+    conn.execute('CREATE TABLE files (content_digest TEXT, full_path TEXT, size_bytes INTEGER, container TEXT,'
+                 ' video_codec TEXT, audio_codec TEXT, removal_state TEXT)')
+    conn.executemany('INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, NULL)', rows)
+    conn.commit()
+    conn.close()
+    return path
 
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.s = Scene(self.tmp.name)
 
-    def tearDown(self):
-        self.tmp.cleanup()
+class Rule1UniverseTests(unittest.TestCase):
 
-    def test_1_live_rows_only_and_never_a_content_already_in_the_corpus(self):
-        self.s.add('/Volumes/A/live.mov', 1, 100)
-        self.s.add('/Volumes/A/gone.mov', 2, 100, removal=('removedFromCatalog', 'x'))
-        self.s.add('/Volumes/A/in-v1.mov', 3, 100)
-        picked = cs.select(self.s.rows(), [sha(3).upper()], can_read=lambda p: True)
-        self.assertEqual([p[0] for p in picked['external']], [sha(1)])
-        self.assertEqual(picked['internal'], [])
-
-    def test_2_one_readable_path_per_digest_away_from_the_archive_then_the_smallest_path(self):
-        self.s.add('/Volumes/FamilyArchive/1990s/a.mov', 1, 100)
-        self.s.add('/Volumes/Z/a.mov', 1, 100)
-        self.s.add('/Volumes/M/a.mov', 1, 100)
-        self.s.add('/Volumes/B/unreadable.mov', 1, 100)
-        self.s.add('/Volumes/FamilyArchive/only-here.mov', 2, 100)
-        self.s.add('/Volumes/B/nowhere.mov', 3, 100)
+    def test_live_rows_only_one_readable_volumes_path_away_from_the_archive_then_the_smallest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Scene(tmp)
+            s.add('/Volumes/FamilyArchive/1990s/a.mov', 1, 100)
+            s.add('/Volumes/Z/a.mov', 1, 100)
+            s.add('/Volumes/M/a.mov', 1, 100)
+            s.add('/Volumes/B/unreadable.mov', 1, 100)
+            s.add('/Volumes/FamilyArchive/only-here.mov', 2, 100)
+            s.add('/Volumes/B/nowhere.mov', 3, 100)
+            s.add('/Volumes/A/gone.mov', 4, 100, removal=('removedFromCatalog', 'x'))
+            rows = cs.catalog_rows(s.close())
         readable = {'/Volumes/FamilyArchive/1990s/a.mov', '/Volumes/Z/a.mov', '/Volumes/M/a.mov',
                     '/Volumes/FamilyArchive/only-here.mov'}
-        picked = cs.select(self.s.rows(), [], can_read=readable.__contains__)
-        self.assertEqual(sorted(picked['external']),
-                         sorted([(sha(1), '/Volumes/M/a.mov', 100), (sha(2), '/Volumes/FamilyArchive/only-here.mov', 100)]))
+        stats = {}
+        picked = cs.select(rows, [], can_read=readable.__contains__, stats=stats)
+        self.assertEqual(sorted((r['sha256'], r['path']) for r in picked),
+                         sorted([(sha(1), '/Volumes/M/a.mov'), (sha(2), '/Volumes/FamilyArchive/only-here.mov')]))
+        self.assertEqual(stats['unreadable'], 1)
 
-    def test_3_under_8_gb_is_external_and_8_gb_exactly_is_large(self):
-        self.s.add('/Volumes/A/under.mov', 1, cs.SPLIT_BYTES - 1)
-        self.s.add('/Volumes/A/at.mov', 2, cs.SPLIT_BYTES)
-        picked = cs.select(self.s.rows(), [], can_read=lambda p: True)
-        self.assertEqual([p[0] for p in picked['external']], [sha(1)])
-        self.assertEqual([p[0] for p in picked['internal']], [sha(2)])
+    def test_a_copy_outside_volumes_never_becomes_the_chosen_path(self):
+        # Review 2026-11-19 C1: "/Users/..." sorts before "/Volumes/..."
+        rows = [row(1, 100, '/Users/someone/Movies/a.mov', rowid=1), row(1, 100, '/Volumes/M/a.mov', rowid=2),
+                row(3, 100, '/Users/someone/only-here.mov')]
+        picked = cs.select(rows, [], can_read=everything)
+        self.assertEqual([r['path'] for r in picked], ['/Volumes/M/a.mov'])
 
-    def test_4_the_smallest_of_each_stratum_smallest_first_until_the_budget(self):
-        # The media matrix as strata: each (container, video, audio) mix is its own.
-        matrix = [('mov,mp4', 'h264', 'aac'), ('mov,mp4', 'prores', 'pcm_s24le'), ('matroska,webm', 'ffv1', 'pcm_s16le'),
-                  ('mxf', 'dnxhd', ''), ('avi', 'dvvideo', 'pcm_s16le')]
-        n = 0
-        for k, (container, v, a) in enumerate(matrix):
-            for extra in (3, 1, 2):                                   # the stratum's smallest is +1
+    def test_a_content_the_corpus_holds_keeps_its_manifest_path_and_root_unread(self):
+        # Its copy sits at the manifest path's place: another path would read `vanished`. Nothing is read.
+        rows = [row(1, 100, '/Volumes/B/other copy.mov', rowid=1)]
+        current = [mrow(1, 100, '/Volumes/A/the copied one.mov', root='internal')]
+        picked = cs.select(rows, current, can_read=lambda p: False)
+        self.assertEqual([(r['path'], r['root']) for r in picked], [('/Volumes/A/the copied one.mov', 'internal')])
+
+    def test_a_row_without_a_size_never_reaches_the_rules_and_is_counted(self):
+        stats = {}
+        picked = cs.select([row(1, None, '/Volumes/A/a.mov', rowid=1), row(1, 100, '/Volumes/B/a.mov', rowid=2)], [],
+                           can_read=everything, stats=stats)
+        self.assertEqual([r['path'] for r in picked], ['/Volumes/B/a.mov'])
+        self.assertEqual((stats['no_size'], stats['unreadable']), (1, 0))
+
+
+class Rule2StratumTests(unittest.TestCase):
+
+    def flags(self, **kw):
+        args = dict(stream_type='Video+Audio', duration=60.0, probe_extra=PLAIN)
+        args.update(kw)
+        return cs.flags_of(**args)
+
+    def test_a_plain_file_is_no_odd_case(self):
+        self.assertEqual(self.flags(), ())
+
+    def test_each_odd_case_from_the_catalog_column_that_states_it(self):
+        cases = [
+            (dict(stream_type='Video only'), ('no_audio',)),
+            (dict(sound={'heardTooLittle'}), ('sound_short',)),
+            (dict(probe_extra=json.dumps({'frameRate': '1.999', 'resolution': '1920x1080'})), ('odd_rate',)),
+            (dict(probe_extra=json.dumps({'frameRate': '29.97', 'resolution': '1920x2'})), ('odd_size',)),
+            (dict(stream_type='ffprobe failed', probe_extra=None), ('damaged',)),
+            (dict(stream_type='No A/V streams', probe_extra=None), ('damaged',)),
+            (dict(probe_extra=json.dumps({'frameRate': '25', 'resolution': '720x576', 'isPlayable': 'Damaged file'})), ('damaged',)),
+            (dict(checks={'broken'}), ('damaged',)),
+            (dict(sound={'failed'}), ('damaged',)),
+            (dict(duration=4.9), ('very_short',)),
+            (dict(duration=7200.5), ('very_long',)),
+        ]
+        for kw, want in cases:
+            with self.subTest(kw=kw):
+                self.assertEqual(self.flags(**kw), want)
+
+    def test_unknown_is_not_odd(self):
+        # A fact the catalog does not hold raises no flag: no duration, no probe, an audio file's picture size.
+        self.assertEqual(self.flags(duration=None, probe_extra=None), ())
+        self.assertEqual(self.flags(duration=0.0), ())
+        self.assertEqual(self.flags(stream_type='Audio only', probe_extra=json.dumps({'resolution': '1x1'})), ())
+        self.assertEqual(self.flags(probe_extra='{not json'), ())
+        self.assertEqual(self.flags(probe_extra=json.dumps({'frameRate': '29.97', 'resolution': '1920x1080',
+                                                            'isPlayable': 'Codec unsupported'})), (),
+                         'an AVFoundation-unsupported codec is the codec stratum, not damage')
+
+    def test_without_a_stream_type_the_codecs_say_whether_sound_is_missing(self):
+        self.assertEqual(cs.flags_of(None, None, None, 'h264', ''), ('no_audio',))
+        self.assertEqual(cs.flags_of(None, None, None, 'h264', 'aac'), ())
+
+    def test_flags_split_a_codec_mix_into_its_own_strata(self):
+        rows = [row(1, 10), row(2, 10, stream='Video only'), row(3, 10, duration=2.0),
+                row(4, 10, mix=('avi', 'dvvideo', 'pcm_s16le'))]
+        stats = {}
+        picked = cs.select(rows, [], can_read=everything, stats=stats)
+        self.assertEqual(stats['strata'], 4)
+        self.assertEqual({tuple(r['stratum']) for r in picked},
+                         {H264, H264 + ('no_audio',), H264 + ('very_short',), ('avi', 'dvvideo', 'pcm_s16le')})
+
+
+class Rule3QuotaTests(unittest.TestCase):
+
+    def test_twelve_percent_rounded_up_at_least_three_and_three_or_fewer_whole(self):
+        self.assertEqual([cs.quota(n) for n in (0, 1, 2, 3, 4, 25, 26, 100, 101, 1000)],
+                         [0, 1, 2, 3, 3, 3, 4, 12, 13, 120])
+
+    def test_each_stratum_takes_its_own_quota(self):
+        rows = [row(n, 10 + n) for n in range(100)]
+        rows += [row(500 + n, 10, mix=('mxf', 'dnxhd', '')) for n in range(2)]
+        rows += [row(600 + n, 10, mix=('avi', 'dvvideo', 'pcm_s16le')) for n in range(10)]
+        counts = {}
+        for r in cs.select(rows, [], can_read=everything):
+            counts[r['stratum'][0]] = counts.get(r['stratum'][0], 0) + 1
+        self.assertEqual(counts, {H264[0]: 12, 'mxf': 2, 'avi': 3})
+
+
+class Rule4SpreadTests(unittest.TestCase):
+
+    def test_the_picks_cover_the_sizes_not_only_the_smallest(self):
+        rows = [row(n, (n + 1) * GB // 10) for n in range(100)]               # 0.1 GB .. 10 GB
+        sizes = sorted(r['size'] for r in cs.select(rows, [], can_read=everything))
+        self.assertEqual(len(sizes), 12)
+        self.assertLess(sizes[0], 1 * GB)
+        self.assertGreater(sizes[-1], 9 * GB)
+        ranks = [s * 10 // GB - 1 for s in sizes]                            # the member's rank by size
+        self.assertTrue(all(b - a >= 5 for a, b in zip(ranks, ranks[1:])), f'bunched picks: {ranks}')
+
+    def test_a_volume_not_yet_picked_wins_inside_a_bin(self):
+        # 3 bins of 2; in each the A-file has the smaller digest and the same distance to the middle: without
+        # the volume rule all three picks would be on A.
+        members = []
+        for b in range(3):
+            pair = sorted([sha(10 * b + 1), sha(10 * b + 2)])
+            members += [cs.Candidate(pair[0], f'/Volumes/A/{b}', 100 + 2 * b, H264, 'A'),
+                        cs.Candidate(pair[1], f'/Volumes/B/{b}', 100 + 2 * b, H264, 'B')]
+        picks = cs.spread(members, 3)
+        self.assertEqual(len(picks), 3)
+        self.assertEqual({p.volume for p in picks}, {'A', 'B'})
+        self.assertEqual(sorted(p.size for p in picks), [100, 102, 104], 'one per size bin')
+
+    def test_the_same_catalog_gives_the_same_sample_whatever_the_row_order(self):
+        rows = [row(n, 1000 + (n * 7919) % 5000, f'/Volumes/V{n % 3}/{n}.mov') for n in range(300)]
+        first = cs.select(rows, [], can_read=everything)
+        shuffled = list(rows)
+        random.Random(4).shuffle(shuffled)
+        self.assertEqual(cs.select(shuffled, [], can_read=everything), first)
+
+    def test_a_size_tie_breaks_by_digest(self):
+        members = [cs.Candidate(sha(n), f'/Volumes/A/{n}', 5, H264, 'A') for n in range(8)]
+        self.assertEqual(cs.spread(members, 4), cs.spread(list(reversed(members)), 4))
+
+
+class Rule5AlwaysTakenTests(unittest.TestCase):
+
+    def test_a_pin_is_taken_and_counts_toward_its_strata_quota(self):
+        rows = [row(n, 10 + n) for n in range(30)]                           # quota(30) = 4
+        pins = {sha(29): 'GH #1 regression', sha(28): 'test_x'}
+        picked = cs.select(rows, [], can_read=everything, pins=pins)
+        digests = [r['sha256'] for r in picked]
+        self.assertEqual(len(digests), 4)
+        self.assertTrue({sha(29), sha(28)} <= set(digests))
+        self.assertEqual({r['why'] for r in picked if r['sha256'] in pins}, {cs.WHY_PINNED})
+
+    def test_a_hand_curated_row_is_always_taken_and_a_generic_one_is_not(self):
+        rows = [row(n, 10 + n) for n in range(40)]
+        current = [mrow(n, 10 + n, why='codec/container combo', root='internal') for n in range(30)]
+        current += [mrow(n, 10 + n, why='one-sided sound', root='internal') for n in range(30, 36)]
+        picked = {r['sha256']: r for r in cs.select(rows, current, can_read=everything)}
+        self.assertTrue(all(sha(n) in picked for n in range(30, 36)), 'the proof lane rests on these')
+        self.assertEqual({picked[sha(n)]['why'] for n in range(30, 36)}, {'one-sided sound'})
+        self.assertEqual(len(picked), 6, 'six curated already pass the quota (5) of the 40: nothing generic added')
+
+    def test_a_curated_row_whose_content_left_the_catalog_is_still_taken_from_the_manifest(self):
+        current = [dict(mrow(7, 50, why='raw DV', root='internal'), stratum=['dv', 'dvvideo', 'pcm_s16le'])]
+        picked = cs.select([row(1, 10)], current, can_read=everything)
+        self.assertEqual({r['sha256']: r['stratum'] for r in picked}[sha(7)], ['dv', 'dvvideo', 'pcm_s16le'])
+
+    def test_a_pin_nowhere_to_be_found_is_counted_not_guessed(self):
+        stats = {}
+        cs.select([row(1, 10)], [], can_read=everything, pins={sha(99): 'GH #2'}, stats=stats)
+        self.assertEqual(stats['pins_not_found'], 1)
+
+    def test_the_pins_file_holds_digests_and_reasons_only(self):
+        self.assertEqual(cs.load_pins(cs.PINS), {}, 'the repository pin list (empty until a test or bug names a corpus file)')
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = pathlib.Path(tmp, 'pins.json')
+            for text in ('[]', json.dumps({'pins': [{'sha256': '/Volumes/A/a.mov'}]}), '{not json'):
+                bad.write_text(text)
+                with self.assertRaises(cs.Refused):
+                    cs.load_pins(bad)
+            bad.write_text(json.dumps({'pins': [{'sha256': sha(1).upper(), 'why': 'GH #3'}]}))
+            self.assertEqual(cs.load_pins(bad), {sha(1): 'GH #3'})
+
+
+class Rule6PlaceTests(unittest.TestCase):
+
+    def cand(self, n, size, root=None):
+        return cs.Candidate(sha(n), f'/Volumes/A/{n}', size, H264, 'A', root)
+
+    def test_small_goes_external_large_goes_internal_and_what_fits_neither_is_ro(self):
+        roots = cs.place([self.cand(1, 1 * GB), self.cand(2, 9 * GB), self.cand(3, 30 * GB), self.cand(4, 50 * GB)],
+                         internal_budget=40 * GB, external_budget=40 * GB)
+        # smallest first: 1 GB -> ext (1); 9 GB -> int (9); 30 GB -> int (39); 50 GB -> neither
+        self.assertEqual(roots, {sha(1): 'external', sha(2): 'internal', sha(3): 'internal', sha(4): 'ro'})
+
+    def test_a_large_file_the_ssd_cannot_hold_goes_to_the_x10(self):
+        roots = cs.place([self.cand(1, 30 * GB), self.cand(2, 20 * GB)], internal_budget=25 * GB, external_budget=100 * GB)
+        self.assertEqual(roots, {sha(2): 'internal', sha(1): 'external'})
+
+    def test_a_small_file_spills_to_the_ssd_before_ro(self):
+        roots = cs.place([self.cand(1, 3 * GB), self.cand(2, 4 * GB)], internal_budget=10 * GB, external_budget=5 * GB)
+        self.assertEqual(roots, {sha(1): 'external', sha(2): 'internal'})
+
+    def test_a_copy_in_place_keeps_its_root_while_the_root_has_room(self):
+        roots = cs.place([self.cand(1, 1 * GB, 'internal'), self.cand(2, 20 * GB, 'external'),
+                          self.cand(3, 5 * GB, 'internal')], internal_budget=5 * GB, external_budget=100 * GB)
+        self.assertEqual(roots, {sha(1): 'internal', sha(2): 'external', sha(3): 'external'},
+                         'the second internal copy no longer fits the SSD budget: placed again')
+
+    def test_the_budgets_are_never_passed(self):
+        cands = [self.cand(n, (n % 13 + 1) * GB, ('internal', 'external', None)[n % 3]) for n in range(200)]
+        roots = cs.place(cands, internal_budget=300 * GB, external_budget=500 * GB)
+        used = {'internal': 0, 'external': 0}
+        for c in cands:
+            if roots[c.digest] in used:
+                used[roots[c.digest]] += c.size
+        self.assertLessEqual(used['internal'], 300 * GB)
+        self.assertLessEqual(used['external'], 500 * GB)
+        self.assertIn('ro', roots.values())
+
+
+class MediaMatrixTests(unittest.TestCase):
+
+    MATRIX = [('mov,mp4,m4a,3gp,3g2,mj2', 'h264', 'aac'), ('mov,mp4,m4a,3gp,3g2,mj2', 'prores', 'pcm_s24le'),
+              ('matroska,webm', 'ffv1', 'pcm_s16le'), ('mxf', 'dnxhd', 'pcm_s24le'), ('avi', 'dvvideo', 'pcm_s16le')]
+
+    def test_every_container_and_codec_mix_of_the_matrix_is_in_the_sample(self):
+        rows, n = [], 0
+        for k, mix in enumerate(self.MATRIX):
+            for i in range(20 * (k + 1)):
                 n += 1
-                self.s.add(f'/Volumes/A/{k}-{extra}.mov', n, 40 * GB + k * GB + extra, container, v, a)
-        picked = cs.select(self.s.rows(), [], can_read=lambda p: True)
-        sizes = [p[2] for p in picked['internal']]
-        # One each, the stratum's smallest (+1), smallest stratum first: 40+41+42+43+44 = 210 GB fits 250 GB.
-        self.assertEqual(sizes, [(40 + k) * GB + 1 for k in range(5)])
-        self.assertEqual(picked['external'], [])
-
-    def test_4_the_budget_stops_at_the_first_file_that_would_pass_it(self):
-        for k in range(10):
-            self.s.add(f'/Volumes/A/{k}.mov', k, 60 * GB + k, 'mov,mp4', f'codec{k}', 'aac')
-        picked = cs.select(self.s.rows(), [], can_read=lambda p: True)
-        self.assertEqual(len(picked['internal']), 4)                   # 4 x 60 GB = 240 GB; a fifth passes 250
-        self.assertLessEqual(sum(p[2] for p in picked['internal']), cs.INTERNAL_BUDGET)
-
-    def test_4_a_size_tie_in_a_stratum_goes_to_the_digest_seen_first_in_the_catalog(self):
-        self.s.add('/Volumes/A/later.mov', 9, 20 * GB)
-        self.s.add('/Volumes/A/a-first-by-path.mov', 1, 20 * GB)
-        picked = cs.select(self.s.rows(), [], can_read=lambda p: True)
-        self.assertEqual([p[0] for p in picked['internal']], [sha(9)])
+                rows.append(row(n, 1_000 + i, mix=mix))
+        picked = cs.select(rows, [], can_read=everything)
+        by_mix = {}
+        for r in picked:
+            by_mix[tuple(r['stratum'][:3])] = by_mix.get(tuple(r['stratum'][:3]), 0) + 1
+        self.assertEqual(by_mix, {mix: cs.quota(20 * (k + 1)) for k, mix in enumerate(self.MATRIX)})
 
 
 class OutputTests(unittest.TestCase):
@@ -127,31 +342,86 @@ class OutputTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_the_lists_name_each_copy_under_its_roots_media_folder(self):
-        picked = {'external': [(sha(1), '/Volumes/A/x y.mov', 5)], 'internal': [(sha(2), '/Volumes/B/big.mxf', 9 * GB)]}
-        cs.write_selection(picked, self.out)
+    def test_the_lists_name_only_the_copies_a_root_does_not_hold_yet(self):
+        rows = [dict(sha256=sha(1), path='/Volumes/A/x y.mov', size=5, why='sample', root='external'),
+                dict(sha256=sha(2), path='/Volumes/B/big.mxf', size=9 * GB, why='sample', root='internal'),
+                dict(sha256=sha(3), path='/Volumes/B/held.mov', size=7, why='x', root='external'),
+                dict(sha256=sha(4), path='/Volumes/B/huge.mxf', size=99 * GB, why='sample', root='ro')]
+        current = [mrow(3, 7, '/Volumes/B/held.mov')]
+        copying = cs.to_copy(rows, current)
+        cs.write_selection(copying, self.out)
         self.assertEqual((self.out / 'v2_external.sha').read_text(), f'{sha(1)}  Volumes/A/x y.mov\n')
         self.assertEqual((self.out / 'v2_internal.files').read_text(), 'Volumes/B/big.mxf\n')
-        self.assertEqual(json.loads((self.out / 'selection.json').read_text())['internal'], [[sha(2), '/Volumes/B/big.mxf', 9 * GB]])
+        self.assertEqual(json.loads((self.out / 'selection.json').read_text())['ro'], [[sha(4), '/Volumes/B/huge.mxf', 99 * GB]])
+        self.assertFalse((self.out / 'v2_ro.files').exists(), 'ro is read in place: nothing to copy')
 
-    def test_the_manifest_is_v1_then_v2_each_with_its_root_and_never_one_content_twice(self):
-        v1 = [dict(sha256=sha(0).upper(), path='/Volumes/A/v1.mov', size=3, why='one-sided sound')]
-        sel = {'internal': [[sha(2), '/Volumes/B/big.mxf', 9 * GB]], 'external': [[sha(1), '/Volumes/A/x.mov', 5]]}
-        rows = cs.manifest(v1, sel)
-        self.assertEqual([(r['sha256'], r['root'], r['why']) for r in rows],
-                         [(sha(0), 'internal', 'one-sided sound'), (sha(2), 'internal', cs.WHY_INTERNAL),
-                          (sha(1), 'external', cs.WHY_EXTERNAL)])
-        with self.assertRaises(cs.Refused):
-            cs.manifest(v1, {'external': [[sha(0), '/Volumes/A/again.mov', 3]]})
-        with self.assertRaises(cs.Refused):
-            cs.manifest([], {'external': [[sha(1), '/Users/someone/x.mov', 3]]})
+    def test_the_command_line_writes_the_sample_manifest_and_prints_counts_only(self):
+        s = Scene(self.tmp.name)
+        for n in range(30):
+            s.add(f'/Volumes/Secret Drive/Grandma {n}.mov', n, 100 + n)
+        path = s.close()
+        current = pathlib.Path(self.tmp.name, 'current.json')
+        current.write_text(json.dumps([mrow(n, 100 + n, f'/Volumes/Secret Drive/Grandma {n}.mov') for n in range(30)]))
+        code, text = said(['select', '--catalog', str(path), '--current', str(current), '--out', str(self.out)])
+        self.assertEqual(code, 0, text)
+        rows = json.loads((self.out / 'corpus-manifest-v2.json').read_text())
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({r['root'] for r in rows}, {'external'})
+        self.assertIn('corpus select: 30 -> 4 files; 1 strata', text)
+        self.assertIn('corpus select: external 30 files 0.0 GB -> 4 files 0.0 GB', text)
+        self.assertIn('corpus select: external to copy 0 files', text)
+        for secret in ('Secret', 'Grandma'):
+            self.assertNotIn(secret, text)
+
+    def test_an_estimate_says_so_on_every_line(self):
+        s = Scene(self.tmp.name)
+        s.add('/Volumes/Nowhere/a.mov', 1, 100)
+        path = s.close()
+        current = pathlib.Path(self.tmp.name, 'current.json')
+        current.write_text('[]')
+        code, text = said(['select', '--catalog', str(path), '--current', str(current), '--out', str(self.out),
+                           '--assume-readable'])
+        self.assertEqual(code, 0)
+        self.assertTrue(all('ESTIMATE' in line for line in text.splitlines()), text)
+        self.assertIn('external to copy 1 files', text)
 
     def test_nothing_with_a_real_path_is_written_into_the_repository(self):
         with self.assertRaises(cs.Refused):
             cs.write_selection({'external': [], 'internal': []}, REPO / '.scratch' / 'selection')
         self.assertFalse((REPO / '.scratch' / 'selection').exists())
-        self.assertEqual(cs.main(['manifest', '--v1', '/nonexistent', '--selection', '/nonexistent',
-                                  '--out', str(REPO / 'corpus-manifest-v2.json')]), 2)
+        s = Scene(self.tmp.name)
+        s.add('/Volumes/A/a.mov', 1, 100)
+        path = s.close()
+        current = pathlib.Path(self.tmp.name, 'current.json')
+        current.write_text('[]')
+        code, _ = said(['select', '--catalog', str(path), '--current', str(current), '--out', str(REPO / 'scripts')])
+        self.assertEqual(code, 2)
+
+    def test_f1_a_manifest_write_that_fails_leaves_the_manifest_as_it_was(self):
+        # Codex #336 F1: --current and the written manifest may be the same file; a failed write must not cost its rows.
+        s = Scene(self.tmp.name)
+        s.add('/Volumes/A/old.mov', 1, 100)
+        path = s.close()
+        self.out.mkdir()
+        manifest = self.out / 'corpus-manifest-v2.json'
+        original = json.dumps([mrow(5, 1, '/Volumes/A/kept.mov', why='raw DV', root='internal')])
+        manifest.write_text(original)
+        real = pathlib.Path.write_text
+
+        def failing(self, *args, **kwargs):
+            if self == manifest:
+                real(self, '')
+                raise OSError(28, 'No space left on device')
+            return real(self, *args, **kwargs)
+        pathlib.Path.write_text = failing
+        try:
+            code = cs.main(['select', '--catalog', str(path), '--current', str(manifest), '--out', str(self.out)])
+        except OSError:
+            code = 1
+        finally:
+            pathlib.Path.write_text = real
+        self.assertEqual(code, 0, 'the write goes to a new file, renamed into place')
+        self.assertIn(sha(5), [r['sha256'] for r in json.loads(manifest.read_text())])
 
 
 class IsolationTests(unittest.TestCase):
@@ -162,226 +432,60 @@ class IsolationTests(unittest.TestCase):
             s.add('/Volumes/A/a.mov', 1, 5)
             path = s.close()
             before = (path.read_bytes(), sorted(os.listdir(path.parent)))
-            cs.catalog_rows(path)
+            cs.catalog_evidence(path)
             self.assertEqual((path.read_bytes(), sorted(os.listdir(path.parent))), before, 'a read left a mark')
             pathlib.Path(str(path) + '-wal').write_text('')
             with self.assertRaises(cs.Refused):
-                cs.catalog_rows(path)
+                cs.catalog_evidence(path)
 
-    def test_the_command_line_prints_counts_only(self):
+    def test_the_real_schema_gives_every_odd_case_column(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = Scene(tmp)
-            media = pathlib.Path(tmp, 'Volumes', 'Secret Drive')
-            media.mkdir(parents=True)
-            s.add('/Volumes/Secret Drive/Grandma.mov', 1, 5)
-            path = s.close()
-            exclude = pathlib.Path(tmp, 'v1.json')
-            exclude.write_text('[]')
-            from io import StringIO
-            from contextlib import redirect_stdout
-            said = StringIO()
-            with redirect_stdout(said):
-                self.assertEqual(cs.main(['select', '--catalog', str(path), '--exclude', str(exclude),
-                                          '--out', str(pathlib.Path(tmp, 'out'))]), 0)
-            self.assertNotIn('Secret', said.getvalue())
-            self.assertNotIn('Grandma', said.getvalue())
-            self.assertIn('external 0 files', said.getvalue())          # not readable here: not chosen
+            rid = s.add('/Volumes/A/a.mov', 1, 5)
+            s.db.conn.execute("UPDATE files SET stream_type = 'Video only', duration_s = 3.0, probe_extra = ? WHERE id = ?",
+                              (json.dumps({'frameRate': '1.999', 'resolution': '120x90'}), rid))
+            s.db.conn.execute("INSERT INTO media_checks (digest, kind, status, checked_at) VALUES (?, 'video', 'broken', 1)", (sha(1),))
+            # sound_attempts comes from a later migration than the schema files the fixture reads: as the live catalog has it.
+            s.db.conn.execute("CREATE TABLE IF NOT EXISTS sound_attempts (digest TEXT PRIMARY KEY, engine_version INTEGER NOT NULL, "
+                              "outcome TEXT NOT NULL, attempts INTEGER NOT NULL, last_at INTEGER NOT NULL, detail TEXT)")
+            s.db.conn.execute("INSERT INTO sound_attempts VALUES (?, 1, 'heardTooLittle', 1, 1, NULL)", (sha(1).upper(),))
+            evidence = cs.catalog_evidence(s.close())
+        self.assertEqual(evidence.missing, [], 'the catalog DDL lost a column the rule reads')
+        picked = cs.select(evidence.rows, [], can_read=everything, sound=evidence.sound, checks=evidence.checks)
+        self.assertEqual(picked[0]['stratum'][3:], ['no_audio', 'sound_short', 'odd_rate', 'odd_size', 'damaged', 'very_short'])
+
+    def test_a_catalog_without_the_odd_case_columns_reads_them_as_unknown_and_says_which(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = minimal_catalog(tmp, [(sha(1), '/Volumes/A/a.mov', 100, 'mov,mp4', 'h264', 'aac')])
+            current = pathlib.Path(tmp, 'current.json')
+            current.write_text('[]')
+            evidence = cs.catalog_evidence(path)
+            code, text = said(['select', '--catalog', str(path), '--current', str(current), '--out', str(pathlib.Path(tmp, 'out'))])
+        self.assertEqual(evidence.missing, ['files.stream_type', 'files.duration_s', 'files.probe_extra',
+                                            'sound_attempts.outcome', 'media_checks.status'])
+        self.assertEqual(code, 0)
+        self.assertIn('not in this catalog (read as unknown): files.stream_type', text)
+
+    def test_poisoned_manifest_paths_are_never_placed(self):
+        current = [mrow(1, 10, '/Volumes/A/../../etc/passwd', why='raw DV', root='internal')]
+        stats = {}
+        picked = cs.select([], current, can_read=everything, stats=stats)
+        self.assertEqual((picked, stats['pins_not_found']), ([], 1))
 
 
 class ScaleTests(unittest.TestCase):
 
-    def test_100k_rows_are_chosen_inside_the_budget(self):
-        rows = [(i, sha(i % 60_000), f'/Volumes/V{i % 7}/f{i}.mov', (i % 97) * 10_000_000,
-                 'mov,mp4', f'c{i % 40}', 'aac') for i in range(100_000)]
-        rows += [(100_000 + k, sha(70_000 + k), f'/Volumes/L/{k}.mxf', cs.SPLIT_BYTES + k * GB, 'mxf', f'c{k}', '')
-                 for k in range(50)]
+    def test_100k_rows_are_sampled_inside_the_time_budget_at_about_twelve_percent(self):
+        rows = [(i, sha(i % 60_000), f'/Volumes/V{i % 7}/f{i}.mov', 1_000 + (i % 97) * 10_000_000,
+                 'mov,mp4', f'c{i % 40}', 'aac', 'Video+Audio', 30.0 + i % 9, PLAIN) for i in range(100_000)]
         t0 = time.time()
-        picked = cs.select(rows, [sha(1)], can_read=lambda p: True)
-        took = time.time() - t0
-        self.assertLess(took, 5.0, f'100k rows took {took:.1f}s')
-        self.assertEqual(len(picked['external']), 59_999)
-        self.assertLessEqual(sum(p[2] for p in picked['internal']), cs.INTERNAL_BUDGET)
-
-
-
-class GrowTests(unittest.TestCase):
-    """DECISIONS 2026-11-19: the manifest is a wish list that grows; nothing ingested is ever removed."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.s = Scene(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def test_new_digests_are_appended_and_nothing_is_ever_removed(self):
-        self.s.add('/Volumes/A/old.mov', 1, 100)
-        self.s.add('/Volumes/A/new.mov', 2, 200)
-        current = [dict(sha256=sha(1), path='/Volumes/A/old.mov', size=100, why=cs.WHY_EXTERNAL, root='external'),
-                   dict(sha256=sha(9), path='/Volumes/Gone/x.mov', size=5, why='one-sided sound', root='internal')]  # gone from the newer catalog
-        rows = self.s.rows()
-        grown, picked = cs.grow(rows, current, can_read=lambda p: True)
-        self.assertEqual(grown[:2], current, 'the current rows are kept as they were, first')
-        self.assertEqual([(r['sha256'], r['root']) for r in grown[2:]], [(sha(2), 'external')])
-        self.assertEqual(picked['external'], [(sha(2), '/Volumes/A/new.mov', 200)])
-        again, picked = cs.grow(rows, grown, can_read=lambda p: True)
-        self.assertEqual((again, picked), (grown, {'external': [], 'internal': []}), 'grown twice: nothing new')
-
-    def test_a_stratum_already_in_the_corpus_is_covered_and_the_budget_is_what_is_left(self):
-        self.s.add('/Volumes/A/big-old.mxf', 1, 200 * GB, 'mxf', 'dnxhd', '')
-        self.s.add('/Volumes/A/big-same-mix.mxf', 2, 100 * GB, 'mxf', 'dnxhd', '')
-        self.s.add('/Volumes/A/big-new-mix.mov', 3, 40 * GB, 'mov,mp4', 'prores', 'pcm_s24le')
-        self.s.add('/Volumes/A/big-too-much.mkv', 4, 60 * GB, 'matroska', 'ffv1', 'flac')
-        current = [dict(sha256=sha(1), path='/Volumes/A/big-old.mxf', size=200 * GB, why=cs.WHY_INTERNAL, root='internal')]
-        _, picked = cs.grow(self.s.rows(), current, can_read=lambda p: True)
-        self.assertEqual([p[0] for p in picked['internal']], [sha(3)], 'covered mix skipped; 60 GB would pass the 50 GB left')
-
-    def test_the_command_line_writes_the_whole_manifest_and_only_the_new_copy_lists(self):
-        self.s.add('/Volumes/A/old.mov', 1, 100)
-        path = self.s.db.close()
-        for side in ('-wal', '-shm'):
-            if os.path.exists(str(path) + side):
-                os.unlink(str(path) + side)
-        manifest = pathlib.Path(self.tmp.name, 'm.json')
-        manifest.write_text(json.dumps([dict(sha256=sha(5), path='/Volumes/A/kept.mov', size=1, why='x', root='internal')]))
-        out = pathlib.Path(self.tmp.name, 'out')
-        self.assertEqual(cs.main(['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)]), 0)
-        grown = json.loads((out / 'corpus-manifest-v2.json').read_text())
-        self.assertEqual(grown[0]['sha256'], sha(5))
-        self.assertEqual((out / 'v2_external.sha').read_text(), '', 'not readable here: nothing new to copy')
-
-
-
-class GrowWriteTests(unittest.TestCase):
-
-    def test_f1_a_grow_that_fails_while_writing_leaves_the_manifest_as_it_was(self):
-        # Codex #336 F1: --manifest and --out may name the same file; a failed write must not cost its rows.
-        with tempfile.TemporaryDirectory() as tmp:
-            s = Scene(tmp)
-            s.add('/Volumes/A/old.mov', 1, 100)
-            path = s.db.close()
-            for side in ('-wal', '-shm'):
-                if os.path.exists(str(path) + side):
-                    os.unlink(str(path) + side)
-            out = pathlib.Path(tmp, 'out')
-            out.mkdir()
-            manifest = out / 'corpus-manifest-v2.json'
-            original = json.dumps([dict(sha256=sha(5), path='/Volumes/A/kept.mov', size=1, why='x', root='internal')])
-            manifest.write_text(original)
-            real = pathlib.Path.write_text
-
-            def failing(self, *args, **kwargs):
-                if self == manifest:
-                    real(self, '')                                        # opened and truncated, then the disk is full
-                    raise OSError(28, 'No space left on device')
-                return real(self, *args, **kwargs)
-            pathlib.Path.write_text = failing
-            try:
-                code = cs.main(['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)])
-            except OSError:
-                code = 1
-            finally:
-                pathlib.Path.write_text = real
-            self.assertEqual(json.loads(manifest.read_text()), json.loads(original), 'the manifest lost rows')
-            self.assertEqual(code, 0, 'the write goes to a new file, renamed into place: the failing truncation never happens')
-
-
-
-def minimal_catalog(folder, rows):
-    """Only the columns catalog_rows reads (size_bytes may be NULL here: the real DDL is not the point)."""
-    import sqlite3
-    path = pathlib.Path(folder, 'catalog.sqlite')
-    conn = sqlite3.connect(str(path))
-    conn.execute('CREATE TABLE files (content_digest TEXT, full_path TEXT, size_bytes INTEGER, container TEXT,'
-                 ' video_codec TEXT, audio_codec TEXT, removal_state TEXT)')
-    conn.executemany('INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, NULL)', rows)
-    conn.commit()
-    conn.close()
-    return path
-
-
-def said(args):
-    from io import StringIO
-    from contextlib import redirect_stdout
-    buf = StringIO()
-    with redirect_stdout(buf):
-        code = cs.main(args)
-    return code, buf.getvalue()
-
-
-class ReviewTests(unittest.TestCase):
-    """Review 2026-11-19 (C1-C3 and two smaller findings). Each was RED on 693c2e5b8."""
-
-    def test_c1_a_copy_outside_volumes_never_becomes_the_chosen_path(self):
-        # "/Users/..." sorts before "/Volumes/...": ONE home-folder duplicate was chosen and the whole run refused
-        rows = [(1, sha(1), '/Users/someone/Movies/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
-                (2, sha(1), '/Volumes/M/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
-                (3, sha(2), '/Volumes/M/b.mov', 100, 'mov,mp4', 'h264', 'aac'),
-                (4, sha(3), '/Users/someone/only-here.mov', 100, 'mov,mp4', 'h264', 'aac')]
-        picked = cs.select(rows, [], can_read=lambda p: True)
-        self.assertEqual(sorted(p[1] for p in picked['external']), ['/Volumes/M/a.mov', '/Volumes/M/b.mov'])
-        with tempfile.TemporaryDirectory() as tmp:
-            cs.write_selection(picked, pathlib.Path(tmp, 'out'))
-
-    def test_c2_growing_twice_does_not_empty_the_copy_lists_of_files_not_yet_copied(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = minimal_catalog(tmp, [(sha(2), '/Volumes/A/new.mov', 200, 'mov,mp4', 'h264', 'aac')])
-            out = pathlib.Path(tmp, 'out')
-            out.mkdir()
-            manifest = out / 'corpus-manifest-v2.json'
-            manifest.write_text('[]')
-            real = cs.readable
-            cs.readable = lambda p: True
-            try:
-                args = ['grow', '--catalog', str(path), '--manifest', str(manifest), '--out', str(out)]
-                self.assertEqual(cs.main(args), 0)
-                self.assertEqual((out / 'v2_external.files').read_text(), 'Volumes/A/new.mov\n')
-                code, text = said(args)                                 # typed again before the rsync
-                self.assertEqual(code, 0)
-            finally:
-                cs.readable = real
-            self.assertEqual(len(json.loads(manifest.read_text())), 1)
-            self.assertEqual((out / 'v2_external.files').read_text(), 'Volumes/A/new.mov\n',
-                             'the list that copies the new file to the M4 was overwritten with nothing')
-            self.assertEqual((out / 'v2_external.sha').read_text(), f'{sha(2)}  Volumes/A/new.mov\n')
-            self.assertEqual(json.loads((out / 'selection.json').read_text())['external'],
-                             [[sha(2), '/Volumes/A/new.mov', 200]])
-            self.assertIn('external list kept: 1 files from an earlier grow', text)
-            self.assertNotIn('new.mov', text)
-
-    def test_c3_a_large_file_that_left_the_catalog_still_covers_its_stratum(self):
-        # `covered` was rebuilt from the NEWER catalog's rows only: once the large file's row is gone, its
-        # stratum read as uncovered and a second large file of the same mix was added
-        first = [(1, sha(1), '/Volumes/A/big-old.mxf', 100 * GB, 'mxf', 'dnxhd', '')]
-        grown, picked = cs.grow(first, [], can_read=lambda p: True)
-        self.assertEqual([p[0] for p in picked['internal']], [sha(1)])
-        self.assertEqual(grown[0]['stratum'], ['mxf', 'dnxhd', ''])
-        grown = json.loads(json.dumps(grown))                            # as the file on disk holds it
-        later = [(7, sha(2), '/Volumes/A/big-same-mix.mxf', 100 * GB, 'mxf', 'dnxhd', '')]   # big-old's row is gone
-        _, picked = cs.grow(later, grown, can_read=lambda p: True)
-        self.assertEqual(picked['internal'], [], 'a second 100 GB file of a mix the corpus already holds')
-
-    def test_skipped_contents_and_null_sizes_are_counted_not_a_traceback(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = minimal_catalog(tmp, [(sha(1), '/Volumes/Nowhere/a.mov', 100, 'mov,mp4', 'h264', 'aac'),
-                                         (sha(2), '/Volumes/Nowhere/b.mov', 100, 'mov,mp4', 'h264', 'aac'),
-                                         (sha(3), '/Volumes/Nowhere/c.mov', None, 'mov,mp4', 'h264', 'aac')])
-            exclude = pathlib.Path(tmp, 'v1.json')
-            exclude.write_text('[]')
-            code, text = said(['select', '--catalog', str(path), '--exclude', str(exclude),
-                               '--out', str(pathlib.Path(tmp, 'out'))])
-        self.assertEqual(code, 0)
-        self.assertIn('corpus select: 2 contents skipped: no readable copy', text)
-        self.assertIn('corpus select: 1 rows skipped: no size_bytes', text)
-        self.assertNotIn('Nowhere', text)
-
-    def test_select_counts_into_stats_and_a_null_size_row_never_reaches_the_rules(self):
         stats = {}
-        rows = [(1, sha(1), '/Volumes/A/a.mov', None, 'mov,mp4', 'h264', 'aac'),
-                (2, sha(1), '/Volumes/B/a.mov', 100, 'mov,mp4', 'h264', 'aac')]
-        picked = cs.select(rows, [], can_read=lambda p: True, stats=stats)
-        self.assertEqual(picked['external'], [(sha(1), '/Volumes/B/a.mov', 100)])
-        self.assertEqual(stats, {'unreadable': 0, 'no_size': 1})
+        picked = cs.select(rows, [mrow(1, 1)], can_read=everything, stats=stats)
+        took = time.time() - t0
+        self.assertLess(took, 10.0, f'100k rows took {took:.1f}s')
+        self.assertEqual(stats['strata'], 40)
+        self.assertEqual(len(picked), 40 * cs.quota(1_500))                 # 60,000 contents over 40 mixes
+        self.assertLessEqual(sum(r['size'] for r in picked if r['root'] == 'external'), cs.EXTERNAL_BUDGET)
 
 
 if __name__ == '__main__':
