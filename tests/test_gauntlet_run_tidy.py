@@ -94,15 +94,43 @@ class GauntletRunTidyTests(unittest.TestCase):
 
     # -- tidy ---------------------------------------------------------------
 
-    def test_tidy_removes_only_build_scratch_of_a_finished_run(self):
+    def test_tidy_of_a_kept_run_removes_every_regenerable_folder_and_keeps_its_logs(self):
+        # RED 2026-11-24 (Rick hand-cleaned ~150 GB off the M4): a kept run (queued publish) lost only
+        # DerivedData/PackageBuild/swift-cache; its xcresult bundles and the sealed roots (caches, tmp,
+        # home, fixtures, ...) stayed, ~1.2 GB a run. Now every folder but the test host's `logs` goes.
         run = make_run(self.case_dir(), '2026-11-08T19-19-00Z-AAAA0001')
+        for root in ('tmp/TemporaryDirectory.x', 'home/Library', 'fixtures', 'app-support'):
+            (run / root).mkdir(parents=True)
+        (run / 'tmp/TemporaryDirectory.x/blob').write_bytes(b'z' * 10_000)
+        (run / 'unit.log').write_text('log')
+        (run / 'unit-summary.json').write_text('{}')
         out = self.seam('--tidy-run', run, 'queued')
-        for gone in ('DerivedData', 'PackageBuild', 'swift-cache'):
+        for gone in ('DerivedData', 'PackageBuild', 'swift-cache', 'unit.xcresult', 'caches', 'tmp', 'home',
+                     'fixtures', 'app-support'):
             self.assertFalse((run / gone).exists(), gone)
-        for kept in ('logs/build.log', 'unit.xcresult', 'caches', 'result.json'):
+        for kept in ('logs/build.log', 'result.json', 'unit.log', 'unit-summary.json', '.gauntlet-run'):
             self.assertTrue((run / kept).exists(), kept)
         self.assertRegex(out, r'GAUNTLET TIDY removed build products \(\d+\.\d+ GB\) from ' + str(run))
         self.assertIn('kept run (publish queued', out)
+
+    def test_a_read_only_folder_left_by_a_test_does_not_keep_the_run(self):
+        # RED 2026-11-24: FileManager.removeItem stops at a folder without write permission (a test
+        # that chmods its fixture 0500 and dies before restoring it); the whole-run removal failed with
+        # a warning and left the run - DerivedData and all - for good (retention failed the same way).
+        for publish in ('published', 'queued'):
+            root = self.case_dir()
+            run = make_run(root, '2026-11-08T19-19-00Z-AAAA0011')
+            locked = run / 'DerivedData' / 'locked'
+            locked.mkdir()
+            (locked / 'inside.bin').write_bytes(b'q' * 1000)
+            locked.chmod(0o500)
+            self.addCleanup(lambda p=locked: p.exists() and p.chmod(0o700))
+            write_history(root, run.name)
+            out = self.seam('--tidy-run', run, publish)
+            self.assertFalse((run / 'DerivedData').exists(), publish + ': ' + out)
+            self.assertNotIn('warning', out, publish)
+            if publish == 'published':
+                self.assertFalse(run.exists(), out)
 
     def test_tidy_refuses_before_result_json_exists(self):
         run = make_run(self.case_dir(), '2026-11-08T19-19-00Z-AAAA0002', finished=False)
@@ -220,15 +248,48 @@ class GauntletRunTidyTests(unittest.TestCase):
         self.assertIn(f'GAUNTLET RETENTION kept {crashed} (no summary row in history.jsonl', out)
         self.assertTrue((crashed / 'logs' / 'build.log').exists())
         self.assertFalse((crashed / 'DerivedData').exists())
-        self.assertEqual(len(out.strip().splitlines()), 3, out)
+        # The two finished runs that stay give up their regenerable folders too (2026-11-24); the live one is untouched.
+        for name in ('2026-11-05T20-00-01Z-NEW00001', '2026-11-08T14-00-00Z-NEW00002'):
+            self.assertIn(f'GAUNTLET RETENTION tidied {root / name}', out)
+            self.assertFalse((root / name / 'DerivedData').exists(), name)
+            self.assertTrue((root / name / 'result.json').exists(), name)
+        self.assertEqual(len(out.strip().splitlines()), 5, out)
         self.assertEqual((root / 'history.jsonl').read_text(), history)
         self.assertEqual((root / 'pending-metrics.jsonl').read_text(), '{}\n')
         self.assertTrue((root / '2026-11-08T19-00-00Z-LIVE0001' / 'logs' / 'build.log').exists())
+        self.assertTrue((root / '2026-11-08T19-00-00Z-LIVE0001' / 'DerivedData').exists(), 'a live run keeps its build')
+
+    def test_retain_keeps_at_most_the_newest_three_runs(self):
+        # RED 2026-11-24: retention went by age only, so a busy week kept every run of the last 3 days.
+        root = self.case_dir() / 'gauntlet'
+        root.mkdir()
+        names = [f'2026-11-08T1{h}-00-00Z-KEEP000{h}' for h in range(5)]       # all within the last 3 days
+        for name in names:
+            make_run(root, name)
+        write_history(root, *names)
+        out = self.seam('--retain', root, NOW)
+        self.assertEqual(sorted(p.name for p in root.iterdir() if p.is_dir()), names[-3:], out)
+        for name in names[:2]:
+            self.assertIn(f'GAUNTLET RETENTION removed {root / name}', out)
+
+    def test_retain_tidies_a_crashed_run_once_it_cannot_be_live(self):
+        # RED 2026-11-24: a run killed before its tidy (SIGKILL past the watchdog) kept its DerivedData
+        # until it was 3 days old. Past the longest a run can last (6 h) its regenerable folders go.
+        root = self.case_dir() / 'gauntlet'
+        root.mkdir()
+        dead = make_run(root, '2026-11-08T13-00-00Z-DEAD0001', finished=False)     # 7 h before NOW
+        live = make_run(root, '2026-11-08T19-30-00Z-LIVE0002', finished=False)     # 30 min before NOW
+        out = self.seam('--retain', root, NOW)
+        self.assertFalse((dead / 'DerivedData').exists(), out)
+        self.assertTrue((dead / 'logs' / 'build.log').exists())
+        self.assertTrue((live / 'DerivedData').exists(), 'a run that may still be live keeps its build')
 
     def test_retain_with_nothing_old_prints_nothing_and_removes_nothing(self):
         root = self.case_dir() / 'gauntlet'
         root.mkdir()
-        make_run(root, '2026-11-08T14-00-00Z-NEW00002')
+        make_run(root, '2026-11-08T14-00-00Z-NEW00002', build=False)
+        for folder in ('unit.xcresult', 'caches'):
+            (root / '2026-11-08T14-00-00Z-NEW00002' / folder).rmdir()
         (root / 'history.jsonl').write_text('{}\n')
         self.assertEqual(self.seam('--retain', root, NOW), '')
         self.assertEqual(sorted(p.name for p in root.iterdir()), ['2026-11-08T14-00-00Z-NEW00002', 'history.jsonl'])

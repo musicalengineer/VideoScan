@@ -182,6 +182,34 @@ else:
         self.assertEqual(sorted(p.name for p in scratch.iterdir()), [],
                          'the inventory check left its module cache or log behind')
 
+    def test_every_xcodebuild_call_names_a_derived_data_path_inside_the_run(self):
+        # RED 2026-11-24: `xcodebuild test-without-building -xctestrun X` with no -derivedDataPath makes
+        # ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash of X's path> (its Logs/Test) - a new folder
+        # per run, never removed: 729 of them (25 GB) on the Ultra, ~180 on the M4.
+        self.run_runner('--keep-run')
+        self.assertTrue(self.calls)
+        run = Path(self.result['roots']['DerivedData']).parent
+        for call in self.calls:
+            args = call['args']
+            self.assertIn('-derivedDataPath', args, args)
+            self.assertTrue(args[args.index('-derivedDataPath') + 1].startswith(str(run) + '/'), args)
+
+    def test_run_gauntlet_sh_removes_its_swift_module_cache(self):
+        # RED 2026-11-24: scripts/run_gauntlet.sh exec-ed swift with a fresh mktemp module cache in
+        # /private/tmp and nothing ever removed it (one per run, --help and --dry-run included).
+        scratch = self.root / 'tmpdir'
+        scratch.mkdir()
+        before = {p.name for p in Path('/private/tmp').glob('videoscan-gauntlet-swift.*')}
+        done = subprocess.run(['/bin/bash', str(REPO / 'scripts/run_gauntlet.sh'), '--help'], text=True,
+                              capture_output=True, env=dict(os.environ, TMPDIR=str(scratch) + '/'), timeout=300)
+        leaked = {p.name for p in Path('/private/tmp').glob('videoscan-gauntlet-swift.*')} - before
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn('run_gauntlet.sh --away', done.stdout)
+        self.assertEqual(leaked, set(), 'the module cache was left in /private/tmp')
+        # (The swift driver itself leaves an empty TemporaryDirectory.* there: 0 bytes, not ours to remove.)
+        self.assertEqual(sorted(p.name for p in scratch.glob('videoscan-gauntlet-swift.*')), [],
+                         'the module cache was left in TMPDIR')
+
     def test_symlink_results_root_refused_before_build(self):
         target = self.root / 'outside'
         target.mkdir()

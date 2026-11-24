@@ -478,8 +478,12 @@ def shard_cmd(xcodebuild: Sequence[str], xctestrun: Path, selectors: Sequence[st
               target: str = TARGET, coverage: bool = False) -> List[str]:
     """One host: -parallel-testing-enabled NO keeps the tests inside it serial (the main actor), and its
     own -resultBundlePath keeps K xcodebuilds from racing for the default bundle name. coverage: the
-    host writes its profile into its own result bundle (the caller merges the K bundles)."""
-    return (list(xcodebuild) + ["test-without-building", "-xctestrun", str(xctestrun), "-destination", DESTINATION,
+    host writes its profile into its own result bundle (the caller merges the K bundles).
+    -derivedDataPath <shard folder>/xcode-dd: without it xcodebuild makes ~/Library/Developer/Xcode/
+    DerivedData/VideoScan-<hash of the sealed .xctestrun path> per run and nothing removes it (2026-11-24:
+    729 folders, 25 GB on the Ultra). _run_sealed removes it once the shard is read."""
+    return (list(xcodebuild) + ["test-without-building", "-xctestrun", str(xctestrun),
+                                "-derivedDataPath", str(result.parent / "xcode-dd"), "-destination", DESTINATION,
                                 "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result)]
             + (["-enableCodeCoverage", "YES"] if coverage else [])
             + [f"-only-testing:{target}/{s}" for s in selectors])
@@ -979,6 +983,8 @@ def _run_sealed(groups, shards, held, lost, xctestrun: Path, jobs: int, run_dir:
 
     bundles = [run_dir / f"{i:04d}" / "shard.xcresult" for i in range(len(work))]
     reports = [fan_in(w.name, gs, r, b, xcresulttool) for w, gs, r, b in zip(work, dealt, results, bundles)]
+    for i in range(len(work)):
+        shutil.rmtree(run_dir / f"{i:04d}" / "xcode-dd", ignore_errors=True)     # regenerable: xcodebuild's own Logs
     for i, rep in enumerate(reports):
         if rep.green and not keep_results:
             # Read and done: a green shard's result bundle is not evidence of anything (the whole suite's

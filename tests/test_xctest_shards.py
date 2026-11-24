@@ -56,6 +56,9 @@ FAKE_XCODEBUILD = textwrap.dedent('''\
     except Exception as e:
         host_env = "unreadable: %s" % e
     bundle = args[args.index("-resultBundlePath") + 1]
+    if "-derivedDataPath" in args:                         # what the real one writes there: its Logs/Test
+        os.makedirs(os.path.join(args[args.index("-derivedDataPath") + 1], "Logs", "Test"), exist_ok=True)
+        open(os.path.join(args[args.index("-derivedDataPath") + 1], "Logs", "Test", "session.log"), "w").write("x" * 1000)
     sels = [a.split("/", 1)[1] for a in args if a.startswith("-only-testing:")]
     stamp = os.path.join(os.environ["FAKE_STAMPS"], "%d.json" % os.getpid())
     t0 = time.time()
@@ -219,6 +222,9 @@ def test_the_manifest_gives_every_app_file_as_a_group_and_the_command_names_one_
     assert cmd[:4] == ["xcodebuild", "test-without-building", "-xctestrun", "/p/x.xctestrun"]
     assert cmd[cmd.index("-parallel-testing-enabled") + 1] == "NO", "in-process parallelism starves the main actor"
     assert cmd[cmd.index("-resultBundlePath") + 1] == "/r/s.xcresult"
+    # RED 2026-11-24: with no -derivedDataPath, each sealed .xctestrun copy (a new path per run) made
+    # ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash> that nothing removed (729 on the Ultra, 25 GB).
+    assert cmd[cmd.index("-derivedDataPath") + 1] == "/r/xcode-dd", "the shard's own DerivedData, beside its bundle"
     assert cmd[-2:] == ["-only-testing:VideoScanTests/A1", "-only-testing:VideoScanTests/A2/f(x:)"]
 
 
@@ -536,6 +542,17 @@ def test_a_green_shards_result_bundle_is_removed_and_a_red_shards_is_kept(bench)
     bench.run_dir = bench.tmp / "run2"
     bench.go(scenario, [grp("A", 1), grp("B", 1)], jobs=2, extra=["--keep-results"])
     assert len(list(bench.run_dir.glob("*/shard.xcresult"))) == 2
+
+
+def test_no_shard_leaves_its_xcode_derived_data_behind(bench):
+    # RED 2026-11-24: the shard's DerivedData (xcodebuild's Logs/Test) is regenerable; it goes once the
+    # shard is read, green or red, kept bundles or not.
+    scenario = {"A": {"tests": ["a()"]}, "B": {"tests": ["b()"], "fail": ["b()"]}}
+    for extra in ([], ["--keep-results"]):
+        bench.run_dir = bench.tmp / ("run-dd" + "".join(extra))
+        bench.go(scenario, [grp("A", 1), grp("B", 1)], jobs=2, extra=extra)
+        assert len(list(bench.run_dir.glob("*/strand.log"))) == 2, "the shards did not run"
+        assert list(bench.run_dir.glob("*/xcode-dd")) == [], extra
 
 
 # ───────────────────────────── run_tests' app lane

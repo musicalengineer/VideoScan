@@ -1,4 +1,4 @@
-"""scripts/testbed_host.py clean / sample — the M4 at rest under 85% used (DECISIONS 2026-11-18, 2026-11-19).
+"""scripts/testbed_host.py clean / sample — the M4 at rest at or under 60% used (DECISIONS 2026-11-18, 2026-11-19, 2026-11-24).
 
 Rick: "after a testrun has been summarized, delete the temp data and cleanup, so we can keep
 that 50% free, but when you are running the testbed, feel free to chew up disk space"; then
@@ -74,7 +74,7 @@ def measure(path):
 
 
 def full(home):
-    """A full disk: nothing free, the floor 15 GB away."""
+    """A full disk: nothing free, the floor 40 GB away."""
     return FakeDisk(home, 100 * GB, 100 * GB)
 
 
@@ -165,8 +165,14 @@ class CleanCase(unittest.TestCase):
         self.fds = []
         self.saved_home = os.environ.get('HOME')
         os.environ['HOME'] = str(self.s.home)                 # the authority: <root> must be $HOME/m4run (Codex F3)
+        # The disk mark measures temp folders too: never the real ones in a test (isolation).
+        self.tmp_root = pathlib.Path(self.tmp.name, 'private-tmp')
+        self.tmp_root.mkdir()
+        self.saved_volumes = (th.TMP_ROOTS, th.EXTRA_VOLUMES)
+        th.TMP_ROOTS, th.EXTRA_VOLUMES = (str(self.tmp_root),), ()
 
     def tearDown(self):
+        th.TMP_ROOTS, th.EXTRA_VOLUMES = self.saved_volumes
         os.environ['HOME'] = self.saved_home
         for fd in self.fds:
             os.close(fd)
@@ -239,7 +245,7 @@ class FloorTests(CleanCase):
         self.assertFalse(dead.exists())
         self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache is kept above the floor')
         self.assertTrue((run / 'suite-app.xcresult').exists(), 'the run in progress is never tidied at its start')
-        self.assertRegex(line, r'^disk: free 100% at the start \(floor 15%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(3\), corpus work [\d.]+ GB \(1\)$')
+        self.assertRegex(line, r'^disk: free 100% at the start \(floor 40%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(3\), corpus work [\d.]+ GB \(1\)$')
 
     def test_below_the_floor_unfinished_runs_go_oldest_first_and_only_until_it_is_met(self):
         unfinished = [self.s.run(f'u{i}', outcome=None, size=1_000_000) for i in range(4)]   # the bundle dominates a run
@@ -282,18 +288,19 @@ class FloorTests(CleanCase):
         (run / 'disk-low.txt').write_text(f'{30 * GB} {100 * GB}\n')      # what the sampler saw mid-run
         (run / 'run.log').write_text((run / 'run.log').read_text() + 'OUTCOME GREEN x\n')
         line = self.clean(run, 'end', disk)
-        self.assertRegex(line, r'^disk: free 60% after cleanup \(lowest 30% during the run, 60% at the start; floor 15%\) — removed')
+        self.assertRegex(line, r'^disk: free 60% after cleanup \(lowest 30% during the run, 60% at the start; floor 40%\) — removed')
         disk = FakeDisk(self.s.home, 100 * GB, 90 * GB)
         line = self.clean(run, 'end', disk)
-        self.assertIn('floor 15%, UNDER by 5.0 GB', line)
+        self.assertIn('floor 40%, UNDER by 30.0 GB', line)
 
-    def test_the_floor_is_the_resting_ceiling_of_85_percent_used(self):
-        # DECISIONS 2026-11-19: the corpus rests on the SSD too; at rest the M4 stays under 85% used.
-        self.assertEqual(th.FLOOR, 0.15)
+    def test_the_floor_is_the_resting_ceiling_of_60_percent_used(self):
+        # DECISIONS 2026-11-24 (disk budgets per drive): the M4 internal rests at or under 60% used; the
+        # corpus copies live on the CrucialX10 or are read from the Ultra. RED before: FLOOR 0.15 (85% used).
+        self.assertEqual(th.FLOOR, 0.40)
         run = self.current()
-        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 84 * GB))
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 59 * GB))
         self.assertNotIn('UNDER', line)
-        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 86 * GB))
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 61 * GB))
         self.assertIn('UNDER by 1.0 GB', line)
 
 
@@ -347,6 +354,219 @@ class CoverageCacheTests(CleanCase):
         self.clean(run, 'start', full(self.s.home))
         for name in ('videoscan-m4run-dd-coverage-old', 'videoscan-nightly-dd-coverage', 'VideoScan'):
             self.assertTrue((self.s.home / 'Library/Caches' / name / 'blob').exists(), name)
+
+
+def age(path, days):
+    """Set the mtime of `path` and everything under it (never through a link) to `days` ago."""
+    when = time.time() - days * 86400
+    for folder, dirs, names in os.walk(path):
+        for name in dirs + names:
+            os.utime(os.path.join(folder, name), (when, when), follow_symlinks=False)
+    os.utime(path, (when, when), follow_symlinks=False)
+
+
+class AgePruneTests(CleanCase):
+    """DECISIONS 2026-11-24: build caches untouched for 7 days go whatever the floor says; coverage result
+    bundles and app logs older than 3 days, nightly test logs older than 7 days go; the newest of each,
+    and what publishers or the guard read, stay. RED before 2026-11-24: clean kept every warm cache unless
+    dropping it alone reached the floor, and never looked at ~/Library/Logs/VideoScan (Rick hand-cleaned
+    ~150 GB off the M4 and ~55 GB off the Ultra)."""
+
+    def cache_dir(self, rel, size=10_000, days=8):
+        path = self.s.home / 'Library/Caches' / rel
+        (path / 'Build' / 'Products').mkdir(parents=True)
+        (path / 'Build' / 'Products' / 'blob').write_bytes(b'c' * size)
+        (path / 'info.plist').write_text('<plist/>')
+        age(path, days)
+        return path
+
+    def test_build_caches_untouched_for_a_week_go_whatever_the_floor_says(self):
+        stale = [self.cache_dir('videoscan-nightly-dd'), self.cache_dir('videoscan-runall-dd-2'),
+                 self.cache_dir('videoscan-nightly-core-build'), self.cache_dir('VideoScan/sanitizer-dd'),
+                 self.cache_dir('videoscan-m4run-dd')]                     # a warm lane cache, idle a week
+        fresh = [self.cache_dir('videoscan-sensor-dd', days=1), self.cache_dir('videoscan-m4run-dd-suite', days=6)]
+        touched = self.cache_dir('videoscan-analysis-dd')                   # old, but a build wrote into it today
+        os.utime(touched / 'info.plist')
+        not_caches = [self.cache_dir('VideoScan/complexity-baseline-wt'),   # a worktree
+                      self.cache_dir('videoscan-runall'),                   # the runner's registry and slots
+                      self.cache_dir('Rick-Breen.VideoScan')]                # the app's own cache
+        timings = self.s.home / 'Library/Caches/videoscan-nightly-xctest-timings.json'
+        timings.write_text('{}')
+        age(timings, 30)
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))          # 100% free: far above the floor
+        for path in stale:
+            self.assertFalse(path.exists(), f'{path.name} untouched for 8 days was kept')
+        for path in fresh + [touched] + not_caches + [timings]:
+            self.assertTrue(path.exists(), f'{path.name} was removed')
+        self.assertRegex(line, r'stale build caches [\d.]+ GB \(5\)')
+
+    def test_a_stale_cache_that_is_a_link_is_never_followed(self):
+        outside = pathlib.Path(self.tmp.name, 'outside-dd')
+        (outside / 'Build').mkdir(parents=True)
+        (outside / 'Build' / 'keep').write_text('keep')
+        age(outside, 30)
+        (self.s.home / 'Library/Caches').mkdir(parents=True, exist_ok=True)
+        link = self.s.home / 'Library/Caches/videoscan-evil-dd'
+        os.symlink(outside, link)
+        os.utime(link, (0, 0), follow_symlinks=False)
+        corpus_alias = self.s.home / 'Library/Caches/videoscan-corpus-dd'
+        os.symlink(self.s.corpus / 'media', corpus_alias)
+        before = self.s.protected_snapshot()
+        run = self.current()
+        self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertEqual((outside / 'Build' / 'keep').read_text(), 'keep')
+        self.assertTrue(link.is_symlink() and corpus_alias.is_symlink())
+        self.assertEqual(self.s.protected_snapshot(), before)
+
+    def logs(self):
+        logs = self.s.home / 'Library/Logs/VideoScan'
+        cov = logs / 'coverage'
+        cov.mkdir(parents=True)
+        made = {}
+        for name, days in (('app-2026-11-10.xcresult', 14), ('app-2026-11-19.xcresult', 4), ('app-2026-11-23.xcresult', 1),
+                           ('app-2026-11-10.log', 14), ('app-2026-11-19.log', 4)):
+            path = cov / name
+            if name.endswith('.xcresult'):
+                (path / 'Data').mkdir(parents=True)
+                (path / 'Data' / 'blob').write_bytes(b'r' * 5000)
+            else:
+                path.write_text('log\n')
+            age(path, days)
+            made[name] = path
+        for name in ('coverage-2026-11-10.json', 'coverage-2026-11-10.md', 'latest.json'):
+            (cov / name).write_text('{}')
+            age(cov / name, 14)
+            made[name] = cov / name
+        for stamp, days in (('20261110_020005', 14), ('20261115_020005', 9), ('20261120_020005', 4)):
+            for suffix in ('', '.hallie-replay', '.hallie-voice'):
+                path = logs / f'nightly_test_{stamp}.log{suffix}'
+                path.write_text('x' * 1000)
+                age(path, days)
+                made[path.name] = path
+        for name in ('testbed_latest.txt', 'testbed_history.log', 'nightly_gauntlet.log', 'videoscan.log', 'catalog.log'):
+            (logs / name).write_text('keep\n')
+            age(logs / name, 30)
+            made[name] = logs / name
+        return made
+
+    def test_old_coverage_bundles_and_logs_go_and_the_newest_and_the_published_stay(self):
+        made = self.logs()
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        gone = ('app-2026-11-10.xcresult', 'app-2026-11-19.xcresult', 'app-2026-11-10.log') + tuple(
+            f'nightly_test_{stamp}.log{suffix}' for stamp in ('20261110_020005', '20261115_020005')
+            for suffix in ('', '.hallie-replay', '.hallie-voice'))
+        for name in gone:
+            self.assertFalse(made[name].exists(), f'{name} was kept')
+        for name in set(made) - set(gone):
+            self.assertTrue(made[name].exists(), f'{name} was removed')
+        self.assertRegex(line, r'old logs [\d.]+ GB \(\d+\)')
+
+    def test_with_no_logs_folder_or_caches_nothing_is_said(self):
+        run = self.current()
+        line = self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertNotIn('stale', line)
+        self.assertNotIn('old logs', line)
+
+    def test_scale_a_thousand_old_logs_are_pruned_within_budget(self):
+        logs = self.s.home / 'Library/Logs/VideoScan'
+        logs.mkdir(parents=True)
+        for i in range(1000):
+            (logs / f'nightly_test_2026{i:04d}_020005.log').write_text('x')
+        age(logs, 30)
+        run = self.current()
+        t0 = time.monotonic()
+        self.clean(run, 'start', FakeDisk(self.s.home, 100 * GB, 0))
+        self.assertLess(time.monotonic() - t0, 30.0)
+        self.assertEqual(len(list(logs.glob('nightly_test_*.log'))), 1, 'the newest stays')
+
+
+class DiskLeakTests(CleanCase):
+    """Rick 2026-11-24: "generous budget DURING a test run ... the real trick is to RELEASE/CLEANUP after
+    the testrun is done". A run that ends, after its cleanup, with less free space than it started with
+    by more than max(2 GB, 0.5% of the volume) says DISK LEAK, AMBER, naming the 5 scratch paths that grew."""
+
+    def test_the_threshold_is_2_gb_or_half_a_percent_of_the_volume(self):
+        self.assertEqual(th.leak_threshold(100 * GB), 2 * GB)
+        self.assertEqual(th.leak_threshold(1000 * GB), 5 * GB)
+
+    def test_a_run_that_ends_lower_than_it_started_names_what_grew(self):
+        roots = [str(self.tmp_root), str(self.s.home / 'Library/Caches')]
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        for i in range(7):
+            (self.tmp_root / f'leak{i}').mkdir()
+            (self.tmp_root / f'leak{i}' / 'blob').write_bytes(b'l' * (10_000 * (i + 1)))
+        (self.s.home / 'Library/Caches/videoscan-sensor-dd').mkdir(parents=True)
+        (self.s.home / 'Library/Caches/videoscan-sensor-dd/blob').write_bytes(b's' * 200_000)
+        (self.s.home / 'Library/Caches/com.apple.other').mkdir(parents=True)
+        (self.s.home / 'Library/Caches/com.apple.other/blob').write_bytes(b'o' * 900_000)
+        disk.other += 3 * GB                                              # what the leak costs on the volume
+        row = th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start))
+        self.assertTrue(row.startswith('DISK LEAK (AMBER): free fell 3.0 GB'), row)
+        self.assertIn('threshold 2.0 GB', row)
+        grew = row.split('grew: ', 1)[1].split(', ')
+        self.assertEqual(len(grew), 5, row)
+        self.assertTrue(grew[0].startswith('~/Library/Caches/videoscan-sensor-dd +'), row)
+        self.assertTrue(grew[1].startswith(str(self.tmp_root / 'leak6') + ' +'), row)
+        self.assertNotIn('com.apple.other', row, 'only our own scratch is named')
+
+    def test_the_temp_folders_are_listed_at_the_start_and_only_new_entries_measured(self):
+        # 41,087 entries (22 GB) in the Ultra's two temp folders took 18 s to measure: twice a run, inside
+        # the testbed lock, was too much. The start lists them; the end measures what is new, and only on a leak.
+        (self.tmp_root / 'before').mkdir()
+        (self.tmp_root / 'before' / 'blob').write_bytes(b'b' * 500_000)
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark([str(self.tmp_root)], disk=disk)
+        self.assertEqual((start['names'], start['sizes']), ({str(self.tmp_root): ['before']}, {}))
+        (self.tmp_root / 'new').mkdir()
+        (self.tmp_root / 'new' / 'blob').write_bytes(b'n' * 100_000)
+        self.assertEqual(th.disk_mark([str(self.tmp_root)], disk=disk, since=start)['sizes'], {}, 'no leak: nothing measured')
+        disk.other += 3 * GB
+        end = th.disk_mark([str(self.tmp_root)], disk=disk, since=start)
+        self.assertEqual(list(end['sizes']), [str(self.tmp_root / 'new')])
+
+    def test_a_run_within_the_threshold_says_nothing(self):
+        roots = [str(self.tmp_root)]
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        start = th.disk_mark(roots, disk=disk)
+        disk.other += 1 * GB
+        self.assertEqual(th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start)), '')
+        disk.other -= 5 * GB                                              # the run freed space: no leak either
+        self.assertEqual(th.disk_leak(start, th.disk_mark(roots, disk=disk, since=start)), '')
+
+    def test_the_testbed_end_line_carries_the_leak_row(self):
+        run = self.current()
+        disk = FakeDisk(self.s.home, 100 * GB, 10 * GB)
+        self.clean(run, 'start', disk)
+        self.assertTrue((run / 'disk-mark.json').exists())
+        (self.s.home / 'Library/Caches/videoscan-m4run-dd-suite').mkdir(parents=True)
+        (self.s.home / 'Library/Caches/videoscan-m4run-dd-suite/blob').write_bytes(b'w' * 50_000)
+        (run / 'run.log').write_text((run / 'run.log').read_text() + 'OUTCOME GREEN x\n')
+        disk.other += 4 * GB
+        line = self.clean(run, 'end', disk)
+        self.assertIn('DISK LEAK (AMBER): free fell 4.0 GB', line)
+        self.assertIn('~/Library/Caches/videoscan-m4run-dd-suite', line)
+        self.assertTrue((run / 'disk-mark.json').exists(), 'the start mark is kept with the summary')
+        disk.other -= 4 * GB
+        self.assertNotIn('DISK LEAK', self.clean(run, 'end', disk))
+
+    def test_the_command_line_marks_and_checks(self):
+        state = pathlib.Path(self.tmp.name, 'mark.json')
+        env = dict(os.environ, HOME=str(self.s.home), VIDEOSCAN_DISK_LEAK_ROOTS=str(self.tmp_root),
+                   VIDEOSCAN_TESTBED_FAKE_DISK=f'{10 ** 9}:0', VIDEOSCAN_DISK_LEAK_THRESHOLD='100000')
+        tool = [sys.executable, str(SCRIPTS / 'testbed_host.py')]
+        done = subprocess.run(tool + ['disk-mark', str(state)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        (self.tmp_root / 'grown').mkdir()
+        (self.tmp_root / 'grown' / 'blob').write_bytes(b'g' * 400_000)
+        done = subprocess.run(tool + ['disk-check', str(state)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('DISK LEAK (AMBER)', done.stdout)
+        self.assertIn('grown', done.stdout)
+        done = subprocess.run(tool + ['disk-check', str(state) + '.missing'], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual((done.returncode, done.stdout), (0, ''), 'no start mark: nothing to compare, nothing said')
 
 
 class ConfinementTests(CleanCase):
@@ -1036,11 +1256,11 @@ class RunnerCleanupTests(TestbedScene):
         (old / 'run.log').write_text('START x\nOUTCOME GREEN y\n')
         p, log, summary, out = self.host('c1')
         self.assertEqual(p.returncode, 0, log)
-        self.assertRegex(log, r'(?m)^disk: free 90% at the start \(floor 15%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(1\)$')
+        self.assertRegex(log, r'(?m)^disk: free 90% at the start \(floor 40%\) — removed [\d.]+ GB: older runs [\d.]+ GB \(1\)$')
         self.assertLess(log.index('disk: free 90% at the start'), log.index('START '))
         block = (out / 'testbed-block.txt').read_text().splitlines()
         last = block[-1]
-        self.assertRegex(last, r'^disk: free 90% after cleanup \(lowest 90% during the run, 90% at the start; floor 15%\) — removed')
+        self.assertRegex(last, r'^disk: free 90% after cleanup \(lowest 90% during the run, 90% at the start; floor 40%\) — removed')
         lines = summary.splitlines()
         self.assertEqual(lines[:len(block)], block, 'the summary opens with the block, its disk line last')
         self.assertEqual(lines[len(block)], "— the lanes' own lines —")
@@ -1054,6 +1274,19 @@ class RunnerCleanupTests(TestbedScene):
                      'corpus-check/corpus-summary.txt', 'corpus-proof/corpus-verdict.json'):
             self.assertTrue((out / name).exists(), name)
         self.assertEqual(probe(self.root / 'lock'), 'FREE', 'the sampler (or the cleanup) kept the lock')
+
+    def test_a_run_that_leaves_scratch_behind_is_amber_and_names_it(self):
+        # Rick 2026-11-24: a DISK LEAK is AMBER (it must not mask the tests' verdict) and is quoted in the summary.
+        leak = self.home / 'Library/Caches/videoscan-leak-dd'
+        (self.fake / 'leak').write_text(str(leak))
+        self.env['VIDEOSCAN_DISK_LEAK_THRESHOLD'] = '100000'
+        p, log, summary, out = self.host('c3')
+        self.assertEqual(p.returncode, 0, log)
+        self.assertRegex(log, r'(?m)^OUTCOME AMBER .* · DISK LEAK \(see the disk line\)$')
+        last = (out / 'testbed-block.txt').read_text().splitlines()[-1]
+        self.assertIn('DISK LEAK (AMBER): free fell', last)
+        self.assertIn('grew: ~/Library/Caches/videoscan-leak-dd +0.6 MB', last)
+        self.assertTrue((out / 'disk-mark.json').exists())
 
     def test_a_cleanup_that_fails_never_costs_the_run_its_outcome(self):
         tool = self.install / 'testbed_host.py'
