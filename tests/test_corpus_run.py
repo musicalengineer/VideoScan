@@ -392,17 +392,29 @@ class WordTests(unittest.TestCase):
         self.assertEqual(cr.sha_prefix('Birthday.mov'), 'scrubbed')
         self.assertEqual(cr.stratum_word('edit list trim/long header'), 'edit_list_trim_long_header')
 
-    def test_a_reference_movie_and_a_sound_that_needs_rebuilding_are_doubts_not_bad_and_not_good(self):
-        # Rick 2026-11-25: Verify Audio no longer calls these two "damaged". A reference movie does not play on its
-        # own and an old codec needs Rebuild Audio Track — questionable, so neither reads good nor bad.
+    def test_a_reference_movie_and_a_sound_that_needs_rebuilding_read_bad_like_damaged(self):
+        # Rick 2026-11-25: Verify Audio no longer CALLS these two "damaged", but the corpus sensor keeps their
+        # severity (Codex #372 P1): a file that read good and now reads either is RED, as it was when the word
+        # was "damaged" — the quick-tier check engine cannot be relied on to say Problem.
         for audio in ('reference_movie', 'needs_rebuild'):
-            self.assertIn(audio, cr.DOUBT_WORDS['audio'])
-            self.assertNotIn(audio, cr.BAD_WORDS['audio'])
+            self.assertIn(audio, cr.BAD_WORDS['audio'])
+            self.assertNotIn(audio, cr.DOUBT_WORDS['audio'])
             record = {'probe': 'probed', 'audio': audio}
-            self.assertFalse(cr.reads_bad(record, ['probe', 'audio']), audio)
+            self.assertTrue(cr.reads_bad(record, ['probe', 'audio']), audio)
             self.assertFalse(cr.reads_good(record, ['probe', 'audio']), audio)
         self.assertTrue(cr.reads_bad({'probe': 'probed', 'audio': 'damaged'}, ['probe', 'audio']))
         self.assertTrue(cr.reads_good({'probe': 'probed', 'audio': 'healthy'}, ['probe', 'audio']))
+
+    def test_good_to_reference_movie_or_needs_rebuild_is_red_whatever_the_quick_check_says(self):
+        # Codex #372 P1, the four subcases it executed (both words x check OK / Warning), plus the Problem controls.
+        engines = ['probe', 'check', 'audio']
+        old = {'f': {'probe': 'probed', 'check': 'OK', 'audio': 'healthy'}}
+        for audio in ('reference_movie', 'needs_rebuild'):
+            for check in ('OK', 'Warning', 'Problem'):
+                new = {'f': {'probe': 'probed', 'check': check, 'audio': audio}}
+                delta = cr.diff(old, new, engines)
+                self.assertEqual(delta['regressed'], ['f'], (audio, check))
+                self.assertEqual(cr.verdict_of({'engine_present': True}, delta), 'RED', (audio, check))
 
 
 class PrepareTests(unittest.TestCase):

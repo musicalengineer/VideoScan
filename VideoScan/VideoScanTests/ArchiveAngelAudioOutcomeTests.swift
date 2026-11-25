@@ -218,7 +218,8 @@ struct ArchiveAngelAudioOutcomeTests {
         guard case .damaged(let n2) = ArchiveAngelAudioOutcome.from(codec) else { Issue.record("codec"); return }
         // Still the Angel's .damaged outcome; the note names each (Rick 2026-11-25).
         #expect(n1.hasPrefix("Reference movie — "))
-        #expect(n2.hasPrefix("Sound needs rebuilding — qdm2 does not play on Apple"))
+        // No levels measured here, so not "needs rebuilding" (Codex #372: only a complete decode promises that).
+        #expect(n2 == "Damaged audio — invalid codec (qdm2)", "\(n2)")
     }
 
     /// GH #468: a levels pass that failed is a failed read OR a track that

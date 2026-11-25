@@ -205,7 +205,7 @@ struct VerifyAudioStatusNoteTests {
         // "ok", so it is distinguishable from no verify at all. (A pass that
         // could not check is `.notChecked` and stores nothing — GH #467.)
         #expect(VerifyAudioRules.verdict(findings: [], levels: .complete) == .ok)
-        #expect(VerifyAudioRules.note(for: []) == "")
+        #expect(VerifyAudioRules.note(for: [], decodeComplete: true) == "")
     }
 
     @Test func anyDamageFindingMakesTheWholeVerdictDamaged() {
@@ -254,13 +254,13 @@ struct VerifyAudioStatusNoteTests {
             .silentAudio,
             .unsupportedCodec(codec: "qdm2", decodable: true),
             .durationMismatch(audioSeconds: 2, videoSeconds: 63),
-        ])
+        ], decodeComplete: true)
         #expect(note == "Damaged audio — invalid codec (qdm2); audio shorter than video (2s vs 63s); silent audio")
 
         let note2 = VerifyAudioRules.note(for: [
             .channelImbalance(.mono),
             .durationMismatch(audioSeconds: 2, videoSeconds: 63),
-        ])
+        ], decodeComplete: true)
         #expect(note2 == "Damaged audio — audio shorter than video (2s vs 63s); mono audio")
     }
 
@@ -274,23 +274,23 @@ struct VerifyAudioStatusNoteTests {
         // 2026-11-25): same stored status, their own words, never in
         // that find (VerifyAudioTroubleWordsTests).
         for f in AudioTroubleFixtures.notDamageButStoredRed {
-            let note = VerifyAudioRules.note(for: [f])
+            let note = VerifyAudioRules.note(for: [f], decodeComplete: true)
             #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .damaged)
             #expect(!note.localizedCaseInsensitiveContains("damaged"), "\(note)")
             #expect(VerifyAudioRules.noteNamesItsOwnTrouble(note), "\(note)")
-            #expect(VerifyAudioRules.noteNamesItsOwnTrouble(VerifyAudioRules.note(for: [.silentAudio, f])))
+            #expect(VerifyAudioRules.noteNamesItsOwnTrouble(VerifyAudioRules.note(for: [.silentAudio, f], decodeComplete: true)))
         }
         let damageFindings: [AudioVerifyFinding] = [
             .durationMismatch(audioSeconds: 120, videoSeconds: 3600),
         ]
         for f in damageFindings {
-            let note = VerifyAudioRules.note(for: [f])
+            let note = VerifyAudioRules.note(for: [f], decodeComplete: true)
             #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .damaged)
             #expect(note.hasPrefix(VerifyAudioRules.damagedNotePrefix),
                     "damaged note '\(note)' must begin with '\(VerifyAudioRules.damagedNotePrefix)'")
             // The prefix must also survive mixed damage + benign
             // findings, in any order.
-            let mixed = VerifyAudioRules.note(for: [.silentAudio, f])
+            let mixed = VerifyAudioRules.note(for: [.silentAudio, f], decodeComplete: true)
             #expect(mixed.hasPrefix(VerifyAudioRules.damagedNotePrefix),
                     "mixed-findings note '\(mixed)' must begin with '\(VerifyAudioRules.damagedNotePrefix)'")
         }
@@ -310,7 +310,7 @@ struct VerifyAudioStatusNoteTests {
             .multipleProgramTracks(count: 2),
         ]
         for f in okFindings {
-            let note = VerifyAudioRules.note(for: [f])
+            let note = VerifyAudioRules.note(for: [f], decodeComplete: true)
             #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .ok)
             #expect(!note.localizedCaseInsensitiveContains("damaged"),
                     "ok-status note '\(note)' must not contain 'damaged'")

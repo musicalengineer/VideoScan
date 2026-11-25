@@ -160,7 +160,9 @@ struct AudioVerifyDiagnosis: Sendable {
 
     /// Which kind of not-usable-as-it-stands this is (nil when nothing is
     /// in the stored "damaged" set) — the words, never a gate.
-    var trouble: AudioTrouble? { VerifyAudioRules.trouble(of: findings) }
+    var trouble: AudioTrouble? {
+        VerifyAudioRules.trouble(of: findings, decodeComplete: levelsPass == .complete)
+    }
 
     /// Persisted `audioVerifyStatus`: "ok" / "damaged", or "" when the
     /// verdict is `.notChecked` — "" is the never-verified value and is
@@ -174,7 +176,9 @@ struct AudioVerifyDiagnosis: Sendable {
     }
     /// The findings' words: the persisted `audioVerifyNote` when a verdict
     /// is stored.
-    var persistedNote: String { VerifyAudioRules.note(for: findings) }
+    var persistedNote: String {
+        VerifyAudioRules.note(for: findings, decodeComplete: levelsPass == .complete)
+    }
 }
 
 /// How the levels pass (the whole-track astats decode) ended.
@@ -329,6 +333,7 @@ enum VerifyAudioRules {
     /// "Damaged" label.
     static func noteNamesItsOwnTrouble(_ note: String) -> Bool {
         note.hasPrefix(referenceMovieNotePrefix) || note.hasPrefix(needsRebuildNotePrefix)
+            || AudioTrouble.isLegacyCodecNote(note)
     }
 
     /// Which findings put the record in the stored "damaged" set (red row,
@@ -363,9 +368,15 @@ enum VerifyAudioRules {
     }
 
     /// The worst trouble in a findings list (real damage outranks the
-    /// rest), or nil. Pure.
-    static func trouble(of findings: [AudioVerifyFinding]) -> AudioTrouble? {
-        findings.compactMap { trouble(of: $0) }.min()
+    /// rest), or nil. `decodeComplete`: the levels pass decoded every
+    /// channel of every stream (`AudioLevelsPass.complete`). "Needs
+    /// rebuilding" promises Rebuild Audio Track fixes it, which only a
+    /// COMPLETE decode supports: an old codec whose decode came up short
+    /// (Codex #372 P0: QDM2, 540 of 600 s missing) is damage in today's
+    /// words, and stays in `notes:damaged`. Pure.
+    static func trouble(of findings: [AudioVerifyFinding], decodeComplete: Bool) -> AudioTrouble? {
+        guard let worst = findings.compactMap({ trouble(of: $0) }).min() else { return nil }
+        return worst == .needsRebuild && !decodeComplete ? .damaged : worst
     }
 
     /// How every `.readFailed` reason starts. Check Media stores the reason
@@ -456,10 +467,12 @@ enum VerifyAudioRules {
     /// `damagedNotePrefix` so ONE query (`notes:damaged`) batch-finds it —
     /// the #128 batch-delete flow. A reference movie or a sound that needs
     /// rebuilding (and no real damage) leads with its own words instead
-    /// (Rick 2026-11-25). ok-status notes stay bare.
-    static func note(for findings: [AudioVerifyFinding]) -> String {
+    /// (Rick 2026-11-25) — a sound that needs rebuilding only after a
+    /// complete decode (`trouble(of:decodeComplete:)`). ok-status notes
+    /// stay bare.
+    static func note(for findings: [AudioVerifyFinding], decodeComplete: Bool) -> String {
         let ordered = findings.filter(isDamage) + findings.filter { !isDamage($0) }
-        guard let worst = trouble(of: findings) else {
+        guard let worst = trouble(of: findings, decodeComplete: decodeComplete) else {
             return ordered.map(noteFragment(for:)).joined(separator: "; ")
         }
         guard worst != .damaged,

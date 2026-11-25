@@ -187,14 +187,15 @@ struct VerifyAudioTroubleWordsTests {
     @Test("legacy notes and card sentences are SHOWN in today's words; real damage and today's notes are shown as stored")
     func legacyDisplay() {
         #expect(AudioTrouble.displayNote("Damaged audio — reference movie, media missing") == referenceWords)
-        #expect(AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2); silent audio") == rebuildWords + "; silent audio")
+        // A legacy codec note promises nothing (Codex #372): no completeness evidence was stored.
+        #expect(AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2); silent audio") == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt" + "; silent audio")
         let realDamage = "Damaged audio — invalid codec (qdm2); audio shorter than video (60s vs 600s)"
         #expect(AudioTrouble.displayNote(realDamage) == realDamage, "real damage beside an old codec stays damaged")
         for asStored in [referenceWords, rebuildWords, "silent audio", "", "Damaged audio — audio shorter than video (2s vs 10s)"] {
             #expect(AudioTrouble.displayNote(asStored) == asStored)
         }
         // Check Media rows and headlines stored before the change.
-        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == rebuildWords + ".")
+        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt" + ".")
         #expect(AudioTrouble.displaySoundSentence("Damaged sound: The sound is damaged: reference movie, media missing.")
                 == referenceWords + ".")
         let damagedRow = "The sound is damaged: audio shorter than video (60s vs 600s)."
@@ -294,5 +295,54 @@ struct VerifyAudioTroubleWordsReviewTests {
             let value = ArchiveAngelReadinessExplanation.make(f).facts.first { $0.label == "Sound" }?.value ?? ""
             #expect(!value.lowercased().contains("damaged"), "\(value)")
         }
+    }
+}
+
+// MARK: - Codex #372
+
+/// QDM2 whose levels pass ran but decoded only 60 of 600 stated seconds
+/// (Codex #372 P0's input): the finding is still `.unsupportedCodec(decodable:
+/// true)`, but nothing says a rebuild would recover the missing 540 s.
+private func shortDecodedOldCodec() -> AudioVerifyDiagnosis {
+    S.soundDiagnosis(channels: [-18, -20], levelsComplete: false,
+                     shortDecode: AudioShortDecode(missingSeconds: 540, statedSeconds: 600),
+                     extraFindings: [.unsupportedCodec(codec: "qdm2", decodable: true)])
+}
+
+@Suite("Verify Audio words — Codex #372")
+@MainActor
+struct VerifyAudioTroubleWordsCodexTests {
+
+    @Test("P0: 'needs rebuilding' only for a COMPLETE decode; an incomplete one keeps today's damaged words and notes:damaged")
+    func incompleteDecodeNeverPromisesRebuild() throws {
+        let d = shortDecodedOldCodec()
+        #expect(d.levelsPass != .complete, "fixture: the decode came up short")
+        #expect(d.verdict == .damaged && d.persistedStatus == "damaged", "stored status unchanged")
+        #expect(d.trouble == .damaged)
+        #expect(d.persistedNote == "Damaged audio — invalid codec (qdm2)", "\(d.persistedNote)")
+        #expect(!d.persistedNote.contains("fixes it"))
+        #expect(pfRecordMatchesQuery(storedRow(d), query: "notes:damaged"))
+        // Promote's words: damaged, no repair promise (code unchanged).
+        let decision = G.decide(finding: G.finding(from: d), mark: .absent, soundPartnerName: nil,
+                                recordedYear: nil, digestPrefix: "", ownerAcceptsUnchecked: false)
+        guard case .refuse(let code, let detail, _) = decision else { Issue.record("\(decision)"); return }
+        #expect(code == .damaged)
+        #expect(detail.contains("the sound is damaged") && !detail.contains("fixes it"), "\(detail)")
+        // Check Media's row says damaged too.
+        let row = CheckMediaRules.checkSound(.success(d), facts: try CheckMediaFixtures.healthy().facts)
+        #expect(row.verdict == .problem && row.sentence.hasPrefix("The sound is damaged: "), "\(row.sentence)")
+        // The same codec decoded in full still reads as repairable.
+        #expect(needsRebuild().trouble == .needsRebuild)
+    }
+
+    @Test("P0: a legacy 'invalid codec' note carries no completeness evidence, so its shown words never promise repair")
+    func legacyCodecNoteIsNeutral() {
+        let shown = AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2)")
+        #expect(shown == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt",
+                "\(shown)")
+        #expect(!shown.contains("fixes it") && !shown.lowercased().contains("damaged"))
+        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == shown + ".")
+        // The legacy reference-movie note still reads as one (a dref is not a decode question).
+        #expect(AudioTrouble.displayNote("Damaged audio — reference movie, media missing") == referenceWords)
     }
 }

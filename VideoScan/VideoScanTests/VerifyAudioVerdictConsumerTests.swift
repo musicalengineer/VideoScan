@@ -298,8 +298,8 @@ struct VerifyAudioVerdictNoteWordingTests {
         var s = AudioVerifyShape(); s.audioStreams = 1; s.audioCodec = "aac"; s.audioDurationSeconds = 60; s.videoDurationSeconds = 600
         let f = VerifyAudioRules.findings(shape: s, referencedPaths: [], levels: .failure(.probeFailed("I/O")))
         #expect(f.count == 2, "fixture: short audio + a failed levels pass: \(f)")
-        #expect(!VerifyAudioRules.note(for: f).contains("undecodable"))
-        #expect(VerifyAudioRules.note(for: f) == "Damaged audio — audio shorter than video (60s vs 600s); audio could not be read (aac)")
+        #expect(!VerifyAudioRules.note(for: f, decodeComplete: true).contains("undecodable"))
+        #expect(VerifyAudioRules.note(for: f, decodeComplete: true) == "Damaged audio — audio shorter than video (60s vs 600s); audio could not be read (aac)")
     }
 
     @Test("no finding's words say 'undecodable': the rebuild's reason and the Angel's note read the same fragment")

@@ -32037,6 +32037,7 @@
       "path": "VideoScan/VideoScanTests/VerifyAudioTroubleWordsTests.swift",
       "stage": "unit",
       "suites": [
+        "VerifyAudioTroubleWordsCodexTests",
         "VerifyAudioTroubleWordsReviewTests",
         "VerifyAudioTroubleWordsTests"
       ],
@@ -32044,7 +32045,9 @@
         "archiveAngelSoundLine",
         "batchDeleteQuery",
         "checkMediaSoundRow",
+        "incompleteDecodeNeverPromisesRebuild",
         "leadsDoNotCarryTheFragmentSeparator",
+        "legacyCodecNoteIsNeutral",
         "legacyDisplay",
         "legacyNotesReadInTheirOwnWords",
         "needsRebuildNote",
@@ -34895,7 +34898,7 @@
         "test_a_readable_volume_passes_and_what_is_missing_is_the_seals_to_judge",
         "test_a_ref_that_tracks_the_overlay_folder_is_refused",
         "test_a_ref_without_the_engine_says_so_and_builds_nothing",
-        "test_a_reference_movie_and_a_sound_that_needs_rebuilding_are_doubts_not_bad_and_not_good",
+        "test_a_reference_movie_and_a_sound_that_needs_rebuilding_read_bad_like_damaged",
         "test_a_refused_prepare_leaves_the_last_good_catalog_in_place",
         "test_a_relaunch_resumes_without_a_duplicate_or_a_gap",
         "test_a_run_records_the_sha256_of_the_manifest_it_read",
@@ -34972,6 +34975,7 @@
         "test_f8_a_poisoned_baseline_cannot_put_a_name_into_what_leaves",
         "test_f8_a_whole_digest_is_not_a_word_and_who_is_never_a_file_name",
         "test_f8_what_sqlite_says_stays_on_the_m4",
+        "test_good_to_reference_movie_or_needs_rebuild_is_red_whatever_the_quick_check_says",
         "test_green_hands_over_the_runs_facts_under_the_lock",
         "test_ingest_is_once_cheap_when_nothing_is_new_and_only_new_files_are_hashed",
         "test_limit_runs_the_first_n_files_by_content",
@@ -41805,7 +41809,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4033,
+      "expected_floor": 4035,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42488,6 +42492,7 @@
         "VideoScanTests/VerifyAudioStatusNoteTests",
         "VideoScanTests/VerifyAudioTroubleWordsTests",
         "VideoScanTests/VerifyAudioTroubleWordsReviewTests",
+        "VideoScanTests/VerifyAudioTroubleWordsCodexTests",
         "VideoScanTests/VerifyCatalogConstraintTests",
         "VideoScanTests/VerifyCatalogExpectedSilenceTests",
         "VideoScanTests/VerifyCatalogJobTests",

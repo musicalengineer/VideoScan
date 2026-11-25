@@ -117,10 +117,12 @@ enum PromoteSoundGate {
         // header still read — a failed read looks the same — so on its own
         // it is "could not check", not damage (Codex #281 F1).
         let damage = d.findings.filter { VerifyAudioRules.isDamage($0) && failedLevelsPassCodec($0) == nil }
-        if let trouble = VerifyAudioRules.trouble(of: damage) {
-            // Real damage: its fragments. A reference movie / a sound that
+        if let trouble = VerifyAudioRules.trouble(of: damage, decodeComplete: d.levelsPass == .complete) {
+            // Real damage (and an old codec whose decode came up short —
+            // Codex #372): its fragments. A reference movie / a sound that
             // needs rebuilding: what it says about itself (Rick 2026-11-25).
-            let own = damage.first { VerifyAudioRules.trouble(of: $0) == trouble }.flatMap(VerifyAudioRules.ownDetail(of:))
+            let own = trouble == .damaged ? nil
+                : damage.first { VerifyAudioRules.trouble(of: $0) == trouble }.flatMap(VerifyAudioRules.ownDetail(of:))
             return .damaged(own ?? damage.map(VerifyAudioRules.noteFragment(for:)).joined(separator: "; "), trouble: trouble)
         }
         if let codec = d.findings.lazy.compactMap(failedLevelsPassCodec).first {

@@ -21,6 +21,11 @@
 // missing", "Damaged audio — invalid codec (qdm2)") are reworded where they
 // are SHOWN (`displayNote`, `displaySoundSentence`); the stored data is
 // untouched, so they stay in `notes:damaged` until the file is verified again.
+// A legacy codec note says no more than its evidence: it never promises a
+// rebuild (it cannot say the decode was complete — Codex #372).
+//
+// "Needs rebuilding" itself is only ever chosen after a COMPLETE decode
+// (VerifyAudioRules.trouble(of:decodeComplete:)).
 //
 // Pure: strings in, strings out.
 
@@ -100,10 +105,10 @@ enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
 
     // MARK: Notes stored before 2026-11-25, as shown
 
-    /// A stored note in the words it would be written in today. A legacy
-    /// "Damaged audio — " note whose leading trouble is a reference movie or
-    /// an old codec (and that carries no real damage) reads as that trouble;
-    /// every other note is returned as stored. Display only.
+    /// A stored note in today's words. A legacy "Damaged audio — " note
+    /// whose leading trouble is a reference movie (and that carries no real
+    /// damage) reads as one; an old codec reads `legacyCodecNote`, which
+    /// promises nothing; every other note is returned as stored. Display only.
     static func displayNote(_ stored: String) -> String {
         let prefix = AudioTrouble.damaged.noteLead
         guard stored.hasPrefix(prefix) else { return stored }
@@ -133,7 +138,20 @@ enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
         let open = String(codecFragment.dropLast())
         guard fragment.hasPrefix(open), fragment.hasSuffix(")") else { return nil }
         let codec = String(fragment.dropFirst(open.count).dropLast())
-        return VerifyAudioRules.troubleLead(.unsupportedCodec(codec: codec, decodable: true))
+        return legacyCodecNote(codec: codec)
+    }
+
+    /// A legacy "invalid codec (<codec>)" note, as shown. The stored note
+    /// carries no evidence that the decode was complete (Codex #372 P0), so
+    /// these words never promise that a rebuild fixes it.
+    static func legacyCodecNote(codec: String) -> String {
+        "Sound in \(codec.isEmpty ? "an unknown format" : codec), " + legacyCodecNoteTail
+    }
+    private static let legacyCodecNoteTail = "a format Apple can't play — run Verify Audio again to know whether it can be rebuilt"
+
+    /// True for a note shown by `legacyCodecNote` (alone or with fragments after it).
+    static func isLegacyCodecNote(_ note: String) -> Bool {
+        note.hasPrefix("Sound in ") && note.contains(legacyCodecNoteTail)
     }
 
     private static let legacyShortAudioLead = String(

@@ -286,11 +286,12 @@ EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
 # DECISIONS 2026-11-25 (Rick): a file whose baseline read GOOD and now reads damaged or unreadable is RED. A file reads
 # BAD when any engine says so (BAD_WORDS); it reads GOOD when no engine says bad and none has a doubt (DOUBT_WORDS).
 # Good -> a doubt is AMBER, as is bad -> good (a detector may have gone blind); only good -> bad is RED.
-BAD_WORDS = {"probe": ("unopenable",), "check": ("Problem", "unopenable", "error:couldNotRead"),
-             "audio": ("damaged", "error:probeFailed")}
 # Verify Audio's reference_movie (plays only with its other files) and needs_rebuild (an old codec Rebuild Audio Track
-# fixes) are doubts, not damage (Rick 2026-11-25).
-DOUBT_WORDS = {"check": ("Warning",), "audio": ("not_checked", "reference_movie", "needs_rebuild")}
+# fixes) are not CALLED damaged (Rick 2026-11-25) but keep its severity here (Codex #372 P1): a good file the engine
+# newly reads as either is RED, as it was when the word was "damaged" — the quick-tier check engine need not say Problem.
+BAD_WORDS = {"probe": ("unopenable",), "check": ("Problem", "unopenable", "error:couldNotRead"),
+             "audio": ("damaged", "reference_movie", "needs_rebuild", "error:probeFailed")}
+DOUBT_WORDS = {"check": ("Warning",), "audio": ("not_checked",)}
 
 
 def reads_bad(record: dict, engines: List[str]) -> bool:

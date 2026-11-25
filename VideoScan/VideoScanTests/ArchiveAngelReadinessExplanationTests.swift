@@ -148,7 +148,7 @@ struct ArchiveAngelReadinessExplanationTests {
         let e = ArchiveAngelReadinessExplanation.make(f)
         #expect(e.missing.count == 1)
         // A note stored before 2026-11-25 is shown in today's words (AudioTrouble.displayNote).
-        #expect(e.missing.first?.what.contains("qdm2 does not play on Apple") == true, "\(e.missing)")
+        #expect(e.missing.first?.what.contains("Sound in qdm2, a format Apple can't play") == true, "\(e.missing)")
     }
 
     @Test func factsListDurationDatePeopleCopiesAndWhere() {
