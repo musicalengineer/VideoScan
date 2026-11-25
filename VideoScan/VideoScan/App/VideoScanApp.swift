@@ -619,6 +619,9 @@ struct VideoScanApp: App {
     /// Validate Catalog once a day in the away window, and a catch-up at
     /// launch / when idle (Rick 2026-11-07). Analyze/DailyFileCheck.swift.
     @State private var dailyFileCheck = DailyFileCheckScheduler()
+    /// Re-measure Sound Levels once, unattended, in the away window (#516;
+    /// MediaOps/CheckMedia/SoundLevelsRemeasureScheduler.swift).
+    @State private var soundLevelsRemeasure = SoundLevelsRemeasureScheduler()
     /// Is the background helper on the content work? Catalog Status's
     /// Content line reads it ("in progress" vs yellow; Rick 2026-11-01
     /// evening). Asks over XPC only when the service is enabled.
@@ -769,6 +772,7 @@ struct VideoScanApp: App {
                         // only, never on a test host.
                         if !TestEnvironment.isTestHost && catalogSync.mode == .master {
                             dailyFileCheck.attach(.live(model: catalogModel, center: fileOpsCenter))
+                            soundLevelsRemeasure.attach(.live(model: catalogModel, center: fileOpsCenter))
                         }
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active

@@ -313,12 +313,18 @@ struct MediaInfoSheet: View {
     /// Per-channel loudness: this session's diagnosis, else the card's
     /// persisted sound row.
     private var channelLevels: [MediaEvidence] {
-        if let channels = request.audioDiagnosis?.balanceAnalysis?.evidenceChannels, !channels.isEmpty {
+        Self.channelLevels(diagnosis: request.audioDiagnosis, card: request.record.mediaReportCard)
+    }
+
+    /// The rule behind `channelLevels`, pure so a test can load a saved card
+    /// and ask what Media Info would show (#516).
+    nonisolated static func channelLevels(diagnosis: AudioVerifyDiagnosis?, card: MediaReportCard?) -> [MediaEvidence] {
+        if let channels = diagnosis?.balanceAnalysis?.evidenceChannels, !channels.isEmpty {
             return channels.enumerated().map { i, c in
                 MediaEvidence(CheckMediaRules.channelName(i, of: channels.count), CheckMediaRules.levelText(c))
             }
         }
-        return request.record.mediaReportCard?.check(.sound)?.evidence ?? []
+        return card?.check(.sound)?.evidence ?? []
     }
 
     private func loadFacts() async {

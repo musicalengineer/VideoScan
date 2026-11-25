@@ -12,6 +12,10 @@
 //   stored before #402            refuses them as evidence; no cleanup
 //                                 engine exists yet, so the row says so
 //                                 and has no Run
+//   Sound levels to measure again GH #516 — Run starts Re-measure Sound
+//                                 Levels (SoundLevelsRemeasureJob); counted
+//                                 with the job's own plan predicate
+//                                 (`SoundLevelsRemeasureRules.need`)
 //
 // The menu item reads "Tidy Catalog… (N)" with N = the sum of the rows that
 // have a Run, and is not there when that sum is 0 (CatalogMenuLayout); a
@@ -50,8 +54,11 @@ struct CatalogTidyCounts: Sendable, Equatable {
     var duplicateGroupsToSplit = 0
     /// GH #402 degenerate OCR date captions still stored on live rows.
     var degenerateOCRCaptions = 0
+    /// GH #516: Check Media cards whose Sound row holds levels from before
+    /// the fix, or whose levels a run withdrew (waiting for their drive).
+    var soundLevelsToRemeasure = 0
 
-    var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions }
+    var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions + soundLevelsToRemeasure }
     /// The menu's "(N)" and its hidden-at-zero rule: only rows that have a
     /// Run (coordinator 2026-11-01). A count-only row — #402's junk
     /// captions, no engine yet — is shown in the sheet but never keeps the
@@ -70,16 +77,23 @@ struct CatalogTidyMember: Sendable, Equatable {
 struct CatalogTidyProjection: Sendable, Equatable {
     var nonVideoRows = 0
     var grouped: [CatalogTidyMember] = []
+    var soundLevelsToRemeasure = 0
 }
 
 enum CatalogTidyCalculator {
 
     /// One pass over `records` (main actor — the records live there).
+    /// `remeasure` = Re-measure Sound Levels' marker (nil = none yet: no count).
     @MainActor
-    static func project(_ records: [VideoRecord]) -> CatalogTidyProjection {
+    static func project(_ records: [VideoRecord], remeasure: SoundLevelsRemeasureMarker? = nil) -> CatalogTidyProjection {
         var out = CatalogTidyProjection()
+        let now = Date()
         for r in records {
             if NonVideoMediaPurge.isOffered(r) { out.nonVideoRows += 1 }
+            if let remeasure, SoundLevelsRemeasureRules.need(r.mediaReportCard, recordID: r.id, live: r.removal == nil,
+                                                             marker: remeasure, now: now) != nil {
+                out.soundLevelsToRemeasure += 1
+            }
             // The split's own facts: live rows with a group (duplicateDigestSplitFacts).
             if r.removal == nil, let g = r.duplicateGroupID {
                 out.grouped.append(CatalogTidyMember(groupID: g, digest: VideoScanModel.storedFullDigest(r)))
@@ -101,14 +115,17 @@ enum CatalogTidyCalculator {
 
     nonisolated static func counts(_ p: CatalogTidyProjection, degenerateOCRCaptions: Int) -> CatalogTidyCounts {
         CatalogTidyCounts(nonVideoRows: p.nonVideoRows, duplicateGroupsToSplit: groupsToSplit(p.grouped),
-                          degenerateOCRCaptions: degenerateOCRCaptions)
+                          degenerateOCRCaptions: degenerateOCRCaptions,
+                          soundLevelsToRemeasure: p.soundLevelsToRemeasure)
     }
 }
 
 // MARK: - The rows (pure)
 
 struct CatalogTidyRow: Sendable, Equatable, Identifiable {
-    enum Kind: String, Sendable, CaseIterable { case nonVideoRows, duplicateGroupsToSplit, degenerateOCRCaptions }
+    enum Kind: String, Sendable, CaseIterable {
+        case nonVideoRows, duplicateGroupsToSplit, degenerateOCRCaptions, soundLevelsToRemeasure
+    }
     var kind: Kind
     /// The live count (named apart from a collection's `count`).
     var number: Int
@@ -132,6 +149,10 @@ struct CatalogTidyRow: Sendable, Equatable, Identifiable {
                            title: "Degenerate OCR captions stored before #402",
                            detail: "Junk readings (\"!!!!…\") the captioner wrote before this build refused them. They are already ignored as date evidence; there is no cleanup action yet.",
                            runTitle: nil),
+            CatalogTidyRow(kind: .soundLevelsToRemeasure, number: c.soundLevelsToRemeasure,
+                           title: "Sound levels to measure again",
+                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file was not connected. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. It also runs by itself once, overnight. Stop any time; running it again continues.",
+                           runTitle: "Run"),
         ]
     }
 }
@@ -214,6 +235,9 @@ struct CatalogTidySheet: View {
             lastSplit = CatalogTidyWords.splitOutcome(center.splitDuplicateGroupsKeepingSameFootage(model: model))
         case .degenerateOCRCaptions:
             break
+        case .soundLevelsToRemeasure:
+            _ = center.startedByUser { $0.startSoundLevelsRemeasure(model: model) }
+            lastSplit = "Re-measure sound levels started — its row in Media File Operations shows progress, Pause and Stop."
         }
     }
 }
