@@ -4,9 +4,11 @@
 // shared it — a forgotten pull A could finish and be published as pull B's
 // export. Regression (Codex's), seen RED before the fix: two held runs A and
 // B; release A → B still waiting, its output absent; release B → B's bytes.
+// 2026-11-24: the same defect on Refresh from FamilySearch (second test).
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 private struct HeldScriptRunner: FamilySearchPullLauncher {
@@ -93,5 +95,51 @@ struct FamilyTreeReadOnlyClosing5Tests {
         })
         #expect((try? Data(contentsOf: outB)) == bytesB, "B published something other than its own export")
         a.cancel(); b.cancel()
+    }
+
+    // The same shape on "Refresh from FamilySearch…" (flake 2026-11-24, M4
+    // suite on 35d23778e: FamilyTreeReadOnlyClosing2Tests' F3 never reached
+    // .ready). Its scratch answer path was `<scratch>/<FSID>-<second>/
+    // person.ged` — unique within ONE refresh root only. Two refreshes of the
+    // same person in the same second under two roots (parallel tests, two
+    // test hosts sharing one TMPDIR) shared it: one run read the other's
+    // answer. Deterministic here: one clock second, one scratch root.
+    @Test func twoPersonRefreshesInOneSecondNeverShareAnAnswerFile() async throws {
+        let second = Date(timeIntervalSince1970: 1_790_000_000)
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-scratch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        func refresh(_ tag: String) throws -> (PersonRefreshCoordinator, PersonRefreshAppFixtures.Layout) {
+            let layout = try PersonRefreshAppFixtures.layout(tag: tag)
+            let seed = FamilyTreeLiveModel(originalsDirectory: layout.gedcom)
+            seed.personRefreshOverlayStore = layout.overlayStore
+            seed.loadNow()
+            let target = try #require(seed.personRefreshTarget(for: "@I1@"))
+            let c = PersonRefreshCoordinator(
+                target: target, root: layout.refreshRoot, overlayStore: layout.overlayStore,
+                installedFacts: { seed.personFacts(familySearchID: target.familySearchID) },
+                locator: FamilySearchToolLocator(overridePath: layout.tool.path, candidatePaths: []),
+                launcher: PersonRefreshAppFixtures.SilentLauncher(), pollInterval: .milliseconds(20),
+                sink: PersonRefreshNoteSink(videoscanLog: { _ in }), now: { second })
+            c.answerScratchRoot = scratch
+            return (c, layout)
+        }
+        let (a, layoutA) = try refresh("scratch-a"); defer { layoutA.remove() }
+        let (b, layoutB) = try refresh("scratch-b"); defer { layoutB.remove() }
+        a.launch()
+        b.launch()
+        defer { a.cancel(); b.cancel() }
+        guard case .waiting(let outA) = a.phase, case .waiting(let outB) = b.phase else {
+            Issue.record("not waiting: \(a.phase) / \(b.phase)"); return
+        }
+        #expect(outA != outB, "two runs were handed one answer file: \(outA.path)")
+        // B's answer lands first — and it is the wrong person (a refusal).
+        try PersonRefreshAppFixtures.onePerson(fsid: "ZZZZ-999").write(to: outB, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { b.isSettled })
+        #expect({ if case .waiting = a.phase { return true }; return false }(), "A read B's answer: \(a.phase)")
+        // A's own answer: A reaches review.
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = a.phase { true } else { false } },
+                "A: \(a.phase)")
     }
 }

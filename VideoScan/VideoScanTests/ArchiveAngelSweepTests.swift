@@ -202,9 +202,20 @@ struct ArchiveAngelSweepTests {
             candidates.append(.init(filename: "tape\(i).mov", fullPath: "/Volumes/T/tape\(i).mov",
                                     durationSeconds: 3600 + Double(i), starRating: 2))
         }
+        // One clock for the whole story (GH #509). The ledger keeps `at` to
+        // the NEAREST millisecond, so a skip stamped `Date()` can read up to
+        // 0.5 ms LATER than the moment it happened; a sweep finishing inside
+        // that half-millisecond (a loaded machine lines this up) read
+        // computedAt <= skipAt and the precondition below went red. Both
+        // instants are explicit now: the skip on the millisecond grid, the
+        // finish line (the sweep's clock) 0.1 ms after it — closer than the
+        // ledger's resolution, the tightest honest ordering.
+        let skipMoment = BackupAttestation.Timestamp.date(
+            milliseconds: BackupAttestation.Timestamp.milliseconds(Date()) - 1_000)
+        let finishLine = skipMoment.addingTimeInterval(0.000_1)
         let gate = TestGate()
         let (sweep, dir) = makeSweep(candidates: candidates, sliceSize: 5, attention: attention,
-                                     playHistory: { _ in await gate.wait(); return [:] })
+                                     playHistory: { _ in await gate.wait(); return [:] }, now: finishLine)
         defer { try? FileManager.default.removeItem(at: dir) }
         let revisionAtSnapshot = attention.revision
         sweep.run(reason: "test")
@@ -215,7 +226,7 @@ struct ArchiveAngelSweepTests {
         guard case .scoring = sweep.status else { Issue.record("expected .scoring, got \(sweep.status)"); return }
         // The person skips a file mid-sweep. (MediaLedgerEvent keeps `at`
         // at millisecond resolution; the store's lastEventAt is the truth.)
-        attention.note([MediaLedgerEvent(at: Date(), event: .angelSkipped, recordID: candidates[0].id, contentKey: "",
+        attention.note([MediaLedgerEvent(at: skipMoment, event: .angelSkipped, recordID: candidates[0].id, contentKey: "",
                                          filename: candidates[0].filename, fullPath: candidates[0].fullPath, by: .rick)])
         let skipAt = attention.lastEventAt
         #expect(skipAt != nil && attention.revision == revisionAtSnapshot + 1)

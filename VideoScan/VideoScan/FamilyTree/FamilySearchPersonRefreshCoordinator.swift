@@ -72,7 +72,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// every family-data location (codex #196 F3). The Terminal process
     /// cannot be reached by the permit, so it never writes into the refresh
     /// root; the coordinator PUBLISHES the answer there through the
-    /// primitive, at the moment it reads it — refused once revoked.
+    /// primitive, at the moment it reads it — refused once revoked. Each
+    /// launch answers into `<this>/<UUID>/<FSID>-<stamp>/person.ged`.
     var answerScratchRoot: URL = FileManager.default.temporaryDirectory
         .appendingPathComponent("VideoScan-person-refresh", isDirectory: true)
 
@@ -169,8 +170,15 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     isDirectory: true)
             suffix += 1
         }
-        // The tool's -o: scratch, not the refresh root (#196 F3).
-        let output = answerScratchRoot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+        // The tool's -o: scratch, not the refresh root (#196 F3), in a folder
+        // of its own per launch (as Get Family Tree, #199). `folder` is unique
+        // only inside THIS root; two roots sharing the scratch (two test
+        // hosts, two app instances) launching the same person in the same
+        // second were handed one person.ged and read each other's answer
+        // (flake 2026-11-24). The UUID level keeps the leaf name — and the
+        // `started` log line — `<FSID>-<stamp>/person.ged`.
+        let output = answerScratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(folder.lastPathComponent, isDirectory: true)
             .appendingPathComponent(PersonRefreshPaths.outputFileName)
         // The attempt is on record BEFORE anything can refuse it: a run that
         // could not start still reads `started` … `failed: could not start`.

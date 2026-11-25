@@ -17462,6 +17462,7 @@
         "FamilyTreeReadOnlyClosing5Tests"
       ],
       "tests": [
+        "twoPersonRefreshesInOneSecondNeverShareAnAnswerFile",
         "twoPullsNeverShareScratchAndBPublishesOnlyItsOwnBytes"
       ]
     },
@@ -41701,7 +41702,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 3994,
+      "expected_floor": 3995,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
