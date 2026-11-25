@@ -167,6 +167,7 @@ paths:
   - VideoScan/VideoScan/FamilyTree/FamilyTreePronunciation.swift
   - VideoScan/VideoScan/FamilyTree/FamilySearchPull*.swift
   - VideoScan/VideoScan/FamilyTree/FamilySearchPersonRefresh*.swift
+  - VideoScan/VideoScan/FamilyTree/PersonRefreshLaunchScratch.swift
   - VideoScan/VideoScan/Hallie/HallieTellingMode*.swift
   - VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Telling.swift
   - VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Pronunciation.swift

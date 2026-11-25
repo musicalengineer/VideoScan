@@ -34841,6 +34841,7 @@
         "test_a_file_added_under_media_is_seen_by_the_sweep",
         "test_a_file_ingested_after_the_last_prepare_waits_for_the_next",
         "test_a_file_past_its_deadline_is_recorded_and_the_rest_still_run",
+        "test_a_file_that_read_good_and_now_reads_damaged_or_unreadable_is_red",
         "test_a_file_that_went_away_or_changed_after_ingest_is_vanished_or_changed",
         "test_a_helper_that_dies_without_a_summary_is_red_and_says_so",
         "test_a_known_error_word_unchanged_is_green_and_a_change_of_kinds_alone_is_only_noted",
