@@ -34188,6 +34188,7 @@
         "test_a_printed_lookalike_result_line_is_never_counted",
         "test_a_printed_swift_testing_lookalike_is_never_counted",
         "test_the_quiet_listing_reads_the_products_folder_swiftpm_names",
+        "test_the_quiet_listing_makes_its_sealed_home_outside_the_results_root",
         "test_a_bin_path_that_fails_is_red_in_its_words_and_runs_no_package_test",
         "test_a_quiet_listing_that_fails_is_red_in_its_words_and_runs_no_package_test",
         "test_a_quiet_test_that_fails_alone_fails_the_stage_by_name",
