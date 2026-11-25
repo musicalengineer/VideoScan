@@ -1,5 +1,5 @@
 // SoundLevelsRemeasureJob.swift — "Re-measure sound levels", the MFO job
-// (GH #516; DECISIONS 2026-11-25). Rules and the marker: SoundLevelsRemeasure.swift.
+// (GH #516; DECISIONS 2026-11-25). Rules and the card stamp: SoundLevelsRemeasure.swift.
 //
 // One sentence: for every Check Media card whose Sound row may hold levels
 // measured by pre-2441ceb42 code (or was withdrawn by an earlier run), run
@@ -16,23 +16,30 @@
 //
 // Safety (data-risk: a catalog writer; follow-up Codex pass before merge):
 //   * READ-ONLY on media: ffprobe + an audio-only ffmpeg decode.
-//   * The ONLY write is the card's Sound row, `soundMeasuredSilent` and (when
-//     the row's verdict changed) the headline — compare-and-set on the card
-//     the plan read (same `checkedAt`, same Sound row): a card Check Media
-//     rewrote meanwhile is left alone ("changed meanwhile").
+//   * The ONLY write is the card's Sound row, `soundMeasuredSilent`, its
+//     `soundLevels` stamp and (when the row's verdict changed) the headline.
+//   * Cards are stored per DIGEST (`media_checks`), so one content is ONE
+//     plan item and its card is written to every in-memory copy at once —
+//     only when every copy still holds the card the plan read AND the card
+//     stored in catalog.sqlite for that digest is that same card (Codex
+//     cycle #373 P0-1: re-measuring B must never overwrite A's newer card).
+//     Anything else is left as it is ("changed meanwhile"); it stays a
+//     candidate for the next run.
 //   * Every 25 cards (or 60 s), on Stop and at the end the job AWAITS an
 //     acknowledged durable catalog save (the commit door via
 //     `saveCatalogAcknowledged`); a failed save stops the job and UNDOES the
-//     unsaved rewrites (compare-and-set), and the cursor does not move.
-//   * The marker's cursor moves only after an acknowledged save, so Stop,
-//     quit or a crash resumes at the first card not yet durably rewritten.
+//     unsaved rewrites (compare-and-set).
+//   * Resume needs no cursor: a rewritten card carries the stamp, so Stop,
+//     quit or a crash leaves exactly the cards not yet rewritten as
+//     candidates (a withdrawn one is tried again — a stat, if its drive is away).
 //   * Refused on a read-only catalog (viewer Mac) and when ffmpeg is missing
 //     (a missing tool is never "could not measure the file").
 //   * One file at a time, holding its volume gate while it reads. Pause
 //     takes effect between files; Stop terminates the running ffmpeg.
 //   * Rows are never added or removed: OUTCOME says rows before = after.
 //
-// Memory: the plan (~300 B per card, ~30 MB at 100k), up to `checkpointEvery`
+// Memory: the plan (~400 B per content, ~40 MB at 100k), the copies index
+// (digest → ids, for planned digests only), up to `checkpointEvery`
 // pending (old, new) card pairs (a few KB each), every problem row, and at
 // most `sampleCap` other rows. Nothing scales with media size.
 //
@@ -47,44 +54,76 @@ import VideoScanCore
 
 private let remeasureLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "remeasureSoundLevels")
 
-/// One card the job will measure again. A small value: no card copy.
+/// One CONTENT the job will measure again (its card is stored per digest).
+/// A small value: no card copy.
 struct SoundLevelsRemeasureItem: Sendable, Equatable {
+    /// The record the plan read the card from.
     let id: UUID
+    /// The content's whole-file digest (the store's key); nil = held row.
+    let digest: String?
     let filename: String
-    let path: String
+    /// Every planned copy's path; the first on a connected drive is read.
+    let paths: [String]
     let need: SoundLevelsRemeasureRules.Need
     /// The card the plan read: compared again before the write.
     let checkedAt: Date
     let soundRow: MediaCheck
     let fileSizeBytes: Int64
 
-    /// Every candidate, in record-id order (the cursor's order). O(records),
-    /// main actor (the records live there).
+    var path: String { paths.first ?? "" }
+
+    /// The row's key: its digest, else the row itself.
     @MainActor
-    static func plan(_ records: [VideoRecord], marker: SoundLevelsRemeasureMarker,
-                     now: Date = Date()) -> [SoundLevelsRemeasureItem] {
-        var out: [SoundLevelsRemeasureItem] = []
+    static func key(_ r: VideoRecord) -> String { CatalogCommit.digest(of: r) ?? "row:" + r.id.uuidString }
+
+    /// Every candidate content, one item per digest, in key order.
+    /// O(records), main actor (the records live there).
+    @MainActor
+    static func plan(_ records: [VideoRecord]) -> [SoundLevelsRemeasureItem] {
+        var byKey: [String: SoundLevelsRemeasureItem] = [:]
         for r in records {
             guard let card = r.mediaReportCard,
-                  let need = SoundLevelsRemeasureRules.need(card, recordID: r.id, live: r.removal == nil,
-                                                                 marker: marker, now: now),
+                  let need = SoundLevelsRemeasureRules.need(card, live: r.removal == nil),
                   let row = card.check(.sound) else { continue }
-            out.append(SoundLevelsRemeasureItem(id: r.id, filename: r.filename, path: r.fullPath, need: need,
-                                                checkedAt: card.checkedAt, soundRow: row,
-                                                fileSizeBytes: card.fileSizeBytes))
+            let k = key(r)
+            if let first = byKey[k] {
+                byKey[k] = SoundLevelsRemeasureItem(id: first.id, digest: first.digest, filename: first.filename,
+                                                    paths: first.paths + [r.fullPath], need: first.need,
+                                                    checkedAt: first.checkedAt, soundRow: first.soundRow,
+                                                    fileSizeBytes: first.fileSizeBytes)
+                continue
+            }
+            byKey[k] = SoundLevelsRemeasureItem(id: r.id, digest: CatalogCommit.digest(of: r), filename: r.filename,
+                                                paths: [r.fullPath], need: need, checkedAt: card.checkedAt,
+                                                soundRow: row, fileSizeBytes: card.fileSizeBytes)
         }
-        return out.sorted { $0.id.uuidString < $1.id.uuidString }
+        return byKey.keys.sorted().compactMap { byKey[$0] }
     }
 
-    /// Cards withdrawn because their drive was not connected: on drives
+    /// digest → every in-memory record id holding it, for the planned
+    /// digests only. O(records).
+    @MainActor
+    static func copies(_ records: [VideoRecord], of plan: [SoundLevelsRemeasureItem]) -> [String: [UUID]] {
+        let wanted = Set(plan.compactMap(\.digest))
+        var out: [String: [UUID]] = [:]
+        for r in records {
+            guard let d = CatalogCommit.digest(of: r), wanted.contains(d) else { continue }
+            out[d, default: []].append(r.id)
+        }
+        return out
+    }
+
+    /// Contents withdrawn because their drive was not connected: on drives
     /// still away (`cards`, `drives`) and on drives connected now (`ready`).
-    /// O(records), main actor; `isOnline` is the app's volume signal.
+    /// One per content. O(records), main actor; `isOnline` is the app's
+    /// volume signal.
     @MainActor
     static func waiting(_ records: [VideoRecord], isOnline: (String) -> Bool) -> SoundLevelsRemeasureWaiting {
         var w = SoundLevelsRemeasureWaiting()
+        var seen: Set<String> = []
         for r in records where r.removal == nil {
-            guard let card = r.mediaReportCard, card.tier == .full, let row = card.check(.sound),
-                  SoundLevelsRemeasureRules.isWaitingForDrive(row) else { continue }
+            guard let card = r.mediaReportCard, card.tier == .full,
+                  SoundLevelsRemeasureRules.isWaitingForDrive(card), seen.insert(key(r)).inserted else { continue }
             if isOnline(r.fullPath) {
                 w.ready += 1
             } else {
@@ -95,13 +134,14 @@ struct SoundLevelsRemeasureItem: Sendable, Equatable {
         return w
     }
 
-    /// Whether the scheduler should start the job: the pre-fix walk is not
-    /// finished, or a card waiting for its drive can be measured now.
+    /// Whether the scheduler should start the job: a card with levels from
+    /// an unstamped pass remains, or a card waiting for its drive can be
+    /// measured now. From the cards alone. O(records).
     @MainActor
-    static func autoRunDue(_ records: [VideoRecord], marker: SoundLevelsRemeasureMarker?,
-                           isOnline: (String) -> Bool) -> Bool {
-        guard let marker else { return true }
-        if !marker.isWalked { return true }
+    static func autoRunDue(_ records: [VideoRecord], isOnline: (String) -> Bool) -> Bool {
+        for r in records where SoundLevelsRemeasureRules.need(r.mediaReportCard, live: r.removal == nil) == .prefix {
+            return true
+        }
         return waiting(records, isOnline: isOnline).ready > 0
     }
 }
@@ -120,6 +160,15 @@ struct SoundLevelsRemeasureWaiting: Sendable, Equatable {
     }
 }
 
+/// The card catalog.sqlite holds for a digest, read just before a write.
+enum SoundLevelsStoredCard: Sendable {
+    /// No SQLite store (or no card stored for it yet).
+    case none
+    case card(MediaReportCard)
+    /// Could not be read or decoded: refuse rather than guess.
+    case unreadable(String)
+}
+
 @MainActor
 final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
 
@@ -136,6 +185,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     struct Totals: Equatable, Sendable {
         var total = 0, done = 0
         var refreshed = 0, reconfigured = 0, offline = 0, notFound = 0, changed = 0, failed = 0, changedMeanwhile = 0
+        /// Cards written (every copy of a content counts).
+        var cardsWritten = 0
         var withdrawn: Int { offline + notFound + changed + failed }
     }
 
@@ -158,6 +209,9 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     var gatesFor: (String) -> [MediaVolumeGate] = { _ in [] }
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// The card catalog.sqlite holds for a digest (P0-1). Production reads
+    /// the committer's repository; with no SQLite store there is none.
+    var storedCard: @MainActor (String) async -> SoundLevelsStoredCard = { _ in .none }
     var now: () -> Date = { Date() }
     var checkpointEvery = 25
     var progressLineEvery = 50
@@ -183,12 +237,14 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     private(set) var savedCount = 0
     private(set) var saveFailed = false
     private(set) var summaryLine = ""
-    private(set) var marker: SoundLevelsRemeasureMarker?
 
-    private struct Pending { let item: SoundLevelsRemeasureItem; let old: MediaReportCard; let new: MediaReportCard }
+    /// One copy's rewrite since the last save (to undo it on a failed save).
+    private struct Pending { let recordID: UUID; let old: MediaReportCard; let new: MediaReportCard }
     private var pending: [Pending] = []
-    /// The last pre-fix item handled since the last save (moves the cursor).
-    private var pendingCursor: String?
+    /// digest → in-memory copies, built at START for the planned digests.
+    private var copies: [String: [UUID]] = [:]
+    /// Catalog rows at START (OUTCOME's "before", Codex P2-7).
+    private(set) var rowsAtStart = 0
     private var lastSave = Date()
     private var runStart = Date()
     /// Set when ffmpeg disappeared mid-run: the run stops, nothing is guessed.
@@ -204,6 +260,9 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     init(model: VideoScanModel, catalogFile: String? = nil) {
         self.model = model
         self.catalogFile = catalogFile ?? model.catalogStore.fileLocation
+        self.storedCard = { [weak model] digest in
+            await Self.readStoredCard(model?.catalogCutover.committer?.repository, digest: digest)
+        }
     }
 
     // MARK: Lifecycle
@@ -250,27 +309,27 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         guard toolsAvailable() else {
             refuse("ffmpeg was not found (install it with Homebrew, or set VS_FFMPEG_PATH)", model: model); return
         }
-        var marker = openMarker(model: model)
-        let plan = SoundLevelsRemeasureItem.plan(model.records, marker: marker, now: now())
+        rowsAtStart = model.records.count
+        let plan = SoundLevelsRemeasureItem.plan(model.records)
+        copies = SoundLevelsRemeasureItem.copies(model.records, of: plan)
         totals.total = plan.count
         isIndeterminateValue = plan.isEmpty
-        note("START — \(Self.startClause(plan, marker: marker))", model: model)
+        note("START — \(Self.startClause(plan)); catalog rows \(rowsAtStart)", model: model)
         runStart = Date()
         lastSave = Date()
         for (i, item) in plan.enumerated() {
             guard await waitOutPause() else { break }
-            guard let outcome = await measureOne(item, index: i) else { break }
-            record(outcome, for: item, index: i, model: model)
+            guard await turn(item, index: i, model: model) else { break }
             totals.done = i + 1
             fractionValue = Double(i + 1) / Double(max(1, plan.count))
             if totals.done % max(1, progressLineEvery) == 0 {
                 note("progress — \(totals.done) of \(totals.total) · \(Self.summaryCounts(totals))", model: model)
             }
             if pending.count >= checkpointEvery || (!pending.isEmpty && Date().timeIntervalSince(lastSave) >= 60) {
-                guard await persist(model: model, marker: &marker) else { await failSave(model: model); return }
+                guard await persist(model: model) else { await failSave(model: model); return }
             }
         }
-        guard await persist(model: model, marker: &marker) else { await failSave(model: model); return }
+        guard await persist(model: model) else { await failSave(model: model); return }
         if let why = toolLost {
             summaryLine = Self.summaryCounts(totals)
             let message = "ffmpeg went away mid-run (\(why)) — stopped after \(totals.done) of \(totals.total); \(savedCount) card(s) saved are kept; it continues from here once ffmpeg is back"
@@ -278,42 +337,34 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
             finish(failed: message)
             return
         }
-        conclude(model: model, marker: &marker)
+        conclude(model: model)
     }
 
-    /// The marker beside the catalog: read, or made now (its cutoff), or —
-    /// unreadable — replaced with today's cutoff, said in the log.
-    private func openMarker(model: VideoScanModel) -> SoundLevelsRemeasureMarker {
-        let loaded = SoundLevelsRemeasureMarker.loadOrCreate(catalogFile: catalogFile, now: now())
-        if loaded.replaced {
-            note("the marker \(SoundLevelsRemeasureMarker.fileName) could not be read — started a new one with today as the cutoff (every card with levels is measured again)", model: model)
-        }
-        if loaded.created { writeMarker(loaded.marker, model: model) }
-        self.marker = loaded.marker
-        return loaded.marker
-    }
-
-    private func conclude(model: VideoScanModel, marker: inout SoundLevelsRemeasureMarker) {
+    private func conclude(model: VideoScanModel) {
         summaryLine = Self.summaryCounts(totals)
-        let rows = "catalog rows before \(model.records.count) · after \(model.records.count) · difference none (Sound rows rewritten in place)"
+        let rows = Self.rowsClause(before: rowsAtStart, after: model.records.count, written: totals.cardsWritten)
         if stopped {
             note("OUTCOME stopped at \(totals.done) of \(totals.total) — \(summaryLine); \(rows)", model: model)
             finish(cancelled: ())
             return
         }
-        // Done only when no card waits for a drive (coordinator, #516 review):
-        // a card withdrawn for an absent drive is work still owed.
+        // Work still owed is said, never "done" (coordinator, #516 review):
+        // cards withdrawn for an absent drive wait for it.
         let waiting = SoundLevelsRemeasureItem.waiting(model.records, isOnline: isOnline)
         if let words = waiting.words { summaryLine += " · " + words }
-        marker.walkedAt = marker.walkedAt ?? now()
-        marker.completedAt = waiting.cards == 0 && waiting.ready == 0 ? now() : nil
-        marker.cursor = nil
-        marker.lastSummary = summaryLine
-        writeMarker(marker, model: model)
-        self.marker = marker
         note("OUTCOME — \(summaryLine); \(rows)", model: model)
         finish(success: totals.total == 0 && waiting.cards == 0
-               ? "Nothing to do — no saved card holds sound levels from before the fix" : summaryLine)
+               ? "Nothing to do — every saved card's sound levels come from today's measurement" : summaryLine)
+    }
+
+    /// One content's turn: measure, read the stored card, write. False when
+    /// the run must stop (Stop, or ffmpeg went away).
+    private func turn(_ item: SoundLevelsRemeasureItem, index i: Int, model: VideoScanModel) async -> Bool {
+        guard let outcome = await measureOne(item, index: i) else { return false }
+        let stored: SoundLevelsStoredCard = if let d = item.digest { await storedCard(d) } else { .none }
+        guard !stopped else { return false }
+        record(outcome, for: item, stored: stored, index: i, model: model)
+        return true
     }
 
     private func waitOutPause() async -> Bool {
@@ -327,7 +378,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     /// One file: hold its volume gate(s), measure. nil when stopped, or when
     /// ffmpeg went away (`toolLost`; the job then fails without writing it).
     private func measureOne(_ item: SoundLevelsRemeasureItem, index i: Int) async -> SoundLevelsRemeasureRules.Remeasured? {
-        guard let permits = await acquireGates(for: item.path) else { return nil }
+        let path = item.paths.first(where: isOnline) ?? item.path
+        guard let permits = await acquireGates(for: path) else { return nil }
         if !pauseRequested {
             subtitleText = PerceptualFingerprintBackfillJob.progressLine(done: i, total: totals.total, current: item.filename,
                                                                          elapsed: Date().timeIntervalSince(runStart))
@@ -335,7 +387,7 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         let measure: Measure = self.measure ?? { [isOnline] path, size in
             try await Self.measureFile(path: path, expectedSize: size, isOnline: isOnline)
         }
-        let pass = Task { try await measure(item.path, item.fileSizeBytes) }
+        let pass = Task { try await measure(path, item.fileSizeBytes) }
         var outcome: SoundLevelsRemeasureRules.Remeasured?
         do {
             outcome = try await withTaskCancellationHandler { try await pass.value } onCancel: { pass.cancel() }
@@ -374,23 +426,49 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         }
     }
 
-    /// Compare-and-set the rewrite onto the card the plan read.
+    /// Compare-and-set the rewrite onto EVERY copy of the content, only when
+    /// each still holds the card the plan read and catalog.sqlite's card for
+    /// the digest is that card too (P0-1). Otherwise nothing is written.
     private func record(_ r: SoundLevelsRemeasureRules.Remeasured, for item: SoundLevelsRemeasureItem,
-                        index i: Int, model: VideoScanModel) {
-        if item.need == .prefix { pendingCursor = item.id.uuidString }
+                        stored: SoundLevelsStoredCard, index i: Int, model: VideoScanModel) {
         guard let rec = model.record(forID: item.id), let card = rec.mediaReportCard,
               card.checkedAt == item.checkedAt, card.check(.sound) == item.soundRow else {
-            totals.changedMeanwhile += 1
-            problems.append(Item(id: i, filename: item.filename, path: item.path, result: nil,
-                                 detail: "its card changed in the catalog during the run (checked again, or removed) — left as it is"))
-            return
+            return leftAlone(i, item, "its card changed in the catalog during the run (checked again, or removed)")
+        }
+        let ids = item.digest.flatMap { copies[$0] } ?? [item.id]
+        let copiesNow = ids.compactMap { model.record(forID: $0) }
+        guard copiesNow.allSatisfy({ $0.mediaReportCard.map { SoundLevelsRemeasureRules.sameCard($0, card) } ?? false }) else {
+            return leftAlone(i, item, "another copy of the same content holds a different card (checked again)")
+        }
+        switch stored {
+        case .none: break
+        case .card(let c) where SoundLevelsRemeasureRules.sameCard(c, card): break
+        case .card:
+            return leftAlone(i, item, "the card stored for this content differs from the one read (a copy was checked again)")
+        case .unreadable(let why):
+            return leftAlone(i, item, "the stored card for this content could not be read (\(why))")
         }
         let result = SoundLevelsRemeasureRules.result(of: r)
-        let new = SoundLevelsRemeasureRules.rewrite(card, with: r, context: rec.soundPresenceContext)
-        if new != card {
-            rec.mediaReportCard = new
-            pending.append(Pending(item: item, old: card, new: new))
+        for copy in copiesNow {
+            guard let old = copy.mediaReportCard else { continue }
+            var new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
+            new.repairedCopy = old.repairedCopy
+            guard new != old else { continue }
+            copy.mediaReportCard = new
+            pending.append(Pending(recordID: copy.id, old: old, new: new))
+            totals.cardsWritten += 1
         }
+        tally(result, i, item, model: model)
+    }
+
+    private func leftAlone(_ i: Int, _ item: SoundLevelsRemeasureItem, _ why: String) {
+        totals.changedMeanwhile += 1
+        problems.append(Item(id: i, filename: item.filename, path: item.path, result: nil,
+                             detail: "\(why) — left as it is; it stays a candidate"))
+    }
+
+    private func tally(_ result: SoundLevelsRemeasureRules.Result, _ i: Int, _ item: SoundLevelsRemeasureItem,
+                       model: VideoScanModel) {
         switch result {
         case .refreshed:
             totals.refreshed += 1
@@ -419,9 +497,9 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
 
     // MARK: Saving
 
-    /// Await an ACKNOWLEDGED durable save of the rewrites since the last one,
-    /// then move the cursor. True when there was nothing to save or it is on disk.
-    private func persist(model: VideoScanModel, marker: inout SoundLevelsRemeasureMarker) async -> Bool {
+    /// Await an ACKNOWLEDGED durable save of the rewrites since the last one.
+    /// True when there was nothing to save or it is on disk.
+    private func persist(model: VideoScanModel) async -> Bool {
         if !pending.isEmpty {
             let n = pending.count
             subtitleText = "Saving the catalog (\(n) card\(n == 1 ? "" : "s") rewritten)…"
@@ -432,21 +510,15 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
             pending.removeAll()
         }
         lastSave = Date()
-        if let cursor = pendingCursor {
-            marker.cursor = cursor
-            pendingCursor = nil
-            writeMarker(marker, model: model)
-            self.marker = marker
-        }
         return true
     }
 
     /// A save was not acknowledged: stop, UNDO the unsaved rewrites
-    /// (compare-and-set), keep the cursor where the last save left it.
+    /// (compare-and-set, every copy).
     private func failSave(model: VideoScanModel) async {
         var undone = 0
         for p in pending {
-            guard let rec = model.record(forID: p.item.id), rec.mediaReportCard == p.new else { continue }
+            guard let rec = model.record(forID: p.recordID), rec.mediaReportCard == p.new else { continue }
             rec.mediaReportCard = p.old
             undone += 1
         }
@@ -456,12 +528,6 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         summaryLine = message
         note("OUTCOME — \(message)", model: model)
         finish(failed: message)
-    }
-
-    private func writeMarker(_ m: SoundLevelsRemeasureMarker, model: VideoScanModel) {
-        do { try m.save(catalogFile: catalogFile) } catch {
-            note("the marker \(SoundLevelsRemeasureMarker.fileName) could not be written (\(error.localizedDescription)) — a later run measures some cards again; nothing is lost", model: model)
-        }
     }
 
     // MARK: The sink
@@ -507,12 +573,21 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
 
     // MARK: Pure pieces
 
-    /// "12 card(s): 10 measured before 25 Nov 2026 at 09:00, 2 withdrawn earlier …"
-    nonisolated static func startClause(_ plan: [SoundLevelsRemeasureItem], marker: SoundLevelsRemeasureMarker) -> String {
+    /// "12 content(s): 10 with sound levels from an earlier measurement, 2 withdrawn earlier …"
+    nonisolated static func startClause(_ plan: [SoundLevelsRemeasureItem]) -> String {
         let withdrawn = plan.filter { $0.need == .withdrawn }.count
-        return "\(plan.count) card(s): \(plan.count - withdrawn) checked before \(marker.cutoff.formatted(date: .abbreviated, time: .shortened)) "
-            + "with sound levels on the Sound row, \(withdrawn) withdrawn earlier and waiting to be measured; "
+        return "\(plan.count) content(s): \(plan.count - withdrawn) with sound levels from an earlier measurement, "
+            + "\(withdrawn) withdrawn earlier and waiting to be measured; "
             + "read-only on media — rewrites only each card's Sound row"
+    }
+
+    /// "catalog rows before 100 · after 101 · difference +1 from other work during the run (…)" — `before` is
+    /// counted at START (Codex P2-7). Pure.
+    nonisolated static func rowsClause(before: Int, after: Int, written: Int) -> String {
+        let diff = after - before
+        return "catalog rows before \(before) · after \(after) · "
+            + (diff == 0 ? "difference none" : "difference \(diff > 0 ? "+" : "")\(diff) from other work during the run")
+            + " (this job adds and removes none; \(written) card(s) rewritten in place)"
     }
 
     /// "Measured again 10 · sound changes partway 1 · withdrawn 2 (not connected 2)".
@@ -550,9 +625,26 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         } catch AudioVerifyProbeError.toolUnavailable(let why) {
             throw AudioVerifyProbeError.toolUnavailable(why)
         } catch let AudioVerifyProbeError.probeFailed(why) {
-            return .notMeasured(.failed(why))
+            // The drive went away mid-read: it waits for the drive (P2-5).
+            return .notMeasured(isOnline(path) ? .failed(why) : .offline)
         } catch {
-            return .notMeasured(.failed(error.localizedDescription))
+            return .notMeasured(isOnline(path) ? .failed(error.localizedDescription) : .offline)
+        }
+    }
+
+    /// The card catalog.sqlite holds for `digest` (no repository → none).
+    static func readStoredCard(_ repository: (any CatalogRepository)?, digest: String) async -> SoundLevelsStoredCard {
+        guard let repository else { return .none }
+        do {
+            let json = try await repository.read { try $0.storedReportCardJSON(digest: digest) }
+            guard let json else { return .none }
+            guard let value = CatalogJSONValue.parse(json),
+                  let card = try? CatalogJSONValueDecoder().decode(MediaReportCard.self, from: value) else {
+                return .unreadable("its JSON does not decode")
+            }
+            return .card(card)
+        } catch {
+            return .unreadable(error.localizedDescription)
         }
     }
 }

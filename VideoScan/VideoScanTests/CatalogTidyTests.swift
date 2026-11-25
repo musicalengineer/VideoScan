@@ -190,7 +190,7 @@ struct CatalogTidySensorTests {
         }
         #expect(body.contains("CatalogTidyRow.rows(coverage.report.tidy)"), "the sheet reads the coverage report")
         let pass = try Self.code("VideoScanModel+AnalyzeCoverage.swift")
-        #expect(pass.contains("let tidy = CatalogTidyCalculator.project(records, remeasure: remeasure)"))
+        #expect(pass.contains("let tidy = CatalogTidyCalculator.project(records)"))
         #expect(tidy.contains("center.startedByUser { $0.startSoundLevelsRemeasure(model: model) }"),
                 "GH #516: the Run starts the one Re-measure Sound Levels job")
         #expect(pass.contains("report.tidy = CatalogTidyCalculator.counts(tidy, degenerateOCRCaptions: report.degenerateOCRDates)"))

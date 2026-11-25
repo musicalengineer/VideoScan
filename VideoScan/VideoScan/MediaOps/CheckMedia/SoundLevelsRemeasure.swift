@@ -10,93 +10,63 @@
 // measure has its old levels WITHDRAWN (row "not checked", saying why) until
 // it can.
 //
-// Which cards are "pre-fix" — evidence already stored, no schema change:
-//   * the card's own `checkedAt` against a CUTOFF kept in a small marker file
-//     beside the catalog (`sound-levels-remeasure.json`). The cutoff is the
-//     moment this build first looked (the scheduler's attach at launch on the
-//     master). Every card saved before it may come from older code; every
-//     card after it was saved by this build, which has the fix. Over-select
-//     is the safe direction: a card saved between the fix's merge and that
-//     first look is simply measured again and confirmed.
-//   * the Sound row holds channel-level evidence (CheckMediaRules.channelName's
-//     labels: Sound / Left / Right / Channel N). A row with no levels has
-//     nothing to correct.
-//   * a row this job withdrew carries `withdrawnLead` in its not-run reason,
-//     so a later run (or Tidy Catalog's Run) finds it again by its own words.
+// Which cards — evidence stored IN the card (Codex cycle #373 P0-2/P0-3/P1-4:
+// a cutoff date and a marker beside the catalog could hide stale cards or
+// repeat finished work; no clock and no outside file decide anything now):
+//   * `MediaReportCard.soundLevels` (additive, optional, inside the card's
+//     JSON — `media_checks.card` is a JSON TEXT column, so no DDL) names the
+//     pass that wrote the Sound row. Today's Check Media stamps every card it
+//     makes (`CheckMediaRules.card`); this job stamps every card it rewrites:
+//     `.measured`, or `.withdrawn` when it could not measure the file.
+//   * candidate = a full card whose Sound row holds channel-level evidence
+//     and carries no current `.measured` stamp, or a `.withdrawn` card.
+//     A restored older catalog is simply found again; "nothing to do" is a
+//     candidate count of 0.
+//   * waiting for a drive = withdrawn because the file's DRIVE was not
+//     connected (the row's pinned words); the scheduler re-runs the job when
+//     that drive is connected. Withdrawn for any other reason (moved,
+//     changed size, unmeasurable) stays a candidate for a run by hand only,
+//     so nothing repeats by itself forever.
 //
-// Resume: cards are walked in record-id order; the marker keeps the last id
-// whose result is SAVED (`cursor`), so Stop / quit / a failed save resumes
-// there. `walkedAt` says the pre-fix walk reached the end: after it only
-// withdrawn rows are candidates. `completedAt` (the done marker) is set only
-// when, besides, NO card waits for a drive: a card withdrawn because its
-// drive was not connected keeps the job unfinished, "waiting for N drives"
-// (OUTCOME, Tidy). The scheduler starts the job again by itself whenever
-// such a card's drive is connected (the app's own volume signal,
-// `VolumeReachability.isVolumeReachable`) — a drive that never returns
-// blocks nothing else and starts nothing. Tidy's Run works by hand any time.
+// The only file beside the catalog, `sound-levels-remeasure.json`, holds the
+// scheduler's last unattended start (one per night, a Stop holds until the
+// next — Codex P2-6). Losing it can at worst start one extra run that night;
+// it never hides or repeats a card.
 //
-// Memory: a plan item is ~300 B (ids, path, the Sound row, the date) —
-// ~30 MB at 100k pre-fix cards, the worst case; the marker is < 1 KB.
+// Memory: a plan item is ~400 B (ids of the copies, paths, the Sound row) —
+// ~40 MB at 100k candidate cards, the worst case.
 //
-// (For Rick: the marker ≈ a tiny journal file; the cursor ≈ "last LSN
-// applied", so a restart replays nothing that was already made durable.)
+// (For Rick: the stamp ≈ a schema-version number inside each record's blob,
+// so "which rows still need the migration" is a property of the data.)
 
 import Foundation
 import VideoScanCore
 
-// MARK: - The marker (beside the catalog)
+// MARK: - The scheduler's one remembered fact (beside the catalog)
 
-/// The job's whole persistent state. Written atomically; never in the catalog.
-struct SoundLevelsRemeasureMarker: Codable, Sendable, Equatable {
-    /// Cards checked before this moment may hold pre-fix levels. Set once.
-    var cutoff: Date
-    /// The last pre-fix card (record id, uuidString order) whose result is
-    /// saved in the catalog; nil = from the start.
-    var cursor: String?
-    /// When a run walked every pre-fix card to the end. nil = not yet.
-    var walkedAt: Date?
-    /// Walked, and no card waits for a drive: done. nil = not yet.
-    var completedAt: Date?
-    /// The last finished run's one-line count.
-    var lastSummary: String?
+/// When the scheduler last started the job by itself. An optimisation and a
+/// courtesy (Stop holds until the next night), never a correctness input.
+struct SoundLevelsRemeasureSchedule: Codable, Sendable, Equatable {
+    var lastUnattendedStart: Date?
 
     static let fileName = "sound-levels-remeasure.json"
-
-    var isDone: Bool { completedAt != nil }
-    /// The pre-fix walk reached the end (older markers: completedAt).
-    var isWalked: Bool { walkedAt != nil || completedAt != nil }
 
     static func url(catalogFile: String) -> URL {
         URL(fileURLWithPath: (catalogFile as NSString).deletingLastPathComponent, isDirectory: true)
             .appendingPathComponent(fileName)
     }
 
-    /// nil when absent. An unreadable marker throws (the caller decides).
-    static func load(catalogFile: String) throws -> SoundLevelsRemeasureMarker? {
-        let url = url(catalogFile: catalogFile)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
+    /// Absent or unreadable → no remembered start.
+    static func load(catalogFile: String) -> SoundLevelsRemeasureSchedule {
+        guard let data = try? Data(contentsOf: url(catalogFile: catalogFile)) else { return .init() }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(SoundLevelsRemeasureMarker.self, from: data)
-    }
-
-    /// The marker, made now when there is none. An unreadable one is
-    /// replaced by a fresh one with the cutoff NOW (over-select: every card
-    /// with levels is measured again — never fewer), and `replaced` says so.
-    static func loadOrCreate(catalogFile: String, now: Date) -> (marker: SoundLevelsRemeasureMarker, created: Bool, replaced: Bool) {
-        do {
-            if let m = try load(catalogFile: catalogFile) { return (m, false, false) }
-            return (SoundLevelsRemeasureMarker(cutoff: now), true, false)
-        } catch {
-            return (SoundLevelsRemeasureMarker(cutoff: now), true, true)
-        }
+        return (try? decoder.decode(Self.self, from: data)) ?? .init()
     }
 
     func save(catalogFile: String) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: Self.url(catalogFile: catalogFile), options: .atomic)
     }
 }
@@ -107,7 +77,7 @@ enum SoundLevelsRemeasureRules {
 
     /// Why a card is in the plan.
     enum Need: Sendable, Equatable {
-        /// Saved before the cutoff with channel levels on its Sound row.
+        /// Channel levels on the Sound row from a pass with no current stamp.
         case prefix
         /// Its levels were withdrawn by an earlier run; waiting to be measured.
         case withdrawn
@@ -142,22 +112,39 @@ enum SoundLevelsRemeasureRules {
         return reason.hasPrefix(withdrawnLead)
     }
 
-    /// Whether this card is a candidate, and why. O(rows). Pure.
+    /// The card's Sound row was withdrawn by this job (stamp, else its words).
+    static func isWithdrawn(_ card: MediaReportCard) -> Bool {
+        card.soundLevels?.state == .withdrawn || (card.check(.sound).map(isWithdrawnRow) ?? false)
+    }
+
+    /// Waiting for its drive: withdrawn because the drive was not connected.
+    static func isWaitingForDrive(_ card: MediaReportCard) -> Bool {
+        isWithdrawn(card) && (card.check(.sound).map(isWaitingForDrive) ?? false)
+    }
+
+    /// Whether this card is a candidate, and why — from the card alone (its
+    /// stamp and its Sound row). O(rows). Pure.
     /// `live` = the catalog row has no removal marker: a withdrawn row on a
     /// removed file is not waited for (its file is not coming back).
-    /// A card dated after `now` (+ slack) cannot have been saved by this
-    /// build: a clock that stepped back or a copied record — its levels are
-    /// no better proven than a pre-fix card's, so it is measured too.
-    static func need(_ card: MediaReportCard?, recordID: UUID, live: Bool,
-                     marker: SoundLevelsRemeasureMarker, now: Date) -> Need? {
+    static func need(_ card: MediaReportCard?, live: Bool) -> Need? {
         guard let card, card.tier == .full, let row = card.check(.sound) else { return nil }
-        if isWithdrawnRow(row) { return live ? .withdrawn : nil }
-        let suspectDate = card.checkedAt < marker.cutoff
-            || card.checkedAt > now.addingTimeInterval(CatalogRealityPolicy.futureSlack)
-        guard !marker.isWalked, suspectDate,
+        if isWithdrawn(card) { return live ? .withdrawn : nil }
+        guard card.soundLevels?.isCurrentMeasurement != true,
               row.evidence.contains(where: isChannelLevel) else { return nil }
-        if let cursor = marker.cursor, recordID.uuidString <= cursor { return nil }
         return .prefix
+    }
+
+    /// Two copies' cards are the same card (a stored card's date is whole
+    /// seconds: compared to the second). Pure.
+    static func sameCard(_ a: MediaReportCard, _ b: MediaReportCard) -> Bool {
+        var a2 = a, b2 = b
+        a2.checkedAt = Date(timeIntervalSince1970: a.checkedAt.timeIntervalSince1970.rounded(.down))
+        b2.checkedAt = Date(timeIntervalSince1970: b.checkedAt.timeIntervalSince1970.rounded(.down))
+        if let ra = a2.repairedCopy, let rb = b2.repairedCopy {
+            a2.repairedCopy?.repairedAt = Date(timeIntervalSince1970: ra.repairedAt.timeIntervalSince1970.rounded(.down))
+            b2.repairedCopy?.repairedAt = Date(timeIntervalSince1970: rb.repairedAt.timeIntervalSince1970.rounded(.down))
+        }
+        return a2 == b2
     }
 
     // MARK: What one file's pass produced
@@ -201,6 +188,8 @@ enum SoundLevelsRemeasureRules {
         /// Today's pass found the sound changes partway: no levels kept.
         case reconfigured
         case withdrawn(NotMeasured)
+
+        var isWithdrawn: Bool { if case .withdrawn = self { return true }; return false }
     }
 
     static func result(of r: Remeasured) -> Result {
@@ -246,6 +235,7 @@ enum SoundLevelsRemeasureRules {
         var out = card
         out.checks = card.checks.map { $0.kind == .sound ? row : $0 }
         out.soundMeasuredSilent = silent
+        out.soundLevels = result(of: r).isWithdrawn ? .withdrawn : .measured
         if card.check(.sound)?.verdict != row.verdict {
             let timing = card.checks.contains { $0.verdict == .problem && CheckMediaRules.timingKinds.contains($0.kind) }
                 ? card.headline : nil

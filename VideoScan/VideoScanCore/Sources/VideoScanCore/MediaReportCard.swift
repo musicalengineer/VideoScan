@@ -214,6 +214,41 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     /// it against the file's date at display time, so a later date change
     /// never leaves a stale verdict.
     public var soundMeasuredSilent: Bool?
+    /// Which sound-levels pass wrote the Sound row (GH #516; additive,
+    /// 2026-11-25). nil = a card saved before this field: its channel levels
+    /// may be the last filter graph's only (pre-2441ceb42) and are not trusted
+    /// until Re-measure Sound Levels measures the file again. Stored inside
+    /// the card's JSON (`media_checks.card`), so it needs no DDL: an older
+    /// build ignores the key, a newer one reads nil from an older card.
+    public var soundLevels: SoundLevelsStamp?
+
+    /// The sound-levels pass that produced (or withdrew) the Sound row.
+    public struct SoundLevelsStamp: Codable, Sendable, Equatable {
+        public enum State: String, Codable, Sendable {
+            /// Today's pass wrote the row (its levels, or none and why).
+            case measured
+            /// The old levels were withdrawn: the file could not be measured
+            /// again yet. Still a Re-measure candidate.
+            case withdrawn
+        }
+        public var version: Int
+        public var state: State
+
+        /// 2 = the pass that keeps no levels after a rebuilt filter graph
+        /// (2441ceb42). Bump it when a measurement improves again: every
+        /// card with a lower version becomes a candidate (DECISIONS 2026-11-25).
+        public static let currentVersion = 2
+        public static let measured = SoundLevelsStamp(version: currentVersion, state: .measured)
+        public static let withdrawn = SoundLevelsStamp(version: currentVersion, state: .withdrawn)
+
+        public init(version: Int, state: State) {
+            self.version = version
+            self.state = state
+        }
+
+        /// A row today's pass stands behind.
+        public var isCurrentMeasurement: Bool { state == .measured && version >= Self.currentVersion }
+    }
 
     public init(tier: Tier, checkedAt: Date, fileSizeBytes: Int64,
                 headline: String, checks: [MediaCheck], repairedCopy: MediaRepairLink? = nil,

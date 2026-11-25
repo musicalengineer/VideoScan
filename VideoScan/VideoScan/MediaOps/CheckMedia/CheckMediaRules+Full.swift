@@ -238,10 +238,15 @@ extension CheckMediaRules {
 
     static func card(tier: MediaReportCard.Tier, checks: [MediaCheck],
                      quick: CheckMediaQuickInputs, at date: Date) -> MediaReportCard {
-        MediaReportCard(tier: tier, checkedAt: date,
-                        fileSizeBytes: quick.facts.sizeBytes ?? quick.videoFacts.fileSizeBytes,
-                        headline: headline(checks: checks, quick: quick, tier: tier),
-                        checks: checks)
+        var card = MediaReportCard(tier: tier, checkedAt: date,
+                                   fileSizeBytes: quick.facts.sizeBytes ?? quick.videoFacts.fileSizeBytes,
+                                   headline: headline(checks: checks, quick: quick, tier: tier),
+                                   checks: checks)
+        // Today's sound-levels pass wrote (or did not run) this Sound row:
+        // stamped, so Re-measure Sound Levels never takes it for a pre-fix
+        // card (#516; the stamp lives inside the card's JSON).
+        card.soundLevels = .measured
+        return card
     }
 
     /// The card a quick Verify writes: the quick rows, the full-tier rows

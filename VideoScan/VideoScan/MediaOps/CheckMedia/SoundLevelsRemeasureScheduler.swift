@@ -2,16 +2,18 @@
 // itself ONCE, unattended, in the away window (GH #516; DECISIONS 2026-11-25:
 // "re-measured in the background … best overnight").
 //
-// One sentence: on the master at launch the scheduler makes sure the marker
-// exists (that moment is the cutoff — SoundLevelsRemeasure.swift), then every
-// 5 minutes, while the pre-fix walk is unfinished or a card withdrawn for an
-// absent drive can be measured because that drive is connected now (the
-// app's own signal, `VolumeReachability.isVolumeReachable`), it starts THE job (rule 4: the same
+// One sentence: on the master, every 5 minutes, while a card's levels come
+// from an unstamped (pre-fix) pass or a card withdrawn for an absent drive
+// can be measured because that drive is connected now (the app's own signal,
+// `VolumeReachability.isVolumeReachable`) — both read from the cards
+// themselves — it starts THE job (rule 4: the same
 // `startSoundLevelsRemeasure` Tidy Catalog's Run calls) in the away window
 // (03:30–11:00, DailyFileCheckPolicy's) or after 15 min idle, never while
 // the catalog cannot be written, a scan runs or the job already runs; one
 // unattended start per day slot, so a run Rick stopped stays stopped until
-// the next night.
+// the next night — remembered beside the catalog
+// (`SoundLevelsRemeasureSchedule`), so a relaunch does not start it again in
+// the same slot (Codex P2-6).
 //
 // State: `SoundLevelsRemeasureScheduler`, a small @MainActor feature store
 // (rule 12: no VideoScanModel extension) owned by VideoScanApp, attached on
@@ -19,8 +21,8 @@
 // tests drive it through `SoundLevelsRemeasureEnvironment`'s closures.
 //
 // Cost: tick() is O(1) outside the window; inside it (and not yet started
-// this slot) one < 1 KB marker read and, once walked, one O(records) pass
-// over the Sound rows (`autoRunDue`, ~ms at 100k) every 5 minutes. Memory: a few small values.
+// this slot) one O(records) pass over the cards (`autoRunDue`, ~ms at 100k)
+// every 5 minutes. Memory: a few small values.
 //
 // (For Rick: a struct of closures ≈ a C++ struct of std::function members.)
 
@@ -55,8 +57,9 @@ struct SoundLevelsRemeasureEnvironment {
     /// The pre-fix walk is unfinished, or a card waiting for its drive can be
     /// measured now (`SoundLevelsRemeasureItem.autoRunDue`). O(records).
     var isDue: () -> Bool = { false }
-    /// Make the marker (the cutoff) if there is none — at attach.
-    var ensureMarker: () -> Void = {}
+    /// The remembered last unattended start, and its writer.
+    var lastStarted: () -> Date? = { nil }
+    var rememberStart: (Date) -> Void = { _ in }
     var busy: () -> String? = { nil }
     var idleSeconds: () -> TimeInterval = { 0 }
     /// Start THE job; false when it was refused.
@@ -74,19 +77,12 @@ extension SoundLevelsRemeasureEnvironment {
         let catalogFile = model.catalogStore.fileLocation
         env.isDue = { [weak model] in
             guard let model else { return false }
-            // An unreadable marker is due (the job replaces it).
-            guard let marker = try? SoundLevelsRemeasureMarker.load(catalogFile: catalogFile) else { return true }
-            return SoundLevelsRemeasureItem.autoRunDue(model.records, marker: marker,
-                                                       isOnline: { VolumeReachability.isVolumeReachable(path: $0) })
+            return SoundLevelsRemeasureItem.autoRunDue(model.records, isOnline: { VolumeReachability.isVolumeReachable(path: $0) })
         }
-        env.ensureMarker = { [weak model] in
-            let loaded = SoundLevelsRemeasureMarker.loadOrCreate(catalogFile: catalogFile, now: Date())
-            guard loaded.created, !loaded.replaced else { return }
-            do {
-                try loaded.marker.save(catalogFile: catalogFile)
-                model?.log("\(SoundLevelsRemeasureJob.title): cards checked before now are measured again once (#516) — cutoff recorded")
-            } catch {
-                model?.log("\(SoundLevelsRemeasureJob.title): the marker could not be written (\(error.localizedDescription)); the job will record its cutoff when it starts")
+        env.lastStarted = { SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).lastUnattendedStart }
+        env.rememberStart = { [weak model] date in
+            do { try SoundLevelsRemeasureSchedule(lastUnattendedStart: date).save(catalogFile: catalogFile) } catch {
+                model?.log("\(SoundLevelsRemeasureJob.title): its last start could not be remembered (\(error.localizedDescription)); a relaunch tonight may start it once more")
             }
         }
         env.busy = { [weak model, weak center] in
@@ -115,7 +111,9 @@ extension SoundLevelsRemeasureEnvironment {
 final class SoundLevelsRemeasureScheduler {
 
     private(set) var env: SoundLevelsRemeasureEnvironment
-    private(set) var lastStarted: Date?
+    /// This session's last start, else the remembered one (P2-6).
+    private var sessionStarted: Date?
+    var lastStarted: Date? { sessionStarted ?? env.lastStarted() }
     private var saidWaiting: String?
     private var loop: Task<Void, Never>?
 
@@ -131,7 +129,6 @@ final class SoundLevelsRemeasureScheduler {
     func attach(_ env: SoundLevelsRemeasureEnvironment, firstLookAfter: TimeInterval = 180) {
         guard loop == nil else { return }
         self.env = env
-        env.ensureMarker()
         env.note(Self.onWords)
         loop = Task { [weak self] in
             try? await Task.sleep(for: .seconds(firstLookAfter))
@@ -164,7 +161,8 @@ final class SoundLevelsRemeasureScheduler {
             saidWaiting = words
         case .start:
             saidWaiting = nil
-            lastStarted = now
+            sessionStarted = now
+            env.rememberStart(now)
             env.note("starting by itself (the background re-measure)")
             if !env.start() { env.note("refused to start — see its row in Media File Operations") }
         }

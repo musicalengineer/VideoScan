@@ -46,10 +46,7 @@ extension VideoScanModel {
         analyzeCoverageTask?.cancel()
         let inputs = AnalyzeCoverageCalculator.project(records)
         let missing = MissingCopyCalculator.project(records)
-        // Re-measure Sound Levels' marker (< 1 KB, beside the catalog): its
-        // count rides this pass with the job's own predicate (#516).
-        let remeasure = try? SoundLevelsRemeasureMarker.load(catalogFile: catalogStore.fileLocation)
-        let tidy = CatalogTidyCalculator.project(records, remeasure: remeasure)
+        let tidy = CatalogTidyCalculator.project(records)
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let scope = analyzeCoverageScope
         let catalogFile = catalogStore.fileLocation

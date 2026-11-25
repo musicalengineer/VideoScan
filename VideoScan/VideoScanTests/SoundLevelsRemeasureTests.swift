@@ -19,7 +19,8 @@
 //   scale      the plan over 100k records inside a time budget.
 //   media      mp4/h264, mov/prores, mkv/ffv1+pcm, mxf/mpeg2, avi/dv and a
 //              rate-changing NUT through the REAL measurement; files unchanged.
-//   isolation  a corrupt marker, poisoned cards (future date, odd evidence,
+//   isolation  a corrupt / unwritable schedule file, a restored old catalog,
+//              copies of one content disagreeing, poisoned cards (future date, odd evidence,
 //              quick tier, removed rows) — never fewer cards than needed.
 //   sensor     one engine (the Sound row rule, the job's start), no
 //              VideoScanModel extension, the scheduler on the master only,
@@ -104,15 +105,12 @@ enum RemeasureFixture {
         return m
     }
 
-    /// A marker whose cutoff is now (every card above is pre-fix).
-    static func marker(_ m: VideoScanModel, cutoff: Date = Date()) throws {
-        try FileManager.default.createDirectory(atPath: (m.catalogStore.fileLocation as NSString).deletingLastPathComponent,
-                                                withIntermediateDirectories: true)
-        try SoundLevelsRemeasureMarker(cutoff: cutoff).save(catalogFile: m.catalogStore.fileLocation)
-    }
+    /// Nothing is owed: no candidate card at all (the job's "done").
+    static func nothingOwed(_ records: [VideoRecord]) -> Bool { SoundLevelsRemeasureItem.plan(records).isEmpty }
 
-    static func readMarker(_ m: VideoScanModel) -> SoundLevelsRemeasureMarker? {
-        try? SoundLevelsRemeasureMarker.load(catalogFile: m.catalogStore.fileLocation)
+    /// Only cards withdrawn earlier remain (no unstamped levels).
+    static func onlyWithdrawn(_ records: [VideoRecord]) -> Bool {
+        SoundLevelsRemeasureItem.plan(records).allSatisfy { $0.need == .withdrawn }
     }
 
     static func job(_ m: VideoScanModel, save: Bool? = true,
@@ -166,7 +164,6 @@ struct SoundLevelsRemeasureLogicTests {
         let silent = RemeasureFixture.record("/Volumes/Tapes/rate_change.mov", size: 5_000,
                                              card: RemeasureFixture.preFixSilentCard(size: 5_000))
         m.records = [rec, silent]
-        try RemeasureFixture.marker(m)
         // The bug, as Rick saw it: the saved card's levels shown as loudness.
         #expect(RemeasureFixture.shownLevels(rec.mediaReportCard).mediaInfo.count == 2)
 
@@ -192,7 +189,6 @@ struct SoundLevelsRemeasureLogicTests {
         let rec = RemeasureFixture.record("/Volumes/T/cut_short.mov", size: 9_000,
                                           card: RemeasureFixture.card(levels: [-18, -20], size: 9_000))
         m.records = [rec]
-        try RemeasureFixture.marker(m)
         let short = MasterArchiveTestSupport.soundDiagnosis(channels: [-18, -20],
                                                             shortDecode: AudioShortDecode(missingSeconds: 3, statedSeconds: 12))
         let j = RemeasureFixture.job(m) { _, _ in .measured(short) }
@@ -210,7 +206,6 @@ struct SoundLevelsRemeasureLogicTests {
         let old = RemeasureFixture.card(levels: [-30, -31], size: 7_000)
         let rec = RemeasureFixture.record("/Volumes/T/ok.mov", size: 7_000, card: old)
         m.records = [rec]
-        try RemeasureFixture.marker(m)
         let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.healthy(-18, -19)) }
         await RemeasureFixture.run(j)
         let card = try #require(rec.mediaReportCard)
@@ -219,40 +214,41 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(card.headline == old.headline && card.checkedAt == old.checkedAt && card.check(.decode) == old.check(.decode))
         #expect(card.soundMeasuredSilent == false)
         #expect(j.totals.refreshed == 1)
-        // Done: the marker says so, and nothing is planned again.
-        let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isDone && marker.cursor == nil)
-        #expect(SoundLevelsRemeasureItem.plan(m.records, marker: marker).isEmpty)
+        // Done: the rewritten card carries today's stamp; nothing is planned again.
+        #expect(card.soundLevels == .measured)
+        #expect(RemeasureFixture.nothingOwed(m.records))
         if case .finished(let s) = j.state { #expect(s.hasPrefix("Measured again 1")) } else { Issue.record("\(j.state)") }
     }
 
-    @Test("the plan: full cards dated before the cutoff with levels on the Sound row; the Tidy count is the same predicate")
+    @Test("the plan reads the card alone: full cards with levels and no current stamp (whatever their date); one item per content; the Tidy count is the same predicate")
     func thePlanPredicate() throws {
-        let cutoff = Date()
-        let marker = SoundLevelsRemeasureMarker(cutoff: cutoff)
         let pre = RemeasureFixture.record("/V/pre.mov", size: 1, card: RemeasureFixture.card(levels: [-20, -20], size: 1))
-        let post = RemeasureFixture.record("/V/post.mov", size: 1,
-                                           card: RemeasureFixture.card(levels: [-20, -20], size: 1, checkedAt: cutoff.addingTimeInterval(10)))
+        var stampedCard = RemeasureFixture.card(levels: [-20, -20], size: 1)
+        stampedCard.soundLevels = .measured
+        let post = RemeasureFixture.record("/V/post.mov", size: 1, card: stampedCard)
+        var oldStamp = RemeasureFixture.card(levels: [-20, -20], size: 1, checkedAt: Date().addingTimeInterval(86_400 * 30))
+        oldStamp.soundLevels = .init(version: 1, state: .measured)
+        let older = RemeasureFixture.record("/V/older-pass.mov", size: 1, card: oldStamp)
         let quick = RemeasureFixture.record("/V/quick.mov", size: 1, card: RemeasureFixture.card(levels: [-20], size: 1, tier: .quick))
         var noLevels = RemeasureFixture.card(levels: [], size: 1)
         noLevels.checks = noLevels.checks.map { $0.kind == .sound ? MediaCheck(kind: .sound, verdict: .ok, sentence: "x", evidence: [MediaEvidence("Dated", "1990")]) : $0 }
         let none = RemeasureFixture.record("/V/nolevels.mov", size: 1, card: noLevels)
         let noCard = RemeasureFixture.record("/V/nocard.mov", size: 1, card: nil)
         let mono = RemeasureFixture.record("/V/mono.wav", size: 1, card: RemeasureFixture.card(levels: [-20, -20, -20], size: 1))
-        let records = [pre, post, quick, none, noCard, mono]
-        let plan = SoundLevelsRemeasureItem.plan(records, marker: marker, now: cutoff.addingTimeInterval(20))
-        #expect(Set(plan.map(\.filename)) == ["pre.mov", "mono.wav"])
-        #expect(plan.map(\.id.uuidString) == plan.map(\.id.uuidString).sorted(), "cursor order")
-        let projected = CatalogTidyCalculator.project(records, remeasure: marker)
+        let records = [pre, post, older, quick, none, noCard, mono]
+        let plan = SoundLevelsRemeasureItem.plan(records)
+        #expect(Set(plan.map(\.filename)) == ["pre.mov", "older-pass.mov", "mono.wav"])
+        let projected = CatalogTidyCalculator.project(records, isOnline: { _ in true })
         #expect(projected.soundLevelsToRemeasure == plan.count)
-        #expect(CatalogTidyCalculator.project(records).soundLevelsToRemeasure == 0, "no marker yet: no count")
-        // The Tidy row offers Run and joins the menu's total.
         let counts = CatalogTidyCalculator.counts(projected, degenerateOCRCaptions: 0)
         #expect(CatalogTidyRow.rows(counts).first { $0.kind == .soundLevelsToRemeasure }?.runTitle == "Run")
         #expect(counts.menuTotal == plan.count)
-        // Done: only withdrawn rows stay candidates.
-        var done = marker; done.completedAt = Date()
-        #expect(SoundLevelsRemeasureItem.plan(records, marker: done).isEmpty)
+        // Today's Check Media stamps every card it makes: never a candidate.
+        let fresh = CheckMediaRules.card(tier: .full, checks: [MediaCheck(kind: .sound, verdict: .ok, sentence: "x",
+                                                                         evidence: [MediaEvidence("Left", "-18 dB average")])],
+                                         quick: try CheckMediaFixtures.healthy(), at: Date())
+        #expect(fresh.soundLevels == .measured)
+        #expect(SoundLevelsRemeasureRules.need(fresh, live: true) == nil)
     }
 
     @Test("not connected / not the size checked: levels withdrawn (never shown as current), counted; measured when the file is back")
@@ -266,7 +262,6 @@ struct SoundLevelsRemeasureLogicTests {
         let changed = RemeasureFixture.record(changedPath.path, size: 3_000,
                                               card: RemeasureFixture.card(levels: [-20, -21], size: 3_000))
         m.records = [offline, changed]
-        try RemeasureFixture.marker(m)
         // The REAL measurement: it never reaches ffmpeg for these two.
         let j = SoundLevelsRemeasureJob(model: m)
         j.toolsAvailable = { true }
@@ -283,23 +278,21 @@ struct SoundLevelsRemeasureLogicTests {
         }
         #expect(offline.mediaReportCard?.check(.sound)?.sentence.contains("not connected") == true)
         #expect(changed.mediaReportCard?.check(.sound)?.sentence.contains("no longer the size") == true)
-        // Walked, NOT done: one card waits for its drive; the plan (and Tidy) still name both.
-        let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isWalked && !marker.isDone)
+        // NOT done: one card waits for its drive; the plan (and Tidy) still name both.
+        #expect(RemeasureFixture.onlyWithdrawn(m.records) && !RemeasureFixture.nothingOwed(m.records))
         if case .finished(let s) = j.state { #expect(s.contains("waiting for 1 drive (1 card)"), "\(s)") }
-        let plan = SoundLevelsRemeasureItem.plan(m.records, marker: marker)
+        let plan = SoundLevelsRemeasureItem.plan(m.records)
         #expect(plan.count == 2 && plan.allSatisfy { $0.need == .withdrawn })
         // The drive is back: a run by hand measures them.
         let again = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.healthy(-18, -19)) }
         await RemeasureFixture.run(again)
         #expect(again.totals.refreshed == 2)
         #expect(offline.mediaReportCard.map { RemeasureFixture.shownLevels($0).mediaInfo.count } == 2)
-        #expect(SoundLevelsRemeasureItem.plan(m.records, marker: try #require(RemeasureFixture.readMarker(m))).isEmpty)
-        #expect(RemeasureFixture.readMarker(m)?.isDone == true, "nothing waits any more: done")
+        #expect(RemeasureFixture.nothingOwed(m.records), "nothing waits any more: done")
         // A withdrawn row on a removed file is not waited for.
         var withdrawn = try #require(changed.mediaReportCard)
         withdrawn = SoundLevelsRemeasureRules.rewrite(withdrawn, with: .notMeasured(.offline), context: changed.soundPresenceContext)
-        #expect(SoundLevelsRemeasureRules.need(withdrawn, recordID: changed.id, live: false, marker: marker, now: Date()) == nil)
+        #expect(SoundLevelsRemeasureRules.need(withdrawn, live: false) == nil)
     }
 
     @Test("Stop mid-run: cards before the stop are saved and rewritten, the rest untouched; a new run resumes at the cursor and finishes")
@@ -308,7 +301,6 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         m.records = (0..<5).map { RemeasureFixture.record("/Volumes/T/f\($0).mov", size: 1_000,
                                                           card: RemeasureFixture.preFixReconfiguredCard(size: 1_000)) }
-        try RemeasureFixture.marker(m)
         let ordered = m.records.sorted { $0.id.uuidString < $1.id.uuidString }
         let measured = MeasuredPaths()
         final class JobRef: @unchecked Sendable { weak var job: SoundLevelsRemeasureJob? }
@@ -331,8 +323,8 @@ struct SoundLevelsRemeasureLogicTests {
             let levels = RemeasureFixture.shownLevels(r.mediaReportCard).mediaInfo.count
             #expect(levels == (i < 2 ? 0 : 2), "card \(i): \(levels) level(s) shown")
         }
-        let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.cursor == ordered[1].id.uuidString && !marker.isDone)
+        // No cursor: the stamp on each rewritten card IS the progress.
+        #expect(SoundLevelsRemeasureItem.plan(m.records).map(\.id) == ordered.suffix(3).map(\.id))
 
         let resumed = MeasuredPaths()
         let j2 = RemeasureFixture.job(m) { path, _ in
@@ -342,7 +334,7 @@ struct SoundLevelsRemeasureLogicTests {
         await RemeasureFixture.run(j2)
         #expect(await resumed.paths == ordered.suffix(3).map(\.fullPath), "resumes at the first card not yet saved")
         #expect(ordered.allSatisfy { RemeasureFixture.shownLevels($0.mediaReportCard).mediaInfo.isEmpty })
-        #expect(RemeasureFixture.readMarker(m)?.isDone == true)
+        #expect(RemeasureFixture.nothingOwed(m.records))
     }
 
     @Test("Pause holds before the next file; Resume continues; nothing is written while paused")
@@ -351,7 +343,6 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         m.records = (0..<3).map { RemeasureFixture.record("/Volumes/T/p\($0).mov", size: 1_000,
                                                           card: RemeasureFixture.card(levels: [-30, -30], size: 1_000)) }
-        try RemeasureFixture.marker(m)
         let measured = MeasuredPaths()
         let j = RemeasureFixture.job(m) { path, _ in
             await measured.add(path)
@@ -374,13 +365,12 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         let cards = (0..<3).map { _ in RemeasureFixture.preFixReconfiguredCard(size: 1_000) }
         m.records = cards.enumerated().map { RemeasureFixture.record("/Volumes/T/s\($0.offset).mov", size: 1_000, card: $0.element) }
-        try RemeasureFixture.marker(m)
         let j = RemeasureFixture.job(m, save: false) { _, _ in .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
         guard case .failed(let words) = j.state else { Issue.record("\(j.state)"); return }
         #expect(words.contains("could not be saved"))
         #expect(zip(m.records, cards).allSatisfy { $0.mediaReportCard == $1 }, "every unsaved rewrite undone")
-        #expect(RemeasureFixture.readMarker(m)?.cursor == nil && RemeasureFixture.readMarker(m)?.isDone == false)
+        #expect(SoundLevelsRemeasureItem.plan(m.records).count == 3, "all three still owed")
     }
 
     @Test("a card Check Media rewrote during the run (inside the debounce window) is left as it is")
@@ -389,7 +379,6 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         let rec = RemeasureFixture.record("/Volumes/T/m.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
         m.records = [rec]
-        try RemeasureFixture.marker(m)
         let fresh = RemeasureFixture.card(levels: [-12, -13], size: 1_000, checkedAt: Date())
         /// Hands the main-actor objects to the stub (it only touches them on the main actor).
         final class Box: @unchecked Sendable { let rec: VideoRecord; let model: VideoScanModel
@@ -410,7 +399,6 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         let card = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
         m.records = [RemeasureFixture.record("/Volumes/T/r.mov", size: 1_000, card: card)]
-        try RemeasureFixture.marker(m)
         let measured = MeasuredPaths()
         let noTool = RemeasureFixture.job(m) { p, _ in await measured.add(p); return .measured(RemeasureFixture.reconfigured()) }
         noTool.toolsAvailable = { false }
@@ -429,7 +417,6 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         m.records = (0..<2).map { RemeasureFixture.record("/Volumes/T/t\($0).mov", size: 1_000,
                                                           card: RemeasureFixture.preFixReconfiguredCard(size: 1_000)) }
-        try RemeasureFixture.marker(m)
         let second = m.records.sorted { $0.id.uuidString < $1.id.uuidString }[1]
         let before = second.mediaReportCard
         let secondPath = second.fullPath
@@ -440,7 +427,7 @@ struct SoundLevelsRemeasureLogicTests {
         await RemeasureFixture.run(j)
         guard case .failed = j.state else { Issue.record("\(j.state)"); return }
         #expect(second.mediaReportCard == before)
-        #expect(RemeasureFixture.readMarker(m)?.isDone == false)
+        #expect(SoundLevelsRemeasureItem.plan(m.records).contains { $0.id == second.id }, "still owed")
     }
 
     @Test("a drive offline on the first run: its cards are withdrawn and counted waiting (not done); the drive returns → the next scheduled run measures them, and only then completedAt is set")
@@ -450,7 +437,6 @@ struct SoundLevelsRemeasureLogicTests {
         let away = RemeasureFixture.record("/Volumes/Away/a.mov", size: 1_000, card: RemeasureFixture.card(levels: [-30, -30], size: 1_000))
         let here = RemeasureFixture.record("/Volumes/Here/b.mov", size: 1_000, card: RemeasureFixture.card(levels: [-30, -30], size: 1_000))
         m.records = [away, here]
-        try RemeasureFixture.marker(m)
         let drive = OnlineFlag()
         let online: @Sendable (String) -> Bool = { $0.hasPrefix("/Volumes/Here") || drive.on }
         func job() -> SoundLevelsRemeasureJob {
@@ -463,10 +449,10 @@ struct SoundLevelsRemeasureLogicTests {
         let first = job()
         await RemeasureFixture.run(first)
         #expect(first.totals.refreshed == 1 && first.totals.offline == 1)
-        var marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isWalked && !marker.isDone, "a card waits for its drive: not done")
+        #expect(RemeasureFixture.onlyWithdrawn(m.records) && !RemeasureFixture.nothingOwed(m.records),
+                "a card waits for its drive: not done")
         #expect(RemeasureFixture.shownLevels(away.mediaReportCard).mediaInfo.isEmpty, "withdrawn, never shown as current")
-        let tidy = CatalogTidyCalculator.counts(CatalogTidyCalculator.project(m.records, remeasure: marker, isOnline: online),
+        let tidy = CatalogTidyCalculator.counts(CatalogTidyCalculator.project(m.records, isOnline: online),
                                                 degenerateOCRCaptions: 0)
         #expect(tidy.soundLevelsWaitingCards == 1 && tidy.soundLevelsWaitingDrives == 1)
         #expect(CatalogTidyRow.rows(tidy).last?.detail.contains("1 of them wait for 1 drive to be connected") == true)
@@ -476,7 +462,7 @@ struct SoundLevelsRemeasureLogicTests {
         func scheduler() -> SoundLevelsRemeasureScheduler {
             var env = SoundLevelsRemeasureEnvironment()
             env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
-            env.isDue = { SoundLevelsRemeasureItem.autoRunDue(m.records, marker: RemeasureFixture.readMarker(m), isOnline: online) }
+            env.isDue = { SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: online) }
             env.start = { let j = job(); started = j; j.start(); return true }
             return SoundLevelsRemeasureScheduler(env: env)
         }
@@ -486,8 +472,7 @@ struct SoundLevelsRemeasureLogicTests {
         await started?.task?.value
         #expect(started?.totals.refreshed == 1)
         #expect(RemeasureFixture.shownLevels(away.mediaReportCard).mediaInfo.count == 2)
-        marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isDone, "only now: completedAt")
+        #expect(RemeasureFixture.nothingOwed(m.records), "only now: nothing owed")
         #expect(scheduler().tick() == .wait, "done: never again by itself")
     }
 
@@ -501,7 +486,6 @@ struct SoundLevelsRemeasureLogicTests {
         let missing = RemeasureFixture.record(dir.appendingPathComponent("moved-away.mov").path, size: 1_000,
                                               card: RemeasureFixture.card(levels: [-20, -20], size: 1_000))
         m.records = [lost] + others + [missing]
-        try RemeasureFixture.marker(m)
         let online: @Sendable (String) -> Bool = { !$0.hasPrefix("/Volumes/Lost") }
         let j = RemeasureFixture.job(m) { path, size in
             if path.hasPrefix("/Volumes/Here") { return .measured(RemeasureFixture.reconfigured()) }
@@ -512,10 +496,9 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(j.totals.reconfigured == 3 && j.totals.offline == 1 && j.totals.notFound == 1)
         #expect(others.allSatisfy { RemeasureFixture.shownLevels($0.mediaReportCard).mediaInfo.isEmpty })
         #expect(missing.mediaReportCard?.check(.sound).map(SoundLevelsRemeasureRules.isWaitingForDrive) == false)
-        let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isWalked && !marker.isDone)
+        #expect(RemeasureFixture.onlyWithdrawn(m.records) && !RemeasureFixture.nothingOwed(m.records))
         for _ in 0..<3 {
-            #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, marker: marker, isOnline: online), "nothing to start while it is away")
+            #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: online), "nothing to start while it is away")
         }
         #expect(SoundLevelsRemeasureItem.waiting(m.records, isOnline: online) == SoundLevelsRemeasureWaiting(cards: 1, drives: ["/Volumes/Lost"], ready: 0))
     }
@@ -526,16 +509,202 @@ struct SoundLevelsRemeasureLogicTests {
         let m = RemeasureFixture.model(dir)
         let rec = RemeasureFixture.record("/Volumes/T/d.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
         m.records = [rec]
-        try RemeasureFixture.marker(m)
         let j = RemeasureFixture.job(m, save: nil) { _, _ in .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
         #expect(j.savedCount == 1 && !j.saveFailed)
         let reloaded = CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true)).load()
         let card = reloaded.first { $0.id == rec.id }?.mediaReportCard
         #expect(card != nil && RemeasureFixture.shownLevels(card).mediaInfo.isEmpty)
-        let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(SoundLevelsRemeasureItem.plan(reloaded, marker: marker).isEmpty)
+        #expect(card?.soundLevels == .measured, "the stamp survives the reload")
+        #expect(RemeasureFixture.nothingOwed(reloaded))
     }
+}
+
+// MARK: - Codex cycle #373: copies of one content, mid-read loss, rows at START
+
+/// Two records of the same bytes (one whole-file digest) with `card` each.
+@MainActor
+private func twoCopies(_ m: VideoScanModel, a: MediaReportCard, b: MediaReportCard) -> (VideoRecord, VideoRecord) {
+    let digest = String(repeating: "ab", count: 32)
+    func make(_ path: String, _ card: MediaReportCard) -> VideoRecord {
+        let r = RemeasureFixture.record(path, size: 1_000, card: card)
+        r.contentFixity = ContentFixity(digest: digest, byteCount: 1_000,
+                                        stamp: FileIdentityStamp(device: 1, inode: UInt64(path.count), size: 1_000, mtimeNs: 3))
+        return r
+    }
+    let ra = make("/Volumes/T/a.mov", a), rb = make("/Volumes/U/b.mov", b)
+    m.records = [ra, rb]
+    return (ra, rb)
+}
+
+@MainActor
+@Suite("GH #516 — re-measure sound levels: Codex cycle #373 (copies, drives, schedule, rows)", .serialized)
+struct SoundLevelsRemeasureCodex373Tests {
+
+    @Test("P0-1 (memory): A was checked again; B still holds the old card — re-measuring B writes NOTHING (cards are stored per digest)")
+    func aSiblingsNewerCardIsNeverOverwritten() async throws {
+        let dir = try RemeasureFixture.scratch("sib"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        var fresh = RemeasureFixture.card(levels: [-12, -13], size: 1_000, checkedAt: Date())
+        fresh.soundLevels = .measured
+        fresh.repairedCopy = MediaRepairLink(recordID: UUID(), path: "/Volumes/T/a-repaired.mov", repairedAt: Date(), fixes: ["x"])
+        let old = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
+        let (a, b) = twoCopies(m, a: fresh, b: old)
+        let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        #expect(a.mediaReportCard == fresh && b.mediaReportCard == old, "nothing written to either copy")
+        #expect(j.totals.changedMeanwhile == 1 && j.totals.cardsWritten == 0)
+    }
+
+    @Test("P0-1: copies that agree are ONE item; every copy gets the same rewritten card")
+    func agreeingCopiesAreOneItem() async throws {
+        let dir = try RemeasureFixture.scratch("sib2"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        let old = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
+        let (a, b) = twoCopies(m, a: old, b: old)
+        #expect(SoundLevelsRemeasureItem.plan(m.records).count == 1)
+        let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        #expect(j.totals.cardsWritten == 2 && a.mediaReportCard == b.mediaReportCard)
+        #expect(RemeasureFixture.shownLevels(b.mediaReportCard).mediaInfo.isEmpty)
+    }
+
+    @Test("P0-1: the card stored for the digest differs from the one read (or cannot be read) → nothing written")
+    func theStoredCardDecides() async throws {
+        let dir = try RemeasureFixture.scratch("stored"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        let old = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
+        let (a, _) = twoCopies(m, a: old, b: old)
+        var newer = RemeasureFixture.card(levels: [-12, -13], size: 1_000, checkedAt: Date())
+        newer.soundLevels = .measured
+        for stored in [SoundLevelsStoredCard.card(newer), .unreadable("bad JSON")] {
+            let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+            j.storedCard = { _ in stored }
+            await RemeasureFixture.run(j)
+            #expect(a.mediaReportCard == old && j.totals.changedMeanwhile == 1)
+        }
+        // The same card stored (its date in whole seconds, as the store keeps it) → written.
+        var same = old
+        same.checkedAt = Date(timeIntervalSince1970: old.checkedAt.timeIntervalSince1970.rounded(.down))
+        let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        j.storedCard = { _ in .card(same) }
+        await RemeasureFixture.run(j)
+        #expect(j.totals.cardsWritten == 2)
+    }
+
+    @Test("P0-1 on catalog.sqlite (Codex's SQL case): A's newer card, its other rows and its repaired-copy link survive B's re-measure and a relaunch")
+    func newerCardSurvivesOnSQLite() async throws {
+        let scene = try CutoverScene.make("remeasure_p01"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let media = scene.folder.appendingPathComponent("media", isDirectory: true)
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let size = 32 * 1024
+        let aURL = try MasterArchiveTestSupport.writeBlob(at: media.appendingPathComponent("a.mov"), bytes: size, seed: 516)
+        let bURL = media.appendingPathComponent("b.mov")
+        try FileManager.default.copyItem(at: aURL, to: bURL)
+        let digest = try scene.sha256(aURL)
+        let old = RemeasureFixture.preFixReconfiguredCard(size: Int64(size))
+        var ids: [UUID] = []
+        for url in [aURL, bURL] {
+            let r = try scene.freshCopy(of: .healthy, path: url.path)
+            r.sizeBytes = Int64(size)
+            r.contentFixity = ContentFixity.captured(path: url.path, digest: digest, byteCount: Int64(size))
+            r.mediaReportCard = old
+            scene.model.records.append(r)
+            ids.append(r.id)
+            try #require(scene.model.saveCatalogNow(), "fixture: stored")
+        }
+        var model = try await relaunchRemeasure(scene, from: scene.model)
+        // Verify checks A again: a newer card, a repaired-copy link.
+        var fresh = RemeasureFixture.card(levels: [-12, -13], size: Int64(size), checkedAt: Date())
+        fresh.soundLevels = .measured
+        fresh.repairedCopy = MediaRepairLink(recordID: UUID(), path: media.appendingPathComponent("a-repaired.mov").path,
+                                             repairedAt: Date(), fixes: ["balance"])
+        try #require(model.record(forID: ids[0]) != nil)
+        model.record(forID: ids[0])?.mediaReportCard = fresh
+        try #require(model.saveCatalogNow())
+        let j = SoundLevelsRemeasureJob(model: model)
+        j.toolsAvailable = { true }
+        j.measure = { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        #expect(j.totals.cardsWritten == 0, Comment(rawValue: SoundLevelsRemeasureJob.summaryCounts(j.totals)))
+        model = try await relaunchRemeasure(scene, from: model)
+        for id in ids {
+            let card = try #require(model.record(forID: id)?.mediaReportCard)
+            #expect(SoundLevelsRemeasureRules.sameCard(card, fresh), "copy \(id): the newer card was lost")
+            #expect(card.repairedCopy?.path.hasSuffix("a-repaired.mov") == true)
+        }
+        if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("P2-5: a drive gone after the stat (the read fails and the drive is away) waits for the drive; on a connected drive it is 'could not measure'")
+    func driveGoneMidRead() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try RemeasureFixture.scratch("midread"); defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("not-media.mov").path
+        try Data(repeating: 7, count: 4_096).write(to: URL(fileURLWithPath: path))
+        guard case .notMeasured(let away) = try await SoundLevelsRemeasureJob.measureFile(path: path, expectedSize: 4_096, isOnline: { _ in false }) else {
+            Issue.record("measured an unreadable file"); return
+        }
+        #expect(away == .offline)
+        guard case .notMeasured(let here) = try await SoundLevelsRemeasureJob.measureFile(path: path, expectedSize: 4_096, isOnline: { _ in true }) else {
+            Issue.record("measured an unreadable file"); return
+        }
+        if case .failed = here {} else { Issue.record("connected drive: \(here)") }
+    }
+
+    @Test("P2-6: the night's start is remembered beside the catalog — a relaunch after a Stop does not start again in the same slot; the next night does")
+    func stopSurvivesRelaunch() throws {
+        let dir = try RemeasureFixture.scratch("slot"); defer { try? FileManager.default.removeItem(at: dir) }
+        let catalogFile = dir.appendingPathComponent("catalog.json").path
+        let cal = Calendar.current
+        func at(_ h: Int, dayOffset: Int = 0) -> Date {
+            let d = cal.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
+            return cal.date(bySettingHour: h, minute: 0, second: 0, of: d) ?? d
+        }
+        func scheduler(_ now: Date) -> SoundLevelsRemeasureScheduler {
+            var env = SoundLevelsRemeasureEnvironment()
+            env.now = { now }
+            env.isDue = { true }
+            env.start = { true }
+            env.lastStarted = { SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).lastUnattendedStart }
+            env.rememberStart = { try? SoundLevelsRemeasureSchedule(lastUnattendedStart: $0).save(catalogFile: catalogFile) }
+            return SoundLevelsRemeasureScheduler(env: env)
+        }
+        #expect(scheduler(at(4)).tick() == .start)
+        #expect(scheduler(at(5)).tick() == .wait, "relaunched at 05:00 after a Stop: held until the next night")
+        #expect(scheduler(at(4, dayOffset: 1)).tick() == .start)
+    }
+
+    @Test("P2-7: OUTCOME's 'before' is the row count at START, not at the end")
+    func rowsCountedAtStart() async throws {
+        let dir = try RemeasureFixture.scratch("rows"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        m.records = [RemeasureFixture.record("/Volumes/T/r.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))]
+        final class Box: @unchecked Sendable { let m: VideoScanModel; init(_ m: VideoScanModel) { self.m = m } }
+        let box = Box(m)
+        let j = RemeasureFixture.job(m) { _, _ in
+            await MainActor.run { box.m.records.append(RemeasureFixture.record("/Volumes/T/new.mov", size: 1, card: nil)) }
+            return .measured(RemeasureFixture.reconfigured())
+        }
+        await RemeasureFixture.run(j)
+        #expect(j.rowsAtStart == 1 && m.records.count == 2)
+        #expect(SoundLevelsRemeasureJob.rowsClause(before: 1, after: 2, written: 1).hasPrefix("catalog rows before 1 · after 2 · difference +1"))
+        #expect(SoundLevelsRemeasureJob.rowsClause(before: 5, after: 5, written: 0).contains("difference none"))
+    }
+}
+
+/// Quit and launch again on the same catalog.sqlite.
+@MainActor
+private func relaunchRemeasure(_ scene: CutoverScene, from model: VideoScanModel) async throws -> VideoScanModel {
+    if let committer = model.catalogCutover.committer { await committer.repository.close() }
+    let sandbox = scene.sandbox
+    let fresh = VideoScanModel(logDirectory: sandbox.logs)
+    fresh.catalogStore = CatalogStore(directory: sandbox.catalogDir)
+    fresh.mediaLedger = MediaLedger(directory: sandbox.root.appendingPathComponent("ledger", isDirectory: true))
+    fresh.records = fresh.loadCatalogAtLaunch()
+    try #require(fresh.catalogCutover.isSQLiteAuthority, "the relaunch opened catalog.sqlite")
+    return fresh
 }
 
 // MARK: - The scheduler (pure rule)
@@ -559,7 +728,7 @@ struct SoundLevelsRemeasureSchedulerTests {
                 "a run Rick stopped stays stopped until the next slot")
     }
 
-    @Test("the store: one start, then the marker says done and it never starts again")
+    @Test("the store: one start, then nothing is due and it never starts again")
     @MainActor
     func theStoreStartsOnce() {
         var done = false
@@ -584,18 +753,18 @@ struct SoundLevelsRemeasureScaleTests {
     @Test("the plan over 100k records (half with pre-fix cards) inside 3 s, Debug; the Tidy count agrees")
     func planAt100k() {
         let cutoff = Date()
-        let marker = SoundLevelsRemeasureMarker(cutoff: cutoff)
         let pre = RemeasureFixture.card(levels: [-20, -21], size: 1)
-        let post = RemeasureFixture.card(levels: [-20, -21], size: 1, checkedAt: cutoff.addingTimeInterval(1))
+        var post = RemeasureFixture.card(levels: [-20, -21], size: 1, checkedAt: cutoff.addingTimeInterval(1))
+        post.soundLevels = .measured
         let records = (0..<100_000).map { i in
             RemeasureFixture.record("/Volumes/T/\(i).mov", size: 1, card: i.isMultiple(of: 2) ? pre : (i % 3 == 0 ? nil : post))
         }
         let clock = ContinuousClock()
         var plan: [SoundLevelsRemeasureItem] = []
-        let elapsed = clock.measure { plan = SoundLevelsRemeasureItem.plan(records, marker: marker, now: cutoff) }
+        let elapsed = clock.measure { plan = SoundLevelsRemeasureItem.plan(records) }
         #expect(plan.count == 50_000)
         #expect(elapsed < .seconds(3), "plan took \(elapsed)")
-        #expect(CatalogTidyCalculator.project(records, remeasure: marker).soundLevelsToRemeasure == 50_000)
+        #expect(CatalogTidyCalculator.project(records, isOnline: { _ in true }).soundLevelsToRemeasure == 50_000)
     }
 }
 
@@ -605,20 +774,27 @@ struct SoundLevelsRemeasureScaleTests {
 @Suite("GH #516 — re-measure sound levels (isolation: poisoned state)", .serialized)
 struct SoundLevelsRemeasureIsolationTests {
 
-    @Test("a corrupt marker is replaced with today as the cutoff — every card with levels is measured, never fewer — and said in the log")
-    func corruptMarker() async throws {
-        let dir = try RemeasureFixture.scratch("corrupt"); defer { try? FileManager.default.removeItem(at: dir) }
+    @Test("Codex P0-2/P1-4: no file beside the catalog decides anything — a corrupt or unwritable schedule file hides no card and repeats no finished work; a restored older catalog is found again")
+    func noOutsideFileDecides() async throws {
+        let dir = try RemeasureFixture.scratch("nofile"); defer { try? FileManager.default.removeItem(at: dir) }
         let m = RemeasureFixture.model(dir)
         let rec = RemeasureFixture.record("/Volumes/T/c.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
         m.records = [rec]
-        try RemeasureFixture.marker(m)
-        try Data("{not json".utf8).write(to: SoundLevelsRemeasureMarker.url(catalogFile: m.catalogStore.fileLocation))
-        #expect(SoundLevelsRemeasureMarker.loadOrCreate(catalogFile: m.catalogStore.fileLocation, now: Date()).replaced)
+        let catalogDir = (m.catalogStore.fileLocation as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: catalogDir, withIntermediateDirectories: true)
+        let file = SoundLevelsRemeasureSchedule.url(catalogFile: m.catalogStore.fileLocation)
+        try Data("{not json".utf8).write(to: file)
+        #expect(SoundLevelsRemeasureSchedule.load(catalogFile: m.catalogStore.fileLocation).lastUnattendedStart == nil)
         let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
         #expect(j.totals.reconfigured == 1)
-        #expect(RemeasureFixture.shownLevels(rec.mediaReportCard).mediaInfo.isEmpty)
-        #expect(RemeasureFixture.readMarker(m)?.isDone == true, "a readable marker replaced it")
+        // Finished work is not repeated, whatever the file says: the card is stamped.
+        #expect(RemeasureFixture.nothingOwed(m.records))
+        #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: { _ in true }))
+        // A restored older catalog (the card as it was) is a candidate again.
+        rec.mediaReportCard = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
+        #expect(SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: { _ in true }))
+        #expect(SoundLevelsRemeasureItem.plan(m.records).count == 1)
     }
 
     @Test("poisoned cards: a date in the future is measured too; odd evidence values are measured and replaced; a missing Sound row, a quick card and no card are skipped")
@@ -638,7 +814,6 @@ struct SoundLevelsRemeasureIsolationTests {
         let quick = RemeasureFixture.record("/Volumes/T/quick.mov", size: 1_000, card: quickCard)
         let none = RemeasureFixture.record("/Volumes/T/none.mov", size: 1_000, card: nil)
         m.records = [future, odd, missingRow, quick, none]
-        try RemeasureFixture.marker(m)
         let measured = MeasuredPaths()
         let j = RemeasureFixture.job(m) { p, _ in await measured.add(p); return .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
@@ -689,7 +864,6 @@ struct SoundLevelsRemeasureMediaMatrixTests {
         let reconfigured = RemeasureFixture.record(nut, size: try size(nut),
                                                    card: RemeasureFixture.preFixReconfiguredCard(size: try size(nut)))
         m.records.append(reconfigured)
-        try RemeasureFixture.marker(m)
         let before = try m.records.map { try MediaFingerprint.of($0.fullPath) }
         let j = SoundLevelsRemeasureJob(model: m)
         j.saveCatalogForTesting = { true }
@@ -723,7 +897,7 @@ struct SoundLevelsRemeasureSensorTests {
         #expect(rules.contains("CheckMediaRules.soundRow(d)"), "the rewrite uses Check Media's own Sound row rule")
         #expect(full.contains("return soundRow(diagnosis)"), "Check Media's checkSound is the same rule")
         #expect(job.contains("VerifyAudioProbe.diagnose(path: path)"), "today's sound pass is Check Media's")
-        #expect(job.contains("rec.mediaReportCard = new") && job.contains("model.saveCatalogAcknowledged()"),
+        #expect(job.contains("copy.mediaReportCard = new") && job.contains("model.saveCatalogAcknowledged()"),
                 "writes only the card, through the acknowledged save (the commit door)")
         #expect(tidy.contains("$0.startSoundLevelsRemeasure(model: model)"))
         #expect(scheduler.contains("center.startSoundLevelsRemeasure(model: model)"))
@@ -737,7 +911,8 @@ struct SoundLevelsRemeasureSensorTests {
     func withdrawnLeadIsPinned() {
         #expect(SoundLevelsRemeasureRules.withdrawnLead
                 == "the sound levels saved here came from an earlier version of VideoScan and are withdrawn until the sound can be measured again")
-        #expect(SoundLevelsRemeasureMarker.fileName == "sound-levels-remeasure.json")
+        #expect(SoundLevelsRemeasureSchedule.fileName == "sound-levels-remeasure.json")
+        #expect(MediaReportCard.SoundLevelsStamp.currentVersion == 2)
         #expect(SoundLevelsRemeasureRules.offlineWordsPinned == "its drive is not connected")
     }
 }

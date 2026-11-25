@@ -205,7 +205,7 @@ public protocol CatalogLiveReading {
 public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading,
                                CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading,
                                CatalogAnalysisResultsReading, CatalogObservationsReading, CatalogFrameIndexReading,
-                               CatalogPublicMarkReading {
+                               CatalogPublicMarkReading, CatalogReportCardReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }

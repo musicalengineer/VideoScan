@@ -14,8 +14,8 @@
 //                                 and has no Run
 //   Sound levels to measure again GH #516 — Run starts Re-measure Sound
 //                                 Levels (SoundLevelsRemeasureJob); counted
-//                                 with the job's own plan predicate
-//                                 (`SoundLevelsRemeasureRules.need`)
+//                                 with the job's own predicate, from the
+//                                 card alone (`SoundLevelsRemeasureRules.need`)
 //
 // The menu item reads "Tidy Catalog… (N)" with N = the sum of the rows that
 // have a Run, and is not there when that sum is 0 (CatalogMenuLayout); a
@@ -88,19 +88,17 @@ struct CatalogTidyProjection: Sendable, Equatable {
 enum CatalogTidyCalculator {
 
     /// One pass over `records` (main actor — the records live there).
-    /// `remeasure` = Re-measure Sound Levels' marker (nil = none yet: no count).
+    /// Re-measure Sound Levels' count is per card, read from the card alone
+    /// (its stamp and Sound row — `SoundLevelsRemeasureRules.need`).
     @MainActor
-    static func project(_ records: [VideoRecord], remeasure: SoundLevelsRemeasureMarker? = nil,
+    static func project(_ records: [VideoRecord],
                         isOnline: (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }) -> CatalogTidyProjection {
         var out = CatalogTidyProjection()
-        let now = Date()
         for r in records {
             if NonVideoMediaPurge.isOffered(r) { out.nonVideoRows += 1 }
-            if let remeasure, SoundLevelsRemeasureRules.need(r.mediaReportCard, recordID: r.id, live: r.removal == nil,
-                                                             marker: remeasure, now: now) != nil {
+            if let card = r.mediaReportCard, SoundLevelsRemeasureRules.need(card, live: r.removal == nil) != nil {
                 out.soundLevelsToRemeasure += 1
-                if let row = r.mediaReportCard?.check(.sound), SoundLevelsRemeasureRules.isWaitingForDrive(row),
-                   !isOnline(r.fullPath) {
+                if SoundLevelsRemeasureRules.isWaitingForDrive(card), !isOnline(r.fullPath) {
                     out.soundLevelsWaiting.cards += 1
                     out.soundLevelsWaiting.drives.insert(SoundLevelsRemeasureRules.driveKey(r.fullPath))
                 }
