@@ -10,11 +10,21 @@
     testbed_host.py clean <root> --current <run dir> --phase start|end
     testbed_host.py sample <root> <run dir>
     testbed_host.py stop <root> <run dir>
+    testbed_host.py disk-mark <state file>
+    testbed_host.py disk-check <state file>
 
-clean and sample (DECISIONS 2026-11-18 and 2026-11-19, the M4 at rest under 85% used): see the section
-"clean" below. clean runs at a run start and once its summary is written, under the lock it
+clean and sample (DECISIONS 2026-11-18, 2026-11-19 and 2026-11-24, the M4 at rest at or under 60% used): see
+the section "clean" below. clean runs at a run start and once its summary is written, under the lock it
 must hold itself; it prints the one "disk: free N% ..." line the summary carries. sample keeps
 the lowest free figure seen while the run works.
+
+disk-mark and disk-check (Rick 2026-11-24: "generous budget DURING a test run ... the real trick is to
+RELEASE/CLEANUP after the testrun is done"): an entry point marks free space per volume and the size of
+each scratch path before its run, and checks again after its cleanup. Free space lower by more than
+max(2 GB, 0.5% of the volume) prints one "DISK LEAK (AMBER): ..." row naming the 5 scratch paths that
+grew most; otherwise nothing. AMBER, never RED: it never hides a test verdict. clean does the same at
+its start and end (the row closes the disk line); scripts/nightly_gauntlet.sh and run_tests.py --full
+call the two commands.
 
 prune (run by m4_run.sh at the start of every lane, under the testbed lock). <root>/out
 holds one folder per run, 140-420 MB each for a suite run; nothing removed them before.
@@ -235,16 +245,11 @@ def prune(root: str, current: str = "", keep: int = 0) -> str:
 # Worst case on disk: the largest run (testbed: ~0.45 GB) plus the two caches (~13 GB) plus what
 # the lanes write while they run. Memory: one 64 KB log tail at a time and one directory walk.
 
-# The resting floor: 15% free = 85% used (DECISIONS 2026-11-19; Rick: stay under 85-90% full at rest,
-# 95% is fine for a run whose intermediate files are deleted afterwards). Why 85, not 90: the corpus now
-# rests on this SSD too (v1 130 GB + v2 247 GB on a 971 GB data volume), and a run must be able to climb
-# about ten points above rest and still stop short of 95% (corpus_run.py TRANSIENT_CEILING), where APFS
-# snapshots and swap start to fail: the proof lane writes a balanced copy about the size of its largest
-# file (the largest corpus file is ~17.5 GB), the two warm caches are ~13 GB, a suite run adds its
-# bundles. 85% at rest leaves ~97 GB below 95%; 90% would leave ~49 GB, too close for a large proof
-# file plus a cold rebuild of the caches. The figure is a resting target: cleanup tidies toward it,
-# it never blocks a run.
-FLOOR = 0.15
+# The resting floor: 40% free = 60% used (DECISIONS 2026-11-24, disk budgets per drive: the M4 internal
+# rests at or under 60% used, a run may reach 90%, and it holds no corpus media - the copies live on the
+# CrucialX10 or are read from the Ultra over a read-only share). Before: 15% (2026-11-19, the corpus on the
+# SSD). The figure is a resting target: cleanup tidies toward it, it never blocks a run.
+FLOOR = 0.40
 TAIL_LINES = 200
 TAIL_BYTES = 64 * 1024
 SAMPLE_SECONDS = 15
@@ -253,7 +258,7 @@ CORPUS_LANES = ("check", "proof", "verbs")
 RUN_WORK = re.compile(r"^[0-9A-Za-z_]+-(" + "|".join(CORPUS_LANES + ("coverage",)) + r")$")
 CORPUS_OUT = re.compile(r"^corpus-(" + "|".join(CORPUS_LANES) + r")$")             # <run>/corpus-<lane> in a testbed run
 KEEP_FILES = frozenset({"run.log", "summary.txt", "testbed-block.txt", "lanes.tsv", "suite-row.json", "corpus-summary.txt",
-                        "corpus-verdict.json", "disk-start.txt", "disk-low.txt", "tidy.txt"})
+                        "corpus-verdict.json", "disk-start.txt", "disk-low.txt", "tidy.txt", "disk-mark.json"})
 KEEP_SUFFIXES = (".tests.tsv",)
 CORPUS_MARKER = "THIS_IS_TEST_DATA.txt"
 # ~/Library/Caches/videoscan-m4run<suffix>. WARM: the lanes run often and a cold build costs 10-25 min, so
@@ -262,6 +267,24 @@ CORPUS_MARKER = "THIS_IS_TEST_DATA.txt"
 # run by hand and rarely, so its caches go at every cleanup, whatever the disk says.
 WARM_CACHES = ("-dd-suite", "-dd")
 SCRATCH_CACHES = ("-dd-coverage", "-dd-coverage-core")
+# Age (DECISIONS 2026-11-24): a build cache untouched for 7 days goes whatever the floor says - any
+# ~/Library/Caches/videoscan-<x>-dd[-<y>] or videoscan-<x>-core-build, and ~/Library/Caches/VideoScan/<x>-dd
+# (by these names only: videoscan-runall holds the side worktrees and timings files are files). "Untouched":
+# the newest mtime anywhere in the tree (Codex #360 F6: rewriting a deep file touches no ancestor), scanned
+# until the first entry newer than the cutoff; a scan past STALE_SCAN_ENTRIES or STALE_SCAN_SECONDS counts
+# as fresh: never delete on doubt.
+# In ~/Library/Logs/VideoScan: coverage/*.xcresult and coverage/app-*.log older than 3 days, and
+# nightly_test_<stamp>.log with its .<x> siblings older than 7 days; the newest of each always stays, and
+# nothing else there is touched (testbed_latest.txt, history files, the summaries publishers read).
+STALE_CACHE_DAYS = 7
+STALE_SCAN_ENTRIES = 2_000_000
+STALE_SCAN_SECONDS = 120
+OLD_COVERAGE_DAYS = 3
+OLD_NIGHTLY_DAYS = 7
+BUILD_CACHE = re.compile(r"^videoscan-[0-9A-Za-z._-]+?-(dd(-[0-9A-Za-z._-]+)?|core-build)$")    # a -<y> suffix after -dd only (Codex #360 F3)
+SUB_CACHE = re.compile(r"^[0-9A-Za-z._-]+-dd$")
+COVERAGE_OLD = ((re.compile(r"^[^/]+[.]xcresult$"), True), (re.compile(r"^app-[^/]+[.]log$"), False))
+NIGHTLY_LOG = re.compile(r"^nightly_test_([0-9]{8}_[0-9]{6})[.]log([.][^/]+)?$")
 # Never a target, whatever a path resolved through: the corpus sources, its documents, its stored
 # reports and accepted baselines, its sealed state, the read-only share mount.
 CORPUS_PROTECTED = ("media", "live", "state", "reports", "corpus-sha-v1.txt", "corpus-manifest-v1.json",
@@ -407,6 +430,7 @@ class Confine:
         self.work = os.path.join(corpus, "work")
         self.caches_dir = os.path.join(self.home, "Library", "Caches")
         self.caches_fd, self.caches, self.scratch = None, [], []
+        library = None
         try:
             library = self._keep(_open_dir("Library", self.home_fd, self.dev))
             self.caches_fd = self._keep(_open_dir("Caches", library, self.dev))
@@ -418,6 +442,12 @@ class Confine:
                     (self.caches if suffix in WARM_CACHES else self.scratch).append(name)
         except Refused:
             self.caches_fd, self.caches, self.scratch = None, [], []
+        # Age-pruned (DECISIONS 2026-11-24): ~/Library/Caches/VideoScan (its <x>-dd caches),
+        # ~/Library/Logs/VideoScan (old nightly logs) and its coverage folder (old bundles and app logs).
+        self.sub_caches_fd = self._optional(self.caches_fd, "VideoScan")
+        logs = self._optional(library, "Logs")
+        self.logs_fd = self._optional(logs, "VideoScan")
+        self.coverage_fd = self._optional(self.logs_fd, "coverage")
         # The roots as the kernel names them (F_GETPATH), so a later where-is-it answer compares like with like;
         # each must still be where it was authorized: a fresh open from home finds the same folder, and the
         # kernel name is that path (Codex #325 T3: a root moved while it was being opened is refused).
@@ -425,9 +455,24 @@ class Confine:
             self.out_where = self._verified(self.out_fd, ("m4run", "out"))
             self.work_where = self._verified(self.work_fd, ("corpus", "work")) if self.work_fd is not None else ""
             self.caches_where = self._verified(self.caches_fd, ("Library", "Caches")) if self.caches_fd is not None else ""
+            self.sub_caches_where = (self._verified(self.sub_caches_fd, ("Library", "Caches", "VideoScan"))
+                                     if self.sub_caches_fd is not None else "")
+            self.logs_where = self._verified(self.logs_fd, ("Library", "Logs", "VideoScan")) if self.logs_fd is not None else ""
+            self.coverage_where = (self._verified(self.coverage_fd, ("Library", "Logs", "VideoScan", "coverage"))
+                                   if self.coverage_fd is not None else "")
         except Refused:
             self.close()
             raise
+
+    def _optional(self, dir_fd, name: str):
+        """A folder of `dir_fd` opened as itself (never a link, never a mount), kept open; None when it is
+        not there or not a real folder of the home volume."""
+        if dir_fd is None:
+            return None
+        try:
+            return self._keep(_open_dir(name, dir_fd, self.dev))
+        except Refused:
+            return None
 
     def _verified(self, fd: int, parts) -> str:
         fresh, opened = self.home_fd, []
@@ -484,12 +529,23 @@ class Confine:
         roots = [self.out_where] + ([self.work_where] if self.work_where else [])
         named = self.caches + self.scratch
         caches = [os.path.join(self.caches_where, name) for name in named] if self.caches_where else []
-        # The three parents themselves are allowed: in them this code acts only on names it chose
-        # (<stamp>-<lane> run and work folders, its own caches by their fixed names).
-        parents = roots + ([self.caches_where] if named and self.caches_where else [])
+        # The parents themselves are allowed: in them this code acts only on names it chose
+        # (<stamp>-<lane> run and work folders, its own caches by their fixed names, a build cache by
+        # BUILD_CACHE or SUB_CACHE, an old log by its pattern).
+        parents = roots + [p for p in (self.caches_where, self.sub_caches_where, self.logs_where, self.coverage_where) if p]
         ok = (where in parents or any(where.startswith(r + "/") for r in roots)
-              or any(where == c or where.startswith(c + "/") for c in caches))
+              or any(where == c or where.startswith(c + "/") for c in caches)
+              or self._aged(where))
         return ok and not self.guarded(where)
+
+    def _aged(self, where: str) -> bool:
+        """Inside a tree the age rules may remove: a build cache of ~/Library/Caches (BUILD_CACHE) or of
+        ~/Library/Caches/VideoScan (SUB_CACHE), or a result bundle of the coverage log folder."""
+        for parent, pattern in ((self.caches_where, BUILD_CACHE), (self.sub_caches_where, SUB_CACHE),
+                                (self.coverage_where, COVERAGE_OLD[0][0])):
+            if parent and where.startswith(parent + "/") and pattern.match(where[len(parent) + 1:].split("/")[0]):
+                return True
+        return False
 
     def remove(self, dir_fd: int, name: str):
         """Remove the entry `name` of an open folder, the whole of it or none of it: a tree with a
@@ -714,6 +770,255 @@ def tidy(conf: Confine, run_name: str):
             os.close(fd)
 
 
+def _touched_since(dir_fd: int, name: str, dev: int, cutoff: float, budget=None) -> bool:
+    """True when anything in the tree (the entry itself included) has an mtime after `cutoff`, or when that
+    cannot be known: an entry that cannot be inspected or opened, or a scan past STALE_SCAN_ENTRIES or
+    STALE_SCAN_SECONDS. Through descriptors, never a link, never another volume; one open folder per level
+    (the depth of the tree, never its width), and it stops at the first newer entry."""
+    budget = budget if budget is not None else [STALE_SCAN_ENTRIES, time.monotonic() + STALE_SCAN_SECONDS]
+    budget[0] -= 1
+    if budget[0] < 0 or time.monotonic() > budget[1]:
+        return True
+    try:
+        info = _lstat_at(dir_fd, name)
+    except Refused:
+        return True
+    if info is None:
+        return False
+    if info.st_mtime > cutoff:
+        return True
+    if not stat.S_ISDIR(info.st_mode):
+        return False
+    try:
+        fd = _open_dir(name, dir_fd, dev)
+    except Refused:
+        return True
+    try:
+        return any(_touched_since(fd, child, dev, cutoff, budget) for child in os.listdir(fd))
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def _stale_caches(conf: Confine, now: float):
+    """(folder fd, name) of every build cache untouched for STALE_CACHE_DAYS: a real folder named by
+    BUILD_CACHE in ~/Library/Caches or by SUB_CACHE in ~/Library/Caches/VideoScan."""
+    found = []
+    for dir_fd, pattern, parent in ((conf.caches_fd, BUILD_CACHE, conf.caches_dir),
+                                    (conf.sub_caches_fd, SUB_CACHE, os.path.join(conf.caches_dir, "VideoScan"))):
+        if dir_fd is None:
+            continue
+        for name in sorted(os.listdir(dir_fd)):
+            info = _lstat_at(dir_fd, name)
+            if (pattern.match(name) and info is not None and stat.S_ISDIR(info.st_mode)
+                    and not conf.guarded(os.path.join(parent, name))
+                    and not _touched_since(dir_fd, name, conf.dev, now - STALE_CACHE_DAYS * DAY)):
+                found.append((dir_fd, name))
+    return found
+
+
+def _old_logs(conf: Confine, now: float):
+    """(folder fd, name) of each old log the age rules remove; the newest of each kind always stays."""
+    found = []
+    if conf.coverage_fd is not None:
+        names = os.listdir(conf.coverage_fd)
+        for pattern, is_dir in COVERAGE_OLD:
+            dated = []
+            for name in names:
+                info = _lstat_at(conf.coverage_fd, name) if pattern.match(name) else None
+                if info is not None and (stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode)):
+                    dated.append((info.st_mtime, name))
+            found += [(conf.coverage_fd, name) for mtime, name in sorted(dated)[:-1] if now - mtime > OLD_COVERAGE_DAYS * DAY]
+    if conf.logs_fd is not None:
+        groups = {}
+        for name in os.listdir(conf.logs_fd):
+            m = NIGHTLY_LOG.match(name)
+            info = _lstat_at(conf.logs_fd, name) if m else None
+            if info is not None and stat.S_ISREG(info.st_mode):
+                groups.setdefault(m.group(1), []).append((name, info.st_mtime))
+        for stamp in sorted(groups)[:-1]:                    # the stamp sorts as time; the newest run stays whole
+            found += [(conf.logs_fd, name) for name, mtime in sorted(groups[stamp]) if now - mtime > OLD_NIGHTLY_DAYS * DAY]
+    return found
+
+
+def _remove_all(conf: Confine, targets):
+    """(bytes given back, items removed, items refused) for each (folder fd, name)."""
+    freed = removed = refused = 0
+    for dir_fd, name in targets:
+        got, whole = conf.remove(dir_fd, name)
+        freed += got
+        if whole:
+            removed += 1
+        else:
+            refused += 1
+    return freed, removed, refused
+
+
+# ── disk leak (Rick 2026-11-24) ───────────────────────────────────────────
+# A run may use what it needs while it works; after its cleanup, free space must be back where it was.
+# Lower by more than max(LEAK_MIN, LEAK_FRACTION of the volume): one AMBER row naming the LEAK_TOP scratch
+# paths that grew most. Scratch paths are the entries of the roots below that this account owns (in
+# ~/Library/Caches only the videoscan ones): the places a test run writes. Worktrees are not measured
+# (too many files to walk twice per run; run_tests slots keep their caches in ~/Library/Caches).
+# Memory: one name per scratch entry (tens of thousands of short strings in the temp folders); the walks, only
+# on a leak, stream (os.walk, one folder at a time).
+LEAK_MIN = 2 * 10 ** 9
+LEAK_FRACTION = 0.005
+LEAK_TOP = 5
+TMP_ROOTS = tuple(sorted({"/private/tmp", os.path.realpath(os.environ.get("TMPDIR") or "/private/tmp")}))
+EXTRA_VOLUMES = ("/Volumes/crucial10_testdata",)
+
+
+def leak_threshold(total: int) -> int:
+    forced = os.environ.get("VIDEOSCAN_DISK_LEAK_THRESHOLD", "")       # test hook, bytes
+    return int(forced) if forced.isdigit() else max(LEAK_MIN, int(total * LEAK_FRACTION))
+
+
+def scratch_roots(home: str) -> list:
+    """Where a test run writes scratch on this Mac (VIDEOSCAN_DISK_LEAK_ROOTS, colon separated, replaces them)."""
+    forced = os.environ.get("VIDEOSCAN_DISK_LEAK_ROOTS", "")
+    if forced:
+        return [p for p in forced.split(":") if p]
+    return ([os.path.join(home, *parts) for parts in (("m4run", "out"), ("corpus", "work"), ("Library", "Caches"),
+                                                      ("Library", "Logs", "VideoScan"))]
+            + list(TMP_ROOTS) + [v for v in EXTRA_VOLUMES if os.path.ismount(v)])
+
+
+def _tree_size(path: str, dev: int) -> int:
+    """Bytes on disk under `path`, each file once, never through a link nor into another volume."""
+    seen, total = set(), 0
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return 0
+    if not stat.S_ISDIR(info.st_mode):
+        return info.st_blocks * 512
+    for folder, dirs, names in os.walk(path):
+        keep = []
+        for name in dirs + names:
+            try:
+                entry = os.lstat(os.path.join(folder, name))
+            except OSError:
+                continue
+            if stat.S_ISDIR(entry.st_mode):
+                if entry.st_dev == dev:
+                    keep.append(name)
+                continue
+            if (entry.st_dev, entry.st_ino) not in seen:
+                seen.add((entry.st_dev, entry.st_ino))
+                total += entry.st_blocks * 512
+        dirs[:] = [d for d in dirs if d in keep]
+    return total
+
+
+def disk_mark(roots, disk=None, probes=(), since=None) -> dict:
+    """Free space per volume, keyed by DEVICE (a root that appears or vanishes mid-run never re-keys a
+    volume and hides its fall), with the first existing probe or root as its name; and the entries of
+    each scratch root. The start only LISTS the entries (a few thousand lstat calls, never a tree walk:
+    the warm caches, the run folders, the temp folders and the CrucialX10 are tens of GB). The end, only
+    when a volume fell past its threshold, measures what is new since the start (`sizes`) and, outside
+    the temp folders, what changed since the start (`changed`: an mtime anywhere in it is later than the
+    start, _touched_since). With `since` and no fall nothing is measured: one statvfs per volume.
+    `disk` is disk_space unless a test gives a fake, as clean takes it."""
+    disk = disk or disk_space
+    volumes = {}
+    for path in list(probes) + list(roots):
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISDIR(info.st_mode) and str(info.st_dev) not in volumes:
+            free, total = disk(path)
+            volumes[str(info.st_dev)] = [free, total, path]
+    mark = {"roots": list(roots), "probes": list(probes), "volumes": volumes, "names": {}, "sizes": {},
+            "changed": {}, "at": time.time()}
+    if since is not None and not _worst_fall(since, mark):
+        return mark
+    uid, started = os.getuid(), float((since or {}).get("at") or 0)
+    budget = [STALE_SCAN_ENTRIES, time.monotonic() + STALE_SCAN_SECONDS]      # ONE scan budget for the whole check
+    for root in roots:
+        try:
+            if not stat.S_ISDIR(os.lstat(root).st_mode):
+                continue
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        ours_only = os.path.basename(root) == "Caches"
+        mark["names"][root] = names
+        if since is None:
+            continue
+        known = set((since.get("names") or {}).get(root) or ())
+        temp = root in TMP_ROOTS
+        try:
+            root_fd = os.open(root, O_DIR)
+        except OSError:
+            continue
+        try:
+            for name in names:
+                path = os.path.join(root, name)
+                try:                                         # an entry that cannot be inspected is skipped, not the rest
+                    info = _lstat_at(root_fd, name)
+                except Refused:
+                    continue
+                if (info is None or stat.S_ISLNK(info.st_mode) or info.st_uid != uid
+                        or (ours_only and not name.lower().startswith("videoscan"))):
+                    continue
+                if name not in known:
+                    mark["sizes"][path] = _tree_size(path, info.st_dev)
+                elif (not temp and budget[0] > 0 and time.monotonic() < budget[1]
+                      and _touched_since(root_fd, name, info.st_dev, started, budget)
+                      and budget[0] >= 0 and time.monotonic() < budget[1]):     # past the budget: not known, not named
+                    mark["changed"][path] = _tree_size(path, info.st_dev)
+        finally:
+            os.close(root_fd)
+    return mark
+
+
+def _worst_fall(start: dict, end: dict):
+    """(bytes fallen, volume name, threshold) of the volume that fell most past its threshold, or None.
+    Volumes are matched by device, whatever root named them."""
+    worst = None
+    for device, before in (start.get("volumes") or {}).items():
+        after = (end.get("volumes") or {}).get(device)
+        if after:
+            fell, limit = before[0] - after[0], leak_threshold(before[1])
+            if fell > limit and (worst is None or fell > worst[0]):
+                worst = (fell, before[2] if len(before) > 2 else device, limit)
+    return worst
+
+
+def _shown(path: str) -> str:
+    """A path as a summary line may carry it: ~ for the home, a volume by its name (status withholds /Volumes/)."""
+    home = os.environ.get("HOME", "")
+    for spelling in ({home.rstrip("/"), os.path.realpath(home)} if home else ()):
+        if spelling and (path == spelling or path.startswith(spelling + "/")):
+            return "~" + path[len(spelling):]
+    return path[len("/Volumes/"):] if path.startswith("/Volumes/") else path
+
+
+def _size(n: int) -> str:
+    return "%.1f GB" % (n / 1e9) if n >= 10 ** 9 else "%.1f MB" % (n / 1e6)
+
+
+def disk_leak(start: dict, end: dict) -> str:
+    """The DISK LEAK row, or "" when no volume ended lower than it started by more than its threshold.
+    It names up to LEAK_TOP scratch paths: what is new since the start ("+size"), largest first, then
+    what changed since the start ("size now, changed": its growth is not known, only that it was written)."""
+    worst = _worst_fall(start, end)
+    if worst is None:
+        return ""
+    new = sorted(((n, p) for p, n in (end.get("sizes") or {}).items() if n > 0), reverse=True)
+    changed = sorted(((n, p) for p, n in (end.get("changed") or {}).items() if n > 0), reverse=True)
+    shown = (["%s +%s" % (_shown(p), _size(n)) for n, p in new]
+             + ["%s %s now, changed" % (_shown(p), _size(n)) for n, p in changed])[:LEAK_TOP]
+    text = "DISK LEAK (AMBER): free fell %.1f GB on %s after cleanup (threshold %.1f GB)" % (
+        worst[0] / 1e9, _shown(worst[1]), worst[2] / 1e9)
+    if shown:
+        return text + "; grew: " + ", ".join(shown)
+    return text + "; no scratch path grew (the space went elsewhere)"
+
+
 def disk_space(path: str):
     """(free bytes, total bytes) of the volume holding `path`: what df calls Available and Size.
     Test hook: VIDEOSCAN_TESTBED_FAKE_DISK=<total>:<other> makes free = total - other - the bytes
@@ -774,10 +1079,13 @@ def clean(root: str, current: str, phase: str, disk=disk_space) -> str:
       2. every OTHER finished run (its run.log has an OUTCOME) not yet tidied is tidied;
       3. every ~/corpus/work/<stamp>-<lane> folder goes (no corpus lane runs outside the lock),
          and the two caches of the coverage lane (SCRATCH_CACHES);
+      3a. the age rules (DECISIONS 2026-11-24): build caches untouched for STALE_CACHE_DAYS, old
+         coverage bundles and app logs, old nightly test logs (see STALE_CACHE_DAYS above);
       4. below the floor (FLOOR of the volume free): unfinished runs other than this one, oldest
          first, are tidied until the floor is met;
       5. still below it: the two build caches go, but only when what they would give back reaches
          the floor (a cold build costs 10-25 minutes; dropping them for nothing is all cost).
+      6. start: the disk mark (disk-mark.json); end: the DISK LEAK row against it, if any, ends the line.
     Returns the one disk line. Refused (exception) unless the lock is held by `current`."""
     if phase not in ("start", "end"):
         raise Refused("phase is start or end")
@@ -842,6 +1150,12 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
             scratch_caches += 1
         else:
             refused += 1
+    now = time.time()                                        # the age rules (DECISIONS 2026-11-24), whatever the disk says
+    stale_bytes, stale_caches, stale_refused = _remove_all(conf, _stale_caches(conf, now))
+    log_bytes, old_logs, log_refused = _remove_all(conf, _old_logs(conf, now))
+    refused += stale_refused + log_refused
+    if conf.caches_fd is not None:
+        conf.caches = [name for name in conf.caches if _lstat_at(conf.caches_fd, name) is not None]
     free, total = disk(root)
     target = int(total * FLOOR)
     for name in unfinished:                                  # oldest first
@@ -859,7 +1173,11 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
         parts.append("corpus work %.2f GB (%d)" % (work_bytes / 1e9, work_folders))
     if scratch_caches:
         parts.append("coverage caches %.2f GB (%d)" % (scratch_bytes / 1e9, scratch_caches))
-    removed += old_bytes + work_bytes + scratch_bytes
+    if stale_caches:
+        parts.append("stale build caches %.2f GB (%d)" % (stale_bytes / 1e9, stale_caches))
+    if old_logs:
+        parts.append("old logs %.2f GB (%d)" % (log_bytes / 1e9, old_logs))
+    removed += old_bytes + work_bytes + scratch_bytes + stale_bytes + log_bytes
     caches_note = ""
     if free < target and conf.caches:
         sizes = [0 if blocked else size for size, blocked in (conf.scan_at(conf.caches_fd, name) for name in conf.caches)]
@@ -891,7 +1209,23 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
     tail = (" — removed %.2f GB: %s" % (removed / 1e9, ", ".join(parts))) if parts else " — nothing to remove"
     if refused:
         tail += "; could not be removed %d (a link, a mount or a locked file)" % refused
-    return head + tail + caches_note
+    return head + tail + caches_note + _leak_mark(conf, cur_fd, phase, disk)
+
+
+def _leak_mark(conf: Confine, cur_fd: int, phase: str, disk) -> str:
+    """At the start, after the cleanup: the disk mark, kept in the run folder (disk-mark.json). At the end,
+    after the cleanup: the DISK LEAK row against it, as " · <row>", or ""."""
+    roots, probes = scratch_roots(conf.home), [os.path.join(conf.home, "m4run")]
+    if phase == "start":
+        if conf.inside(cur_fd):
+            _write_at(cur_fd, "disk-mark.json", json.dumps(disk_mark(roots, disk, probes)) + "\n")
+        return ""
+    try:
+        start = json.loads(_read_at(cur_fd, "disk-mark.json", 16 << 20).decode("utf-8", "replace") or "null")
+    except ValueError:
+        start = None
+    row = disk_leak(start, disk_mark(roots, disk, probes, since=start)) if isinstance(start, dict) else ""
+    return " \u00b7 " + row if row else ""
 
 
 def _replace_at(conf: Confine, dir_fd: int, name: str, data: bytes) -> bool:
@@ -1193,6 +1527,55 @@ def ran(root: str, sha: str, ignore: str = "") -> str:
     return ""
 
 
+def disk_command(verb: str, state: str) -> int:
+    """disk-mark: the mark of scratch_roots(HOME) into <state>; disk-check: the DISK LEAK row against it, or
+    nothing (no mark, an unreadable one, or no leak). Always exit 0: the row is AMBER and never a verdict.
+    <state> is written and read as itself: never through a link, never a file with a second name."""
+    if verb == "disk-mark":
+        # A new file in the same folder renamed over the name (Codex #360 F2: O_TRUNC wrote through a hard
+        # link into another file). What is at the name now must be absent or a plain file with one name.
+        try:
+            info = os.lstat(state)
+        except FileNotFoundError:
+            info = None
+        except OSError as error:
+            print("disk-mark: refused %s (%s)" % (os.path.basename(state), type(error).__name__), file=sys.stderr)
+            return 0
+        if info is not None and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1):
+            print("disk-mark: refused %s (not a plain file with one name)" % os.path.basename(state), file=sys.stderr)
+            return 0
+        mark = disk_mark(scratch_roots(os.environ.get("HOME", "")))
+        temporary = "%s.%d.new" % (state, os.getpid())
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(mark) + "\n")
+            os.replace(temporary, state)
+        except OSError as error:
+            print("disk-mark: cannot write %s (%s)" % (os.path.basename(state), type(error).__name__), file=sys.stderr)
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        return 0
+    try:
+        fd = os.open(state, O_READ)
+    except OSError:
+        return 0
+    with os.fdopen(fd, "rb") as f:
+        info = os.fstat(f.fileno())
+        data = f.read(16 << 20) if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 else b""
+    try:
+        start = json.loads(data.decode("utf-8", "replace") or "null")
+    except ValueError:
+        start = None
+    if isinstance(start, dict):
+        row = disk_leak(start, disk_mark(start.get("roots") or [], probes=start.get("probes") or [], since=start))
+        if row:
+            print(row)
+    return 0
+
+
 def main(argv: list) -> int:
     if len(argv) >= 2 and argv[0] == "prune":
         current, keep, rest = "", 0, argv[2:]
@@ -1233,6 +1616,8 @@ def main(argv: list) -> int:
         signal.alarm(0)
         print(line)
         return rc
+    if len(argv) == 2 and argv[0] in ("disk-mark", "disk-check"):
+        return disk_command(argv[0], argv[1])
     if len(argv) == 3 and argv[0] == "stop":
         def late(signum, frame):
             raise OverBudget()

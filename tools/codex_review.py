@@ -2,7 +2,7 @@
 """One command for a whole codex review cycle (Rick, 2026-09-26/27).
 
     python3 tools/codex_review.py --title "⌘O" --range de54a7ca..48708aba \
-        --brief docs/reviews/briefs/<file>.md [--doc docs/reviews/codex/codex-review-<slug>-<date>.md] \
+        --brief docs/reviews/briefs/<file>.md [--doc .scratch/reviews/codex-review-<slug>-<date>.md] \
         [--timeout 1800]
     python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "..."]
     python3 tools/codex_review.py status
@@ -250,7 +250,10 @@ def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float
     if problem:
         print(f"codex_review: {problem} ({brief_path})", file=sys.stderr)
         return 2
-    doc_path = resolve(doc) if doc else REPO / "docs" / "reviews" / "codex" / (
+    # A transcript is scratch (CLAUDE.md, PROCESS §9): it lives in the ignored .scratch/; the kept verdict
+    # is one row in docs/reviews/codex.md. Under docs/ each pass was a new live doc (2026-11-24: two passes
+    # pushed docs/ over its ceiling and turned the M4's script tests RED).
+    doc_path = resolve(doc) if doc else REPO / ".scratch" / "reviews" / (
         f"codex-review-{slug(title, rng)}-{datetime.now().strftime('%Y-%m-%d')}.md")
 
     # briefed

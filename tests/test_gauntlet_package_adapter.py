@@ -28,6 +28,12 @@ tool = pathlib.Path(sys.argv[0]).name
 if tool == 'swift':
     with open(os.environ['FAKE_CALLS'] + '.swift', 'a') as f:
         f.write(json.dumps({'args': args, 'env': {k: os.environ.get(k, '') for k in ('HOME', 'TMPDIR', 'VS_UI_TEST')}}) + '\n')
+    if args[0] == 'build' and '--show-bin-path' in args:
+        # Swift 6.4's build system names `<scratch>/out/Products/Release`, not `<scratch>/release`.
+        if config.get('bin_path_exit'):
+            sys.exit(config['bin_path_exit'])
+        print(args[args.index('--scratch-path') + 1] + '/out/Products/Release')
+        sys.exit(0)
     if args[0] == 'build':
         if config.get('package_build_orphan'):
             # A child that outlives the build in its process group (Codex 11/05).
@@ -36,8 +42,38 @@ if tool == 'swift':
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sys.exit(config.get('package_build_exit', 0))
     filters = [args[i + 1] for i, a in enumerate(args) if a == '--filter']
-    stage = re.match(r'VideoScanCoreTests\\\.(\w+?)PkgTests/', filters[0]).group(1).lower()
+    stage = re.search(r'VideoScanCoreTests\\\.(\w+?)PkgTests', filters[0]).group(1).lower()
     s = config.get('package', {}).get(stage, {})
+    # Quiet-machine tests (core_lane.py list names them; the fake below). The serial
+    # pass (`--no-parallel --filter <ids>`) runs exactly what its filter matches; the
+    # parallel pass runs every quiet test its `--skip` does not name (all of them
+    # when there is no --skip: the gauntlet's behaviour before 2026-11-24).
+    qid = lambda q: f'VideoScanCoreTests.{stage.title()}PkgTests/{q}()/A.swift:1:1'
+    serial = '--no-parallel' in args
+    skip = args[args.index('--skip') + 1] if '--skip' in args else None
+    if serial:
+        quiet_ran = [q for q in s.get('quiet', []) if re.search(filters[0], qid(q))]
+    else:
+        quiet_ran = [q for q in s.get('quiet', [])
+                     if s.get('ignore_skip') or not (skip and re.search(skip, qid(q)))]
+    if args[1] != 'list':
+        with open(os.environ['FAKE_CALLS'] + '.ran', 'a') as f:
+            f.write(json.dumps({'stage': stage, 'serial': serial, 'quiet': quiet_ran}) + '\n')
+    if serial:
+        events = []
+        for q in quiet_ran:
+            events.append(dict(kind='test', version='6.4.0', payload=dict(id=qid(q), kind='function', name=q + '()')))
+        for q in quiet_ran:
+            p = dict(messages=[], testID=qid(q))
+            events.append(dict(kind='event', version='6.4.0', payload=dict(p, kind='testStarted')))
+            if q in s.get('quiet_fail', []):
+                events.append(dict(kind='event', version='6.4.0',
+                                   payload=dict(p, kind='issueRecorded', issue=dict(isKnown=False, isFailure=True))))
+            events.append(dict(kind='event', version='6.4.0', payload=dict(p, kind='testEnded')))
+        events.append(dict(kind='event', version='6.4.0', payload=dict(kind='runEnded', messages=[])))
+        with open(args[args.index('--event-stream-output-path') + 1], 'w') as f:
+            f.writelines(json.dumps(e) + '\n' for e in events)
+        sys.exit(1 if set(quiet_ran) & set(s.get('quiet_fail', [])) else 0)
     xclass = f'VideoScanCoreTests.{stage.title()}PkgTests'      # the stage's XCTest class, selected by its filter
     if args[1] == 'list':
         # `swift test list` as SwiftPM 6.4 really behaves: it accepts --filter
@@ -76,6 +112,9 @@ if tool == 'swift':
         ev('testEnded', tid)
     if not s.get('no_summary'):
         for n in range(s.get('passed', 2)): ran(f'ok{n}')
+        for q in quiet_ran:
+            events.insert(0, dict(kind='test', version='6.4.0', payload=dict(id=qid(q), kind='function', name=q + '()')))
+            ev('testStarted', qid(q)); ev('testEnded', qid(q))
         for n in range(s.get('failed', 0)): ran(f'bad{n}', dict(isKnown=False, isFailure=True))
         for n in range(s.get('known', 0)): ran(f'kn{n}', dict(isKnown=True, isFailure=False))
         for name in s.get('stream_only', []): ran(name)
@@ -115,6 +154,23 @@ if tool == 'swift':
             print(f'━ Test kn{n}() passed after 0.001 seconds with 1 known issue.')
         print('✔ Test run with 3 tests in 1 suite passed after 0.1 seconds.')
     sys.exit(s.get('exit', 0))
+if tool == 'core_lane.py':
+    # `core_lane.py list --products <dir>`: quiet XCTest classes, then quiet Swift
+    # Testing ids, with the sealed home's chatter on stderr (the real one's shape).
+    assert args[:2] == ['list', '--products'], args
+    with open(os.environ['FAKE_CALLS'] + '.quietlist', 'a') as f:
+        f.write(json.dumps(args) + '\n')
+    with open(os.environ['FAKE_CALLS'] + '.quietenv', 'a') as f:
+        f.write(json.dumps({k: os.environ.get(k, '') for k in ('HOME', 'TMPDIR')}) + '\n')
+    print('sealed_home: backups/x/catalog.sqlite kept as a clone (no catalog.cutover beside it)', file=sys.stderr)
+    if config.get('quiet_list_exit'):
+        sys.exit(config['quiet_list_exit'])
+    print('VideoScanCoreTests.SomeQuietXCTests    (XCTest class, 3 tests)')
+    print('VideoScanCoreTests.ElsewhereTests/notThisStage()/B.swift:2:2')
+    for st, c in sorted(config.get('package', {}).items()):
+        for q in c.get('quiet', []):
+            print(f'VideoScanCoreTests.{st.title()}PkgTests/{q}()/A.swift:1:1')
+    sys.exit(0)
 if tool == 'xcodebuild':
     if 'build-for-testing' in args:
         root = pathlib.Path(args[args.index('-derivedDataPath') + 1]) / 'Build/Products'
@@ -165,6 +221,8 @@ class GauntletPackageAdapterTests(unittest.TestCase):
             path = cls.bin_dir / tool
             path.write_text('#!' + sys.executable + '\n' + FAKE)
             path.chmod(0o755)
+        # The Runner runs `python3 <repo>/scripts/core_lane.py list` after the package build.
+        (cls.repo / 'scripts/core_lane.py').write_text(FAKE)
 
     @classmethod
     def tearDownClass(cls):
@@ -210,7 +268,7 @@ class GauntletPackageAdapterTests(unittest.TestCase):
     def test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env(self):
         self.run_runner()
         self.assertEqual(self.result['inventory_errors'], [], self.completed.stderr)
-        builds = [c for c in self.swift_calls if c['args'][0] == 'build']
+        builds = [c for c in self.swift_calls if c['args'][0] == 'build' and '--show-bin-path' not in c['args']]
         runs = [c for c in self.swift_calls if c['args'][0] == 'test' and c['args'][1] != 'list']
         lists = [c for c in self.swift_calls if c['args'][:2] == ['test', 'list']]
         self.assertEqual(len(builds), 1)
@@ -236,6 +294,101 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(unit['package']['passed'], 3)
         self.assertEqual(self.stage('integration')['status'], 'passed')
         self.assertNotIn('package', self.stage('integration'))
+
+    # M4 deep gauntlet 2026-11-24 00:26 (217649edf): 13 unit-stage package
+    # failures — JobSupervisor/JobSchedule/FableReview/StateRootLock waits and
+    # ContainedLogWrite's outage budget — every one tagged quiet-machine, every
+    # one green in the nightly, where core_lane.py runs quiet tests one at a
+    # time after the rest. The gauntlet ran them beside ~1,000 parallel tests.
+    def ran(self):
+        path = self.root / 'calls.jsonl.ran'
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def test_quiet_machine_tests_run_alone_after_the_parallel_pass_never_beside_it(self):
+        self.config['package'] = {'unit': {'quiet': ['q0', 'q1']}}
+        self.run_runner()
+        unit_runs = [r for r in self.ran() if r['stage'] == 'unit']
+        parallel = [r for r in unit_runs if not r['serial']]
+        serial = [r for r in unit_runs if r['serial']]
+        self.assertEqual(len(parallel), 1, unit_runs)
+        self.assertEqual(parallel[0]['quiet'], [], 'a quiet-machine test ran in the parallel pass')
+        self.assertEqual(len(serial), 1, unit_runs)
+        self.assertEqual(sorted(serial[0]['quiet']), ['q0', 'q1'])
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'passed', unit)
+        # 1 XCTest + 2 Swift Testing + 2 quiet, each counted once.
+        self.assertEqual(unit['package']['passed'], 5, unit)
+        self.assertEqual(unit['package']['quiet_machine'], 2, unit)
+        # A stage with no quiet tests runs exactly as before: one pass, no --skip.
+        reg = [c for c in self.swift_calls if c['args'][:2] == ['test', '--skip-build']
+               and r'VideoScanCoreTests\.RegressionPkgTests/' in c['args']]
+        self.assertEqual(len(reg), 1, reg)
+        self.assertNotIn('--skip', reg[0]['args'])
+        self.assertEqual(self.stage('regression')['status'], 'passed')
+        # Another suite's quiet id is not this stage's (the stage's own filters select).
+        self.assertNotIn('ElsewhereTests', json.dumps([c['args'] for c in self.swift_calls]))
+
+    def test_a_quiet_test_that_fails_alone_fails_the_stage_by_name(self):
+        self.config['package'] = {'unit': {'quiet': ['q0', 'q1'], 'quiet_fail': ['q1']}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertEqual(unit['package']['failed'], 1, unit)
+        self.assertIn('VideoScanCoreTests.UnitPkgTests/q1()', unit['failed_tests'])
+
+    def test_a_skip_that_did_not_skip_is_red_never_a_quiet_test_counted_twice(self):
+        self.config['package'] = {'unit': {'quiet': ['q0'], 'ignore_skip': True}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('counts unavailable', unit['reason'])
+
+    # M4 deep gauntlet 2026-11-24 14:57 (35d23778e): unit, regression and performance all RED with
+    # "quiet-machine listing (core_lane.py list) exit 1" — the Runner handed the listing
+    # `<scratch>/release`, which Swift 6.4's build system no longer makes; the bundle is in
+    # `<scratch>/out/Products/Release`. The products folder is asked of SwiftPM, never guessed.
+    def test_the_quiet_listing_reads_the_products_folder_swiftpm_names(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.run_runner()
+        lists = [json.loads(l) for l in (self.root / 'calls.jsonl.quietlist').read_text().splitlines()]
+        self.assertEqual(len(lists), 1, lists)
+        products = lists[0][lists[0].index('--products') + 1]
+        self.assertTrue(products.endswith('/out/Products/Release'), products)
+        bins = [c for c in self.swift_calls if '--show-bin-path' in c['args']]
+        self.assertEqual(len(bins), 1)
+        for flag in ('--build-tests', '-enable-testing', '--scratch-path'):
+            self.assertIn(flag, bins[0]['args'])          # the build's own flags, so the build's own folder
+        self.assertEqual(self.stage('unit')['status'], 'passed', self.stage('unit'))
+
+    # Ultra deep gauntlet 2026-11-24 19:15 (33ea0c52b): the listing found the bundle, then core_lane.py's own
+    # sealed home was refused — it is made in $TMPDIR, and the run's tmp root is under the results root
+    # (~/Library/Logs/VideoScan/gauntlet on a real host), where sealed_home refuses a home.
+    def test_the_quiet_listing_makes_its_sealed_home_outside_the_results_root(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.run_runner()
+        envs = [json.loads(l) for l in (self.root / 'calls.jsonl.quietenv').read_text().splitlines()]
+        self.assertEqual(len(envs), 1, envs)
+        self.assertTrue(envs[0]['TMPDIR'], envs)
+        self.assertFalse(envs[0]['TMPDIR'].startswith(str(self.root / 'results')), envs)
+        self.assertEqual(self.stage('unit')['status'], 'passed', self.stage('unit'))
+
+    def test_a_bin_path_that_fails_is_red_in_its_words_and_runs_no_package_test(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.config['bin_path_exit'] = 4
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('--show-bin-path exit 4', unit['reason'])
+        self.assertEqual(self.ran(), [], 'a package test ran without the quiet-machine split')
+
+    def test_a_quiet_listing_that_fails_is_red_in_its_words_and_runs_no_package_test(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.config['quiet_list_exit'] = 2
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('quiet-machine listing (core_lane.py list) exit 2', unit['reason'])
+        self.assertEqual(self.ran(), [], 'a package test ran without the quiet-machine split')
 
     def test_package_failure_fails_a_stage_whose_xcode_part_passed(self):
         self.config['package'] = {'unit': {'failed': 1, 'exit': 1}}

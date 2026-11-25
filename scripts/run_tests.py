@@ -792,8 +792,10 @@ def app_build_cmd(wt: Path, dd: Optional[Path] = None, v: Variant = DEBUG) -> Li
 def app_test_cmd(wt: Path, suites: Sequence[str], dd: Optional[Path] = None, result: Optional[Path] = None,
                  v: Variant = DEBUG) -> List[str]:
     """suites: `Suite` or `Suite/test` selectors (app_selectors). Each run its own -resultBundlePath:
-    two runs from one DerivedData must not race for xcodebuild's default result bundle name."""
-    return (["xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v)
+    two runs from one DerivedData must not race for xcodebuild's default result bundle name. The single
+    host runs in a sealed home holding a copy of App Support, freed after (this runner's own
+    scripts/sealed_home.py run; DECISIONS 2026-11-22 — the K hosts are sealed by xctest_shards.py)."""
+    return ([sys.executable, str(SELF.parent / "sealed_home.py"), "run", "--", "xcodebuild", "test-without-building"] + xcode_flags(wt / "VideoScan" / "VideoScan.xcodeproj", dd, v)
             + ["-parallel-testing-enabled", "NO"] + (["-resultBundlePath", str(result)] if result else [])
             + (["-enableCodeCoverage", "YES"] if v.coverage else [])
             + [f"-only-testing:VideoScanTests/{s}" for s in suites])
@@ -1660,7 +1662,8 @@ def fmt_secs(s: float) -> str:
 
 class Out:
     COLORS = {"OK": "\033[32m", "FAILED": "\033[31m", "SKIPPED": "\033[33m", "GREEN": "\033[32m",
-              "RED": "\033[31m", "NOT RUN": "\033[33m", "BUILD": "\033[36m", "NOT READY: setup": "\033[33m"}
+              "RED": "\033[31m", "NOT RUN": "\033[33m", "BUILD": "\033[36m", "NOT READY: setup": "\033[33m",
+              "AMBER": "\033[33m"}
 
     def __init__(self, verbose: bool, stream=None) -> None:
         self.s = stream or sys.stdout
@@ -2207,7 +2210,35 @@ def lane_end(out: Out, lane: LaneResult, log: Path) -> None:
         out.plain(" " * 13 + f"log: {log}")
 
 
-def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional[Path]) -> int:
+def disk_mark(run_dir: Path) -> Optional[Path]:
+    """Rick 2026-11-24 ("generous budget DURING a test run ... RELEASE/CLEANUP after the testrun is done"):
+    free space and scratch sizes before a --full run, through scripts/testbed_host.py disk-mark (the one
+    helper). None when this copy runs without it (the --host copy runs alone)."""
+    tool = SELF.parent / "testbed_host.py"
+    if not tool.is_file():
+        return None
+    state = run_dir / "disk-mark.json"
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run([sys.executable, str(tool), "disk-mark", str(state)], capture_output=True, timeout=600,
+                       stdin=subprocess.DEVNULL)
+    return state if state.exists() else None
+
+
+def disk_leak_row(state: Optional[Path]) -> str:
+    """The DISK LEAK (AMBER) row against the mark, or "" (no mark, no helper, no leak)."""
+    tool = SELF.parent / "testbed_host.py"
+    if state is None or not tool.is_file() or not state.exists():
+        return ""
+    try:
+        done = subprocess.run([sys.executable, str(tool), "disk-check", str(state)], capture_output=True, text=True,
+                              timeout=600, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return next((line for line in done.stdout.splitlines() if line.startswith("DISK LEAK")), "")
+
+
+def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional[Path], leak: str = "") -> int:
+    """`leak`: a DISK LEAK row, shown AMBER; it never changes the exit code (it must not mask a verdict)."""
     code, word = verdict(lanes)
     for l in lanes:
         if not l.ran:
@@ -2218,6 +2249,8 @@ def summary(out: Out, lanes: List[LaneResult], elapsed: float, run_dir: Optional
     total = sum(l.total for l in lanes)
     out.line("==========", f"{word} · lanes: GREEN {green} · RED {red}"
                            f"{f' · NOT RUN {notrun}' if notrun else ''} · {total} tests · {fmt_secs(elapsed)}", word)
+    if leak:
+        out.line("DISK LEAK", leak, "AMBER")
     fails = [e for l in lanes for e in l.failures]
     for e in fails:
         out.line("FAILED", e.name, "FAILED")
@@ -2716,6 +2749,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         live.update(run_dir=str(run_dir))
 
         t0 = time.monotonic()
+        mark = disk_mark(run_dir) if a.mode == "full" else None
         if a.mode == "full":
             lanes = run_full(a, out, run_dir, local_key, missing, slot=slot, live=live)
         else:
@@ -2726,7 +2760,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             lanes = run_lanes(a, picks, slot.wt, base, out, run_dir, header, missing, slot=slot, live=live, sha=sha)
         if "corpus" in a.kinds and not a.on_host:
             lanes.append(LaneResult("corpus", reason=corpus_why or "runs from the Ultra with --host m4"))
-        return summary(out, lanes, time.monotonic() - t0, run_dir)
+        return summary(out, lanes, time.monotonic() - t0, run_dir, leak=disk_leak_row(mark))
     finally:
         live.close()
 

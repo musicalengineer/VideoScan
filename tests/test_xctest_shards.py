@@ -56,6 +56,9 @@ FAKE_XCODEBUILD = textwrap.dedent('''\
     except Exception as e:
         host_env = "unreadable: %s" % e
     bundle = args[args.index("-resultBundlePath") + 1]
+    if "-derivedDataPath" in args:                         # what the real one writes there: its Logs/Test
+        os.makedirs(os.path.join(args[args.index("-derivedDataPath") + 1], "Logs", "Test"), exist_ok=True)
+        open(os.path.join(args[args.index("-derivedDataPath") + 1], "Logs", "Test", "session.log"), "w").write("x" * 1000)
     sels = [a.split("/", 1)[1] for a in args if a.startswith("-only-testing:")]
     stamp = os.path.join(os.environ["FAKE_STAMPS"], "%d.json" % os.getpid())
     t0 = time.time()
@@ -219,6 +222,9 @@ def test_the_manifest_gives_every_app_file_as_a_group_and_the_command_names_one_
     assert cmd[:4] == ["xcodebuild", "test-without-building", "-xctestrun", "/p/x.xctestrun"]
     assert cmd[cmd.index("-parallel-testing-enabled") + 1] == "NO", "in-process parallelism starves the main actor"
     assert cmd[cmd.index("-resultBundlePath") + 1] == "/r/s.xcresult"
+    # RED 2026-11-24: with no -derivedDataPath, each sealed .xctestrun copy (a new path per run) made
+    # ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash> that nothing removed (729 on the Ultra, 25 GB).
+    assert cmd[cmd.index("-derivedDataPath") + 1] == "/r/xcode-dd", "the shard's own DerivedData, beside its bundle"
     assert cmd[-2:] == ["-only-testing:VideoScanTests/A1", "-only-testing:VideoScanTests/A2/f(x:)"]
 
 
@@ -538,6 +544,17 @@ def test_a_green_shards_result_bundle_is_removed_and_a_red_shards_is_kept(bench)
     assert len(list(bench.run_dir.glob("*/shard.xcresult"))) == 2
 
 
+def test_no_shard_leaves_its_xcode_derived_data_behind(bench):
+    # RED 2026-11-24: the shard's DerivedData (xcodebuild's Logs/Test) is regenerable; it goes once the
+    # shard is read, green or red, kept bundles or not.
+    scenario = {"A": {"tests": ["a()"]}, "B": {"tests": ["b()"], "fail": ["b()"]}}
+    for extra in ([], ["--keep-results"]):
+        bench.run_dir = bench.tmp / ("run-dd" + "".join(extra))
+        bench.go(scenario, [grp("A", 1), grp("B", 1)], jobs=2, extra=extra)
+        assert len(list(bench.run_dir.glob("*/strand.log"))) == 2, "the shards did not run"
+        assert list(bench.run_dir.glob("*/xcode-dd")) == [], extra
+
+
 # ───────────────────────────── run_tests' app lane
 
 def app_picks():
@@ -585,13 +602,14 @@ def test_run_tests_app_lane_runs_as_shards_by_default_and_as_one_host_with_jobs_
     cmd = seen[-1][0]
     if (os.cpu_count() or 2) >= 4:
         assert cmd[cmd.index("--jobs") + 1] == str((os.cpu_count() or 2) // 2)
-    # --jobs 1: the single host, as before
+    # --jobs 1: the single host, as before — in a sealed home (scripts/sealed_home.py run, 2026-11-23)
+    single = [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--", "xcodebuild", "test-without-building"]
     lanes_with(monkeypatch, tmp_path, ["--jobs", "1"], wt, fake_stream)
     cmd = seen[-1][0]
-    assert cmd[:2] == ["xcodebuild", "test-without-building"] and "-only-testing:VideoScanTests/A1" in cmd
+    assert cmd[:6] == single and "-only-testing:VideoScanTests/A1" in cmd
     # a commit whose worktree has no xctest_shards.py (an older ref): the single host
     lanes_with(monkeypatch, tmp_path, ["--jobs", "6"], tmp_path / "old-wt", fake_stream)
-    assert seen[-1][0][:2] == ["xcodebuild", "test-without-building"]
+    assert seen[-1][0][:6] == single
     with pytest.raises(SystemExit):
         rt.parse_args(["--jobs", "0"])
 
@@ -1055,3 +1073,41 @@ def test_a_symlinked_run_home_is_refused_and_its_target_never_removed(bench):
     assert code == 1 and "REFUSED" in out, out
     assert (outside / "sentinel.txt").read_text() == "keep" and sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"]
     assert bench.stamps() == [], "a test host ran"
+
+
+# Review 2026-11-24 (reviewer agent). RED: scripts/xctest_shards.py:975-979 returns 130 on an interrupt
+# before the xcode-dd removal at :986-987, so a stopped run (run_tests TERMs its lane) keeps every
+# shard's DerivedData in the run folder.
+def test_an_interrupted_run_leaves_no_shard_derived_data(bench):
+    import signal
+    scenario = {s: {"tests": ["a()"], "hang": True} for s in ("A", "B")}
+    (bench.tmp / "scenario.json").write_text(json.dumps(scenario))
+    (bench.tmp / "plan.json").write_text(json.dumps({"groups": [grp("A", 1), grp("B", 1)]}))
+    env = dict(os.environ, FAKE_SCENARIO=str(bench.tmp / "scenario.json"), FAKE_STAMPS=str(bench.tmp / "stamps"))
+    p = subprocess.Popen([sys.executable, str(SCRIPT), "--xctestrun", str(bench.tmp / "x.xctestrun"), "--plan", str(bench.tmp / "plan.json"),
+                          "--jobs", "2", "--run-dir", str(bench.run_dir), "--timings", str(bench.timings),
+                          "--xcodebuild", f"{sys.executable} {bench.tmp / 'fake_xcodebuild.py'}"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
+    pids, deadline = [], time.monotonic() + 30
+    while time.monotonic() < deadline and len(pids) < 2:
+        time.sleep(0.1)
+        pids = [int(m.group(1)) for log in bench.run_dir.glob("*/strand.log")
+                for m in [re.search(r"TEST_HOST_STARTED epoch=\S+ pid=(\d+)", log.read_text())] if m]
+    assert len(pids) == 2, "the two hosts never started"
+    assert len(list(bench.run_dir.glob("*/xcode-dd"))) == 2, "the fake did not make its DerivedData"
+    os.kill(p.pid, signal.SIGTERM)
+    out, _ = p.communicate(timeout=40)
+    assert p.returncode == 130, out
+    assert list(bench.run_dir.glob("*/xcode-dd")) == [], "an interrupted run kept its shards' DerivedData"
+
+
+def test_codex_360_1_cleanup_never_removes_derived_data_it_did_not_create(bench):
+    # Codex #360 F1 RED: a run folder whose 0000 is a link to elsewhere, holding an xcode-dd of its own:
+    # the cleanup rmtree-d run/0000/xcode-dd through the link. Only what this run made is removed.
+    outside = bench.tmp / "outside"
+    (outside / "xcode-dd").mkdir(parents=True)
+    (outside / "xcode-dd" / "precious").write_text("keep")
+    bench.run_dir.mkdir(parents=True, exist_ok=True)
+    os.symlink(outside, bench.run_dir / "0000")
+    bench.go({"A": {"tests": ["a()"]}}, [grp("A", 1)], jobs=1)
+    assert (outside / "xcode-dd" / "precious").read_text() == "keep"

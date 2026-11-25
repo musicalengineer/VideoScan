@@ -196,6 +196,55 @@ func countsFromPackageRun(eventStream: String, console: String, xctestList: Stri
     return counts
 }
 
+// Quiet-machine tests in a package stage (2026-11-24). A Core test that judges
+// wall time, or waits on a job's progress, carries `.tags(.quietMachine)`; the
+// Core lane runs those one at a time after the rest (core_lane.py, phase B).
+// The gauntlet ran them beside ~1,000 parallel tests, so they starved: the M4
+// deep run of 2026-11-24 had 13 unit-stage failures, all quiet-tagged, all
+// green in the nightly. The stage now runs in two passes: the rest in parallel
+// with the quiet ids `--skip`ped, then the quiet ids `--no-parallel`. The ids
+// come from `core_lane.py list` (the ONE reader of the tag, from the built
+// bundle); `swift test` has no tag filter.
+
+/// The quiet Swift Testing ids in `core_lane.py list` output that the stage's
+/// `--filter` regexes select (the same unanchored search SwiftPM does), sorted.
+/// XCTest class lines are left out: `swift test` runs XCTest serially in its
+/// own process before Swift Testing, so they never run beside other tests.
+func quietMachineIDs(listing: String, filters: [String]) -> [String] {
+    let id = try! NSRegularExpression(pattern: #"^VideoScanCoreTests\.\S.*\.swift:\d+:\d+$"#)
+    let patterns = filters.compactMap { try? NSRegularExpression(pattern: $0) }
+    var out = Set<String>()
+    for raw in listing.split(separator: "\n", omittingEmptySubsequences: true) {
+        let line = String(raw)
+        let whole = NSRange(line.startIndex..., in: line)
+        guard id.firstMatch(in: line, range: whole) != nil,
+              patterns.isEmpty || patterns.contains(where: { $0.firstMatch(in: line, range: whole) != nil }) else { continue }
+        out.insert(line)
+    }
+    return out.sorted()
+}
+
+/// One regex matching exactly `ids`, in the dialect both Swift Regex (Swift
+/// Testing's --filter/--skip) and ICU read: core_lane.py's swift_id_regex.
+func swiftIDRegex(_ ids: [String]) -> String {
+    let meta = Set(#"\^$.|?*+()[]{}"#)
+    return "^(?:" + ids.map { id in id.map { meta.contains($0) ? "\\\($0)" : String($0) }.joined() }.joined(separator: "|") + ")$"
+}
+
+/// The two passes' counts, strictly: the parallel pass (P) must declare none of
+/// `quiet` and the serial pass (Q) exactly `quiet` — a `--skip` or `--filter`
+/// that did not do its job is unavailable (RED), never a quiet test run twice
+/// or not at all. No quiet ids: P alone, as before.
+func countsFromQuietSplit(parallel: [String: Int]?, parallelStream: String, quietStream: String, quiet: [String]) -> [String: Int]? {
+    guard var counts = parallel else { return nil }
+    if quiet.isEmpty { return counts }
+    guard let p = SwiftTestingTally(eventStream: parallelStream), let q = SwiftTestingTally(eventStream: quietStream) else { return nil }
+    let functions = { (t: SwiftTestingTally) in Set(t.kinds.filter { $0.value == "function" }.keys) }
+    guard functions(p).isDisjoint(with: quiet), functions(q) == Set(quiet) else { return nil }
+    for (key, value) in q.counts { counts[key, default: 0] += value }
+    return counts
+}
+
 /// Names for the summary row from the same two sources, read leniently (a
 /// killed run still names its failures and the tests left without a verdict).
 func packageNames(eventStream: String, console: String, xctestList: String?, filters: [String]) -> TestNames {
@@ -551,16 +600,26 @@ func summaryRow(result: [String: Any], previous: [String: Any]?) -> [String: Any
     return row.merging(failureChanges(current: row, previous: previous)) { $1 }
 }
 
-// MARK: Run tidy and retention (Rick 2026-11-08)
+// MARK: Run tidy and retention (Rick 2026-11-08, 2026-11-24)
 // Each run kept DerivedData (~5 GB), PackageBuild (~1.3 GB) and swift-cache
 // forever; the M4 testbed reached 102 GB and 86% full. The run removes its own
-// regenerable build scratch once result.json and the history row exist (like
-// `make clean`), and finished runs older than 14 days are removed at the start
-// of the next run. history.jsonl, pending-metrics* and unfinished runs are never touched.
+// regenerable scratch once result.json and the history row exist (like
+// `make clean`); at the start of the next run, at most `keepRuns` run dirs stay
+// and none older than `retentionDays`. history.jsonl, pending-metrics* are never touched.
+// 2026-11-24 (Rick hand-cleaned ~150 GB off the M4): "regenerable" is now every FOLDER of a run but
+// the test host's `logs` root — DerivedData, PackageBuild, swift-cache, the *.xcresult bundles (their
+// counts and names are in <stage>-summary.json and the history row; publish.swift reads result.json
+// only) and the sealed roots (caches, tmp, home, fixtures, ...). The run's files (result.json, the
+// logs, the summaries, the event streams) stay. A folder a test left read-only no longer stops a removal.
 // Memory: O(entries in one directory) for retention; the size walk streams
 // (FileManager's enumerator holds one directory level at a time).
-let buildScratchNames = ["DerivedData", "PackageBuild", "swift-cache"]
+/// The one folder of a run that is evidence, not scratch: the test host's own log root.
+let keptFolderNames: Set<String> = ["logs"]
 let retentionDays = 3
+/// At most this many run dirs stay under the results root (the current run included).
+let keepRuns = 3
+/// Longer than any run can last (the watchdog stops a run at 4 h): an unfinished run older than this crashed.
+let liveRunHours = 6.0
 
 /// "2026-11-08T20-19-00Z-1A2B3C4D" (prepareRoots' runID) -> its UTC start; nil = not a run dir.
 /// The WHOLE name must have that shape (Codex sweep 11/09 F1: a timestamp
@@ -574,29 +633,41 @@ func runDate(fromName name: String) -> Date? {
     return formatter.date(from: String(name.prefix(20)))
 }
 
-/// Pure retention decision: run dirs whose NAME date is more than `days` old (mtime ignored),
-/// finished or not: a run lasts hours (watchdog 4 h), so a 3-day-old one without result.json crashed.
-func retentionCandidates(_ entries: [(name: String, finished: Bool)], now: Date, days: Int = retentionDays) -> [String] {
-    entries.filter { entry in
-        guard let started = runDate(fromName: entry.name) else { return false }
-        return now.timeIntervalSince(started) > Double(days) * 86_400
-    }.map(\.name).sorted()
+/// Pure retention decision: run dirs beyond the newest `keep` (by name) or whose NAME date is more than
+/// `days` old (mtime ignored), finished or not: a run lasts hours (watchdog 4 h), so a 3-day-old one
+/// without result.json crashed.
+func retentionCandidates(_ entries: [(name: String, finished: Bool)], now: Date, days: Int = retentionDays, keep: Int = keepRuns) -> [String] {
+    let dated = entries.compactMap { entry in runDate(fromName: entry.name).map { (entry.name, $0) } }
+    let newest = Set(dated.sorted { $0.0 > $1.0 }.prefix(keep).map(\.0))
+    return dated.filter { name, started in
+        !newest.contains(name) || now.timeIntervalSince(started) > Double(days) * 86_400
+    }.map(\.0).sorted()
 }
 
-/// Pure tidy decision: which of the run's own build dirs may go now (none before result.json, none with --keep-run).
+/// Pure tidy decision: whether the run's own scratch may go now (not before result.json, not with --keep-run).
 func buildScratchToRemove(run: URL, resultExists: Bool, keepBuild: Bool, publishReaped: Bool) -> [URL] {
     guard resultExists, !keepBuild, publishReaped else { return [] }
-    return buildScratchNames.map { run.appendingPathComponent($0) }
+    return regenerableFolders(run: run)
+}
+
+/// Every real folder of the run but `keptFolderNames` (never a symlink: not the runner's own output).
+func regenerableFolders(run: URL) -> [URL] {
+    ((try? fm.contentsOfDirectory(atPath: run.path)) ?? []).sorted().compactMap { name in
+        let url = run.appendingPathComponent(name)
+        var st = stat()
+        guard !keptFolderNames.contains(name), lstat(url.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        return url
+    }
 }
 
 /// Pure tidy decision for the whole run: nil = remove it, else why it stays. It goes only when its
 /// summary row is in history.jsonl and the metrics row was published; a queued publish keeps
-/// result.json for a manual retry (the 3-day retention removes it later).
+/// result.json for a manual retry (retention removes it later).
 func keepRunReason(publish: String, resultExists: Bool, summaryInHistory: Bool, keepRun: Bool, publishReaped: Bool) -> String? {
     if keepRun { return "--keep-run" }
     if !publishReaped { return "publisher not reaped" }
     if !resultExists { return "no result.json" }
-    if publish != "published" { return "publish \(publish); result.json kept for the retry, removed by retention after \(retentionDays) days" }
+    if publish != "published" { return "publish \(publish); result.json kept for the retry, removed by retention (newest \(keepRuns), at most \(retentionDays) days)" }
     if !summaryInHistory { return "no summary row in history.jsonl" }
     return nil
 }
@@ -610,8 +681,134 @@ func allocatedBytes(_ url: URL) -> Int64 {
     return total
 }
 
-/// The end-of-run tidy: the whole run once its summary is safe (keepRunReason), else just its
-/// build scratch. Returns the lines to print.
+func posixError(_ what: String) -> RunError { RunError("\(what): \(String(cString: strerror(errno)))") }
+
+/// The names in an open folder (not "." or ".."), read through a duplicate of its descriptor.
+func entryNames(_ folder: Int32) throws -> [String] {
+    let copy = dup(folder)
+    guard copy >= 0, let stream = fdopendir(copy) else { if copy >= 0 { close(copy) }; throw posixError("list a folder") }
+    defer { closedir(stream) }
+    var names: [String] = []
+    while let entry = readdir(stream) {
+        let name = withUnsafePointer(to: &entry.pointee.d_name) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
+        if name != "." && name != ".." { names.append(name) }
+    }
+    return names
+}
+
+/// Opens the folder `name` of the open folder `parent` for removal, by descriptor only: it gets owner rwx
+/// FIRST with fchmodat(AT_SYMLINK_NOFOLLOW) (a folder a test left 0000 or 0100 cannot be opened otherwise;
+/// re-review 2026-11-24), then opened O_NOFOLLOW|O_DIRECTORY, and must be the folder `expected` describes
+/// (no swap in between) on `device` (a disk image a test left mounted is never entered). nil: left as it is.
+func openForRemoval(parent: Int32, name: String, expected: stat, device: dev_t) -> Int32? {
+    guard expected.st_dev == device else { return nil }
+    _ = fchmodat(parent, name, (expected.st_mode & 0o7777) | S_IRWXU, AT_SYMLINK_NOFOLLOW)
+    let folder = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard folder >= 0 else { return nil }
+    var opened = stat()
+    guard fstat(folder, &opened) == 0, opened.st_ino == expected.st_ino, opened.st_dev == device else { close(folder); return nil }
+    return folder
+}
+
+/// Removes the entry `name` of the open folder `parent`, a whole tree when it is one, by descriptor only
+/// (Codex #360 F4: a path-based lstat-then-chmod could follow a symlink swapped in between): a symlink or
+/// file is unlinked as itself; each folder goes through openForRemoval. The walk is an explicit stack that
+/// holds ONE open folder at a time (re-review 2026-11-24: one per level hit EMFILE past RLIMIT_NOFILE
+/// levels): it descends into a folder's first sub-folder, and once a folder is empty climbs back through
+/// "..", checked to be the folder it came from, and removes it there. What cannot go (another volume, a
+/// swap, a folder that will not open or list) stays with every folder holding it, and the call throws.
+/// Memory: one frame per level of the tree, each with the names of its sub-folders still to go (listed once).
+/// (C++: fstatat/fchmodat/openat/unlinkat on dirfds, an explicit std::vector stack.)
+func removeEntry(parent: Int32, name: String, device: dev_t) throws {
+    var top = stat()
+    guard fstatat(parent, name, &top, AT_SYMLINK_NOFOLLOW) == 0 else {
+        if errno == ENOENT { return }
+        throw posixError("inspect \(name)")
+    }
+    guard (top.st_mode & S_IFMT) == S_IFDIR else {
+        guard unlinkat(parent, name, 0) == 0 || errno == ENOENT else { throw posixError("unlink \(name)") }
+        return
+    }
+    var parentStat = stat()
+    guard fstat(parent, &parentStat) == 0 else { throw posixError("inspect the folder holding \(name)") }
+    guard var current = openForRemoval(parent: parent, name: name, expected: top, device: device) else {
+        throw RunError("\(name) is on another volume, changed while it was being removed, or cannot be opened: left as it is")
+    }
+    // A frame per folder on the way down: its name in its parent, the parent's inode (checked on the way
+    // back up), the sub-folders still to remove (listed ONCE, on the first visit), and whether anything
+    // in it had to be left alone (then it, and every folder holding it, stays).
+    struct Frame { let name: String; let parentInode: ino_t; var pending: [String]? = nil; var leftAlone = false }
+    var frames = [Frame(name: name, parentInode: parentStat.st_ino)]
+    var problem: String?
+    func leave(_ why: String) { frames[frames.count - 1].leftAlone = true; problem = problem ?? why }
+    while !frames.isEmpty {
+        let last = frames.count - 1
+        if frames[last].pending == nil {
+            var folders: [String] = []
+            do {
+                for child in try entryNames(current) {
+                    var st = stat()
+                    guard fstatat(current, child, &st, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+                    if (st.st_mode & S_IFMT) == S_IFDIR { folders.append(child); continue }
+                    if unlinkat(current, child, 0) != 0 && errno != ENOENT { leave("unlink \(child): \(String(cString: strerror(errno)))") }
+                }
+            } catch { leave("\(error)") }
+            frames[last].pending = folders
+        }
+        if let child = frames[last].pending?.popLast() {
+            var st = stat()
+            guard fstatat(current, child, &st, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+            guard (st.st_mode & S_IFMT) == S_IFDIR else {
+                if unlinkat(current, child, 0) != 0 && errno != ENOENT { leave("unlink \(child): \(String(cString: strerror(errno)))") }
+                continue
+            }
+            guard let opened = openForRemoval(parent: current, name: child, expected: st, device: device) else {
+                leave("\(child) is on another volume, changed, or cannot be opened: left as it is")
+                continue
+            }
+            var here = stat(); _ = fstat(current, &here)
+            frames.append(Frame(name: child, parentInode: here.st_ino))
+            close(current); current = opened
+            continue
+        }
+        // The folder is as empty as it will get: climb to its parent (checked) and remove it there.
+        let frame = frames.removeLast()
+        let up: Int32 = frames.isEmpty ? dup(parent) : openat(current, "..", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        close(current)
+        var upStat = stat()
+        guard up >= 0, fstat(up, &upStat) == 0, upStat.st_ino == frame.parentInode else {
+            if up >= 0 { close(up) }
+            throw RunError("the folder holding \(frame.name) changed while it was being removed: left as it is")
+        }
+        var removed = false
+        if !frame.leftAlone {
+            removed = unlinkat(up, frame.name, AT_REMOVEDIR) == 0
+            if !removed { problem = problem ?? "remove \(frame.name): \(String(cString: strerror(errno)))" }
+        }
+        if frames.isEmpty { close(up); break }
+        if !removed { frames[frames.count - 1].leftAlone = true }
+        current = up
+    }
+    if let problem { throw RunError(problem) }
+}
+
+/// Removes a run's folder or one of its regenerable folders: through the folder holding it, opened as
+/// itself, and only on that folder's volume.
+func removeTree(_ url: URL) throws {
+    let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard parent >= 0 else { throw posixError("open the folder holding \(url.path)") }
+    defer { close(parent) }
+    var st = stat()
+    guard fstat(parent, &st) == 0 else { throw posixError("inspect the folder holding \(url.path)") }
+    try removeEntry(parent: parent, name: url.lastPathComponent, device: st.st_dev)
+}
+
+/// `--keep-run` leaves this marker, so a later run's retention does not tidy what was asked to be kept
+/// (review 2026-11-24). Such a run still goes once it is beyond the newest `keepRuns` or older than `retentionDays`.
+let keepRunMarkerName = ".keep-run"
+
+/// The end-of-run tidy: the whole run once its summary is safe (keepRunReason), else its
+/// regenerable folders. Returns the lines to print.
 func tidyRun(run: URL, publish: String, keepRun: Bool, publishReaped: Bool) -> [String] {
     let root = run.deletingLastPathComponent()
     let inHistory = historyHasRun(root.appendingPathComponent("history.jsonl"), runID: run.lastPathComponent)
@@ -621,35 +818,37 @@ func tidyRun(run: URL, publish: String, keepRun: Bool, publishReaped: Bool) -> [
             guard !isSymlink(run) else { throw RunError("run dir is a symlink") }
             _ = try guarded(run, under: root)
             let size = allocatedBytes(run)          // the enumerator does not descend symlinks
-            try fm.removeItem(at: run)                 // removes a symlink inside, never its target
+            try removeTree(run)
             return ["GAUNTLET TIDY removed run \(run.path) (\(String(format: "%.2f", Double(size) / 1e9)) GB); summary in history.jsonl"]
         } catch { return ["GAUNTLET TIDY warning: could not remove \(run.path): \(error)"] }
     }
-    return [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
+    var markerLine: [String] = []
+    if keepRun {
+        do { try write(Data("--keep-run\n".utf8), to: run.appendingPathComponent(keepRunMarkerName), root: run) } catch {
+            markerLine = ["GAUNTLET TIDY warning: the \(keepRunMarkerName) marker was not written (\(error)); the next run's retention may tidy \(run.path)"]
+        }
+    }
+    return markerLine + [tidyBuildScratch(run: run, keepBuild: keepRun, publishReaped: publishReaped), "GAUNTLET TIDY kept run (\(why)) \(run.path)"]
 }
 
-/// Removes the run's build scratch when buildScratchToRemove allows it; returns the one line to print.
+/// Removes the run's regenerable folders when buildScratchToRemove allows it; returns the one line to print.
 func tidyBuildScratch(run: URL, keepBuild: Bool, publishReaped: Bool) -> String {
     let resultExists = fm.fileExists(atPath: run.appendingPathComponent("result.json").path)
-    let targets = buildScratchToRemove(run: run, resultExists: resultExists, keepBuild: keepBuild, publishReaped: publishReaped)
-    guard !targets.isEmpty else {
+    guard resultExists, !keepBuild, publishReaped else {
         let why = keepBuild ? "--keep-run" : !resultExists ? "no result.json" : "publisher not reaped"
         return "GAUNTLET TIDY kept build products (\(why)) in \(run.path)"
     }
-    var bytes: Int64 = 0
-    var problems: [String] = []
-    for target in targets where fm.fileExists(atPath: target.path) {
-        // A symlink here is not the runner's own output: never follow or remove it.
-        guard !isSymlink(target), (try? guarded(target, under: run)) != nil else { problems.append("skipped \(target.lastPathComponent)"); continue }
-        let size = allocatedBytes(target)
-        do { try fm.removeItem(at: target); bytes += size } catch { problems.append("\(target.lastPathComponent): \(error.localizedDescription)") }
-    }
-    let gb = String(format: "%.2f", Double(bytes) / 1e9)
-    return "GAUNTLET TIDY removed build products (\(gb) GB) from \(run.path)" + (problems.isEmpty ? "" : " warning=\"\(problems.joined(separator: "; "))\"")
+    return "GAUNTLET TIDY " + removeBuildScratch(run: run) + " from \(run.path)"
 }
 
 /// The marker prepareRoots writes into every run dir it makes: the run's own id.
 let runMarkerName = ".gauntlet-run"
+
+/// The last non-blank line of a small text file (a command log), trimmed; nil when there is none.
+func lastLine(of url: URL) -> String? {
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+    return text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+}
 
 func isRegularFile(_ url: URL) -> Bool {
     var st = stat()
@@ -678,38 +877,57 @@ func runEntries(_ resultsRoot: URL) -> [(name: String, finished: Bool)] {
     }
 }
 
-/// Removes runs older than retentionDays (by name); returns one line per run removed. The safety
-/// net for runs the end-of-run tidy kept (queued publish, crash, --keep-run).
+/// At the start of a run: runs beyond the newest `keepRuns` or older than `retentionDays` (by name)
+/// are removed; every other run that is finished, or too old to be live, gives up its regenerable
+/// folders (a run killed before its own tidy kept DerivedData for days: 2026-11-24). Returns one line
+/// per run acted on. `current` (this run) is never touched.
 /// Rick 2026-11-08: "delete them all, once we have the summary data" -- history.jsonl keeps every
 /// run's summary row, so these run dirs are removed outright rather than moved to .trash (his
 /// explicit exception, for gauntlet run dirs only; DECISIONS). history.jsonl and pending-metrics* are never touched.
 /// Codex sweep 11/09 F2: "once we have the summary data" — a run whose summary
 /// row is NOT in history.jsonl (a crash before the row) keeps its logs and
-/// result.json, the only record of it; only its regenerable build products go.
-func retainFinishedRuns(resultsRoot: URL, now: Date) -> [String] {
+/// result.json, the only record of it; only its regenerable folders go.
+func retainFinishedRuns(resultsRoot: URL, now: Date, current: String = "") -> [String] {
     let history = resultsRoot.appendingPathComponent("history.jsonl")
-    return retentionCandidates(runEntries(resultsRoot), now: now).map { name in
-        let dir = resultsRoot.appendingPathComponent(name)
-        guard historyHasRun(history, runID: name) else {
+    let entries = runEntries(resultsRoot)
+    let candidates = Set(retentionCandidates(entries, now: now))
+    return entries.compactMap { entry -> String? in
+        let dir = resultsRoot.appendingPathComponent(entry.name)
+        guard entry.name != current else { return nil }
+        let started = runDate(fromName: entry.name) ?? now
+        let mayBeLive = !entry.finished && now.timeIntervalSince(started) <= liveRunHours * 3600
+        guard candidates.contains(entry.name) else {
+            guard !mayBeLive, !isRegularFile(dir.appendingPathComponent(keepRunMarkerName)),
+                  !regenerableFolders(run: dir).isEmpty else { return nil }
+            return "GAUNTLET RETENTION tidied \(dir.path) (" + (entry.finished ? "finished" : "unfinished, older than \(Int(liveRunHours)) h") + "); "
+                + removeBuildScratch(run: dir)
+        }
+        guard historyHasRun(history, runID: entry.name) else {
+            guard !mayBeLive else { return nil }          // no summary row yet: it may still be running
             return "GAUNTLET RETENTION kept \(dir.path) (no summary row in history.jsonl — its logs are the only record); "
                 + removeBuildScratch(run: dir)
         }
         do {
             _ = try guarded(dir, under: resultsRoot)
-            try fm.removeItem(at: dir)
-            return "GAUNTLET RETENTION removed \(dir.path) (run older than \(retentionDays) days; summary in history.jsonl)"
+            try removeTree(dir)
+            return "GAUNTLET RETENTION removed \(dir.path) (beyond the newest \(keepRuns) or older than \(retentionDays) days; summary in history.jsonl)"
         } catch { return "GAUNTLET RETENTION warning: could not remove \(dir.path): \(error)" }
     }
 }
 
-/// Removes the run's own build products (never a symlink, never outside the run); the words to print.
+/// Removes the run's regenerable folders (never a symlink, never outside the run); the words to print.
+/// A run that proves itself only by its pre-marker `.write-probe` files gets its marker first, so it
+/// stays recognisably the runner's own once its home/tmp/catalog folders are gone.
 func removeBuildScratch(run: URL) -> String {
     var bytes: Int64 = 0
     var problems: [String] = []
-    for target in buildScratchNames.map({ run.appendingPathComponent($0) }) where fm.fileExists(atPath: target.path) {
-        guard !isSymlink(target), (try? guarded(target, under: run)) != nil else { problems.append("skipped \(target.lastPathComponent)"); continue }
+    if !isRegularFile(run.appendingPathComponent(runMarkerName)), runnerOwns(run) {
+        try? write(Data(run.lastPathComponent.utf8), to: run.appendingPathComponent(runMarkerName), root: run)
+    }
+    for target in regenerableFolders(run: run) {
+        guard (try? guarded(target, under: run)) != nil else { problems.append("skipped \(target.lastPathComponent)"); continue }
         let size = allocatedBytes(target)
-        do { try fm.removeItem(at: target); bytes += size } catch { problems.append("\(target.lastPathComponent): \(error.localizedDescription)") }
+        do { try removeTree(target); bytes += size } catch { problems.append("\(target.lastPathComponent): \(error.localizedDescription)") }
     }
     return "removed build products (\(String(format: "%.2f", Double(bytes) / 1e9)) GB)" + (problems.isEmpty ? "" : " warning=\"\(problems.joined(separator: "; "))\"")
 }
@@ -747,6 +965,9 @@ struct GauntletRunner {
     /// The package adapter's one build (nil = not needed / not attempted).
     var packageBuildOK: Bool?
     var packageBuildReason: String?
+    /// `core_lane.py list` output for the built package (nil = not listed); why it failed, if it did.
+    var quietListing: String?
+    var quietListingReason: String?
     var packagePath: URL { repo.appendingPathComponent("VideoScan/VideoScanCore") }
     var packageScratch: String { run.appendingPathComponent("PackageBuild").path }
 
@@ -810,7 +1031,7 @@ struct GauntletRunner {
         print("Inventory: \(validationErrors.isEmpty ? "valid" : validationErrors.joined(separator: "; "))")
         print("Isolation: per-run home, App Support, catalog, preferences, caches, logs, archive, fixtures; canonical write allowlist")
         print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath <run>/DerivedData")
-        print("Package: ONE swift build --build-tests -c release -Xswiftc -enable-testing --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors")
+        print("Package: ONE swift build --build-tests -c release -Xswiftc -enable-testing --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors: the stage's quiet-machine tests (core_lane.py list) --skip'ped, then run --no-parallel")
         for name in stageOrder {
             let entry = stageMap[name]!
             let selectors = entry["selectors"] as? [String] ?? []
@@ -820,7 +1041,7 @@ struct GauntletRunner {
             print("\(name): \(name == "ui" ? "UI not run (phase 2)" : !only.contains(name) ? "not_run (not selected)" : "test-without-building selectors=\(selectors.count) expected_floor=\(entry["expected_floor"] ?? 0)\(package) blocked=\(blocked.count)")")
         }
         print("Results: history.jsonl summary row (totals, failed/skipped/incomplete test names, new_failures, fixed, first_failed); \(resultsRoot.path)/<run-id>/result.json while the run dir lives; metrics publication queued on failure")
-        print("Tidy: after the summary row is in history.jsonl and publish=published, remove the whole run dir\(keepRun ? " (skipped: --keep-run)" : ""); queued: remove only <run>/{\(buildScratchNames.joined(separator: ","))}; retention: runs older than \(retentionDays) days (by run name) are removed")
+        print("Tidy: after the summary row is in history.jsonl and publish=published, remove the whole run dir\(keepRun ? " (skipped: --keep-run)" : ""); queued: remove every folder of the run but logs/ (DerivedData, PackageBuild, swift-cache, xcresult bundles, the sealed roots); retention: at most the newest \(keepRuns) runs, none older than \(retentionDays) days (by run name)")
 
     }
 
@@ -923,6 +1144,36 @@ struct GauntletRunner {
             // RED, never AMBER (Codex 11/05): contamination blocks every stage
             // before runPackageSuites could fail one, so the run itself fails here.
             fatalReason = fatalReason ?? packageBuildReason
+            return
+        }
+        // The quiet-machine ids, read once from the bundle just built. A listing that
+        // fails leaves every package stage RED in its words, never all-parallel.
+        // The products folder is SwiftPM's to name (`<scratch>/out/Products/Release` under Swift 6.4's
+        // build system, `<scratch>/release` before it): ask it with the build's own flags, never guess
+        // (2026-11-24: the guessed `/release` left all three package stages RED on the M4).
+        let binLog = run.appendingPathComponent("package-bin-path.log")
+        let bin = try command(cmd + ["--show-bin-path"], log: binLog, timeout: 600, environment: buildEnvironment)
+        if bin.contaminated { contaminated = true }
+        let products = bin.code == 0 ? lastLine(of: binLog) : nil
+        guard let products, products.hasPrefix("/") else {
+            quietListingReason = "quiet-machine listing: swift build --show-bin-path exit \(bin.code) named no products folder"
+            return
+        }
+        let listLog = run.appendingPathComponent("package-quiet-list.log")
+        // core_lane.py makes its own sealed home in $TMPDIR, and sealed_home refuses one under ~/Library/Logs —
+        // where this run's tmp root lives (Ultra 2026-11-24 19:15: "sealed_home.Refused … would be inside the
+        // real home's App Support, Logs"). The listing gets the system temp, as the nightly's core lane has.
+        var listEnvironment = environment
+        listEnvironment["TMPDIR"] = ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory()
+        let listing = try command(["python3", repo.appendingPathComponent("scripts/core_lane.py").path, "list",
+                                   "--products", products], log: listLog, timeout: 600, environment: listEnvironment)
+        if listing.contaminated { contaminated = true }
+        if listing.code == 0, !listing.contaminated, let text = try? String(contentsOf: listLog, encoding: .utf8) {
+            quietListing = text
+        } else {
+            // The run folder is deleted once summarized, so the reason carries the listing's own last line.
+            quietListingReason = "quiet-machine listing (core_lane.py list) exit \(listing.code)" + (listing.contaminated ? " (unreaped process contamination)" : "")
+                + (lastLine(of: listLog).map { ": \($0.prefix(200))" } ?? "")
         }
     }
 
@@ -937,12 +1188,21 @@ struct GauntletRunner {
             output["status"] = "failed"; output["reason"] = packageBuildReason ?? "package build did not run"
             return (output, names)
         }
+        guard let quietListing else {
+            output["status"] = "failed"; output["reason"] = quietListingReason ?? "quiet-machine listing did not run"
+            return (output, names)
+        }
         let patterns = selectors.map { NSRegularExpression.escapedPattern(for: $0) + "/" }
         let filters = patterns.flatMap { ["--filter", $0] }
+        let quiet = quietMachineIDs(listing: quietListing, filters: patterns)
         let log = run.appendingPathComponent("\(name)-package.log")
         let events = run.appendingPathComponent("\(name)-package-events.jsonl")
-        let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch,
-                   "--event-stream-output-path", events.path] + filters
+        let base = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch]
+        let cmd = base + ["--event-stream-output-path", events.path] + filters + (quiet.isEmpty ? [] : ["--skip", swiftIDRegex(quiet)])
+        let quietLog = run.appendingPathComponent("\(name)-package-quiet.log")
+        let quietEvents = run.appendingPathComponent("\(name)-package-quiet-events.jsonl")
+        let quietCmd = base + ["--event-stream-output-path", quietEvents.path, "--no-parallel", "--filter", swiftIDRegex(quiet)]
+        output["quiet_machine"] = quiet.count
         // The independent XCTest count: the package listed, not run, then narrowed
         // by `patterns` here — `swift test list` ignores --filter (kept on the
         // command in case a later SwiftPM honours it; filtering twice is a no-op).
@@ -957,14 +1217,27 @@ struct GauntletRunner {
                 return (output, names)
             }
             let listed: String? = listing.code == 0 ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
-            let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
+            var execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
+            var quietStream = ""
+            if !quiet.isEmpty && !execution.contaminated {
+                // The quiet pass: one test at a time, nothing else of the stage beside it.
+                let serial = try command(quietCmd, log: quietLog, timeout: timeout, environment: environment)
+                if serial.contaminated { contaminated = true }
+                quietStream = (try? String(contentsOf: quietEvents, encoding: .utf8)) ?? ""
+                execution = CommandResult(code: execution.code != 0 ? execution.code : serial.code,
+                                          timedOut: execution.timedOut || serial.timedOut,
+                                          contaminated: execution.contaminated || serial.contaminated,
+                                          elapsed: execution.elapsed + serial.elapsed)
+            }
             output["exit_code"] = execution.code
             output["elapsed_s"] = execution.elapsed
             let stream = (try? String(contentsOf: events, encoding: .utf8)) ?? ""
             let console = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-            let counts = countsFromPackageRun(eventStream: stream, console: console, xctestList: listed, filters: patterns)
+            let counts = countsFromQuietSplit(parallel: countsFromPackageRun(eventStream: stream, console: console, xctestList: listed, filters: patterns),
+                                              parallelStream: stream, quietStream: quietStream, quiet: quiet)
             names = packageNames(eventStream: stream, console: console, xctestList: listed, filters: patterns)
+            if !quiet.isEmpty { names.merge(SwiftTestingTally(eventStream: quietStream, lenient: true)?.names ?? TestNames()) }
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -1038,7 +1311,9 @@ struct GauntletRunner {
         var artifacts: [String] = []
         var names = TestNames()
         if !selectors.isEmpty {
-            let cmd = ["xcodebuild", "test-without-building", "-xctestrun", xctestrun!.path, "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-resultBundlePath", bundle.path, "-skip-testing:VideoScanUITests"] + selectors.map { "-only-testing:\($0)" }
+            // -derivedDataPath: without it xcodebuild makes ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash
+            // of the .xctestrun path> per run and never removes it (2026-11-24: 729 folders, 25 GB on the Ultra).
+            let cmd = ["xcodebuild", "test-without-building", "-xctestrun", xctestrun!.path, "-derivedDataPath", roots["DerivedData"]!, "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-resultBundlePath", bundle.path, "-skip-testing:VideoScanUITests"] + selectors.map { "-only-testing:\($0)" }
             do {
                 let execution = try command(cmd, log: run.appendingPathComponent("\(name).log"), timeout: timeout, environment: environment)
                 contaminated = execution.contaminated
@@ -1055,7 +1330,8 @@ struct GauntletRunner {
                                            floor: entry["package_expected_floor"] as? Int ?? 1, timeout: timeout)
             mergePackage(package.row, into: &output, xcodeRan: !selectors.isEmpty)
             names.merge(package.names)
-            artifacts += ["package-build.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
+            artifacts += ["package-build.log", "package-quiet-list.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
+                + ((package.row["quiet_machine"] as? Int ?? 0) > 0 ? ["\(name)-package-quiet.log", "\(name)-package-quiet-events.jsonl"] : [])
         }
         // Safe subset passed, but the stage still holds unadapted suites
         // (AMBER-class); an AMBER stage keeps its status and says both.
@@ -1175,7 +1451,7 @@ struct GauntletRunner {
         try validateInventory()
         if dry { printPlan(); return validationErrors.isEmpty ? 0 : 1 }
         try prepareRoots()
-        retainFinishedRuns(resultsRoot: resultsRoot, now: Date()).forEach { print($0) }
+        retainFinishedRuns(resultsRoot: resultsRoot, now: Date(), current: runID).forEach { print($0) }
         try prepareAdapterEnvironment()
         initializeResult()
         signal(SIGINT, onSignal); signal(SIGTERM, onSignal); signal(SIGHUP, onSignal)

@@ -11,6 +11,7 @@ import importlib.util
 import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -254,3 +255,52 @@ def test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh(monkeypatch
     monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 5.0))
     assert sl.main(["run", "--log-dir", str(tmp_path)]) == 0
     assert "sensor lane GREEN (703 tests)" in capsys.readouterr().out
+
+
+# ---- sealed: every test process the lane starts runs in a sealed home (DECISIONS 2026-11-22) ----
+
+def _capture_runs(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr(sl.subprocess, "run", fake_run)
+    return calls
+
+
+def test_the_app_half_runs_its_test_host_in_a_sealed_home(monkeypatch, tmp_path):
+    calls = _capture_runs(monkeypatch)
+    sl.run_app(APP[:2], tmp_path, tmp_path / "dd")
+    (cmd,) = calls
+    sealed = [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--empty", "--"]
+    assert cmd[:len(sealed)] == sealed, cmd
+    assert cmd[len(sealed):len(sealed) + 2] == ["xcodebuild", "test"]
+
+
+def test_the_core_half_builds_under_the_real_home_then_tests_sealed(monkeypatch, tmp_path):
+    calls = _capture_runs(monkeypatch)
+    sl.run_core(CORE[:2], tmp_path)
+    build, test = calls
+    assert build[:3] == ["swift", "build", "--build-tests"], "the build keeps the real home (SwiftPM caches)"
+    sealed = [sys.executable, str(ROOT / "scripts" / "sealed_home.py"), "run", "--empty", "--plain", "--"]
+    assert test[:len(sealed)] == sealed, test
+    assert test[len(sealed):len(sealed) + 3] == ["swift", "test", "--skip-build"], "the sealed step must not build"
+
+
+def test_a_failed_core_build_does_not_run_the_tests(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(sl.subprocess, "run", lambda args, **kw: (calls.append(args), subprocess.CompletedProcess(args, 1))[1])
+    p, f, names, rc, el = sl.run_core(CORE[:1], tmp_path)
+    assert rc == 1 and len(calls) == 1
+
+
+def test_derived_data_on_an_external_volume_is_refused_gh510(monkeypatch, tmp_path, capsys):
+    ran = []
+    monkeypatch.setattr(sl, "run_app", lambda *a, **k: ran.append(a) or (700, 0, [], 0, 1.0))
+    monkeypatch.setattr(sl, "run_core", lambda *a, **k: ran.append(a) or (3, 0, [], 0, 1.0))
+    monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 0.0))
+    assert sl.main(["run", "--derived-data", "/Volumes/SomeDrive/dd/x", "--log-dir", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "REFUSED" in err and "#510" in err and not ran
+    assert not sl.external_volume(Path.home() / "Library" / "Caches" / "x")

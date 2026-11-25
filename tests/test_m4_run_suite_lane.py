@@ -59,12 +59,19 @@ case " $* " in
     fi
     exit 0 ;;
   *" build-for-testing "*) echo "fake build"; exit "$(cat "$SUITE_FAKE/build_rc")" ;;
-  *" test-without-building "*) cat "$SUITE_FAKE/app.log"; exit "$(cat "$SUITE_FAKE/test_rc")" ;;
+  *" test-without-building "*)
+    # what the test host would be given (xcodebuild strips TEST_RUNNER_), and whether that home exists now
+    { echo "home=${TEST_RUNNER_HOME:-}"; echo "cfhome=${TEST_RUNNER_CFFIXED_USER_HOME:-}"
+      echo "tmp=${TEST_RUNNER_VIDEOSCAN_TEST_TMP:-}"
+      [ -n "${TEST_RUNNER_HOME:-}" ] && [ -d "$TEST_RUNNER_HOME/Library/Logs" ] && echo "logs=yes"; } > "$SUITE_FAKE/runner_env"
+    cat "$SUITE_FAKE/app.log"; exit "$(cat "$SUITE_FAKE/test_rc")" ;;
 esac
 exit 0
 '''
 FAKE_SWIFT = r'''#!/bin/sh
 echo "swift $*" >> "$SUITE_FAKE/calls"
+# A lane that leaves scratch behind (the DISK LEAK check): $SUITE_FAKE/leak names the folder to fill.
+if [ -s "$SUITE_FAKE/leak" ]; then d="$(cat "$SUITE_FAKE/leak")"; mkdir -p "$d"; head -c 600000 /dev/zero > "$d/blob"; fi
 cat "$SUITE_FAKE/core.log"
 exit "$(cat "$SUITE_FAKE/core_rc")"
 '''
@@ -160,7 +167,9 @@ class Testbed(unittest.TestCase):
         self.git_env = dict(os.environ, HOME=str(self.home), GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
                             GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
         self.env = dict(os.environ, HOME=str(self.home), SUITE_FAKE=str(self.fake),
-                        VIDEOSCAN_M4RUN_TEST_PATH=str(self.bin), VIDEOSCAN_M4RUN_WAIT_POLL='1')
+                        VIDEOSCAN_M4RUN_TEST_PATH=str(self.bin), VIDEOSCAN_M4RUN_WAIT_POLL='1',
+                        # the host cleanup's disk mark measures the fake home's scratch only, never the real temp folders
+                        VIDEOSCAN_DISK_LEAK_ROOTS=f'{self.home}/Library/Caches:{self.home}/m4run/out')
 
     def tearDown(self):
         self.home_dir.cleanup()
@@ -369,6 +378,13 @@ sys.exit(0 if d["verdict"] == "GREEN" else 1)
         self.assertEqual((row['status'], row['passed']), ('ok', 5))
         self.assertNotIn('app_test_hosts', row)
         self.assertIn('one test host (NIGHTLY_APP_JOBS=1)', (out / 'suite.log').read_text())
+        # Sealed (DECISIONS 2026-11-22): the single host's test host gets a scratch home, never the real one,
+        # and the home is freed after the run.
+        got = dict(line.split('=', 1) for line in (self.fake / 'runner_env').read_text().splitlines())
+        self.assertTrue(got.get('home'), 'the single host ran with the real home')
+        self.assertNotEqual(got['home'], str(self.home))
+        self.assertEqual((got['cfhome'], got['tmp'], got.get('logs')), (got['home'], got['home'] + '/tmp/', 'yes'))
+        self.assertFalse(pathlib.Path(got['home']).exists(), 'the sealed home was not freed')
 
     def test_a_shard_that_came_up_short_is_red_by_name_though_every_test_passed(self):
         self.commit_sharder()

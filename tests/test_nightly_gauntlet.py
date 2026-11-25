@@ -58,6 +58,11 @@ printf 'GAUNTLET %s sha=abc12345 total=9s results=%s publish=published\n' "$stat
 exit "$(cat "$FAKE/g_rc")"
 '''
 
+# The same, leaving scratch behind when $FAKE/leak names a folder (the DISK LEAK check).
+FAKE_GAUNTLET_LEAK = FAKE_GAUNTLET.replace('echo "$@" > "$FAKE/gauntlet_args"\n',
+    'echo "$@" > "$FAKE/gauntlet_args"\n'
+    'if [ -s "$FAKE/leak" ]; then d="$(cat "$FAKE/leak")"; mkdir -p "$d"; head -c 600000 /dev/zero > "$d/blob"; fi\n')
+
 FAKE_SSH = r'''#!/bin/sh
 # Stand-in for ssh: records the call; fails when told to.
 printf '%s\n' "$@" > "$FAKE/ssh_args"
@@ -182,6 +187,26 @@ class NightlyGauntletTests(unittest.TestCase):
         rc, line = self.run_it("--gauntlet-only")
         self.assertEqual(rc, 1)
         self.assertIn("gauntlet RED", line)
+
+    def test_a_testbed_that_leaves_scratch_behind_says_disk_leak_in_the_done_line_amber_only(self):
+        # Rick 2026-11-24: free space marked before the testbed and checked after it; lower by more than the
+        # threshold is a DISK LEAK row, AMBER: quoted in testbed_latest.txt, never the exit code.
+        shutil.copy(REPO / "scripts/testbed_host.py", self.repo / "scripts/testbed_host.py")
+        gauntlet = self.repo / "scripts/run_gauntlet.sh"
+        gauntlet.write_text(FAKE_GAUNTLET_LEAK)
+        scratch = self.home / "scratch"
+        scratch.mkdir()
+        self.env.update(VIDEOSCAN_DISK_LEAK_ROOTS=str(scratch), VIDEOSCAN_TESTBED_FAKE_DISK=f"{10 ** 9}:0",
+                        VIDEOSCAN_DISK_LEAK_THRESHOLD="300000")
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("DISK LEAK", line, "nothing was left behind")
+        (self.fake / "leak").write_text(str(scratch / "left-behind"))
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0, "a DISK LEAK is AMBER: it never changes the exit code")
+        self.assertIn("· DISK LEAK (AMBER): free fell", line)
+        self.assertIn("grew: ~/scratch/left-behind +0.6 MB", line)
+        self.assertTrue(line.endswith("· results https://musicalengineer.github.io/VideoScan/"), line)
 
     def race(self, pause_env, stale=False):
         """Owner A is paused at `pause_env`; contender B runs to a live hold (its

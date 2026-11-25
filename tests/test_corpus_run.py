@@ -84,6 +84,8 @@ if args[0] == "build-for-testing":
         f.write("built " + ",".join(sorted(os.listdir(overlay))) if os.path.isdir(overlay) else "built without drivers")
     sys.exit(0)
 run = plistlib.load(open(args[args.index("-xctestrun") + 1], "rb"))
+if "-derivedDataPath" in args:                            # what the real one leaves there: its Logs/Test
+    os.makedirs(args[args.index("-derivedDataPath") + 1] + "/Logs/Test", exist_ok=True)
 env = run["TestConfigurations"][0]["TestTargets"][0]["EnvironmentVariables"]
 config = json.load(open(env["VS_CORPUS_CONFIG"]))
 target = run["TestConfigurations"][0]["TestTargets"][0]
@@ -678,6 +680,11 @@ class LaneTests(unittest.TestCase):
         self.assertNotIn('SkipTestIdentifiers', driver['target_keys'])
         self.assertNotIn('OS_ACTIVITY_DT_MODE', env, "the engines' os_log lines name files; they stay out of the test log")
         self.assertIn('-test-timeouts-enabled', test['args'])
+        # RED 2026-11-24: no -derivedDataPath made ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash of
+        # the patched .xctestrun path> per launch, with xcodebuild's default result bundle in it, never removed.
+        dd = test['args'][test['args'].index('-derivedDataPath') + 1]
+        self.assertTrue(dd.startswith(str(self.scene.seal.work_root) + '/'), dd)
+        self.assertFalse(os.path.lexists(dd), 'the launch left its DerivedData behind')
 
     def test_a_crash_in_one_file_does_not_stop_the_run(self):
         self.scene.plan['files'] = {sha_of(1): dict(crash='check')}
@@ -3972,6 +3979,141 @@ class WishListTests(unittest.TestCase):
         ledger = cr.Ledger.load(self.scene.seal)
         states = cr.classify(entries, ledger, built_over=[e.sha for e in entries if e.sha != sha_of(1)])
         self.assertEqual(states[sha_of(1)], 'missing')
+
+
+class SampleRootsTests(unittest.TestCase):
+    """DECISIONS 2026-11-24: the corpus is a stratified sample (scripts/corpus_select.py). A sample file that fits
+    neither copy root is `ro`, read from the Ultra over a read-only share that is not mounted yet: in the manifest
+    and the inventory, NOT RUN in every run — AMBER, never a baseline — as an unplugged external volume's files.
+    A run records the manifest it read (corpus_shrink.py apply proves the green run ran the installed sample), and
+    a SHA-256 list that still names a content the sample dropped is not a disagreement."""
+
+    RO = (40, '/Volumes/UltraDrive/Grandma/too big for the M4.mxf', 9_000, 'sample')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)                 # v1: three internal files, prepared
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sample(self, keep=(0, 1, 2), ro=True):
+        """The sample installed as the v2 manifest (over the v1 backup, as v2's own)."""
+        rows = [dict(sha256=sha_of(n), path=o, size=s, why=w, root='internal') for n, o, s, w in self.scene.files if n in keep]
+        if ro:
+            n, o, s, w = self.RO
+            rows.append(dict(sha256=sha_of(n), path=o, size=s, why=w, root='ro'))
+        (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows))
+        if not (self.scene.corpus / cr.SOURCE_BACKUP_V2).exists():
+            shutil.copyfile(self.scene.corpus / cr.SOURCE_BACKUP, self.scene.corpus / cr.SOURCE_BACKUP_V2)
+        return rows
+
+    def summary(self):
+        return (self.scene.out / 'corpus-summary.txt').read_text()
+
+    def test_an_ro_row_is_a_manifest_row_and_its_file_is_never_looked_at(self):
+        self.sample()
+        entries = cr.load_manifest(self.scene.seal)
+        ro = [e for e in entries if e.root == 'ro']
+        self.assertEqual(len(ro), 1)
+        self.assertTrue(str(ro[0].path).startswith(str(cr.RO_NOT_MOUNTED) + '/'))
+        hashed = []
+        real = self.scene.seal.hasher
+        self.scene.seal.hasher = lambda path, size: (hashed.append(str(path)), real(path, size))[1]
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 3 · missing 0 | ro present 0 · missing 0 · not_run 1', lines)
+        self.assertIn('  read-only share NOT MOUNTED: its 1 files were not looked at', lines)
+        self.assertFalse(any('corpus-ro-share' in h for h in hashed))
+
+    def test_a_run_with_ro_files_counts_them_not_run_amber_and_never_a_baseline(self):
+        self.sample()
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check'), cr.EXIT_AMBER, self.summary())
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual((report['files'], report['not_run_ro'], report['not_run_external']), (3, 1, 0))
+        self.assertIn('read-only share NOT MOUNTED: 1 files read from the Ultra', self.summary())
+        self.assertIn('1 files NOT RUN: the read-only share is not mounted',
+                      json.loads((self.scene.out / cr.VERDICT_FILE).read_text())['notes'])
+        with self.assertRaises(cr.Refused) as refused:
+            cr.accept(self.scene.seal, 'check', 'tester')
+        self.assertIn('read-only share', str(refused.exception))
+        self.assertEqual(cr.baseline_of(self.scene.seal, 'check')[0], None, 'never the implicit first baseline')
+        self.assertNotIn('Grandma', self.scene.everything_that_leaves())
+
+    def test_a_run_records_the_sha256_of_the_manifest_it_read(self):
+        self.sample(ro=False)
+        cr.prepare(self.scene.seal)
+        self.assertEqual(self.scene.run('check'), cr.EXIT_GREEN, self.summary())
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['manifest_sha256'],
+                         hashlib.sha256((self.scene.corpus / cr.MANIFEST_V2).read_bytes()).hexdigest())
+        self.assertEqual(cr.clean_report(report)['manifest_sha256'], report['manifest_sha256'])
+
+    def test_codex_359_f7_a_run_records_the_hash_of_the_manifest_bytes_it_parsed(self):
+        rows = self.sample(ro=False)
+        cr.prepare(self.scene.seal)
+        parsed = hashlib.sha256((self.scene.corpus / cr.MANIFEST_V2).read_bytes()).hexdigest()
+        real = cr.load_manifest
+
+        def load_then_swap(seal, *args, **kwargs):
+            entries = real(seal, *args, **kwargs)
+            (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows[:2]))      # B put in place after A was read
+            return entries
+        cr.load_manifest = load_then_swap
+        try:
+            self.scene.run('check')
+        finally:
+            cr.load_manifest = real
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual(report['manifest_sha256'], parsed, "the run recorded a manifest it never read")
+
+    def test_codex_359_f9_a_content_moved_to_ro_is_never_built_into_the_sealed_catalog(self):
+        self.sample(ro=False)
+        cr.prepare(self.scene.seal)                                 # file 2 proven ok in the ledger
+        rows = json.loads((self.scene.corpus / cr.MANIFEST_V2).read_text())
+        rows[2]['root'] = 'ro'
+        (self.scene.corpus / cr.MANIFEST_V2).write_text(json.dumps(rows))
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 2 · missing 0 | ro present 0 · missing 0 · not_run 1', lines)
+
+    def test_a_sha_list_naming_a_content_the_sample_dropped_is_not_a_disagreement(self):
+        # The v1 list names all three files; the sample keeps two. Before 2026-11-24 prepare refused here.
+        self.sample(keep=(0, 1), ro=False)
+        code, lines = cr.prepare(self.scene.seal)
+        self.assertEqual(code, cr.EXIT_GREEN, lines)
+        self.assertIn('  files: internal present 2 · missing 0', lines)
+        (self.scene.corpus / cr.SHA_LIST).write_text(f"{sha_of(0)}  media/Volumes/PrivateDrive/elsewhere.mov\n")
+        with self.assertRaises(cr.Refused) as refused:                           # a KEPT content elsewhere still is
+            cr.prepare(self.scene.seal)
+        self.assertIn('disagree on 1', str(refused.exception))
+
+
+class ReviewerReRootTests(unittest.TestCase):
+    """Reviewer, 2026-11-24 (feat/corpus-sample). corpus_select.place re-roots a kept content when its old root's
+    budget no longer holds it (test_corpus_select Rule6PlaceTests.test_a_copy_in_place_keeps_its_root_while_the_root_has_room),
+    and plan-shrink plans its old copy (test_corpus_shrink test_a_digest_the_sample_moved_to_another_root_leaves_its_old_copy_planned).
+    The old root's SHA-256 list still names it at its old place: that line is a dropped copy ON THAT ROOT, not a
+    disagreement — else `prepare` refuses, no green run can be made, and apply-shrink can never free the old copy.
+    Pins scripts/corpus_run.py:804-819 (check_sha_list compares a line against the manifest place on ANY root)."""
+
+    def test_reviewer_a_content_the_sample_moved_to_the_x10_is_not_a_disagreement_on_the_ssd_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(os.path.realpath(tmp), 'home')
+            corpus = home / 'corpus'
+            corpus.mkdir(parents=True)
+            (corpus / cr.MARKER).write_text('test data\n')
+            (corpus / cr.VOLUME_PIN).write_text(json.dumps(dict(mount='/Volumes/NotHere',
+                                                                 volume_uuid='0' * 8 + '-0000-0000-0000-' + '0' * 12)))
+            moved = dict(sha256=sha_of(1), path='/Volumes/D1/f1.mov', size=1, why='sample', root='external')
+            (corpus / cr.MANIFEST_V2).write_text(json.dumps([moved]))
+            (corpus / cr.SHA_LIST).write_text('')
+            (corpus / cr.SHA_LIST_V2_INTERNAL).write_text(f"{moved['sha256']}  Volumes/D1/f1.mov\n")   # its old SSD copy
+            seal = cr.Seal(home, 'ricksm4')
+            entries = cr.load_manifest(seal)
+            self.assertEqual(cr.check_sha_list(seal, entries, seal.external()), 0,
+                             'the SSD list names the copy the sample moved off the SSD: a dropped copy there, not a disagreement')
 
 
 class WishListScaleTests(unittest.TestCase):

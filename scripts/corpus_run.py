@@ -57,6 +57,13 @@ asks the same, CorpusSeal.external). Nothing ever writes on it, mounted or not.
     same mount during the run.
   - the verbs lane clones from the INTERNAL root only: `cp -c` makes an APFS clone only
     within one volume, and the clones live in ~/corpus/work on the SSD.
+  - the ONE writer on the corpus roots is `scripts/corpus_shrink.py apply` (DECISIONS 2026-11-24): it
+    deletes copies the sample dropped, only after a GREEN check run on the installed sample.
+
+A THIRD ROOT, `ro` (DECISIONS 2026-11-24): a sample file that fits neither copy root is read from its
+original on the Ultra's drives over a read-only share. That share is not set up yet: an `ro` row is in
+the manifest and the inventory, and every run counts it NOT RUN — AMBER, never a baseline — exactly as
+an unplugged external volume's files (`not_run_ro`). Nothing opens anything under RO_NOT_MOUNTED.
   - the proof lane takes v1's one-sided-sound stratum, then the files the newest whole check
     run heard one-sided (Verify Audio's channelImbalance:leftOnly / :rightOnly), smallest
     first, PROOF_CAP (40) in all, and refuses to start unless the balanced copy of the
@@ -181,7 +188,10 @@ SHA_LIST_V2_INTERNAL = "corpus-sha-v2-internal.txt"     # `<sha256>  Volumes/…
 SHA_LIST_V2_EXTERNAL = "corpus-sha-v2-external.txt"     # on the external volume: <mount>/corpus/, relative to <mount>/corpus/media
 SOURCE_BACKUP_V2 = "catalog-source-backup-v2.sqlite"
 VOLUME_PIN = "external-volume.json"              # the adopted external volume: {mount, volume_uuid} (`adopt-volume`)
-ROOTS = ("internal", "external")
+ROOTS = ("internal", "external", "ro")
+# Where an `ro` row's file would be read: no share is mounted yet, so a path that never exists (/var/empty
+# is the system's empty, root-owned folder). Every `ro` file is NOT RUN until the share is set up.
+RO_NOT_MOUNTED = Path("/var/empty/corpus-ro-share-not-mounted")
 DOCUMENTS = (MANIFEST, SHA_LIST, SOURCE_BACKUP, MARKER, MANIFEST_V2, SHA_LIST_V2_INTERNAL, SOURCE_BACKUP_V2, VOLUME_PIN)
 VOLUMES = "/Volumes"                             # adopt-volume takes a volume mounted directly in this folder
 _UUID = re.compile(r"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}")
@@ -589,6 +599,12 @@ class Seal:
         self._external = External("ok", Path(mount), pin["volume_uuid"])
         return self._external
 
+    def reprove_external(self) -> External:
+        """The external root proven AFRESH (the cached proof dropped): for a step that must know the volume
+        is still the adopted one at this moment (corpus_shrink.py, after it opened the X10's media folder)."""
+        self._external = None
+        return self.external()
+
     def pristine(self, path: Path) -> bool:
         """True when `path` resolves inside the parts of the corpus nothing may write: the media
         copies, the read-only mount, the adopted external volume (whole, mounted or not), or one
@@ -740,13 +756,14 @@ def manifest_name(seal: Seal) -> str:
     return MANIFEST_V2 if os.path.lexists(str(seal.corpus / MANIFEST_V2)) else MANIFEST
 
 
-def load_manifest(seal: Seal) -> List[Entry]:
+def load_manifest(seal: Seal, data: Optional[bytes] = None) -> List[Entry]:
     """Every corpus file, each with its root and the place its copy sits: an internal file under
     ~/corpus/media, an external one under <the adopted mount>/corpus/media (whether or not that is
-    mounted now: whether it may be run is the lane's question, `Seal.external`)."""
+    mounted now: whether it may be run is the lane's question, `Seal.external`). `data`: the manifest's
+    bytes as the caller already read them (a lane hashes the very bytes it parses: Codex #359 F7)."""
     name = manifest_name(seal)
     try:
-        rows = json.loads((seal.corpus / name).read_text(encoding="utf-8"))
+        rows = json.loads((data if data is not None else (seal.corpus / name).read_bytes()).decode("utf-8"))
     except (OSError, ValueError):
         raise Refused(f"refused: ~/corpus/{name} is missing or unreadable")
     pin = seal.pin()
@@ -757,39 +774,45 @@ def load_manifest(seal: Seal) -> List[Entry]:
         if not re.fullmatch(r"[0-9a-f]{64}", sha) or not original.startswith("/Volumes/") or ".." in original.split("/"):
             raise Refused("refused: a manifest row is not a sha256 plus an original /Volumes path")
         if root not in ROOTS:
-            raise Refused("refused: a manifest row's root is not internal or external")
+            raise Refused("refused: a manifest row's root is not internal, external or ro")
         if sha in seen:
             raise Refused("refused: the manifest lists one content twice")
         if root == "external" and pin is None:
             raise Refused("refused: the manifest has files on the external volume and no volume was adopted — "
                           "run `scripts/corpus_run.sh adopt-volume <mount>` first")
         seen.add(sha)
-        folder = seal.media if root == "internal" else Path(pin["mount"]) / "corpus" / "media"
+        folder = (seal.media if root == "internal" else RO_NOT_MOUNTED if root == "ro"
+                  else Path(pin["mount"]) / "corpus" / "media")
         entries.append(Entry(sha, original, int(row["size"]), str(row.get("why", "")), folder / original.lstrip("/"), root))
     if not entries:
         raise Refused("refused: the manifest is empty")
     return sorted(entries, key=lambda e: e.sha)
 
 
-def sha_lists(seal: Seal, external: External) -> List[Tuple[Path, Path]]:
+def sha_lists(seal: Seal, external: External) -> List[Tuple[Path, Path, str]]:
     """The second documents (sha256 + relative path), each with the folder its paths are relative
-    to. v1: one, relative to ~/corpus. v2: that one, ~/corpus's list of the v2 internal files
-    (relative to ~/corpus/media), and — when the external volume is there — its own list."""
-    lists = [(seal.corpus / SHA_LIST, seal.corpus)]
+    to and the root whose copies it lists. v1: one, relative to ~/corpus (internal). v2: that one,
+    ~/corpus's list of the v2 internal files (relative to ~/corpus/media), and — when the external
+    volume is there — its own list (external)."""
+    lists = [(seal.corpus / SHA_LIST, seal.corpus, "internal")]
     if manifest_name(seal) == MANIFEST_V2:
-        lists.append((seal.corpus / SHA_LIST_V2_INTERNAL, seal.media))
+        lists.append((seal.corpus / SHA_LIST_V2_INTERNAL, seal.media, "internal"))
         if external.state == "ok":
-            lists.append((external.mount / "corpus" / SHA_LIST_V2_EXTERNAL, external.media))
+            lists.append((external.mount / "corpus" / SHA_LIST_V2_EXTERNAL, external.media, "external"))
     return lists
 
 
 def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External] = None) -> int:
     """The second documents (sha256 + relative path) never contradict the manifest: a listed
-    content must be a manifest entry, at the manifest's place. A list may be shorter than the
-    manifest (the manifest is the wish list; a copy list names what was sent so far)."""
-    wanted = {e.sha: os.path.normpath(str(e.path)) for e in entries}
+    content that IS a manifest entry must be at the manifest's place. A list may be shorter than the
+    manifest (the manifest is the wish list; a copy list names what was sent so far), and may name
+    content the manifest no longer holds (the sample dropped it, DECISIONS 2026-11-24: its copy waits
+    for `corpus_shrink.py apply`): that line is no longer the manifest's business. Each list is held
+    only to the manifest's rows on ITS OWN root: a content the sample moved to the other drive leaves a
+    dropped copy on the old one, named by the old drive's list (reviewer 2026-11-24)."""
+    wanted = {(e.sha, e.root): os.path.normpath(str(e.path)) for e in entries if e.root != "ro"}  # ro: no copy
     wrong = 0
-    for document, base in sha_lists(seal, external or External("none")):
+    for document, base, root in sha_lists(seal, external or External("none")):
         if os.path.islink(str(document)):
             raise Refused("refused: a corpus SHA-256 list is a link")
         try:
@@ -801,7 +824,8 @@ def check_sha_list(seal: Seal, entries: List[Entry], external: Optional[External
         for line in text.splitlines():
             if line.strip():
                 sha, rel = line.split(None, 1)
-                if wanted.get(sha.lower()) != os.path.normpath(str(base / rel.strip().lstrip("*"))):
+                key = (sha.lower(), root)
+                if key in wanted and wanted[key] != os.path.normpath(str(base / rel.strip().lstrip("*"))):
                     wrong += 1
     return wrong
 
@@ -1280,6 +1304,7 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
     entries = load_manifest(seal)
     external = seal.external()
     unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
+    ro = {e.sha for e in entries if e.root == "ro"}             # the read-only share is not mounted yet
     disagree = check_sha_list(seal, entries, external)
     if disagree:
         raise Refused(f"refused: {manifest_name(seal)} and the SHA-256 lists disagree on {disagree} entries")
@@ -1289,11 +1314,12 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
     for name in ("home", "caches"):
         seal.mkdir(seal.state / name)
     ledger = Ledger.load(seal)
-    ingested = ingest(seal, entries, ledger, unavailable, hasher=seal.hasher)
-    states = classify(entries, ledger, unavailable)
+    ingested = ingest(seal, entries, ledger, unavailable | ro, hasher=seal.hasher)
+    states = classify(entries, ledger, unavailable | ro)
     # Built over every proven file that is there or merely unplugged (an unplugged drive does not shrink it).
-    build = [e for e in entries if states[e.sha] == "present"
-             or (states[e.sha] == "not_run" and (ledger.files.get(e.sha) or {}).get("status") == "ok")]
+    # Never an `ro` file, whatever an earlier ingest proved of it on another root (Codex #359 F9).
+    build = [e for e in entries if e.root != "ro" and (states[e.sha] == "present"
+             or (states[e.sha] == "not_run" and (ledger.files.get(e.sha) or {}).get("status") == "ok"))]
     built_over = sorted(e.sha for e in build)
     previous = prepared_record(seal) or {}
     database = seal.state / database_name
@@ -1344,6 +1370,8 @@ def prepare(seal: Seal, out: Optional[Path] = None) -> Tuple[int, List[str]]:
     lines += [f"  {state} (AMBER): " + " ".join(named[state]) for state in PROBLEM_STATES if named.get(state)]
     if unavailable:
         lines.append(f"  external volume NOT MOUNTED: its {len(unavailable)} files were not looked at")
+    if ro:
+        lines.append(f"  read-only share NOT MOUNTED: its {len(ro)} files were not looked at")
     if counts:
         lines.append(f"  carried: files={counts.get('files')} content={counts.get('content')} volumes={counts.get('volumes')} "
                      f"user_dates={counts.get('user_dates')} workflow_tags={counts.get('workflow_tags')} "
@@ -1562,6 +1590,8 @@ class Lane:
         self.closing: Dict[str, int] = {}
         self.housekeeping: List[str] = []
         self.not_run_external = 0                            # files on an external volume that is not mounted
+        self.not_run_ro = 0                                  # files on the read-only share (not mounted yet)
+        self.manifest_sha256 = ""                            # the manifest this run read (corpus_shrink.py apply asks)
         # Launches of N that died with files in flight (their widths), and the files they left to be run again alone:
         # said in the report, and the run is AMBER at best — a fault only files in flight together cause (an engine
         # race, memory pressure) is a finding, never absorbed (review of 327576126).
@@ -1727,15 +1757,20 @@ class Lane:
         coverage = (["-enableCodeCoverage", "YES",
                      "-resultBundlePath", str(seal.writable(self.profiles / f"result-{self.launches}.xcresult"))]
                     if self.profiles is not None else [])
+        # The launch's own DerivedData, in the lane's work folder and removed after it: with no -derivedDataPath
+        # xcodebuild makes ~/Library/Developer/Xcode/DerivedData/VideoScan-<hash of the patched path> per launch
+        # (its default result bundle inside) and nothing removes it (2026-11-24: 729 folders, 25 GB on the Ultra).
+        launch_dd = self.seal.writable(self.work / "xcode-dd")
         try:
-            _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-destination",
-                  "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
+            _run([self.xcodebuild, "test-without-building", "-xctestrun", str(patched), "-derivedDataPath", str(launch_dd),
+                  "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO",
                   "-test-timeouts-enabled", "NO",            # one test method walks every file; the per-file deadline is the driver's
                   f"-only-testing:VideoScanTests/{self.test_class}", *coverage],
                  self.seal, self.out, "corpus-test.log", env, self.worktree)
         finally:
             if patched.exists():
                 move_file(self.seal, patched, self.out / patched.name)
+            remove_tree(self.seal, launch_dd)
         return read_events(progress)
 
     # -- what a lane may change about a launch (VerbsLane does)
@@ -1891,7 +1926,8 @@ class Lane:
                 "run_again_alone": len(self.ran_alone),
                 "failed_alone": sum(1 for sha in self.ran_alone if sha in results and (
                     results[sha].get("unfinished") or any(results[sha].get(e) in CUT_WORDS for e in engines))),
-                "limit": self.limit, "not_run_external": self.not_run_external + gone, "picked": self.picked,
+                "limit": self.limit, "not_run_external": self.not_run_external + gone, "not_run_ro": self.not_run_ro,
+                "manifest_sha256": self.manifest_sha256, "picked": self.picked,
                 "external_ran": external_ran, "external_unreadable": external_unreadable,
                 "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
                 "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
@@ -1922,13 +1958,21 @@ class Lane:
     def go(self) -> int:
         seal = self.seal.check()
         t0 = time.time()
-        entries = load_manifest(seal)
+        try:
+            manifest_bytes = (seal.corpus / manifest_name(seal)).read_bytes()
+        except OSError:
+            raise Refused(f"refused: ~/corpus/{manifest_name(seal)} is missing or unreadable")
+        self.manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        entries = load_manifest(seal, manifest_bytes)
         # The external root: run when proven; NOT RUN (and said, with the count) when it is not mounted;
         # refused (exit 2, nothing run) when something else is mounted there.
         external = seal.external()
         self.proven_uuid = external.uuid
         unavailable = {e.sha for e in entries if e.root == "external" and external.state != "ok"}
         self.not_run_external = len(unavailable)
+        ro = {e.sha for e in entries if e.root == "ro"}             # no read-only share yet: NOT RUN, AMBER
+        self.not_run_ro = len(ro)
+        unavailable |= ro
         # The wish list: only the files proven present run; the rest are counted (DECISIONS 2026-11-19).
         self.ledger = Ledger.load(seal)
         states = current_states(seal, entries, unavailable)
@@ -2123,7 +2167,8 @@ def proof_files(seal: Seal, entries: List[Entry], cap: int = PROOF_CAP) -> Tuple
     fixed = [e for e in entries if e.stratum == PROOF_STRATUM]
     heard, source = set(), "none"
     runs = [run for run, report in usable_runs(seal, "check")
-            if not report.get("limit") and not report.get("not_run_external") and not report.get("smoke")
+            if not report.get("limit") and not report.get("not_run_external") and not report.get("not_run_ro")
+            and not report.get("smoke")
             and not host_refused(report)]
     if runs:
         try:
@@ -2314,7 +2359,7 @@ def verdict_of(report: dict, against: Optional[dict]) -> str:
     # nothing about them) and never RED (no engine failed and no copy is at risk; the count is said).
     # Files mismatched, vanished or changed: AMBER, named. Files MISSING (not yet copied) never move it.
     # A launch of N that died (its files then ran alone): AMBER — the fault needed files in flight together.
-    return "AMBER" if ((against or {}).get("changed") or report.get("not_run_external")
+    return "AMBER" if ((against or {}).get("changed") or report.get("not_run_external") or report.get("not_run_ro")
                        or report.get("problem_count") or report.get("launches_cut_short")) else "GREEN"
 
 
@@ -2384,6 +2429,9 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
     if report.get("not_run_external"):
         lines.append(f"  external volume NOT MOUNTED: {report['not_run_external']} files on it NOT RUN — AMBER; "
                      "mount it and run again (a run without them is never a baseline)")
+    if report.get("not_run_ro"):
+        lines.append(f"  read-only share NOT MOUNTED: {report['not_run_ro']} files read from the Ultra's drives NOT RUN — "
+                     "AMBER (a run without them is never a baseline)")
     return lines + against_lines(against)
 
 
@@ -2443,6 +2491,8 @@ def verdict_facts(report: dict) -> dict:
         facts["notes"].append(f"{cut_count(report)} files crashed an engine or ran past the deadline: RED")
     if report.get("not_run_external"):
         facts["notes"].append(f"{report['not_run_external']} files NOT RUN: the external volume is not mounted")
+    if report.get("not_run_ro"):
+        facts["notes"].append(f"{report['not_run_ro']} files NOT RUN: the read-only share is not mounted")
     if report.get("smoke"):
         facts["smoke"] = True
         facts["notes"].insert(0, SMOKE_NOTE)
@@ -2552,6 +2602,7 @@ def baseline_of(seal: Seal, lane: str, exclude: Optional[Path] = None) -> Tuple[
                      "accepted_by": who_word(record.get("accepted_by"))}, None
     for run, report in usable_runs(seal, lane):
         if (run != exclude and not cut_count(report) and not report.get("limit") and not report.get("not_run_external")
+                and not report.get("not_run_ro")
                 and not report.get("problem_count") and not report.get("smoke") and not report.get("launches_cut_short")
                 and not host_refused(report) and report.get("files")):
             return run, {"what": "its first run (no baseline accepted yet)"}, None
@@ -2798,6 +2849,9 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
     if report.get("not_run_external"):
         raise Refused(f"refused: the newest {lane} run did not run {report['not_run_external']} files (the external volume "
                       "was not mounted) — a partial run is never the baseline")
+    if report.get("not_run_ro"):
+        raise Refused(f"refused: the newest {lane} run did not run {report['not_run_ro']} files (the read-only share "
+                      "is not mounted) — a partial run is never the baseline")
     folder = seal.reports / lane
     try:
         was = json.loads(seal.contained(folder / BASELINE, seal.reports).read_text(encoding="utf-8")).get("run")
@@ -2882,6 +2936,9 @@ def clean_report(report) -> dict:
             "failed_alone": int(number(report.get("failed_alone"))),
             "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
+            "not_run_ro": int(number(report.get("not_run_ro"))),
+            "manifest_sha256": (report["manifest_sha256"] if re.fullmatch(r"[0-9a-f]{64}", str(report.get("manifest_sha256")))
+                                else None),
             "external_ran": int(number(report.get("external_ran"))),
             "external_unreadable": int(number(report.get("external_unreadable"))),
             "problem_count": int(number(report.get("problem_count"))),

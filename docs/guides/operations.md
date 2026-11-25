@@ -167,11 +167,10 @@ reference.*
 
 **What it is.** A copy of real family media on the M4, on **two roots**, with the documents that describe it and a
 `.backup` of the catalog, marked `THIS_IS_TEST_DATA.txt`. v1 (234 files, ~130 GB) was chosen by stratum (one-sided
-sound, edit lists, Avid halves, codec/container combinations, …). v2 (`scripts/corpus_select.py`, its rules in its
-header) adds every other distinct content of the live catalog: under 8 GB onto the **external** root (the Crucial X10,
-6,096 files, ~1.58 TB), and at or over 8 GB the smallest file of each container/codec mix, up to 250 GB, onto the
-**internal** root (the SSD, 21 files, ~247 GB) — 6,351 files in all. Automation runs the app's own engines across it
-and reports counts.
+sound, edit lists, Avid halves, codec/container combinations, …). v2 added every other distinct content of the live
+catalog (6,351 files, ~1.96 TB: 6,096 on the **external** root, the Crucial X10; 255 on the **internal** root, the SSD).
+From 2026-11-24 the corpus is a stratified **sample** of that (below: `scripts/corpus_select.py`), with a third root,
+`ro`, for what fits neither drive. Automation runs the app's own engines across it and reports counts.
 
 | Where, on the M4 | What |
 |---|---|
@@ -276,15 +275,36 @@ SHA-256 prefix; missing never moves a verdict. A lane runs only present files. T
 both runs had; new ones are counted. `accept` takes a run with missing files, not a `--limit` run or one with the
 external volume away.
 
-**Growing the corpus** (how v2 was made; again the same way): on the Ultra, `scripts/corpus_select.py select` over a
-fresh catalog `.backup` with `--exclude` the current manifest writes the selection, the two SHA-256 lists and the
-rsync file lists into a scratch folder (never the repo: they hold real paths); `rsync -a --files-from` to each root
-(never `--delete`), then `shasum -a 256 -c` on the M4 from each root's `media/`; `corpus_select.py manifest` writes
-`corpus-manifest-v2.json`; copy it, the lists and the backup (as `catalog-source-backup-v2.sqlite`) into `~/corpus`;
-`adopt-volume` once; `prepare` — and again whenever more has arrived. Later growth: `corpus_select.py grow --catalog
-<newer .backup> --manifest <current manifest> --out <scratch>` appends the new digests (nothing is ever removed) and
-writes the copy lists of the new files only; copy them, put the grown manifest and the newer backup in place, `prepare`. Disk (DECISIONS 2026-11-19): the SSD rests under 85% used (`testbed_host.py clean`'s
-floor, 15% free) and a run may take it to 95% if its scratch goes after the summary.
+**The corpus is a stratified SAMPLE** (DECISIONS 2026-11-24; the rules are `scripts/corpus_select.py`'s header).
+Stratum = container, video codec, audio codec plus the odd cases the catalog states (no sound, sound decode short,
+odd frame rate or size, damaged, under 5 s or over 2 h); each stratum gives ceil(12%), at least 3 (a stratum of 3 or
+fewer whole), spread across size and source drive; pins (`scripts/corpus_pins.json`: a file a bug or a test is tied
+to) and v1's hand-curated rows are always taken. Roots: a copy already in place keeps its root; otherwise under 8 GB
+onto the X10 (1.8 TB of copies), 8 GB and over onto the SSD (400 GB of copies; ~100 GB stays for run scratch) if it
+fits, and what fits neither is `ro` — read from the Ultra over a read-only share, NOT RUN (AMBER, never a baseline)
+until that share is set up. Measured on the v2 backup, 2026-11-24: 6,351 files / 1.96 TB → 1,043 files / 551 GB
+(201 strata) from the copies already made; ~1,078 files / ~1.9 TB if every uncopied large original is readable
+(an estimate: small strata of large files are taken whole).
+
+1. On the Ultra (or the M4 for an estimate, `--assume-readable`): `scripts/corpus_select.py select --catalog <fresh
+   .backup> --current <the installed manifest> --out <scratch>` writes the sample manifest
+   (`corpus-manifest-v2.json`, every row with its `root`) and the copy lists of what each root does not hold yet
+   (`v2_<root>.sha` / `.files`) into a scratch folder (never the repo: they hold real paths). Prints counts only.
+2. `rsync -a --files-from` the new copies to each root (never `--delete`), `shasum -a 256 -c` on the M4; put the
+   sample manifest and the backup (as `catalog-source-backup-v2.sqlite`) in `~/corpus`; `prepare`. The old SHA-256
+   lists may still name dropped files: that is not a disagreement.
+3. On the M4: `corpus_select.py plan-shrink --sample ~/corpus/corpus-manifest-v2.json --current <the previous
+   manifest> --out <scratch>` lists the present copies the sample dropped, per root, with bytes. Deletes nothing.
+4. A whole `run check` on the installed sample (every sample file present, nothing NOT RUN, GREEN). Then
+   `corpus_select.py apply-shrink --plan <scratch>/shrink-plan.json --after-green <that run's stamp>` deletes the
+   planned copies — refused unless the run is GREEN, ran this very manifest (its `manifest_sha256`) and found every
+   sample file present; only under `~/corpus/media` and `<X10>/corpus/media`, through folder descriptors that never
+   follow a link or leave the root's volume; a file the sample names, a link, a second name, a lock or another size is
+   left and counted. A receipt (counts only) goes to `~/corpus/state/shrink-history.jsonl`. Originals are never
+   touched (`scripts/corpus_shrink.py`).
+
+Disk (DECISIONS 2026-11-24): the X10 holds the sample (up to ~2 TB during a run); the SSD gives the testbed ~500 GB and
+rests ≤ 60% used once a run's regenerable scratch is gone.
 
 ## 2. Storage layout
 
