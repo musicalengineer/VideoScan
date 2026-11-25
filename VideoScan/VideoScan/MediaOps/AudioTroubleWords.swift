@@ -21,8 +21,9 @@
 // missing", "Damaged audio — invalid codec (qdm2)") are reworded where they
 // are SHOWN (`displayNote`, `displaySoundSentence`); the stored data is
 // untouched, so they stay in `notes:damaged` until the file is verified again.
-// A legacy codec note says no more than its evidence: it never promises a
-// rebuild (it cannot say the decode was complete — Codex #372).
+// Only the reference-movie note is reworded: "invalid codec (<codec>)" is also
+// what an old codec whose decode came up short is stored as TODAY (real
+// damage), so it is shown as stored (Codex #372 closing).
 //
 // "Needs rebuilding" itself is only ever chosen after a COMPLETE decode
 // (VerifyAudioRules.trouble(of:decodeComplete:)).
@@ -107,8 +108,8 @@ enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
 
     /// A stored note in today's words. A legacy "Damaged audio — " note
     /// whose leading trouble is a reference movie (and that carries no real
-    /// damage) reads as one; an old codec reads `legacyCodecNote`, which
-    /// promises nothing; every other note is returned as stored. Display only.
+    /// damage) reads as one; every other note — "invalid codec (…)"
+    /// included — is returned as stored. Display only.
     static func displayNote(_ stored: String) -> String {
         let prefix = AudioTrouble.damaged.noteLead
         guard stored.hasPrefix(prefix) else { return stored }
@@ -129,29 +130,15 @@ enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
         return shown.hasPrefix(AudioTrouble.damaged.noteLead) ? sentence : shown + "."
     }
 
-    /// The lead a legacy damage fragment becomes, or nil when it is real
-    /// damage (or not one of ours).
+    /// The lead a legacy damage fragment becomes, or nil to show the note
+    /// as stored. Only the reference movie: that fragment is unambiguous.
+    /// "invalid codec (<codec>)" is NOT reworded — today's incomplete-decode
+    /// note says exactly the same, so the words cannot tell a legacy note
+    /// from real damage (Codex #372 closing): shown as stored until verified
+    /// again.
     private static func legacyLead(_ fragment: String) -> String? {
         let reference = VerifyAudioRules.noteFragment(for: .referenceMovie(referencedPaths: []))
-        if fragment == reference { return VerifyAudioRules.troubleLead(.referenceMovie(referencedPaths: [])) }
-        let codecFragment = VerifyAudioRules.noteFragment(for: .unsupportedCodec(codec: "", decodable: true))  // "invalid codec ()"
-        let open = String(codecFragment.dropLast())
-        guard fragment.hasPrefix(open), fragment.hasSuffix(")") else { return nil }
-        let codec = String(fragment.dropFirst(open.count).dropLast())
-        return legacyCodecNote(codec: codec)
-    }
-
-    /// A legacy "invalid codec (<codec>)" note, as shown. The stored note
-    /// carries no evidence that the decode was complete (Codex #372 P0), so
-    /// these words never promise that a rebuild fixes it.
-    static func legacyCodecNote(codec: String) -> String {
-        "Sound in \(codec.isEmpty ? "an unknown format" : codec), " + legacyCodecNoteTail
-    }
-    private static let legacyCodecNoteTail = "a format Apple can't play — run Verify Audio again to know whether it can be rebuilt"
-
-    /// True for a note shown by `legacyCodecNote` (alone or with fragments after it).
-    static func isLegacyCodecNote(_ note: String) -> Bool {
-        note.hasPrefix("Sound in ") && note.contains(legacyCodecNoteTail)
+        return fragment == reference ? VerifyAudioRules.troubleLead(.referenceMovie(referencedPaths: [])) : nil
     }
 
     private static let legacyShortAudioLead = String(

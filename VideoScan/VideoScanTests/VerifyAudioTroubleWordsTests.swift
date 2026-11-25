@@ -187,15 +187,17 @@ struct VerifyAudioTroubleWordsTests {
     @Test("legacy notes and card sentences are SHOWN in today's words; real damage and today's notes are shown as stored")
     func legacyDisplay() {
         #expect(AudioTrouble.displayNote("Damaged audio — reference movie, media missing") == referenceWords)
-        // A legacy codec note promises nothing (Codex #372): no completeness evidence was stored.
-        #expect(AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2); silent audio") == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt" + "; silent audio")
+        // A legacy codec note is shown as stored: today's incomplete decode stores the same words (Codex #372 closing).
+        #expect(AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2); silent audio")
+                == "Damaged audio — invalid codec (qdm2); silent audio")
         let realDamage = "Damaged audio — invalid codec (qdm2); audio shorter than video (60s vs 600s)"
         #expect(AudioTrouble.displayNote(realDamage) == realDamage, "real damage beside an old codec stays damaged")
         for asStored in [referenceWords, rebuildWords, "silent audio", "", "Damaged audio — audio shorter than video (2s vs 10s)"] {
             #expect(AudioTrouble.displayNote(asStored) == asStored)
         }
         // Check Media rows and headlines stored before the change.
-        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt" + ".")
+        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).")
+                == "The sound is damaged: invalid codec (qdm2).")
         #expect(AudioTrouble.displaySoundSentence("Damaged sound: The sound is damaged: reference movie, media missing.")
                 == referenceWords + ".")
         let damagedRow = "The sound is damaged: audio shorter than video (60s vs 600s)."
@@ -286,8 +288,9 @@ struct VerifyAudioTroubleWordsReviewTests {
     /// the files the change was for until Rick re-runs Verify Audio.
     @Test("REVIEW: a legacy stored note for a reference movie / old codec does not read 'Damaged'")
     func legacyNotesReadInTheirOwnWords() {
-        for legacy in ["Damaged audio — reference movie, media missing",
-                       "Damaged audio — invalid codec (qdm2)"] {
+        // The legacy "invalid codec" half of this finding was superseded by Codex #372 closing: that note is also
+        // today's incomplete-decode (real damage) note, so it is shown as stored (legacyCodecNoteIsNeutral).
+        for legacy in ["Damaged audio — reference movie, media missing"] {
             var f = ArchiveAngelRowFacts(id: UUID(), filename: "a.mov", fullPath: "/Volumes/X/a.mov", kind: .ready)
             f.audioVerifyStatus = "damaged"
             f.audioVerifyNote = legacy
@@ -331,17 +334,24 @@ struct VerifyAudioTroubleWordsCodexTests {
         // Check Media's row says damaged too.
         let row = CheckMediaRules.checkSound(.success(d), facts: try CheckMediaFixtures.healthy().facts)
         #expect(row.verdict == .problem && row.sentence.hasPrefix("The sound is damaged: "), "\(row.sentence)")
+        // Closing pass: a fresh incomplete-decode note is indistinguishable from a legacy one, so where it is
+        // SHOWN it stays damaged too (tooltip, Angel line, Check Media row and headline).
+        #expect(AudioTrouble.displayNote(d.persistedNote).hasPrefix("Damaged audio — "), "\(AudioTrouble.displayNote(d.persistedNote))")
+        #expect(AudioTrouble.displaySoundSentence(row.sentence).hasPrefix("The sound is damaged: "),
+                "\(AudioTrouble.displaySoundSentence(row.sentence))")
         // The same codec decoded in full still reads as repairable.
         #expect(needsRebuild().trouble == .needsRebuild)
     }
 
-    @Test("P0: a legacy 'invalid codec' note carries no completeness evidence, so its shown words never promise repair")
+    @Test("P0 + closing: a legacy 'invalid codec' note is shown as stored — it cannot be told from today's incomplete decode")
     func legacyCodecNoteIsNeutral() {
-        let shown = AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2)")
-        #expect(shown == "Sound in qdm2, a format Apple can't play — run Verify Audio again to know whether it can be rebuilt",
-                "\(shown)")
-        #expect(!shown.contains("fixes it") && !shown.lowercased().contains("damaged"))
-        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == shown + ".")
+        let stored = "Damaged audio — invalid codec (qdm2)"
+        #expect(AudioTrouble.displayNote(stored) == stored)
+        #expect(!AudioTrouble.displayNote(stored).contains("fixes it"))
+        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).")
+                == "The sound is damaged: invalid codec (qdm2).")
+        #expect(AudioTrouble.displaySoundSentence("Damaged sound: The sound is damaged: invalid codec (qdm2).")
+                == "Damaged sound: The sound is damaged: invalid codec (qdm2).")
         // The legacy reference-movie note still reads as one (a dref is not a decode question).
         #expect(AudioTrouble.displayNote("Damaged audio — reference movie, media missing") == referenceWords)
     }

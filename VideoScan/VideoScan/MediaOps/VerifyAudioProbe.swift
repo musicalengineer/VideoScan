@@ -333,7 +333,6 @@ enum VerifyAudioRules {
     /// "Damaged" label.
     static func noteNamesItsOwnTrouble(_ note: String) -> Bool {
         note.hasPrefix(referenceMovieNotePrefix) || note.hasPrefix(needsRebuildNotePrefix)
-            || AudioTrouble.isLegacyCodecNote(note)
     }
 
     /// Which findings put the record in the stored "damaged" set (red row,

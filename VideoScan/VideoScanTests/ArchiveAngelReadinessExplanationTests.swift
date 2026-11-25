@@ -147,8 +147,8 @@ struct ArchiveAngelReadinessExplanationTests {
         f.audio = .verifiedProblem(f.audioVerifyNote)
         let e = ArchiveAngelReadinessExplanation.make(f)
         #expect(e.missing.count == 1)
-        // A note stored before 2026-11-25 is shown in today's words (AudioTrouble.displayNote).
-        #expect(e.missing.first?.what.contains("Sound in qdm2, a format Apple can't play") == true, "\(e.missing)")
+        // "invalid codec" is shown as stored (Codex #372 closing: it may be today's incomplete decode).
+        #expect(e.missing.first?.what.contains("invalid codec (qdm2)") == true, "\(e.missing)")
     }
 
     @Test func factsListDurationDatePeopleCopiesAndWhere() {
