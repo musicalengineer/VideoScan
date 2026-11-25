@@ -135,6 +135,17 @@ struct AudioShortDecode: Sendable, Equatable {
     var missingSeconds: Double
     /// Seconds of sound the stream's header states.
     var statedSeconds: Double
+    /// The pass ended in a rebuilt filter graph: the sound's sample rate,
+    /// format or channel layout changed partway, so no measurement covers the
+    /// whole track — with or without a stated length (Codex #368, closing P1).
+    /// Same refusal as a decode that ended early: "not checked", and Promote's
+    /// "Archive anyway" tick does not accept it (it RAN and is not whole).
+    var graphReconfigured: Bool = false
+
+    /// A pass whose graph ffmpeg rebuilt (AstatsOutputParser.graphReconfiguredMarker).
+    static func reconfigured(statedSeconds: Double?) -> AudioShortDecode {
+        AudioShortDecode(missingSeconds: statedSeconds ?? 0, statedSeconds: statedSeconds ?? 0, graphReconfigured: true)
+    }
 
     /// Why this is not a measurement, in the words every surface shows
     /// (Verify Audio, Check Media's Sound row, Promote's refusal). Numbers
@@ -147,7 +158,11 @@ struct AudioShortDecode: Sendable, Equatable {
     }
 
     var reason: String {
-        "the sound decode stopped early — "
+        if graphReconfigured {
+            return "the sound's sample rate, format or channel layout changes partway through the track, "
+                + "so no single measurement covers all of it"
+        }
+        return "the sound decode stopped early — "
             + String(format: "%.1f s of the %.1f s", missingSeconds, statedSeconds)
             + " the file's header states did not decode (the file may be cut short, or a read failed)"
     }
@@ -337,6 +352,10 @@ enum AudioBalanceProbe {
                                     shape: AudioBalanceStreamShape, path: String) -> AudioShortDecode? {
         guard ordinal < shape.audioStreamInfos.count else { return nil }
         let info = shape.audioStreamInfos[ordinal]
+        if levelsStderr.contains(AstatsOutputParser.graphReconfiguredMarker) {
+            balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) audio stream \(ordinal) — the sound's parameters changed mid-stream and ffmpeg rebuilt its filter graph; the levels are not one measurement of the whole track")
+            return .reconfigured(statedSeconds: info.statedSeconds)
+        }
         let decoded = AstatsOutputParser.samplesPerChannel(fromStderr: levelsStderr, runTag: runTag)
         guard let missing = shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: info.sampleRateHz,
                                                statedSeconds: info.statedSeconds) else { return nil }
@@ -507,6 +526,20 @@ enum AudioBalanceProbe {
 
     // MARK: Levels of every stream (I/O)
 
+    /// What a difference pass said: the RMS of L−R (nil when unparseable),
+    /// or that ffmpeg rebuilt its filter graph mid-pass, so there is no one
+    /// measurement to read (Codex #368 closing P1).
+    enum DifferenceReading: Sendable, Equatable {
+        case rms(Double?)
+        case reconfigured
+    }
+
+    /// Read one difference pass's stderr. Pure.
+    static func differenceReading(fromStderr text: String, runTag: String) -> DifferenceReading {
+        if text.contains(AstatsOutputParser.graphReconfiguredMarker) { return .reconfigured }
+        return .rms(AstatsOutputParser.perChannelLevels(fromStderr: text, runTag: runTag).first?.rmsDBFS)
+    }
+
     /// Why one stream's levels pass gave no measurement, else nil. Pure.
     static func levelsFailure(exitCode: Int32, timedOut: Bool, channels: [AudioChannelLevels], ordinal: Int,
                               deadline: TimeInterval) -> AudioBalanceProbeError? {
@@ -617,8 +650,9 @@ enum AudioBalanceProbe {
 
         // ---- Per-channel levels of EVERY audio stream (audio-only
         // decode, one pass each — 12-bit DV tapes carry two pairs).
-        let (perStream, shortDecode) = try await measureLevels(
+        let (perStream, levelsShortDecode) = try await measureLevels(
             path: path, shape: shape, ffmpeg: ffmpeg, deadline: passDeadline, control: control)
+        var shortDecode = levelsShortDecode
 
         // ---- Program-stream selection (the analyze-time decision).
         // A stream "carries program" when ANY of its channels clears the
@@ -668,10 +702,17 @@ enum AudioBalanceProbe {
                 throw AudioBalanceProbeError.probeFailed(
                     "ffmpeg difference pass exited with status \(diffResult.exitCode)")
             }
-            let diffChannels = AstatsOutputParser.perChannelLevels(
-                fromStderr: diffResult.stderr, runTag: differenceTag)
-            // Unparseable difference stays nil → conservative trueStereo.
-            difference = diffChannels.first?.rmsDBFS
+            switch differenceReading(fromStderr: diffResult.stderr, runTag: differenceTag) {
+            case .rms(let rms):
+                // Unparseable difference stays nil → conservative trueStereo.
+                difference = rms
+            case .reconfigured:
+                // The pass is not one measurement: the analysis is not
+                // complete (Codex #368 closing P1), whatever the levels said.
+                balanceLog.notice("analyze: \((path as NSString).lastPathComponent, privacy: .public) difference pass — ffmpeg rebuilt its filter graph mid-stream; the analysis is not complete")
+                let stated = chosenOrdinal < shape.audioStreamInfos.count ? shape.audioStreamInfos[chosenOrdinal].statedSeconds : nil
+                shortDecode = .reconfigured(statedSeconds: stated)
+            }
         }
 
         // Silent extras are dropped ONLY in the actionable single-

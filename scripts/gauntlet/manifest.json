@@ -37926,10 +37926,12 @@
       ],
       "tests": [
         "diagnoseWithinBudget",
+        "differencePassOnReconfiguredFile",
         "layoutChangeBeforeFirstFrame",
         "markerRule",
         "rateChangeAfterFirstFrame",
         "rateChangeBeforeFirstFrame",
+        "rateChangeWithoutStatedLength",
         "reframeChangesNoMeasurement",
         "reframedDownstream"
       ]

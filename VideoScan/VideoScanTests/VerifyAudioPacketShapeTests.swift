@@ -310,15 +310,17 @@ enum ReconfiguredSoundFixture {
     /// the FIRST segment's rate and layout.
     static func make(into dir: URL, name: String,
                      first: (rate: Int, channels: Int, seconds: Double),
-                     second: (rate: Int, channels: Int, seconds: Double)) throws -> String {
+                     second: (rate: Int, channels: Int, seconds: Double),
+                     statesLength: Bool = true) throws -> String {
         let a = try segment(dir, name + ".a.aac", rate: first.rate, channels: first.channels, seconds: first.seconds)
         let b = try segment(dir, name + ".b.aac", rate: second.rate, channels: second.channels, seconds: second.seconds)
         let joined = dir.appendingPathComponent(name + ".aac")
         try (try Data(contentsOf: a) + (try Data(contentsOf: b))).write(to: joined)
         let out = dir.appendingPathComponent(name).path
         try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "testsrc=duration=12:size=160x120:rate=25", "-i", joined.path,
-                                        "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "copy",
-                                        "-metadata:s:a:0", "DURATION=00:00:12.000000000"], output: out)
+                                        "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "copy"]
+                                       + (statesLength ? ["-metadata:s:a:0", "DURATION=00:00:12.000000000"] : []),
+                                       output: out)
         return out
     }
 }
@@ -371,6 +373,65 @@ struct VerifyAudioReconfigurationTests {
         let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_layout.nut",
                                                      first: (48_000, 2, 0.02), second: (48_000, 1, 12))
         try await expectRefused(path, "layout change")
+    }
+
+    @Test("no stated length (Codex #368 closing P1): a rate change with nothing to hold the count against is still not a complete pass — not checked, nothing stored, Promote refuses ticked or not",
+          .timeLimit(.minutes(3)))
+    func rateChangeWithoutStatedLength() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_unstated")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_unstated.nut",
+                                                     first: (48_000, 2, 0.02), second: (96_000, 2, 6), statesLength: false)
+        let analysis = try await AudioBalanceProbe.analyze(path: path)
+        #expect(analysis.shape.audioStreamInfos.first?.statedSeconds == nil, "the fixture must state no length")
+        #expect(analysis.levelsComplete == false)
+        #expect(analysis.shortDecode?.graphReconfigured == true)
+        #expect(analysis.measuredSilent == nil)
+
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        guard case .notChecked = d.verdict else {
+            Issue.record("verdict \(d.verdict), findings \(d.findings)"); return
+        }
+        #expect(d.persistedStatus.isEmpty)
+
+        // Promote, as PromoteToArchiveJob+Guards decides it: the finding,
+        // then "could not be made" = !ranButCameUpShort, which gates the tick.
+        let finding = PromoteSoundGate.finding(from: d)
+        guard case .unchecked = finding else { Issue.record("Promote finding \(finding)"); return }
+        #expect(PromoteSoundGate.ranButCameUpShort(d), "a pass that ran and is not whole must block the tick")
+        let couldNotBeMade = !PromoteSoundGate.ranButCameUpShort(d)
+        for tick in [false, true] {
+            let decision = PromoteSoundGate.decide(finding: finding, mark: .absent, soundPartnerName: nil,
+                                                   recordedYear: nil, digestPrefix: "",
+                                                   ownerAcceptsUnchecked: couldNotBeMade && tick)
+            #expect(decision.isRefusal, "Archive anyway \(tick ? "ticked" : "not ticked"): \(decision)")
+        }
+    }
+
+    @Test("the difference pass on a reconfigured file is no reading: it makes the analysis incomplete",
+          .timeLimit(.minutes(3)))
+    func differencePassOnReconfiguredFile() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_difference")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_difference.nut",
+                                                     first: (48_000, 2, 0.02), second: (96_000, 2, 6), statesLength: false)
+        let tag = AstatsOutputParser.newRunTag()
+        let r = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath,
+                                               arguments: AudioBalanceProbe.differenceArgs(input: path, runTag: tag),
+                                               deadlineSeconds: 120)
+        try #require(r.exitCode == 0)
+        #expect(AudioBalanceProbe.differenceReading(fromStderr: r.stderr, runTag: tag) == .reconfigured)
+        // A whole pass still reads its RMS.
+        let normal = try OneSamplePacketMov.generate(into: dir, name: "test_reconfig_normal.mov", seconds: 2)
+        let clean = await ProcessRunner.runProcess(executable: ToolLocator.ffmpegPath,
+                                                   arguments: AudioBalanceProbe.differenceArgs(input: normal, runTag: tag),
+                                                   deadlineSeconds: 120)
+        guard case .rms(let rms) = AudioBalanceProbe.differenceReading(fromStderr: clean.stderr, runTag: tag) else {
+            Issue.record("a whole difference pass read as reconfigured"); return
+        }
+        #expect(rms != nil)
     }
 
     @Test("the marker: ffmpeg names the reconfiguration on stderr; a count beside it is no answer, and without it the count stands")
