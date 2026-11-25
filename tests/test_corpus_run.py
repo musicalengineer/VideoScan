@@ -4548,7 +4548,8 @@ class ParallelLaneTests(unittest.TestCase):
         self.assertEqual([c['jobs'] for c in launches_of(self.scene)], [4])
         report = json.loads((self.scene.report_dir() / 'report.json').read_text())
         self.assertEqual(report['jobs'], 4)
-        self.assertIn('1 launch(es), 4 files at a time, per-file deadline 300s', (self.scene.out / 'corpus-summary.txt').read_text())
+        self.assertIn('1 launch(es), 4 files at a time, per-file deadline 300 s + 1.0 s per media second, at most 3600 s',
+                      (self.scene.out / 'corpus-summary.txt').read_text())
         self.assertEqual(self.scene.run(stamp='20261117_130000_2', jobs=None), cr.EXIT_GREEN)
         self.assertEqual(launches_of(self.scene)[-1]['jobs'], min(cr.default_jobs(), 12), 'never more in flight than files to run')
         # Half the host's logical cores (Rick 2026-11-20: M4 16 -> 8, Ultra 30 -> 15), never under one, never past JOBS_MAX.
@@ -5074,3 +5075,157 @@ class ShippedHarnessTests(unittest.TestCase):
         p = self.dry_run()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f'<string>{sha}</string>', p.stdout, "without --ref the run must test HEAD, not the M4's main")
+
+
+# ── The check lane's deadline scales with the media's duration (2026-11-24). The audio engine's remaining work on
+# PCM stored one sample frame per packet is linear in packet count — proportional to DURATION (~4 µs/packet/pass
+# unloaded, ~13 µs loaded: files of 177–1167 s of media took 206–816 s). A fixed 300 s cut genuine work. The rule:
+# base + perMediaSecond × duration, at most the cap; armed with the base at `begin`, EXTENDED once the probe states
+# the duration (never shortened); an unknown, zero, NaN or negative duration stays at the base.
+
+class DeadlineByDurationTests(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scene = LaneScene(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_check_config_carries_the_rule_and_deadline_still_sets_the_base(self):
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        config = launches_of(self.scene)[0]
+        self.assertEqual((config['deadlineSeconds'], config['deadlinePerMediaSecond'], config['deadlineCapSeconds']),
+                         (300, 1.0, 3600))
+        self.assertEqual(self.scene.run(stamp='20261117_130000_2', deadline=90), cr.EXIT_GREEN)
+        config = launches_of(self.scene)[-1]
+        self.assertEqual((config['deadlineSeconds'], config['deadlinePerMediaSecond'], config['deadlineCapSeconds']),
+                         (90, 1.0, 3600))
+
+    def test_the_summary_states_the_rule_truthfully(self):
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        summary = (self.scene.out / 'corpus-summary.txt').read_text()
+        self.assertIn('per-file deadline 300 s + 1.0 s per media second, at most 3600 s', summary)
+        self.assertNotIn('per-file deadline 300s', summary)
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        self.assertEqual((report['deadline_s'], report['deadline_per_media_s'], report['deadline_cap_s']), (300, 1.0, 3600))
+        clean = cr.clean_report(report)
+        self.assertEqual((clean['deadline_per_media_s'], clean['deadline_cap_s']), (1.0, 3600), 'status reads it back')
+        self.assertIn('per-file deadline 300 s + 1.0 s per media second, at most 3600 s', '\n'.join(cr.head_lines(clean, None)))
+
+    def test_a_poisoned_stored_rule_reads_back_as_the_fixed_deadline(self):
+        self.assertEqual(self.scene.run(), cr.EXIT_GREEN)
+        report = json.loads((self.scene.report_dir() / 'report.json').read_text())
+        for bad in ('1.0', True, float('nan'), -2.0, None, [1]):
+            report['deadline_per_media_s'] = bad
+            clean = cr.clean_report(report)
+            self.assertEqual(clean['deadline_per_media_s'], 0, repr(bad))
+            self.assertIn('per-file deadline 300s', '\n'.join(cr.head_lines(clean, None)), repr(bad))
+
+    def test_the_proof_and_verbs_lanes_keep_their_fixed_deadline(self):
+        self.assertEqual(cr.DEADLINE_SCALING, {'check': (1.0, 3600)})
+        scene = LaneScene(pathlib.Path(self.tmp.name, 'proof').as_posix(), with_proof_engine=True)
+        scene.plan['engines'] = ['balance', 'proof']
+        scene.plan['files'] = {sha_of(0): dict(balance='balanced', proof='same_content')}
+        self.assertEqual(scene.run('proof'), cr.EXIT_GREEN)
+        config = launches_of(scene)[0]
+        self.assertNotIn('deadlinePerMediaSecond', config)
+        self.assertNotIn('deadlineCapSeconds', config)
+        self.assertIn('per-file deadline 3600s', (scene.out / 'corpus-summary.txt').read_text())
+
+    def test_the_check_driver_extends_the_deadline_from_the_probed_duration(self):
+        check = (SCRIPTS / 'corpus' / 'CorpusCheckDriver.swift').read_text()
+        probe = check[check.index('case .success(let facts):'):check.index('return ("probed", [])')]
+        self.assertIn('run.mediaDuration(item, seconds: facts.durationSeconds)', probe)
+        support = (SCRIPTS / 'corpus' / 'CorpusDriverSupport.swift').read_text()
+        self.assertIn('deadline.extend(sha: item.sha, toSeconds:', support)
+        seal = (SCRIPTS / 'corpus' / 'CorpusSeal.swift').read_text()
+        self.assertIn('let deadlinePerMediaSecond: Double?', seal)
+        self.assertIn('let deadlineCapSeconds: Double?', seal)
+
+
+DEADLINE_MAIN = r"""
+import Foundation
+final class Box: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    private var n = 0
+    func add(_ s: String) { lock.lock(); lines.append(s); lock.unlock() }
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+}
+func f(_ x: Double) -> String { String(format: "%.1f", x) }
+func main() async {
+    // The rule, a pure function: base + per x duration, at most the cap; a bad duration is the base.
+    let rule = { (d: Double?) in CorpusDeadline.seconds(base: 300, perMediaSecond: 1.0, cap: 3600, mediaSeconds: d) }
+    print("rule=" + [rule(1167), rule(0), rule(nil), rule(.nan), rule(-50), rule(.infinity), rule(1e12), rule(10)].map(f).joined(separator: ","))
+    print("nocap=" + f(CorpusDeadline.seconds(base: 300, perMediaSecond: 0, cap: 3600, mediaSeconds: 1167)))
+    print("basepastcap=" + f(CorpusDeadline.seconds(base: 5000, perMediaSecond: 1.0, cap: 3600, mediaSeconds: 10)))
+    let cut = Box(), halted = Box()
+    let started = Date()
+    let deadline = CorpusDeadline(write: { if $0["cut"] != nil { cut.add($0["sha"] as? String ?? "?") } },
+                                  halt: { halted.bump() })
+    // The timer ticks once a second (at ~1, 2, 3, 4 s), so a file is cut at the first tick past its due time.
+    // long: base 1 s, extended at 0.5 s to 3.5 s FROM ITS OWN BEGIN -> due 3.5, cut at the 4 s tick
+    //       (unextended: the 2 s tick; measured from the extend call, due 4.0: the 5 s tick).
+    // short: base 2.5 s, "extended" to 0.5 s -> never shortened, cut at the 3 s tick (shortened: the 1 s tick).
+    deadline.arm(sha: "long", seconds: 1.0)
+    deadline.arm(sha: "short", seconds: 2.5)
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    deadline.extend(sha: "long", toSeconds: 3.5)
+    deadline.extend(sha: "short", toSeconds: 0.5)
+    deadline.extend(sha: "unknown", toSeconds: 9.0)
+    var order: [String] = [], when: [String] = []
+    while order.count < 2 && Date().timeIntervalSince(started) < 8 {
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        for sha in cut.all where !order.contains(sha) {
+            order.append(sha); when.append(f(Date().timeIntervalSince(started)))
+            deadline.disarm(sha: sha)
+        }
+    }
+    print("order=" + order.joined(separator: ","))
+    print("when=" + when.joined(separator: ","))
+}
+await main()
+"""
+
+
+@unittest.skipUnless(shutil.which('swiftc'), 'needs the Swift compiler')
+class SwiftDeadlineExtendTests(unittest.TestCase):
+    """CorpusDeadline.extend and the rule, pinned by BEHAVIOUR (CorpusPool.swift compiled by itself)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.build = tempfile.TemporaryDirectory()
+        main = pathlib.Path(cls.build.name, 'main.swift')
+        main.write_text(DEADLINE_MAIN)
+        binary = pathlib.Path(cls.build.name, 'deadline')
+        done = subprocess.run(['swiftc', '-swift-version', '6', '-o', str(binary), str(SCRIPTS / 'corpus' / 'CorpusPool.swift'),
+                               str(main)], capture_output=True, text=True, timeout=600)
+        cls.compiled = done
+        cls.facts = {}
+        if done.returncode == 0:
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+            cls.facts = dict(line.split('=', 1) for line in ran.stdout.split())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.build.cleanup()
+
+    def setUp(self):
+        self.assertEqual(self.compiled.returncode, 0, self.compiled.stdout + self.compiled.stderr)
+
+    def test_the_rule_is_base_plus_per_media_second_capped_and_a_bad_duration_is_the_base(self):
+        self.assertEqual(self.facts['rule'].split(','),
+                         ['1467.0', '300.0', '300.0', '300.0', '300.0', '300.0', '3600.0', '310.0'])
+        self.assertEqual(self.facts['nocap'], '300.0')
+        self.assertEqual(self.facts['basepastcap'], '5000.0', 'the cap bounds the extension, never cuts the base')
+
+    def test_extend_is_measured_from_the_files_own_begin_and_never_shortens(self):
+        self.assertEqual(self.facts['order'], 'short,long', self.facts)
+        short, long = (float(x) for x in self.facts['when'].split(','))
+        self.assertGreaterEqual(short, 2.5, 'extending to less than the base never shortens the deadline')
+        self.assertLess(short, 3.5)
+        self.assertGreaterEqual(long, 3.5, 'extended past its 1 s base')
+        self.assertLess(long, 4.5, 'measured from its own begin, not from the extend call (that would be the 5 s tick)')

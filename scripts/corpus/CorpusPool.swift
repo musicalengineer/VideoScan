@@ -13,7 +13,9 @@
 // the host (half its logical cores: the M4 8, the Ultra 15) — and N = 1 is the serial loop itself,
 // not a group of one.
 //
-// The deadline: a file that overruns `seconds` from its own `arm` is written
+// The deadline: a file that overruns `seconds` from its own `arm` (or, once
+// `extend` has given it longer — the check lane, from the probed duration —
+// that longer time, still from its own `arm`) is written
 // as `timeout` in the engine it was in, its `end` is written `cut`, and the
 // test host exits itself (`halt`, `_exit(86)` in the driver). Several files
 // overdue at one tick are all cut. The other files in flight are left as they
@@ -63,7 +65,7 @@ enum CorpusPool {
 final class CorpusDeadline: @unchecked Sendable {
     private struct Running {
         var engine: String
-        let due: Date
+        var due: Date
         let started: Date
     }
 
@@ -94,6 +96,25 @@ final class CorpusDeadline: @unchecked Sendable {
         lock.lock()
         for sha in shas { running[sha] = Running(engine: "", due: now.addingTimeInterval(seconds), started: now) }
         lock.unlock()
+    }
+
+    /// The check lane's rule (scripts/corpus_run.py DEADLINE_SCALING): `base + perMediaSecond × mediaSeconds`, at
+    /// most `cap`. A duration that is unknown, zero, negative or not finite gives the base; so does a rule that adds
+    /// nothing. The cap bounds what the media adds — a corrupt huge duration cannot switch the watchdog off — and
+    /// never cuts a base set above it (`--deadline 5000`).
+    static func seconds(base: Double, perMediaSecond: Double, cap: Double, mediaSeconds: Double?) -> Double {
+        guard let media = mediaSeconds, media.isFinite, media > 0,
+              perMediaSecond.isFinite, perMediaSecond > 0, cap.isFinite else { return base }
+        return max(base, min(base + perMediaSecond * media, cap))
+    }
+
+    /// Gives the file `sha` until `seconds` after its own `arm` — never less time than it already had. A file not
+    /// in flight (already ended, or never armed) is left alone.
+    func extend(sha: String, toSeconds seconds: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let file = running[sha] else { return }
+        running[sha]?.due = max(file.due, file.started.addingTimeInterval(seconds))
     }
 
     /// The file `sha` is now in `engine`.

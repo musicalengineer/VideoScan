@@ -159,6 +159,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import plistlib
 import pwd
@@ -225,6 +226,14 @@ LANES = {
     "verbs": ("CorpusVerbsDriver", ["group", "trash_copy", "dedupe", "trash_last", "purge", "set_aside", "promote", "intact"],
               3600, ["CorpusSeal.swift", "CorpusDriverSupport.swift", "CorpusPool.swift", "CorpusVerbsDriver.swift"]),
 }
+# A DEADLINE THAT SCALES WITH THE MEDIA (2026-11-24): lane -> (seconds added per second of media, the cap in seconds).
+# The check lane's audio engine does work linear in packet count, and on PCM stored one sample frame per packet that
+# is proportional to the file's DURATION (~4 us/packet/pass unloaded, ~13 us loaded: 177-1167 s of media took
+# 206-816 s). A file's deadline is base + perMediaSecond x duration, at most the cap (the proof lane's 3600 s, so a
+# corrupt huge duration cannot switch the watchdog off). The driver arms the base at `begin` and EXTENDS the file's
+# deadline (from its own begin, never shorter) once the probe states the duration; an unknown, zero, NaN or negative
+# duration stays at the base. `--deadline` sets the base. A lane not listed keeps its fixed deadline.
+DEADLINE_SCALING = {"check": (1.0, 3600)}
 # N FILES IN FLIGHT (Rick 2026-11-20: "2 hour testbeds in serial is not performant design … N == 1 does not sound
 # good"). The check and proof drivers walk their files through CorpusPool.swift, `jobs` at a time, each file under
 # its own deadline; the config carries `jobs`. The default is half the host's logical cores (Rick 2026-11-20: the
@@ -1579,6 +1588,7 @@ class Lane:
         self.out, self.worktree, self.derived_data, self.bin_dir = Path(out), Path(worktree), Path(derived_data), Path(bin_dir)
         self.test_class, self.engines, default_deadline, self.sources = LANES[lane]
         self.deadline = int(deadline or default_deadline)
+        self.deadline_per_media_s, self.deadline_cap_s = DEADLINE_SCALING.get(lane, (0.0, 0))
         self.limit, self.xcodebuild = limit, xcodebuild
         self.work = seal.work_root / f"{stamp}-{lane}"
         self.report_dir = seal.reports / lane / sha / stamp
@@ -1735,7 +1745,7 @@ class Lane:
         seal.write_json(config, {
             "lane": self.lane, "corpusRoot": str(seal.corpus), "stateRoot": str(seal.state), "catalog": str(database),
             "mediaRoot": str(seal.media), "work": str(self.work), "progress": str(progress),
-            "deadlineSeconds": self.deadline, "jobs": width,
+            "deadlineSeconds": self.deadline, "jobs": width, **self.deadline_rule(),
             "pending": [self.pending_item(e) for e in pending], **self.config_extra()})
         seal.write_text(progress, "")
         home = self.home()
@@ -1787,6 +1797,12 @@ class Lane:
 
     def config_extra(self) -> dict:
         return {}
+
+    def deadline_rule(self) -> dict:
+        """The config's scaling of the per-file deadline (DEADLINE_SCALING); none for a lane with a fixed one."""
+        if not self.deadline_per_media_s:
+            return {}
+        return {"deadlinePerMediaSecond": self.deadline_per_media_s, "deadlineCapSeconds": self.deadline_cap_s}
 
     def scope(self, entries: List[Entry]) -> List[Entry]:
         if self.lane == "proof":
@@ -1931,7 +1947,8 @@ class Lane:
                 "external_ran": external_ran, "external_unreadable": external_unreadable,
                 "inventory": self.inventory, "problems": self.problems, "smoke": self.smoke,
                 "problem_count": sum(n for c in self.inventory.values() for st, n in c.items() if st in PROBLEM_STATES),
-                "deadline_s": self.deadline, "engines": {e: dict(c) for e, c in totals.items()},
+                "deadline_s": self.deadline, "deadline_per_media_s": self.deadline_per_media_s,
+                "deadline_cap_s": self.deadline_cap_s, "engines": {e: dict(c) for e, c in totals.items()},
                 "failures": dict(failures), "seal": hello,
                 "by_stratum": {k: {kk: (dict(vv) if isinstance(vv, Counter) else vv) for kk, vv in v.items()}
                                for k, v in by_stratum.items()},
@@ -2399,7 +2416,7 @@ def head_lines(report: dict, against: Optional[dict]) -> List[str]:
            + ("(the build reused: same commit, same drivers)" if report.get("build_reused") else f"(build {report['build_s']:.0f}s)")
            + f", {report['launches']} launch(es)"
            + (f", {report['jobs']} file{'s' if report['jobs'] != 1 else ''} at a time" if report.get("jobs") else "")
-           + f", per-file deadline {report['deadline_s']}s"
+           + ", " + deadline_words(report)
            + (f", limited to {report['limit']} files" if report.get("limit") else ""))
     head = f"corpus {lane}{' SMOKE' if report.get('smoke') else ''}: "
     refused = host_refused(report)
@@ -2908,6 +2925,14 @@ def adopt_volume(seal: Seal, mount: str, who: str) -> List[str]:
             f"accepted from now on only while that volume is mounted at that path"]
 
 
+def deadline_words(report) -> str:
+    """The per-file deadline as the run applied it: fixed, or the check lane's rule (DEADLINE_SCALING)."""
+    per, cap = report.get("deadline_per_media_s") or 0, report.get("deadline_cap_s") or 0
+    if per > 0 and cap > 0:
+        return f"per-file deadline {report['deadline_s']} s + {float(per)} s per media second, at most {cap:g} s"
+    return f"per-file deadline {report['deadline_s']}s"
+
+
 def clean_report(report) -> dict:
     """A STORED report as `status` may print it: rebuilt from words and numbers only. A report
     file is read back from disk and is not trusted to hold what `report()` wrote — a counter's
@@ -2918,6 +2943,11 @@ def clean_report(report) -> dict:
 
     def number(value, default=0):
         return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+    def positive(value):
+        """A finite positive number, else 0 (a stored NaN, a string or a negative is not a rule)."""
+        value = number(value)
+        return value if math.isfinite(value) and value > 0 else 0
 
     def counter(value) -> Dict[str, int]:
         return {word(k): int(number(v)) for k, v in value.items()} if isinstance(value, dict) else {}
@@ -2934,7 +2964,10 @@ def clean_report(report) -> dict:
             "cut_short_width": int(number(report.get("cut_short_width"))),
             "run_again_alone": int(number(report.get("run_again_alone"))),
             "failed_alone": int(number(report.get("failed_alone"))),
-            "deadline_s": int(number(report.get("deadline_s"))), "limit": int(number(report.get("limit"))) or None,
+            "deadline_s": int(number(report.get("deadline_s"))),
+            "deadline_per_media_s": positive(report.get("deadline_per_media_s")),
+            "deadline_cap_s": positive(report.get("deadline_cap_s")),
+            "limit": int(number(report.get("limit"))) or None,
             "not_run_external": int(number(report.get("not_run_external"))),
             "not_run_ro": int(number(report.get("not_run_ro"))),
             "manifest_sha256": (report["manifest_sha256"] if re.fullmatch(r"[0-9a-f]{64}", str(report.get("manifest_sha256")))

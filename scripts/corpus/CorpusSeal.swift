@@ -57,6 +57,10 @@ struct CorpusConfig: Decodable, Sendable {
     let work: String
     let progress: String
     let deadlineSeconds: Double
+    /// The check lane: seconds added to a file's deadline per second of its media, and the most it may reach
+    /// (CorpusDeadline.seconds). Absent — another lane, or a config written before them — is the fixed deadline.
+    let deadlinePerMediaSecond: Double?
+    let deadlineCapSeconds: Double?
     /// Files in flight (CorpusPool). Absent — a config written before it — is one at a time.
     let jobs: Int?
     let pending: [Item]
