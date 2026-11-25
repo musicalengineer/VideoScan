@@ -859,17 +859,17 @@ class StatusTests(unittest.TestCase):
 
     def test_status_shows_what_changed_as_counts_and_transitions_only(self):
         self.scene.run()
-        self.scene.plan['files'] = {sha_of(1): dict(check='Problem'), sha_of(2): dict(audio='damaged', check='Problem')}
+        self.scene.plan['files'] = {sha_of(1): dict(check='Warning'), sha_of(2): dict(audio='not_checked', check='Warning')}
         self.scene.run(sha='b' * 40, stamp='20261118_090000_2')
         lines = cr.status(self.scene.seal)
         text = '\n'.join(lines)
         self.assertIn('newest check run: 20261118_090000_2', text)
         self.assertIn('corpus check: AMBER 3 files', text)
         self.assertIn('against its first run (no baseline accepted yet) 20261117_120000_1 at aaaaaaaaa: 2 of 3 files changed', text)
-        self.assertIn('    check: OK -> Problem x2', lines)
-        self.assertIn('    audio: OK -> damaged x1', lines)
-        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Problem', lines)
-        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged', lines)
+        self.assertIn('    check: OK -> Warning x2', lines)
+        self.assertIn('    audio: OK -> not_checked x1', lines)
+        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Warning', lines)
+        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Warning; audio: OK -> not_checked', lines)
         for n in range(3):
             self.assertNotIn(sha_of(n)[:13], text, 'a SHA-256 prefix only, never the whole digest')
         for name in SECRET_NAMES:
@@ -909,19 +909,19 @@ class BaselineTests(unittest.TestCase):
 
     def test_a_moved_outcome_word_is_amber_and_the_file_is_listed_by_sha_prefix(self):
         self.scene.run()
-        self.scene.plan['files'] = {sha_of(1): dict(check='Problem'), sha_of(2): dict(audio='damaged', check='Problem')}
+        self.scene.plan['files'] = {sha_of(1): dict(check='Warning'), sha_of(2): dict(audio='not_checked', check='Warning')}
         self.assertEqual(self.scene.run(sha='b' * 40, stamp='20261118_090000_2'), cr.EXIT_AMBER)
         lines = self.summary().splitlines()
         self.assertTrue(lines[0].startswith('corpus check: AMBER 3 files'), lines[0])
         self.assertIn('  against its first run (no baseline accepted yet) 20261117_120000_1 at aaaaaaaaa: 2 of 3 files changed '
                       '(new in this run 0, not in this run 0)', lines)
-        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Problem', lines)
-        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged', lines)
+        self.assertIn(f'    {sha_of(1)[:12]} check: OK -> Warning', lines)
+        self.assertIn(f'    {sha_of(2)[:12]} check: OK -> Warning; audio: OK -> not_checked', lines)
         against = self.facts()['against']
         self.assertEqual((self.facts()['verdict'], against['changed'], against['compared']), ('AMBER', 2, 3))
-        self.assertEqual(against['transitions'], {'check: OK -> Problem': 2, 'audio: OK -> damaged': 1})
-        self.assertEqual(sorted(against['listed']), sorted([f'{sha_of(1)[:12]} check: OK -> Problem',
-                                                            f'{sha_of(2)[:12]} check: OK -> Problem; audio: OK -> damaged']))
+        self.assertEqual(against['transitions'], {'check: OK -> Warning': 2, 'audio: OK -> not_checked': 1})
+        self.assertEqual(sorted(against['listed']), sorted([f'{sha_of(1)[:12]} check: OK -> Warning',
+                                                            f'{sha_of(2)[:12]} check: OK -> Warning; audio: OK -> not_checked']))
         leaves = self.summary() + (self.scene.out / cr.VERDICT_FILE).read_text()
         for n in range(3):
             self.assertNotIn(sha_of(n)[:13], leaves, 'only the prefix leaves the M4')
@@ -930,6 +930,37 @@ class BaselineTests(unittest.TestCase):
         stored = json.loads((self.scene.report_dir(sha='b' * 40, stamp='20261118_090000_2') / 'report.json').read_text())
         self.assertEqual(sorted(c[0] for c in stored['against']['changes']), sorted([sha_of(1), sha_of(2)]),
                          'the whole list stays in the report on the M4')
+
+    def test_a_file_that_read_good_and_now_reads_damaged_or_unreadable_is_red(self):
+        # DECISIONS 2026-11-25 (Rick): a file whose baseline read good and now reads damaged or unreadable is RED;
+        # a file that only gains a warning is AMBER; a known-damaged file that now reads good is AMBER.
+        self.scene.plan['files'] = {sha_of(2): dict(audio='damaged')}
+        self.scene.run()
+        cases = ((dict(check='Problem'), 'check: OK -> Problem'), (dict(audio='damaged'), 'audio: OK -> damaged'),
+                 (dict(check='error:couldNotRead'), 'check: OK -> error:couldNotRead'),
+                 (dict(audio='error:probeFailed'), 'audio: OK -> error:probeFailed'),
+                 (dict(probe='unopenable'), 'probe: OK -> unopenable'))
+        for n, (how, moved) in enumerate(cases):
+            with self.subTest(how=how):
+                self.scene.plan['files'] = {sha_of(1): how, sha_of(2): dict(audio='damaged')}
+                self.assertEqual(self.scene.run(stamp=f'20261118_09000{n}_{n + 2}'), cr.EXIT_RED)
+                lines = self.summary().splitlines()
+                self.assertTrue(lines[0].startswith('corpus check: RED 3 files'), lines[0])
+                self.assertIn('  1 files that read good in the baseline now read damaged or unreadable: RED (listed first below)', lines)
+                self.assertIn(f'    {sha_of(1)[:12]} {moved}', lines)
+                self.assertEqual((self.facts()['verdict'], self.facts()['against']['regressed']), ('RED', 1))
+        self.scene.plan['files'] = {sha_of(1): dict(check='Warning'), sha_of(2): dict(audio='damaged')}
+        self.assertEqual(self.scene.run(stamp='20261118_100000_9'), cr.EXIT_AMBER, 'good to a warning is a difference, AMBER')
+        self.assertEqual(self.facts()['against']['regressed'], 0)
+        self.scene.plan['files'] = {}
+        self.assertEqual(self.scene.run(stamp='20261118_110000_10'), cr.EXIT_AMBER,
+                         'a known-damaged file that now reads good is AMBER: a detector may have gone blind')
+        self.assertIn(f'    {sha_of(2)[:12]} audio: damaged -> OK', self.summary().splitlines())
+        # A RED of this kind may be accepted (a detector that now sees damage is right): the accept line says so.
+        self.scene.plan['files'] = {sha_of(1): dict(check='Problem'), sha_of(2): dict(audio='damaged')}
+        self.assertEqual(self.scene.run(stamp='20261118_120000_11'), cr.EXIT_RED)
+        self.assertIn('it accepts 1 files that read good before and now read damaged or unreadable as the new truth',
+                      cr.accept(self.scene.seal, 'check', 'rick')[0])
 
     def test_a_known_error_word_unchanged_is_green_and_a_change_of_kinds_alone_is_only_noted(self):
         self.scene.plan['files'] = {sha_of(0): dict(check='error:couldNotRead'), sha_of(1): dict(check_kinds=['a:Warning'])}
@@ -959,7 +990,7 @@ class BaselineTests(unittest.TestCase):
 
     def test_accept_blesses_the_newest_run_and_records_who_when_and_which(self):
         self.scene.run()
-        self.scene.plan['files'] = {sha_of(1): dict(check='Problem')}
+        self.scene.plan['files'] = {sha_of(1): dict(check='Warning')}
         self.assertEqual(self.scene.run(sha='b' * 40, stamp='20261118_090000_2'), cr.EXIT_AMBER)
         lines = cr.accept(self.scene.seal, 'check', 'rickb@RicksUltra')
         self.assertRegex(lines[0], r'^corpus check: the baseline is now run 20261118_090000_2 at bbbbbbbbb \(3 files\) — accepted '
@@ -976,7 +1007,7 @@ class BaselineTests(unittest.TestCase):
         # A later run is held to the accepted one, not to the first.
         self.scene.plan['files'] = {}
         self.assertEqual(self.scene.run(sha='c' * 40, stamp='20261119_090000_3'), cr.EXIT_AMBER)
-        self.assertIn(f'    {sha_of(1)[:12]} check: Problem -> OK', self.summary().splitlines())
+        self.assertIn(f'    {sha_of(1)[:12]} check: Warning -> OK', self.summary().splitlines())
         self.assertEqual(self.facts()['against']['what'], 'its accepted baseline')
         again = cr.accept(self.scene.seal, 'check', 'night worker')
         self.assertIn('by night_worker; it replaces 20261118_090000_2', again[0])

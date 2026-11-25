@@ -283,6 +283,21 @@ ACCESS_REASON = ("the test app could not read any file on the external volume ({
                  "click Allow and run again; nothing was judged")
 
 EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
+# DECISIONS 2026-11-25 (Rick): a file whose baseline read GOOD and now reads damaged or unreadable is RED. A file reads
+# BAD when any engine says so (BAD_WORDS); it reads GOOD when no engine says bad and none has a doubt (DOUBT_WORDS).
+# Good -> a doubt is AMBER, as is bad -> good (a detector may have gone blind); only good -> bad is RED.
+BAD_WORDS = {"probe": ("unopenable",), "check": ("Problem", "unopenable", "error:couldNotRead"),
+             "audio": ("damaged", "error:probeFailed")}
+DOUBT_WORDS = {"check": ("Warning",), "audio": ("not_checked",)}
+
+
+def reads_bad(record: dict, engines: List[str]) -> bool:
+    return any(word(record.get(e, "not_run")) in BAD_WORDS.get(e, ()) for e in engines)
+
+
+def reads_good(record: dict, engines: List[str]) -> bool:
+    return (any(e in BAD_WORDS and e in record for e in engines) and not reads_bad(record, engines)
+            and not any(word(record.get(e, "not_run")) in DOUBT_WORDS.get(e, ()) for e in engines))
 BASELINE, BASELINE_LOG = "baseline.json", "baseline-history.jsonl"     # in reports/<lane>/
 CUT_WORDS = ("crash", "timeout")                # an engine that died or overran on a file: RED
 KEEP_RUNS = 20                                   # stored runs kept per lane (plus the baseline and every RED run)
@@ -2370,7 +2385,7 @@ def verdict_of(report: dict, against: Optional[dict]) -> str:
     """The lane's verdict (the module docstring's rule): `against` is its diff with the baseline."""
     if not report.get("engine_present", True):
         return "NORUN"
-    if cut_count(report) or (against or {}).get("problem") or host_refused(report):
+    if cut_count(report) or (against or {}).get("problem") or (against or {}).get("regressed") or host_refused(report):
         return "RED"
     # Files NOT RUN because the external volume is not mounted: AMBER, never GREEN (the run proves
     # nothing about them) and never RED (no engine failed and no copy is at risk; the count is said).
@@ -2389,6 +2404,9 @@ def against_lines(against: Optional[dict]) -> List[str]:
     accepted = f" (accepted {against['accepted_at']} by {against['accepted_by']})" if against.get("accepted_at") else ""
     lines = [f"  against {against['what']} {against['run']} at {against['sha'][:9]}{accepted}: {against['changed']} of "
              f"{against['compared']} files changed (new in this run {against['only_new']}, not in this run {against['only_old']})"]
+    if against.get("regressed"):
+        lines.append(f"  {against['regressed']} files that read good in the baseline now read damaged or unreadable: RED "
+                     "(listed first below)")
     for transition, n in sorted(against["transitions"].items(), key=lambda kv: (-kv[1], kv[0])):
         lines.append(f"    {transition} x{n}")
     lines += ["    " + line for line in against.get("listed") or []]
@@ -2523,7 +2541,9 @@ def verdict_facts(report: dict) -> dict:
         facts["notes"].append("baseline: " + against["problem"])
     elif against:
         facts["against"] = {k: against.get(k) for k in ("what", "run", "sha", "compared", "changed", "only_new", "only_old",
-                                                        "transitions", "listed")}
+                                                        "transitions", "listed", "regressed")}
+        if against.get("regressed"):
+            facts["notes"].append(f"{against['regressed']} files that read good in the baseline now read damaged or unreadable: RED")
         if against.get("listed_more"):
             facts["notes"].append(f"… +{against['listed_more']} more changed files")
     return facts
@@ -2552,6 +2572,7 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
     changed file its SHA-256 with `engine: old -> new` (`moved`; the caller shortens the SHA)."""
     transitions = Counter()
     moved: List[Tuple[str, str]] = []
+    regressed: List[str] = []
     kinds_changed = 0
     shared = sorted(sha for sha in set(old) & set(new) if isinstance(old[sha], dict) and isinstance(new[sha], dict))
     for sha in shared:
@@ -2565,12 +2586,15 @@ def diff(old: Dict[str, dict], new: Dict[str, dict], engines: List[str]) -> dict
                 words.append(f"{e}: {a} -> {b}")
         if words:
             moved.append((sha, "; ".join(words)))
+            seen = [e for e in engines if e in old[sha]]     # judged on the engines the baseline ran, as the words are
+            if reads_good(old[sha], seen) and reads_bad(new[sha], seen):
+                regressed.append(sha)
         elif any(sorted(old[sha].get(e + "_kinds") or []) != sorted(new[sha].get(e + "_kinds") or [])
                  for e in engines if e in old[sha]):         # an engine the lane did not have then has no kinds to compare
             kinds_changed += 1
     return {"compared": len(shared), "changed": len(moved), "only_new": len(set(new) - set(old)),
             "only_old": len(set(old) - set(new)), "transitions": dict(transitions), "moved": moved,
-            "kinds_changed": kinds_changed}
+            "regressed": regressed, "kinds_changed": kinds_changed}
 
 
 def usable_runs(seal: Seal, lane: str) -> List[Tuple[Path, dict]]:
@@ -2637,10 +2661,13 @@ def against_baseline(seal: Seal, lane: str, results: Dict[str, dict], engines: L
     if run is None or run == this_run:
         return None if run is None else {**described, "run": run.name, "sha": run.parent.name, "compared": len(results),
                                          "changed": 0, "only_new": 0, "only_old": 0, "transitions": {}, "listed": [],
+                                         "regressed": 0,
                                          "listed_more": 0, "kinds_changed": 0, "changes": [], "previous": None}
     delta = diff(_outcomes(run), results, engines)
     moved = delta.pop("moved")
-    against = {**described, "run": run.name, "sha": run.parent.name, **delta,
+    regressed = set(delta.pop("regressed"))
+    moved.sort(key=lambda m: m[0] not in regressed)          # the RED files first, so a capped list still names them
+    against = {**described, "run": run.name, "sha": run.parent.name, **delta, "regressed": len(regressed),
                "listed": [f"{sha_prefix(sha)} {words}" for sha, words in moved[:LISTED]],
                "listed_more": max(0, len(moved) - LISTED),
                "changes": [[sha, words] for sha, words in moved], "previous": None}
@@ -2869,6 +2896,10 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
     if report.get("not_run_ro"):
         raise Refused(f"refused: the newest {lane} run did not run {report['not_run_ro']} files (the read-only share "
                       "is not mounted) — a partial run is never the baseline")
+    try:                                                     # recomputed, never read from the stored report
+        regressed = (against_baseline(seal, lane, _outcomes(newest), list(LANES[lane][1]), this_run=newest) or {}).get("regressed") or 0
+    except (OSError, ValueError, KeyError, TypeError):
+        regressed = 0
     folder = seal.reports / lane
     try:
         was = json.loads(seal.contained(folder / BASELINE, seal.reports).read_text(encoding="utf-8")).get("run")
@@ -2883,7 +2914,9 @@ def accept(seal: Seal, lane: str, who: str) -> List[str]:
     seal.write_text(folder / BASELINE_LOG, json.dumps(record, sort_keys=True) + "\n", append=True)
     return [f"corpus {lane}: the baseline is now run {newest.name} at {newest.parent.name[:9]} ({report['files']} files) — "
             f"accepted {record['accepted_at']} by {record['accepted_by']}"
-            + (f"; it replaces {word(was)}" if was else "; the lane had no accepted baseline before")]
+            + (f"; it replaces {word(was)}" if was else "; the lane had no accepted baseline before")
+            + (f"; it accepts {regressed} files that read good before and now read damaged or unreadable as the new truth"
+               if regressed else "")]
 
 
 def adopt_volume(seal: Seal, mount: str, who: str) -> List[str]:
