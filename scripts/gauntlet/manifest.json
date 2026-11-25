@@ -37956,6 +37956,31 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
+      "stage": "regression",
+      "suites": [
+        "VerifyAudioPacketShapeTests",
+        "VerifyAudioReconfigurationTests"
+      ],
+      "tests": [
+        "diagnoseWithinBudget",
+        "differencePassOnReconfiguredFile",
+        "layoutChangeBeforeFirstFrame",
+        "markerRule",
+        "rateChangeAfterFirstFrame",
+        "rateChangeBeforeFirstFrame",
+        "rateChangeWithoutStatedLength",
+        "reframeChangesNoMeasurement",
+        "reframedDownstream",
+        "savedCardHoldsNoLevels",
+        "soundRowHasNoEvidence",
+        "toneThenSilenceEndToEnd",
+        "verifySheetShowsNoLevels"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VerifyAudioVerdictConsumerTests.swift",
       "stage": "regression",
@@ -42972,6 +42997,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/VerifyAudioVerdictTruthMediaTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

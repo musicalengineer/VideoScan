@@ -313,7 +313,7 @@ struct MediaInfoSheet: View {
     /// Per-channel loudness: this session's diagnosis, else the card's
     /// persisted sound row.
     private var channelLevels: [MediaEvidence] {
-        if let channels = request.audioDiagnosis?.balanceAnalysis?.measurements.channels, !channels.isEmpty {
+        if let channels = request.audioDiagnosis?.balanceAnalysis?.evidenceChannels, !channels.isEmpty {
             return channels.enumerated().map { i, c in
                 MediaEvidence(CheckMediaRules.channelName(i, of: channels.count), CheckMediaRules.levelText(c))
             }

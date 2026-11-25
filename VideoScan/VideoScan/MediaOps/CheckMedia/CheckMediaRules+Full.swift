@@ -102,7 +102,9 @@ extension CheckMediaRules {
         case .failure(let skip): return .notRun(.sound, because: skip.reason)
         case .success(let d): diagnosis = d
         }
-        let channels = diagnosis.balanceAnalysis?.measurements.channels ?? []
+        // Only levels that are a fact about the file are evidence (a rebuilt
+        // filter graph keeps none; the row's sentence says why).
+        let channels = diagnosis.balanceAnalysis?.evidenceChannels ?? []
         let evidence = channels.enumerated().map { index, c in
             MediaEvidence(channelName(index, of: channels.count), levelText(c))
         }

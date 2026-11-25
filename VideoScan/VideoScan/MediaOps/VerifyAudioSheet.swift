@@ -224,7 +224,11 @@ struct VerifyAudioSheet: View {
                                                     : shape.audioDurationSeconds))
                 if let analysis = diagnosis.balanceAnalysis {
                     Divider()
-                    channelLevelRows(analysis.measurements)
+                    if let why = Self.levelsWithheldReason(analysis) {
+                        readoutRow("Channel levels", "not shown — \(why)")
+                    } else {
+                        channelLevelRows(Self.readoutChannels(analysis))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -243,18 +247,31 @@ struct VerifyAudioSheet: View {
         }
     }
 
+    /// The channels the readout shows: only levels that are a fact about the
+    /// file (`AudioBalanceAnalysis.evidenceChannels`). Pure.
+    nonisolated static func readoutChannels(_ analysis: AudioBalanceAnalysis) -> [AudioChannelLevels] {
+        analysis.evidenceChannels
+    }
+
+    /// Why the readout shows no channel levels for a pass that ran, or nil
+    /// when it shows them: a rebuilt filter graph (Codex #368 closing-2 P0).
+    nonisolated static func levelsWithheldReason(_ analysis: AudioBalanceAnalysis) -> String? {
+        guard let short = analysis.shortDecode, short.graphReconfigured else { return nil }
+        return short.reason
+    }
+
     /// One row per measured channel: "Left — has sound (−18 dB)" /
     /// "Right — silent". Channels beyond 2 are numbered.
     @ViewBuilder
-    private func channelLevelRows(_ m: AudioBalanceMeasurements) -> some View {
-        ForEach(Array(m.channels.enumerated()), id: \.offset) { index, channel in
+    private func channelLevelRows(_ channels: [AudioChannelLevels]) -> some View {
+        ForEach(Array(channels.enumerated()), id: \.offset) { index, channel in
             let hasSound = AudioBalanceClassifier.carriesProgram(channel)
             HStack(spacing: 8) {
                 Image(systemName: hasSound
                       ? "speaker.wave.2.fill"
                       : "speaker.slash.fill")
                     .foregroundColor(hasSound ? .accentColor : .secondary)
-                Text("\(channelName(index, of: m.channels.count)) — \(levelText(channel))")
+                Text("\(channelName(index, of: channels.count)) — \(levelText(channel))")
                     .font(.callout)
                     .foregroundColor(hasSound ? .primary : .secondary)
             }

@@ -134,7 +134,7 @@ enum ArchiveAngelAudioOutcome: Equatable {
     /// "L −18.2 dBFS RMS · R silent" — the probe's numbers, one line.
     static func levelsLine(_ analysis: AudioBalanceAnalysis) -> String {
         let names = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
-        let parts = analysis.measurements.channels.enumerated().map { i, ch -> String in
+        let parts = analysis.evidenceChannels.enumerated().map { i, ch -> String in
             let name = i < names.count ? names[i] : "\(i + 1)"
             if ch.rmsDBFS == -Double.infinity || ch.rmsDBFS < AudioBalanceClassifier.programFloorDBFS {
                 return "\(name) silent"

@@ -283,7 +283,9 @@ struct VerifyAudioIncompleteLevelsTests {
         #expect(tag != other && tag.count == 34 && tag.hasPrefix("vs") && tag.allSatisfy { $0.isLetter || $0.isNumber })
         #expect(AudioBalanceProbe.astatsFilter(runTag: tag) == "astats@\(tag)=measure_perchannel=Peak_level+RMS_level:measure_overall=Number_of_samples")
         #expect(AudioBalanceProbe.astatsFilter(runTag: nil) == AudioBalanceProbe.astatsFilter)
-        #expect(AudioBalanceProbe.levelsArgs(input: "x", audioStreamOrdinal: 1, runTag: tag).contains(AudioBalanceProbe.astatsFilter(runTag: tag)))
+        // The levels chain is the reframe (VerifyAudioPacketShapeTests) then this run's astats, nothing else.
+        #expect(AudioBalanceProbe.levelsArgs(input: "x", audioStreamOrdinal: 1, runTag: tag)
+            .contains(AudioBalanceProbe.reframeFilter + "," + AudioBalanceProbe.astatsFilter(runTag: tag)))
         #expect(AudioBalanceProbe.differenceArgs(input: "x", runTag: tag).contains { $0.hasSuffix("," + AudioBalanceProbe.astatsFilter(runTag: tag)) })
     }
 
