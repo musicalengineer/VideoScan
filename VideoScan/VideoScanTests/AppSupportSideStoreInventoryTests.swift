@@ -50,7 +50,6 @@ struct AppSupportSideStoreInventoryTests {
         "metadata_cache.sqlite": .derived,                    // ffprobe cache
         "personfinder_cache.sqlite": .derived,
         "fullhash-backfill.json": .derived,                   // resume state of Fill In Full Hashes
-        "sound-levels-remeasure.json": .derived,              // cutoff + resume state of Re-measure Sound Levels (#516)
         "sync-sources.json": .derived,                        // CatalogSync: written beside the manifest
         "sets.json": .derived,                                // Footage Spectrum helper input
         "current.json": .derived,                             // compiled family graph / sync pointer

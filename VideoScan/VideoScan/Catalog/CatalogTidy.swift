@@ -162,7 +162,7 @@ struct CatalogTidyRow: Sendable, Equatable, Identifiable {
                            runTitle: nil),
             CatalogTidyRow(kind: .soundLevelsToRemeasure, number: c.soundLevelsToRemeasure,
                            title: "Sound levels to measure again",
-                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file could not be measured. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. It runs by itself overnight, and again when a drive it waits for is connected. Stop any time; running it again continues."
+                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file could not be measured. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. Copies whose cards differ are left alone (a later Run tries again). Stop any time; running it again continues."
                                + (c.soundLevelsWaitingCards > 0
                                   ? " \(c.soundLevelsWaitingCards.formatted()) of them wait for \(c.soundLevelsWaitingDrives.formatted()) drive\(c.soundLevelsWaitingDrives == 1 ? "" : "s") to be connected."
                                   : ""),

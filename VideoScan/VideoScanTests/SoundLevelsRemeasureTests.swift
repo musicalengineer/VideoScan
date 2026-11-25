@@ -367,7 +367,8 @@ struct SoundLevelsRemeasureLogicTests {
         let j = RemeasureFixture.job(m, save: false) { _, _ in .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
         guard case .failed(let words) = j.state else { Issue.record("\(j.state)"); return }
-        #expect(words.contains("could not be saved"))
+        #expect(words.contains("could not store"))
+        #expect(words.contains("catalog rows before 3 · after 3"), "a commit-failure OUTCOME carries the row counts (Codex third pass P2-6)")
         #expect(zip(m.records, cards).allSatisfy { $0.mediaReportCard == $1 }, "the refused content put back, the rest untouched")
         #expect(SoundLevelsRemeasureItem.plan(m.records).count == 3, "all three still owed")
     }
@@ -429,7 +430,7 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(SoundLevelsRemeasureItem.plan(m.records).contains { $0.id == second.id }, "still owed")
     }
 
-    @Test("a drive offline on the first run: its cards are withdrawn and counted waiting (not done); the drive returns → the next scheduled run measures them, and only then completedAt is set")
+    @Test("a drive offline on the first run: its cards are withdrawn and counted waiting in Tidy (not done); the drive returns → the next Run measures them, and only then is nothing owed")
     func driveOfflineThenBack() async throws {
         let dir = try RemeasureFixture.scratch("driveback"); defer { try? FileManager.default.removeItem(at: dir) }
         let m = RemeasureFixture.model(dir)
@@ -456,26 +457,17 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(tidy.soundLevelsWaitingCards == 1 && tidy.soundLevelsWaitingDrives == 1)
         #expect(CatalogTidyRow.rows(tidy).last?.detail.contains("1 of them wait for 1 drive to be connected") == true)
 
-        // The scheduler, as the app wires it (same rule, live-shaped closures).
-        var started: SoundLevelsRemeasureJob?
-        func scheduler() -> SoundLevelsRemeasureScheduler {
-            var env = SoundLevelsRemeasureEnvironment()
-            env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
-            env.isDue = { SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: online) }
-            env.start = { let j = job(); started = j; j.start(); return true }
-            return SoundLevelsRemeasureScheduler(env: env)
-        }
-        #expect(scheduler().tick() == .wait, "the drive is still away: nothing to start")
+        // The drive returns: Tidy's count is the reminder; Rick presses Run.
         drive.on = true
-        #expect(scheduler().tick() == .start, "the drive is back: the next night's run starts")
-        await started?.task?.value
-        #expect(started?.totals.refreshed == 1)
+        #expect(SoundLevelsRemeasureItem.waiting(m.records, isOnline: online).ready == 1)
+        let second = job()
+        await RemeasureFixture.run(second)
+        #expect(second.totals.refreshed == 1)
         #expect(RemeasureFixture.shownLevels(away.mediaReportCard).mediaInfo.count == 2)
         #expect(RemeasureFixture.nothingOwed(m.records), "only now: nothing owed")
-        #expect(scheduler().tick() == .wait, "done: never again by itself")
     }
 
-    @Test("a drive that never returns blocks no other card and starts nothing; a file missing from a CONNECTED drive is not 'waiting'")
+    @Test("a drive that never returns blocks no other card; a file missing from a CONNECTED drive is not 'waiting'")
     func driveThatNeverReturns() async throws {
         let dir = try RemeasureFixture.scratch("never"); defer { try? FileManager.default.removeItem(at: dir) }
         let m = RemeasureFixture.model(dir)
@@ -496,9 +488,6 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(others.allSatisfy { RemeasureFixture.shownLevels($0.mediaReportCard).mediaInfo.isEmpty })
         #expect(missing.mediaReportCard?.check(.sound).map(SoundLevelsRemeasureRules.isWaitingForDrive) == false)
         #expect(RemeasureFixture.onlyWithdrawn(m.records) && !RemeasureFixture.nothingOwed(m.records))
-        for _ in 0..<3 {
-            #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: online), "nothing to start while it is away")
-        }
         #expect(SoundLevelsRemeasureItem.waiting(m.records, isOnline: online) == SoundLevelsRemeasureWaiting(cards: 1, drives: ["/Volumes/Lost"], ready: 0))
     }
 
@@ -537,7 +526,7 @@ private func twoCopies(_ m: VideoScanModel, a: MediaReportCard, b: MediaReportCa
 }
 
 @MainActor
-@Suite("GH #516 — re-measure sound levels: Codex cycle #373 (copies, drives, schedule, rows)", .serialized)
+@Suite("GH #516 — re-measure sound levels: Codex cycle #373 (copies, drives, rows)", .serialized)
 struct SoundLevelsRemeasureCodex373Tests {
 
     @Test("P0-1 (memory): A was checked again; B still holds the old card — re-measuring B writes NOTHING (cards are stored per digest)")
@@ -652,29 +641,6 @@ struct SoundLevelsRemeasureCodex373Tests {
         if case .failed = here {} else { Issue.record("connected drive: \(here)") }
     }
 
-    @Test("P2-6: the night's start is remembered beside the catalog — a relaunch after a Stop does not start again in the same slot; the next night does")
-    func stopSurvivesRelaunch() throws {
-        let dir = try RemeasureFixture.scratch("slot"); defer { try? FileManager.default.removeItem(at: dir) }
-        let catalogFile = dir.appendingPathComponent("catalog.json").path
-        let cal = Calendar.current
-        func at(_ h: Int, dayOffset: Int = 0) -> Date {
-            let d = cal.date(byAdding: .day, value: dayOffset, to: Date()) ?? Date()
-            return cal.date(bySettingHour: h, minute: 0, second: 0, of: d) ?? d
-        }
-        func scheduler(_ now: Date) -> SoundLevelsRemeasureScheduler {
-            var env = SoundLevelsRemeasureEnvironment()
-            env.now = { now }
-            env.isDue = { true }
-            env.start = { true }
-            env.lastStarted = { SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).lastUnattendedStart }
-            env.rememberStart = { try? SoundLevelsRemeasureSchedule(lastUnattendedStart: $0).save(catalogFile: catalogFile) }
-            return SoundLevelsRemeasureScheduler(env: env)
-        }
-        #expect(scheduler(at(4)).tick() == .start)
-        #expect(scheduler(at(5)).tick() == .wait, "relaunched at 05:00 after a Stop: held until the next night")
-        #expect(scheduler(at(4, dayOffset: 1)).tick() == .start)
-    }
-
     @Test("P2-7: OUTCOME's 'before' is the row count at START, not at the end")
     func rowsCountedAtStart() async throws {
         let dir = try RemeasureFixture.scratch("rows"); defer { try? FileManager.default.removeItem(at: dir) }
@@ -696,7 +662,7 @@ struct SoundLevelsRemeasureCodex373Tests {
 // MARK: - Codex closing pass (3845c3ddd)
 
 @MainActor
-@Suite("GH #516 — re-measure sound levels: Codex closing pass (one synchronous commit per content, due set, clock)", .serialized)
+@Suite("GH #516 — re-measure sound levels: Codex closing pass (one synchronous commit per content)", .serialized)
 struct SoundLevelsRemeasureClosingTests {
 
     /// A content's copies of the same bytes on catalog.sqlite, committed with `card`.
@@ -817,62 +783,55 @@ struct SoundLevelsRemeasureClosingTests {
         if let c = after.catalogCutover.committer { await c.repository.close() }
     }
 
-    @Test("P1-3: copies that disagree → ONE run, then no more across three nights until a card changes; OUTCOME says why")
-    func disagreeingCopiesRunOnce() async throws {
+    @Test("copies whose cards differ are left alone, counted and named in OUTCOME; a later Run simply tries again")
+    func disagreeingCopiesNamedInOutcome() async throws {
         let dir = try RemeasureFixture.scratch("disagree"); defer { try? FileManager.default.removeItem(at: dir) }
         let m = RemeasureFixture.model(dir)
-        try FileManager.default.createDirectory(atPath: (m.catalogStore.fileLocation as NSString).deletingLastPathComponent,
-                                                withIntermediateDirectories: true)
         var fresh = RemeasureFixture.card(levels: [-12, -13], size: 1_000, checkedAt: Date())
         fresh.soundLevels = .measured
-        let (_, b) = twoCopies(m, a: fresh, b: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
-        let catalogFile = m.catalogStore.fileLocation
-        let cal = Calendar.current
-        func night(_ n: Int) -> Date {
-            let d = cal.date(byAdding: .day, value: n, to: Date()) ?? Date()
-            return cal.date(bySettingHour: 4, minute: 0, second: 0, of: d) ?? d
-        }
-        var runs = 0
-        var last: SoundLevelsRemeasureJob?
-        func scheduler(_ now: Date) -> SoundLevelsRemeasureScheduler {
-            var env = SoundLevelsRemeasureEnvironment()
-            env.now = { now }
-            env.isDue = { SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: { _ in true },
-                                                              leftAlone: SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).leftAlone) }
-            env.start = {
-                runs += 1
-                let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
-                last = j
-                j.start()
-                return true
-            }
-            return SoundLevelsRemeasureScheduler(env: env)
-        }
-        #expect(scheduler(night(0)).tick() == .start)
-        await last?.task?.value
-        if case .finished(let s) = last?.state { #expect(s.contains("1 file left alone: their copies' cards differ"), "\(s)") }
-        #expect(scheduler(night(1)).tick() == .wait)
-        #expect(scheduler(night(2)).tick() == .wait)
-        #expect(runs == 1, "one run, no fruitless repeats")
-        // A card changes (B is checked again with a different old card): due again.
-        var changed = RemeasureFixture.preFixReconfiguredCard(size: 1_000, checkedAt: Date().addingTimeInterval(-3_600))
-        changed.headline += " "
-        b.mediaReportCard = changed
-        #expect(scheduler(night(3)).tick() == .start)
+        let (a, b) = twoCopies(m, a: fresh, b: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
+        let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        if case .finished(let s) = j.state { #expect(s.contains("1 file left alone: their copies' cards differ"), "\(s)") }
+        else { Issue.record("\(j.state)") }
+        #expect(a.mediaReportCard == fresh && SoundLevelsRemeasureItem.plan(m.records).count == 1, "still a candidate for a later Run")
+        // Once B is checked again (copies agree), a later Run has nothing to refuse.
+        b.mediaReportCard = fresh
+        #expect(RemeasureFixture.nothingOwed(m.records))
     }
 
-    @Test("P1-4: a remembered start in the future (the clock was 2030, then corrected) is ignored — tonight's run starts")
-    func futureRememberedStartIgnored() throws {
-        let dir = try RemeasureFixture.scratch("clock"); defer { try? FileManager.default.removeItem(at: dir) }
-        let catalogFile = dir.appendingPathComponent("catalog.json").path
-        let y2030 = Calendar.current.date(from: DateComponents(year: 2030, month: 1, day: 1, hour: 4)) ?? Date()
-        try SoundLevelsRemeasureSchedule(lastUnattendedStart: y2030).save(catalogFile: catalogFile)
-        var env = SoundLevelsRemeasureEnvironment()
-        env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
-        env.isDue = { true }
-        env.start = { true }
-        env.lastStarted = { SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).lastUnattendedStart }
-        #expect(SoundLevelsRemeasureScheduler(env: env).tick() == .start)
+    @Test("third pass P0-1 on catalog.sqlite: one copy's row is refused (a path collision), the other's card LANDS — memory is set to what the store holds, never blindly back to the old card; another save and a relaunch never bring the old levels back")
+    func partialCommitMemoryEqualsStore() async throws {
+        let scene = try CutoverScene.make("remeasure_partial"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let ids = try copies(scene, name: "p", count: 2, seed: 404) { RemeasureFixture.preFixReconfiguredCard(size: $0) }
+        let model = try await relaunchRemeasure(scene, from: scene.model)
+        let a = try #require(model.record(forID: ids[0])), b = try #require(model.record(forID: ids[1]))
+        let digest = try #require(CatalogCommit.digest(of: a))
+        // B's row can no longer be stored: its path now collides with A's live path.
+        b.fullPath = a.fullPath
+        let j = SoundLevelsRemeasureJob(model: model)
+        j.toolsAvailable = { true }
+        j.measure = { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        guard case .failed(let words) = j.state else { Issue.record("\(j.state)"); return }
+        #expect(words.contains("exactly the card catalog.sqlite holds") && words.contains("catalog rows before"), "\(words)")
+        guard case .card(let stored) = await SoundLevelsRemeasureJob.readStoredCard(model.catalogCutover.committer?.repository, digest: digest) else {
+            Issue.record("no stored card"); return
+        }
+        #expect(stored.soundLevels == .measured, "A's rewritten card landed")
+        for copy in [a, b] {
+            let card = try #require(copy.mediaReportCard)
+            #expect(SoundLevelsRemeasureRules.sameCard(card, stored), "memory equals the store")
+        }
+        _ = model.saveCatalogNow()   // another ordinary save
+        let after = try await relaunchRemeasure(scene, from: model)
+        for id in ids {
+            let card = try #require(after.record(forID: id)?.mediaReportCard)
+            #expect(RemeasureFixture.shownLevels(card).mediaInfo.isEmpty, "copy \(id): the old levels came back")
+            #expect(card.soundLevels == .measured)
+        }
+        if let c = after.catalogCutover.committer { await c.repository.close() }
     }
 
     @Test("P2-5: a content waiting for a drive is ready when ANY copy's drive is back")
@@ -884,7 +843,6 @@ struct SoundLevelsRemeasureClosingTests {
         let (a, b) = twoCopies(m, a: withdrawn, b: withdrawn)   // a on /Volumes/T, b on /Volumes/U
         let online: (String) -> Bool = { $0.hasPrefix("/Volumes/U") }
         #expect(SoundLevelsRemeasureItem.waiting(m.records, isOnline: online).ready == 1)
-        #expect(SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: online))
         _ = (a, b)
     }
 
@@ -918,43 +876,6 @@ private func relaunchRemeasure(_ scene: CutoverScene, from model: VideoScanModel
     return fresh
 }
 
-// MARK: - The scheduler (pure rule)
-
-@Suite("GH #516 — re-measure sound levels runs once, overnight (scheduler rule)")
-struct SoundLevelsRemeasureSchedulerTests {
-
-    private func at(_ hour: Int, _ minute: Int = 0) -> Date {
-        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
-    }
-
-    @Test("start in the away window or when idle; never when done, busy (skip, with words) or already started this slot")
-    func theRule() {
-        typealias P = SoundLevelsRemeasurePolicy
-        #expect(P.decide(now: at(4), due: { true }, busy: nil, idleSeconds: 0, lastStarted: nil) == .start)
-        #expect(P.decide(now: at(14), due: { true }, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
-        #expect(P.decide(now: at(14), due: { true }, busy: nil, idleSeconds: 20 * 60, lastStarted: nil) == .start)
-        #expect(P.decide(now: at(4), due: { false }, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
-        #expect(P.decide(now: at(4), due: { true }, busy: "a scan is running", idleSeconds: 0, lastStarted: nil) == .skip("a scan is running"))
-        #expect(P.decide(now: at(5), due: { true }, busy: nil, idleSeconds: 0, lastStarted: at(4)) == .wait,
-                "a run Rick stopped stays stopped until the next slot")
-    }
-
-    @Test("the store: one start, then nothing is due and it never starts again")
-    @MainActor
-    func theStoreStartsOnce() {
-        var done = false
-        var starts = 0
-        var env = SoundLevelsRemeasureEnvironment()
-        env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
-        env.isDue = { !done }
-        env.start = { starts += 1; done = true; return true }
-        let s = SoundLevelsRemeasureScheduler(env: env)
-        #expect(s.tick() == .start)
-        #expect(s.tick() == .wait)
-        #expect(starts == 1)
-    }
-}
-
 // MARK: - Scale
 
 @MainActor
@@ -985,26 +906,17 @@ struct SoundLevelsRemeasureScaleTests {
 @Suite("GH #516 — re-measure sound levels (isolation: poisoned state)", .serialized)
 struct SoundLevelsRemeasureIsolationTests {
 
-    @Test("Codex P0-2/P1-4: no file beside the catalog decides anything — a corrupt or unwritable schedule file hides no card and repeats no finished work; a restored older catalog is found again")
-    func noOutsideFileDecides() async throws {
-        let dir = try RemeasureFixture.scratch("nofile"); defer { try? FileManager.default.removeItem(at: dir) }
+    @Test("Codex P0-2: nothing outside the card decides — finished work is not repeated (the stamp), a restored older catalog is found again")
+    func theCardAloneDecides() async throws {
+        let dir = try RemeasureFixture.scratch("cardalone"); defer { try? FileManager.default.removeItem(at: dir) }
         let m = RemeasureFixture.model(dir)
         let rec = RemeasureFixture.record("/Volumes/T/c.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
         m.records = [rec]
-        let catalogDir = (m.catalogStore.fileLocation as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: catalogDir, withIntermediateDirectories: true)
-        let file = SoundLevelsRemeasureSchedule.url(catalogFile: m.catalogStore.fileLocation)
-        try Data("{not json".utf8).write(to: file)
-        #expect(SoundLevelsRemeasureSchedule.load(catalogFile: m.catalogStore.fileLocation).lastUnattendedStart == nil)
         let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
         await RemeasureFixture.run(j)
         #expect(j.totals.reconfigured == 1)
-        // Finished work is not repeated, whatever the file says: the card is stamped.
         #expect(RemeasureFixture.nothingOwed(m.records))
-        #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: { _ in true }))
-        // A restored older catalog (the card as it was) is a candidate again.
-        rec.mediaReportCard = RemeasureFixture.preFixReconfiguredCard(size: 1_000)
-        #expect(SoundLevelsRemeasureItem.autoRunDue(m.records, isOnline: { _ in true }))
+        rec.mediaReportCard = RemeasureFixture.preFixReconfiguredCard(size: 1_000)   // a restored older catalog
         #expect(SoundLevelsRemeasureItem.plan(m.records).count == 1)
     }
 
@@ -1094,15 +1006,14 @@ struct SoundLevelsRemeasureMediaMatrixTests {
 @Suite("GH #516 — re-measure sound levels Sensor (source)")
 struct SoundLevelsRemeasureSensorTests {
 
-    @Test("one rule, one engine, one door: the Sound row rule is Check Media's; Tidy's Run and the scheduler start the same job; no VideoScanModel extension; the master only")
+    @Test("one rule, one engine, one door: the Sound row rule is Check Media's; only Tidy's Run starts the job (no unattended scheduler); no VideoScanModel extension")
     func shape() throws {
         let job = try SourceTree.appSource(named: "SoundLevelsRemeasureJob.swift")
         let rules = try SourceTree.appSource(named: "SoundLevelsRemeasure.swift")
-        let scheduler = try SourceTree.appSource(named: "SoundLevelsRemeasureScheduler.swift")
         let full = try SourceTree.appSource(named: "CheckMediaRules+Full.swift")
         let tidy = try SourceTree.appSource(named: "CatalogTidy.swift")
         let app = try SourceTree.appSource(named: "VideoScanApp.swift")
-        for src in [job, rules, scheduler] {
+        for src in [job, rules] {
             #expect(!src.contains("extension VideoScanModel"), "rule 12")
         }
         #expect(rules.contains("CheckMediaRules.soundRow(d)"), "the rewrite uses Check Media's own Sound row rule")
@@ -1111,18 +1022,14 @@ struct SoundLevelsRemeasureSensorTests {
         #expect(job.contains("copy.mediaReportCard = new") && job.contains("committer.commitNow(ids: Set(ids))"),
                 "writes only the card, committed per content through the committer's scoped synchronous door")
         #expect(tidy.contains("$0.startSoundLevelsRemeasure(model: model)"))
-        #expect(scheduler.contains("center.startSoundLevelsRemeasure(model: model)"))
-        let master = try #require(app.range(of: "if !TestEnvironment.isTestHost && catalogSync.mode == .master {"))
-        let attach = try #require(app.range(of: "soundLevelsRemeasure.attach(.live(model: catalogModel, center: fileOpsCenter))"))
-        #expect(master.upperBound < attach.lowerBound && app.distance(from: master.upperBound, to: attach.lowerBound) < 300,
-                "attached inside the master-only, never-on-a-test-host block")
+        #expect(!app.contains("SoundLevelsRemeasure") && !app.contains("soundLevelsRemeasure"), "nothing starts it at launch")
+        #expect(!SourceTree.appSources.contains { $0.relative.hasSuffix("SoundLevelsRemeasureScheduler.swift") }, "the unattended scheduler is gone")
     }
 
     @Test("the withdrawn words are persisted on cards — pinned (a reworded lead would strand every withdrawn row)")
     func withdrawnLeadIsPinned() {
         #expect(SoundLevelsRemeasureRules.withdrawnLead
                 == "the sound levels saved here came from an earlier version of VideoScan and are withdrawn until the sound can be measured again")
-        #expect(SoundLevelsRemeasureSchedule.fileName == "sound-levels-remeasure.json")
         #expect(MediaReportCard.SoundLevelsStamp.currentVersion == 2)
         #expect(SoundLevelsRemeasureRules.offlineWordsPinned == "its drive is not connected")
     }

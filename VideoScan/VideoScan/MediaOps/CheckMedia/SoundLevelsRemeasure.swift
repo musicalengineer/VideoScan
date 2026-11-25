@@ -23,15 +23,13 @@
 //     A restored older catalog is simply found again; "nothing to do" is a
 //     candidate count of 0.
 //   * waiting for a drive = withdrawn because the file's DRIVE was not
-//     connected (the row's pinned words); the scheduler re-runs the job when
-//     that drive is connected. Withdrawn for any other reason (moved,
-//     changed size, unmeasurable) stays a candidate for a run by hand only,
-//     so nothing repeats by itself forever.
+//     connected (the row's pinned words); Tidy Catalog counts them ("N wait
+//     for a drive") until a run by hand measures them.
 //
-// The only file beside the catalog, `sound-levels-remeasure.json`, holds the
-// scheduler's last unattended start (one per night, a Stop holds until the
-// next — Codex P2-6). Losing it can at worst start one extra run that night;
-// it never hides or repeats a card.
+// Launched only by hand: Catalog ▸ Tidy Catalog… ▸ "Sound levels to measure
+// again" ▸ Run (coordinator, after three Codex passes found most defects in
+// an unattended scheduler — removed, KISS). The Tidy count is the reminder.
+// Nothing outside the catalog is kept.
 //
 // Memory: a plan item is ~400 B (ids of the copies, paths, the Sound row) —
 // ~40 MB at 100k candidate cards, the worst case.
@@ -39,53 +37,8 @@
 // (For Rick: the stamp ≈ a schema-version number inside each record's blob,
 // so "which rows still need the migration" is a property of the data.)
 
-import CryptoKit
 import Foundation
 import VideoScanCore
-
-// MARK: - The scheduler's one remembered fact (beside the catalog)
-
-/// When the scheduler last started the job by itself. An optimisation and a
-/// courtesy (Stop holds until the next night), never a correctness input.
-struct SoundLevelsRemeasureSchedule: Codable, Sendable, Equatable {
-    var lastUnattendedStart: Date?
-    /// Contents the job left alone because their copies' cards differ:
-    /// key → fingerprint of those cards (P1-3). Not due again by itself
-    /// until a card changes. Losing it costs at most one extra run.
-    var leftAlone: [String: String] = [:]
-
-    init(lastUnattendedStart: Date? = nil, leftAlone: [String: String] = [:]) {
-        self.lastUnattendedStart = lastUnattendedStart
-        self.leftAlone = leftAlone
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        lastUnattendedStart = try c.decodeIfPresent(Date.self, forKey: .lastUnattendedStart)
-        leftAlone = try c.decodeIfPresent([String: String].self, forKey: .leftAlone) ?? [:]
-    }
-
-    static let fileName = "sound-levels-remeasure.json"
-
-    static func url(catalogFile: String) -> URL {
-        URL(fileURLWithPath: (catalogFile as NSString).deletingLastPathComponent, isDirectory: true)
-            .appendingPathComponent(fileName)
-    }
-
-    /// Absent or unreadable → no remembered start.
-    static func load(catalogFile: String) -> SoundLevelsRemeasureSchedule {
-        guard let data = try? Data(contentsOf: url(catalogFile: catalogFile)) else { return .init() }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(Self.self, from: data)) ?? .init()
-    }
-
-    func save(catalogFile: String) throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(self).write(to: Self.url(catalogFile: catalogFile), options: .atomic)
-    }
-}
 
 // MARK: - Which cards (pure)
 
@@ -150,23 +103,6 @@ enum SoundLevelsRemeasureRules {
         return .prefix
     }
 
-    /// A stable fingerprint of a content's copies' cards (P1-3): the cards'
-    /// JSON (sorted keys, dates to the second) in record-id order, SHA-256.
-    @MainActor
-    static func fingerprint(_ copies: [VideoRecord]) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .secondsSince1970
-        var bytes = Data()
-        for copy in copies.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
-            var card = copy.mediaReportCard
-            if let c = card { card?.checkedAt = Date(timeIntervalSince1970: c.checkedAt.timeIntervalSince1970.rounded(.down)) }
-            bytes.append(Data(copy.id.uuidString.utf8))
-            bytes.append((try? encoder.encode(card)) ?? Data())
-        }
-        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-    }
-
     /// Two copies' cards are the same card (a stored card's date is whole
     /// seconds: compared to the second). Pure.
     static func sameCard(_ a: MediaReportCard, _ b: MediaReportCard) -> Bool {
@@ -184,8 +120,7 @@ enum SoundLevelsRemeasureRules {
 
     /// Why a file could not be measured again.
     enum NotMeasured: Sendable, Equatable {
-        /// The file's DRIVE is not connected: waits for it (the scheduler
-        /// re-runs when it is back).
+        /// The file's DRIVE is not connected: waits for it (Tidy counts it).
         case offline
         /// The drive is connected but the file is not at its path.
         case notFound

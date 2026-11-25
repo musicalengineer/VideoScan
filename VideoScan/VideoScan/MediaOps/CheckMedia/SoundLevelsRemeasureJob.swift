@@ -26,9 +26,16 @@
 //     just before, async); (c) write every copy; (d) commit exactly those
 //     rows now (`CatalogCommitter.commitNow(ids:)`, the committer's scoped
 //     synchronous door; `saveCatalogNow` on the JSON store). Nothing the job
-//     made dirty is left lying around while another await runs; a commit
-//     that is refused (a write hold, a read-only flip) puts that content
-//     back exactly as it was and stops the run. Anything that fails (a or b)
+//     made dirty is left lying around while another await runs.
+//   * A commit that returns false may still have stored SOME rows (each row
+//     has its own savepoint — Codex third pass P0-1). So memory is never
+//     put back blindly: every copy is set to exactly the card catalog.sqlite
+//     now holds for the digest (the truth), so memory and store agree and
+//     the old levels cannot come back with the next ordinary save; then the
+//     run stops with a named outcome. With no SQLite store (catalog.json is
+//     written whole or not at all) the old cards are put back; a stored card
+//     that cannot be read leaves memory as written (never older than the
+//     store) and says so. Anything that fails (a or b)
 //     is left as it is ("left alone"); it stays a candidate.
 //   * Resume needs no cursor: a rewritten card carries the stamp, so Stop,
 //     quit or a crash leaves exactly the cards not yet rewritten as
@@ -133,24 +140,6 @@ struct SoundLevelsRemeasureItem: Sendable, Equatable {
         }
         return w
     }
-
-    /// Whether the scheduler should start the job, from the cards alone: a
-    /// content with levels from an unstamped pass that is NOT in the
-    /// left-alone set with the same fingerprint (P1-3), or a content waiting
-    /// for a drive that is connected now. O(records).
-    @MainActor
-    static func autoRunDue(_ records: [VideoRecord], isOnline: (String) -> Bool,
-                           leftAlone: [String: String] = [:]) -> Bool {
-        var prefixKeys: Set<String> = []
-        for r in records where SoundLevelsRemeasureRules.need(r.mediaReportCard, live: r.removal == nil) == .prefix {
-            prefixKeys.insert(key(r))
-        }
-        for k in prefixKeys {
-            guard let fp = leftAlone[k] else { return true }
-            if SoundLevelsRemeasureRules.fingerprint(copiesNow(records, key: k)) != fp { return true }
-        }
-        return waiting(records, isOnline: isOnline).ready > 0
-    }
 }
 
 /// Cards whose levels wait for their drive to be connected.
@@ -247,9 +236,6 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     private(set) var saveFailed = false
     private(set) var summaryLine = ""
 
-    /// Contents left alone because their copies' cards differ: key →
-    /// fingerprint of those cards (the scheduler's "not due again" set, P1-3).
-    private(set) var leftAloneKeys: [String: String] = [:]
     /// Catalog rows at START (OUTCOME's "before", Codex P2-7).
     private(set) var rowsAtStart = 0
     private var runStart = Date()
@@ -330,11 +316,11 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
                 note("progress — \(totals.done) of \(totals.total) · \(Self.summaryCounts(totals))", model: model)
             }
         }
-        rememberLeftAlone(plan)
         if saveFailed { return }
         if let why = toolLost {
             summaryLine = Self.summaryCounts(totals)
-            let message = "ffmpeg went away mid-run (\(why)) — stopped after \(totals.done) of \(totals.total); \(savedCount) card(s) saved are kept; it continues from here once ffmpeg is back"
+            let message = "ffmpeg went away mid-run (\(why)) — stopped after \(totals.done) of \(totals.total); \(savedCount) card(s) saved are kept; it continues from here once ffmpeg is back; "
+                + Self.rowsClause(before: rowsAtStart, after: model.records.count, written: totals.cardsWritten)
             note("OUTCOME — \(message)", model: model)
             finish(failed: message)
             return
@@ -366,7 +352,12 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         let stored: SoundLevelsStoredCard = if let d = item.digest { await storedCard(d) } else { .none }
         guard !stopped else { return false }
         record(outcome, for: item, stored: stored, index: i, model: model)
-        return !saveFailed
+        if let refused = refusedCommit {
+            refusedCommit = nil
+            await reconcileRefusedCommit(refused, model: model)
+            return false
+        }
+        return true
     }
 
     private func waitOutPause() async -> Bool {
@@ -441,7 +432,6 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         let key = SoundLevelsRemeasureItem.key(rec)
         let copies = SoundLevelsRemeasureItem.copiesNow(model.records, key: key)
         guard copies.allSatisfy({ $0.mediaReportCard.map { SoundLevelsRemeasureRules.sameCard($0, card) } ?? false }) else {
-            leftAloneKeys[key] = SoundLevelsRemeasureRules.fingerprint(copies)
             totals.copiesDiffer += 1
             return leftAlone(i, item, "its copies' cards differ (a copy was checked again)")
         }
@@ -461,11 +451,10 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
             copy.mediaReportCard = new
             before.append((copy, old))
         }
-        leftAloneKeys[key] = nil
         if !before.isEmpty {
             guard commitRows(before.map(\.0.id), model: model) else {
-                for (copy, old) in before { copy.mediaReportCard = old }
-                return failCommit(item, model: model)
+                refusedCommit = RefusedCommit(item: item, copies: before)
+                return
             }
             savedCount += before.count
             totals.cardsWritten += before.count
@@ -484,27 +473,36 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         return model.saveCatalogNow()
     }
 
-    /// A refused commit: that content is back exactly as it was; stop.
-    private func failCommit(_ item: SoundLevelsRemeasureItem, model: VideoScanModel) {
+    /// A commit that returned false: its content and the cards it wrote.
+    private struct RefusedCommit {
+        let item: SoundLevelsRemeasureItem
+        let copies: [(VideoRecord, MediaReportCard)]
+    }
+    private var refusedCommit: RefusedCommit?
+
+    /// After a commit that returned false: memory set to what the store
+    /// holds (never the planned-old cards blindly — some rows may have
+    /// landed), then stop with a named OUTCOME that carries the row counts.
+    private func reconcileRefusedCommit(_ refused: RefusedCommit, model: VideoScanModel) async {
         saveFailed = true
-        let message = "The catalog could not be saved — \(item.filename)'s card was put back as it was; "
-            + "\(savedCount) card(s) saved earlier are kept; no media was changed. Stopped; it continues from here once the catalog can be saved."
+        let words: String
+        let stored: SoundLevelsStoredCard = if let d = refused.item.digest { await storedCard(d) } else { .none }
+        switch stored {
+        case .card(let truth):
+            for (copy, _) in refused.copies { copy.mediaReportCard = truth }
+            words = "every copy now shows exactly the card catalog.sqlite holds"
+        case .none:
+            for (copy, old) in refused.copies { copy.mediaReportCard = old }
+            words = "nothing of it was stored; its copies show their cards as they were"
+        case .unreadable(let why):
+            words = "the stored card could not be read back (\(why)); its copies keep the rewritten card, never older than the store"
+        }
+        let message = "The catalog could not store all of \(refused.item.filename)'s copies — \(words); "
+            + "\(savedCount) card(s) saved earlier are kept; no media was changed. Stopped; run it again once the catalog can be saved. "
+            + Self.rowsClause(before: rowsAtStart, after: model.records.count, written: totals.cardsWritten)
         summaryLine = message
         note("OUTCOME — \(message)", model: model)
         finish(failed: message)
-    }
-
-    /// Keep the left-alone set beside the catalog (the scheduler reads it):
-    /// this run's skips replace earlier entries for the contents it planned.
-    private func rememberLeftAlone(_ plan: [SoundLevelsRemeasureItem]) {
-        var schedule = SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile)
-        guard let model else { return }
-        for item in plan {
-            guard let rec = model.record(forID: item.id) else { continue }
-            schedule.leftAlone[SoundLevelsRemeasureItem.key(rec)] = nil
-        }
-        schedule.leftAlone.merge(leftAloneKeys) { $1 }
-        try? schedule.save(catalogFile: catalogFile)
     }
 
     private func leftAlone(_ i: Int, _ item: SoundLevelsRemeasureItem, _ why: String) {
