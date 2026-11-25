@@ -82,6 +82,17 @@ struct ArchiveAngelCodex1659Tests {
         return Fixture(sb: sb, model: model, target: target, donor: donor)
     }
 
+    /// Each way a target can fail `describesFileNow`, stated (GH #509): not in
+    /// the catalogue, no usable fixity, racily ambiguous, or a stamp that moved.
+    private static func whyNotFresh(_ rec: VideoRecord, in model: VideoScanModel) -> String {
+        let fixity = rec.contentFixity
+        return "in catalogue: \(model.record(forID: rec.id) != nil) of \(model.records.count)"
+            + " · usable: \(fixity?.isUsableForVerification ?? false) · racy: \(fixity?.isRacilyAmbiguous ?? true)"
+            + " · hashed at: \(fixity?.computedAt.timeIntervalSince1970 ?? 0)"
+            + " · stored: \(fixity.map { String(describing: $0.stamp) } ?? "none")"
+            + " · now: \(FileIdentityStamp.capture(path: rec.fullPath).map { String(describing: $0) } ?? "unstatable")"
+    }
+
     private func entry(_ rec: VideoRecord, proposedDate: String?) -> ArchiveAngelPlan.Entry {
         ArchiveAngelPlan.Entry(id: rec.id, sourcePath: rec.fullPath, filename: rec.filename, sizeBytes: rec.sizeBytes,
                                sourceContentHash: rec.contentHash, sourceModifiedAt: nil, durationSeconds: 600,
@@ -131,7 +142,10 @@ struct ArchiveAngelCodex1659Tests {
                                     entries: [entry(f.target, proposedDate: nil)])
         plan.status = .ready
         let fresh = await ArchiveAngelPromoter.verifiedFixity(for: plan, catalog: f.model)
-        #expect(fresh == [f.target.id], "only the unchanged target's fixity describes its file now")
+        // GH #509: red once under load (`fresh → []`), not reproduced since;
+        // on failure the message carries the evidence that names the cause.
+        #expect(fresh == [f.target.id],
+                "only the unchanged target's fixity describes its file now — \(Self.whyNotFresh(f.target, in: f.model))")
         let job = ArchiveAngelPromoter().promote(plan: &plan, model: f.model, center: MediaFileOperationsCenter(),
                                                  freshFixity: fresh) { _ in }
         job?.soundMeasure = MasterArchiveTestSupport.soundPresent

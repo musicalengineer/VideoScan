@@ -4,9 +4,11 @@
 // shared it — a forgotten pull A could finish and be published as pull B's
 // export. Regression (Codex's), seen RED before the fix: two held runs A and
 // B; release A → B still waiting, its output absent; release B → B's bytes.
+// 2026-11-24: the same defect on Refresh from FamilySearch (second test).
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 private struct HeldScriptRunner: FamilySearchPullLauncher {
@@ -93,5 +95,244 @@ struct FamilyTreeReadOnlyClosing5Tests {
         })
         #expect((try? Data(contentsOf: outB)) == bytesB, "B published something other than its own export")
         a.cancel(); b.cancel()
+    }
+
+    // The same shape on "Refresh from FamilySearch…" (flake 2026-11-24, M4
+    // suite on 35d23778e: FamilyTreeReadOnlyClosing2Tests' F3 never reached
+    // .ready). Its scratch answer path was `<scratch>/<FSID>-<second>/
+    // person.ged` — unique within ONE refresh root only. Two refreshes of the
+    // same person in the same second under two roots (parallel tests, two
+    // test hosts sharing one TMPDIR) shared it: one run read the other's
+    // answer. Deterministic here: one clock second, one scratch root.
+    @Test func twoPersonRefreshesInOneSecondNeverShareAnAnswerFile() async throws {
+        let second = Date(timeIntervalSince1970: 1_790_000_000)
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-scratch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        func refresh(_ tag: String) throws -> (PersonRefreshCoordinator, PersonRefreshAppFixtures.Layout) {
+            let layout = try PersonRefreshAppFixtures.layout(tag: tag)
+            let seed = FamilyTreeLiveModel(originalsDirectory: layout.gedcom)
+            seed.personRefreshOverlayStore = layout.overlayStore
+            seed.loadNow()
+            let target = try #require(seed.personRefreshTarget(for: "@I1@"))
+            let c = PersonRefreshCoordinator(
+                target: target, root: layout.refreshRoot, overlayStore: layout.overlayStore,
+                installedFacts: { seed.personFacts(familySearchID: target.familySearchID) },
+                locator: FamilySearchToolLocator(overridePath: layout.tool.path, candidatePaths: []),
+                launcher: PersonRefreshAppFixtures.SilentLauncher(), pollInterval: .milliseconds(20),
+                sink: PersonRefreshNoteSink(videoscanLog: { _ in }), now: { second })
+            c.answerScratchRoot = scratch
+            return (c, layout)
+        }
+        let (a, layoutA) = try refresh("scratch-a"); defer { layoutA.remove() }
+        let (b, layoutB) = try refresh("scratch-b"); defer { layoutB.remove() }
+        a.launch()
+        b.launch()
+        defer { a.cancel(); b.cancel() }
+        guard case .waiting(let outA) = a.phase, case .waiting(let outB) = b.phase else {
+            Issue.record("not waiting: \(a.phase) / \(b.phase)"); return
+        }
+        #expect(outA != outB, "two runs were handed one answer file: \(outA.path)")
+        // B's answer lands first — and it is the wrong person (a refusal).
+        try PersonRefreshAppFixtures.onePerson(fsid: "ZZZZ-999").write(to: outB, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { b.isSettled })
+        #expect({ if case .waiting = a.phase { return true }; return false }(), "A read B's answer: \(a.phase)")
+        // A's own answer: A reaches review.
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = a.phase { true } else { false } },
+                "A: \(a.phase)")
+    }
+
+    // Codex P2 on d91d4503e (disk rule, DECISIONS 2026-11-23): each launch
+    // left its scratch folder and person.ged behind — after a publish, a
+    // cancel, a refused publish. The launch frees what it allocated; the
+    // published copy under the refresh root stays.
+    private final class Mode: @unchecked Sendable { var value: FamilyTreeAccessMode = .full }
+
+    private func scratchLaunch(_ tag: String, scratch: URL, mode: Mode)
+        throws -> (PersonRefreshCoordinator, PersonRefreshAppFixtures.Layout, URL) {
+        let layout = try PersonRefreshAppFixtures.layout(tag: tag)
+        let seed = FamilyTreeLiveModel(originalsDirectory: layout.gedcom)
+        seed.personRefreshOverlayStore = layout.overlayStore
+        seed.loadNow()
+        let target = try #require(seed.personRefreshTarget(for: "@I1@"))
+        let c = PersonRefreshCoordinator(
+            target: target, root: layout.refreshRoot, overlayStore: layout.overlayStore,
+            installedFacts: { seed.personFacts(familySearchID: target.familySearchID) },
+            locator: FamilySearchToolLocator(overridePath: layout.tool.path, candidatePaths: []),
+            launcher: PersonRefreshAppFixtures.SilentLauncher(), pollInterval: .milliseconds(20),
+            sink: PersonRefreshNoteSink(videoscanLog: { _ in }))
+        c.answerScratchRoot = scratch
+        c.writeMode = { mode.value }
+        c.launch()
+        guard case .waiting(let output) = c.phase else { throw CancellationError() }
+        return (c, layout, output)
+    }
+
+    private func leftovers(_ scratch: URL) -> [String] {
+        (try? FileManager.default.contentsOfDirectory(atPath: scratch.path)) ?? []
+    }
+
+    @Test func aPublishedRefreshFreesItsScratchAndKeepsThePublishedCopy() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-publish", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: output, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "\(c.phase)")
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+        let published = try #require(c.stagingFolder).appendingPathComponent(PersonRefreshPaths.outputFileName)
+        #expect(FileManager.default.fileExists(atPath: published.path), "the published copy is the record")
+    }
+
+    @Test func aCancelledRefreshFreesItsScratch() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (c, layout, _) = try scratchLaunch("free-cancel", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        #expect(!leftovers(scratch).isEmpty, "precondition: the launch made its folder")
+        c.cancel()
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+    }
+
+    @Test func aRefusedPublishFreesItsScratchAndLandsNothing() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let mode = Mode()
+        let (c, layout, output) = try scratchLaunch("free-refused", scratch: scratch, mode: mode)
+        defer { layout.remove(); c.cancel() }
+        mode.value = .readOnly(.viewer)          // revoked before the answer is published
+        try PersonRefreshAppFixtures.onePerson().write(to: output, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .failed = c.phase { true } else { false } }, "\(c.phase)")
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+        let published = try #require(c.stagingFolder).appendingPathComponent(PersonRefreshPaths.outputFileName)
+        #expect(!FileManager.default.fileExists(atPath: published.path), "a refused publish landed the answer")
+    }
+
+    // Codex closing pass on 84e7a599f, P1: the cleanup checked the folder's
+    // TYPE, not its identity — a folder moved into its place was deleted.
+    @Test func aFolderSwappedInUnderTheScratchNameSurvivesCancel() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-swap", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        let launchFolder = output.deletingLastPathComponent().deletingLastPathComponent()
+        // The launch's folder renamed aside; a look-alike (same names, a
+        // sentinel answer) moved into its path.
+        try fm.moveItem(at: launchFolder, to: scratch.appendingPathComponent("aside", isDirectory: true))
+        try fm.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "sentinel".write(to: output, atomically: true, encoding: .utf8)
+        c.cancel()
+        #expect((try? String(contentsOf: output, encoding: .utf8)) == "sentinel", "cleanup deleted a folder it did not make")
+    }
+
+    @Test func aScratchHoldingWhatTheLaunchDidNotMakeIsLeftWhole() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-extra", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        let stranger = output.deletingLastPathComponent().appendingPathComponent("not-ours.txt")
+        try "keep".write(to: stranger, atomically: true, encoding: .utf8)
+        c.cancel()
+        #expect(fm.fileExists(atPath: stranger.path), "cleanup removed a file the launch did not make")
+    }
+
+    // P2: one coordinator, A's answer being parsed, relaunched as B before
+    // yielding — A's parser must neither set B's phase nor free B's scratch.
+    @Test func aRelaunchMidParseKeepsTheNewLaunchAndItsScratch() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, outA) = try scratchLaunch("free-relaunch", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        c.read(output: outA)             // A's parse is now in flight
+        c.launch()                       // B, before A's parser can finish
+        guard case .waiting(let outB) = c.phase, outB != outA else { Issue.record("B not waiting: \(c.phase)"); return }
+        // A's parse takes milliseconds; a stale completion would end B's wait.
+        let ended = await PersonRefreshAppFixtures.waitUntil(1) { if case .waiting = c.phase { false } else { true } }
+        #expect(!ended, "A's stale parse changed B's phase to \(c.phase)")
+        #expect(fm.fileExists(atPath: outB.deletingLastPathComponent().path), "B's scratch was freed before B answered")
+        try PersonRefreshAppFixtures.onePerson().write(to: outB, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "B: \(c.phase)")
+    }
+
+    // Codex closing 2, P2: an Apply suspended in its overlay write, then a
+    // relaunch — the Apply resumed and set the NEW run's phase (freeing its
+    // scratch) and journalled the new run's answer file as its source.
+    @Test func anApplyFinishingAfterARelaunchLeavesTheNewRunAlone() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, outA) = try scratchLaunch("free-apply", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "\(c.phase)")
+        guard case .ready(let diff) = c.phase else { return }
+        let sourceA = try #require(c.stagingFolder).lastPathComponent + "/" + PersonRefreshPaths.outputFileName
+        // The overlay write asks the mode OFF the main actor: hold it there.
+        final class Hold: @unchecked Sendable {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let lock = NSLock(); var armed = true
+        }
+        let hold = Hold()
+        c.writeMode = {
+            if !Thread.isMainThread, hold.lock.withLock({ hold.armed }) {
+                hold.lock.withLock { hold.armed = false }
+                hold.entered.signal(); hold.release.wait()
+            }
+            return .full
+        }
+        let applying = Task { await c.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key))) }
+        await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async { hold.entered.wait(); k.resume() }
+        }
+        c.launch()                                    // B, while A's write is held
+        guard case .waiting(let outB) = c.phase else { Issue.record("B not waiting: \(c.phase)"); hold.release.signal(); return }
+        hold.release.signal()
+        #expect(await applying.value, "A's overlay write landed")
+        #expect({ if case .waiting(let o) = c.phase { return o == outB }; return false }(), "A's Apply set B's phase: \(c.phase)")
+        #expect(fm.fileExists(atPath: outB.deletingLastPathComponent().path), "A's Apply freed B's scratch")
+        let journal = PersonRefreshAudit.entries(directory: layout.refreshRoot, log: { _ in })
+        #expect(journal.last?.source == sourceA, "A's journal entry names \(journal.last?.source ?? "nothing"), not A's answer")
+    }
+
+    // Codex closing 2, P2: a trailer read that answered "not yet" skipped the
+    // cancellation check — a relaunched run got the old run's "Terminal may
+    // be waiting" note from the old run's poll count.
+    @Test func aTrailerReadAnsweringAfterARelaunchLeavesTheNewRunQuiet() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        final class Gate: @unchecked Sendable {
+            let lock = NSLock(); var calls = 0; var entered = false; var released = false
+        }
+        let gate = Gate()
+        let (c, layout, outA) = try scratchLaunch("free-trailer", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        // Call k comes after k-1 unchanged polls; call #pollsBeforeQuiet+1 is
+        // the poll that would set quietSince — hold it, answer "not yet".
+        let holdAt = PersonRefreshCoordinator.pollsBeforeQuiet + 1
+        c.trailerCheck = { _ in
+            let n = gate.lock.withLock { gate.calls += 1; return gate.calls }
+            if n == holdAt {
+                gate.lock.withLock { gate.entered = true }
+                while !gate.lock.withLock({ gate.released }) { try? await Task.sleep(for: .milliseconds(5)) }
+            }
+            return false
+        }
+        try "0 HEAD\n1 CHAR UTF-8\n".write(to: outA, atomically: true, encoding: .utf8)   // partial: no trailer
+        #expect(await PersonRefreshAppFixtures.waitUntil(10) { gate.lock.withLock { gate.entered } })
+        #expect(c.quietSince == nil, "precondition: A had not gone quiet yet")
+        c.launch()                                    // B, while A's trailer read is held
+        guard case .waiting = c.phase else { Issue.record("B not waiting: \(c.phase)"); return }
+        gate.lock.withLock { gate.released = true }
+        try await Task.sleep(for: .milliseconds(200))   // A's held read answers and A's loop resumes
+        #expect(c.quietSince == nil, "B shows A's 'Terminal may be waiting' at \(String(describing: c.quietSince))")
     }
 }

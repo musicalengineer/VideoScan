@@ -60,7 +60,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     }
 
     let target: Target
-    @Published private(set) var phase: Phase = .idle
+    /// Leaving `.waiting` is the ONE exit path for this launch's scratch
+    /// (codex P2 on d91d4503e; disk rule, DECISIONS 2026-11-23): published
+    /// (→ .parsing), refused / failed / timed out (→ .failed), cancelled
+    /// (→ .idle) — every one frees the launch folder. (≈ a C++ RAII guard
+    /// whose destructor is "phase left .waiting".)
+    @Published private(set) var phase: Phase = .idle {
+        didSet { if case .waiting = phase {} else { releaseLaunchScratch() } }
+    }
     @Published private(set) var startedAt: Date?
     /// No growth and no trailer for `pollsBeforeQuiet` polls — "Terminal
     /// may be waiting for you" (a note, never a failure).
@@ -72,9 +79,18 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// every family-data location (codex #196 F3). The Terminal process
     /// cannot be reached by the permit, so it never writes into the refresh
     /// root; the coordinator PUBLISHES the answer there through the
-    /// primitive, at the moment it reads it — refused once revoked.
+    /// primitive, at the moment it reads it — refused once revoked. Each
+    /// launch answers into `<this>/<UUID>/<FSID>-<stamp>/person.ged`.
     var answerScratchRoot: URL = FileManager.default.temporaryDirectory
         .appendingPathComponent("VideoScan-person-refresh", isDirectory: true)
+    /// `<answerScratchRoot>/<UUID>/<FSID>-<stamp>/` as THIS launch made it,
+    /// by identity (PersonRefreshLaunchScratch); freed and cleared by
+    /// `releaseLaunchScratch`. Never the shared root. Worst case held on
+    /// disk: one folder + one small person.ged per coordinator still
+    /// `.waiting`.
+    private(set) var launchScratch: PersonRefreshLaunchScratch?
+    /// "Has the answer its `0 TRLR`?" — read at each poll; tests inject.
+    var trailerCheck: @Sendable (URL) async -> Bool = { await FamilySearchPullCoordinator.hasGedcomTrailer(at: $0) }
 
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
@@ -157,6 +173,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// Write the script into a fresh staging folder, open it in Terminal
     /// and start watching. Nothing runs until Return is pressed there.
     func launch() {
+        // A relaunch ends the earlier run first (codex closing P2): its watcher
+        // and parser are cancelled and the generation moves on, so a callback
+        // of that run is stale and can neither set this run's phase nor free
+        // this run's scratch; then the earlier run's folder is freed.
+        watchTask?.cancel(); watchTask = nil
+        parseTask?.cancel(); parseTask = nil
+        generation &+= 1
+        releaseLaunchScratch()
         let started = now()
         // Never reuse a folder: a leftover person.ged from a refresh in
         // the same second would otherwise be read as this one's answer.
@@ -169,8 +193,16 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     isDirectory: true)
             suffix += 1
         }
-        // The tool's -o: scratch, not the refresh root (#196 F3).
-        let output = answerScratchRoot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+        // The tool's -o: scratch, not the refresh root (#196 F3), in a folder
+        // of its own per launch (as Get Family Tree, #199). `folder` is unique
+        // only inside THIS root; two roots sharing the scratch (two test
+        // hosts, two app instances) launching the same person in the same
+        // second were handed one person.ged and read each other's answer
+        // (flake 2026-11-24). The UUID level keeps the leaf name — and the
+        // `started` log line — `<FSID>-<stamp>/person.ged`.
+        let launchName = UUID().uuidString
+        let output = answerScratchRoot.appendingPathComponent(launchName, isDirectory: true)
+            .appendingPathComponent(folder.lastPathComponent, isDirectory: true)
             .appendingPathComponent(PersonRefreshPaths.outputFileName)
         // The attempt is on record BEFORE anything can refuse it: a run that
         // could not start still reads `started` … `failed: could not start`.
@@ -196,10 +228,16 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             // primitive; the spawned tool's only output path is `output`,
             // in scratch (#196 F3).
             let launcher = self.launcher
+            var made: PersonRefreshLaunchScratch?
+            defer { if let made { launchScratch = made } }   // recorded even when the script write throws
+            let scratchRoot = answerScratchRoot
             try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script + spawn → \(output.lastPathComponent) in scratch)",
                                                mode: writeMode) {
-                try FileManager.default.createDirectory(at: output.deletingLastPathComponent(),
-                                                        withIntermediateDirectories: true)
+                // The shared root (kept); then this launch's two levels, made
+                // and identified by PersonRefreshLaunchScratch.make.
+                try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+                made = try PersonRefreshLaunchScratch.make(in: scratchRoot, name: launchName,
+                                                           leafName: folder.lastPathComponent)
                 _ = try script.write()
                 launcher.open(script.scriptURL)
             }
@@ -257,6 +295,18 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         return published
     }
 
+    /// Free this launch's scratch by identity (PersonRefreshLaunchScratch.free):
+    /// a folder swapped in under its name, or anything the launch did not
+    /// make inside it, is left whole and named in one log line. The published
+    /// copy under the refresh root is not in here.
+    private func releaseLaunchScratch() {
+        guard let scratch = launchScratch else { return }
+        launchScratch = nil
+        if let kept = scratch.free() {
+            note("left its scratch folder \(scratch.name) in place: \(kept)")
+        }
+    }
+
     /// `<FSID>-<stamp>/person.ged` — the answer file, relative to the root.
     private nonisolated static func relative(_ output: URL) -> String {
         output.deletingLastPathComponent().lastPathComponent + "/" + output.lastPathComponent
@@ -275,7 +325,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             while !Task.isCancelled, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
-                guard let size = await FamilySearchPullCoordinator.fileSize(at: output, newerThan: since) else {
+                let statted = await FamilySearchPullCoordinator.fileSize(at: output, newerThan: since)
+                guard !Task.isCancelled else { return }   // cancelled or relaunched during the stat
+                guard let size = statted else {
                     if lastSize >= 0 {
                         self.quietSince = nil
                         let message = "\(output.lastPathComponent) was removed before it finished. Nothing was changed."
@@ -285,10 +337,16 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     }
                     continue
                 }
-                if size > 0, await FamilySearchPullCoordinator.hasGedcomTrailer(at: output) {
-                    self.quietSince = nil
-                    self.read(output: output)
-                    return
+                if size > 0 {
+                    let complete = await self.trailerCheck(output)
+                    // Either answer: a run cancelled or relaunched during the
+                    // read touches nothing of the new run (codex closing 2).
+                    guard !Task.isCancelled else { return }
+                    if complete {
+                        self.quietSince = nil
+                        self.read(output: output)
+                        return
+                    }
                 }
                 if size == lastSize {
                     stable += 1
@@ -465,36 +523,45 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         isApplying = true
         defer { isApplying = false }
         let fsid = target.familySearchID, name = target.personName, at = now()
+        // This run, as it was when Apply began (codex closing 2): a relaunch
+        // or cancel during the write moves `generation`, and then the phase
+        // and the outcome belong to the newer run — this Apply only records
+        // what it did, under its own answer file.
+        let token = generation
+        let source = stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName }
         let outcome = await Self.writeOverlay(overlayStore, now: at, mode: writeMode) { overlay -> Bool? in
             overlay.record(chosen, familySearchID: fsid, displayName: name, at: at)
             return true
+        }
+        let current = token == generation
+        /// A failed Apply: this run's phase and outcome, or — superseded —
+        /// only its line.
+        func settleFailure(_ shown: String, line: String) -> Bool {
+            if current { phase = .failed(message: shown); noteOutcome(line) } else { note(line) }
+            return false
         }
         switch outcome {
         case .written, .nothingToDo:
             break
         case .unreadable(let reason, let keptAs, let setAsideError):
-            phase = .failed(message: Self.unreadableSentence(keptAs: keptAs))
-            noteOutcome(PersonRefreshAuditLines.overlayUnreadable(
+            return settleFailure(Self.unreadableSentence(keptAs: keptAs), line: PersonRefreshAuditLines.overlayUnreadable(
                 action: "apply", reason: reason, keptAs: keptAs, setAsideError: setAsideError))
-            return false
         case .failed(let message):
-            phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
-            noteOutcome(PersonRefreshAuditLines.overlayWriteFailed(message))
-            return false
+            return settleFailure("Could not save the refreshed facts: \(message). Nothing was changed.",
+                                 line: PersonRefreshAuditLines.overlayWriteFailed(message))
         case .refused(let message):
-            phase = .failed(message: message)
-            noteOutcome(PersonRefreshAuditLines.failed(message))
-            return false
+            return settleFailure(message, line: PersonRefreshAuditLines.failed(message))
         }
         let entry = PersonRefreshAudit.Entry(
             at: now(), action: .applied, familySearchID: fsid, person: name,
             changes: PersonRefreshAudit.applyChanges(chosen),
-            source: stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName },
+            source: source,
             relationshipNotes: diff.relationshipNotes.count)
         // The journal entry is the record; the lines are its reading.
         // Lines first: if the journal cannot be written, the log still has
-        // every before/after value.
-        outcomeNoted = true
+        // every before/after value. The overlay WAS written, so a superseded
+        // Apply keeps its record too — only the phase is not its to set.
+        if current { outcomeNoted = true }
         for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
         do {
             try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
@@ -505,7 +572,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         } catch {
             note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
-        phase = .applied(fields: chosen.count)
+        if current { phase = .applied(fields: chosen.count) }
         return true
     }
 
