@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - VolumeRoleTaxonomyMigrationTests
@@ -651,6 +652,92 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(sneaky, temporaryDirectory: fakeTemp))
         #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(fakeTemp.path + "/a/../b", temporaryDirectory: fakeTemp),
                 "any `..` is refused: a test never needs one")
+    }
+
+    // MARK: Codex 2026-11-24 (cycle #361) P1 — the pinned test temp root
+    //
+    // The icon guard admits the runner's test temp root. It used to re-resolve that root's URL on every call, so
+    // a root replaced after validation by a symlink to `/` (or the home, or the archive) admitted every path. The
+    // pin binds the guard to the validated directory: its resolved path (never re-resolved) and its (dev, ino).
+    // Every path below is a STRING the guard refuses before any NSWorkspace call; nothing real is touched.
+
+    /// The real account home (not $HOME, which a sealed run points at the sealed home).
+    private var realHome: String { String(cString: getpwuid(getuid()).pointee.pw_dir) }
+
+    /// A marked root inside test scratch, pinned the way the test host pins the runner's root.
+    private func pinnedScratchRoot() throws -> (URL, TestHostScratch.PinnedRoot) {
+        let root = TestScratch.reserved("roletax-pin-")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(TestHostScratch.rootMarkerName))
+        let pin = try #require(TestHostScratch.PinnedRoot.pin(root), "a marked scratch root pins")
+        return (root, pin)
+    }
+
+    /// Move `root` aside (into scratch) and put a symlink to `target` in its place. The returned closure removes
+    /// the LINK itself (unlink never follows it); the aside folder is scratch-recorded.
+    private func swapForSymlink(_ root: URL, to target: String) throws -> () -> Void {
+        try FileManager.default.moveItem(at: root, to: TestScratch.reserved("roletax-pin-aside-"))
+        try FileManager.default.createSymbolicLink(atPath: root.path, withDestinationPath: target)
+        return {
+            var st = stat()
+            if lstat(root.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFLNK { unlink(root.path) }
+        }
+    }
+
+    @Test func iconGuard_testRootSwappedForSymlinkToSlash_refusesRealPaths() throws {
+        let (root, pin) = try pinnedScratchRoot()
+        #expect(MasterArchiveIcon.isInsidePinnedRoot(root.appendingPathComponent("Breen_Family_Archive").path, pin: pin),
+                "control: the intact pinned root admits its own scratch")
+        let unlink = try swapForSymlink(root, to: "/")
+        defer { unlink() }
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot("/Volumes/FamilyArchive", pin: pin))
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot("/Volumes/FamilyArchive/Breen_Family_Archive", pin: pin))
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot(realHome + "/Movies", pin: pin))
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot(root.path + "/Volumes/FamilyArchive", pin: pin),
+                "through the swapped root: really /Volumes/FamilyArchive")
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot(root.appendingPathComponent("Breen_Family_Archive").path, pin: pin),
+                "a replaced root admits nothing, not even its old children")
+        // The guard itself: refused before NSWorkspace, and recorded.
+        let before = MasterArchiveIcon.testHostRefusals.count
+        #expect(!MasterArchiveIcon.mayTouch("/Volumes/FamilyArchive", testRootPin: pin))
+        #expect(!MasterArchiveIcon.mayTouch(realHome + "/Movies", testRootPin: pin))
+        #expect(MasterArchiveIcon.testHostRefusals.count == before + 2)
+    }
+
+    @Test func iconGuard_testRootSwappedForSymlinkToHome_refusesHomePaths() throws {
+        let (root, pin) = try pinnedScratchRoot()
+        let unlink = try swapForSymlink(root, to: realHome)
+        defer { unlink() }
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot(realHome + "/Movies", pin: pin))
+        #expect(!MasterArchiveIcon.isInsidePinnedRoot(root.path + "/Movies", pin: pin), "through the swapped root: really ~/Movies")
+        let before = MasterArchiveIcon.testHostRefusals.count
+        #expect(!MasterArchiveIcon.mayTouch(root.path + "/Movies", testRootPin: pin))
+        #expect(MasterArchiveIcon.testHostRefusals.count == before + 1)
+    }
+
+    /// Sensor: under a runner (a marked VIDEOSCAN_TEST_TMP) this process's own root IS pinned — else the guard
+    /// would silently fall back to the user temp dir and every test that badges runner scratch would be refused.
+    @Test func iconGuard_runnerRootIsPinnedInThisProcess() {
+        let fallback = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        if TestHostScratch.testTempRoot == fallback {
+            #expect(TestHostScratch.testTempRootPin == nil, "no runner root: nothing pinned")
+        } else {
+            #expect(TestHostScratch.testTempRootPin?.resolvedPath == TestHostScratch.realPath(TestHostScratch.testTempRoot))
+            #expect(TestHostScratch.testTempRootPin?.isIntact == true)
+        }
+    }
+
+    @Test func iconGuard_pinRefusesARootOutsideTheScratchParents() {
+        let parents = ["/private/var/folders/xx/T", "/private/tmp", realHome + "/Library/Caches"]
+        for bad in ["/", "/Users", realHome, realHome + "/Library", realHome + "/Library/Application Support/VideoScan/tmp",
+                    realHome + "/Movies/tmp", "/Volumes", "/Volumes/FamilyArchive/tmp", "/private/tmp",
+                    "/private/tmpX/tmp", realHome + "/Library/CachesX/tmp"] {
+            #expect(!TestHostScratch.PinnedRoot.isAllowedLocation(bad, allowedParents: parents), "\(bad)")
+        }
+        for good in ["/private/var/folders/xx/T/videoscan-sealed-home-1/tmp", "/private/tmp/claude-501/run/home/tmp",
+                     realHome + "/Library/Caches/videoscan-xctest-shards/run/home/tmp"] {
+            #expect(TestHostScratch.PinnedRoot.isAllowedLocation(good, allowedParents: parents), "\(good)")
+        }
     }
 
     @Test func m3_adoptImportedDesignation_rerunsMigration() {
