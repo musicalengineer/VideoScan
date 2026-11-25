@@ -1138,7 +1138,13 @@ final class VideoScanModel: ObservableObject {
     /// - Parameter logDirectory: `catalog.log`'s directory. Nil — the app,
     ///   and every existing caller — keeps the routed default. Tests that
     ///   read their own catalog.log lines back pass a scratch dir (GH #211).
-    init(logDirectory: URL? = nil) {
+    /// - Parameter familyAssetCenter: where this model publishes its
+    ///   Master Archive authority. Nil — the app and every existing caller
+    ///   — takes `FamilyAssetConfigurationCenter.forNewModel()`: `.shared`
+    ///   in the app, a private centre per model in a unit-test process
+    ///   (GH #511).
+    init(logDirectory: URL? = nil, familyAssetCenter: FamilyAssetConfigurationCenter? = nil) {
+        self.familyAssetCenter = familyAssetCenter ?? .forNewModel()
         dashboard = DashboardState(logDirectory: logDirectory)
         // GH #337 slice 1: connect the preview store FIRST, before anything
         // can touch preview state.
@@ -1685,6 +1691,13 @@ final class VideoScanModel: ObservableObject {
     // Swift extensions cannot add stored properties. All the LOGIC —
     // initialize / clear / promote plan / linked-copy index — lives in
     // the extension file.
+
+    /// Where `publishFamilyAssetConfiguration()` publishes the archive
+    /// authority the Family Tree, Hallie and research writers read. An
+    /// immutable collaborator fixed at init (not state): `.shared` for the
+    /// app's one model; a private centre for each model a unit test builds,
+    /// so no test leaves the process-wide centre `.unavailable` (GH #511).
+    let familyAssetCenter: FamilyAssetConfigurationCenter
 
     /// The one designated Master Archive, or nil when none. Mirrored into
     /// `catalogStore.masterArchive` on every change so the next catalog
