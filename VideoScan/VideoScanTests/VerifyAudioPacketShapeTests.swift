@@ -297,8 +297,10 @@ enum ReconfiguredSoundFixture {
 
     /// One AAC/ADTS segment (ADTS files concatenate into one stream whose
     /// parameters change at the join).
-    private static func segment(_ dir: URL, _ name: String, rate: Int, channels: Int, seconds: Double) throws -> URL {
-        let expr = channels == 2 ? VerifyAudioTestMedia.trueStereoExpr : "0.5*sin(440*2*PI*t)"
+    private static func segment(_ dir: URL, _ name: String, rate: Int, channels: Int, seconds: Double,
+                                silent: Bool = false) throws -> URL {
+        let expr = silent ? (channels == 2 ? "0|0" : "0")
+            : channels == 2 ? VerifyAudioTestMedia.trueStereoExpr : "0.5*sin(440*2*PI*t)"
         let out = dir.appendingPathComponent(name)
         try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "aevalsrc=\(expr):s=\(rate):d=\(seconds)", "-c:a", "aac"],
                                        output: out.path)
@@ -311,9 +313,10 @@ enum ReconfiguredSoundFixture {
     static func make(into dir: URL, name: String,
                      first: (rate: Int, channels: Int, seconds: Double),
                      second: (rate: Int, channels: Int, seconds: Double),
-                     statesLength: Bool = true) throws -> String {
+                     statesLength: Bool = true, secondSilent: Bool = false) throws -> String {
         let a = try segment(dir, name + ".a.aac", rate: first.rate, channels: first.channels, seconds: first.seconds)
-        let b = try segment(dir, name + ".b.aac", rate: second.rate, channels: second.channels, seconds: second.seconds)
+        let b = try segment(dir, name + ".b.aac", rate: second.rate, channels: second.channels, seconds: second.seconds,
+                            silent: secondSilent)
         let joined = dir.appendingPathComponent(name + ".aac")
         try (try Data(contentsOf: a) + (try Data(contentsOf: b))).write(to: joined)
         let out = dir.appendingPathComponent(name).path
@@ -432,6 +435,72 @@ struct VerifyAudioReconfigurationTests {
             Issue.record("a whole difference pass read as reconfigured"); return
         }
         #expect(rms != nil)
+    }
+
+    // MARK: Codex #368 closing-2 P0 — the last graph's levels are no fact
+
+    @Test("Check Media's Sound row carries no channel evidence for a reconfigured pass, and says why")
+    func soundRowHasNoEvidence() throws {
+        let d = MasterArchiveTestSupport.soundDiagnosis(channels: [-84.63, -77.26],
+                                                        shortDecode: .reconfigured(statedSeconds: nil))
+        let row = CheckMediaRules.checkSound(.success(d), facts: try CheckMediaFixtures.healthy().facts)
+        #expect(row.evidence.isEmpty, "\(row.evidence)")
+        #expect(row.sentence.contains("changes partway through"), "\(row.sentence)")
+    }
+
+    @Test("the saved card holds no levels for a reconfigured pass")
+    func savedCardHoldsNoLevels() throws {
+        let quick = try CheckMediaFixtures.healthy()
+        let d = MasterArchiveTestSupport.soundDiagnosis(channels: [-84.63, -77.26],
+                                                        shortDecode: .reconfigured(statedSeconds: nil))
+        let row = CheckMediaRules.checkSound(.success(d), facts: quick.facts)
+        let card = CheckMediaRules.card(tier: .full, checks: [row], quick: quick, at: Date())
+        let saved = try JSONEncoder().encode(card)
+        let reloaded = try JSONDecoder().decode(MediaReportCard.self, from: saved)
+        #expect(reloaded.check(.sound)?.evidence.isEmpty == true)
+        let text = String(bytes: saved, encoding: .utf8) ?? ""
+        #expect(!text.contains("84.6") && !text.contains("77.3"), "a level reached the saved card")
+    }
+
+    @Test("the Verify Audio sheet shows no channel loudness (and no \"silent\") for a reconfigured pass, and says why")
+    func verifySheetShowsNoLevels() throws {
+        let d = MasterArchiveTestSupport.soundDiagnosis(channels: [-84.63, -77.26],
+                                                        shortDecode: .reconfigured(statedSeconds: nil))
+        let analysis = try #require(d.balanceAnalysis)
+        #expect(VerifyAudioSheet.readoutChannels(analysis).isEmpty)
+        #expect(VerifyAudioSheet.levelsWithheldReason(analysis)?.contains("changes partway through") == true)
+        // A decode that ended early keeps its numbers (#470): one graph, the part that decoded.
+        let short = MasterArchiveTestSupport.soundDiagnosis(channels: [-18, -20],
+                                                            shortDecode: AudioShortDecode(missingSeconds: 3, statedSeconds: 12))
+        let shortAnalysis = try #require(short.balanceAnalysis)
+        #expect(VerifyAudioSheet.readoutChannels(shortAnalysis).count == 2)
+        #expect(VerifyAudioSheet.levelsWithheldReason(shortAnalysis) == nil)
+    }
+
+    @Test("end to end: 2 s of tone at 48 kHz then 6 s of silence at 96 kHz, no stated length — the silent tail is never shown or stored as the file's levels",
+          .timeLimit(.minutes(3)))
+    func toneThenSilenceEndToEnd() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_tone_silence")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_tone_silence.nut",
+                                                     first: (48_000, 2, 2), second: (96_000, 2, 6),
+                                                     statesLength: false, secondSilent: true)
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        let analysis = try #require(d.balanceAnalysis)
+        #expect(analysis.shortDecode?.graphReconfigured == true)
+        #expect(analysis.measurements.channels.isEmpty, "the analysis kept \(analysis.measurements.channels)")
+        #expect(analysis.evidenceChannels.isEmpty)
+        guard case .notChecked = d.verdict else { Issue.record("verdict \(d.verdict)"); return }
+        guard case .success(let facts) = await CheckMediaProbe.facts(path: path) else {
+            Issue.record("facts did not probe"); return
+        }
+        let row = CheckMediaRules.checkSound(.success(d), facts: facts)
+        #expect(row.evidence.isEmpty, "\(row.evidence)")
+        #expect(VerifyAudioSheet.readoutChannels(analysis).isEmpty)
+        guard case .unchecked = PromoteSoundGate.finding(from: d) else {
+            Issue.record("Promote finding \(PromoteSoundGate.finding(from: d))"); return
+        }
     }
 
     @Test("the marker: ffmpeg names the reconfiguration on stderr; a count beside it is no answer, and without it the count stands")

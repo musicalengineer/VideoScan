@@ -37933,7 +37933,11 @@
         "rateChangeBeforeFirstFrame",
         "rateChangeWithoutStatedLength",
         "reframeChangesNoMeasurement",
-        "reframedDownstream"
+        "reframedDownstream",
+        "savedCardHoldsNoLevels",
+        "soundRowHasNoEvidence",
+        "toneThenSilenceEndToEnd",
+        "verifySheetShowsNoLevels"
       ]
     },
     {

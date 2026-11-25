@@ -135,7 +135,10 @@ struct BalanceAudioUnlockedDVTests {
 
     private func balance(_ path: String, ffmpeg: String? = nil) async throws -> BalanceAudioJob {
         let analysis = try await AudioBalanceProbe.analyze(path: path)
-        try #require(analysis.classification == .leftOnly, "fixture is not left-only: \(analysis.classification.rawValue)")
+        // A tape whose sample rate changes part-way rebuilds ffmpeg's filter graph: its levels are no fact about
+        // the file and the analysis carries none (Codex #368 closing-2) — the job must refuse it, which is the point.
+        try #require(analysis.classification == .leftOnly || analysis.shortDecode?.graphReconfigured == true,
+                     "fixture is not left-only: \(analysis.classification.rawValue)")
         let model = VideoScanModel()
         let record = makeBalanceSourceRecord(path: path, durationSeconds: analysis.shape.durationSeconds,
                                              audioCodec: analysis.shape.audioCodec)

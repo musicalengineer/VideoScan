@@ -151,9 +151,12 @@ struct AudioShortDecode: Sendable, Equatable {
     /// (Verify Audio, Check Media's Sound row, Promote's refusal). Numbers
     /// only: safe for logs.
     /// The one with more sound missing (a file can carry several streams).
+    /// A rebuilt graph outranks a decode that ended early: its levels are
+    /// no fact about the file at all (`AudioBalanceAnalysis.evidenceChannels`).
     static func worse(_ a: AudioShortDecode?, _ b: AudioShortDecode?) -> AudioShortDecode? {
         guard let a else { return b }
         guard let b else { return a }
+        if a.graphReconfigured != b.graphReconfigured { return a.graphReconfigured ? a : b }
         return b.missingSeconds > a.missingSeconds ? b : a
     }
 
@@ -201,6 +204,17 @@ struct AudioBalanceAnalysis: Sendable, Equatable {
 }
 
 extension AudioBalanceAnalysis {
+    /// The per-channel levels a surface may STORE or SHOW as evidence (Check
+    /// Media's Sound row and its saved card, Media Info, the Verify Audio
+    /// sheet). Empty when the pass was not one measurement of the file: after
+    /// a rebuilt filter graph the parser holds only the LAST graph's numbers
+    /// (a tone then silence reads silent — Codex #368 closing-2 P0); the why is
+    /// `shortDecode.reason`. A decode that ended early keeps its numbers: one
+    /// graph, the part that decoded, shown beside its reason (#470).
+    var evidenceChannels: [AudioChannelLevels] {
+        shortDecode?.graphReconfigured == true ? [] : measurements.channels
+    }
+
     /// What the levels pass MEASURED, in one place (Check Media's sound row
     /// and Promote's sound gate both ask this): true = every channel sat at
     /// or below the program floor (−60 dBFS RMS); false = at least one
@@ -540,6 +554,24 @@ enum AudioBalanceProbe {
         return .rms(AstatsOutputParser.perChannelLevels(fromStderr: text, runTag: runTag).first?.rmsDBFS)
     }
 
+    /// One difference pass on one stream (I/O): its reading, or a throw when
+    /// ffmpeg failed — `.timedOut` for OUR deadline (GH #136), never file
+    /// evidence.
+    static func differencePass(path: String, ordinal: Int, ffmpeg: String,
+                               deadline: TimeInterval, control: ProcessControl?) async throws -> DifferenceReading {
+        let tag = AstatsOutputParser.newRunTag()
+        let result = await ProcessRunner.runProcess(
+            executable: ffmpeg,
+            arguments: differenceArgs(input: path, audioStreamOrdinal: ordinal, runTag: tag),
+            deadlineSeconds: deadline,
+            control: control)
+        guard result.exitCode == 0 else {
+            if result.timedOut { throw AudioBalanceProbeError.timedOut(afterSeconds: Int(deadline)) }
+            throw AudioBalanceProbeError.probeFailed("ffmpeg difference pass exited with status \(result.exitCode)")
+        }
+        return differenceReading(fromStderr: result.stderr, runTag: tag)
+    }
+
     /// Why one stream's levels pass gave no measurement, else nil. Pure.
     static func levelsFailure(exitCode: Int32, timedOut: Bool, channels: [AudioChannelLevels], ordinal: Int,
                               deadline: TimeInterval) -> AudioBalanceProbeError? {
@@ -689,20 +721,8 @@ enum AudioBalanceProbe {
         if shortDecode == nil, programOrdinals.count == 1, channels.count == 2,
            AudioBalanceClassifier.carriesProgram(channels[0]),
            AudioBalanceClassifier.carriesProgram(channels[1]) {
-            let differenceTag = AstatsOutputParser.newRunTag()
-            let diffResult = await ProcessRunner.runProcess(
-                executable: ffmpeg,
-                arguments: differenceArgs(input: path, audioStreamOrdinal: chosenOrdinal, runTag: differenceTag),
-                deadlineSeconds: passDeadline,
-                control: control)
-            guard diffResult.exitCode == 0 else {
-                if diffResult.timedOut {
-                    throw AudioBalanceProbeError.timedOut(afterSeconds: Int(passDeadline))
-                }
-                throw AudioBalanceProbeError.probeFailed(
-                    "ffmpeg difference pass exited with status \(diffResult.exitCode)")
-            }
-            switch differenceReading(fromStderr: diffResult.stderr, runTag: differenceTag) {
+            switch try await differencePass(path: path, ordinal: chosenOrdinal, ffmpeg: ffmpeg,
+                                            deadline: passDeadline, control: control) {
             case .rms(let rms):
                 // Unparseable difference stays nil → conservative trueStereo.
                 difference = rms
@@ -722,10 +742,18 @@ enum AudioBalanceProbe {
             ? perStream.indices.filter { $0 != chosenOrdinal }.map(absoluteIndex)
             : []
 
-        let measurements = AudioBalanceMeasurements(
-            channels: channels, differenceRMSDBFS: difference)
+        // A rebuilt graph: the levels are the last graph's only — not a fact
+        // about the file, so the analysis carries none (evidenceChannels).
+        let reconfigured = shortDecode?.graphReconfigured == true
+        let measurements = reconfigured
+            ? AudioBalanceMeasurements(channels: [], differenceRMSDBFS: nil)
+            : AudioBalanceMeasurements(channels: channels, differenceRMSDBFS: difference)
         let classification = AudioBalanceClassifier.classify(measurements)
-        balanceLog.info("analyze: \((path as NSString).lastPathComponent, privacy: .public) → \(classification.rawValue, privacy: .public) (audioStreams=\(shape.audioStreams), programStreams=\(programOrdinals.count), program=#\(absoluteIndex(chosenOrdinal)), drop=[\(dropped.map(String.init).joined(separator: ","), privacy: .public)], channels=\(channels.count), diff=\(difference.map { String(format: "%.1f", $0) } ?? "n/a", privacy: .public) dBFS)")
+        if reconfigured {
+            balanceLog.info("analyze: \((path as NSString).lastPathComponent, privacy: .public) → not measured: ffmpeg rebuilt its filter graph mid-stream, no levels kept (audioStreams=\(shape.audioStreams))")
+        } else {
+            balanceLog.info("analyze: \((path as NSString).lastPathComponent, privacy: .public) → \(classification.rawValue, privacy: .public) (audioStreams=\(shape.audioStreams), programStreams=\(programOrdinals.count), program=#\(absoluteIndex(chosenOrdinal)), drop=[\(dropped.map(String.init).joined(separator: ","), privacy: .public)], channels=\(channels.count), diff=\(difference.map { String(format: "%.1f", $0) } ?? "n/a", privacy: .public) dBFS)")
+        }
         var analysis = AudioBalanceAnalysis(
             classification: classification,
             measurements: measurements,
