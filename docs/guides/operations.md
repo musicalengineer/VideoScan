@@ -278,7 +278,8 @@ external volume away.
 **The corpus is a stratified SAMPLE** (DECISIONS 2026-11-24; the rules are `scripts/corpus_select.py`'s header).
 Stratum = container, video codec, audio codec plus the odd cases the catalog states (no sound, sound decode short,
 odd frame rate or size, damaged, under 5 s or over 2 h); each stratum gives ceil(12%), at least 3 (a stratum of 3 or
-fewer whole), spread across size and source drive; pins (`scripts/corpus_pins.json`: a file a bug or a test is tied
+fewer whole), spread across size and source drive, and at most one file of 8 GB or more per stratum (its large files stand
+as one candidate: the copy already made, else the smallest); pins (`scripts/corpus_pins.json`: a file a bug or a test is tied
 to) and v1's hand-curated rows are always taken. Roots: a copy already in place keeps its root; otherwise under 8 GB
 onto the X10 (1.8 TB of copies), 8 GB and over onto the SSD (400 GB of copies; ~100 GB stays for run scratch) if it
 fits, and what fits neither is `ro` — read from the Ultra over a read-only share, NOT RUN (AMBER, never a baseline)
