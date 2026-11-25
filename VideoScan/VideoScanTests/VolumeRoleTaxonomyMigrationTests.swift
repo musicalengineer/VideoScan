@@ -578,10 +578,18 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     @Test func m3_clearMasterArchive_demotesExMaster_noQueue() {
         let m = makeModel()
-        // A temp path, never a real volume name (it does not need to exist).
-        let archive = TestScratch.reserved("roletax-m3-").appendingPathComponent("FamilyArchive").path
+        // A temp path, never a real volume name. It is NEVER CREATED (nothing here writes to it; the icon
+        // un-badge skips a missing path), so it leaks nothing — and it must NOT be a TestScratch path: a
+        // sealed run sets HOME = CFFIXED_USER_HOME = <sealed home> and the scratch root to <sealed home>/tmp,
+        // so a scratch path is a home folder and R3 rightly makes the demoted target Workspace (M4 combined
+        // run 2026-11-24). The system temp dir is outside every home, sealed or not.
+        let archive = FileManager.default.temporaryDirectory
+            .appendingPathComponent("roletax-m3-\(UUID().uuidString.prefix(8))/FamilyArchive").path
         let master = CatalogScanTarget(searchPath: archive)
         master.role = .archive; master.isReachable = true
+        // The fixture's premise: an external archive, not a home folder. A home folder that ends up
+        // Unassigned is promoted to Workspace by the clear's own migrateVolumeRoles() (R3) — correctly.
+        #expect(!master.isHomeFolderTarget, "fixture premise: \(archive) must not be inside the home (\(NSHomeDirectory()))")
         m.scanTargets = [master]
         designateMaster(m, at: archive)
         // clearMasterArchive() un-badges the designated folder and volume on
