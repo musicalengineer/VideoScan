@@ -30,10 +30,16 @@ import os
 //
 // Cost: audio-only decode — seconds even for a two-hour tape, per audio
 // stream (no video decode ever happens; `-map 0:a:N` + `-f null -`).
+// The exception is PCM stored one sample frame per packet: ffmpeg's demux
+// + decode then cost a few µs PER SAMPLE (minutes for a long file) — see
+// `reframeFilter`, which keeps everything after the decoder at 4096-sample
+// frames.
 //
 // Memory: ffmpeg streams; this process retains only ffprobe's JSON
 // (KBs) and astats' stderr, capped by ProcessRunner's default 256 KB
 // stderr limit. Worst-case in-process footprint ≈ 0.5 MB per analysis.
+// The ffmpeg child's reframe buffer is one 4096-sample frame (≤ 4096 ×
+// channels × 8 B: 256 KB even for 8 channels of doubles).
 //
 // Concurrency: `analyze` is `@concurrent` — this repo's Approachable
 // Concurrency configuration runs `nonisolated async` on the CALLER's
@@ -363,6 +369,30 @@ enum AudioBalanceProbe {
         return "astats@\(runTag)" + astatsFilter.dropFirst("astats".count)
     }
 
+    /// First filter of every full-decode pass: regroup the decoded sound
+    /// into frames of 4096 samples, the last one short (`p=0`: never
+    /// padded, so no sample is added and none dropped). The samples, their
+    /// order and their values are what the decoder gave; only the frame
+    /// boundaries move, and astats (peak, RMS, sample count) and aeval are
+    /// per-sample, so the numbers are the same to the last digit.
+    ///
+    /// Why: some QuickTime writers (Core Media with a 90 kHz sound
+    /// timescale, and remuxes of such files) store PCM as one sample frame
+    /// per packet. ffmpeg's mov demuxer then hands over one packet, and the
+    /// decoder one frame, PER SAMPLE — 56 M of them for 19 min of stereo
+    /// — and without this filter every one of those frames crossed the
+    /// filter graph, the encoder and the null muxer: the corpus timed out at
+    /// 300 s on five such files (measured: the levels pass on a 444 s file
+    /// took 419 s, 80 s with this filter; a 60 s synthetic of the shape, 40 s
+    /// → 10 s). Files with normal packets are unaffected (a pass on them
+    /// costs the same either way). What remains on the bad shape is ffmpeg's
+    /// own demux + decode per packet; regrouping BEFORE the decoder
+    /// (the `pcm_rechunk` bitstream filter, ~100× faster) was measured and
+    /// refused: it merges packets the mov demuxer marks for discard at an
+    /// edit-list boundary and changed the sample count (480 000 → 479 712 on
+    /// a synthetic edit-listed mov), i.e. it changes what is measured.
+    static let reframeFilter = "asetnsamples=n=4096:p=0"
+
     /// Levels pass — per-channel levels of ONE audio stream, selected
     /// by audio-ordinal (`0:a:N`, N = position among audio streams).
     static func levelsArgs(input: String, audioStreamOrdinal: Int = 0, runTag: String? = nil) -> [String] {
@@ -370,7 +400,7 @@ enum AudioBalanceProbe {
             "-hide_banner", "-nostdin",
             "-i", input,
             "-map", "0:a:\(audioStreamOrdinal)",
-            "-af", astatsFilter(runTag: runTag),
+            "-af", "\(reframeFilter),\(astatsFilter(runTag: runTag))",
             "-f", "null", "-"
         ]
     }
@@ -383,7 +413,7 @@ enum AudioBalanceProbe {
             "-hide_banner", "-nostdin",
             "-i", input,
             "-map", "0:a:\(audioStreamOrdinal)",
-            "-af", "aeval=val(0)-val(1):c=mono,\(astatsFilter(runTag: runTag))",
+            "-af", "\(reframeFilter),aeval=val(0)-val(1):c=mono,\(astatsFilter(runTag: runTag))",
             "-f", "null", "-"
         ]
     }
