@@ -324,6 +324,9 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
     /// note is checked, and the note is worth knowing — not a need).
     private static func soundValue(_ f: ArchiveAngelRowFacts) -> String {
         if f.audioVerifyStatus == "damaged" {
+            // A reference movie / a sound that needs rebuilding names itself;
+            // only real damage is labelled "Damaged" (Rick 2026-11-25).
+            if VerifyAudioRules.noteNamesItsOwnTrouble(f.audioVerifyNote) { return f.audioVerifyNote }
             return "Damaged — " + stripPrefix(f.audioVerifyNote, "Damaged audio — ", fallback: "the sound check found a problem")
         }
         // The standing first (Codex #300): what the check did NOT measure,

@@ -32034,6 +32034,25 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyAudioTroubleWordsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VerifyAudioTroubleWordsTests"
+      ],
+      "tests": [
+        "archiveAngelSoundLine",
+        "batchDeleteQuery",
+        "checkMediaSoundRow",
+        "needsRebuildNote",
+        "promoteGateStillRefuses",
+        "realDamageUnchanged",
+        "referenceMovieNote",
+        "sheetHeadline",
+        "storedStatusDoesNotMove"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VerifyAudioScaleTests.swift",
       "stage": "performance",
       "suites": [
@@ -34869,6 +34888,7 @@
         "test_a_readable_volume_passes_and_what_is_missing_is_the_seals_to_judge",
         "test_a_ref_that_tracks_the_overlay_folder_is_refused",
         "test_a_ref_without_the_engine_says_so_and_builds_nothing",
+        "test_a_reference_movie_and_a_sound_that_needs_rebuilding_are_doubts_not_bad_and_not_good",
         "test_a_refused_prepare_leaves_the_last_good_catalog_in_place",
         "test_a_relaunch_resumes_without_a_duplicate_or_a_gap",
         "test_a_run_records_the_sha256_of_the_manifest_it_read",
@@ -41778,7 +41798,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4018,
+      "expected_floor": 4027,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42459,6 +42479,7 @@
         "VideoScanTests/VerifyAudioJobGateClassingTests",
         "VideoScanTests/VerifyAudioShapeDecodingTests",
         "VideoScanTests/VerifyAudioStatusNoteTests",
+        "VideoScanTests/VerifyAudioTroubleWordsTests",
         "VideoScanTests/VerifyCatalogConstraintTests",
         "VideoScanTests/VerifyCatalogExpectedSilenceTests",
         "VideoScanTests/VerifyCatalogJobTests",

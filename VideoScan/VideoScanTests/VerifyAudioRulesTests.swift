@@ -253,8 +253,9 @@ struct VerifyAudioStatusNoteTests {
         let note = VerifyAudioRules.note(for: [
             .silentAudio,
             .unsupportedCodec(codec: "qdm2", decodable: true),
+            .durationMismatch(audioSeconds: 2, videoSeconds: 63),
         ])
-        #expect(note == "Damaged audio — invalid codec (qdm2); silent audio")
+        #expect(note == "Damaged audio — invalid codec (qdm2); audio shorter than video (2s vs 63s); silent audio")
 
         let note2 = VerifyAudioRules.note(for: [
             .channelImbalance(.mono),
@@ -265,14 +266,22 @@ struct VerifyAudioStatusNoteTests {
 
     @Test func batchDeleteSensorEveryDamagedNoteBeginsWithDamagedAudio() {
         // SENSOR (Manager decision 2026-07-24, the #128 batch-delete
-        // flow): Rick finds ALL red rows with the ONE query
-        // `notes:damaged`, which works iff every damaged-status note
-        // begins with the common prefix. Any new damage finding that
-        // forgets the prefix breaks batch-find silently — this pins it.
+        // flow): Rick finds ALL really damaged rows with the ONE query
+        // `notes:damaged`, which works iff every damaged note begins with
+        // the common prefix. Any new damage finding that forgets the
+        // prefix breaks batch-find silently — this pins it. A reference
+        // movie and a sound that needs rebuilding are NOT damage (Rick
+        // 2026-11-25): same stored status, their own words, never in
+        // that find (VerifyAudioTroubleWordsTests).
+        for f in AudioTroubleFixtures.notDamageButStoredRed {
+            let note = VerifyAudioRules.note(for: [f])
+            #expect(VerifyAudioRules.verdict(findings: [f], levels: .complete) == .damaged)
+            #expect(!note.localizedCaseInsensitiveContains("damaged"), "\(note)")
+            #expect(VerifyAudioRules.noteNamesItsOwnTrouble(note), "\(note)")
+            #expect(VerifyAudioRules.noteNamesItsOwnTrouble(VerifyAudioRules.note(for: [.silentAudio, f])))
+        }
         let damageFindings: [AudioVerifyFinding] = [
-            .referenceMovie(referencedPaths: ["x"]),
             .durationMismatch(audioSeconds: 120, videoSeconds: 3600),
-            .unsupportedCodec(codec: "truespeech", decodable: true),
         ]
         for f in damageFindings {
             let note = VerifyAudioRules.note(for: [f])
@@ -467,7 +476,7 @@ struct VerifyAudioFindingsCompositionTests {
             shape: shape(), balanceAnalysis: nil)
         #expect(!damaged.isHealthy)
         #expect(damaged.persistedStatus == "damaged")
-        #expect(damaged.persistedNote == "Damaged audio — reference movie, media missing")
+        #expect(damaged.persistedNote == "Reference movie — the picture and sound are stored in other files; this file alone does not play")
         #expect(damaged.levelsPass == .notNeeded && damaged.verdict == .damaged)
 
         // GH #467: a sound track with no measurement, or a partial one, is
@@ -595,4 +604,13 @@ struct VerifyAudioShapeDecodingTests {
             _ = try VerifyAudioProbe.shape(fromProbeJSON: Data("not json".utf8))
         }
     }
+}
+
+/// The two findings that store the red "damaged" status but are not damage
+/// (Rick 2026-11-25): a reference movie, an old codec that needs rebuilding.
+enum AudioTroubleFixtures {
+    static let notDamageButStoredRed: [AudioVerifyFinding] = [
+        .referenceMovie(referencedPaths: ["x"]),
+        .unsupportedCodec(codec: "truespeech", decodable: true),
+    ]
 }

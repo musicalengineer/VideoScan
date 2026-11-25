@@ -109,10 +109,18 @@ extension CheckMediaRules {
             MediaEvidence(channelName(index, of: channels.count), levelText(c))
         }
         if diagnosis.persistedStatus == "damaged" {
+            // A Problem whatever the kind (Repair… keeps Rebuild on offer for
+            // it); only real damage is called damaged (Rick 2026-11-25).
+            let note = diagnosis.persistedNote
+            let referenceMovie = diagnosis.trouble == .referenceMovie
             return MediaCheck(kind: .sound, verdict: .problem,
-                              sentence: "The sound is damaged: \(diagnosis.persistedNote.replacingOccurrences(of: VerifyAudioRules.damagedNotePrefix, with: "")).",
+                              sentence: diagnosis.trouble == .damaged
+                                  ? "The sound is damaged: \(note.replacingOccurrences(of: VerifyAudioRules.damagedNotePrefix, with: ""))."
+                                  : "\(note).",
                               evidence: evidence,
-                              fix: "Right-click ▸ Repair… to rebuild the sound track, or look for another copy.")
+                              fix: referenceMovie
+                                  ? "Verify Audio lists the files it points to; find those, or another copy."
+                                  : "Right-click ▸ Repair… to rebuild the sound track, or look for another copy.")
         }
         // Not a verdict (GH #467 / #468): the levels pass failed, or did not
         // cover every channel of every stream. Never OK, never Problem.
@@ -333,7 +341,11 @@ extension CheckMediaRules {
         switch c.kind {
         case .truncation: return "Cut short: the file ends before its last frame."
         case .decode: return "Damaged picture: \(c.sentence)"
-        case .sound: return "Damaged sound: \(c.sentence)"
+        // The Sound row's Problem sentences name their own trouble ("The
+        // sound is damaged: …", "Reference movie — …", "Sound needs
+        // rebuilding — …"); only checkSound writes one (the presence policy
+        // never says Problem), so the headline is the sentence itself.
+        case .sound: return c.sentence
         case .audioSamples: return "Plays at the wrong speed: \(c.sentence)"
         case .layout: return "Sound may stutter: \(c.sentence)"
         case .soundContinuity: return "Sound breaks up: \(c.sentence)"

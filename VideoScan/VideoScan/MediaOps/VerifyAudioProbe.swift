@@ -21,10 +21,12 @@ import os
 //   - channelImbalance    → offer Balance Audio (existing engine
 //                           becomes a treatment, not an entry point)
 //   - unsupportedCodec    → offer Rebuild Audio Track (RebuildAudioJob:
-//                           -c:v copy + audio-only pcm_s16le re-encode)
+//                           -c:v copy + audio-only pcm_s16le re-encode);
+//                           decodable → NEEDS REBUILD (not damage)
 //   - noAudioStream       → point at Find Matching Audio (message only)
 //   - referenceMovie      → dref aliases, essence missing — no repair
-//                           possible; show referenced paths; DAMAGED
+//                           possible; show referenced paths; REFERENCE
+//                           MOVIE (not damage)
 //   - durationMismatch    → audio >10% shorter than video (the #125
 //                           class); suggest correlate/deep-verify; DAMAGED
 //   - silentAudio         → reported honestly, not damaged
@@ -39,8 +41,14 @@ import os
 // rebuild remux (where `-c:v copy` makes the rate cosmetic anyway).
 //
 // STORED VERDICT (GH #467 / #468, 2026-11-10) — `AudioVerifyVerdict`:
-//   - damaged     a decoded-and-bad result (reference movie, short audio,
-//                 an old codec). Stored.
+//   - damaged     the sound is not usable as it stands: short audio (real
+//                 damage), a reference movie, or an old codec that needs
+//                 rebuilding. Stored as "damaged" — media_checks takes only
+//                 'ok' / 'damaged' for audio — so every gate and reader of
+//                 the status treats all three alike. Which of the three it
+//                 is (`AudioTrouble`, Rick 2026-11-25) decides the WORDS
+//                 only: only real damage says "damaged", so `notes:damaged`
+//                 (the batch-delete find) lists only real damage.
 //   - ok          no damage AND the levels pass covered every declared
 //                 channel of every stream (or none was needed). Stored.
 //   - notChecked  the levels pass failed (a failed read looks the same as a
@@ -150,6 +158,10 @@ struct AudioVerifyDiagnosis: Sendable {
         VerifyAudioRules.verdict(findings: findings, levels: levelsPass)
     }
 
+    /// Which kind of not-usable-as-it-stands this is (nil when nothing is
+    /// in the stored "damaged" set) — the words, never a gate.
+    var trouble: AudioTrouble? { VerifyAudioRules.trouble(of: findings) }
+
     /// Persisted `audioVerifyStatus`: "ok" / "damaged", or "" when the
     /// verdict is `.notChecked` — "" is the never-verified value and is
     /// never written (VerifyAudioJob.write stores nothing).
@@ -189,6 +201,36 @@ enum AudioVerifyVerdict: Sendable, Equatable {
     case ok
     case damaged
     case notChecked(reason: String)
+}
+
+/// What a stored "damaged" verdict really is (Rick 2026-11-25: "fix the
+/// wording — it helps when looking through vast numbers of files"). All
+/// three store the same status and meet the same gates; only real damage
+/// is called damaged. Worst first: in a mixed list the lowest case leads.
+/// (For Rick: `Comparable` on the raw value ≈ an `enum class` with
+/// `operator<` defined over its underlying int.)
+enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
+    /// Decoded and bad: the sound runs far shorter than the picture.
+    case damaged
+    /// A QuickTime reference movie: its picture and sound live in other files.
+    case referenceMovie
+    /// An old sound format Apple can't play that ffmpeg decodes:
+    /// Rebuild Audio Track fixes it.
+    case needsRebuild
+
+    static func < (a: AudioTrouble, b: AudioTrouble) -> Bool { a.rawValue < b.rawValue }
+
+    /// The Verify Audio sheet's headline.
+    var sheetHeadline: String {
+        switch self {
+        case .damaged:
+            return "This file's audio is damaged — it's marked red in the catalog so you can find it again later."
+        case .referenceMovie:
+            return "This is a reference movie: its picture and sound are stored in other files, so this file alone does not play. Its row stays red in the catalog."
+        case .needsRebuild:
+            return "The sound needs rebuilding: it is stored in a format Apple can't play. Rebuild Audio Track below fixes it; its row stays red in the catalog until then."
+        }
+    }
 }
 
 enum AudioVerifyProbeError: Error, Equatable {
@@ -293,31 +335,63 @@ enum VerifyAudioRules {
         return Int(digits)
     }
 
-    /// The common prefix EVERY damaged-status note leads with (Manager
-    /// decision 2026-07-24): one `notes:damaged` query batch-finds all
-    /// red rows — no per-cause query zoo. The em dash separates prefix
-    /// from detail, so detail fragments must not carry their own em
-    /// dash (see the referenceMovie fragment's comma).
+    /// The prefix every REALLY damaged note leads with (Manager decision
+    /// 2026-07-24): one `notes:damaged` query batch-finds them — the #128
+    /// batch-delete flow. A reference movie and a sound that needs
+    /// rebuilding store the same status but lead with their own words
+    /// (Rick 2026-11-25), so that find never lists them. The em dash
+    /// separates prefix from detail, so detail fragments must not carry
+    /// their own em dash (see the referenceMovie fragment's comma).
     static let damagedNotePrefix = "Damaged audio — "
+    /// A reference movie's stored note (it is the whole lead).
+    static let referenceMovieNotePrefix = "Reference movie — "
+    static let referenceMovieNote = referenceMovieNotePrefix
+        + "the picture and sound are stored in other files; this file alone does not play"
+    /// How a sound that needs rebuilding's stored note leads.
+    static let needsRebuildNotePrefix = "Sound needs rebuilding — "
 
-    /// Which findings mark the record DAMAGED (red row, batch-delete
-    /// candidate). Everything else is reported in the sheet but leaves
-    /// the record's status at "ok" — imbalance is repairable, silence /
-    /// no-audio / surround are honest states, not broken files.
+    /// A stored note that names its own trouble (a reference movie, a sound
+    /// that needs rebuilding): a reader shows it as it is, never under a
+    /// "Damaged" label.
+    static func noteNamesItsOwnTrouble(_ note: String) -> Bool {
+        note.hasPrefix(referenceMovieNotePrefix) || note.hasPrefix(needsRebuildNotePrefix)
+    }
+
+    /// Which findings put the record in the stored "damaged" set (red row,
+    /// readiness refusal, Promote's sound-damaged refusal): real damage, a
+    /// reference movie, an old codec that needs rebuilding. Everything
+    /// else is reported in the sheet but leaves the record's status at
+    /// "ok" — imbalance is repairable, silence / no-audio / surround are
+    /// honest states, not broken files. The NAME is historical: which of
+    /// the three it is, and so the words, is `trouble(of:)`.
     ///
-    /// Damage is a DECODED-and-bad result. A levels pass that failed
-    /// (`unsupportedCodec(decodable: false)`) is not one: a transient read
-    /// error on a healthy file produces the same finding (GH #468).
+    /// A levels pass that failed (`unsupportedCodec(decodable: false)`) is
+    /// not in the set: a transient read error on a healthy file produces
+    /// the same finding (GH #468).
     static func isDamage(_ finding: AudioVerifyFinding) -> Bool {
+        trouble(of: finding) != nil
+    }
+
+    /// The kind of trouble one finding is, or nil when it is not in the
+    /// stored "damaged" set. Pure.
+    static func trouble(of finding: AudioVerifyFinding) -> AudioTrouble? {
         switch finding {
-        case .referenceMovie, .durationMismatch:
-            return true
+        case .durationMismatch:
+            return .damaged
+        case .referenceMovie:
+            return .referenceMovie
         case .unsupportedCodec(_, let decodable):
-            return decodable
+            return decodable ? .needsRebuild : nil
         case .channelImbalance, .noAudioStream, .silentAudio, .surround,
              .multipleProgramTracks:
-            return false
+            return nil
         }
+    }
+
+    /// The worst trouble in a findings list (real damage outranks the
+    /// rest), or nil. Pure.
+    static func trouble(of findings: [AudioVerifyFinding]) -> AudioTrouble? {
+        findings.compactMap { trouble(of: $0) }.min()
     }
 
     /// How every `.readFailed` reason starts. Check Media stores the reason
@@ -370,9 +444,9 @@ enum VerifyAudioRules {
     static func noteFragment(for finding: AudioVerifyFinding) -> String {
         switch finding {
         case .referenceMovie:
-            // Comma, not em dash: the damaged-note prefix already uses
-            // the em dash — "Damaged audio — reference movie, media
-            // missing" reads as one clause, not two dashes.
+            // Comma, not em dash: the words this lands in already use one
+            // (Promote's "the sound is damaged: …" refusal). The stored
+            // note leads with `referenceMovieNote` instead (`troubleLead`).
             return "reference movie, media missing"
         case .unsupportedCodec(let codec, let decodable):
             // decodable == false: the levels pass FAILED. That is not
@@ -403,18 +477,38 @@ enum VerifyAudioRules {
         }
     }
 
-    /// Persisted `audioVerifyNote` — damage fragments first, joined
-    /// with "; ". "" for a clean bill of health. Damaged verdicts lead
-    /// with `damagedNotePrefix` so ONE query (`notes:damaged`) batch-
-    /// finds every red row — the #128 batch-delete flow; ok-status
-    /// notes stay bare.
+    /// Persisted `audioVerifyNote` — trouble fragments first, joined
+    /// with "; ". "" for a clean bill of health. Real damage leads with
+    /// `damagedNotePrefix` so ONE query (`notes:damaged`) batch-finds it —
+    /// the #128 batch-delete flow. A reference movie or a sound that needs
+    /// rebuilding (and no real damage) leads with its own words instead
+    /// (Rick 2026-11-25). ok-status notes stay bare.
     static func note(for findings: [AudioVerifyFinding]) -> String {
         let ordered = findings.filter(isDamage) + findings.filter { !isDamage($0) }
-        let joined = ordered.map(noteFragment(for:)).joined(separator: "; ")
-        guard !joined.isEmpty else { return "" }
-        return findings.contains(where: isDamage)
-            ? damagedNotePrefix + joined
-            : joined
+        guard let worst = trouble(of: findings) else {
+            return ordered.map(noteFragment(for:)).joined(separator: "; ")
+        }
+        guard worst != .damaged,
+              let leadIndex = ordered.firstIndex(where: { trouble(of: $0) == worst }) else {
+            return damagedNotePrefix + ordered.map(noteFragment(for:)).joined(separator: "; ")
+        }
+        var rest = ordered
+        let lead = troubleLead(rest.remove(at: leadIndex))
+        return ([lead] + rest.map(noteFragment(for:))).joined(separator: "; ")
+    }
+
+    /// The self-naming lead of a reference movie or a sound that needs
+    /// rebuilding; the bare fragment for anything else. Pure.
+    static func troubleLead(_ finding: AudioVerifyFinding) -> String {
+        switch finding {
+        case .referenceMovie:
+            return referenceMovieNote
+        case .unsupportedCodec(let codec, decodable: true):
+            return needsRebuildNotePrefix
+                + "\(codec.isEmpty ? "this sound format" : codec) does not play on Apple; Repair… ▸ Rebuild Audio Track fixes it"
+        default:
+            return noteFragment(for: finding)
+        }
     }
 
     /// What the levels step handed back: nil = it was not run (reference

@@ -306,16 +306,17 @@ struct VerifyAudioSheet: View {
 
     @ViewBuilder
     private func findingsView(_ diagnosis: AudioVerifyDiagnosis) -> some View {
-        // Damage headline when the verdict marks the record damaged, so
-        // the red catalog row has an obvious source.
-        if diagnosis.persistedStatus == "damaged" {
+        // Headline when the verdict marks the record red, so the red
+        // catalog row has an obvious source — in its own words: only real
+        // damage says "damaged" (Rick 2026-11-25).
+        if diagnosis.persistedStatus == "damaged", let trouble = diagnosis.trouble {
             Label {
-                Text("This file's audio is damaged — it's marked red in the catalog so you can find it again later.")
+                Text(trouble.sheetHeadline)
                     .font(.body.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: "xmark.octagon.fill")
-                    .foregroundColor(.red)
+                Image(systemName: trouble == .damaged ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                    .foregroundColor(trouble == .damaged ? .red : .orange)
             }
             .accessibilityIdentifier("verifySheet.damagedHeadline")
         }

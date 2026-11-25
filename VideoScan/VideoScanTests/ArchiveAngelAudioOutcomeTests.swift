@@ -216,8 +216,9 @@ struct ArchiveAngelAudioOutcomeTests {
                                          shape: verifyShape(), balanceAnalysis: nil)
         guard case .damaged(let n1) = ArchiveAngelAudioOutcome.from(ref) else { Issue.record("ref"); return }
         guard case .damaged(let n2) = ArchiveAngelAudioOutcome.from(codec) else { Issue.record("codec"); return }
-        #expect(n1.contains("reference movie"))
-        #expect(n2.contains("invalid codec (qdm2)"))
+        // Still the Angel's .damaged outcome; the note names each (Rick 2026-11-25).
+        #expect(n1.hasPrefix("Reference movie — "))
+        #expect(n2.hasPrefix("Sound needs rebuilding — qdm2 does not play on Apple"))
     }
 
     /// GH #468: a levels pass that failed is a failed read OR a track that

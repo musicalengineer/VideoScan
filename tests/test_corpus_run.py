@@ -392,6 +392,18 @@ class WordTests(unittest.TestCase):
         self.assertEqual(cr.sha_prefix('Birthday.mov'), 'scrubbed')
         self.assertEqual(cr.stratum_word('edit list trim/long header'), 'edit_list_trim_long_header')
 
+    def test_a_reference_movie_and_a_sound_that_needs_rebuilding_are_doubts_not_bad_and_not_good(self):
+        # Rick 2026-11-25: Verify Audio no longer calls these two "damaged". A reference movie does not play on its
+        # own and an old codec needs Rebuild Audio Track — questionable, so neither reads good nor bad.
+        for audio in ('reference_movie', 'needs_rebuild'):
+            self.assertIn(audio, cr.DOUBT_WORDS['audio'])
+            self.assertNotIn(audio, cr.BAD_WORDS['audio'])
+            record = {'probe': 'probed', 'audio': audio}
+            self.assertFalse(cr.reads_bad(record, ['probe', 'audio']), audio)
+            self.assertFalse(cr.reads_good(record, ['probe', 'audio']), audio)
+        self.assertTrue(cr.reads_bad({'probe': 'probed', 'audio': 'damaged'}, ['probe', 'audio']))
+        self.assertTrue(cr.reads_good({'probe': 'probed', 'audio': 'healthy'}, ['probe', 'audio']))
+
 
 class PrepareTests(unittest.TestCase):
 

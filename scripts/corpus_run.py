@@ -288,7 +288,9 @@ EXIT_GREEN, EXIT_RED, EXIT_REFUSED, EXIT_AMBER, EXIT_NORUN = 0, 1, 2, 3, 4
 # Good -> a doubt is AMBER, as is bad -> good (a detector may have gone blind); only good -> bad is RED.
 BAD_WORDS = {"probe": ("unopenable",), "check": ("Problem", "unopenable", "error:couldNotRead"),
              "audio": ("damaged", "error:probeFailed")}
-DOUBT_WORDS = {"check": ("Warning",), "audio": ("not_checked",)}
+# Verify Audio's reference_movie (plays only with its other files) and needs_rebuild (an old codec Rebuild Audio Track
+# fixes) are doubts, not damage (Rick 2026-11-25).
+DOUBT_WORDS = {"check": ("Warning",), "audio": ("not_checked", "reference_movie", "needs_rebuild")}
 
 
 def reads_bad(record: dict, engines: List[str]) -> bool:

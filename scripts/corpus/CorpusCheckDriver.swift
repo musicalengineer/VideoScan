@@ -92,7 +92,14 @@ final class CorpusCheckDriver: XCTestCase {
                 }
                 switch diagnosis.verdict {
                 case .ok: return (diagnosis.isHealthy ? "healthy" : "ok_with_findings", kinds)
-                case .damaged: return ("damaged", kinds)
+                case .damaged:
+                    // Rick 2026-11-25: the same stored status, but only real damage is "damaged"; a reference movie and
+                    // an old codec that needs rebuilding are doubts (corpus_run.py DOUBT_WORDS["audio"]).
+                    switch diagnosis.trouble {
+                    case .referenceMovie?: return ("reference_movie", kinds)
+                    case .needsRebuild?: return ("needs_rebuild", kinds)
+                    case .damaged?, nil: return ("damaged", kinds)
+                    }
                 case .notChecked: return ("not_checked", kinds)
                 }
             }
