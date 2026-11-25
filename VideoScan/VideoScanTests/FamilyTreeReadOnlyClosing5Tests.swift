@@ -261,4 +261,78 @@ struct FamilyTreeReadOnlyClosing5Tests {
         try PersonRefreshAppFixtures.onePerson().write(to: outB, atomically: true, encoding: .utf8)
         #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "B: \(c.phase)")
     }
+
+    // Codex closing 2, P2: an Apply suspended in its overlay write, then a
+    // relaunch — the Apply resumed and set the NEW run's phase (freeing its
+    // scratch) and journalled the new run's answer file as its source.
+    @Test func anApplyFinishingAfterARelaunchLeavesTheNewRunAlone() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, outA) = try scratchLaunch("free-apply", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "\(c.phase)")
+        guard case .ready(let diff) = c.phase else { return }
+        let sourceA = try #require(c.stagingFolder).lastPathComponent + "/" + PersonRefreshPaths.outputFileName
+        // The overlay write asks the mode OFF the main actor: hold it there.
+        final class Hold: @unchecked Sendable {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let lock = NSLock(); var armed = true
+        }
+        let hold = Hold()
+        c.writeMode = {
+            if !Thread.isMainThread, hold.lock.withLock({ hold.armed }) {
+                hold.lock.withLock { hold.armed = false }
+                hold.entered.signal(); hold.release.wait()
+            }
+            return .full
+        }
+        let applying = Task { await c.apply(selectedFieldKeys: Set(diff.changes.map(\.field.key))) }
+        await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async { hold.entered.wait(); k.resume() }
+        }
+        c.launch()                                    // B, while A's write is held
+        guard case .waiting(let outB) = c.phase else { Issue.record("B not waiting: \(c.phase)"); hold.release.signal(); return }
+        hold.release.signal()
+        #expect(await applying.value, "A's overlay write landed")
+        #expect({ if case .waiting(let o) = c.phase { return o == outB }; return false }(), "A's Apply set B's phase: \(c.phase)")
+        #expect(fm.fileExists(atPath: outB.deletingLastPathComponent().path), "A's Apply freed B's scratch")
+        let journal = PersonRefreshAudit.entries(directory: layout.refreshRoot, log: { _ in })
+        #expect(journal.last?.source == sourceA, "A's journal entry names \(journal.last?.source ?? "nothing"), not A's answer")
+    }
+
+    // Codex closing 2, P2: a trailer read that answered "not yet" skipped the
+    // cancellation check — a relaunched run got the old run's "Terminal may
+    // be waiting" note from the old run's poll count.
+    @Test func aTrailerReadAnsweringAfterARelaunchLeavesTheNewRunQuiet() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        final class Gate: @unchecked Sendable {
+            let lock = NSLock(); var calls = 0; var entered = false; var released = false
+        }
+        let gate = Gate()
+        let (c, layout, outA) = try scratchLaunch("free-trailer", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        // Call k comes after k-1 unchanged polls; call #pollsBeforeQuiet+1 is
+        // the poll that would set quietSince — hold it, answer "not yet".
+        let holdAt = PersonRefreshCoordinator.pollsBeforeQuiet + 1
+        c.trailerCheck = { _ in
+            let n = gate.lock.withLock { gate.calls += 1; return gate.calls }
+            if n == holdAt {
+                gate.lock.withLock { gate.entered = true }
+                while !gate.lock.withLock({ gate.released }) { try? await Task.sleep(for: .milliseconds(5)) }
+            }
+            return false
+        }
+        try "0 HEAD\n1 CHAR UTF-8\n".write(to: outA, atomically: true, encoding: .utf8)   // partial: no trailer
+        #expect(await PersonRefreshAppFixtures.waitUntil(10) { gate.lock.withLock { gate.entered } })
+        #expect(c.quietSince == nil, "precondition: A had not gone quiet yet")
+        c.launch()                                    // B, while A's trailer read is held
+        guard case .waiting = c.phase else { Issue.record("B not waiting: \(c.phase)"); return }
+        gate.lock.withLock { gate.released = true }
+        try await Task.sleep(for: .milliseconds(200))   // A's held read answers and A's loop resumes
+        #expect(c.quietSince == nil, "B shows A's 'Terminal may be waiting' at \(String(describing: c.quietSince))")
+    }
 }

@@ -89,6 +89,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// disk: one folder + one small person.ged per coordinator still
     /// `.waiting`.
     private(set) var launchScratch: PersonRefreshLaunchScratch?
+    /// "Has the answer its `0 TRLR`?" — read at each poll; tests inject.
+    var trailerCheck: @Sendable (URL) async -> Bool = { await FamilySearchPullCoordinator.hasGedcomTrailer(at: $0) }
 
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
@@ -335,11 +337,16 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     }
                     continue
                 }
-                if size > 0, await FamilySearchPullCoordinator.hasGedcomTrailer(at: output) {
+                if size > 0 {
+                    let complete = await self.trailerCheck(output)
+                    // Either answer: a run cancelled or relaunched during the
+                    // read touches nothing of the new run (codex closing 2).
                     guard !Task.isCancelled else { return }
-                    self.quietSince = nil
-                    self.read(output: output)
-                    return
+                    if complete {
+                        self.quietSince = nil
+                        self.read(output: output)
+                        return
+                    }
                 }
                 if size == lastSize {
                     stable += 1
@@ -516,36 +523,45 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         isApplying = true
         defer { isApplying = false }
         let fsid = target.familySearchID, name = target.personName, at = now()
+        // This run, as it was when Apply began (codex closing 2): a relaunch
+        // or cancel during the write moves `generation`, and then the phase
+        // and the outcome belong to the newer run — this Apply only records
+        // what it did, under its own answer file.
+        let token = generation
+        let source = stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName }
         let outcome = await Self.writeOverlay(overlayStore, now: at, mode: writeMode) { overlay -> Bool? in
             overlay.record(chosen, familySearchID: fsid, displayName: name, at: at)
             return true
+        }
+        let current = token == generation
+        /// A failed Apply: this run's phase and outcome, or — superseded —
+        /// only its line.
+        func settleFailure(_ shown: String, line: String) -> Bool {
+            if current { phase = .failed(message: shown); noteOutcome(line) } else { note(line) }
+            return false
         }
         switch outcome {
         case .written, .nothingToDo:
             break
         case .unreadable(let reason, let keptAs, let setAsideError):
-            phase = .failed(message: Self.unreadableSentence(keptAs: keptAs))
-            noteOutcome(PersonRefreshAuditLines.overlayUnreadable(
+            return settleFailure(Self.unreadableSentence(keptAs: keptAs), line: PersonRefreshAuditLines.overlayUnreadable(
                 action: "apply", reason: reason, keptAs: keptAs, setAsideError: setAsideError))
-            return false
         case .failed(let message):
-            phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
-            noteOutcome(PersonRefreshAuditLines.overlayWriteFailed(message))
-            return false
+            return settleFailure("Could not save the refreshed facts: \(message). Nothing was changed.",
+                                 line: PersonRefreshAuditLines.overlayWriteFailed(message))
         case .refused(let message):
-            phase = .failed(message: message)
-            noteOutcome(PersonRefreshAuditLines.failed(message))
-            return false
+            return settleFailure(message, line: PersonRefreshAuditLines.failed(message))
         }
         let entry = PersonRefreshAudit.Entry(
             at: now(), action: .applied, familySearchID: fsid, person: name,
             changes: PersonRefreshAudit.applyChanges(chosen),
-            source: stagingFolder.map { $0.lastPathComponent + "/" + PersonRefreshPaths.outputFileName },
+            source: source,
             relationshipNotes: diff.relationshipNotes.count)
         // The journal entry is the record; the lines are its reading.
         // Lines first: if the journal cannot be written, the log still has
-        // every before/after value.
-        outcomeNoted = true
+        // every before/after value. The overlay WAS written, so a superseded
+        // Apply keeps its record too — only the phase is not its to set.
+        if current { outcomeNoted = true }
         for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
         do {
             try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
@@ -556,7 +572,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         } catch {
             note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
-        phase = .applied(fields: chosen.count)
+        if current { phase = .applied(fields: chosen.count) }
         return true
     }
 

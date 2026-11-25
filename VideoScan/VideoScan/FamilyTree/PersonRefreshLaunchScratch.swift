@@ -19,7 +19,13 @@
 // rmdir of the leaf and of the UUID folder by name relative to their verified
 // parents. Residual: between the identity check and that final rmdir a racer
 // could swap in a different EMPTY folder under the same name; rmdir removes
-// only empty folders, so that is the most it can cost.
+// only empty folders, so that is the most it can cost. A second window is at
+// creation: between a level's mkdirat and its openat, a process running as
+// this user could rename the fresh folder aside and substitute its own, whose
+// identity would then be recorded and whose person.ged a later free would
+// remove. Accepted (codex closing 2, 2026-11-24): it needs a racer inside a
+// fresh UUID folder in the user's private temp within that instant; these
+// guards stop test and tool bugs, not an adversary running as the user.
 //
 // Scratch only — never media, never family data (those go to Trash). Memory:
 // two short strings and four integers per live launch.
