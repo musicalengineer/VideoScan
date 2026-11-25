@@ -115,7 +115,7 @@ extension CheckMediaRules {
             let referenceMovie = diagnosis.trouble == .referenceMovie
             return MediaCheck(kind: .sound, verdict: .problem,
                               sentence: diagnosis.trouble == .damaged
-                                  ? "The sound is damaged: \(note.replacingOccurrences(of: VerifyAudioRules.damagedNotePrefix, with: ""))."
+                                  ? AudioTrouble.soundRowDamagedLead + "\(note.replacingOccurrences(of: VerifyAudioRules.damagedNotePrefix, with: ""))."
                                   : "\(note).",
                               evidence: evidence,
                               fix: referenceMovie

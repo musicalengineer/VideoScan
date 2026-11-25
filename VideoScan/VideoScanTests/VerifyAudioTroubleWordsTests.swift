@@ -24,9 +24,9 @@ private typealias S = MasterArchiveTestSupport
 private typealias G = PromoteSoundGate
 
 private let referenceWords =
-    "Reference movie — the picture and sound are stored in other files; this file alone does not play"
+    "Reference movie — the picture and sound are stored in other files, so this file alone does not play"
 private let rebuildWords =
-    "Sound needs rebuilding — qdm2 does not play on Apple; Repair… ▸ Rebuild Audio Track fixes it"
+    "Sound needs rebuilding — qdm2 does not play on Apple (Repair… ▸ Rebuild Audio Track fixes it)"
 
 /// A reference movie as the probe reports it: no audio stream of its own,
 /// the dref finding alone, nothing decoded.
@@ -109,10 +109,12 @@ struct VerifyAudioTroubleWordsTests {
 
     @Test("SAFETY: Promote's sound gate refuses both exactly as before — sound-damaged, whatever the owner's tag or tick")
     func promoteGateStillRefuses() {
-        let cases: [(AudioVerifyDiagnosis, String)] = [(referenceMovie(), "reference movie, media missing"),
-                                                       (needsRebuild(), "invalid codec (qdm2)")]
-        for (d, words) in cases {
-            #expect(G.finding(from: d) == .damaged(words))
+        let cases: [(AudioVerifyDiagnosis, String, AudioTrouble)] = [
+            (referenceMovie(), "the picture and sound are stored in other files, so this file alone does not play", .referenceMovie),
+            (needsRebuild(), "qdm2 does not play on Apple (Repair… ▸ Rebuild Audio Track fixes it)", .needsRebuild),
+        ]
+        for (d, words, trouble) in cases {
+            #expect(G.finding(from: d) == .damaged(words, trouble: trouble))
             for mark in [G.Mark.absent, .accepted, .notTiedToTheseBytes] {
                 for tick in [false, true] {
                     let decision = G.decide(finding: G.finding(from: d), mark: mark, soundPartnerName: nil,
@@ -169,6 +171,58 @@ struct VerifyAudioTroubleWordsTests {
         #expect(CheckMediaRules.headline(checks: [damaged], quick: quick, tier: .full).lowercased().contains("damaged"))
     }
 
+    // MARK: The words table and legacy notes as shown
+
+    @Test("the one table: every own detail is free of the em dash and the '; ' separator, and leads stay distinct")
+    func wordsTableKeepsTheSeparatorRule() {
+        for trouble in AudioTrouble.allCases {
+            if let detail = trouble.ownDetail(codec: "qdm2") {
+                #expect(!detail.contains("—") && !detail.contains(";"), "\(trouble): \(detail)")
+            }
+        }
+        #expect(Set(AudioTrouble.allCases.map(\.noteLead)).count == AudioTrouble.allCases.count)
+        #expect(VerifyAudioRules.damagedNotePrefix == "Damaged audio — ")
+    }
+
+    @Test("legacy notes and card sentences are SHOWN in today's words; real damage and today's notes are shown as stored")
+    func legacyDisplay() {
+        #expect(AudioTrouble.displayNote("Damaged audio — reference movie, media missing") == referenceWords)
+        #expect(AudioTrouble.displayNote("Damaged audio — invalid codec (qdm2); silent audio") == rebuildWords + "; silent audio")
+        let realDamage = "Damaged audio — invalid codec (qdm2); audio shorter than video (60s vs 600s)"
+        #expect(AudioTrouble.displayNote(realDamage) == realDamage, "real damage beside an old codec stays damaged")
+        for asStored in [referenceWords, rebuildWords, "silent audio", "", "Damaged audio — audio shorter than video (2s vs 10s)"] {
+            #expect(AudioTrouble.displayNote(asStored) == asStored)
+        }
+        // Check Media rows and headlines stored before the change.
+        #expect(AudioTrouble.displaySoundSentence("The sound is damaged: invalid codec (qdm2).") == rebuildWords + ".")
+        #expect(AudioTrouble.displaySoundSentence("Damaged sound: The sound is damaged: reference movie, media missing.")
+                == referenceWords + ".")
+        let damagedRow = "The sound is damaged: audio shorter than video (60s vs 600s)."
+        #expect(AudioTrouble.displaySoundSentence(damagedRow) == damagedRow)
+        #expect(AudioTrouble.displaySoundSentence("Damaged sound: " + damagedRow) == "Damaged sound: " + damagedRow)
+        #expect(AudioTrouble.displaySoundSentence("The sound track is silent.") == "The sound track is silent.")
+        // Shown, never stored: `notes:damaged` still finds a legacy row until it is verified again.
+        let legacy = VideoRecord()
+        legacy.audioVerifyStatus = "damaged"
+        legacy.audioVerifyNote = "Damaged audio — reference movie, media missing"
+        #expect(pfRecordMatchesQuery(legacy, query: "notes:damaged"))
+    }
+
+    @Test("Promote's refusal: real damage keeps its words; the Angel's row label no longer says damaged for any kind")
+    func promoteWordsPerKind() {
+        let real = G.decide(finding: G.finding(from: shortAudio()), mark: .absent, soundPartnerName: nil,
+                            recordedYear: nil, digestPrefix: "", ownerAcceptsUnchecked: false)
+        guard case .refuse(.damaged, let detail, let log) = real else { Issue.record("\(real)"); return }
+        #expect(detail == "Not promoted — the sound is damaged: audio shorter than video (60s vs 600s). Right-click ▸ Repair… shows the fix. Nothing was copied.")
+        #expect(log == "damaged sound (audio shorter than video (60s vs 600s)); nothing written")
+        let ref = G.decide(finding: G.finding(from: referenceMovie()), mark: .absent, soundPartnerName: nil,
+                           recordedYear: nil, digestPrefix: "", ownerAcceptsUnchecked: false)
+        guard case .refuse(.damaged, let refDetail, _) = ref else { Issue.record("\(ref)"); return }
+        #expect(refDetail.hasPrefix("Not promoted — this is a reference movie: "))
+        #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-damaged", detail: refDetail)
+                == "Sound not usable as it stands — " + refDetail)
+    }
+
     // MARK: Archive Angel's Sound line
 
     @Test("Archive Angel's Sound line does not prefix 'Damaged' onto a reference movie or a needs-rebuild note")
@@ -183,5 +237,62 @@ struct VerifyAudioTroubleWordsTests {
         #expect(sound(referenceMovie()) == referenceWords)
         #expect(sound(needsRebuild()) == rebuildWords)
         #expect(sound(shortAudio()) == "Damaged — audio shorter than video (60s vs 600s)")
+    }
+}
+
+// MARK: - Reviewer RED tests (2026-11-25, fix/audio-damaged-wording @ 662ed5c28)
+
+@Suite("Verify Audio words — reviewer findings")
+@MainActor
+struct VerifyAudioTroubleWordsReviewTests {
+
+    /// Pins VerifyAudioProbe.swift:348 (`referenceMovieNote`) and :508
+    /// (`troubleLead` for needsRebuild): the stored note is "fragments
+    /// joined with '; '" (note(for:) :486), and ArchiveReadiness.swift:321
+    /// and :395 split it on ";". A lead that carries its own "; " turns one
+    /// finding into two fragments — the same rule the em-dash comment keeps
+    /// for the prefix.
+    @Test("REVIEW: a self-naming lead is ONE '; '-fragment, as every finding is")
+    func leadsDoNotCarryTheFragmentSeparator() {
+        for d in [referenceMovie(), needsRebuild(), needsRebuild([.silentAudio])] {
+            let pieces = d.persistedNote.split(separator: ";")
+            #expect(pieces.count == d.findings.count, "\(d.persistedNote)")
+        }
+    }
+
+    /// Pins PromoteSoundGate.swift:233 (and ArchiveAngelPromoter.swift:262,
+    /// which wraps it as "Needs repair: sound damaged — …"): the same file
+    /// the catalog now calls a reference movie / a sound that needs
+    /// rebuilding is refused at Promote as "the sound is damaged". The
+    /// refusal (code .damaged) must stand; only the words are wrong.
+    @Test("REVIEW: Promote's refusal words do not call a reference movie or a needs-rebuild codec damaged")
+    func promoteRefusalWordsFollowTheTrouble() {
+        for d in [referenceMovie(), needsRebuild()] {
+            let decision = G.decide(finding: G.finding(from: d), mark: .absent, soundPartnerName: nil,
+                                    recordedYear: 1975, digestPrefix: "abc", ownerAcceptsUnchecked: false)
+            guard case .refuse(let code, let detail, _) = decision else {
+                Issue.record("must refuse: \(decision)"); continue
+            }
+            #expect(code == .damaged)
+            #expect(!detail.lowercased().contains("damaged"), "\(detail)")
+        }
+    }
+
+    /// Pins ArchiveAngelReadinessExplanation.swift:329-330: a row verified
+    /// BEFORE this branch still stores "Damaged audio — reference movie,
+    /// media missing" / "Damaged audio — invalid codec (qdm2)", and nothing
+    /// re-verifies it, so the Sound line keeps saying "Damaged" for exactly
+    /// the files the change was for until Rick re-runs Verify Audio.
+    @Test("REVIEW: a legacy stored note for a reference movie / old codec does not read 'Damaged'")
+    func legacyNotesReadInTheirOwnWords() {
+        for legacy in ["Damaged audio — reference movie, media missing",
+                       "Damaged audio — invalid codec (qdm2)"] {
+            var f = ArchiveAngelRowFacts(id: UUID(), filename: "a.mov", fullPath: "/Volumes/X/a.mov", kind: .ready)
+            f.audioVerifyStatus = "damaged"
+            f.audioVerifyNote = legacy
+            f.audio = .verifiedProblem(legacy)
+            let value = ArchiveAngelReadinessExplanation.make(f).facts.first { $0.label == "Sound" }?.value ?? ""
+            #expect(!value.lowercased().contains("damaged"), "\(value)")
+        }
     }
 }

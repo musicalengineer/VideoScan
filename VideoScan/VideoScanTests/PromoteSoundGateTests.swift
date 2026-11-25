@@ -121,10 +121,10 @@ struct PromoteSoundGateTests {
                                      extraFindings: [.durationMismatch(audioSeconds: 2, videoSeconds: 10)])
         #expect(G.finding(from: short) == .damaged("audio shorter than video (2s vs 10s)"))
         let badCodec = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.unsupportedCodec(codec: "qdm2", decodable: true)])
-        #expect(G.finding(from: badCodec) == .damaged("invalid codec (qdm2)"))
+        #expect(G.finding(from: badCodec) == .damaged("qdm2 does not play on Apple (Repair… ▸ Rebuild Audio Track fixes it)", trouble: .needsRebuild))
         var reference = S.soundDiagnosis(channels: [], audioStreams: 0)
         reference.findings = [.referenceMovie(referencedPaths: ["/Avid MediaFiles/x"])]
-        #expect(G.finding(from: reference) == .damaged("reference movie, media missing"),
+        #expect(G.finding(from: reference) == .damaged("the picture and sound are stored in other files, so this file alone does not play", trouble: .referenceMovie),
                 "a reference movie is damage, and its paths stay out of the words")
     }
 
@@ -140,7 +140,7 @@ struct PromoteSoundGateTests {
                                                                            .durationMismatch(audioSeconds: 2, videoSeconds: 10)])
         #expect(G.finding(from: both) == .damaged("audio shorter than video (2s vs 10s)"))
         let legacy = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.unsupportedCodec(codec: "qdm2", decodable: true)])
-        #expect(G.finding(from: legacy) == .damaged("invalid codec (qdm2)"))
+        #expect(G.finding(from: legacy) == .damaged("qdm2 does not play on Apple (Repair… ▸ Rebuild Audio Track fixes it)", trouble: .needsRebuild))
     }
 
     @Test("an incomplete measurement is COULD NOT CHECK, never silent and never a pass")
@@ -328,7 +328,7 @@ struct PromoteSoundGateTests {
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-none", detail: "d") == "Needs your OK: no sound — d")
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-silent", detail: "d") == "Needs your OK: no sound — d")
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-pair-half", detail: "d") == "Needs your OK: no sound — d")
-        #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-damaged", detail: "d") == "Needs repair: sound damaged — d")
+        #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-damaged", detail: "d") == "Sound not usable as it stands — d")
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: "sound-unchecked", detail: "d") == "Could not check the sound — d")
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: "duplicate", detail: "d") == nil)
         #expect(ArchiveAngelPromoter.soundRefusalWords(code: nil, detail: "d") == nil)

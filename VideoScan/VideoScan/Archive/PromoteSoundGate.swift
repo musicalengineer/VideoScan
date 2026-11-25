@@ -57,8 +57,11 @@ enum PromoteSoundGate {
         case noTrack
         /// Every channel of every stream was measured at or under the line.
         case silent(levels: String, loudestDBFS: Double)
-        /// Verify Audio's damage (reference movie, short audio, bad codec).
-        case damaged(String)
+        /// Verify Audio's stored-"damaged" set: short audio, a reference
+        /// movie, an old codec that needs rebuilding. `trouble` chooses the
+        /// refusal's WORDS only; every kind refuses with code sound-damaged.
+        /// (A defaulted payload ≈ a C++ constructor argument with a default.)
+        case damaged(String, trouble: AudioTrouble = .damaged)
         /// No measurement: the reason. Never a pass.
         case unchecked(String)
     }
@@ -114,8 +117,11 @@ enum PromoteSoundGate {
         // header still read — a failed read looks the same — so on its own
         // it is "could not check", not damage (Codex #281 F1).
         let damage = d.findings.filter { VerifyAudioRules.isDamage($0) && failedLevelsPassCodec($0) == nil }
-        if !damage.isEmpty {
-            return .damaged(damage.map(VerifyAudioRules.noteFragment(for:)).joined(separator: "; "))
+        if let trouble = VerifyAudioRules.trouble(of: damage) {
+            // Real damage: its fragments. A reference movie / a sound that
+            // needs rebuilding: what it says about itself (Rick 2026-11-25).
+            let own = damage.first { VerifyAudioRules.trouble(of: $0) == trouble }.flatMap(VerifyAudioRules.ownDetail(of:))
+            return .damaged(own ?? damage.map(VerifyAudioRules.noteFragment(for:)).joined(separator: "; "), trouble: trouble)
         }
         if let codec = d.findings.lazy.compactMap(failedLevelsPassCodec).first {
             return .unchecked("the sound track could not be decoded (\(codec.isEmpty ? "unknown codec" : codec)) — "
@@ -228,10 +234,9 @@ enum PromoteSoundGate {
                                + "Nothing was copied; try again when the drive is connected and idle.",
                            logFacts: "the sound could not be checked (\(why)); nothing written")
 
-        case .damaged(let what):
-            return .refuse(code: .damaged,
-                           detail: "Not promoted — the sound is damaged: \(what). Right-click ▸ Repair… shows the fix. Nothing was copied.",
-                           logFacts: "damaged sound (\(what)); nothing written")
+        case .damaged(let what, let trouble):
+            // One code for all three kinds; the words follow the kind.
+            return .refuse(code: .damaged, detail: trouble.refusalDetail(what), logFacts: trouble.refusalLog(what))
 
         case .present(let side, let levels):
             let measured = " — \(levels), floor \(db(floorDBFS))"

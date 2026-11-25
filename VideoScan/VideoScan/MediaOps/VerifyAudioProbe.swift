@@ -203,35 +203,7 @@ enum AudioVerifyVerdict: Sendable, Equatable {
     case notChecked(reason: String)
 }
 
-/// What a stored "damaged" verdict really is (Rick 2026-11-25: "fix the
-/// wording — it helps when looking through vast numbers of files"). All
-/// three store the same status and meet the same gates; only real damage
-/// is called damaged. Worst first: in a mixed list the lowest case leads.
-/// (For Rick: `Comparable` on the raw value ≈ an `enum class` with
-/// `operator<` defined over its underlying int.)
-enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
-    /// Decoded and bad: the sound runs far shorter than the picture.
-    case damaged
-    /// A QuickTime reference movie: its picture and sound live in other files.
-    case referenceMovie
-    /// An old sound format Apple can't play that ffmpeg decodes:
-    /// Rebuild Audio Track fixes it.
-    case needsRebuild
-
-    static func < (a: AudioTrouble, b: AudioTrouble) -> Bool { a.rawValue < b.rawValue }
-
-    /// The Verify Audio sheet's headline.
-    var sheetHeadline: String {
-        switch self {
-        case .damaged:
-            return "This file's audio is damaged — it's marked red in the catalog so you can find it again later."
-        case .referenceMovie:
-            return "This is a reference movie: its picture and sound are stored in other files, so this file alone does not play. Its row stays red in the catalog."
-        case .needsRebuild:
-            return "The sound needs rebuilding: it is stored in a format Apple can't play. Rebuild Audio Track below fixes it; its row stays red in the catalog until then."
-        }
-    }
-}
+// `AudioTrouble` (which kind of stored "damaged" this is) and its words: AudioTroubleWords.swift.
 
 enum AudioVerifyProbeError: Error, Equatable {
     case toolUnavailable(String)
@@ -339,16 +311,18 @@ enum VerifyAudioRules {
     /// 2026-07-24): one `notes:damaged` query batch-finds them — the #128
     /// batch-delete flow. A reference movie and a sound that needs
     /// rebuilding store the same status but lead with their own words
-    /// (Rick 2026-11-25), so that find never lists them. The em dash
-    /// separates prefix from detail, so detail fragments must not carry
-    /// their own em dash (see the referenceMovie fragment's comma).
-    static let damagedNotePrefix = "Damaged audio — "
-    /// A reference movie's stored note (it is the whole lead).
-    static let referenceMovieNotePrefix = "Reference movie — "
-    static let referenceMovieNote = referenceMovieNotePrefix
-        + "the picture and sound are stored in other files; this file alone does not play"
-    /// How a sound that needs rebuilding's stored note leads.
-    static let needsRebuildNotePrefix = "Sound needs rebuilding — "
+    /// (Rick 2026-11-25), so that find never lists them. The words live in
+    /// ONE table, `AudioTrouble` (AudioTroubleWords.swift).
+    ///
+    /// SEPARATOR RULE: a note is fragments joined by "; " (readers split
+    /// it on ";", ArchiveReadiness), and a lead's em dash separates it
+    /// from its detail — so no fragment or detail carries its own em dash
+    /// or ";" (the referenceMovie fragment's comma; the leads' commas and
+    /// parentheses).
+    static let damagedNotePrefix = AudioTrouble.damaged.noteLead
+    static let referenceMovieNotePrefix = AudioTrouble.referenceMovie.noteLead
+    static let referenceMovieNote = referenceMovieNotePrefix + (AudioTrouble.referenceMovie.ownDetail(codec: "") ?? "")
+    static let needsRebuildNotePrefix = AudioTrouble.needsRebuild.noteLead
 
     /// A stored note that names its own trouble (a reference movie, a sound
     /// that needs rebuilding): a reader shows it as it is, never under a
@@ -498,17 +472,22 @@ enum VerifyAudioRules {
     }
 
     /// The self-naming lead of a reference movie or a sound that needs
-    /// rebuilding; the bare fragment for anything else. Pure.
+    /// rebuilding ("<noteLead><ownDetail>"); the bare fragment for anything
+    /// else. Pure.
     static func troubleLead(_ finding: AudioVerifyFinding) -> String {
-        switch finding {
-        case .referenceMovie:
-            return referenceMovieNote
-        case .unsupportedCodec(let codec, decodable: true):
-            return needsRebuildNotePrefix
-                + "\(codec.isEmpty ? "this sound format" : codec) does not play on Apple; Repair… ▸ Rebuild Audio Track fixes it"
-        default:
+        guard let trouble = trouble(of: finding), let detail = ownDetail(of: finding) else {
             return noteFragment(for: finding)
         }
+        return trouble.noteLead + detail
+    }
+
+    /// The words a reference movie or a sound that needs rebuilding says
+    /// about itself (the table's `ownDetail`); nil for real damage and for
+    /// every other finding. Pure.
+    static func ownDetail(of finding: AudioVerifyFinding) -> String? {
+        guard let trouble = trouble(of: finding) else { return nil }
+        if case .unsupportedCodec(let codec, _) = finding { return trouble.ownDetail(codec: codec) }
+        return trouble.ownDetail(codec: "")
     }
 
     /// What the levels step handed back: nil = it was not run (reference

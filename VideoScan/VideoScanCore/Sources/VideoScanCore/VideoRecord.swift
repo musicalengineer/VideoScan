@@ -619,21 +619,25 @@ public class VideoRecord: Identifiable, Decodable {
 
     /// Verify Audio verdict (GH #128): "" = never verified, "ok" = the
     /// audio checked out (or had a non-damage finding — see the note),
-    /// "damaged" = irreparable/bogus audio (reference movie with missing
-    /// media, invalid codec, audio much shorter than video). Damaged
-    /// records render RED in the catalog table so un-deleted ones can be
-    /// batch-found and removed later. Additive — legacy catalogs decode
+    /// "damaged" = the sound is not usable as it stands: real damage
+    /// (audio much shorter than video), a reference movie (its media is in
+    /// other files), or an old codec that needs rebuilding. All three
+    /// render RED in the catalog table; the note says which. Additive — legacy catalogs decode
     /// as "" (never verified), and the DTO encodes the key only when
     /// non-empty, so old catalog.json files round-trip byte-identical
     /// (the tags/userNotes migration pattern, a769988).
     public var audioVerifyStatus: String = ""
 
-    /// Human-readable detail for `audioVerifyStatus`. Damaged-status
-    /// notes ALWAYS lead with the standardized "Damaged audio — "
-    /// prefix — e.g. "Damaged audio — invalid codec (qdm2)",
-    /// "Damaged audio — reference movie, media missing" — so ONE query
-    /// (`notes:damaged`) batch-finds every red row (Manager decision
-    /// 2026-07-24; sensor in VerifyAudioRulesTests). Also carries
+    /// Human-readable detail for `audioVerifyStatus`. Really damaged
+    /// notes lead with the standardized "Damaged audio — " prefix (e.g.
+    /// "Damaged audio — audio shorter than video (120s vs 3780s)"), so ONE
+    /// query (`notes:damaged`) batch-finds them (Manager decision
+    /// 2026-07-24; sensor in VerifyAudioRulesTests). A reference movie
+    /// leads "Reference movie — …" and an old codec "Sound needs
+    /// rebuilding — …" (Rick 2026-11-25; app-side table AudioTrouble);
+    /// notes stored before then may still read "Damaged audio — reference
+    /// movie, media missing" / "… invalid codec (qdm2)" and are reworded
+    /// only where shown. Also carries
     /// non-damage findings ("silent audio", "no audio stream") bare,
     /// under status "ok", so the row tooltip can tell the story. ""
     /// when never verified or verified clean. Same additive/

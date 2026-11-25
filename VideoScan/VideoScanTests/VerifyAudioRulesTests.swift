@@ -476,7 +476,7 @@ struct VerifyAudioFindingsCompositionTests {
             shape: shape(), balanceAnalysis: nil)
         #expect(!damaged.isHealthy)
         #expect(damaged.persistedStatus == "damaged")
-        #expect(damaged.persistedNote == "Reference movie — the picture and sound are stored in other files; this file alone does not play")
+        #expect(damaged.persistedNote == "Reference movie — the picture and sound are stored in other files, so this file alone does not play")
         #expect(damaged.levelsPass == .notNeeded && damaged.verdict == .damaged)
 
         // GH #467: a sound track with no measurement, or a partial one, is

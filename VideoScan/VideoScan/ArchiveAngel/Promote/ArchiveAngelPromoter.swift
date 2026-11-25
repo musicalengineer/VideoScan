@@ -259,7 +259,9 @@ final class ArchiveAngelPromoter: ObservableObject {
         guard let code, let sound = PromoteSoundGate.Code(rawValue: code) else { return nil }
         switch sound {
         case .noTrack, .silent, .pairHalf: return "Needs your OK: no sound — \(detail)"
-        case .damaged: return "Needs repair: sound damaged — \(detail)"
+        // sound-damaged covers real damage, a reference movie and a sound
+        // that needs rebuilding; the gate's detail names which (Rick 2026-11-25).
+        case .damaged: return "Sound not usable as it stands — \(detail)"
         case .unchecked: return "Could not check the sound — \(detail)"
         }
     }

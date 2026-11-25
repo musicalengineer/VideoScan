@@ -229,7 +229,7 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
     static func step(_ need: ArchiveAngelNeed) -> Step {
         switch need {
         case .audioRepair(let note):
-            return Step(what: "The sound check found a problem: \(stripPrefix(note, "Damaged audio — ", fallback: "damaged sound")).",
+            return Step(what: "The sound check found a problem: \(stripPrefix(AudioTrouble.displayNote(note), "Damaged audio — ", fallback: "damaged sound")).",
                         todo: "Play it and listen. Prepare to Archive makes a repaired copy of the sound; the original is kept exactly as it is.")
         case .audioBalance(let note):
             return Step(what: "Its sound is on one side only (\(note)).",
@@ -326,8 +326,10 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         if f.audioVerifyStatus == "damaged" {
             // A reference movie / a sound that needs rebuilding names itself;
             // only real damage is labelled "Damaged" (Rick 2026-11-25).
-            if VerifyAudioRules.noteNamesItsOwnTrouble(f.audioVerifyNote) { return f.audioVerifyNote }
-            return "Damaged — " + stripPrefix(f.audioVerifyNote, "Damaged audio — ", fallback: "the sound check found a problem")
+            // A note stored before then is shown in today's words.
+            let note = AudioTrouble.displayNote(f.audioVerifyNote)
+            if VerifyAudioRules.noteNamesItsOwnTrouble(note) { return note }
+            return "Damaged — " + stripPrefix(note, "Damaged audio — ", fallback: "the sound check found a problem")
         }
         // The standing first (Codex #300): what the check did NOT measure,
         // a tag that accepts silence, and a stored note that does not

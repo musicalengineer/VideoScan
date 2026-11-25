@@ -497,7 +497,8 @@ enum VerifyVideoRules {
 
     /// Every Broken note leads with this, so ONE query (`notes:broken`)
     /// batch-finds every broken picture (the Verify Audio
-    /// "Damaged audio — " convention).
+    /// "Damaged audio — " convention, which since 2026-11-25 covers real
+    /// damage only).
     static let brokenNotePrefix = "Broken video — "
     /// Warnings get their own findable prefix (`notes:"video warning"`).
     static let warningNotePrefix = "Video warning — "
