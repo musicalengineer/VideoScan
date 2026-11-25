@@ -96,6 +96,7 @@ struct OneEngineSensorTests {
         "FamilyTree/CouplePortrait.swift": "portrait cache",
         "FamilyTree/FamilyAssetStore.swift": "asset store destination",
         "FamilyTree/FamilySearchPullCoordinator.swift": "pull staging",
+        "FamilyTree/FamilySearchPersonRefreshCoordinator.swift": "its own per-launch temp scratch folder",
         "Hallie/HalliePhotoImport.swift": "picked-photo temp",
         "Hallie/Voice/HallieNeuralSpeech.swift": "speech output dirs",
         "Hallie/Voice/HalliePronunciationLexicon.swift": "lexicon staging",

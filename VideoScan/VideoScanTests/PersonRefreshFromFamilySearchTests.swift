@@ -558,6 +558,12 @@ struct PersonRefreshCoordinatorTests {
         guard case .waiting(let output) = coordinator.phase else { return }
         coordinator.cancel()
         #expect(coordinator.phase == .idle)
+        // Cancel frees the launch's scratch (codex P2, 2026-11-24); the worst
+        // late tool re-creates its folder and writes anyway — still ignored.
+        #expect(!FileManager.default.fileExists(atPath: output.deletingLastPathComponent().path))
+        let launchFolder = output.deletingLastPathComponent().deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: launchFolder) }
+        try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
         try AF.onePerson().write(to: output, atomically: true, encoding: .utf8)
         try await Task.sleep(for: .milliseconds(200))
         #expect(coordinator.phase == .idle)

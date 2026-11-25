@@ -142,4 +142,73 @@ struct FamilyTreeReadOnlyClosing5Tests {
         #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = a.phase { true } else { false } },
                 "A: \(a.phase)")
     }
+
+    // Codex P2 on d91d4503e (disk rule, DECISIONS 2026-11-23): each launch
+    // left its scratch folder and person.ged behind — after a publish, a
+    // cancel, a refused publish. The launch frees what it allocated; the
+    // published copy under the refresh root stays.
+    private final class Mode: @unchecked Sendable { var value: FamilyTreeAccessMode = .full }
+
+    private func scratchLaunch(_ tag: String, scratch: URL, mode: Mode)
+        throws -> (PersonRefreshCoordinator, PersonRefreshAppFixtures.Layout, URL) {
+        let layout = try PersonRefreshAppFixtures.layout(tag: tag)
+        let seed = FamilyTreeLiveModel(originalsDirectory: layout.gedcom)
+        seed.personRefreshOverlayStore = layout.overlayStore
+        seed.loadNow()
+        let target = try #require(seed.personRefreshTarget(for: "@I1@"))
+        let c = PersonRefreshCoordinator(
+            target: target, root: layout.refreshRoot, overlayStore: layout.overlayStore,
+            installedFacts: { seed.personFacts(familySearchID: target.familySearchID) },
+            locator: FamilySearchToolLocator(overridePath: layout.tool.path, candidatePaths: []),
+            launcher: PersonRefreshAppFixtures.SilentLauncher(), pollInterval: .milliseconds(20),
+            sink: PersonRefreshNoteSink(videoscanLog: { _ in }))
+        c.answerScratchRoot = scratch
+        c.writeMode = { mode.value }
+        c.launch()
+        guard case .waiting(let output) = c.phase else { throw CancellationError() }
+        return (c, layout, output)
+    }
+
+    private func leftovers(_ scratch: URL) -> [String] {
+        (try? FileManager.default.contentsOfDirectory(atPath: scratch.path)) ?? []
+    }
+
+    @Test func aPublishedRefreshFreesItsScratchAndKeepsThePublishedCopy() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-publish", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: output, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "\(c.phase)")
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+        let published = try #require(c.stagingFolder).appendingPathComponent(PersonRefreshPaths.outputFileName)
+        #expect(FileManager.default.fileExists(atPath: published.path), "the published copy is the record")
+    }
+
+    @Test func aCancelledRefreshFreesItsScratch() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (c, layout, _) = try scratchLaunch("free-cancel", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        #expect(!leftovers(scratch).isEmpty, "precondition: the launch made its folder")
+        c.cancel()
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+    }
+
+    @Test func aRefusedPublishFreesItsScratchAndLandsNothing() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let mode = Mode()
+        let (c, layout, output) = try scratchLaunch("free-refused", scratch: scratch, mode: mode)
+        defer { layout.remove(); c.cancel() }
+        mode.value = .readOnly(.viewer)          // revoked before the answer is published
+        try PersonRefreshAppFixtures.onePerson().write(to: output, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .failed = c.phase { true } else { false } }, "\(c.phase)")
+        #expect(leftovers(scratch).isEmpty, "the launch left \(leftovers(scratch)) in scratch")
+        let published = try #require(c.stagingFolder).appendingPathComponent(PersonRefreshPaths.outputFileName)
+        #expect(!FileManager.default.fileExists(atPath: published.path), "a refused publish landed the answer")
+    }
 }
