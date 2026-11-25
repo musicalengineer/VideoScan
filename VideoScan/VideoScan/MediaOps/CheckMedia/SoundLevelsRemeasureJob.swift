@@ -443,13 +443,13 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         case .unreadable(let why):
             return leftAlone(i, item, "the stored card for this content could not be read (\(why))")
         }
-        var before: [(VideoRecord, MediaReportCard)] = []
+        var before: [(VideoRecord, MediaReportCard, MediaReportCard)] = []
         for copy in copies {
             guard let old = copy.mediaReportCard else { continue }
             let new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
             guard new != old else { continue }
             copy.mediaReportCard = new
-            before.append((copy, old))
+            before.append((copy, old, new))
         }
         if !before.isEmpty {
             guard commitRows(before.map(\.0.id), model: model) else {
@@ -476,33 +476,50 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     /// A commit that returned false: its content and the cards it wrote.
     private struct RefusedCommit {
         let item: SoundLevelsRemeasureItem
-        let copies: [(VideoRecord, MediaReportCard)]
+        /// (copy, its card before, the card the job wrote)
+        let copies: [(VideoRecord, MediaReportCard, MediaReportCard)]
     }
     private var refusedCommit: RefusedCommit?
 
     /// After a commit that returned false: memory set to what the store
     /// holds (never the planned-old cards blindly — some rows may have
     /// landed), then stop with a named OUTCOME that carries the row counts.
+    /// After the awaited read-back, ONE synchronous step: a copy is set only
+    /// while it still holds exactly the card the job wrote — a copy Check
+    /// Media changed during the await is newer than both and is left as it
+    /// is, counted and named (Codex fourth pass P0).
     private func reconcileRefusedCommit(_ refused: RefusedCommit, model: VideoScanModel) async {
         saveFailed = true
-        let words: String
         let stored: SoundLevelsStoredCard = if let d = refused.item.digest { await storedCard(d) } else { .none }
-        switch stored {
-        case .card(let truth):
-            for (copy, _) in refused.copies { copy.mediaReportCard = truth }
-            words = "every copy now shows exactly the card catalog.sqlite holds"
-        case .none:
-            for (copy, old) in refused.copies { copy.mediaReportCard = old }
-            words = "nothing of it was stored; its copies show their cards as they were"
-        case .unreadable(let why):
-            words = "the stored card could not be read back (\(why)); its copies keep the rewritten card, never older than the store"
+        let changed = refused.copies.filter { copy, _, new in copy.mediaReportCard != new }.count
+        let words = Self.settle(refused.copies, to: stored)
+        if case .card(let truth) = stored, SoundLevelsRemeasureRules.sameCard(truth, refused.copies[0].2) {
+            totals.cardsWritten += refused.copies.count - changed   // the rewritten card landed (P2)
         }
-        let message = "The catalog could not store all of \(refused.item.filename)'s copies — \(words); "
+        if changed > 0 { totals.changedMeanwhile += changed }
+        let meanwhile = changed > 0 ? "; \(changed) cop\(changed == 1 ? "y" : "ies") changed meanwhile (checked again) — left as \(changed == 1 ? "it is" : "they are")" : ""
+        let message = "The catalog could not store all of \(refused.item.filename)'s copies — \(words)\(meanwhile); "
             + "\(savedCount) card(s) saved earlier are kept; no media was changed. Stopped; run it again once the catalog can be saved. "
             + Self.rowsClause(before: rowsAtStart, after: model.records.count, written: totals.cardsWritten)
         summaryLine = message
         note("OUTCOME — \(message)", model: model)
         finish(failed: message)
+    }
+
+    /// Set each copy that still holds the job's card to the stored truth
+    /// (or back to its old card when nothing could be stored). Synchronous.
+    /// Returns the OUTCOME words.
+    static func settle(_ copies: [(VideoRecord, MediaReportCard, MediaReportCard)], to stored: SoundLevelsStoredCard) -> String {
+        switch stored {
+        case .card(let truth):
+            for (copy, _, new) in copies where copy.mediaReportCard == new { copy.mediaReportCard = truth }
+            return "the copies it still owned now show exactly the card catalog.sqlite holds"
+        case .none:
+            for (copy, old, new) in copies where copy.mediaReportCard == new { copy.mediaReportCard = old }
+            return "nothing of it was stored; the copies it still owned show their cards as they were"
+        case .unreadable(let why):
+            return "the stored card could not be read back (\(why)); its copies keep the rewritten card, never older than the store"
+        }
     }
 
     private func leftAlone(_ i: Int, _ item: SoundLevelsRemeasureItem, _ why: String) {

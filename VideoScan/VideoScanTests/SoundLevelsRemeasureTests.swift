@@ -820,6 +820,7 @@ struct SoundLevelsRemeasureClosingTests {
             Issue.record("no stored card"); return
         }
         #expect(stored.soundLevels == .measured, "A's rewritten card landed")
+        #expect(j.totals.cardsWritten == 2, "the copies whose rewritten card landed are counted (fourth pass P2): \(j.totals.cardsWritten)")
         for copy in [a, b] {
             let card = try #require(copy.mediaReportCard)
             #expect(SoundLevelsRemeasureRules.sameCard(card, stored), "memory equals the store")
@@ -831,6 +832,41 @@ struct SoundLevelsRemeasureClosingTests {
             #expect(RemeasureFixture.shownLevels(card).mediaInfo.isEmpty, "copy \(id): the old levels came back")
             #expect(card.soundLevels == .measured)
         }
+        if let c = after.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("fourth pass P0 on catalog.sqlite: Check Media publishes a newer card on a copy DURING the recovery read-back — that copy is left as it is (newer than both), named in OUTCOME; it survives a save and a relaunch")
+    func recoveryKeepsACardChangedMeanwhile() async throws {
+        let scene = try CutoverScene.make("remeasure_recovery"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let ids = try copies(scene, name: "q", count: 2, seed: 505) { RemeasureFixture.preFixReconfiguredCard(size: $0) }
+        let model = try await relaunchRemeasure(scene, from: scene.model)
+        let a = try #require(model.record(forID: ids[0])), b = try #require(model.record(forID: ids[1]))
+        b.fullPath = a.fullPath   // B's row is refused: the commit returns false
+        var fresh = freshCard(a.sizeBytes)
+        fresh.checks.append(MediaCheck(kind: .black, verdict: .ok, sentence: "No black stretches."))
+        let box = Box(model)
+        let j = SoundLevelsRemeasureJob(model: model)
+        j.toolsAvailable = { true }
+        j.measure = { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        j.storedCard = { digest in
+            let snapshot = await SoundLevelsRemeasureJob.readStoredCard(box.model.catalogCutover.committer?.repository, digest: digest)
+            box.calls += 1
+            if box.calls == 2 {   // the recovery read-back: Verify checks A again meanwhile
+                a.mediaReportCard = fresh
+                box.model.saveCatalogDebounced()
+            }
+            return snapshot
+        }
+        await RemeasureFixture.run(j)
+        #expect(box.calls == 2, "the pre-write check and the recovery read-back")
+        #expect(a.mediaReportCard == fresh, "Check Media's newer card was overwritten by the recovery")
+        guard case .failed(let words) = j.state else { Issue.record("\(j.state)"); return }
+        #expect(words.contains("1 copy changed meanwhile"), "\(words)")
+        _ = model.saveCatalogNow()
+        let after = try await relaunchRemeasure(scene, from: model)
+        let reloaded = try #require(after.record(forID: ids[0])?.mediaReportCard)
+        #expect(SoundLevelsRemeasureRules.sameCard(reloaded, fresh), "after save + relaunch A keeps its newer card")
         if let c = after.catalogCutover.committer { await c.repository.close() }
     }
 
