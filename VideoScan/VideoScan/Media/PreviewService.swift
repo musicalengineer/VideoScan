@@ -513,8 +513,9 @@ final class PreviewService {
 /// ledger is symmetric: + at set (before super, so an object NSCache drops
 /// inside its own setObject nets to zero), − at every delegate call, both
 /// sides computed from the image's own pixel size (never the caller's
-/// `cost:`, so a 0-cost caller cannot drift it). Re-storing the SAME object
-/// fires no delegate call, so that + is undone. Our own replacements and
+/// `cost:`, so a 0-cost caller cannot drift it). Re-storing the object the
+/// key already holds is a no-op (NSCache would fire no delegate call for
+/// it). Our own replacements and
 /// removals are told apart from NSCache's evictions by the identity of the
 /// outgoing object (held alive by the override across the super call, so
 /// the identity is unique) — the fast→best upgrade is not an eviction.
@@ -524,9 +525,16 @@ final class PreviewService {
 /// The ledger is exact only for serialised writers: the look-up of the
 /// outgoing object and super's replace are check-then-act. A memory-
 /// pressure purge landing between the two can file one entry as a removal
-/// instead of an eviction (entries/bytesHeld stay exact). Two CONCURRENT
+/// instead of an eviction (entries/bytesHeld stay exact; the sweep test
+/// ledgerExactUnderPressureAtEveryStep pins both). Two CONCURRENT
 /// setters on one key are not supported: they can misfile and drift the
 /// counts by one. Moving a writer off the main actor means revisiting this.
+///
+/// Memory pressure: NSCache may drop any entry at any moment, even inside
+/// our setObject (M5 Ultra suite 2026-11-24, ~16 GB swap: every set was
+/// evicted at once). entries/bytesHeld stay exact — every exit, whoever
+/// causes it, goes through willEvict — and only the evictions/removals
+/// split can misfile, in the one window described above.
 ///
 /// Memory: a handful of integers plus, transiently, the identities of the
 /// objects being replaced right now (≤ concurrent setters). Thread-safety:
@@ -551,12 +559,53 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
         var removals = 0
     }
 
-    private struct Ledger {
-        var snapshot = Snapshot()
+    /// The bookkeeping, with no NSCache in it: each NSCache event the shell
+    /// below sees is one mutating call. Split out (2026-11-24) so tests can
+    /// play any event order NSCache might produce — including a memory-
+    /// pressure eviction at any point — and pin exact counts, since NSCache
+    /// itself evicts when it chooses and cannot be made to hold an entry on
+    /// a machine under pressure. C++ analogy: a value-type state machine
+    /// the wrapper owns behind a mutex; tests call its methods directly.
+    struct Ledger: Sendable {
+        private(set) var snapshot = Snapshot()
         /// Outgoing objects of an in-flight replace/remove (ours, not evictions).
-        var outgoing: Set<ObjectIdentifier> = []
+        private(set) var outgoing: Set<ObjectIdentifier> = []
         /// removeAllObjects in progress: every delegate call is ours.
-        var purging = 0
+        private(set) var purging = 0
+
+        /// Before super.setObject: the + goes in first, so a − NSCache
+        /// fires inside its own setObject finds it already there.
+        mutating func willSet(replacing old: ObjectIdentifier?, cost added: Int) {
+            if let old { outgoing.insert(old) }
+            snapshot.entries += 1
+            snapshot.bytesHeld += added
+        }
+
+        /// After super.setObject: forget the outgoing id. The delegate has
+        /// normally consumed it already (the replace fired willEvict).
+        mutating func didSet(replacing old: ObjectIdentifier?) {
+            if let old { outgoing.remove(old) }
+        }
+
+        mutating func willRemove(_ old: ObjectIdentifier) { outgoing.insert(old) }
+        mutating func didRemove(_ old: ObjectIdentifier) { outgoing.remove(old) }
+        mutating func willPurge() { purging += 1 }
+        mutating func didPurge() { purging -= 1 }
+
+        /// NSCache's willEvictObject — every removal, ours or its own.
+        mutating func willEvict(_ id: ObjectIdentifier?, cost gone: Int) {
+            // No clamps: every − follows its + (set accounts before super),
+            // so a negative here would be a real ordering bug, not noise.
+            snapshot.entries -= 1
+            snapshot.bytesHeld -= gone
+            if let id, outgoing.remove(id) != nil {
+                snapshot.removals += 1
+            } else if purging > 0 {
+                snapshot.removals += 1
+            } else {
+                snapshot.evictions += 1
+            }
+        }
     }
 
     private let ledger = OSAllocatedUnfairLock(initialState: Ledger())
@@ -585,41 +634,39 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
 
     override func setObject(_ obj: NSImage, forKey key: NSString, cost g: Int) {
         let old = object(forKey: key)          // kept alive across super
+        // The key already holds this very object: nothing would change, so
+        // nothing is stored or accounted. (Fix 2026-11-24: NSCache re-stores
+        // the same object silently, with no willEvict; the old ledger added
+        // a + and undid it after super, and a pressure purge landing between
+        // super's return and the undo consumed the id, so the undo was
+        // skipped and entries/bytesHeld stayed one entry high for good.
+        // Every production writer builds a fresh NSImage, so this changes
+        // nothing a caller sees.)
+        if let old, old === obj { return }
         let added = Self.cost(of: obj)
         // Account BEFORE super, in one lock section: NSCache may evict the
         // new object inside its own setObject (cost > limit, measured
         // 2026-11-19) and the delegate's − must find the + already there.
-        ledger.withLock {
-            if let old { $0.outgoing.insert(ObjectIdentifier(old)) }
-            $0.snapshot.entries += 1
-            $0.snapshot.bytesHeld += added
-        }
+        let oldID = old.map(ObjectIdentifier.init)
+        ledger.withLock { $0.willSet(replacing: oldID, cost: added) }
         super.setObject(obj, forKey: key, cost: g)
-        ledger.withLock {
-            guard let old else { return }
-            // `remove` returns nil when the delegate already consumed the
-            // id (the normal replace). Still present + same object = NSCache
-            // re-stored it silently (no willEvict): undo our +.
-            if $0.outgoing.remove(ObjectIdentifier(old)) != nil, old === obj {
-                $0.snapshot.entries -= 1
-                $0.snapshot.bytesHeld -= added
-            }
-        }
+        ledger.withLock { $0.didSet(replacing: oldID) }
         withExtendedLifetime(old) {}
     }
 
     override func removeObject(forKey key: NSString) {
         let old = object(forKey: key)
-        if let old { ledger.withLock { _ = $0.outgoing.insert(ObjectIdentifier(old)) } }
+        let oldID = old.map(ObjectIdentifier.init)
+        if let oldID { ledger.withLock { $0.willRemove(oldID) } }
         super.removeObject(forKey: key)
-        if let old { ledger.withLock { _ = $0.outgoing.remove(ObjectIdentifier(old)) } }
+        if let oldID { ledger.withLock { $0.didRemove(oldID) } }
         withExtendedLifetime(old) {}
     }
 
     override func removeAllObjects() {
-        ledger.withLock { $0.purging += 1 }
+        ledger.withLock { $0.willPurge() }
         super.removeAllObjects()
-        ledger.withLock { $0.purging -= 1 }
+        ledger.withLock { $0.didPurge() }
     }
 
     // NSCacheDelegate — called on whatever thread NSCache is running on.
@@ -627,18 +674,6 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
         let image = obj as? NSImage
         let gone = image.map(Self.cost(of:)) ?? 0
         let id = image.map(ObjectIdentifier.init)
-        ledger.withLock {
-            // No clamps: every − follows its + (set accounts before super),
-            // so a negative here would be a real ordering bug, not noise.
-            $0.snapshot.entries -= 1
-            $0.snapshot.bytesHeld -= gone
-            if let id, $0.outgoing.remove(id) != nil {
-                $0.snapshot.removals += 1
-            } else if $0.purging > 0 {
-                $0.snapshot.removals += 1
-            } else {
-                $0.snapshot.evictions += 1
-            }
-        }
+        ledger.withLock { $0.willEvict(id, cost: gone) }
     }
 }
