@@ -28,6 +28,12 @@ tool = pathlib.Path(sys.argv[0]).name
 if tool == 'swift':
     with open(os.environ['FAKE_CALLS'] + '.swift', 'a') as f:
         f.write(json.dumps({'args': args, 'env': {k: os.environ.get(k, '') for k in ('HOME', 'TMPDIR', 'VS_UI_TEST')}}) + '\n')
+    if args[0] == 'build' and '--show-bin-path' in args:
+        # Swift 6.4's build system names `<scratch>/out/Products/Release`, not `<scratch>/release`.
+        if config.get('bin_path_exit'):
+            sys.exit(config['bin_path_exit'])
+        print(args[args.index('--scratch-path') + 1] + '/out/Products/Release')
+        sys.exit(0)
     if args[0] == 'build':
         if config.get('package_build_orphan'):
             # A child that outlives the build in its process group (Codex 11/05).
@@ -260,7 +266,7 @@ class GauntletPackageAdapterTests(unittest.TestCase):
     def test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env(self):
         self.run_runner()
         self.assertEqual(self.result['inventory_errors'], [], self.completed.stderr)
-        builds = [c for c in self.swift_calls if c['args'][0] == 'build']
+        builds = [c for c in self.swift_calls if c['args'][0] == 'build' and '--show-bin-path' not in c['args']]
         runs = [c for c in self.swift_calls if c['args'][0] == 'test' and c['args'][1] != 'list']
         lists = [c for c in self.swift_calls if c['args'][:2] == ['test', 'list']]
         self.assertEqual(len(builds), 1)
@@ -334,6 +340,32 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         unit = self.stage('unit')
         self.assertEqual(unit['status'], 'failed', unit)
         self.assertIn('counts unavailable', unit['reason'])
+
+    # M4 deep gauntlet 2026-11-24 14:57 (35d23778e): unit, regression and performance all RED with
+    # "quiet-machine listing (core_lane.py list) exit 1" — the Runner handed the listing
+    # `<scratch>/release`, which Swift 6.4's build system no longer makes; the bundle is in
+    # `<scratch>/out/Products/Release`. The products folder is asked of SwiftPM, never guessed.
+    def test_the_quiet_listing_reads_the_products_folder_swiftpm_names(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.run_runner()
+        lists = [json.loads(l) for l in (self.root / 'calls.jsonl.quietlist').read_text().splitlines()]
+        self.assertEqual(len(lists), 1, lists)
+        products = lists[0][lists[0].index('--products') + 1]
+        self.assertTrue(products.endswith('/out/Products/Release'), products)
+        bins = [c for c in self.swift_calls if '--show-bin-path' in c['args']]
+        self.assertEqual(len(bins), 1)
+        for flag in ('--build-tests', '-enable-testing', '--scratch-path'):
+            self.assertIn(flag, bins[0]['args'])          # the build's own flags, so the build's own folder
+        self.assertEqual(self.stage('unit')['status'], 'passed', self.stage('unit'))
+
+    def test_a_bin_path_that_fails_is_red_in_its_words_and_runs_no_package_test(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.config['bin_path_exit'] = 4
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('--show-bin-path exit 4', unit['reason'])
+        self.assertEqual(self.ran(), [], 'a package test ran without the quiet-machine split')
 
     def test_a_quiet_listing_that_fails_is_red_in_its_words_and_runs_no_package_test(self):
         self.config['package'] = {'unit': {'quiet': ['q0']}}

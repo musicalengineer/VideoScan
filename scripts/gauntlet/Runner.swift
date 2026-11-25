@@ -844,6 +844,12 @@ func tidyBuildScratch(run: URL, keepBuild: Bool, publishReaped: Bool) -> String 
 /// The marker prepareRoots writes into every run dir it makes: the run's own id.
 let runMarkerName = ".gauntlet-run"
 
+/// The last non-blank line of a small text file (a command log), trimmed; nil when there is none.
+func lastLine(of url: URL) -> String? {
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+    return text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+}
+
 func isRegularFile(_ url: URL) -> Bool {
     var st = stat()
     return lstat(url.path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
@@ -1142,14 +1148,27 @@ struct GauntletRunner {
         }
         // The quiet-machine ids, read once from the bundle just built. A listing that
         // fails leaves every package stage RED in its words, never all-parallel.
+        // The products folder is SwiftPM's to name (`<scratch>/out/Products/Release` under Swift 6.4's
+        // build system, `<scratch>/release` before it): ask it with the build's own flags, never guess
+        // (2026-11-24: the guessed `/release` left all three package stages RED on the M4).
+        let binLog = run.appendingPathComponent("package-bin-path.log")
+        let bin = try command(cmd + ["--show-bin-path"], log: binLog, timeout: 600, environment: buildEnvironment)
+        if bin.contaminated { contaminated = true }
+        let products = bin.code == 0 ? lastLine(of: binLog) : nil
+        guard let products, products.hasPrefix("/") else {
+            quietListingReason = "quiet-machine listing: swift build --show-bin-path exit \(bin.code) named no products folder"
+            return
+        }
         let listLog = run.appendingPathComponent("package-quiet-list.log")
         let listing = try command(["python3", repo.appendingPathComponent("scripts/core_lane.py").path, "list",
-                                   "--products", packageScratch + "/release"], log: listLog, timeout: 600, environment: environment)
+                                   "--products", products], log: listLog, timeout: 600, environment: environment)
         if listing.contaminated { contaminated = true }
         if listing.code == 0, !listing.contaminated, let text = try? String(contentsOf: listLog, encoding: .utf8) {
             quietListing = text
         } else {
+            // The run folder is deleted once summarized, so the reason carries the listing's own last line.
             quietListingReason = "quiet-machine listing (core_lane.py list) exit \(listing.code)" + (listing.contaminated ? " (unreaped process contamination)" : "")
+                + (lastLine(of: listLog).map { ": \($0.prefix(200))" } ?? "")
         }
     }
 

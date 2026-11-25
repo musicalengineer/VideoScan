@@ -258,12 +258,12 @@ def test_track_registers_an_interactive_cycle_and_verdict_moves_it(env, capsys):
     assert "Map stage 1" in out and "fixing" in out
 
 
-def test_default_review_doc_uses_codex_reviews_directory(env, monkeypatch):
+def test_default_review_doc_is_scratch_never_a_live_doc(env, monkeypatch):
     monkeypatch.setattr(codex_review, "REPO", env)
     assert codex_review.main(["--title", "default destination", "--range", "a..b",
                               "--brief", str(env / "brief.md")]) == 0
     cycle = codex_review.load_cycles()[-1]
     doc = env / cycle["doc"]
-    assert doc.parent == env / "docs" / "reviews" / "codex"
+    assert doc.parent == env / ".scratch" / "reviews"
     assert doc.is_file()
     assert "Finding count: 0" in doc.read_text()
