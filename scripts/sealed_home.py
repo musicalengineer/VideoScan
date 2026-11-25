@@ -233,6 +233,31 @@ def leftovers_line(tmp: Path, top: int = 6) -> Optional[str]:
             " (freed with the sealed home; each is a test that does not clean up)")
 
 
+# confstr(_CS_DARWIN_USER_TEMP_DIR): Python's os.confstr_names lacks the name on macOS, the number is <unistd.h>'s.
+_CS_DARWIN_USER_TEMP_DIR = 65537
+
+
+def scratch_parent() -> Path:
+    """Where every sealed home is made: the per-user system temp dir (what Foundation's NSTemporaryDirectory
+    returns), resolved — never $TMPDIR (run_tests and the testbed strands point it into a run's --out folder)
+    and never a run's log folder. The app's test-host icon guard trusts a test temp root only strictly inside
+    the per-user temp dir, /private/tmp or the real ~/Library/Caches (VideoScanCore TestHostScratch.PinnedRoot,
+    Codex 2026-11-24 #361/#363); the M4's suite lane made its home under ~/m4run/out/<run>/… and 3 iconGuard
+    tests went red (2026-11-24). /private/tmp when the temp dir cannot be read."""
+    try:
+        d = os.confstr(_CS_DARWIN_USER_TEMP_DIR)
+    except (ValueError, OSError):
+        d = None
+    return Path(d or "/private/tmp").resolve()
+
+
+def make_home(prefix: str, parent: Optional[Path] = None) -> Path:
+    """A fresh, empty, private folder for a sealed home in `parent` (default `scratch_parent()`; mkdtemp: mode
+    0700, a new name). The caller prepares it and frees it."""
+    import tempfile
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent or scratch_parent())))
+
+
 def test_env(home: Path, runner: bool = True) -> Dict[str, str]:
     """What points a test process at `home`. runner=True: TEST_RUNNER_-prefixed, for xcodebuild to hand on."""
     tmp = str(Path(home) / "tmp") + "/"      # Foundation ignores TMPDIR: the tests' scratch helpers read VIDEOSCAN_TEST_TMP
@@ -244,8 +269,7 @@ def run(cmd: List[str], copy: bool = True, plain: bool = False) -> int:
     """Allocate a sealed home, run `cmd` pointed at it, free it (whoever allocates frees). The command's exit
     code; 128+N when a signal N ended it or this runner. ≈ C++: an RAII guard around one child process."""
     import signal
-    import tempfile
-    home = Path(tempfile.mkdtemp(prefix="videoscan-sealed-home-"))
+    home = make_home("videoscan-sealed-home-")
 
     def stop(signum, frame):                 # TERM/HUP become an exception, so `finally` frees the home
         raise SystemExit(128 + signum)

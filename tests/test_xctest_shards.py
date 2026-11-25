@@ -1025,15 +1025,20 @@ def test_every_test_host_runs_with_a_sealed_home_and_the_built_xctestrun_is_unto
     code, out = bench.go({"A": {"tests": ["a1()"]}, "B": {"tests": ["b1()"]}, "C": {"tests": ["c1()"]}},
                          [grp("A", 1), grp("B", 1), grp("C", 1)], jobs=2)
     assert code == 0, out
-    home = bench.run_dir / "home"
     stamps = bench.stamps()
     assert len(stamps) >= 2
+    home = Path(stamps[0]["host_env"][0]["HOME"])
     for st in stamps:
         assert st["xctestrun"] != str(bench.tmp / "x.xctestrun"), "a host ran from the unsealed .xctestrun"
         assert Path(st["xctestrun"]).parent == bench.tmp, "the sealed copy sits beside the original (__TESTROOT__)"
         for env in st["host_env"]:
             assert env["HOME"] == env["CFFIXED_USER_HOME"] == str(home), env
             assert env["KEEP_ME"] == "1", "the build's own test environment is kept"
+    # M4 2026-11-24: m4_run's suite lane hands --run-dir under its --out folder (~/m4run/out/…); a home made there
+    # puts VIDEOSCAN_TEST_TMP outside the parents the app's icon guard trusts (TestHostScratch.PinnedRoot), and
+    # 3 iconGuard tests went red. The home is made in the per-user temp dir, wherever the run's logs go.
+    assert not str(home).startswith(str(bench.run_dir.resolve()) + "/"), f"the sealed home landed under --run-dir: {home}"
+    assert home.parent == Path(os.confstr(65537)).resolve(), f"not in the per-user temp dir: {home}"
     assert not home.exists(), "the sealed home (a copy of App Support) was left behind after the run"
     assert (bench.tmp / "x.xctestrun").read_bytes() == original, "the build's .xctestrun was modified"
     assert not list(bench.tmp.glob("*.sealed-*.xctestrun")), "the sealed copy was left beside the build"
@@ -1053,26 +1058,32 @@ def test_test_hosts_get_their_own_tmp_and_what_they_leave_is_reported_then_freed
                           "B": {"tests": ["b1()"], "leak": ["SigVerify-0A0B0C0D-1111-2222-3333-444455556666"]}},
                          [grp("A", 1), grp("B", 1)], jobs=2)
     assert code == 0, out
-    home = bench.run_dir / "home"
+    home = Path(bench.stamps()[0]["host_env"][0]["HOME"])
+    assert home.parent == Path(os.confstr(65537)).resolve(), f"the test temp root is not in the per-user temp dir: {home}"
     for st in bench.stamps():
         for env in st["host_env"]:
             assert env["TMPDIR"] == env["VIDEOSCAN_TEST_TMP"] == str(home / "tmp") + "/", env
+    assert not home.exists(), "freed after the run"
     assert "left behind by tests: 2 folder(s)" in out and "SigVerify-<id> ×2" in out, out
     assert not home.exists(), "the sealed home (and its tmp) was not freed"
 
 
-def test_a_symlinked_run_home_is_refused_and_its_target_never_removed(bench):
+def test_a_symlink_at_the_old_run_home_name_is_never_used_or_removed(bench):
     # Codex 2026-11-23 (runner deletion review, round 2): the caller resolved run_dir/home before preparing it, then
-    # rmtree'd the resolved path — a symlinked home would have its EXTERNAL target removed.
+    # rmtree'd the resolved path — a symlinked home would have its EXTERNAL target removed. Since 2026-11-24 the
+    # home is a fresh mkdtemp folder in the per-user temp dir: a link planted at run_dir/home is neither the home
+    # nor touched, and its target keeps exactly what it had.
     outside = bench.tmp / "outside"
     outside.mkdir()
     (outside / "sentinel.txt").write_text("keep")
     bench.run_dir.mkdir(parents=True, exist_ok=True)
     (bench.run_dir / "home").symlink_to(outside)
     code, out = bench.go({"A": {"tests": ["a1()"]}}, [grp("A", 1)], jobs=1)
-    assert code == 1 and "REFUSED" in out, out
+    assert code == 0, out
+    assert all(env["HOME"] not in (str(bench.run_dir / "home"), str(outside))
+               for st in bench.stamps() for env in st["host_env"]), "the planted link was used as the home"
     assert (outside / "sentinel.txt").read_text() == "keep" and sorted(p.name for p in outside.iterdir()) == ["sentinel.txt"]
-    assert bench.stamps() == [], "a test host ran"
+    assert (bench.run_dir / "home").is_symlink(), "the planted link itself is not ours to remove"
 
 
 # Review 2026-11-24 (reviewer agent). RED: scripts/xctest_shards.py:975-979 returns 130 on an interrupt

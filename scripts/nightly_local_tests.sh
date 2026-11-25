@@ -1934,7 +1934,10 @@ fi
 # home, handed on by xcodebuild's TEST_RUNNER_ variables (xcodebuild keeps the
 # real home for its caches). It holds a copy of App Support when the commit has
 # scripts/sealed_home.py (as the K hosts' does), else it is empty. Freed after.
-APP_HOME=$(mktemp -d "${TMPDIR:-/tmp}/videoscan-app-home.XXXXXX")
+# Made in the per-user temp dir, never $TMPDIR: the app's test-host icon guard trusts a test temp root only
+# inside the per-user temp dir, /private/tmp or ~/Library/Caches (TestHostScratch.PinnedRoot, 2026-11-24).
+APP_HOME_PARENT=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /private/tmp/)
+APP_HOME=$(mktemp -d "${APP_HOME_PARENT%/}/videoscan-app-home.XXXXXX")
 mkdir -p "$APP_HOME/Library/Application Support" "$APP_HOME/Library/Logs" \
     "$APP_HOME/Library/Preferences" "$APP_HOME/Library/Caches" "$APP_HOME/tmp"
 if [ -f "$REPO/scripts/sealed_home.py" ]; then

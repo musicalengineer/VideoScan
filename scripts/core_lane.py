@@ -186,10 +186,19 @@ def free_sealed_homes() -> None:
         shutil.rmtree(_HOMES.pop(), ignore_errors=True)
 
 
+def homes_root() -> Path:
+    """Where this lane's sealed homes are made and a dead lane's are found: the per-user temp dir
+    (sealed_home.scratch_parent), never $TMPDIR — the testbed strands point TMPDIR into a run's --out folder,
+    outside the parents the app's test-host icon guard trusts (2026-11-24)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import sealed_home
+    return sealed_home.scratch_parent()
+
+
 def free_dead_lanes_homes() -> None:
     """Free every `videoscan-core-home-<pid>-…` in the temp dir whose lane (pid) is no longer running — what a
     SIGKILLed lane leaves. A live lane's home, and anything not named like a lane home, are never touched."""
-    root = Path(tempfile.gettempdir())
+    root = homes_root()
     for d in root.glob(f"{HOME_PREFIX}*"):
         m = re.fullmatch(re.escape(HOME_PREFIX) + r"(\d+)-[A-Za-z0-9_]+", d.name)
         if not m or not d.is_dir() or d.is_symlink():
@@ -224,7 +233,7 @@ def sealed_home() -> str:
     import sealed_home
     free_dead_lanes_homes()
     # named for this lane's pid: a later lane frees it if this one dies without its exit handlers (SIGKILL)
-    home = tempfile.mkdtemp(prefix=f"{HOME_PREFIX}{os.getpid()}-")
+    home = str(sealed_home.make_home(f"{HOME_PREFIX}{os.getpid()}-", homes_root()))   # never $TMPDIR
     _HOMES.append(home)
     atexit.register(free_sealed_homes)
     src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination

@@ -664,32 +664,48 @@ struct VolumeRoleTaxonomyMigrationTests {
     /// The real account home (not $HOME, which a sealed run points at the sealed home).
     private var realHome: String { String(cString: getpwuid(getuid()).pointee.pw_dir) }
 
-    /// A marked root inside test scratch, pinned the way the test host pins the runner's root.
-    private func pinnedScratchRoot() throws -> (URL, TestHostScratch.PinnedRoot) {
-        let root = TestScratch.reserved("roletax-pin-")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data().write(to: root.appendingPathComponent(TestHostScratch.rootMarkerName))
-        let pin = try #require(TestHostScratch.PinnedRoot.pin(root), "a marked scratch root pins")
-        return (root, pin)
-    }
-
-    /// Move `root` aside (into scratch) and put a symlink to `target` in its place. The returned closure removes
-    /// the LINK itself (unlink never follows it); the aside folder is scratch-recorded.
-    private func swapForSymlink(_ root: URL, to target: String) throws -> () -> Void {
-        try FileManager.default.moveItem(at: root, to: TestScratch.reserved("roletax-pin-aside-"))
-        try FileManager.default.createSymbolicLink(atPath: root.path, withDestinationPath: target)
-        return {
+    /// A marked root, pinned the way the test host pins the runner's root — made in the PER-USER TEMP DIR
+    /// itself, not under the runner's VIDEOSCAN_TEST_TMP: these tests are about the guard, not about where a
+    /// runner put its root (M4 2026-11-24: a runner root outside the allowed parents made them fail on their
+    /// precondition; `iconGuard_runnerRootIsPinnedInThisProcess` is the sensor for the placement). The returned
+    /// closure removes what the test made there: the planted LINK (unlink never follows it) and the folders.
+    private func pinnedTempRoot() throws -> (URL, TestHostScratch.PinnedRoot, () -> Void) {
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let id = UUID().uuidString
+        let root = temp.appendingPathComponent("roletax-pin-\(id)", isDirectory: true)
+        let aside = temp.appendingPathComponent("roletax-pin-aside-\(id)", isDirectory: true)
+        let cleanup = {
             var st = stat()
             if lstat(root.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFLNK { unlink(root.path) }
+            try? FileManager.default.removeItem(at: root)     // a real folder (never swapped), or gone
+            try? FileManager.default.removeItem(at: aside)
         }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(TestHostScratch.rootMarkerName))
+        guard let pin = TestHostScratch.PinnedRoot.pin(root) else {
+            cleanup()
+            throw PinFixtureRefused(path: root.path)
+        }
+        return (root, pin, cleanup)
+    }
+
+    private struct PinFixtureRefused: Error { let path: String }
+
+    /// Move `root` aside (beside it, same name + "-aside" spelling the cleanup knows) and put a symlink to
+    /// `target` in its place.
+    private func swapForSymlink(_ root: URL, to target: String) throws {
+        let aside = root.deletingLastPathComponent()
+            .appendingPathComponent(root.lastPathComponent.replacingOccurrences(of: "roletax-pin-", with: "roletax-pin-aside-"))
+        try FileManager.default.moveItem(at: root, to: aside)
+        try FileManager.default.createSymbolicLink(atPath: root.path, withDestinationPath: target)
     }
 
     @Test func iconGuard_testRootSwappedForSymlinkToSlash_refusesRealPaths() throws {
-        let (root, pin) = try pinnedScratchRoot()
+        let (root, pin, cleanup) = try pinnedTempRoot()
+        defer { cleanup() }
         #expect(MasterArchiveIcon.isInsidePinnedRoot(root.appendingPathComponent("Breen_Family_Archive").path, pin: pin),
                 "control: the intact pinned root admits its own scratch")
-        let unlink = try swapForSymlink(root, to: "/")
-        defer { unlink() }
+        try swapForSymlink(root, to: "/")
         #expect(!MasterArchiveIcon.isInsidePinnedRoot("/Volumes/FamilyArchive", pin: pin))
         #expect(!MasterArchiveIcon.isInsidePinnedRoot("/Volumes/FamilyArchive/Breen_Family_Archive", pin: pin))
         #expect(!MasterArchiveIcon.isInsidePinnedRoot(realHome + "/Movies", pin: pin))
@@ -705,9 +721,9 @@ struct VolumeRoleTaxonomyMigrationTests {
     }
 
     @Test func iconGuard_testRootSwappedForSymlinkToHome_refusesHomePaths() throws {
-        let (root, pin) = try pinnedScratchRoot()
-        let unlink = try swapForSymlink(root, to: realHome)
-        defer { unlink() }
+        let (root, pin, cleanup) = try pinnedTempRoot()
+        defer { cleanup() }
+        try swapForSymlink(root, to: realHome)
         #expect(!MasterArchiveIcon.isInsidePinnedRoot(realHome + "/Movies", pin: pin))
         #expect(!MasterArchiveIcon.isInsidePinnedRoot(root.path + "/Movies", pin: pin), "through the swapped root: really ~/Movies")
         let before = MasterArchiveIcon.testHostRefusals.count
@@ -778,8 +794,18 @@ struct VolumeRoleTaxonomyMigrationTests {
         if TestHostScratch.testTempRoot == fallback {
             #expect(TestHostScratch.testTempRootPin == nil, "no runner root: nothing pinned")
         } else {
-            #expect(TestHostScratch.testTempRootPin?.resolvedPath == TestHostScratch.realPath(TestHostScratch.testTempRoot))
-            #expect(TestHostScratch.testTempRootPin?.isIntact == true)
+            let root = TestHostScratch.testTempRoot.path
+            let runner = ProcessInfo.processInfo.environment[TestHostScratch.rootEnvironmentKey] ?? "(unset)"
+            let parents = TestHostScratch.PinnedRoot.usableParents(TestHostScratch.PinnedRoot.defaultAllowedParents(),
+                                                                   protection: .real)
+            #expect(TestHostScratch.testTempRootPin?.resolvedPath == TestHostScratch.realPath(TestHostScratch.testTempRoot),
+                    """
+                    the runner's test temp root is not pinned: VIDEOSCAN_TEST_TMP=\(runner) (root \(root)). The \
+                    test-host icon guard trusts a root only strictly inside \(parents) and not protected — the runner \
+                    (xctest_shards.py / sealed_home.py run / core_lane.py / nightly) must make its sealed home with \
+                    sealed_home.make_home (the per-user temp dir), not under its --out or --run-dir folder.
+                    """)
+            #expect(TestHostScratch.testTempRootPin?.isIntact == true, "pinned root \(root) was replaced since the pin")
         }
     }
 
