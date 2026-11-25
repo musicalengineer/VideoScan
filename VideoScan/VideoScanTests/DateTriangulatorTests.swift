@@ -81,7 +81,7 @@ enum GH201Fixtures {
 
 // MARK: - Logic
 
-@Suite("DateTriangulator — the GH #201 live cases and the criterion table")
+@Suite("DateTriangulator — the GH #201 live cases and the criterion table", .scratchCleanup)
 struct DateTriangulatorLogicTests {
 
     @Test("CapeCod: three 'what year is it? 2004' now-cues beat the 2008 export stamp; the reason names the cue and the set-aside")
@@ -315,7 +315,7 @@ struct DateTriangulatorLogicTests {
 
 // MARK: - Sensors
 
-@Suite("DateTriangulator — sensors (GH #201)")
+@Suite("DateTriangulator — sensors (GH #201)", .scratchCleanup)
 struct DateTriangulatorSensorTests {
 
     @Test("SENSOR: a DV record never infers a year before 1995, whatever the content says")
@@ -380,8 +380,7 @@ struct DateTriangulatorSensorTests {
         rec.embeddedCreationDate = utc(2008, 10, 23, 14); rec.originMake = "Apple"
         rec.userDate = "2003"; rec.userDateConfidence = "known"
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateTriangulatorTests-user-\(UUID().uuidString)", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("DateTriangulatorTests-user-"))
         model.dateInferencePeople = []
         model.records = [rec]
         let result = model.catchUpInferredDates(trigger: "test")
@@ -442,7 +441,7 @@ struct DateTriangulatorSensorTests {
 
 // MARK: - Isolation
 
-@Suite("DateTriangulator — isolation")
+@Suite("DateTriangulator — isolation", .scratchCleanup)
 struct DateTriangulatorIsolationTests {
 
     @Test("no People profiles ⇒ ages are neutral: same date, lower confidence, no age line in the reason")
@@ -462,8 +461,7 @@ struct DateTriangulatorIsolationTests {
     @MainActor
     func modelUnderTestNeverReadsRealPeople() throws {
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateTriangulatorTests-iso-\(UUID().uuidString)", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("DateTriangulatorTests-iso-"))
         #expect(TestEnvironment.isTestHost)
         #expect(model.dateInferencePeopleResolved.isEmpty, "the real POI store must not be read under a test host")
         model.dateInferencePeople = [GH201Fixtures.timmy]
@@ -473,7 +471,7 @@ struct DateTriangulatorIsolationTests {
 
 // MARK: - Scale
 
-@Suite("DateTriangulator — scale")
+@Suite("DateTriangulator — scale", .scratchCleanup)
 struct DateTriangulatorScaleTests {
 
     /// Realistic transcripts: Whisper on a 10–20 minute home tape is 2–5 kB.
@@ -541,12 +539,11 @@ struct DateTriangulatorScaleTests {
 // MARK: - Model level: catch-up + footage-group sharing
 
 @MainActor
-@Suite("DateInference — GH #201 catch-up re-triangulation and footage-group sharing")
+@Suite("DateInference — GH #201 catch-up re-triangulation and footage-group sharing", .scratchCleanup)
 struct DateInferenceGH201Tests {
 
     private func scratchDir(_ label: String) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateInferenceGH201Tests-\(label)-\(UUID().uuidString)", isDirectory: true)
+        let dir = TestScratch.reserved("DateInferenceGH201Tests-\(label)-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -726,7 +723,7 @@ struct DateInferenceGH201Tests {
 
 // MARK: - Inspector: the inferred line (pure text)
 
-@Suite("Inspector — the machine's guess line (GH #201 #7)")
+@Suite("Inspector — the machine's guess line (GH #201 #7)", .scratchCleanup)
 struct InspectorInferredDateLineTests {
 
     @Test("the line shows the span, how sure, and the reason; 'No guess' when examined and empty; nothing before any pass")
@@ -764,13 +761,12 @@ struct InspectorInferredDateLineTests {
 // MARK: - In-house QA review of GH #201 (M1–M3 + the unwind minor)
 
 @MainActor
-@Suite("QA review — GH #201 date branch (M1–M3, unwind)")
+@Suite("QA review — GH #201 date branch (M1–M3, unwind)", .scratchCleanup)
 struct DateTriangulatorQAReviewTests {
 
     private func model(_ label: String) -> VideoScanModel {
         let m = VideoScanModel()
-        m.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateQAReview-\(label)-\(UUID().uuidString)", isDirectory: true))
+        m.catalogStore = CatalogStore(directory: TestScratch.reserved("DateQAReview-\(label)-"))
         m.dateInferencePeople = []
         return m
     }
@@ -843,8 +839,7 @@ struct DateTriangulatorQAReviewTests {
     /// sidecar carries them back on reapply.
     @Test func unwindClearsRangeAndReason() throws {
         let m = model("unwind")
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DateQAReview-sidecar-\(UUID().uuidString)", isDirectory: true)
+        let dir = TestScratch.reserved("DateQAReview-sidecar-")
         let orphan = rec("/Volumes/Y/a.mov")
         orphan.partialMD5 = "y"; orphan.sizeBytes = 2
         orphan.inferredRecordDate = pfJanuaryFirst(of: 2004)

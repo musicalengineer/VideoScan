@@ -21,7 +21,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Steward C01-F1 — nested scan targets: the card says what the run does", .serialized)
+@Suite("Steward C01-F1 — nested scan targets: the card says what the run does", .serialized, .scratchCleanup)
 @MainActor
 struct StewardNestedDriveParityTests {
 
@@ -30,8 +30,7 @@ struct StewardNestedDriveParityTests {
 
     private func isolatedModel() -> VideoScanModel {
         let model = VideoScanModel()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_steward_nested_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = TestScratch.reserved("test_steward_nested_")
         model.catalogStore = CatalogStore(directory: dir)
         return model
     }

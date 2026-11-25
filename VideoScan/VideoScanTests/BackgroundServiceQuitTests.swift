@@ -20,7 +20,7 @@ import VideoScanCore
 @testable import VideoScan
 
 @MainActor
-@Suite("BackgroundServiceStore — Quit from the helper's menu bar")
+@Suite("BackgroundServiceStore — Quit from the helper's menu bar", .scratchCleanup)
 struct BackgroundServiceQuitTests {
 
     typealias S = BackgroundServiceStoreTests
@@ -115,7 +115,7 @@ struct BackgroundServiceQuitTests {
 
     @Test("end to end on the real file store (temp root): helper writes → poll holds off → launch clears the file")
     func realStore() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bgquit-\(UUID().uuidString)", isDirectory: true)
+        let root = TestScratch.reserved("bgquit-")
         let file = BackgroundQuitStore.beside(stateRoot: root)
         try file.write()  // what the helper's Quit does
         let (store, r) = S.make(enabled: true, agent: S.FakeAgent(.enabled))

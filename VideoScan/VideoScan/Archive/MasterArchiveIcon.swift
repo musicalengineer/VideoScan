@@ -13,6 +13,7 @@
 //
 
 import AppKit
+import VideoScanCore
 
 // @MainActor: it draws with lockFocus and reads NSApp, both main-thread
 // AppKit; its only callers (VideoScanModel+MasterArchive) already run there.
@@ -87,12 +88,23 @@ enum MasterArchiveIcon {
     /// Paths a test host asked to badge or un-badge outside the temp folder.
     private(set) static var testHostRefusals: [String] = []
 
-    private static func mayTouch(_ path: String) -> Bool {
+    static func mayTouch(_ path: String, testRootPin: TestHostScratch.PinnedRoot? = TestHostScratch.testTempRootPin) -> Bool {
         guard TestEnvironment.isTestHost else { return true }
         if isInsideTemporaryDirectory(path, temporaryDirectory: FileManager.default.temporaryDirectory) { return true }
+        // The runner's test temp root (VIDEOSCAN_TEST_TMP) is test scratch too (TestHostScratch).
+        if isInsidePinnedRoot(path, pin: testRootPin) { return true }
         testHostRefusals.append(path)
         NSLog("TEST-ISOLATION: MasterArchiveIcon refused %@ — a test host may only badge paths inside the temp folder", path)
         return false
+    }
+
+    /// Is `path` inside the runner's test temp root as it was PINNED (Codex 2026-11-24, cycle #361 P1)? Only
+    /// the candidate is canonicalized; the root is the pin's cached realpath, never resolved again, and the pin
+    /// must still be the same real directory (TestHostScratch.PinnedRoot.isIntact). A root swapped for a
+    /// symlink to `/`, the home or the archive after validation admits nothing. nil pin → refuse.
+    nonisolated static func isInsidePinnedRoot(_ path: String, pin: TestHostScratch.PinnedRoot?) -> Bool {
+        guard let pin, let candidate = canonicalPath(path) else { return false }
+        return pin.contains(canonicalPath: candidate)
     }
 
     /// Pure: is `path` the temp folder or below it, after resolving symlinks
@@ -118,7 +130,8 @@ enum MasterArchiveIcon {
         while true {
             if let real = realpath(head, nil) {
                 defer { free(real) }
-                let resolved = String(cString: real)
+                // The firmlinked /System/Volumes/Data spelling shortened the same way the pin's root is.
+                let resolved = TestHostScratch.shortenedFirmlink(String(cString: real))
                 return tail.isEmpty ? resolved : (resolved as NSString).appendingPathComponent(tail.reversed().joined(separator: "/"))
             }
             guard head != "/", !head.isEmpty else { return nil }

@@ -9,13 +9,11 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-@Suite("Unified Review Adversarial Isolation")
+@Suite("Unified Review Adversarial Isolation", .scratchCleanup)
 struct UnifiedReviewAdversarialTests {
 
     private func makeTempDir() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("unified-review-adversarial-\(UUID().uuidString)",
-                                    isDirectory: true)
+        let dir = TestScratch.reserved("unified-review-adversarial-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

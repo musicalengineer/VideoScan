@@ -69,7 +69,7 @@ private let tree = """
 0 TRLR
 """
 
-@Suite("Photography floor — no photo offer for anyone who predates photography")
+@Suite("Photography floor — no photo offer for anyone who predates photography", .scratchCleanup)
 struct HalliePhotographyFloorTests {
     typealias Q = HallieLineageQuestion
     typealias Exec = HallieTurnExecutor
@@ -264,8 +264,7 @@ struct HalliePhotographyFloorTests {
     // MARK: Biography route (the live bug) — HallieBiographyPhotoOffer
 
     private func temporaryStore() throws -> FamilyAssetStore {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("photo-floor-\(UUID().uuidString)", isDirectory: true)
+        let base = TestScratch.reserved("photo-floor-")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return FamilyAssetStore(
             root: base.appendingPathComponent("40_Family_Tree", isDirectory: true),

@@ -255,7 +255,10 @@ def test_run_hands_the_test_runner_a_sealed_home_keeps_its_own_home_and_frees_it
     assert got["HOME"] == "/Users/the-real-home", "xcodebuild itself must keep the real home (its caches)"
     assert not got["app"], "--empty copies nothing"
     assert not Path(home).exists(), "the sealed home was not freed"
-    assert home.startswith(str(tmp_path / "t")), "allocated in the temp dir"
+    # allocated in the per-user temp dir, NOT $TMPDIR (here a stand-in for a run's --out folder): the app's icon
+    # guard trusts a test temp root only there, in /private/tmp or ~/Library/Caches (M4 2026-11-24)
+    assert Path(home).parent == Path(os.confstr(65537)).resolve(), home
+    assert not home.startswith(str(tmp_path / "t")), "allocated under $TMPDIR"
 
 
 def test_run_plain_points_the_process_itself_at_the_home_and_copies_app_support_by_default(tmp_path):

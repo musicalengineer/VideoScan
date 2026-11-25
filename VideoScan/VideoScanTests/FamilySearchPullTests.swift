@@ -35,7 +35,7 @@ private func request(
 
 // MARK: - SENSOR: the password can never reach the command line
 
-@Test func noOptionCombinationEverEmitsAPasswordFlag() throws {
+@Test(.scratchCleanup) func noOptionCombinationEverEmitsAPasswordFlag() throws {
     // Production shape: every setting the sheet can produce, swept.
     for ascend in FamilySearchPullRequest.ascendRange {
         for descend in FamilySearchPullRequest.descendRange {
@@ -59,7 +59,7 @@ private func request(
     }
 }
 
-@Test func generatedScriptNeverMentionsAStoredPassword() throws {
+@Test(.scratchCleanup) func generatedScriptNeverMentionsAStoredPassword() throws {
     let command = try FamilySearchPullCommand(toolURL: tool, request: request())
     let script = FamilySearchPullScript(
         command: command,
@@ -81,7 +81,7 @@ private func request(
 /// getmyancestors walks parents one generation at a time, so depth is not
 /// bounded by FamilySearch's 8-generation `ancestry` endpoint (verified in
 /// the tool's source 2026-08-25). Only the practical ceiling clamps.
-@Test func ascendIsNotCappedAtEightButAtThePracticalCeiling() throws {
+@Test(.scratchCleanup) func ascendIsNotCappedAtEightButAtThePracticalCeiling() throws {
     let twenty = try FamilySearchPullCommand(toolURL: tool, request: request(ascend: 20))
     let index = try #require(twenty.arguments.firstIndex(of: "-a"))
     #expect(twenty.arguments[index + 1] == "20")
@@ -93,41 +93,41 @@ private func request(
     #expect(silly.arguments[i2 + 1] == "40", "the product safety cap, not an API ceiling")
 }
 
-@Test func ascendIsClampedUpFromZero() throws {
+@Test(.scratchCleanup) func ascendIsClampedUpFromZero() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool, request: request(ascend: 0))
     let index = try #require(command.arguments.firstIndex(of: "-a"))
     #expect(command.arguments[index + 1] == "1")
 }
 
-@Test func zeroDescendOmitsTheFlagEntirely() throws {
+@Test(.scratchCleanup) func zeroDescendOmitsTheFlagEntirely() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool, request: request(descend: 0))
     #expect(!command.arguments.contains("-d"))
 }
 
-@Test func descendIsClampedToFour() throws {
+@Test(.scratchCleanup) func descendIsClampedToFour() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool, request: request(descend: 99))
     let index = try #require(command.arguments.firstIndex(of: "-d"))
     #expect(command.arguments[index + 1] == "4")
 }
 
-@Test func marriageFlagIsOptional() throws {
+@Test(.scratchCleanup) func marriageFlagIsOptional() throws {
     let on = try FamilySearchPullCommand(toolURL: tool, request: request(marriage: true))
     let off = try FamilySearchPullCommand(toolURL: tool, request: request(marriage: false))
     #expect(on.arguments.contains("-m"))
     #expect(!off.arguments.contains("-m"))
 }
 
-@Test func personIDIsUppercasedAndPassed() throws {
+@Test(.scratchCleanup) func personIDIsUppercasedAndPassed() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool, request: request(personID: "lf7t-y4c"))
     let index = try #require(command.arguments.firstIndex(of: "-i"))
     #expect(command.arguments[index + 1] == "LF7T-Y4C")
 }
 
-@Test func blankPersonIDMeansStartFromTheSignedInUser() throws {
+@Test(.scratchCleanup) func blankPersonIDMeansStartFromTheSignedInUser() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool, request: request(personID: "   "))
     #expect(!command.arguments.contains("-i"))
@@ -135,13 +135,13 @@ private func request(
 
 // MARK: - LOGIC: validation refuses bad input
 
-@Test func emptyUsernameIsRejected() {
+@Test(.scratchCleanup) func emptyUsernameIsRejected() {
     #expect(throws: FamilySearchPullError.emptyUsername) {
         try FamilySearchPullCommand(toolURL: tool, request: request(username: "  "))
     }
 }
 
-@Test func usernameWithANewlineIsRejected() {
+@Test(.scratchCleanup) func usernameWithANewlineIsRejected() {
     // A newline would let a pasted value append a second shell line.
     #expect(throws: FamilySearchPullError.unsafeUsername) {
         try FamilySearchPullCommand(
@@ -149,7 +149,7 @@ private func request(
     }
 }
 
-@Test func malformedPersonIDsAreRejected() {
+@Test(.scratchCleanup) func malformedPersonIDsAreRejected() {
     for bad in ["LF7TY4C", "LF7T-Y4CX", "LF7-Y4C", "LF7T_Y4C", "L F7T-Y4C"] {
         #expect(throws: FamilySearchPullError.invalidPersonID(bad)) {
             try FamilySearchPullCommand(
@@ -158,7 +158,7 @@ private func request(
     }
 }
 
-@Test func outputMustBeAGedcomPath() {
+@Test(.scratchCleanup) func outputMustBeAGedcomPath() {
     let bad = request(output: "/tmp/tree.txt")
     #expect(throws: FamilySearchPullError.outputNotGedcom(bad.outputURL)) {
         try FamilySearchPullCommand(toolURL: tool, request: bad)
@@ -167,26 +167,26 @@ private func request(
 
 // MARK: - LOGIC: shell quoting
 
-@Test func pathsWithSpacesAreQuoted() throws {
+@Test(.scratchCleanup) func pathsWithSpacesAreQuoted() throws {
     let command = try FamilySearchPullCommand(
         toolURL: tool,
         request: request(output: "/Users/rickb/My Trees/breen tree.ged"))
     #expect(command.displayLine.contains("'/Users/rickb/My Trees/breen tree.ged'"))
 }
 
-@Test func embeddedSingleQuotesAreEscapedNotDropped() {
+@Test(.scratchCleanup) func embeddedSingleQuotesAreEscapedNotDropped() {
     let quoted = FamilySearchPullCommand.quoted("O'Connor's tree")
     #expect(quoted == #"'O'\''Connor'\''s tree'"#)
 }
 
-@Test func ordinaryValuesAreLeftUnquotedForReadability() {
+@Test(.scratchCleanup) func ordinaryValuesAreLeftUnquotedForReadability() {
     #expect(FamilySearchPullCommand.quoted("rick@example.com") == "rick@example.com")
     #expect(FamilySearchPullCommand.quoted("/tmp/out.ged") == "/tmp/out.ged")
 }
 
 // MARK: - ISOLATION: the locator only consults known paths
 
-@Test func locatorReturnsNilWhenNothingIsInstalled() throws {
+@Test(.scratchCleanup) func locatorReturnsNilWhenNothingIsInstalled() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -201,7 +201,7 @@ private func request(
     #expect(locator.locate() == nil)
 }
 
-@Test func locatorRejectsANonExecutableFileOfTheRightName() throws {
+@Test(.scratchCleanup) func locatorRejectsANonExecutableFileOfTheRightName() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -213,7 +213,7 @@ private func request(
     #expect(locator.locate() == nil)
 }
 
-@Test func locatorRejectsADirectoryOfTheRightName() throws {
+@Test(.scratchCleanup) func locatorRejectsADirectoryOfTheRightName() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     let planted = directory.appendingPathComponent("getmyancestors")
@@ -227,7 +227,7 @@ private func request(
 // SENSOR: the production search order. If someone reorders or drops a
 // location this fails on purpose — the dedicated venv must win so a broken
 // genealogy dependency can never take VideoScan's own venv down with it.
-@Test func locatorDefaultSearchOrderIsUnchanged() {
+@Test(.scratchCleanup) func locatorDefaultSearchOrderIsUnchanged() {
     let expected = [
         "~/dev/VideoScan/venv-genealogy/bin/getmyancestors",
         "~/dev/VideoScan/venv/bin/getmyancestors",
@@ -243,7 +243,7 @@ private func request(
 }
 
 // SENSOR: an override that is usable wins over the candidate list.
-@Test func locatorPrefersAUsableOverride() throws {
+@Test(.scratchCleanup) func locatorPrefersAUsableOverride() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -260,7 +260,7 @@ private func request(
 
 // MARK: - ISOLATION: a stale export is never adopted
 
-@Test func aFileOlderThanTheLaunchIsIgnored() async throws {
+@Test(.scratchCleanup) func aFileOlderThanTheLaunchIsIgnored() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -276,7 +276,7 @@ private func request(
     #expect(size == nil)
 }
 
-@Test func aFreshFileIsReported() async throws {
+@Test(.scratchCleanup) func aFreshFileIsReported() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -290,9 +290,8 @@ private func request(
     #expect(size == 128)
 }
 
-@Test func aMissingFileReportsNoSize() async {
-    let missing = FileManager.default.temporaryDirectory
-        .appendingPathComponent("\(UUID().uuidString).ged")
+@Test(.scratchCleanup) func aMissingFileReportsNoSize() async {
+    let missing = TestScratch.reserved("", suffix: ".ged")
     let size = await FamilySearchPullCoordinator.fileSize(
         at: missing, newerThan: .distantPast)
     #expect(size == nil)
@@ -300,7 +299,7 @@ private func request(
 
 // MARK: - LOGIC: script file is written safely
 
-@Test func scriptIsWrittenOwnerOnlyExecutable() throws {
+@Test(.scratchCleanup) func scriptIsWrittenOwnerOnlyExecutable() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -315,7 +314,7 @@ private func request(
     #expect(permissions.int16Value == 0o700)
 }
 
-@Test func rewritingTheScriptReplacesTheOldCommand() throws {
+@Test(.scratchCleanup) func rewritingTheScriptReplacesTheOldCommand() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -344,13 +343,13 @@ private func writeTemp(_ contents: String) throws -> URL {
     return url
 }
 
-@Test func aCompleteExportIsRecognisedByItsTrailer() async throws {
+@Test(.scratchCleanup) func aCompleteExportIsRecognisedByItsTrailer() async throws {
     let url = try writeTemp("0 HEAD\n0 @I1@ INDI\n1 NAME Rick /Breen/\n0 TRLR\n")
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     #expect(await FamilySearchPullCoordinator.hasGedcomTrailer(at: url))
 }
 
-@Test func aTruncatedExportHasNoTrailer() async throws {
+@Test(.scratchCleanup) func aTruncatedExportHasNoTrailer() async throws {
     // The failure that matters: the run died partway and left a file that
     // still parses. Without the trailer check we would install half a tree.
     let url = try writeTemp("0 HEAD\n0 @I1@ INDI\n1 NAME Rick /Bre")
@@ -358,25 +357,24 @@ private func writeTemp(_ contents: String) throws -> URL {
     #expect(await !FamilySearchPullCoordinator.hasGedcomTrailer(at: url))
 }
 
-@Test func anEmptyFileHasNoTrailer() async throws {
+@Test(.scratchCleanup) func anEmptyFileHasNoTrailer() async throws {
     let url = try writeTemp("")
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     #expect(await !FamilySearchPullCoordinator.hasGedcomTrailer(at: url))
 }
 
-@Test func aTrailerThatIsNotTheLastLineDoesNotCount() async throws {
+@Test(.scratchCleanup) func aTrailerThatIsNotTheLastLineDoesNotCount() async throws {
     let url = try writeTemp("0 HEAD\n0 TRLR\n0 @I9@ INDI\n1 NAME Later /Person/\n")
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     #expect(await !FamilySearchPullCoordinator.hasGedcomTrailer(at: url))
 }
 
-@Test func aMissingFileHasNoTrailer() async {
-    let missing = FileManager.default.temporaryDirectory
-        .appendingPathComponent("\(UUID().uuidString).ged")
+@Test(.scratchCleanup) func aMissingFileHasNoTrailer() async {
+    let missing = TestScratch.reserved("", suffix: ".ged")
     #expect(await !FamilySearchPullCoordinator.hasGedcomTrailer(at: missing))
 }
 
-@Test func trailerDetectionReadsOnlyTheTail() async throws {
+@Test(.scratchCleanup) func trailerDetectionReadsOnlyTheTail() async throws {
     // A big export must not be slurped into memory to answer this.
     let filler = String(repeating: "1 NOTE padding padding padding\n", count: 200_000)
     let url = try writeTemp("0 HEAD\n" + filler + "0 TRLR\n")
@@ -392,7 +390,7 @@ private func writeTemp(_ contents: String) throws -> URL {
 
 // MARK: - SENSOR: the generated script is valid zsh
 
-@Test func generatedScriptPassesZshSyntaxCheck() throws {
+@Test(.scratchCleanup) func generatedScriptPassesZshSyntaxCheck() throws {
     // Regression sensor. The first draft assigned `status=$?`, which is a
     // read-only variable in zsh: the script aborted before the tool ran,
     // and no amount of string-matching would have caught it. Parse the
@@ -421,7 +419,7 @@ private func writeTemp(_ contents: String) throws -> URL {
     #expect(process.terminationStatus == 0, "zsh -n rejected the script: \(message)")
 }
 
-@Test func generatedScriptAvoidsZshReadOnlyNames() throws {
+@Test(.scratchCleanup) func generatedScriptAvoidsZshReadOnlyNames() throws {
     // The specific trap, pinned by name so a future edit doesn't quietly
     // reintroduce it in a form `zsh -n` accepts but the shell rejects at
     // runtime (assigning a read-only variable is a runtime error).
@@ -443,7 +441,7 @@ private func writeTemp(_ contents: String) throws -> URL {
 
 // MARK: - LOGIC: reported depth
 
-@Test func depthCountsTheLongestAncestorChain() {
+@Test(.scratchCleanup) func depthCountsTheLongestAncestorChain() {
     // Rick → father → grandfather: three generations.
     let graph = GedcomFamilyGraph(gedcomText: """
     0 HEAD
@@ -465,7 +463,7 @@ private func writeTemp(_ contents: String) throws -> URL {
     #expect(FamilySearchPullCoordinator.deepestAncestorDepth(in: graph) == 3)
 }
 
-@Test func depthOfALoneIndividualIsOne() {
+@Test(.scratchCleanup) func depthOfALoneIndividualIsOne() {
     let graph = GedcomFamilyGraph(gedcomText: """
     0 HEAD
     0 @I1@ INDI
@@ -474,7 +472,7 @@ private func writeTemp(_ contents: String) throws -> URL {
     #expect(FamilySearchPullCoordinator.deepestAncestorDepth(in: graph) == 1)
 }
 
-@Test func aCyclicPedigreeTerminatesInsteadOfRecursingForever() {
+@Test(.scratchCleanup) func aCyclicPedigreeTerminatesInsteadOfRecursingForever() {
     // User-submitted trees really do contain these: I1 is recorded as his
     // own grandfather. The walk must stop, not blow the stack.
     let graph = GedcomFamilyGraph(gedcomText: """
@@ -499,7 +497,7 @@ private func writeTemp(_ contents: String) throws -> URL {
 
 // MARK: - SCALE: a deep tree is measured, not walked forever
 
-@Test func depthOnADeepChainStaysWithinBudget() {
+@Test(.scratchCleanup) func depthOnADeepChainStaysWithinBudget() {
     // 20,000-generation chain — far past anything FamilySearch holds, and
     // the shape that would expose an accidental O(n²) walk or a stack
     // overflow from unmemoized recursion.
@@ -529,7 +527,7 @@ private func writeTemp(_ contents: String) throws -> URL {
     #expect(elapsed < .seconds(5), "depth walk took \(elapsed)")
 }
 
-@Test func commandBuildingIsCheapEnoughToRunOnEveryKeystroke() throws {
+@Test(.scratchCleanup) func commandBuildingIsCheapEnoughToRunOnEveryKeystroke() throws {
     // refreshPreview() runs on every character typed into the sheet.
     let started = ContinuousClock.now
     for _ in 0..<10_000 {
@@ -546,14 +544,14 @@ private struct SilentLauncher: FamilySearchPullLauncher {
     func open(_ url: URL) {}
 }
 
-@Test func gedcomIDKeysNormaliseAtSignsAndCase() {
+@Test(.scratchCleanup) func gedcomIDKeysNormaliseAtSignsAndCase() {
     #expect(FamilySearchPullCoordinator.idKey("@I42@") == "I42")
     #expect(FamilySearchPullCoordinator.idKey("i42") == "I42")
 }
 
-@Test @MainActor func installFromFileParsesAndComparesAgainstTheCurrentTree() async throws {
+@Test(.scratchCleanup) @MainActor func installFromFileParsesAndComparesAgainstTheCurrentTree() async throws {
     let fm = FileManager.default
-    let base = fm.temporaryDirectory.appendingPathComponent("fs-replace-\(UUID().uuidString)", isDirectory: true)
+    let base = TestScratch.reserved("fs-replace-")
     let gedcomDir = base.appendingPathComponent("GEDCOM", isDirectory: true)
     try fm.createDirectory(at: gedcomDir, withIntermediateDirectories: true)
     let current = """
@@ -597,7 +595,7 @@ private struct SilentLauncher: FamilySearchPullLauncher {
             "replace is additive: the old file stays")
 }
 
-@Test @MainActor func installFromFileRejectsNonGedcom() {
+@Test(.scratchCleanup) @MainActor func installFromFileRejectsNonGedcom() {
     let coordinator = FamilySearchPullCoordinator(
         gedcomDirectory: FileManager.default.temporaryDirectory, launcher: SilentLauncher())
     coordinator.installFromFile(URL(fileURLWithPath: "/tmp/tree.txt"))

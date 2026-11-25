@@ -84,9 +84,7 @@ private final class CountingObserver: CatalogStoreObserver {
 
 @MainActor
 private func scratchDir(_ tag: String = "sync") -> URL {
-    URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("videoscan_\(tag)_\(UUID().uuidString)",
-                                isDirectory: true)
+    TestScratch.reserved("videoscan_\(tag)_")
 }
 
 @MainActor
@@ -136,6 +134,7 @@ private func makeSync(paths: CatalogSyncPaths,
 
 // MARK: - Hostname matching
 
+@Suite(.scratchCleanup)
 @MainActor
 struct HostnameMatchTests {
 
@@ -176,6 +175,7 @@ struct HostnameMatchTests {
     }
 }
 
+@Suite(.scratchCleanup)
 @MainActor
 struct ModeResolutionTests {
 
@@ -212,6 +212,7 @@ struct ModeResolutionTests {
 /// again today 16:26 → 17:4x) because its defaults key was missing and the
 /// code default still named the M4. A missing key must mean "the Ultra is
 /// the master" — the M4 becomes a viewer, the Ultra the master.
+@Suite(.scratchCleanup)
 @MainActor
 struct DefaultMasterHostnameTests {
 
@@ -244,6 +245,7 @@ struct DefaultMasterHostnameTests {
 
 // MARK: - sha256 + manifest computation
 
+@Suite(.scratchCleanup)
 @MainActor
 struct ManifestComputeTests {
 
@@ -337,6 +339,7 @@ struct ManifestComputeTests {
 
 // MARK: - Manifest write + verify round-trip
 
+@Suite(.scratchCleanup)
 @MainActor
 struct ManifestVerifyTests {
 
@@ -477,6 +480,7 @@ struct ManifestVerifyTests {
 
 // MARK: - CatalogStore read-only guard
 
+@Suite(.scratchCleanup)
 @MainActor
 struct CatalogStoreReadOnlyTests {
 
@@ -599,6 +603,7 @@ struct CatalogStoreReadOnlyTests {
 
 // MARK: - CatalogStoreObserver hook
 
+@Suite(.scratchCleanup)
 @MainActor
 struct CatalogStoreObserverTests {
 
@@ -649,6 +654,7 @@ struct CatalogStoreObserverTests {
 
 // MARK: - Off-main, coalesced manifest refresh (#161)
 
+@Suite(.scratchCleanup)
 @MainActor
 struct ManifestRefreshOffMainTests {
 
@@ -723,6 +729,7 @@ struct ManifestRefreshOffMainTests {
 
 // MARK: - End-to-end sync round-trip
 
+@Suite(.scratchCleanup)
 @MainActor
 struct SyncRoundTripTests {
 
@@ -909,6 +916,7 @@ struct SyncRoundTripTests {
 
 // MARK: - Atomic swap rotation
 
+@Suite(.scratchCleanup)
 @MainActor
 struct AtomicSwapTests {
 
@@ -1002,6 +1010,7 @@ struct AtomicSwapTests {
 // The fix is to backslash-escape spaces in the remote root. These
 // tests pin that escape into place so it can't silently regress.
 
+@Suite(.scratchCleanup)
 @MainActor
 struct RsyncArgumentsSpaceEscapeTests {
 
@@ -1010,8 +1019,7 @@ struct RsyncArgumentsSpaceEscapeTests {
     /// the args. Pass through whatever path the test cares about as
     /// stagingDir.
     private func makeViewer(masterHost: String = "RicksM4.local") -> CatalogSync {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs-rsync-args-test-\(UUID().uuidString.prefix(8))")
+        let root = TestScratch.reserved("vs-rsync-args-test-")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let paths = CatalogSyncPaths(
             liveDir: root.appendingPathComponent("live"),

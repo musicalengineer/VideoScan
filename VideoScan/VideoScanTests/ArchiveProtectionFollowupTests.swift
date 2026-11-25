@@ -55,8 +55,7 @@ private func record(_ path: String, group: UUID? = nil,
 @MainActor
 private func isolatedModel() -> VideoScanModel {
     let model = VideoScanModel()
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_archfu_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_archfu_")
     model.catalogStore = CatalogStore(directory: dir)
     return model
 }
@@ -105,7 +104,7 @@ private func sha(_ path: String) -> String? { MasterArchiveTestSupport.sha256(of
 
 // MARK: - 1. Transcode never deletes first
 
-@Suite("Archive follow-ups — Transcode never deletes an existing file", .serialized)
+@Suite("Archive follow-ups — Transcode never deletes an existing file", .serialized, .scratchCleanup)
 @MainActor
 struct TranscodeArchiveFollowupTests {
 
@@ -166,7 +165,7 @@ struct TranscodeArchiveFollowupTests {
 
 // MARK: - 2. No archive-volume disk probe on the main thread
 
-@Suite("Archive follow-ups — snapshot probes stay off the main thread", .serialized)
+@Suite("Archive follow-ups — snapshot probes stay off the main thread", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveSnapshotMainThreadTests {
 
@@ -211,7 +210,7 @@ struct ArchiveSnapshotMainThreadTests {
 
 // MARK: - 3. Delete Duplicates re-checks the file's OWN volume
 
-@Suite("Archive follow-ups — Delete Duplicates volume re-check", .serialized)
+@Suite("Archive follow-ups — Delete Duplicates volume re-check", .serialized, .scratchCleanup)
 @MainActor
 struct DeleteDuplicatesArchiveVolumeRecheckTests {
 
@@ -220,8 +219,7 @@ struct DeleteDuplicatesArchiveVolumeRecheckTests {
     /// says FamilyArchive. Junk refuses this; Delete Duplicates must too —
     /// and must not even move the file into quarantine.
     @Test func deleteDuplicatesJobReChecksEachFilesOwnVolumeLikeJunkDoes() async throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("test_archfu_dd_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = TestScratch.reserved("test_archfu_dd_")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let bytes = Data((0..<(FileHasher.segmentSize * 2)).map { UInt8($0 % 197) })
@@ -274,8 +272,7 @@ private func consoleText(_ model: VideoScanModel) async -> String {
 @MainActor
 private func tidyModel() -> VideoScanModel {
     let model = isolatedModel()
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("test_archfu_ignored_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_archfu_ignored_")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     model.ignoredContentStore = IgnoredContentStore(directory: dir)
     return model
@@ -292,7 +289,7 @@ private func still(_ path: String, md5: String) -> VideoRecord {
     return r
 }
 
-@Suite("Archive follow-ups — nothing is Removed from the archive volume", .serialized)
+@Suite("Archive follow-ups — nothing is Removed from the archive volume", .serialized, .scratchCleanup)
 @MainActor
 struct CatalogRemovalArchiveVolumeTests {
 
@@ -349,7 +346,7 @@ struct CatalogRemovalArchiveVolumeTests {
 
 // MARK: - The cached snapshot: lifecycle
 
-@Suite("Archive follow-ups — cached archive-volume snapshot", .serialized)
+@Suite("Archive follow-ups — cached archive-volume snapshot", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveVolumeSnapshotCacheTests {
 
@@ -405,7 +402,7 @@ struct ArchiveVolumeSnapshotCacheTests {
 
 // MARK: - Transcode "Replace": Trash only, only after the new file exists
 
-@Suite("Archive follow-ups — Transcode Replace goes to the Trash", .serialized)
+@Suite("Archive follow-ups — Transcode Replace goes to the Trash", .serialized, .scratchCleanup)
 @MainActor
 struct TranscodeReplaceTrashTests {
 
@@ -495,7 +492,7 @@ struct TranscodeReplaceTrashTests {
 
 // MARK: - QA round 2 (2026-09-22): a stale snapshot never writes to the catalog
 
-@Suite("QA archfu — a stale snapshot must not re-mark an ordinary duplicate", .serialized)
+@Suite("QA archfu — a stale snapshot must not re-mark an ordinary duplicate", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveSnapshotStaleWindowQATests {
 
@@ -547,8 +544,7 @@ struct ArchiveSnapshotStaleWindowQATests {
     /// cannot put real files there, so this pins "a mount mid-run changes
     /// nothing" rather than reproducing the refusal.
     @Test func aMountNotificationMidRunReMarksNothing() async throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("test_archfu_mount_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let dir = TestScratch.reserved("test_archfu_mount_")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let bytes = Data((0..<(FileHasher.segmentSize * 2)).map { UInt8($0 % 193) })
@@ -599,7 +595,7 @@ struct ArchiveSnapshotStaleWindowQATests {
     }
 }
 
-@Suite("QA archfu — catalog removal refuses FamilyArchive only, preview matches apply", .serialized)
+@Suite("QA archfu — catalog removal refuses FamilyArchive only, preview matches apply", .serialized, .scratchCleanup)
 @MainActor
 struct CatalogRemovalUnprovableQATests {
 
@@ -638,12 +634,11 @@ struct CatalogRemovalUnprovableQATests {
     }
 }
 
-@Suite("QA archfu — publish leftovers and failure wording", .serialized)
+@Suite("QA archfu — publish leftovers and failure wording", .serialized, .scratchCleanup)
 struct DerivativePublishQATests {
 
     private func tempDir() throws -> URL {
-        let d = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("test_archfu_pub_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let d = TestScratch.reserved("test_archfu_pub_")
         try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }

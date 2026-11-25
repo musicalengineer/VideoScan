@@ -7,7 +7,7 @@ import Foundation
 // `possible` — Promote kept filing the sibling under a year nobody claims.
 
 @MainActor
-@Suite("Codex F2 — a share is stale unless the donor still holds the shared claim in a ≥ likely, not-refused group")
+@Suite("Codex F2 — a share is stale unless the donor still holds the shared claim in a ≥ likely, not-refused group", .scratchCleanup)
 struct DateReviewF2Tests {
     typealias F = DateReviewFixtures
 

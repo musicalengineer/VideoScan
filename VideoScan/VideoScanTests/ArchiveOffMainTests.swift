@@ -28,7 +28,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite("Archive tab — off-main progress totals and Needs a date", .serialized)
+@Suite("Archive tab — off-main progress totals and Needs a date", .serialized, .scratchCleanup)
 @MainActor
 struct ArchiveOffMainTests {
 
@@ -36,8 +36,7 @@ struct ArchiveOffMainTests {
 
     private static func makeModel() -> VideoScanModel {
         let model = VideoScanModel()
-        model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_archive_offmain_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        model.catalogStore = CatalogStore(directory: TestScratch.reserved("test_archive_offmain_"))
         model.masterArchive = MasterArchiveDesignation(targetPath: "/Volumes/TestArchive", rootPath: archiveRoot)
         return model
     }

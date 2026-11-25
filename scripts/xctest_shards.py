@@ -841,7 +841,7 @@ class SealRefused(Exception):
 
 def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
     """(the sealed copy of the .xctestrun, the home it points at). Every test target's host gets
-    HOME = CFFIXED_USER_HOME = <run_dir>/home — a fresh scratch home, so ~/Library/Application Support,
+    HOME = CFFIXED_USER_HOME = <per-user temp>/videoscan-shards-home-<pid>-* — a fresh scratch home, so ~/Library/Application Support,
     ~/Library/Logs and ~/Library/Preferences resolve inside the run, never to Rick's real catalog, logs
     or defaults (DECISIONS 2026-11-22: tests never open the real catalog; the corpus runner's and the
     gauntlet's seal, applied to every app test run). The copy sits BESIDE the original (its paths are
@@ -856,11 +856,18 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
         raise SealRefused(f"cannot read {xctestrun} to seal the test hosts' home ({type(e).__name__})")
     import sealed_home
     src = os.environ.get("VIDEOSCAN_SEAL_SOURCE_HOME")       # tests: a fake source; never changes the destination
+    made: Optional[Path] = None
     try:
-        # NOT resolved first: prepare must see a symlinked run_dir/home to refuse it, and the cleanup below removes
-        # this same unresolved path (rmtree refuses a symlink) — never a link's external target (Codex 2026-11-23 r2)
-        home = sealed_home.prepare(run_dir.resolve() / "home", Path(src) if src else None)
+        # The home is made in the per-user temp dir (sealed_home.make_home), NOT under run_dir: a caller's
+        # --run-dir may sit anywhere (the M4 suite lane's is ~/m4run/out/<run>/…), and the app's test-host icon
+        # guard trusts a test temp root only inside the per-user temp dir, /private/tmp or ~/Library/Caches
+        # (TestHostScratch.PinnedRoot; 3 iconGuard tests RED on the M4 2026-11-24). Logs stay in run_dir.
+        # mkdtemp makes a new real folder (never a link), and the cleanup removes that same path.
+        made = sealed_home.make_home(f"videoscan-shards-home-{os.getpid()}-")
+        home = sealed_home.prepare(made, Path(src) if src else None)
     except (sealed_home.Refused, OSError, sqlite3_error()) as e:
+        if made is not None:
+            shutil.rmtree(made, ignore_errors=True)            # whoever allocates frees, a refusal included
         raise SealRefused(f"cannot prepare the sealed home ({type(e).__name__}: {e})")
     # Temp folders: the test host is launched from this file, not from xcodebuild's environment. TMPDIR reaches
     # child processes (python, shell); Foundation on macOS IGNORES TMPDIR (NSTemporaryDirectory is the system
@@ -883,11 +890,13 @@ def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
         return value
     patched = patch(plan)
     if targets[0] == 0:
+        shutil.rmtree(home, ignore_errors=True)
         raise SealRefused(f"{xctestrun} names no test target: nothing to seal")
     dest = xctestrun.with_name(f"{xctestrun.stem}.sealed-{os.getpid()}-{run_dir.name}.xctestrun")
     try:
         fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     except OSError as e:
+        shutil.rmtree(home, ignore_errors=True)
         raise SealRefused(f"cannot write the sealed copy beside {xctestrun} ({e.strerror})")
     with os.fdopen(fd, "wb") as f:
         plistlib.dump(patched, f)

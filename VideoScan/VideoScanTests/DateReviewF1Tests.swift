@@ -8,7 +8,7 @@ import Foundation
 // Promote filed by day though Rick typed only a year.
 
 @MainActor
-@Suite("Codex F1 — a software stamp never refines a user year, and its day never travels")
+@Suite("Codex F1 — a software stamp never refines a user year, and its day never travels", .scratchCleanup)
 struct DateReviewF1Tests {
     typealias F = DateReviewFixtures
 

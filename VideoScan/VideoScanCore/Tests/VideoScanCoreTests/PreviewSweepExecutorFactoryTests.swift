@@ -55,9 +55,11 @@ final class PreviewSweepExecutorFactoryTests: XCTestCase {
 
     private func workItem(needsBestStill: Bool, needsFilmstrip: Bool) -> PreviewSweepWorkItem {
         // A real temp file so previewFileSignature succeeds.
-        let path = URL(fileURLWithPath: NSTemporaryDirectory())
+        let path = TestHostScratch.testTempRoot
             .appendingPathComponent("exec-\(UUID().uuidString).bin").path
         try? Data("x".utf8).write(to: URL(fileURLWithPath: path))
+        // XCTest: removed when this test ends (≈ a scope guard registered on the test case).
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: path) }
         let c = PreviewSweepCandidate(path: path, container: "Matroska / WebM",
                                       videoCodec: "ffv1", likelyUnanalyzable: false,
                                       durationSeconds: 30)

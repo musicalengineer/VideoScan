@@ -12,7 +12,7 @@ import Testing
 // predicate, (2) that production() is inert under a test host, and
 // (3) that inert instances refuse to write.
 
-@Suite("TestEnvironment detection")
+@Suite("TestEnvironment detection", .scratchCleanup)
 struct TestEnvironmentDetectTests {
 
     @Test func xctestConfigEnvDetected() {
@@ -76,7 +76,7 @@ struct TestEnvironmentDetectTests {
     }
 }
 
-@Suite("CatalogSync inert mode")
+@Suite("CatalogSync inert mode", .scratchCleanup)
 struct CatalogSyncInertTests {
 
     private struct FixedHostname: HostnameSource {
@@ -93,8 +93,7 @@ struct CatalogSyncInertTests {
     }
 
     private func tempPaths() throws -> CatalogSyncPaths {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-inert-tests-\(UUID().uuidString)")
+        let root = TestScratch.reserved("vs-inert-tests-")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return CatalogSyncPaths(
             liveDir: root.appendingPathComponent("live"),

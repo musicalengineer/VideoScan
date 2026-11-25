@@ -24,8 +24,7 @@ import VideoScanCore
 @testable import VideoScan
 
 private func tempDir(_ label: String) -> URL {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("test_readonly_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    let dir = TestScratch.reserved("test_readonly_\(label)_")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
@@ -72,7 +71,7 @@ private let fileSize = FileHasher.segmentSize * 2
 
 // MARK: - The snapshot (pure; UUID probes injected)
 
-@Suite("Read-only volumes — which paths are protected, and whose drive it is")
+@Suite("Read-only volumes — which paths are protected, and whose drive it is", .scratchCleanup)
 struct ReadOnlyVolumeSnapshotTests {
 
     typealias P = ReadOnlyVolumeProtection
@@ -192,7 +191,7 @@ struct ReadOnlyVolumeSnapshotTests {
 
 // MARK: - The gate and every verb behind it (poisoned state: the volume is marked)
 
-@Suite("Read-only volumes — no bulk verb removes anything there", .serialized)
+@Suite("Read-only volumes — no bulk verb removes anything there", .serialized, .scratchCleanup)
 @MainActor
 struct ReadOnlyVolumeGateTests {
 
@@ -459,7 +458,7 @@ struct ReadOnlyVolumeGateTests {
 
 // MARK: - The switch and where it is stored
 
-@Suite("Read-only volumes — the switch, its storage, the viewer", .serialized)
+@Suite("Read-only volumes — the switch, its storage, the viewer", .serialized, .scratchCleanup)
 @MainActor
 struct ReadOnlyVolumeSettingsTests {
 
@@ -605,7 +604,7 @@ struct ReadOnlyVolumeSettingsTests {
 
 // MARK: - Sensors
 
-@Suite("Read-only volumes — every bulk remove verb goes through the one gate")
+@Suite("Read-only volumes — every bulk remove verb goes through the one gate", .scratchCleanup)
 struct ReadOnlyVolumeSensorTests {
 
     private func code(_ name: String) throws -> String {

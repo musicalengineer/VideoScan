@@ -111,6 +111,26 @@ enum TestScratch {
     static func unique(_ prefix: String) throws -> URL {
         try directory(named: prefix + UUID().uuidString)
     }
+
+    /// `<root>/<prefix><UUID><suffix>`, NOT created — for a fixture whose code
+    /// (or the code under test) makes it itself, as a folder or a file — and
+    /// recorded for removal when the current test case ends. Non-throwing, so
+    /// a non-throwing fixture helper can use it. A name with "/" is refused
+    /// (Issue) and a never-recorded throwaway name is returned.
+    static func reserved(_ prefix: String, suffix: String = "") -> URL {
+        let name = prefix + UUID().uuidString + suffix
+        guard !name.contains("/") else {
+            Issue.record("\(NotAFlatName(name: name))")
+            return tempRoot.appendingPathComponent("refused-\(UUID().uuidString)", isDirectory: suffix.isEmpty)
+        }
+        let url = tempRoot.appendingPathComponent(name, isDirectory: suffix.isEmpty)
+        if let scope = current {
+            scope.record(url)
+        } else {
+            Issue.record("TestScratch: \(name) was reserved outside a .scratchCleanup scope and will be left on disk — tag the suite @Suite(.scratchCleanup)")
+        }
+        return url
+    }
 }
 
 /// `@Suite(.scratchCleanup)` / `@Test(.scratchCleanup)`: every test case runs

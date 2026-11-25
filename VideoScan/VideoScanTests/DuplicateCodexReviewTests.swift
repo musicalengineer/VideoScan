@@ -60,8 +60,7 @@ private func write(_ url: URL, _ bytes: [UInt8]) {
 }
 
 private func tempDir(_ label: String) -> URL {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("\(label)-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.reserved("\(label)-")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
@@ -69,7 +68,7 @@ private func tempDir(_ label: String) -> URL {
 // MARK: - A. Enrichment inheritance
 
 @MainActor
-@Suite("Codex A — enrichment carry-over")
+@Suite("Codex A — enrichment carry-over", .scratchCleanup)
 struct DuplicateEnrichmentInheritanceTests {
 
     private func richExtra() -> VideoRecord {
@@ -185,7 +184,7 @@ struct DuplicateEnrichmentInheritanceTests {
 // MARK: - B. Stale policy ⇒ re-election
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateStalePolicyReelectionTests {
 
     /// Integration sensor: two stamped, grouped records (ledger says "up to
@@ -247,7 +246,7 @@ struct DuplicateStalePolicyReelectionTests {
 
 // MARK: - C. Hub / keeper decoupling
 
-@Suite("Codex C — non-clique grouping")
+@Suite("Codex C — non-clique grouping", .scratchCleanup)
 struct DuplicateHubKeeperDecouplingTests {
 
     /// A–B (hash) and B–C (timecode) score; A–C does not. A sits on the
@@ -283,7 +282,7 @@ struct DuplicateHubKeeperDecouplingTests {
 // MARK: - D. Off-main snapshot (scale sensor)
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateSnapshotOffMainTests {
 
     /// 100k records: the async snapshot lands, and the MAIN THREAD is never
@@ -351,7 +350,7 @@ struct DuplicateSnapshotOffMainTests {
 // MARK: - E. Snapshot failure on a mixed batch fixes skipped/summary
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateSnapshotFailureAccountingTests {
 
     @Test func mixedBatchSnapshotFailureCountsDroppedAsSkipped() async throws {
@@ -397,7 +396,7 @@ struct DuplicateSnapshotFailureAccountingTests {
 // MARK: - Media matrix on the working-copy delete path
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateWorkingCopyMediaMatrixTests {
 
     struct Case: Sendable, CustomStringConvertible {
@@ -455,7 +454,7 @@ struct DuplicateWorkingCopyMediaMatrixTests {
 // MARK: - Codex follow-up (377c5d4a review)
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateCarryOverLiveRowGuardTests {
 
     /// MAJOR 1: the extra's catalog row is replaced while byte-verify runs
@@ -516,7 +515,7 @@ struct DuplicateCarryOverLiveRowGuardTests {
     }
 }
 
-@Suite("Codex follow-up NOTE 2 — re-election best match")
+@Suite("Codex follow-up NOTE 2 — re-election best match", .scratchCleanup)
 struct DuplicateReelectionBestMatchTests {
 
     /// After re-election the new keeper's best match is its STRONGEST
@@ -580,7 +579,7 @@ struct DuplicateReelectionBestMatchTests {
 }
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .scratchCleanup)
 struct DuplicateReelectionStampTests {
 
     /// Flake regression (2026-10-25): the fixture's volume facts must

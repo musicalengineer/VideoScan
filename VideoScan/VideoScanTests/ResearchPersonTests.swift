@@ -75,8 +75,7 @@ private func david() -> ResearchSubject {
 }
 
 private func tempPeopleRoot() throws -> URL {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ResearchPerson-\(UUID().uuidString)", isDirectory: true)
+    let root = TestScratch.reserved("ResearchPerson-")
         .appendingPathComponent("People", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
@@ -138,7 +137,7 @@ private func fetcher(recorder: FixtureResearchFetcher.RequestRecorder? = nil) ->
 
 // MARK: - Privacy guard
 
-@Suite("Research Person — privacy guard")
+@Suite("Research Person — privacy guard", .scratchCleanup)
 struct ResearchPrivacyGuardTests {
 
     @Test func deceasedTreePersonIsEligibleAndKeyedByFamilySearchID() {
@@ -195,7 +194,7 @@ struct ResearchPrivacyGuardTests {
 
 // MARK: - Query plan
 
-@Suite("Research Person — query plan")
+@Suite("Research Person — query plan", .scratchCleanup)
 struct ResearchQueryPlanTests {
 
     @Test func nameVariantsIncludeSuffixlessAlternateAndGivenSurname() {
@@ -245,7 +244,7 @@ struct ResearchQueryPlanTests {
 
 // MARK: - Adapters
 
-@Suite("Research Person — source adapters (fixtures only)")
+@Suite("Research Person — source adapters (fixtures only)", .scratchCleanup)
 struct ResearchSourceAdapterTests {
 
     @Test func chroniclingAmericaParsesItemsAndConstrainsTheQuery() async throws {
@@ -344,7 +343,7 @@ struct ResearchSourceAdapterTests {
 
 // MARK: - Store: round-trip, cache, isolation, verdicts
 
-@Suite("Research Person — store round-trip and isolation")
+@Suite("Research Person — store round-trip and isolation", .scratchCleanup)
 struct ResearchStoreTests {
 
     @Test func dossierRoundTripsAndVerdictsSurviveARerun() throws {
@@ -441,7 +440,7 @@ struct ResearchStoreTests {
 
 // MARK: - Attestation shape
 
-@Suite("Research Person — Tell Hallie attestation shape")
+@Suite("Research Person — Tell Hallie attestation shape", .scratchCleanup)
 struct ResearchAttestationTests {
 
     private func confirmedFinding() -> ResearchFinding {
@@ -524,8 +523,7 @@ struct ResearchAttestationTests {
     }
 
     @Test func durableRecordThroughTheWriterIsReadableByTheIndex() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ResearchBrain-\(UUID().uuidString)", isDirectory: true)
+        let root = TestScratch.reserved("ResearchBrain-")
         let testimony = try ResearchAttestation.testimony(for: confirmedFinding(), subject: david(), speakerName: "Rick", date: now)
         let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
         let index = try CyberBrainIndex(archive: CyberBrainLoader(rootURL: root).load())
@@ -574,7 +572,7 @@ private final class N1012LogBox: @unchecked Sendable {
     var lines: [String] { lock.withLock { stored } }
 }
 
-@Suite("Research Person — N1012 lore is never dropped", .serialized)
+@Suite("Research Person — N1012 lore is never dropped", .serialized, .scratchCleanup)
 @MainActor
 struct ResearchLoreNeverDroppedTests {
     private let fm = FileManager.default
@@ -588,7 +586,7 @@ struct ResearchLoreNeverDroppedTests {
     }
 
     private func fixture() throws -> (URL, ResearchStore, ResearchSubject, N1012SourceBox, ResearchPersonModel) {
-        let base = fm.temporaryDirectory.appendingPathComponent("test_N1012Lore-\(UUID().uuidString)", isDirectory: true)
+        let base = TestScratch.reserved("test_N1012Lore-")
         let store = ResearchStore(peopleRoot: base.appendingPathComponent("People", isDirectory: true))
         let record = try #require(GedcomFamilyGraph(gedcomText: n1012Gedcom).people["@I1@"])
         let subject = ResearchSubject(person: record)

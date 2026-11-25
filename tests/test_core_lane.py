@@ -1307,7 +1307,7 @@ def test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_i
     # RED 2026-11-23: a videoscan-core-home-* was left in the user temp dir — the stop handler re-raises the signal
     # (atexit never runs) and a SIGKILL can never be caught. Homes are named for their lane's pid; a new lane frees
     # every home whose pid is gone, and never one whose lane is alive.
-    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(cl, "homes_root", lambda: tmp_path)
     import subprocess as sp
     gone = sp.Popen(["/usr/bin/true"])
     gone.wait()
@@ -1327,8 +1327,22 @@ def test_a_core_home_whose_lane_died_is_freed_by_the_next_lane_and_a_live_ones_i
     assert os.path.basename(home).startswith(f"videoscan-core-home-{os.getpid()}-"), home
 
 
-def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monkeypatch):
+def test_a_core_home_is_made_in_the_per_user_temp_dir_never_under_tmpdir(tmp_path, monkeypatch):
+    # M4 2026-11-24: the testbed strands point TMPDIR into a run's --out folder; a home made there puts
+    # VIDEOSCAN_TEST_TMP outside the parents the app's test-host icon guard trusts (TestHostScratch.PinnedRoot).
     monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path) + "/")
+    home = Path(cl.sealed_home())
+    try:
+        assert home.parent == Path(os.confstr(65537)).resolve(), f"not in the per-user temp dir: {home}"
+        assert not str(home).startswith(str(tmp_path)), f"made under TMPDIR: {home}"
+    finally:
+        cl.free_sealed_homes()
+    assert not home.exists()
+
+
+def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monkeypatch):
+    monkeypatch.setattr(cl, "homes_root", lambda: tmp_path)
     home = cl.sealed_home()
     assert os.path.isdir(home)
     cl.free_sealed_homes()                 # what the stop handler calls before it re-raises the signal
@@ -1337,7 +1351,7 @@ def test_the_stop_handler_frees_the_sealed_home_before_re_raising(tmp_path, monk
 
 def test_a_folder_named_like_a_dead_lanes_home_but_not_proven_one_is_kept(tmp_path, monkeypatch):
     # Codex 2026-11-23 (runner deletion review) P1: a matching NAME was treated as ownership proof.
-    monkeypatch.setattr(cl.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(cl, "homes_root", lambda: tmp_path)
     import subprocess as sp
     gone = sp.Popen(["/usr/bin/true"]); gone.wait()
     unowned = tmp_path / f"videoscan-core-home-{gone.pid}-archive"

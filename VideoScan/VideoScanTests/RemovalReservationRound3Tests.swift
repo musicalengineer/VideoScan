@@ -11,7 +11,7 @@ import Testing
 import VideoScanCore
 @testable import VideoScan
 
-@Suite(.serialized) @MainActor
+@Suite(.serialized, .scratchCleanup) @MainActor
 struct RemovalReservationRound3Tests {
 
     @MainActor
@@ -22,7 +22,7 @@ struct RemovalReservationRound3Tests {
 
         init() throws {
             let fm = FileManager.default
-            root = fm.temporaryDirectory.appendingPathComponent("test_reserve3_\(UUID().uuidString.prefix(8))", isDirectory: true)
+            root = TestScratch.reserved("test_reserve3_")
             folder = root.appendingPathComponent("Sources", isDirectory: true)
             trashDir = root.appendingPathComponent("trash", isDirectory: true)
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)

@@ -5,13 +5,12 @@ import Testing
 // HalliePhotoImport (codex #675): behavioural proof that cancelling the
 // caller cancels the worker, and that a file is never read whole past the
 // cap.
-@Suite("Hallie photo import worker", .serialized)
+@Suite("Hallie photo import worker", .serialized, .scratchCleanup)
 struct HalliePhotoImportTests {
     private let fileManager = FileManager.default
 
     private func fixture() throws -> (base: URL, configuration: FamilyAssetConfiguration, folder: URL) {
-        let base = fileManager.temporaryDirectory
-            .appendingPathComponent("HalliePhotoImportTests-\(UUID().uuidString)", isDirectory: true)
+        let base = TestScratch.reserved("HalliePhotoImportTests-")
         try fileManager.createDirectory(at: base, withIntermediateDirectories: true)
         let roots = FamilyAssetStore.Roots(
             assets: base.appendingPathComponent("archive/40_Family_Tree", isDirectory: true),

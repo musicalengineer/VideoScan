@@ -12,7 +12,7 @@ import Testing
 
 // MARK: - Resolver matrix
 
-@Suite("Master Archive — path resolver")
+@Suite("Master Archive — path resolver", .scratchCleanup)
 struct ArchivePathResolverTests {
 
     private func facts(_ st: StreamType, _ name: String, _ hint: ArchiveDateHint,
@@ -163,7 +163,7 @@ struct ArchivePathResolverTests {
 
 // MARK: - Date hint rules
 
-@Suite("Master Archive — date hint")
+@Suite("Master Archive — date hint", .scratchCleanup)
 struct ArchiveDateHintTests {
 
     @Test("user date outranks inferred, at its entered precision")
@@ -201,7 +201,7 @@ struct ArchiveDateHintTests {
 
 // MARK: - Manifest CSV
 
-@Suite("Master Archive — manifest CSV")
+@Suite("Master Archive — manifest CSV", .scratchCleanup)
 struct ArchiveManifestCSVTests {
 
     private func row(_ relPath: String, people: [String] = []) -> ArchiveManifestCSV.Row {
@@ -264,7 +264,7 @@ struct ArchiveManifestCSVTests {
 
 // MARK: - Designation persistence (catalog snapshot, additive key)
 
-@Suite("Master Archive — designation persistence")
+@Suite("Master Archive — designation persistence", .scratchCleanup)
 struct MasterArchiveDesignationPersistenceTests {
 
     @Test("encodes only when set; legacy JSON without the key decodes nil; header probe intact")
@@ -291,7 +291,7 @@ struct MasterArchiveDesignationPersistenceTests {
         #expect(back.generation == 7)
 
         // Header probe still finds version/generation in the first 4 KB.
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_marchive_probe_\(UUID().uuidString.prefix(6)).json")
+        let tmp = TestScratch.reserved("test_marchive_probe_", suffix: ".json")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try data.write(to: tmp)
         let probe = try #require(CatalogSnapshot.headerProbe(at: tmp))
@@ -310,8 +310,7 @@ struct MasterArchiveDesignationPersistenceTests {
     @Test("CatalogStore round-trips the designation through save/load in an isolated directory")
     @MainActor
     func storeRoundTrip() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_marchive_store_\(UUID().uuidString.prefix(6))", isDirectory: true)
+        let dir = TestScratch.reserved("test_marchive_store_")
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = CatalogStore(directory: dir)
         let d = MasterArchiveDesignation(targetPath: dir.path, rootPath: dir.appendingPathComponent("Breen_Family_Archive").path)
@@ -335,7 +334,7 @@ struct MasterArchiveDesignationPersistenceTests {
 
 // MARK: - Initialize + routing (model)
 
-@Suite("Master Archive — Initialize + routing")
+@Suite("Master Archive — Initialize + routing", .scratchCleanup)
 @MainActor
 struct MasterArchiveInitializeTests {
 
@@ -451,7 +450,7 @@ struct MasterArchiveInitializeTests {
 
 // MARK: - Journey stamp
 
-@Suite("Master Archive — journey stamp")
+@Suite("Master Archive — journey stamp", .scratchCleanup)
 struct PromoteJourneyStampTests {
 
     @Test("'Promote <ISO>: …' parses to a .promote event and is a machine line")
@@ -473,7 +472,7 @@ struct PromoteJourneyStampTests {
 // WHERE THE FILE LANDS. A green build proves only that the field exists;
 // the field sat inert in UI state for a whole build before these existed.
 
-@Suite("Archive: dates typed on the promote sheet")
+@Suite("Archive: dates typed on the promote sheet", .scratchCleanup)
 struct ArchiveTypedPromoteDateTests {
 
     private func undatedFacts(filename: String = "UncleTerryMovie.m4v")
@@ -569,7 +568,7 @@ struct ArchiveTypedPromoteDateTests {
 // Both landed in 30_Video. These pin the fix, and — more importantly —
 // pin that unrecognised extensions still go where they always went.
 
-@Suite("Archive: routing by medium")
+@Suite("Archive: routing by medium", .scratchCleanup)
 struct ArchiveMediumRoutingTests {
 
     private func facts(_ stream: StreamType, _ filename: String)

@@ -20,7 +20,7 @@ import Foundation
 // dependencies on real files) so they're reproducible across machines.
 
 @MainActor
-@Suite("CatalogSearchIndex", .serialized)   // .serialized: the perf-budget tests
+@Suite("CatalogSearchIndex", .serialized, .scratchCleanup)   // .serialized: the perf-budget tests
 // below time real work; running them alongside the rest of this suite's 10k-
 // record corpus builds adds parallel-contention noise to the measurements.
 struct CatalogSearchIndexTests {
@@ -783,9 +783,7 @@ struct CatalogSearchIndexTests {
     // MARK: - Persistence (Rick 2026-06-16)
 
     private func makeTempURL(name: String) -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_search_index_\(UUID().uuidString.prefix(8))",
-                                    isDirectory: true)
+        let dir = TestScratch.reserved("vs_search_index_")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent(name)
     }
@@ -933,7 +931,7 @@ private let casings = ["Thanksgiving", "thanksgiving", "THANKSGIVING", "tHANKSgi
 // MARK: - Logic: every field, every casing
 
 @MainActor
-@Suite("Search is case-insensitive — every field")
+@Suite("Search is case-insensitive — every field", .scratchCleanup)
 struct SearchCaseInsensitivityTests {
 
     private func hits(_ idx: CatalogSearchIndex, _ fx: [(field: String, record: VideoRecord)], _ q: String) -> [String] {
@@ -1041,12 +1039,11 @@ struct SearchCaseInsensitivityTests {
 // MARK: - The stale persisted index (the case-looking symptom)
 
 @MainActor
-@Suite("Search index staleness — the catalog store")
+@Suite("Search index staleness — the catalog store", .scratchCleanup)
 struct SearchIndexCatalogStoreStalenessTests {
 
     private func tempFolder() throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SearchIndexStaleness-\(UUID().uuidString)", isDirectory: true)
+        let dir = TestScratch.reserved("SearchIndexStaleness-")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

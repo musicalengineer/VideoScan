@@ -15,7 +15,7 @@ import Foundation
 @testable import VideoScan
 
 @MainActor
-@Suite("Confirm Verb v1.1")
+@Suite("Confirm Verb v1.1", .scratchCleanup)
 struct ConfirmVerbTests {
 
     // MARK: - Synthetic record helper
@@ -406,9 +406,7 @@ struct ConfirmVerbTests {
     // MARK: - ValidationLabelStore
 
     private func tempDir(_ name: String) -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_confirm_tests_\(UUID().uuidString.prefix(8))",
-                                    isDirectory: true)
+        let dir = TestScratch.reserved("vs_confirm_tests_")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
