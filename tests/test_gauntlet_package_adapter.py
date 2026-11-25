@@ -160,6 +160,8 @@ if tool == 'core_lane.py':
     assert args[:2] == ['list', '--products'], args
     with open(os.environ['FAKE_CALLS'] + '.quietlist', 'a') as f:
         f.write(json.dumps(args) + '\n')
+    with open(os.environ['FAKE_CALLS'] + '.quietenv', 'a') as f:
+        f.write(json.dumps({k: os.environ.get(k, '') for k in ('HOME', 'TMPDIR')}) + '\n')
     print('sealed_home: backups/x/catalog.sqlite kept as a clone (no catalog.cutover beside it)', file=sys.stderr)
     if config.get('quiet_list_exit'):
         sys.exit(config['quiet_list_exit'])
@@ -356,6 +358,18 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(len(bins), 1)
         for flag in ('--build-tests', '-enable-testing', '--scratch-path'):
             self.assertIn(flag, bins[0]['args'])          # the build's own flags, so the build's own folder
+        self.assertEqual(self.stage('unit')['status'], 'passed', self.stage('unit'))
+
+    # Ultra deep gauntlet 2026-11-24 19:15 (33ea0c52b): the listing found the bundle, then core_lane.py's own
+    # sealed home was refused — it is made in $TMPDIR, and the run's tmp root is under the results root
+    # (~/Library/Logs/VideoScan/gauntlet on a real host), where sealed_home refuses a home.
+    def test_the_quiet_listing_makes_its_sealed_home_outside_the_results_root(self):
+        self.config['package'] = {'unit': {'quiet': ['q0']}}
+        self.run_runner()
+        envs = [json.loads(l) for l in (self.root / 'calls.jsonl.quietenv').read_text().splitlines()]
+        self.assertEqual(len(envs), 1, envs)
+        self.assertTrue(envs[0]['TMPDIR'], envs)
+        self.assertFalse(envs[0]['TMPDIR'].startswith(str(self.root / 'results')), envs)
         self.assertEqual(self.stage('unit')['status'], 'passed', self.stage('unit'))
 
     def test_a_bin_path_that_fails_is_red_in_its_words_and_runs_no_package_test(self):

@@ -1160,8 +1160,13 @@ struct GauntletRunner {
             return
         }
         let listLog = run.appendingPathComponent("package-quiet-list.log")
+        // core_lane.py makes its own sealed home in $TMPDIR, and sealed_home refuses one under ~/Library/Logs —
+        // where this run's tmp root lives (Ultra 2026-11-24 19:15: "sealed_home.Refused … would be inside the
+        // real home's App Support, Logs"). The listing gets the system temp, as the nightly's core lane has.
+        var listEnvironment = environment
+        listEnvironment["TMPDIR"] = ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory()
         let listing = try command(["python3", repo.appendingPathComponent("scripts/core_lane.py").path, "list",
-                                   "--products", products], log: listLog, timeout: 600, environment: environment)
+                                   "--products", products], log: listLog, timeout: 600, environment: listEnvironment)
         if listing.contaminated { contaminated = true }
         if listing.code == 0, !listing.contaminated, let text = try? String(contentsOf: listLog, encoding: .utf8) {
             quietListing = text
