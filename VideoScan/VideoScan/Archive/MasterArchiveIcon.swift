@@ -130,7 +130,8 @@ enum MasterArchiveIcon {
         while true {
             if let real = realpath(head, nil) {
                 defer { free(real) }
-                let resolved = String(cString: real)
+                // The firmlinked /System/Volumes/Data spelling shortened the same way the pin's root is.
+                let resolved = TestHostScratch.shortenedFirmlink(String(cString: real))
                 return tail.isEmpty ? resolved : (resolved as NSString).appendingPathComponent(tail.reversed().joined(separator: "/"))
             }
             guard head != "/", !head.isEmpty else { return nil }

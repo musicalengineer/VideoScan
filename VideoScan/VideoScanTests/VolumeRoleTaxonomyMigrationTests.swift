@@ -765,6 +765,10 @@ struct VolumeRoleTaxonomyMigrationTests {
                                "a firmlink-spelled marked root pins by identity")
         #expect(pin.resolvedPath == real, "stored in the spelling candidates canonicalize to")
         #expect(MasterArchiveIcon.isInsidePinnedRoot(real + "/Breen_Family_Archive", pin: pin))
+        // Codex closing 2 (P2): a candidate spelled through the firmlink, existing or not, is the same scratch.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("child"), withIntermediateDirectories: true)
+        #expect(MasterArchiveIcon.isInsidePinnedRoot(spelled + "/child", pin: pin), "an existing firmlink-spelled child")
+        #expect(MasterArchiveIcon.isInsidePinnedRoot(spelled + "/child/Breen_Family_Archive", pin: pin), "a not-yet-created one below it")
     }
 
     /// Sensor: under a runner (a marked VIDEOSCAN_TEST_TMP) this process's own root IS pinned — else the guard
@@ -789,6 +793,10 @@ struct VolumeRoleTaxonomyMigrationTests {
                     realHome + "/Library/Logs/VideoScan", "/Volumes", "/Volumes/FamilyArchive/tmp"] {
             let resolved = TestHostScratch.realPath(URL(fileURLWithPath: bad)) ?? bad
             #expect(protection.isProtected(resolved), "\(bad)")
+        }
+        // Codex closing 2 (P1): the Data volume's own spellings contain the home through the firmlink.
+        for bad in ["/System/Volumes/Data", "/System/Volumes", "/System/Volumes/Data/Users"] {
+            #expect(protection.isProtected(bad), "\(bad)")
         }
         let temp = try #require(TestHostScratch.realPath(URL(fileURLWithPath: NSTemporaryDirectory())))
         for good in [temp + "/videoscan-sealed-home-x/tmp", "/private/tmp/run/home/tmp",

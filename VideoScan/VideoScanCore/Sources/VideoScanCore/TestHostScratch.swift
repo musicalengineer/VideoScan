@@ -167,6 +167,12 @@ public enum TestHostScratch {
                 var contains = Set<FileID>()
                 for path in [h] + resolvedTrees {
                     contains.formUnion(PinnedRoot.selfAndAncestorIDs(path))
+                    // The same folder through the Data volume's firmlink: its ancestors (/System/Volumes/Data,
+                    // /System/Volumes) contain the home too (Codex closing 2, P1).
+                    let viaData = TestHostScratch.firmlinkPrefix + path
+                    if PinnedRoot.fileID(viaData) != nil {
+                        contains.formUnion(PinnedRoot.selfAndAncestorIDs(viaData))
+                    }
                 }
                 return Protection(containsProtected: contains,
                                   protectedTrees: Set(resolvedTrees.compactMap { PinnedRoot.fileID($0) }))
@@ -191,7 +197,7 @@ public enum TestHostScratch {
         public static func pin(_ url: URL, allowedParents: [String] = defaultAllowedParents(),
                                protection: Protection = .real) -> PinnedRoot? {
             guard let raw = TestHostScratch.realPath(url), let first = fileID(raw) else { return nil }
-            let resolved = shortenedFirmlink(raw, id: first)
+            let resolved = TestHostScratch.shortenedFirmlink(raw)
             guard resolved != "/", !protection.isProtected(resolved) else { return nil }
             let parents = Set(usableParents(allowedParents, protection: protection).compactMap { fileID($0) })
             let strictAncestors = selfAndAncestorIDs((resolved as NSString).deletingLastPathComponent)
@@ -233,19 +239,11 @@ public enum TestHostScratch {
             return String(cString: dir)
         }
 
-        /// /System/Volumes/Data/<x> → /<x> when both name the same directory (the Data volume's firmlinks), so
-        /// the pin is stored in the spelling candidates canonicalize to; otherwise unchanged.
-        static func shortenedFirmlink(_ path: String, id: FileID) -> String {
-            let prefix = "/System/Volumes/Data"
-            guard path.hasPrefix(prefix + "/") else { return path }
-            let short = String(path.dropFirst(prefix.count))
-            return fileID(short) == id ? short : path
-        }
-
         /// The identity of `path` when lstat() finds a real directory there (never through a final symlink).
-        static func fileID(_ path: String) -> FileID? {
+        /// `anyType`: any file, not only a directory (a candidate path may name a file).
+        static func fileID(_ path: String, anyType: Bool = false) -> FileID? {
             var st = stat()
-            guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return nil }
+            guard lstat(path, &st) == 0, anyType || (st.st_mode & S_IFMT) == S_IFDIR else { return nil }
             return FileID(device: UInt64(bitPattern: Int64(st.st_dev)), inode: UInt64(st.st_ino))
         }
 
@@ -260,6 +258,21 @@ public enum TestHostScratch {
             }
             return ids
         }
+    }
+
+    static let firmlinkPrefix = "/System/Volumes/Data"
+
+    /// `/System/Volumes/Data/<x>` → `/<x>` when both spellings name the same file (lstat (st_dev, st_ino) equal:
+    /// the Data volume's firmlinks), else `existingPath` unchanged. ONE helper for both sides of a containment
+    /// test — the pin's stored root and a guard's canonical candidate (Codex closing 2, P2) — so a firmlinked
+    /// spelling never makes legitimate scratch look foreign. `existingPath` should exist (a realpath).
+    public static func shortenedFirmlink(_ existingPath: String) -> String {
+        guard existingPath.hasPrefix(firmlinkPrefix + "/") else { return existingPath }
+        let short = String(existingPath.dropFirst(firmlinkPrefix.count))
+        // Two LIVE lstats of the same instant (never a stored stamp), compared as one identity value.
+        guard let id = PinnedRoot.fileID(existingPath, anyType: true),
+              PinnedRoot.fileID(short, anyType: true) == id else { return existingPath }
+        return short
     }
 
     /// The pin of `testTempRoot`, taken together with it (nil when the root is the user temp dir fallback, or
