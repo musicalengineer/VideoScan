@@ -39,6 +39,7 @@
 // (For Rick: the stamp ≈ a schema-version number inside each record's blob,
 // so "which rows still need the migration" is a property of the data.)
 
+import CryptoKit
 import Foundation
 import VideoScanCore
 
@@ -48,6 +49,21 @@ import VideoScanCore
 /// courtesy (Stop holds until the next night), never a correctness input.
 struct SoundLevelsRemeasureSchedule: Codable, Sendable, Equatable {
     var lastUnattendedStart: Date?
+    /// Contents the job left alone because their copies' cards differ:
+    /// key → fingerprint of those cards (P1-3). Not due again by itself
+    /// until a card changes. Losing it costs at most one extra run.
+    var leftAlone: [String: String] = [:]
+
+    init(lastUnattendedStart: Date? = nil, leftAlone: [String: String] = [:]) {
+        self.lastUnattendedStart = lastUnattendedStart
+        self.leftAlone = leftAlone
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastUnattendedStart = try c.decodeIfPresent(Date.self, forKey: .lastUnattendedStart)
+        leftAlone = try c.decodeIfPresent([String: String].self, forKey: .leftAlone) ?? [:]
+    }
 
     static let fileName = "sound-levels-remeasure.json"
 
@@ -134,6 +150,23 @@ enum SoundLevelsRemeasureRules {
         return .prefix
     }
 
+    /// A stable fingerprint of a content's copies' cards (P1-3): the cards'
+    /// JSON (sorted keys, dates to the second) in record-id order, SHA-256.
+    @MainActor
+    static func fingerprint(_ copies: [VideoRecord]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+        var bytes = Data()
+        for copy in copies.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            var card = copy.mediaReportCard
+            if let c = card { card?.checkedAt = Date(timeIntervalSince1970: c.checkedAt.timeIntervalSince1970.rounded(.down)) }
+            bytes.append(Data(copy.id.uuidString.utf8))
+            bytes.append((try? encoder.encode(card)) ?? Data())
+        }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Two copies' cards are the same card (a stored card's date is whole
     /// seconds: compared to the second). Pure.
     static func sameCard(_ a: MediaReportCard, _ b: MediaReportCard) -> Bool {
@@ -196,6 +229,12 @@ enum SoundLevelsRemeasureRules {
         switch r {
         case .measured(let d) where d.shape.audioStreams == 0:
             return .withdrawn(noSoundTrack)
+        case .measured(let d) where d.balanceAnalysis == nil:
+            // The pass ran but measured nothing (an undecodable codec, a
+            // reference movie): unmeasurable — stays withdrawn for a retry,
+            // never `.measured` (Codex closing pass P2-6).
+            if case .notChecked(let why) = d.verdict { return .withdrawn(.failed(why)) }
+            return .withdrawn(.failed("the sound track could not be decoded"))
         case .measured(let d):
             return d.balanceAnalysis?.shortDecode?.graphReconfigured == true ? .reconfigured : .refreshed
         case .notMeasured(let why):
@@ -217,18 +256,18 @@ enum SoundLevelsRemeasureRules {
                         context: SoundPresenceContext) -> MediaReportCard {
         let row: MediaCheck
         let silent: Bool?
-        switch r {
-        case .measured(let d) where d.shape.audioStreams > 0:
+        switch (r, result(of: r)) {
+        case (_, .withdrawn(let why)):
+            silent = nil
+            row = .notRun(.sound, because: "\(withdrawnLead) — \(why.words)")
+        case (.measured(let d), _):
             silent = d.balanceAnalysis?.measuredSilent
             var rows = [CheckMediaRules.soundRow(d)]
             if silent == true {
                 rows = CheckMediaRules.applyingSilentTrack(rows, hasPicture: d.shape.videoCodec != nil, context: context)
             }
             row = rows[0]
-        case .measured:
-            silent = nil
-            row = .notRun(.sound, because: "\(withdrawnLead) — \(noSoundTrack.words)")
-        case .notMeasured(let why):
+        case (.notMeasured(let why), _):
             silent = nil
             row = .notRun(.sound, because: "\(withdrawnLead) — \(why.words)")
         }

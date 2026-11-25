@@ -77,11 +77,14 @@ extension SoundLevelsRemeasureEnvironment {
         let catalogFile = model.catalogStore.fileLocation
         env.isDue = { [weak model] in
             guard let model else { return false }
-            return SoundLevelsRemeasureItem.autoRunDue(model.records, isOnline: { VolumeReachability.isVolumeReachable(path: $0) })
+            return SoundLevelsRemeasureItem.autoRunDue(model.records, isOnline: { VolumeReachability.isVolumeReachable(path: $0) },
+                                                       leftAlone: SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).leftAlone)
         }
         env.lastStarted = { SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile).lastUnattendedStart }
         env.rememberStart = { [weak model] date in
-            do { try SoundLevelsRemeasureSchedule(lastUnattendedStart: date).save(catalogFile: catalogFile) } catch {
+            var schedule = SoundLevelsRemeasureSchedule.load(catalogFile: catalogFile)
+            schedule.lastUnattendedStart = date
+            do { try schedule.save(catalogFile: catalogFile) } catch {
                 model?.log("\(SoundLevelsRemeasureJob.title): its last start could not be remembered (\(error.localizedDescription)); a relaunch tonight may start it once more")
             }
         }
@@ -111,9 +114,16 @@ extension SoundLevelsRemeasureEnvironment {
 final class SoundLevelsRemeasureScheduler {
 
     private(set) var env: SoundLevelsRemeasureEnvironment
-    /// This session's last start, else the remembered one (P2-6).
+    /// This session's last start, else the remembered one (P2-6). A
+    /// remembered start in the FUTURE (a clock that was wrong, then fixed)
+    /// proves nothing and is ignored (Codex closing P1-4).
     private var sessionStarted: Date?
-    var lastStarted: Date? { sessionStarted ?? env.lastStarted() }
+    var lastStarted: Date? {
+        if let sessionStarted { return sessionStarted }
+        guard let remembered = env.lastStarted(),
+              remembered <= env.now().addingTimeInterval(DailyFileCheckPolicy.futureSlack) else { return nil }
+        return remembered
+    }
     private var saidWaiting: String?
     private var loop: Task<Void, Never>?
 
