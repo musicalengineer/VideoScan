@@ -116,7 +116,7 @@ struct ArchiveAngelSoundGateTests {
         let damaged = try Self.bench("angel_sg_damaged"); defer { damaged.sb.cleanup() }
         let d = S.soundDiagnosis(channels: [-18, -20], extraFindings: [.durationMismatch(audioSeconds: 2, videoSeconds: 10)])
         try Self.expectNotPromoted(damaged, try await Self.promote(damaged, measure: S.measure(d)).settled,
-                                   failurePrefix: "Needs repair: sound damaged — ")
+                                   failurePrefix: "Sound not usable as it stands — Not promoted — the sound is damaged: ")
         let unchecked = try Self.bench("angel_sg_unchecked"); defer { unchecked.sb.cleanup() }
         let failing = S.measure(throwing: AudioVerifyProbeError.probeFailed("ffprobe exited with status 1"))
         try Self.expectNotPromoted(unchecked, try await Self.promote(unchecked, measure: failing).settled,

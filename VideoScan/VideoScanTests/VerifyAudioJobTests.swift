@@ -99,8 +99,8 @@ struct VerifyAudioJobLogicTests {
         #expect(rec.audioVerifyStatus == "damaged")
         #expect(summary == rec.audioVerifyNote,
                 "the MFO row summary carries the same verdict note the catalog persists")
-        #expect(rec.audioVerifyNote.hasPrefix("Damaged audio — "),
-                "damaged notes keep the standardized batch-find prefix")
+        #expect(rec.audioVerifyNote == VerifyAudioRules.referenceMovieNote,
+                "a reference movie's note names it, never the damaged batch-find prefix (Rick 2026-11-25)")
     }
 
     @Test func verdictPersistsToReplacementRecordWithSameID() async throws {

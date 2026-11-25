@@ -406,7 +406,7 @@ struct SoundStandingFollowsGateTests {
         let readiness = ArchiveReadiness.assess(record: r)
         let line = readiness.sheetLine(dateLabel: "1992")
         #expect(F.isRed(readiness), "\(line) | \(readiness.warnings)")
-        #expect(line.contains("Audio ✗") && line.contains("reference movie"), "\(line)")
+        #expect(line.contains("Audio ✗") && line.localizedCaseInsensitiveContains("reference movie"), "\(line)")
         #expect(readiness.sound.bucket == .refused)
         #expect(readiness.token.contains("audio=problem"), "\(readiness.token)")
         // An un-probeable record that stores damage is red on its sound too.

@@ -53,7 +53,8 @@ extension CatalogContent {
         // standardization, so no extra label — a label would double up
         // as "Damaged audio: Damaged audio — …".
         if rec.audioVerifyStatus == "damaged" {
-            tip += "\n\n⚠️ \(rec.audioVerifyNote.isEmpty ? "Damaged audio" : rec.audioVerifyNote)"
+            // A note stored before 2026-11-25 is shown in today's words.
+            tip += "\n\n⚠️ \(rec.audioVerifyNote.isEmpty ? "Damaged audio" : AudioTrouble.displayNote(rec.audioVerifyNote))"
         }
         // Verify Video (2026-09-23): broken AND warning verdicts explain
         // themselves here; the note self-describes ("Broken video — …").

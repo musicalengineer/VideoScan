@@ -367,11 +367,12 @@ nonisolated func pfRecordNeedsDate(_ rec: VideoRecord) -> Bool {
 /// (2026-07-23): the human text that used to live in `notes` migrated
 /// to `userNotes`, so note:/notes: matches EITHER field — nothing the
 /// user could previously find becomes unfindable. The Verify Audio
-/// verdict note (GH #128) joins the union, and every damaged-status
+/// verdict note (GH #128) joins the union, and every really damaged
 /// note leads with the standardized "Damaged audio — " prefix
 /// (VerifyAudioRules.damagedNotePrefix), so the ONE query
-/// `notes:damaged` batch-finds every red row — the #128 batch-delete
-/// flow. Field-prefix ONLY: this machine state stays out of plain
+/// `notes:damaged` batch-finds it — the #128 batch-delete flow. A
+/// reference movie or a sound that needs rebuilding (red too) leads with
+/// its own words and stays out of that find (Rick 2026-11-25). Field-prefix ONLY: this machine state stays out of plain
 /// search and CatalogSearchIndex's haystack is untouched. Extracted
 /// (like pfCodecFieldMatches below) to keep pfFieldTokenMatches'
 /// cyclomatic complexity in budget. `value` must already be lowercased.

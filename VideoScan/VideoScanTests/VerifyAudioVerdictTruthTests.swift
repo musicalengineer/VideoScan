@@ -376,7 +376,13 @@ struct VerifyAudioReadFailureTests {
             model.records.append(rec)
             let job = await runVerify(rec, model: model) { _ in diagnosis }
             #expect(rec.audioVerifyStatus == "damaged", "\(name): \(job.state)")
-            #expect(rec.audioVerifyNote.hasPrefix(VerifyAudioRules.damagedNotePrefix), "\(name): \(rec.audioVerifyNote)")
+            // Each names itself: only real damage leads with the batch-find prefix (Rick 2026-11-25).
+            let lead = switch diagnosis.trouble {
+            case .referenceMovie?: VerifyAudioRules.referenceMovieNotePrefix
+            case .needsRebuild?: VerifyAudioRules.needsRebuildNotePrefix
+            case .damaged?, nil: VerifyAudioRules.damagedNotePrefix
+            }
+            #expect(rec.audioVerifyNote.hasPrefix(lead), "\(name): \(rec.audioVerifyNote)")
             #expect(job.state == .finished(summary: rec.audioVerifyNote), "\(name)")
         }
     }

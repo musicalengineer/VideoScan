@@ -22,8 +22,9 @@ extension VideoRecord {
             return .red
         }
         // Verify Audio verdict (GH #128): damaged audio shares the
-        // "damaged (red)" priority tier with unreadable files — these
-        // rows exist to be batch-found and deleted later, so the tint
+        // "damaged (red)" priority tier with unreadable files — the sound
+        // is not usable as it stands (real damage, a reference movie, a
+        // sound that needs rebuilding; the note says which), so the tint
         // must survive every softer disposition below.
         if audioVerifyStatus == "damaged" {
             return .red

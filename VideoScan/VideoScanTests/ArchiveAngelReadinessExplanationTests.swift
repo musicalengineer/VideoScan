@@ -147,7 +147,8 @@ struct ArchiveAngelReadinessExplanationTests {
         f.audio = .verifiedProblem(f.audioVerifyNote)
         let e = ArchiveAngelReadinessExplanation.make(f)
         #expect(e.missing.count == 1)
-        #expect(e.missing.first?.what.contains("invalid codec (qdm2)") == true)
+        // "invalid codec" is shown as stored (Codex #372 closing: it may be today's incomplete decode).
+        #expect(e.missing.first?.what.contains("invalid codec (qdm2)") == true, "\(e.missing)")
     }
 
     @Test func factsListDurationDatePeopleCopiesAndWhere() {

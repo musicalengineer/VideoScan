@@ -25,7 +25,8 @@ struct MediaReportCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label {
-                Text(card.displayHeadline)
+                // A Sound row stored before 2026-11-25 is shown in today's words.
+                Text(AudioTrouble.displaySoundSentence(card.displayHeadline))
                     .font(.body.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
@@ -60,7 +61,7 @@ struct MediaReportCardView: View {
             MediaVerdictIcon(verdict: check.verdict)
             VStack(alignment: .leading, spacing: 3) {
                 Text(check.kind.title).font(.callout.weight(.semibold))
-                Text(check.sentence)
+                Text(check.kind == .sound ? AudioTrouble.displaySoundSentence(check.sentence) : check.sentence)
                     .font(.callout)
                     .foregroundStyle(isNotRun(check) ? .secondary : .primary)
                     .fixedSize(horizontal: false, vertical: true)

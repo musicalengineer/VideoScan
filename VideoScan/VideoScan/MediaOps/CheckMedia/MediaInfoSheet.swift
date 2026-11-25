@@ -114,7 +114,8 @@ struct MediaInfoSheet: View {
         } else if let card = request.record.mediaReportCard {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(SoundPresencePolicy.displayHeadline(card: card, presence: soundPresence))
+                    // A Sound row stored before 2026-11-25 is shown in today's words.
+                    Text(AudioTrouble.displaySoundSentence(SoundPresencePolicy.displayHeadline(card: card, presence: soundPresence)))
                         .font(.body.weight(.medium))
                     lastChecked(card)
                 }
