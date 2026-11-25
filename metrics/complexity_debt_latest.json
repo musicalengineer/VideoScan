@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-24T15:25:53Z",
- "sha": "9cc50a6e",
+ "ts": "2026-11-25T15:10:37Z",
+ "sha": "d43c3013",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -128,6 +128,16 @@
    "lang": "swift",
    "base_ccn": 13,
    "base_nloc": 238
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.analyze",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
+   "function": "AudioBalanceProbe.analyze",
+   "ccn": 15,
+   "nloc": 88,
+   "lang": "swift",
+   "base_ccn": 12,
+   "base_nloc": 88
   },
   {
    "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::VideoScanModel.resumeTarget",

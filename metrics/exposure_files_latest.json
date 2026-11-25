@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-24T15:26:27Z",
- "sha": "9cc50a6e",
+ "ts": "2026-11-25T15:11:10Z",
+ "sha": "d43c3013",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift": {
    "lines": 288,
@@ -901,8 +901,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Archive/MasterArchiveIcon.swift": {
-   "lines": 143,
-   "decls": 4,
+   "lines": 156,
+   "decls": 6,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -3502,8 +3502,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift": {
-   "lines": 2183,
-   "decls": 121,
+   "lines": 2199,
+   "decls": 122,
    "could_be_private": [
     "FamilyAssetStore.liveAccess",
     "FamilyAssetStore.exclusionSidecarSuffix",
@@ -3617,9 +3617,10 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/FamilyTree/FamilySearchPersonRefreshCoordinator.swift": {
-   "lines": 688,
-   "decls": 40,
+   "lines": 755,
+   "decls": 42,
    "could_be_private": [
+    "PersonRefreshCoordinator.launchScratch",
     "PersonRefreshCoordinator.OverlayWrite",
     "PersonRefreshCoordinator.writeOverlay",
     "PersonRefreshCoordinator.unreadableSentence",
@@ -4029,6 +4030,14 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/FamilyTree/PersonRefreshLaunchScratch.swift": {
+   "lines": 157,
+   "decls": 10,
+   "could_be_private": [
+    "PersonRefreshLaunchScratch.leafIdentity"
+   ],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/FamilyTree/RecordFinderFiling.swift": {
    "lines": 910,
    "decls": 80,
@@ -4193,7 +4202,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/FamilyTree/VideoScanModel+FamilyAssets.swift": {
-   "lines": 29,
+   "lines": 32,
    "decls": 1,
    "could_be_private": [],
    "widened_for_split": [
@@ -6279,19 +6288,21 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift": {
-   "lines": 283,
-   "decls": 16,
+   "lines": 303,
+   "decls": 17,
    "could_be_private": [
     "AstatsOutputParser.taggedPayloads"
    ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/AudioBalanceProbe.swift": {
-   "lines": 668,
-   "decls": 49,
+   "lines": 771,
+   "decls": 56,
    "could_be_private": [
     "AudioBalanceStreamShape.declaredChannelsPerStream",
     "AudioBalanceProbe.levelsDemuxBudgetBytesPerSecond",
+    "AudioBalanceProbe.DifferenceReading",
+    "AudioBalanceProbe.differencePass",
     "AudioBalanceProbe.measureLevels"
    ],
    "widened_for_split": []
@@ -6645,8 +6656,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Media/PreviewService.swift": {
-   "lines": 644,
-   "decls": 39,
+   "lines": 707,
+   "decls": 52,
    "could_be_private": [
     "PreviewService.thumbnailDebounceTask"
    ],
@@ -7052,7 +7063,7 @@
    ]
   },
   "VideoScan/VideoScan/MediaOps/CheckMedia/CheckMediaRules+Full.swift": {
-   "lines": 357,
+   "lines": 359,
    "decls": 21,
    "could_be_private": [
     "CheckMediaRules.soundNotCheckedLead",
@@ -8378,8 +8389,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/VerifyAudioSheet.swift": {
-   "lines": 598,
-   "decls": 3,
+   "lines": 615,
+   "decls": 5,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -8711,8 +8722,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Model/VideoScanModel.swift": {
-   "lines": 1941,
-   "decls": 268,
+   "lines": 1954,
+   "decls": 269,
    "could_be_private": [
     "VideoScanModel.DossierCounts",
     "VideoScanModel.volumeStatusCache",
@@ -13045,9 +13056,15 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift": {
-   "lines": 132,
-   "decls": 2,
-   "could_be_private": [],
+   "lines": 296,
+   "decls": 11,
+   "could_be_private": [
+    "TestHostScratch.PinnedRoot.FileID",
+    "TestHostScratch.PinnedRoot.Protection.containsProtected",
+    "TestHostScratch.PinnedRoot.Protection.protectedTrees",
+    "TestHostScratch.PinnedRoot.selfAndAncestorIDs",
+    "TestHostScratch.firmlinkPrefix"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/ThrottledMainActorUpdate.swift": {

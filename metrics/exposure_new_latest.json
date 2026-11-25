@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-24T15:26:27Z",
- "sha": "9cc50a6e",
+ "ts": "2026-11-25T15:11:10Z",
+ "sha": "d43c3013",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
@@ -3175,6 +3175,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/FamilyTree/FamilySearchPersonRefreshCoordinator.swift::PersonRefreshCoordinator.launchScratch",
+   "file": "VideoScan/VideoScan/FamilyTree/FamilySearchPersonRefreshCoordinator.swift",
+   "name": "PersonRefreshCoordinator.launchScratch",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift::FamilySearchPullCoordinator.MergeStaged",
    "file": "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift",
    "name": "FamilySearchPullCoordinator.MergeStaged",
@@ -3200,6 +3207,13 @@
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeReadOnlyLoad.swift",
    "name": "FamilyTreeReadOnlyLoad.refusingWrites",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/FamilyTree/PersonRefreshLaunchScratch.swift::PersonRefreshLaunchScratch.leafIdentity",
+   "file": "VideoScan/VideoScan/FamilyTree/PersonRefreshLaunchScratch.swift",
+   "name": "PersonRefreshLaunchScratch.leafIdentity",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {
@@ -3885,6 +3899,20 @@
    "key": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift::AstatsOutputParser.taggedPayloads",
    "file": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift",
    "name": "AstatsOutputParser.taggedPayloads",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.DifferenceReading",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
+   "name": "AudioBalanceProbe.DifferenceReading",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.differencePass",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
+   "name": "AudioBalanceProbe.differencePass",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -8891,6 +8919,41 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/SQLiteWALSidecar.swift",
    "name": "SQLiteWALSidecar.missingWords",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift::TestHostScratch.PinnedRoot.FileID",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift",
+   "name": "TestHostScratch.PinnedRoot.FileID",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift::TestHostScratch.PinnedRoot.Protection.containsProtected",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift",
+   "name": "TestHostScratch.PinnedRoot.Protection.containsProtected",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift::TestHostScratch.PinnedRoot.Protection.protectedTrees",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift",
+   "name": "TestHostScratch.PinnedRoot.Protection.protectedTrees",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift::TestHostScratch.PinnedRoot.selfAndAncestorIDs",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift",
+   "name": "TestHostScratch.PinnedRoot.selfAndAncestorIDs",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift::TestHostScratch.firmlinkPrefix",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TestHostScratch.swift",
+   "name": "TestHostScratch.firmlinkPrefix",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {

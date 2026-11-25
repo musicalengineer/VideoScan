@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-24T15:26:35Z",
- "sha": "9cc50a6e",
+ "ts": "2026-11-25T15:11:19Z",
+ "sha": "d43c3013",
  "formula_version": 1,
- "files_scored": 885,
+ "files_scored": 887,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -24,8 +24,8 @@
    "lines": 1827,
    "could_be_private": 3,
    "widened_for_split": 20,
-   "churn_7d": 4,
-   "score": 64.1
+   "churn_7d": 1,
+   "score": 42.8
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift",
@@ -58,17 +58,6 @@
    "could_be_private": 11,
    "widened_for_split": 0,
    "churn_7d": 2,
-   "score": 27.1
-  },
-  {
-   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
-   "offenders": 1,
-   "worst_ccn": 11,
-   "new_or_worse": 1,
-   "lines": 1961,
-   "could_be_private": 4,
-   "widened_for_split": 1,
-   "churn_7d": 4,
    "score": 27.1
   },
   {
@@ -105,6 +94,17 @@
    "score": 25.0
   },
   {
+   "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift",
+   "offenders": 3,
+   "worst_ccn": 17,
+   "new_or_worse": 0,
+   "lines": 2199,
+   "could_be_private": 12,
+   "widened_for_split": 3,
+   "churn_7d": 1,
+   "score": 24.2
+  },
+  {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
    "offenders": 1,
    "worst_ccn": 20,
@@ -125,17 +125,6 @@
    "widened_for_split": 4,
    "churn_7d": 0,
    "score": 21.8
-  },
-  {
-   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1941,
-   "could_be_private": 6,
-   "widened_for_split": 27,
-   "churn_7d": 2,
-   "score": 21.6
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",
@@ -160,15 +149,26 @@
    "score": 21.3
   },
   {
-   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift",
-   "offenders": 2,
-   "worst_ccn": 24,
-   "new_or_worse": 0,
-   "lines": 1291,
-   "could_be_private": 7,
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",
+   "offenders": 4,
+   "worst_ccn": 27,
+   "new_or_worse": 1,
+   "lines": 878,
+   "could_be_private": 10,
    "widened_for_split": 0,
-   "churn_7d": 4,
-   "score": 21.2
+   "churn_7d": 0,
+   "score": 20.8
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift",
+   "offenders": 6,
+   "worst_ccn": 28,
+   "new_or_worse": 0,
+   "lines": 739,
+   "could_be_private": 12,
+   "widened_for_split": 0,
+   "churn_7d": 0,
+   "score": 20.6
   }
  ]
 }
