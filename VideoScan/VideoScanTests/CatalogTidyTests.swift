@@ -82,18 +82,19 @@ struct CatalogTidyTests {
         #expect(CatalogTidyCalculator.groupsToSplit([]) == 0)
     }
 
-    @Test("LOGIC: the total sums the three counts; hidden from the menu at zero; the rows say which have a Run")
+    @Test("LOGIC: the total sums the four counts; hidden from the menu at zero; the rows say which have a Run")
     func totalRowsAndHiddenAtZero() {
         let zero = CatalogTidyCounts()
         #expect(zero.total == 0)
         #expect(!CatalogMenuLayout.entries(tidyTotal: zero.total).contains(.tidyCatalog(total: 0)))
-        let c = CatalogTidyCounts(nonVideoRows: 5, duplicateGroupsToSplit: 2, degenerateOCRCaptions: 7)
-        #expect(c.total == 14)
-        #expect(CatalogMenuLayout.entries(tidyTotal: c.total).contains(.tidyCatalog(total: 14)))
+        let c = CatalogTidyCounts(nonVideoRows: 5, duplicateGroupsToSplit: 2, degenerateOCRCaptions: 7,
+                                  soundLevelsToRemeasure: 3)
+        #expect(c.total == 17)
+        #expect(CatalogMenuLayout.entries(tidyTotal: c.total).contains(.tidyCatalog(total: 17)))
         let rows = CatalogTidyRow.rows(c)
         #expect(rows.map(\.kind) == CatalogTidyRow.Kind.allCases)
-        #expect(rows.map(\.number) == [5, 2, 7])
-        #expect(rows.map(\.runTitle) == ["Run…", "Run", nil], "junk captions have no engine yet — no Run")
+        #expect(rows.map(\.number) == [5, 2, 7, 3])
+        #expect(rows.map(\.runTitle) == ["Run…", "Run", nil, "Run"], "junk captions have no engine yet — no Run")
         #expect(rows[2].detail.contains("no cleanup action yet"))
     }
 
@@ -190,6 +191,8 @@ struct CatalogTidySensorTests {
         #expect(body.contains("CatalogTidyRow.rows(coverage.report.tidy)"), "the sheet reads the coverage report")
         let pass = try Self.code("VideoScanModel+AnalyzeCoverage.swift")
         #expect(pass.contains("let tidy = CatalogTidyCalculator.project(records)"))
+        #expect(tidy.contains("center.startedByUser { $0.startSoundLevelsRemeasure(model: model) }"),
+                "GH #516: the Run starts the one Re-measure Sound Levels job")
         #expect(pass.contains("report.tidy = CatalogTidyCalculator.counts(tidy, degenerateOCRCaptions: report.degenerateOCRDates)"))
         let menu = try Self.code("CatalogMenu.swift")
         #expect(menu.contains("private var tidyTotal: Int { coverage.report.tidy.menuTotal }"))

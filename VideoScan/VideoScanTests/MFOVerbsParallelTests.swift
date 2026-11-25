@@ -95,6 +95,7 @@ enum MFOParallelInventory {
         "findMaster": .parallelSafe,
         "indexFrames": .parallelSafeWithIsolation,
         "estimateProvenance": .parallelSafeWithIsolation,
+        "remeasureSoundLevels": .parallelSafeWithIsolation,
     ]
 
     /// Verbs the concurrent test does not start, with the reason. Everything
@@ -111,6 +112,7 @@ enum MFOParallelInventory {
         "indexFrames": "needs a frame-embedding model; FrameIndexEngineTests runs it with a stub embedder",
         "findMaster": "reads a fingerprint sidecar built by fingerprintSound; FindMasterTests covers the job",
         "estimateProvenance": "reads only the catalog's provenance tables (no media); ProvenanceEstimateTests covers the job",
+        "remeasureSoundLevels": "needs saved Check Media cards from before the fix (#516); SoundLevelsRemeasureTests covers the job",
         "fingerprintBackfill": "needs the perceptual-fingerprint model; PerceptualFingerprintStoreTests covers the job",
         "bindFixity": "needs an archive volume with pre-identity fixity stamps; FixityStampVolumeIdentityTests covers the job",
     ]

@@ -38,7 +38,14 @@ extension CheckMediaRules {
     /// as evidence. A Problem row (damaged sound) is never softened.
     private static func applyingSilentTrack(_ checks: [MediaCheck], facts: MediaFacts,
                                             context: SoundPresenceContext) -> [MediaCheck] {
-        let presence = SoundPresencePolicy.assess(hasPicture: facts.video != nil, hasSound: true,
+        applyingSilentTrack(checks, hasPicture: facts.video != nil, context: context)
+    }
+
+    /// The same rule from the picture fact alone (Re-measure Sound Levels,
+    /// #516, reads it from the sound pass's own probe).
+    static func applyingSilentTrack(_ checks: [MediaCheck], hasPicture: Bool,
+                                    context: SoundPresenceContext) -> [MediaCheck] {
+        let presence = SoundPresencePolicy.assess(hasPicture: hasPicture, hasSound: true,
                                                   soundMeasuredSilent: true, context: context)
         guard let verdict = presence.verdict, let sentence = presence.sentence,
               let existing = checks.first(where: { $0.kind == .sound }),

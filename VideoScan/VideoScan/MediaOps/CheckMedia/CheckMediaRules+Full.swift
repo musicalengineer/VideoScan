@@ -102,6 +102,12 @@ extension CheckMediaRules {
         case .failure(let skip): return .notRun(.sound, because: skip.reason)
         case .success(let d): diagnosis = d
         }
+        return soundRow(diagnosis)
+    }
+
+    /// The Sound row for a sound pass that RAN — the one rule, shared by
+    /// Check Media and Re-measure Sound Levels (#516, rule 4). Pure.
+    static func soundRow(_ diagnosis: AudioVerifyDiagnosis) -> MediaCheck {
         // Only levels that are a fact about the file are evidence (a rebuilt
         // filter graph keeps none; the row's sentence says why).
         let channels = diagnosis.balanceAnalysis?.evidenceChannels ?? []
@@ -240,10 +246,15 @@ extension CheckMediaRules {
 
     static func card(tier: MediaReportCard.Tier, checks: [MediaCheck],
                      quick: CheckMediaQuickInputs, at date: Date) -> MediaReportCard {
-        MediaReportCard(tier: tier, checkedAt: date,
-                        fileSizeBytes: quick.facts.sizeBytes ?? quick.videoFacts.fileSizeBytes,
-                        headline: headline(checks: checks, quick: quick, tier: tier),
-                        checks: checks)
+        var card = MediaReportCard(tier: tier, checkedAt: date,
+                                   fileSizeBytes: quick.facts.sizeBytes ?? quick.videoFacts.fileSizeBytes,
+                                   headline: headline(checks: checks, quick: quick, tier: tier),
+                                   checks: checks)
+        // Today's sound-levels pass wrote (or did not run) this Sound row:
+        // stamped, so Re-measure Sound Levels never takes it for a pre-fix
+        // card (#516; the stamp lives inside the card's JSON).
+        card.soundLevels = .measured
+        return card
     }
 
     /// The card a quick Verify writes: the quick rows, the full-tier rows
@@ -257,7 +268,17 @@ extension CheckMediaRules {
     static func headline(checks: [MediaCheck], quick: CheckMediaQuickInputs,
                          tier: MediaReportCard.Tier) -> String {
         let problems = checks.filter { $0.verdict == .problem }
-        if let timing = timingHeadline(problems: problems, quick: quick) { return timing }
+        return headline(checks: checks, tier: tier, hasSound: quick.facts.audio != nil,
+                        timing: timingHeadline(problems: problems, quick: quick))
+    }
+
+    /// The headline from the rows alone, given the timing headline when
+    /// there is one (it needs the quick tier's stored frame rate). Re-measure
+    /// Sound Levels (#516) rebuilds a saved card's headline with it. Pure.
+    static func headline(checks: [MediaCheck], tier: MediaReportCard.Tier, hasSound: Bool,
+                         timing: String?) -> String {
+        let problems = checks.filter { $0.verdict == .problem }
+        if let timing { return timing }
         if let first = problems.first { return problemHeadline(first) }
         let warnings = checks.filter { $0.verdict == .warning }
         // A picture with no sound track (Rick 2026-10-10) is named first.
@@ -271,7 +292,7 @@ extension CheckMediaRules {
         }
         // A full check that could not check the sound is not a clean bill
         // (review F1, 2026-11-11): say so, and why, instead of "Looks healthy".
-        if let why = soundNotCheckedReason(checks: checks, quick: quick, tier: tier) {
+        if let why = soundNotCheckedReason(checks: checks, hasSound: hasSound, tier: tier) {
             return "\(soundNotCheckedLead)\(why). No problems were found in the rest of the full check."
         }
         return tier == .quick ? quickPassHeadline : fullPassHeadline
@@ -287,7 +308,12 @@ extension CheckMediaRules {
     /// has a verdict. O(rows).
     static func soundNotCheckedReason(checks: [MediaCheck], quick: CheckMediaQuickInputs,
                                       tier: MediaReportCard.Tier) -> String? {
-        guard tier == .full, quick.facts.audio != nil,
+        soundNotCheckedReason(checks: checks, hasSound: quick.facts.audio != nil, tier: tier)
+    }
+
+    static func soundNotCheckedReason(checks: [MediaCheck], hasSound: Bool,
+                                      tier: MediaReportCard.Tier) -> String? {
+        guard tier == .full, hasSound,
               case .notRun(let reason)? = checks.first(where: { $0.kind == .sound })?.verdict else { return nil }
         return reason
     }
@@ -319,9 +345,11 @@ extension CheckMediaRules {
     static let fullPassHeadline =
         "Looks healthy — the full check read the whole file and found nothing wrong."
 
+    /// The rows whose Problem makes the headline the timing one.
+    static let timingKinds: Set<MediaCheckKind> = [.frameRate, .timestamps, .distinctFrames]
+
     /// The duplicate-frame / broken-timing headline (the CapeCod class).
     private static func timingHeadline(problems: [MediaCheck], quick: CheckMediaQuickInputs) -> String? {
-        let timingKinds: Set<MediaCheckKind> = [.frameRate, .timestamps, .distinctFrames]
         guard problems.contains(where: { timingKinds.contains($0.kind) }) else { return nil }
         guard let fps = storedFPS(quick), fps > cameraFPS.upperBound else {
             return "Plays, but its timing is broken."

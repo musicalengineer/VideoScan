@@ -505,6 +505,17 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let estimateProvenance = Self("estimateProvenance", hasDetailView: false,
         style: .init(badge: "Provenance", logVerb: "estimate provenance", fill: .init(0.00, 0.30, 0.20)))
 
+    // Re-measure Sound Levels (2026-11-25, GH #516) — magenta: a reading verb
+    // whose only write is the Sound row of saved Check Media cards. Δ ≥ 0.21
+    // from every other fill (nearest: Balance's raspberry), contrast vs
+    // white ≈ 4.7.
+    /// "Re-measure sound levels" (DECISIONS 2026-11-25): Check Media cards
+    /// saved before 2441ceb42 may hold a partial filter graph's levels; the
+    /// sound is measured again with today's pass and the Sound row rewritten
+    /// (or its levels withdrawn). Read-only on media. SoundLevelsRemeasureJob.
+    static let remeasureSoundLevels = Self("remeasureSoundLevels", hasDetailView: false,
+        style: .init(badge: "Re-measure", logVerb: "re-measure sound levels", fill: .init(0.80, 0.20, 0.60)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -515,6 +526,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
         .verifyCatalog, .validateCatalog, .findMaster, .indexFrames, .estimateProvenance,
+        .remeasureSoundLevels,
     ]
 
     /// Badge text — rendered in small caps by the row view.

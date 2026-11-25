@@ -12,6 +12,10 @@
 //   stored before #402            refuses them as evidence; no cleanup
 //                                 engine exists yet, so the row says so
 //                                 and has no Run
+//   Sound levels to measure again GH #516 — Run starts Re-measure Sound
+//                                 Levels (SoundLevelsRemeasureJob); counted
+//                                 with the job's own predicate, from the
+//                                 card alone (`SoundLevelsRemeasureRules.need`)
 //
 // The menu item reads "Tidy Catalog… (N)" with N = the sum of the rows that
 // have a Run, and is not there when that sum is 0 (CatalogMenuLayout); a
@@ -50,8 +54,15 @@ struct CatalogTidyCounts: Sendable, Equatable {
     var duplicateGroupsToSplit = 0
     /// GH #402 degenerate OCR date captions still stored on live rows.
     var degenerateOCRCaptions = 0
+    /// GH #516: Check Media cards whose Sound row holds levels from before
+    /// the fix, or whose levels a run withdrew (waiting for their drive).
+    var soundLevelsToRemeasure = 0
+    /// Of those, cards waiting for a drive that is not connected, and how
+    /// many drives (#516 review): shown, never "done".
+    var soundLevelsWaitingCards = 0
+    var soundLevelsWaitingDrives = 0
 
-    var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions }
+    var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions + soundLevelsToRemeasure }
     /// The menu's "(N)" and its hidden-at-zero rule: only rows that have a
     /// Run (coordinator 2026-11-01). A count-only row — #402's junk
     /// captions, no engine yet — is shown in the sheet but never keeps the
@@ -70,16 +81,28 @@ struct CatalogTidyMember: Sendable, Equatable {
 struct CatalogTidyProjection: Sendable, Equatable {
     var nonVideoRows = 0
     var grouped: [CatalogTidyMember] = []
+    var soundLevelsToRemeasure = 0
+    var soundLevelsWaiting = SoundLevelsRemeasureWaiting()
 }
 
 enum CatalogTidyCalculator {
 
     /// One pass over `records` (main actor — the records live there).
+    /// Re-measure Sound Levels' count is per card, read from the card alone
+    /// (its stamp and Sound row — `SoundLevelsRemeasureRules.need`).
     @MainActor
-    static func project(_ records: [VideoRecord]) -> CatalogTidyProjection {
+    static func project(_ records: [VideoRecord],
+                        isOnline: (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }) -> CatalogTidyProjection {
         var out = CatalogTidyProjection()
         for r in records {
             if NonVideoMediaPurge.isOffered(r) { out.nonVideoRows += 1 }
+            if let card = r.mediaReportCard, SoundLevelsRemeasureRules.need(card, live: r.removal == nil) != nil {
+                out.soundLevelsToRemeasure += 1
+                if SoundLevelsRemeasureRules.isWaitingForDrive(card), !isOnline(r.fullPath) {
+                    out.soundLevelsWaiting.cards += 1
+                    out.soundLevelsWaiting.drives.insert(SoundLevelsRemeasureRules.driveKey(r.fullPath))
+                }
+            }
             // The split's own facts: live rows with a group (duplicateDigestSplitFacts).
             if r.removal == nil, let g = r.duplicateGroupID {
                 out.grouped.append(CatalogTidyMember(groupID: g, digest: VideoScanModel.storedFullDigest(r)))
@@ -101,14 +124,19 @@ enum CatalogTidyCalculator {
 
     nonisolated static func counts(_ p: CatalogTidyProjection, degenerateOCRCaptions: Int) -> CatalogTidyCounts {
         CatalogTidyCounts(nonVideoRows: p.nonVideoRows, duplicateGroupsToSplit: groupsToSplit(p.grouped),
-                          degenerateOCRCaptions: degenerateOCRCaptions)
+                          degenerateOCRCaptions: degenerateOCRCaptions,
+                          soundLevelsToRemeasure: p.soundLevelsToRemeasure,
+                          soundLevelsWaitingCards: p.soundLevelsWaiting.cards,
+                          soundLevelsWaitingDrives: p.soundLevelsWaiting.drives.count)
     }
 }
 
 // MARK: - The rows (pure)
 
 struct CatalogTidyRow: Sendable, Equatable, Identifiable {
-    enum Kind: String, Sendable, CaseIterable { case nonVideoRows, duplicateGroupsToSplit, degenerateOCRCaptions }
+    enum Kind: String, Sendable, CaseIterable {
+        case nonVideoRows, duplicateGroupsToSplit, degenerateOCRCaptions, soundLevelsToRemeasure
+    }
     var kind: Kind
     /// The live count (named apart from a collection's `count`).
     var number: Int
@@ -132,6 +160,13 @@ struct CatalogTidyRow: Sendable, Equatable, Identifiable {
                            title: "Degenerate OCR captions stored before #402",
                            detail: "Junk readings (\"!!!!…\") the captioner wrote before this build refused them. They are already ignored as date evidence; there is no cleanup action yet.",
                            runTitle: nil),
+            CatalogTidyRow(kind: .soundLevelsToRemeasure, number: c.soundLevelsToRemeasure,
+                           title: "Sound levels to measure again",
+                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file could not be measured. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. Copies whose cards differ are left alone (a later Run tries again). Stop any time; running it again continues."
+                               + (c.soundLevelsWaitingCards > 0
+                                  ? " \(c.soundLevelsWaitingCards.formatted()) of them wait for \(c.soundLevelsWaitingDrives.formatted()) drive\(c.soundLevelsWaitingDrives == 1 ? "" : "s") to be connected."
+                                  : ""),
+                           runTitle: "Run"),
         ]
     }
 }
@@ -214,6 +249,9 @@ struct CatalogTidySheet: View {
             lastSplit = CatalogTidyWords.splitOutcome(center.splitDuplicateGroupsKeepingSameFootage(model: model))
         case .degenerateOCRCaptions:
             break
+        case .soundLevelsToRemeasure:
+            _ = center.startedByUser { $0.startSoundLevelsRemeasure(model: model) }
+            lastSplit = "Re-measure sound levels started — its row in Media File Operations shows progress, Pause and Stop."
         }
     }
 }
