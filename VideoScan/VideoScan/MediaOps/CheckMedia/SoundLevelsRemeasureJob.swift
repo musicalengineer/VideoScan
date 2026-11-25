@@ -75,6 +75,49 @@ struct SoundLevelsRemeasureItem: Sendable, Equatable {
         }
         return out.sorted { $0.id.uuidString < $1.id.uuidString }
     }
+
+    /// Cards withdrawn because their drive was not connected: on drives
+    /// still away (`cards`, `drives`) and on drives connected now (`ready`).
+    /// O(records), main actor; `isOnline` is the app's volume signal.
+    @MainActor
+    static func waiting(_ records: [VideoRecord], isOnline: (String) -> Bool) -> SoundLevelsRemeasureWaiting {
+        var w = SoundLevelsRemeasureWaiting()
+        for r in records where r.removal == nil {
+            guard let card = r.mediaReportCard, card.tier == .full, let row = card.check(.sound),
+                  SoundLevelsRemeasureRules.isWaitingForDrive(row) else { continue }
+            if isOnline(r.fullPath) {
+                w.ready += 1
+            } else {
+                w.cards += 1
+                w.drives.insert(SoundLevelsRemeasureRules.driveKey(r.fullPath))
+            }
+        }
+        return w
+    }
+
+    /// Whether the scheduler should start the job: the pre-fix walk is not
+    /// finished, or a card waiting for its drive can be measured now.
+    @MainActor
+    static func autoRunDue(_ records: [VideoRecord], marker: SoundLevelsRemeasureMarker?,
+                           isOnline: (String) -> Bool) -> Bool {
+        guard let marker else { return true }
+        if !marker.isWalked { return true }
+        return waiting(records, isOnline: isOnline).ready > 0
+    }
+}
+
+/// Cards whose levels wait for their drive to be connected.
+struct SoundLevelsRemeasureWaiting: Sendable, Equatable {
+    var cards = 0
+    var drives: Set<String> = []
+    /// Waiting cards whose drive is connected now: the next run measures them.
+    var ready = 0
+
+    /// "waiting for 2 drives (14 cards)"; nil when none waits.
+    var words: String? {
+        guard cards > 0 else { return nil }
+        return "waiting for \(drives.count) drive\(drives.count == 1 ? "" : "s") (\(cards) card\(cards == 1 ? "" : "s"))"
+    }
 }
 
 @MainActor
@@ -92,8 +135,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
 
     struct Totals: Equatable, Sendable {
         var total = 0, done = 0
-        var refreshed = 0, reconfigured = 0, offline = 0, changed = 0, failed = 0, changedMeanwhile = 0
-        var withdrawn: Int { offline + changed + failed }
+        var refreshed = 0, reconfigured = 0, offline = 0, notFound = 0, changed = 0, failed = 0, changedMeanwhile = 0
+        var withdrawn: Int { offline + notFound + changed + failed }
     }
 
     /// Today's sound pass on one file (tests inject a stub).
@@ -106,7 +149,11 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     private let catalogFile: String
 
     // Seams (tests replace them; production defaults below).
-    var measure: Measure = { path, size in try await SoundLevelsRemeasureJob.measureFile(path: path, expectedSize: size) }
+    /// TEST SEAM: replaces today's sound pass. nil in production (`measureFile`).
+    var measure: Measure?
+    /// Is this path's DRIVE connected (the app's volume signal; never "does
+    /// the file exist"). Tests replace it.
+    var isOnline: @Sendable (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }
     var toolsAvailable: @Sendable () -> Bool = { FileManager.default.isExecutableFile(atPath: ToolLocator.ffmpegPath) }
     var gatesFor: (String) -> [MediaVolumeGate] = { _ in [] }
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
@@ -254,13 +301,19 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
             finish(cancelled: ())
             return
         }
-        marker.completedAt = now()
+        // Done only when no card waits for a drive (coordinator, #516 review):
+        // a card withdrawn for an absent drive is work still owed.
+        let waiting = SoundLevelsRemeasureItem.waiting(model.records, isOnline: isOnline)
+        if let words = waiting.words { summaryLine += " · " + words }
+        marker.walkedAt = marker.walkedAt ?? now()
+        marker.completedAt = waiting.cards == 0 && waiting.ready == 0 ? now() : nil
         marker.cursor = nil
         marker.lastSummary = summaryLine
         writeMarker(marker, model: model)
         self.marker = marker
         note("OUTCOME — \(summaryLine); \(rows)", model: model)
-        finish(success: totals.total == 0 ? "Nothing to do — no saved card holds sound levels from before the fix" : summaryLine)
+        finish(success: totals.total == 0 && waiting.cards == 0
+               ? "Nothing to do — no saved card holds sound levels from before the fix" : summaryLine)
     }
 
     private func waitOutPause() async -> Bool {
@@ -279,7 +332,10 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
             subtitleText = PerceptualFingerprintBackfillJob.progressLine(done: i, total: totals.total, current: item.filename,
                                                                          elapsed: Date().timeIntervalSince(runStart))
         }
-        let pass = Task { [measure] in try await measure(item.path, item.fileSizeBytes) }
+        let measure: Measure = self.measure ?? { [isOnline] path, size in
+            try await Self.measureFile(path: path, expectedSize: size, isOnline: isOnline)
+        }
+        let pass = Task { try await measure(item.path, item.fileSizeBytes) }
         var outcome: SoundLevelsRemeasureRules.Remeasured?
         do {
             outcome = try await withTaskCancellationHandler { try await pass.value } onCancel: { pass.cancel() }
@@ -346,6 +402,7 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         case .withdrawn(let why):
             switch why {
             case .offline: totals.offline += 1
+            case .notFound: totals.notFound += 1
             case .changed: totals.changed += 1
             case .failed: totals.failed += 1
             }
@@ -463,6 +520,7 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         var parts = ["Measured again \(t.refreshed)", "sound changes partway \(t.reconfigured)"]
         var why: [String] = []
         if t.offline > 0 { why.append("not connected \(t.offline)") }
+        if t.notFound > 0 { why.append("not at its path \(t.notFound)") }
         if t.changed > 0 { why.append("changed on disk \(t.changed)") }
         if t.failed > 0 { why.append("could not measure \(t.failed)") }
         parts.append("withdrawn \(t.withdrawn)" + (why.isEmpty ? "" : " (\(why.joined(separator: ", ")))"))
@@ -478,8 +536,11 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func measureFile(path: String, expectedSize: Int64) async throws -> SoundLevelsRemeasureRules.Remeasured {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return .notMeasured(.offline) }
+    nonisolated static func measureFile(path: String, expectedSize: Int64,
+                                        isOnline: @Sendable (String) -> Bool) async throws -> SoundLevelsRemeasureRules.Remeasured {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return .notMeasured(isOnline(path) ? .notFound : .offline)
+        }
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
         guard size == expectedSize else { return .notMeasured(.changed) }
         do {

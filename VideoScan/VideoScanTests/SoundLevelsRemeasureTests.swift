@@ -142,6 +142,9 @@ enum RemeasureFixture {
     }
 }
 
+/// A drive's connected state a test flips (serialized suite; ≈ a plain bool).
+final class OnlineFlag: @unchecked Sendable { var on = false }
+
 /// The paths a stub measured, in order (≈ a mutex-guarded vector).
 actor MeasuredPaths {
     private(set) var paths: [String] = []
@@ -268,6 +271,7 @@ struct SoundLevelsRemeasureLogicTests {
         let j = SoundLevelsRemeasureJob(model: m)
         j.toolsAvailable = { true }
         j.saveCatalogForTesting = { true }
+        j.isOnline = { !$0.hasSuffix("gone.mov") }   // gone.mov's drive is away
         await RemeasureFixture.run(j)
         #expect(j.totals.offline == 1 && j.totals.changed == 1 && j.totals.withdrawn == 2)
         for r in [offline, changed] {
@@ -279,9 +283,10 @@ struct SoundLevelsRemeasureLogicTests {
         }
         #expect(offline.mediaReportCard?.check(.sound)?.sentence.contains("not connected") == true)
         #expect(changed.mediaReportCard?.check(.sound)?.sentence.contains("no longer the size") == true)
-        // Done, but the two wait for their files: the plan (and Tidy) still name them.
+        // Walked, NOT done: one card waits for its drive; the plan (and Tidy) still name both.
         let marker = try #require(RemeasureFixture.readMarker(m))
-        #expect(marker.isDone)
+        #expect(marker.isWalked && !marker.isDone)
+        if case .finished(let s) = j.state { #expect(s.contains("waiting for 1 drive (1 card)"), "\(s)") }
         let plan = SoundLevelsRemeasureItem.plan(m.records, marker: marker)
         #expect(plan.count == 2 && plan.allSatisfy { $0.need == .withdrawn })
         // The drive is back: a run by hand measures them.
@@ -290,6 +295,7 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(again.totals.refreshed == 2)
         #expect(offline.mediaReportCard.map { RemeasureFixture.shownLevels($0).mediaInfo.count } == 2)
         #expect(SoundLevelsRemeasureItem.plan(m.records, marker: try #require(RemeasureFixture.readMarker(m))).isEmpty)
+        #expect(RemeasureFixture.readMarker(m)?.isDone == true, "nothing waits any more: done")
         // A withdrawn row on a removed file is not waited for.
         var withdrawn = try #require(changed.mediaReportCard)
         withdrawn = SoundLevelsRemeasureRules.rewrite(withdrawn, with: .notMeasured(.offline), context: changed.soundPresenceContext)
@@ -437,6 +443,83 @@ struct SoundLevelsRemeasureLogicTests {
         #expect(RemeasureFixture.readMarker(m)?.isDone == false)
     }
 
+    @Test("a drive offline on the first run: its cards are withdrawn and counted waiting (not done); the drive returns → the next scheduled run measures them, and only then completedAt is set")
+    func driveOfflineThenBack() async throws {
+        let dir = try RemeasureFixture.scratch("driveback"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        let away = RemeasureFixture.record("/Volumes/Away/a.mov", size: 1_000, card: RemeasureFixture.card(levels: [-30, -30], size: 1_000))
+        let here = RemeasureFixture.record("/Volumes/Here/b.mov", size: 1_000, card: RemeasureFixture.card(levels: [-30, -30], size: 1_000))
+        m.records = [away, here]
+        try RemeasureFixture.marker(m)
+        let drive = OnlineFlag()
+        let online: @Sendable (String) -> Bool = { $0.hasPrefix("/Volumes/Here") || drive.on }
+        func job() -> SoundLevelsRemeasureJob {
+            let j = RemeasureFixture.job(m) { path, _ in
+                online(path) ? .measured(RemeasureFixture.healthy(-18, -18)) : .notMeasured(.offline)
+            }
+            j.isOnline = online
+            return j
+        }
+        let first = job()
+        await RemeasureFixture.run(first)
+        #expect(first.totals.refreshed == 1 && first.totals.offline == 1)
+        var marker = try #require(RemeasureFixture.readMarker(m))
+        #expect(marker.isWalked && !marker.isDone, "a card waits for its drive: not done")
+        #expect(RemeasureFixture.shownLevels(away.mediaReportCard).mediaInfo.isEmpty, "withdrawn, never shown as current")
+        let tidy = CatalogTidyCalculator.counts(CatalogTidyCalculator.project(m.records, remeasure: marker, isOnline: online),
+                                                degenerateOCRCaptions: 0)
+        #expect(tidy.soundLevelsWaitingCards == 1 && tidy.soundLevelsWaitingDrives == 1)
+        #expect(CatalogTidyRow.rows(tidy).last?.detail.contains("1 of them wait for 1 drive to be connected") == true)
+
+        // The scheduler, as the app wires it (same rule, live-shaped closures).
+        var started: SoundLevelsRemeasureJob?
+        func scheduler() -> SoundLevelsRemeasureScheduler {
+            var env = SoundLevelsRemeasureEnvironment()
+            env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
+            env.isDue = { SoundLevelsRemeasureItem.autoRunDue(m.records, marker: RemeasureFixture.readMarker(m), isOnline: online) }
+            env.start = { let j = job(); started = j; j.start(); return true }
+            return SoundLevelsRemeasureScheduler(env: env)
+        }
+        #expect(scheduler().tick() == .wait, "the drive is still away: nothing to start")
+        drive.on = true
+        #expect(scheduler().tick() == .start, "the drive is back: the next night's run starts")
+        await started?.task?.value
+        #expect(started?.totals.refreshed == 1)
+        #expect(RemeasureFixture.shownLevels(away.mediaReportCard).mediaInfo.count == 2)
+        marker = try #require(RemeasureFixture.readMarker(m))
+        #expect(marker.isDone, "only now: completedAt")
+        #expect(scheduler().tick() == .wait, "done: never again by itself")
+    }
+
+    @Test("a drive that never returns blocks no other card and starts nothing; a file missing from a CONNECTED drive is not 'waiting'")
+    func driveThatNeverReturns() async throws {
+        let dir = try RemeasureFixture.scratch("never"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        let lost = RemeasureFixture.record("/Volumes/Lost/x.mov", size: 1_000, card: RemeasureFixture.preFixReconfiguredCard(size: 1_000))
+        let others = (0..<3).map { RemeasureFixture.record("/Volumes/Here/o\($0).mov", size: 1_000,
+                                                          card: RemeasureFixture.preFixReconfiguredCard(size: 1_000)) }
+        let missing = RemeasureFixture.record(dir.appendingPathComponent("moved-away.mov").path, size: 1_000,
+                                              card: RemeasureFixture.card(levels: [-20, -20], size: 1_000))
+        m.records = [lost] + others + [missing]
+        try RemeasureFixture.marker(m)
+        let online: @Sendable (String) -> Bool = { !$0.hasPrefix("/Volumes/Lost") }
+        let j = RemeasureFixture.job(m) { path, size in
+            if path.hasPrefix("/Volumes/Here") { return .measured(RemeasureFixture.reconfigured()) }
+            return try await SoundLevelsRemeasureJob.measureFile(path: path, expectedSize: size, isOnline: online)
+        }
+        j.isOnline = online
+        await RemeasureFixture.run(j)
+        #expect(j.totals.reconfigured == 3 && j.totals.offline == 1 && j.totals.notFound == 1)
+        #expect(others.allSatisfy { RemeasureFixture.shownLevels($0.mediaReportCard).mediaInfo.isEmpty })
+        #expect(missing.mediaReportCard?.check(.sound).map(SoundLevelsRemeasureRules.isWaitingForDrive) == false)
+        let marker = try #require(RemeasureFixture.readMarker(m))
+        #expect(marker.isWalked && !marker.isDone)
+        for _ in 0..<3 {
+            #expect(!SoundLevelsRemeasureItem.autoRunDue(m.records, marker: marker, isOnline: online), "nothing to start while it is away")
+        }
+        #expect(SoundLevelsRemeasureItem.waiting(m.records, isOnline: online) == SoundLevelsRemeasureWaiting(cards: 1, drives: ["/Volumes/Lost"], ready: 0))
+    }
+
     @Test("relaunch: the real save reaches the catalog; a reloaded catalog carries the rewritten card and nothing is planned again")
     func survivesARelaunch() async throws {
         let dir = try RemeasureFixture.scratch("relaunch"); defer { try? FileManager.default.removeItem(at: dir) }
@@ -467,12 +550,12 @@ struct SoundLevelsRemeasureSchedulerTests {
     @Test("start in the away window or when idle; never when done, busy (skip, with words) or already started this slot")
     func theRule() {
         typealias P = SoundLevelsRemeasurePolicy
-        #expect(P.decide(now: at(4), done: false, busy: nil, idleSeconds: 0, lastStarted: nil) == .start)
-        #expect(P.decide(now: at(14), done: false, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
-        #expect(P.decide(now: at(14), done: false, busy: nil, idleSeconds: 20 * 60, lastStarted: nil) == .start)
-        #expect(P.decide(now: at(4), done: true, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
-        #expect(P.decide(now: at(4), done: false, busy: "a scan is running", idleSeconds: 0, lastStarted: nil) == .skip("a scan is running"))
-        #expect(P.decide(now: at(5), done: false, busy: nil, idleSeconds: 0, lastStarted: at(4)) == .wait,
+        #expect(P.decide(now: at(4), due: { true }, busy: nil, idleSeconds: 0, lastStarted: nil) == .start)
+        #expect(P.decide(now: at(14), due: { true }, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
+        #expect(P.decide(now: at(14), due: { true }, busy: nil, idleSeconds: 20 * 60, lastStarted: nil) == .start)
+        #expect(P.decide(now: at(4), due: { false }, busy: nil, idleSeconds: 0, lastStarted: nil) == .wait)
+        #expect(P.decide(now: at(4), due: { true }, busy: "a scan is running", idleSeconds: 0, lastStarted: nil) == .skip("a scan is running"))
+        #expect(P.decide(now: at(5), due: { true }, busy: nil, idleSeconds: 0, lastStarted: at(4)) == .wait,
                 "a run Rick stopped stays stopped until the next slot")
     }
 
@@ -483,7 +566,7 @@ struct SoundLevelsRemeasureSchedulerTests {
         var starts = 0
         var env = SoundLevelsRemeasureEnvironment()
         env.now = { Calendar.current.date(bySettingHour: 4, minute: 0, second: 0, of: Date()) ?? Date() }
-        env.isDone = { done }
+        env.isDue = { !done }
         env.start = { starts += 1; done = true; return true }
         let s = SoundLevelsRemeasureScheduler(env: env)
         #expect(s.tick() == .start)
@@ -655,5 +738,6 @@ struct SoundLevelsRemeasureSensorTests {
         #expect(SoundLevelsRemeasureRules.withdrawnLead
                 == "the sound levels saved here came from an earlier version of VideoScan and are withdrawn until the sound can be measured again")
         #expect(SoundLevelsRemeasureMarker.fileName == "sound-levels-remeasure.json")
+        #expect(SoundLevelsRemeasureRules.offlineWordsPinned == "its drive is not connected")
     }
 }

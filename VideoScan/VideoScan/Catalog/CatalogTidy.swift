@@ -57,6 +57,10 @@ struct CatalogTidyCounts: Sendable, Equatable {
     /// GH #516: Check Media cards whose Sound row holds levels from before
     /// the fix, or whose levels a run withdrew (waiting for their drive).
     var soundLevelsToRemeasure = 0
+    /// Of those, cards waiting for a drive that is not connected, and how
+    /// many drives (#516 review): shown, never "done".
+    var soundLevelsWaitingCards = 0
+    var soundLevelsWaitingDrives = 0
 
     var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions + soundLevelsToRemeasure }
     /// The menu's "(N)" and its hidden-at-zero rule: only rows that have a
@@ -78,6 +82,7 @@ struct CatalogTidyProjection: Sendable, Equatable {
     var nonVideoRows = 0
     var grouped: [CatalogTidyMember] = []
     var soundLevelsToRemeasure = 0
+    var soundLevelsWaiting = SoundLevelsRemeasureWaiting()
 }
 
 enum CatalogTidyCalculator {
@@ -85,7 +90,8 @@ enum CatalogTidyCalculator {
     /// One pass over `records` (main actor — the records live there).
     /// `remeasure` = Re-measure Sound Levels' marker (nil = none yet: no count).
     @MainActor
-    static func project(_ records: [VideoRecord], remeasure: SoundLevelsRemeasureMarker? = nil) -> CatalogTidyProjection {
+    static func project(_ records: [VideoRecord], remeasure: SoundLevelsRemeasureMarker? = nil,
+                        isOnline: (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }) -> CatalogTidyProjection {
         var out = CatalogTidyProjection()
         let now = Date()
         for r in records {
@@ -93,6 +99,11 @@ enum CatalogTidyCalculator {
             if let remeasure, SoundLevelsRemeasureRules.need(r.mediaReportCard, recordID: r.id, live: r.removal == nil,
                                                              marker: remeasure, now: now) != nil {
                 out.soundLevelsToRemeasure += 1
+                if let row = r.mediaReportCard?.check(.sound), SoundLevelsRemeasureRules.isWaitingForDrive(row),
+                   !isOnline(r.fullPath) {
+                    out.soundLevelsWaiting.cards += 1
+                    out.soundLevelsWaiting.drives.insert(SoundLevelsRemeasureRules.driveKey(r.fullPath))
+                }
             }
             // The split's own facts: live rows with a group (duplicateDigestSplitFacts).
             if r.removal == nil, let g = r.duplicateGroupID {
@@ -116,7 +127,9 @@ enum CatalogTidyCalculator {
     nonisolated static func counts(_ p: CatalogTidyProjection, degenerateOCRCaptions: Int) -> CatalogTidyCounts {
         CatalogTidyCounts(nonVideoRows: p.nonVideoRows, duplicateGroupsToSplit: groupsToSplit(p.grouped),
                           degenerateOCRCaptions: degenerateOCRCaptions,
-                          soundLevelsToRemeasure: p.soundLevelsToRemeasure)
+                          soundLevelsToRemeasure: p.soundLevelsToRemeasure,
+                          soundLevelsWaitingCards: p.soundLevelsWaiting.cards,
+                          soundLevelsWaitingDrives: p.soundLevelsWaiting.drives.count)
     }
 }
 
@@ -151,7 +164,10 @@ struct CatalogTidyRow: Sendable, Equatable, Identifiable {
                            runTitle: nil),
             CatalogTidyRow(kind: .soundLevelsToRemeasure, number: c.soundLevelsToRemeasure,
                            title: "Sound levels to measure again",
-                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file was not connected. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. It also runs by itself once, overnight. Stop any time; running it again continues.",
+                           detail: "Verify report cards saved before the sound-level fix (#516), and cards whose levels were withdrawn because the file could not be measured. Run measures each file's sound again (read only) and rewrites only the card's Sound row; a file it cannot measure keeps no levels until it can. It runs by itself overnight, and again when a drive it waits for is connected. Stop any time; running it again continues."
+                               + (c.soundLevelsWaitingCards > 0
+                                  ? " \(c.soundLevelsWaitingCards.formatted()) of them wait for \(c.soundLevelsWaitingDrives.formatted()) drive\(c.soundLevelsWaitingDrives == 1 ? "" : "s") to be connected."
+                                  : ""),
                            runTitle: "Run"),
         ]
     }

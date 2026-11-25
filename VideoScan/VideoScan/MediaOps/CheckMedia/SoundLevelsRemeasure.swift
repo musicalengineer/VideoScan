@@ -26,9 +26,14 @@
 //
 // Resume: cards are walked in record-id order; the marker keeps the last id
 // whose result is SAVED (`cursor`), so Stop / quit / a failed save resumes
-// there. `completedAt` is the done marker: once set, only withdrawn rows are
-// candidates (they wait for their drive), and the scheduler never starts
-// the job again — Tidy Catalog's Run still does, by hand.
+// there. `walkedAt` says the pre-fix walk reached the end: after it only
+// withdrawn rows are candidates. `completedAt` (the done marker) is set only
+// when, besides, NO card waits for a drive: a card withdrawn because its
+// drive was not connected keeps the job unfinished, "waiting for N drives"
+// (OUTCOME, Tidy). The scheduler starts the job again by itself whenever
+// such a card's drive is connected (the app's own volume signal,
+// `VolumeReachability.isVolumeReachable`) — a drive that never returns
+// blocks nothing else and starts nothing. Tidy's Run works by hand any time.
 //
 // Memory: a plan item is ~300 B (ids, path, the Sound row, the date) —
 // ~30 MB at 100k pre-fix cards, the worst case; the marker is < 1 KB.
@@ -48,8 +53,9 @@ struct SoundLevelsRemeasureMarker: Codable, Sendable, Equatable {
     /// The last pre-fix card (record id, uuidString order) whose result is
     /// saved in the catalog; nil = from the start.
     var cursor: String?
-    /// When a run walked every pre-fix card to the end. nil = not yet (the
-    /// scheduler will start it).
+    /// When a run walked every pre-fix card to the end. nil = not yet.
+    var walkedAt: Date?
+    /// Walked, and no card waits for a drive: done. nil = not yet.
     var completedAt: Date?
     /// The last finished run's one-line count.
     var lastSummary: String?
@@ -57,6 +63,8 @@ struct SoundLevelsRemeasureMarker: Codable, Sendable, Equatable {
     static let fileName = "sound-levels-remeasure.json"
 
     var isDone: Bool { completedAt != nil }
+    /// The pre-fix walk reached the end (older markers: completedAt).
+    var isWalked: Bool { walkedAt != nil || completedAt != nil }
 
     static func url(catalogFile: String) -> URL {
         URL(fileURLWithPath: (catalogFile as NSString).deletingLastPathComponent, isDirectory: true)
@@ -116,6 +124,19 @@ enum SoundLevelsRemeasureRules {
         e.label == "Sound" || e.label == "Left" || e.label == "Right" || e.label.hasPrefix("Channel ")
     }
 
+    /// A row withdrawn because the file's drive was not connected.
+    static func isWaitingForDrive(_ row: MediaCheck) -> Bool {
+        guard isWithdrawnRow(row), case .notRun(let reason) = row.verdict else { return false }
+        return reason.hasSuffix(NotMeasured.offlineWords)
+    }
+
+    /// The drive a path lives on, for "waiting for N drives": "/Volumes/X",
+    /// else "/" (the internal disk). Pure.
+    static func driveKey(_ path: String) -> String {
+        let c = (path as NSString).pathComponents
+        return c.count >= 3 && c[1] == "Volumes" ? "/Volumes/\(c[2])" : "/"
+    }
+
     static func isWithdrawnRow(_ row: MediaCheck) -> Bool {
         guard row.kind == .sound, case .notRun(let reason) = row.verdict else { return false }
         return reason.hasPrefix(withdrawnLead)
@@ -133,7 +154,7 @@ enum SoundLevelsRemeasureRules {
         if isWithdrawnRow(row) { return live ? .withdrawn : nil }
         let suspectDate = card.checkedAt < marker.cutoff
             || card.checkedAt > now.addingTimeInterval(CatalogRealityPolicy.futureSlack)
-        guard !marker.isDone, suspectDate,
+        guard !marker.isWalked, suspectDate,
               row.evidence.contains(where: isChannelLevel) else { return nil }
         if let cursor = marker.cursor, recordID.uuidString <= cursor { return nil }
         return .prefix
@@ -143,19 +164,30 @@ enum SoundLevelsRemeasureRules {
 
     /// Why a file could not be measured again.
     enum NotMeasured: Sendable, Equatable {
+        /// The file's DRIVE is not connected: waits for it (the scheduler
+        /// re-runs when it is back).
         case offline
+        /// The drive is connected but the file is not at its path.
+        case notFound
         /// The file on disk is not the size the card was checked at.
         case changed
         case failed(String)
 
+        static let offlineWords = SoundLevelsRemeasureRules.offlineWordsPinned
+
         var words: String {
             switch self {
-            case .offline: return "the file was not found (its drive is not connected)"
+            case .offline: return Self.offlineWords
+            case .notFound: return "the file is not at its path on a connected drive"
             case .changed: return "the file on disk is no longer the size it was checked at"
             case .failed(let why): return "the sound could not be measured (\(why))"
             }
         }
     }
+
+    /// Persisted at the end of a withdrawn row's reason: how "waiting for its
+    /// drive" is found again. Never reword.
+    static let offlineWordsPinned = "its drive is not connected"
 
     enum Remeasured: Sendable {
         case measured(AudioVerifyDiagnosis)
