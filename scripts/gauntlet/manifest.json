@@ -37921,10 +37921,15 @@
       "path": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
       "stage": "regression",
       "suites": [
-        "VerifyAudioPacketShapeTests"
+        "VerifyAudioPacketShapeTests",
+        "VerifyAudioReconfigurationTests"
       ],
       "tests": [
         "diagnoseWithinBudget",
+        "layoutChangeBeforeFirstFrame",
+        "markerRule",
+        "rateChangeAfterFirstFrame",
+        "rateChangeBeforeFirstFrame",
         "reframeChangesNoMeasurement",
         "reframedDownstream"
       ]

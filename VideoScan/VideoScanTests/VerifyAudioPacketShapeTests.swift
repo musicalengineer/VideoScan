@@ -279,3 +279,106 @@ struct VerifyAudioPacketShapeTests {
         #expect(diagnosis.balanceAnalysis?.measurements == reference.balanceAnalysis?.measurements)
     }
 }
+
+// MARK: - A mid-stream parameter change (Codex #368 P1)
+//
+// When the decoded sound changes sample rate, format or channel layout
+// mid-stream, ffmpeg tears the filter graph down and builds a new one; the
+// samples the reframe holds (fewer than 4096) are dropped, not flushed. Before
+// the reframe each graph's astats printed its own count, the counts disagreed
+// and the parser answered nil, so a stated length read "decode ended early"
+// and nothing was stored. With the reframe a first segment under 4096 samples
+// leaves NO count, the second graph's count alone can look whole, and the pass
+// read complete. The rule now: a pass whose graph was reconfigured has no
+// sample count (AstatsOutputParser.graphReconfiguredMarker) — the outcome the
+// old chain gave.
+
+enum ReconfiguredSoundFixture {
+
+    /// One AAC/ADTS segment (ADTS files concatenate into one stream whose
+    /// parameters change at the join).
+    private static func segment(_ dir: URL, _ name: String, rate: Int, channels: Int, seconds: Double) throws -> URL {
+        let expr = channels == 2 ? VerifyAudioTestMedia.trueStereoExpr : "0.5*sin(440*2*PI*t)"
+        let out = dir.appendingPathComponent(name)
+        try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "aevalsrc=\(expr):s=\(rate):d=\(seconds)", "-c:a", "aac"],
+                                       output: out.path)
+        return out
+    }
+
+    /// Two segments joined, stream-copied into NUT beside a 12 s picture, the
+    /// sound tagged DURATION=12 s (Codex's executed shape). ffprobe reports
+    /// the FIRST segment's rate and layout.
+    static func make(into dir: URL, name: String,
+                     first: (rate: Int, channels: Int, seconds: Double),
+                     second: (rate: Int, channels: Int, seconds: Double)) throws -> String {
+        let a = try segment(dir, name + ".a.aac", rate: first.rate, channels: first.channels, seconds: first.seconds)
+        let b = try segment(dir, name + ".b.aac", rate: second.rate, channels: second.channels, seconds: second.seconds)
+        let joined = dir.appendingPathComponent(name + ".aac")
+        try (try Data(contentsOf: a) + (try Data(contentsOf: b))).write(to: joined)
+        let out = dir.appendingPathComponent(name).path
+        try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "testsrc=duration=12:size=160x120:rate=25", "-i", joined.path,
+                                        "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "copy",
+                                        "-metadata:s:a:0", "DURATION=00:00:12.000000000"], output: out)
+        return out
+    }
+}
+
+@Suite("Verify Audio — a mid-stream sound parameter change is never a complete pass (Codex #368 P1)", .serialized)
+struct VerifyAudioReconfigurationTests {
+
+    /// The real call site: no complete levels pass, a short decode, verdict
+    /// "not checked", nothing to store.
+    private func expectRefused(_ path: String, _ label: String) async throws {
+        let analysis = try await AudioBalanceProbe.analyze(path: path)
+        #expect(analysis.levelsComplete == false, "\(label): levels read complete")
+        #expect(analysis.shortDecode != nil, "\(label): no short decode")
+        let diagnosis = try await VerifyAudioProbe.diagnose(path: path)
+        guard case .notChecked = diagnosis.verdict else {
+            Issue.record("\(label): verdict \(diagnosis.verdict), findings \(diagnosis.findings)")
+            return
+        }
+        #expect(diagnosis.persistedStatus.isEmpty)
+    }
+
+    @Test("rate change before the first reframed frame: 0.02 s at 48 kHz then 6 s at 96 kHz, stated 12 s — refused",
+          .timeLimit(.minutes(3)))
+    func rateChangeBeforeFirstFrame() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_rate_early")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_rate_early.nut",
+                                                     first: (48_000, 2, 0.02), second: (96_000, 2, 6))
+        try await expectRefused(path, "rate change, early")
+    }
+
+    @Test("rate change after reframed frames went out: 2 s at 48 kHz then 6 s at 96 kHz, stated 12 s — refused",
+          .timeLimit(.minutes(3)))
+    func rateChangeAfterFirstFrame() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_rate_late")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_rate_late.nut",
+                                                     first: (48_000, 2, 2), second: (96_000, 2, 6))
+        try await expectRefused(path, "rate change, late")
+    }
+
+    @Test("channel-layout change before the first reframed frame: 0.02 s stereo then 12 s mono at 48 kHz, stated 12 s — refused",
+          .timeLimit(.minutes(3)))
+    func layoutChangeBeforeFirstFrame() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("reconfig_layout")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try ReconfiguredSoundFixture.make(into: dir, name: "test_reconfig_layout.nut",
+                                                     first: (48_000, 2, 0.02), second: (48_000, 1, 12))
+        try await expectRefused(path, "layout change")
+    }
+
+    @Test("the marker: ffmpeg names the reconfiguration on stderr; a count beside it is no answer, and without it the count stands")
+    func markerRule() {
+        let tag = "vstest"
+        let count = "[astats@vstest @ 0x1] Number of samples: 577536\n"
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: count, runTag: tag) == 577_536)
+        let reconfigured = "[af#0:0 @ 0x2] Reconfiguring filter graph because audio parameters changed to 96000 Hz, stereo, fltp\n" + count
+        #expect(AstatsOutputParser.samplesPerChannel(fromStderr: reconfigured, runTag: tag) == nil)
+    }
+}

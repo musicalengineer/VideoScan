@@ -184,6 +184,22 @@ enum AstatsOutputParser {
         "vs" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
+    /// What ffmpeg logs at its default level when the decoded sound's sample
+    /// rate, format or channel layout changes mid-stream and it tears the
+    /// filter graph down and builds another (ffmpeg 9.0.2: "[af#0:0 @ 0x…]
+    /// Reconfiguring filter graph because audio parameters changed to
+    /// 96000 Hz, stereo, fltp"). Each graph has its own astats instance, and
+    /// samples the reframe (AudioBalanceProbe.reframeFilter) still held are
+    /// dropped, not flushed: a first segment under 4096 samples leaves no
+    /// count at all, and the next graph's count alone can look like the whole
+    /// stream (Codex #368 P1). So no count from such a pass is an answer —
+    /// the outcome the chain without the reframe reached through its two
+    /// disagreeing counts. Sound against truncation: ProcessRunner keeps the
+    /// HEAD of stderr, and the line is logged before the last graph's count.
+    /// A file that prints this text in its metadata only makes a pass refuse.
+    /// VerifyAudioReconfigurationTests fails if an ffmpeg stops logging it.
+    static let graphReconfiguredMarker = "Reconfiguring filter graph because"
+
     /// The payloads of the lines THIS run's astats instance logged, in order.
     static func taggedPayloads(fromStderr text: String, runTag: String) -> [Substring] {
         let prefix = "[astats@\(runTag) @ "
@@ -244,7 +260,11 @@ enum AstatsOutputParser {
     /// absent or unreadable: never a guess. Only a line THIS run's astats
     /// instance logged counts (`newRunTag`); one pass has one instance, so
     /// two different counts are not an answer. Pure.
+    ///
+    /// A pass whose filter graph was rebuilt mid-stream has no count either
+    /// (`graphReconfiguredMarker`, Codex #368 P1).
     static func samplesPerChannel(fromStderr text: String, runTag: String) -> Int64? {
+        guard !text.contains(graphReconfiguredMarker) else { return nil }
         var counts = Set<Int64>()
         for payload in taggedPayloads(fromStderr: text, runTag: runTag) {
             guard let v = value(of: "Number of samples:", in: payload) else { continue }

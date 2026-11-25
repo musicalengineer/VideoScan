@@ -391,6 +391,10 @@ enum AudioBalanceProbe {
     /// refused: it merges packets the mov demuxer marks for discard at an
     /// edit-list boundary and changed the sample count (480 000 → 479 712 on
     /// a synthetic edit-listed mov), i.e. it changes what is measured.
+    /// One thing the reframe does change: when the sound's parameters change
+    /// mid-stream ffmpeg rebuilds the graph and drops what this filter held,
+    /// so such a pass has no sample count (AstatsOutputParser
+    /// .graphReconfiguredMarker — the old chain's outcome, Codex #368 P1).
     static let reframeFilter = "asetnsamples=n=4096:p=0"
 
     /// Levels pass — per-channel levels of ONE audio stream, selected
