@@ -398,6 +398,22 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
             readOnly: true)
     }
 
+    /// The centre a newly built VideoScanModel publishes its archive
+    /// authority into (GH #511). The app process — and the app under
+    /// XCUITest, which must boot like the real app — has exactly one model
+    /// and it publishes into `.shared`, the centre every reader defaults to:
+    /// unchanged. In a unit-test process every model is a test's model, and
+    /// ~290 test files build one; each gets its OWN centre, so a test that
+    /// designates an offline archive can no longer leave `.shared` reading
+    /// `.unavailable` (or another test's roots) for whichever suites the
+    /// shard deal puts after it in the same host. Same runner-only predicate
+    /// as main.swift's boot gate. (C++: a factory that hands the singleton
+    /// to production and a fresh instance to the test harness.)
+    static func forNewModel(isUnitTestProcess: Bool = TestEnvironment.isUnitTestProcess)
+        -> FamilyAssetConfigurationCenter {
+        isUnitTestProcess ? FamilyAssetConfigurationCenter() : .shared
+    }
+
     func snapshot() -> FamilyAssetConfiguration {
         lock.lock()
         defer { lock.unlock() }

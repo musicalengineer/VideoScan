@@ -14,6 +14,9 @@ extension VideoScanModel {
     /// where the sync stages the master's People/ enrichments, and its
     /// GEDCOM directory to family-tree/originals, also synced. Read-only
     /// either way.
+    ///
+    /// Into `familyAssetCenter`: `.shared` for the app's one model, the
+    /// model's own centre in a unit-test process (GH #511).
     func publishFamilyAssetConfiguration() {
         let isViewer = ViewerModeCenter.shared.isViewer
         let root = isViewer ? nil : masterArchiveRootPath.map {
@@ -21,7 +24,7 @@ extension VideoScanModel {
         }
         let safelyAvailable = root == nil
             || (isMasterArchiveOnline && masterArchiveIdentityRefusal() == nil)
-        FamilyAssetConfigurationCenter.shared.publish(
+        familyAssetCenter.publish(
             masterArchiveRoot: root,
             masterIsSafelyAvailable: safelyAvailable,
             readOnly: isReadOnly || isViewer)
