@@ -20,6 +20,11 @@ select — THE RULES (each one is a test in tests/test_corpus_select.py):
   2. its STRATUM: (container, video_codec, audio_codec) plus the odd-case flags the catalog can state
      (`flags_of`): no_audio, sound_short, odd_rate, odd_size, damaged, very_short (< 5 s), very_long (> 2 h).
   3. per stratum: ceil(12%) of its members, at least 3; a stratum of 3 or fewer is taken whole (`quota`).
+     A file of 8 GB or more is taken at most ONCE per stratum (DECISIONS 2026-11-24, amended: "do we really
+     need more than 1TB?"): in the spread the stratum's large members stand as ONE candidate — the one whose
+     copy is already made, else the smallest — so a stratum gives at most one, and only where the spread
+     would have taken a large file anyway. A pin or a curated row is still always taken, large or not, and
+     then no other large file is.
   4. the picks are SPREAD (`spread`): the stratum, smallest first, is cut into as many bins as picks are
      wanted, one pick per bin; inside a bin the source volume picked least so far wins, then a member whose
      copy is already made, then the member nearest the bin's middle, then the smallest digest. Deterministic: the same catalog, the same sample.
@@ -251,7 +256,8 @@ def spread(members: List[Candidate], k: int, taken: Iterable[Candidate] = ()) ->
 
 
 def sample(candidates: Iterable[Candidate], always: Iterable[str] = ()) -> List[Candidate]:
-    """Rules 3-5 over the candidates: per stratum its quota, the always-taken counted first."""
+    """Rules 3-5 over the candidates: per stratum its quota, the always-taken counted first, at most one
+    large (>= SPLIT_BYTES) file per stratum beyond them (rule 3)."""
     always = set(always)
     strata: Dict[Tuple[str, ...], List[Candidate]] = defaultdict(list)
     for c in candidates:
@@ -260,7 +266,14 @@ def sample(candidates: Iterable[Candidate], always: Iterable[str] = ()) -> List[
     for key in sorted(strata):
         members = strata[key]
         taken = sorted((c for c in members if c.digest in always), key=lambda c: c.digest)
-        chosen += taken + spread(members, quota(len(members)), taken)
+        # The stratum's large members stand as ONE candidate in the spread (a cap, never a forced pick):
+        # the one whose copy is already made (no new copy), else the smallest (least disk). None when an
+        # always-taken file is already large.
+        large = [c for c in members if c.size >= SPLIT_BYTES and c.digest not in always]
+        pool = [c for c in members if c.size < SPLIT_BYTES]
+        if large and not any(c.size >= SPLIT_BYTES for c in taken):
+            pool.append(min(large, key=lambda c: (c.root is None, c.size, c.digest)))
+        chosen += taken + spread(pool, quota(len(members)), taken)
     return sorted(chosen, key=lambda c: c.digest)
 
 

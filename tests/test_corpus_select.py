@@ -207,9 +207,34 @@ class Rule4SpreadTests(unittest.TestCase):
         sizes = sorted(r['size'] for r in cs.select(rows, [], can_read=everything))
         self.assertEqual(len(sizes), 12)
         self.assertLess(sizes[0], 1 * GB)
-        self.assertGreater(sizes[-1], 9 * GB)
+        self.assertLessEqual(sum(s >= cs.SPLIT_BYTES for s in sizes), 1, 'at most one large file (rule 3)')
+        self.assertGreater(sizes[-1], 7 * GB, 'the picks still reach the top of the sizes')
         ranks = [s * 10 // GB - 1 for s in sizes]                            # the member's rank by size
         self.assertTrue(all(b - a >= 5 for a, b in zip(ranks, ranks[1:])), f'bunched picks: {ranks}')
+
+    # Rick 2026-11-24: "do we really need more than 1TB?" — a file of 8 GB or more at most once per stratum.
+    def test_a_stratum_takes_at_most_one_large_file(self):
+        rows = [row(n, (n + 1) * GB // 10) for n in range(100)]               # 22 of them are >= 8 GB
+        rows += [row(200 + n, 20 * GB + n, mix=('mov', 'prores', 'pcm_s24le')) for n in range(3)]  # all large, <= 3
+        picked = cs.select(rows, [], can_read=everything)
+        by = {}
+        for r in picked:
+            by.setdefault(r['stratum'][0], []).append(r['size'])
+        self.assertLessEqual(sum(s >= cs.SPLIT_BYTES for s in by[H264[0]]), 1, by[H264[0]])
+        self.assertEqual(len(by[H264[0]]), 12, 'the quota still holds')
+        self.assertEqual(by['mov'], [20 * GB], 'a small stratum of large files gives its smallest one, not all three')
+
+    def test_the_large_file_kept_is_the_one_already_copied(self):
+        rows = [row(n, 9 * GB + n) for n in range(5)]
+        current = [mrow(3, 9 * GB + 3, why='codec/container combo', root='external')]
+        picked = cs.select(rows, current, can_read=everything)
+        self.assertEqual([r['sha256'] for r in picked if r['size'] >= cs.SPLIT_BYTES], [sha(3)], 'no new copy made')
+
+    def test_a_pinned_large_file_is_taken_and_then_no_other_large_one(self):
+        rows = [row(n, 9 * GB + n) for n in range(4)] + [row(10 + n, GB) for n in range(4)]
+        picked = cs.select(rows, [], can_read=everything, pins={sha(2): 'GH #1'})
+        large = [r['sha256'] for r in picked if r['size'] >= cs.SPLIT_BYTES]
+        self.assertEqual(large, [sha(2)])
 
     def test_a_volume_not_yet_picked_wins_inside_a_bin(self):
         # 3 bins of 2; in each the A-file has the smaller digest and the same distance to the middle: without
