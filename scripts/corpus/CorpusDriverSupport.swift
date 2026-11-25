@@ -38,8 +38,11 @@
 // but never mix; the Python side folds them by SHA-256, not by order.
 //
 // Deadline: a file that overruns `deadlineSeconds` from its own `begin` is
-// recorded as `timeout` and the test host EXITS ITSELF (`_exit`); the Python
-// side relaunches for the files left (and runs again ALONE every file a launch
+// recorded as `timeout` (the check lane: once the probe states the file's
+// duration, `mediaDuration` extends that file's deadline to
+// `deadlineSeconds + deadlinePerMediaSecond × duration`, at most
+// `deadlineCapSeconds`, still from its own `begin` and never shorter) and
+// the test host EXITS ITSELF (`_exit`); the Python side relaunches for the files left (and runs again ALONE every file a launch
 // of N left unfinished). No other process is ever signalled.
 //
 // Privacy: only enum case names, codec/container names and numbers are
@@ -218,6 +221,14 @@ final class CorpusRun: Sendable {
     func begin(_ items: [CorpusConfig.Item]) {
         for item in items { progress.write(["ev": "begin", "sha": item.sha]) }
         deadline.arm(shas: items.map(\.sha), seconds: config.deadlineSeconds)
+    }
+
+    /// The probe has stated the file's duration: its deadline grows by the config's rule (CorpusDeadline.seconds),
+    /// measured from its own `begin`, never shortened. Without the rule, or without a usable duration, nothing changes.
+    func mediaDuration(_ item: CorpusConfig.Item, seconds: Double?) {
+        guard let perMediaSecond = config.deadlinePerMediaSecond, let cap = config.deadlineCapSeconds else { return }
+        deadline.extend(sha: item.sha, toSeconds: CorpusDeadline.seconds(base: config.deadlineSeconds, perMediaSecond: perMediaSecond,
+                                                                          cap: cap, mediaSeconds: seconds))
     }
 
     func end(_ item: CorpusConfig.Item) {

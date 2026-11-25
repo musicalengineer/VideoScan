@@ -57,6 +57,8 @@ final class CorpusCheckDriver: XCTestCase {
             await run.engine(item, "probe") {
                 switch await CheckMediaProbe.facts(path: item.path) {
                 case .success(let facts):
+                    // The audio engine's work is linear in the media's length: its deadline grows with it.
+                    run.mediaDuration(item, seconds: facts.durationSeconds)
                     run.facts(item, ["container": CorpusWords.word(facts.formatName),
                                      "vcodec": CorpusWords.word(facts.video?.codec ?? "none"),
                                      "acodec": CorpusWords.word(facts.audio?.codec ?? "none"),
