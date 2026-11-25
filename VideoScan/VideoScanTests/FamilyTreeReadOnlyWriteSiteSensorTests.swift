@@ -48,9 +48,12 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         "FamilyTreeLiveModel.swift:rememberFocus": "UserDefaults UI preference: the last focused person",
         "FamilyTreeLineExport.swift:writePNG": "Export line…: the file the user named in a save panel",
         "TreeIdentityCenter.swift:var store": "the raw persistence closure; it is only ever called inside gatedStore's withWrite",
-        "FamilySearchPersonRefreshCoordinator.swift:releaseLaunchScratch":
-            "frees this launch's own temp scratch folder, outside every family-data location (#196 F3); it must run "
-            + "when read-only too, or a refused publish leaks it (codex P2, 2026-11-24)",
+        "PersonRefreshLaunchScratch.swift:make":
+            "rolls back its own half-made temp scratch folder; called only inside PersonRefresh.launch's withWrite",
+        "PersonRefreshLaunchScratch.swift:free":
+            "frees this launch's own temp scratch folder by identity, outside every family-data location (#196 F3); "
+            + "it must run when read-only too, or a refused publish leaks it (codex P2 + closing, 2026-11-24)",
+        "PersonRefreshLaunchScratch.swift:freeLeaf": "the leaf level of free (same reason): its own verified leaf",
     ]
 
     static func sourcesUnderTheSensor() throws -> [(String, String)] {

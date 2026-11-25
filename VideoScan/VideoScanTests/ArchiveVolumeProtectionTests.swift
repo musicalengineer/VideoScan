@@ -541,8 +541,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         // the one Trash call, MediaTrash.move (below).
         "VideoScan/FamilyTree/FamilyAssetStore.swift": 2,
         "VideoScan/FamilyTree/FamilySearchPullCoordinator.swift": 6, "VideoScan/People/FindPersonJob.swift": 1,
-        // Person refresh frees its own per-launch temp scratch folder (codex P2, 2026-11-24).
-        "VideoScan/FamilyTree/FamilySearchPersonRefreshCoordinator.swift": 1,
+        // Person refresh makes and frees its own per-launch temp scratch folder by identity
+        // (unlinkat relative to verified descriptors; codex closing P1, 2026-11-24). Never a
+        // catalog record's file: the tool's answer in the temp dir.
+        "VideoScan/FamilyTree/PersonRefreshLaunchScratch.swift": 7,
         "VideoScan/Hallie/Voice/HallieNeuralSpeech.swift": 7, "VideoScan/Hallie/HalliePhotoImport.swift": 1,
         "VideoScan/Hallie/Voice/HalliePronunciationLexicon.swift": 1, "VideoScan/Hallie/Web/HallieWebPoster.swift": 3,
         "VideoScan/Hallie/Web/HallieWebProxy.swift": 3, "VideoScan/People/IdentifyFamilyModel.swift": 1,

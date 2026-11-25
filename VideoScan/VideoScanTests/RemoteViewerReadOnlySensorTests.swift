@@ -544,8 +544,6 @@ struct RemoteViewerReadOnlySensorTests {
         "Catalog/CatalogWriteError.swift": (1, nil, nil),
         "FamilyTree/CouplePortrait.swift": (2, nil, nil), "FamilyTree/FamilyAssetStore.swift": (1, nil, nil),
         "FamilyTree/FamilySearchPullCoordinator.swift": (6, nil, nil),
-        // Person refresh frees its own per-launch temp scratch folder (codex P2, 2026-11-24).
-        "FamilyTree/FamilySearchPersonRefreshCoordinator.swift": (1, nil, nil),
         "Hallie/HalliePhotoImport.swift": (1, nil, nil), "Hallie/Voice/HallieNeuralSpeech.swift": (7, nil, nil),
         "Hallie/Voice/HalliePronunciationLexicon.swift": (1, nil, nil),
         "Hallie/Web/HallieWebPoster.swift": (3, nil, nil), "Hallie/Web/HallieWebProxy.swift": (3, nil, nil),

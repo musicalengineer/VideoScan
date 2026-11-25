@@ -211,4 +211,54 @@ struct FamilyTreeReadOnlyClosing5Tests {
         let published = try #require(c.stagingFolder).appendingPathComponent(PersonRefreshPaths.outputFileName)
         #expect(!FileManager.default.fileExists(atPath: published.path), "a refused publish landed the answer")
     }
+
+    // Codex closing pass on 84e7a599f, P1: the cleanup checked the folder's
+    // TYPE, not its identity — a folder moved into its place was deleted.
+    @Test func aFolderSwappedInUnderTheScratchNameSurvivesCancel() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-swap", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        let launchFolder = output.deletingLastPathComponent().deletingLastPathComponent()
+        // The launch's folder renamed aside; a look-alike (same names, a
+        // sentinel answer) moved into its path.
+        try fm.moveItem(at: launchFolder, to: scratch.appendingPathComponent("aside", isDirectory: true))
+        try fm.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "sentinel".write(to: output, atomically: true, encoding: .utf8)
+        c.cancel()
+        #expect((try? String(contentsOf: output, encoding: .utf8)) == "sentinel", "cleanup deleted a folder it did not make")
+    }
+
+    @Test func aScratchHoldingWhatTheLaunchDidNotMakeIsLeftWhole() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, output) = try scratchLaunch("free-extra", scratch: scratch, mode: Mode())
+        defer { layout.remove() }
+        let stranger = output.deletingLastPathComponent().appendingPathComponent("not-ours.txt")
+        try "keep".write(to: stranger, atomically: true, encoding: .utf8)
+        c.cancel()
+        #expect(fm.fileExists(atPath: stranger.path), "cleanup removed a file the launch did not make")
+    }
+
+    // P2: one coordinator, A's answer being parsed, relaunched as B before
+    // yielding — A's parser must neither set B's phase nor free B's scratch.
+    @Test func aRelaunchMidParseKeepsTheNewLaunchAndItsScratch() async throws {
+        let fm = FileManager.default
+        let scratch = fm.temporaryDirectory.appendingPathComponent("fsrefresh-free-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let (c, layout, outA) = try scratchLaunch("free-relaunch", scratch: scratch, mode: Mode())
+        defer { layout.remove(); c.cancel() }
+        try PersonRefreshAppFixtures.onePerson().write(to: outA, atomically: true, encoding: .utf8)
+        c.read(output: outA)             // A's parse is now in flight
+        c.launch()                       // B, before A's parser can finish
+        guard case .waiting(let outB) = c.phase, outB != outA else { Issue.record("B not waiting: \(c.phase)"); return }
+        // A's parse takes milliseconds; a stale completion would end B's wait.
+        let ended = await PersonRefreshAppFixtures.waitUntil(1) { if case .waiting = c.phase { false } else { true } }
+        #expect(!ended, "A's stale parse changed B's phase to \(c.phase)")
+        #expect(fm.fileExists(atPath: outB.deletingLastPathComponent().path), "B's scratch was freed before B answered")
+        try PersonRefreshAppFixtures.onePerson().write(to: outB, atomically: true, encoding: .utf8)
+        #expect(await PersonRefreshAppFixtures.waitUntil { if case .ready = c.phase { true } else { false } }, "B: \(c.phase)")
+    }
 }

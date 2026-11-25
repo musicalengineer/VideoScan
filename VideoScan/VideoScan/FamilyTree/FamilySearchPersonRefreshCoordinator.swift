@@ -83,11 +83,12 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// launch answers into `<this>/<UUID>/<FSID>-<stamp>/person.ged`.
     var answerScratchRoot: URL = FileManager.default.temporaryDirectory
         .appendingPathComponent("VideoScan-person-refresh", isDirectory: true)
-    /// `<answerScratchRoot>/<UUID>/` — set only when THIS launch created it,
-    /// removed (and cleared) by `releaseLaunchScratch`. Never the shared root.
-    /// Worst case held on disk: one folder + one small person.ged per
-    /// coordinator still `.waiting`.
-    private(set) var launchScratch: URL?
+    /// `<answerScratchRoot>/<UUID>/<FSID>-<stamp>/` as THIS launch made it,
+    /// by identity (PersonRefreshLaunchScratch); freed and cleared by
+    /// `releaseLaunchScratch`. Never the shared root. Worst case held on
+    /// disk: one folder + one small person.ged per coordinator still
+    /// `.waiting`.
+    private(set) var launchScratch: PersonRefreshLaunchScratch?
 
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
@@ -170,7 +171,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// Write the script into a fresh staging folder, open it in Terminal
     /// and start watching. Nothing runs until Return is pressed there.
     func launch() {
-        releaseLaunchScratch()   // a relaunch replaces the earlier run's folder
+        // A relaunch ends the earlier run first (codex closing P2): its watcher
+        // and parser are cancelled and the generation moves on, so a callback
+        // of that run is stale and can neither set this run's phase nor free
+        // this run's scratch; then the earlier run's folder is freed.
+        watchTask?.cancel(); watchTask = nil
+        parseTask?.cancel(); parseTask = nil
+        generation &+= 1
+        releaseLaunchScratch()
         let started = now()
         // Never reuse a folder: a leftover person.ged from a refresh in
         // the same second would otherwise be read as this one's answer.
@@ -190,8 +198,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         // second were handed one person.ged and read each other's answer
         // (flake 2026-11-24). The UUID level keeps the leaf name — and the
         // `started` log line — `<FSID>-<stamp>/person.ged`.
-        let launchFolder = answerScratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let output = launchFolder
+        let launchName = UUID().uuidString
+        let output = answerScratchRoot.appendingPathComponent(launchName, isDirectory: true)
             .appendingPathComponent(folder.lastPathComponent, isDirectory: true)
             .appendingPathComponent(PersonRefreshPaths.outputFileName)
         // The attempt is on record BEFORE anything can refuse it: a run that
@@ -218,14 +226,16 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             // primitive; the spawned tool's only output path is `output`,
             // in scratch (#196 F3).
             let launcher = self.launcher
-            var created = false
-            defer { if created { launchScratch = launchFolder } }   // recorded even when the script write throws
+            var made: PersonRefreshLaunchScratch?
+            defer { if let made { launchScratch = made } }   // recorded even when the script write throws
+            let scratchRoot = answerScratchRoot
             try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script + spawn → \(output.lastPathComponent) in scratch)",
                                                mode: writeMode) {
-                let fresh = !FileManager.default.fileExists(atPath: launchFolder.path)
-                try FileManager.default.createDirectory(at: output.deletingLastPathComponent(),
-                                                        withIntermediateDirectories: true)
-                created = fresh   // a fresh UUID: if it did not exist, this launch made it
+                // The shared root (kept); then this launch's two levels, made
+                // and identified by PersonRefreshLaunchScratch.make.
+                try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+                made = try PersonRefreshLaunchScratch.make(in: scratchRoot, name: launchName,
+                                                           leafName: folder.lastPathComponent)
                 _ = try script.write()
                 launcher.open(script.scriptURL)
             }
@@ -283,21 +293,15 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         return published
     }
 
-    /// Free this launch's scratch folder: only `launchScratch` (made by this
-    /// launch, a fresh UUID), only while it is still a real directory — a
-    /// symlink put in its place is left alone, never followed. removeItem
-    /// unlinks a nested symlink, it does not descend through it. The
-    /// published copy under the refresh root is not in here. Scratch only:
-    /// never media, never family data (those go to Trash).
+    /// Free this launch's scratch by identity (PersonRefreshLaunchScratch.free):
+    /// a folder swapped in under its name, or anything the launch did not
+    /// make inside it, is left whole and named in one log line. The published
+    /// copy under the refresh root is not in here.
     private func releaseLaunchScratch() {
-        guard let folder = launchScratch else { return }
+        guard let scratch = launchScratch else { return }
         launchScratch = nil
-        var info = stat()
-        guard lstat(folder.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return }
-        do {
-            try FileManager.default.removeItem(at: folder)
-        } catch {
-            note("could not free its scratch folder \(folder.lastPathComponent): \(error.localizedDescription)")
+        if let kept = scratch.free() {
+            note("left its scratch folder \(scratch.name) in place: \(kept)")
         }
     }
 
@@ -319,7 +323,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             while !Task.isCancelled, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
-                guard let size = await FamilySearchPullCoordinator.fileSize(at: output, newerThan: since) else {
+                let statted = await FamilySearchPullCoordinator.fileSize(at: output, newerThan: since)
+                guard !Task.isCancelled else { return }   // cancelled or relaunched during the stat
+                guard let size = statted else {
                     if lastSize >= 0 {
                         self.quietSince = nil
                         let message = "\(output.lastPathComponent) was removed before it finished. Nothing was changed."
@@ -330,6 +336,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     continue
                 }
                 if size > 0, await FamilySearchPullCoordinator.hasGedcomTrailer(at: output) {
+                    guard !Task.isCancelled else { return }
                     self.quietSince = nil
                     self.read(output: output)
                     return
