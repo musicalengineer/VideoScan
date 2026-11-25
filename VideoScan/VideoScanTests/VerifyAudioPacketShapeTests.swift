@@ -74,7 +74,7 @@ enum OneSamplePacketMov {
                 size = end - i
             }
             guard size >= header, i + size <= end else { break }
-            out.append(Box(type: String(decoding: b[i + 4..<i + 8], as: UTF8.self),
+            out.append(Box(type: String(bytes: b[i + 4..<i + 8], encoding: .isoLatin1) ?? "",
                            start: i, body: i + header, end: i + size))
             i += size
         }
@@ -94,7 +94,7 @@ enum OneSamplePacketMov {
         for moov in boxes(b, 0, b.count) where moov.type == "moov" {
             for trak in boxes(b, moov.body, moov.end) where trak.type == "trak" {
                 guard let mdia = child(b, trak, "mdia"), let hdlr = child(b, mdia, "hdlr"),
-                      String(decoding: b[hdlr.body + 8..<hdlr.body + 12], as: UTF8.self) == "soun",
+                      String(bytes: b[hdlr.body + 8..<hdlr.body + 12], encoding: .isoLatin1) == "soun",
                       let mdhd = child(b, mdia, "mdhd"), let minf = child(b, mdia, "minf"),
                       let stbl = child(b, minf, "stbl"), let stts = child(b, stbl, "stts") else { continue }
                 let version1 = b[mdhd.body] == 1
