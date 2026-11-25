@@ -234,6 +234,25 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 - To file (date-review build 2026-11-01): the preview cache holds no poster or filmstrip for any of the 297 DV digests — the preview sweep skips raw DV (or never reached it); every DV row in the Catalog shows no picture until it does.
 - To file (11/01): a `.vs.archive.mov` the app itself transcoded has no `lineage` row to its source `.dv` (GrampaBreen tape: the archive copy and the raw DV are two contents with nothing linking them), so a date Rick sets on one does not reach the other and nothing can propagate it; check how many archive transcodes lack a lineage row and whether the Promote path writes one.
 
+## Parked from the issue triage of 2026-11-25 (each was a GH issue, closed into this line)
+- Dead-code sweep: TrimJob/TrimEngine, the two purge sheets, CatalogDuplicatesMenu, test-only files (#312).
+- Typecheck ratchet: fail a new function only after 2 consecutive nights over 500 ms, or with a margin (#246).
+- Pull Irish genealogy sources into the tree the way FamilySearch is pulled (#230).
+- Re-run the 9/13 Hallie misses (royalty title, count follow-ups, "longest video in the archive", "Marry" read as a name) against the current brain; add them to the eval (#185).
+- Selection-driven still preview that skips black or blank leading frames, the same in Catalog, Archive and People (#134).
+- Swift 6 reviewer minors: dead fileManager seam (FamilyGraphCompiledStore), HallieQueryBench comment, NUL helper, move MainActorSlot (#382).
+- Volumes table: Date Scanned (dd-MMM-yyyy), yellow (rescan)/(update) from evidence (missing count, FSEvents id), never from age alone (#348).
+- Split VideoScanModel into feature stores, one slice per night, scan/merge first (#337; CLAUDE.md rule 12 holds the line meanwhile).
+- Archive Angel "only copy" = no other live on-disk row with the same SHA-256 (trashed or removed don't count), not the duplicateGroupID == nil proxy (#316).
+- Trash engine leftovers: Delete Duplicates' per-file proof → the engine's RemovalStep; Forget Volume / full rescan record markers or Missing, never deletion; retire Show Again (#315).
+- Background JobSupervisor.admit builds the job (EraJob plans the catalog) on the actor; move it off before 100k scale (~50 ms today) (#427).
+- Hallie Cloud: tag HistoryTurn with HallieDataClass so Cloud gets familyText-only prior turns (#449).
+- Hallie Cloud E1 eval via shell --cloud; move translator prompts to HallieTranslatorContract (cloud→local fallback is out: DECISIONS 2026-11-07) (#451).
+- fd-bound derivative and rescue staging (O_EXCL, fstat publish, mkdirat no-follow walk) against a local actor racing renames (#503).
+- Catalog load decodes CatalogJSONValue straight from column bytes instead of JSONSerialization → Any → cast; 4.8 s Release (#491).
+- Supersede pass over the ~2,850 stored "!!!!" ocrDate caption rows, through the commit door, Codex (from #402, fixed for new rows).
+- Caption bench: the smoke-N sweep stops at the first N with 0 valid outputs; investigate the mlx-vlm N=12 cliff (from #406, fixed).
+
 ## Done (moved here 2026-11-01; kept for the record)
 - Background step 1 candidate (2026-10-31): the 8B era/OCR expert as the helper's first real job — A2's windows + contracts over the whole catalog, assertions into model-lab.sqlite with model + prompt hashes, sidecars + journal to the app's committer; needs §7 ruling 4 (step order).
 - Schema v14 `provenance_assertions` with the rejected-value veto trigger — shipped 2026-11-01 with background step 1 (DECISIONS 2026-11-01); was the last item of BACKLOG's "Phase 1: schema v13 additive" line.
