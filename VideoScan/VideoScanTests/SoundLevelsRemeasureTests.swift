@@ -835,13 +835,14 @@ struct SoundLevelsRemeasureClosingTests {
         if let c = after.catalogCutover.committer { await c.repository.close() }
     }
 
-    @Test("fourth pass P0 on catalog.sqlite: Check Media publishes a newer card on a copy DURING the recovery read-back — that copy is left as it is (newer than both), named in OUTCOME; it survives a save and a relaunch")
+    @Test("fourth/fifth pass P0 on catalog.sqlite: Check Media publishes a newer card on a copy DURING the recovery read-back — EVERY copy takes that newer card (one card per content), named in OUTCOME; it survives the refused copy becoming saveable, a save and a relaunch")
     func recoveryKeepsACardChangedMeanwhile() async throws {
         let scene = try CutoverScene.make("remeasure_recovery"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let ids = try copies(scene, name: "q", count: 2, seed: 505) { RemeasureFixture.preFixReconfiguredCard(size: $0) }
         let model = try await relaunchRemeasure(scene, from: scene.model)
         let a = try #require(model.record(forID: ids[0])), b = try #require(model.record(forID: ids[1]))
+        let bPath = b.fullPath
         b.fullPath = a.fullPath   // B's row is refused: the commit returns false
         var fresh = freshCard(a.sizeBytes)
         fresh.checks.append(MediaCheck(kind: .black, verdict: .ok, sentence: "No black stretches."))
@@ -861,12 +862,18 @@ struct SoundLevelsRemeasureClosingTests {
         await RemeasureFixture.run(j)
         #expect(box.calls == 2, "the pre-write check and the recovery read-back")
         #expect(a.mediaReportCard == fresh, "Check Media's newer card was overwritten by the recovery")
+        #expect(b.mediaReportCard == fresh, "the refused copy holds the content's newer card too")
         guard case .failed(let words) = j.state else { Issue.record("\(j.state)"); return }
-        #expect(words.contains("1 copy changed meanwhile"), "\(words)")
+        #expect(words.contains("checked again meanwhile"), "\(words)")
+        _ = model.saveCatalogNow()
+        // Codex fifth pass: B becomes saveable again — it must not write an older card over A's.
+        b.fullPath = bPath
         _ = model.saveCatalogNow()
         let after = try await relaunchRemeasure(scene, from: model)
-        let reloaded = try #require(after.record(forID: ids[0])?.mediaReportCard)
-        #expect(SoundLevelsRemeasureRules.sameCard(reloaded, fresh), "after save + relaunch A keeps its newer card")
+        for id in ids {
+            let reloaded = try #require(after.record(forID: id)?.mediaReportCard)
+            #expect(SoundLevelsRemeasureRules.sameCard(reloaded, fresh), "copy \(id): after B is saveable again, save + relaunch, the newer card survives")
+        }
         if let c = after.catalogCutover.committer { await c.repository.close() }
     }
 

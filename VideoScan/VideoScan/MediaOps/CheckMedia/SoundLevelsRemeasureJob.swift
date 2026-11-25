@@ -491,14 +491,15 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     private func reconcileRefusedCommit(_ refused: RefusedCommit, model: VideoScanModel) async {
         saveFailed = true
         let stored: SoundLevelsStoredCard = if let d = refused.item.digest { await storedCard(d) } else { .none }
-        let changed = refused.copies.filter { copy, _, new in copy.mediaReportCard != new }.count
-        let words = Self.settle(refused.copies, to: stored)
-        if case .card(let truth) = stored, SoundLevelsRemeasureRules.sameCard(truth, refused.copies[0].2) {
-            totals.cardsWritten += refused.copies.count - changed   // the rewritten card landed (P2)
+        // The card belongs to the CONTENT: every live copy of the digest ends
+        // holding the same card (Codex fifth pass P0).
+        let live = refused.copies.first.map { SoundLevelsRemeasureItem.copiesNow(model.records, key: SoundLevelsRemeasureItem.key($0.0)) } ?? []
+        let settled = Self.settle(refused.copies, live: live, to: stored)
+        if case .card(let truth) = stored, settled.changed == 0, SoundLevelsRemeasureRules.sameCard(truth, refused.copies[0].2) {
+            totals.cardsWritten += live.count   // the rewritten card landed (P2)
         }
-        if changed > 0 { totals.changedMeanwhile += changed }
-        let meanwhile = changed > 0 ? "; \(changed) cop\(changed == 1 ? "y" : "ies") changed meanwhile (checked again) — left as \(changed == 1 ? "it is" : "they are")" : ""
-        let message = "The catalog could not store all of \(refused.item.filename)'s copies — \(words)\(meanwhile); "
+        totals.changedMeanwhile += settled.changed
+        let message = "The catalog could not store all of \(refused.item.filename)'s copies — \(settled.words); "
             + "\(savedCount) card(s) saved earlier are kept; no media was changed. Stopped; run it again once the catalog can be saved. "
             + Self.rowsClause(before: rowsAtStart, after: model.records.count, written: totals.cardsWritten)
         summaryLine = message
@@ -506,19 +507,36 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         finish(failed: message)
     }
 
-    /// Set each copy that still holds the job's card to the stored truth
-    /// (or back to its old card when nothing could be stored). Synchronous.
-    /// Returns the OUTCOME words.
-    static func settle(_ copies: [(VideoRecord, MediaReportCard, MediaReportCard)], to stored: SoundLevelsStoredCard) -> String {
+    /// One synchronous step after the read-back. The card belongs to the
+    /// CONTENT, so every live copy ends holding the SAME card:
+    ///   * a copy changed meanwhile (Verify checked it again) holds a card
+    ///     newer than both the job's and the store's → ALL copies take it;
+    ///     two different newer cards → the latest `checkedAt`, named;
+    ///   * otherwise ALL take the stored card; with no SQLite store, their
+    ///     cards as they were; a stored card that cannot be read → the job's
+    ///     card stays (never older than the store).
+    /// Returns the OUTCOME words and how many copies had changed meanwhile.
+    @MainActor
+    static func settle(_ written: [(VideoRecord, MediaReportCard, MediaReportCard)], live: [VideoRecord],
+                       to stored: SoundLevelsStoredCard) -> (words: String, changed: Int) {
+        guard let jobCard = written.first?.2 else { return ("nothing was written", 0) }
+        let newer = live.compactMap(\.mediaReportCard).filter { $0 != jobCard }
+        if let latest = newer.max(by: { $0.checkedAt < $1.checkedAt }) {
+            for copy in live { copy.mediaReportCard = latest }
+            let distinct = Set(newer.map { $0.checkedAt.timeIntervalSince1970 }).count
+            return ("a copy was checked again meanwhile, so all \(live.count) copies now hold that newer card"
+                    + (distinct > 1 ? " (copies were checked again with different results; the latest, checked \(latest.checkedAt.formatted(date: .abbreviated, time: .shortened)), is kept)" : ""),
+                    newer.count)
+        }
         switch stored {
         case .card(let truth):
-            for (copy, _, new) in copies where copy.mediaReportCard == new { copy.mediaReportCard = truth }
-            return "the copies it still owned now show exactly the card catalog.sqlite holds"
+            for copy in live { copy.mediaReportCard = truth }
+            return ("every copy now shows exactly the card catalog.sqlite holds", 0)
         case .none:
-            for (copy, old, new) in copies where copy.mediaReportCard == new { copy.mediaReportCard = old }
-            return "nothing of it was stored; the copies it still owned show their cards as they were"
+            for (copy, old, _) in written where copy.mediaReportCard == jobCard { copy.mediaReportCard = old }
+            return ("nothing of it was stored; its copies show their cards as they were", 0)
         case .unreadable(let why):
-            return "the stored card could not be read back (\(why)); its copies keep the rewritten card, never older than the store"
+            return ("the stored card could not be read back (\(why)); its copies keep the rewritten card, never older than the store", 0)
         }
     }
 
