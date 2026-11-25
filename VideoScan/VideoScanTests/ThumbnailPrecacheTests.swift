@@ -228,9 +228,11 @@ struct ThumbnailPrecacheTests {
     //     their costs, entries + evictions + removals == inserts, and each of
     //     OUR removals counted as a removal whenever no eviction overlapped
     //     it. On a quiet machine these reduce to the old exact counts.
-    //   * Ledger tests play NSCache's event orders (including a pressure
-    //     eviction at every step) into ThumbnailMemoryCache.Ledger directly
-    //     and pin exact counts deterministically.
+    //   * Ledger tests play NSCache's event orders into
+    //     ThumbnailMemoryCache.Ledger directly and pin exact counts.
+    //   * Shell tests drive the REAL class: a purge landed through the
+    //     stepHook seam in each window of set/remove/purge, and a canary-
+    //     guarded check that our replace/remove/purge never raise evictions.
 
     /// How hard NSCache is squeezed. `.pressure` reproduces the M5 Ultra
     /// suite of 2026-11-24: NSCache dropped every entry inside the setObject
@@ -461,89 +463,95 @@ struct ThumbnailPrecacheTests {
         #expect(l.outgoing.isEmpty)
     }
 
-    /// One scripted operation against a model NSCache that drives the
-    /// Ledger in the same order the ThumbnailMemoryCache shell does, with a
-    /// pressure eviction of every held entry injectable at any hook.
-    private struct ModelCache {
-        var ledger = Ledger()
-        var held: [String: Obj] = [:]
-        var inserts = 0, ours = 0, pressured = 0, hook = 0
-        var pressureInWindow = false
-        let pressureAt: Int?
+    // MARK: - Shell, real class (a purge landed in every window)
 
-        /// `inWindow`: between a willX and its didX (the misfile window).
-        mutating func pressure(inWindow: Bool) {
-            defer { hook += 1 }
-            guard hook == pressureAt else { return }
-            if inWindow && !held.isEmpty { pressureInWindow = true }
-            for (k, o) in held {
-                held[k] = nil; pressured += 1
-                ledger.willEvict(ObjectIdentifier(o), cost: 4)
+    @Test("Shell: an NSCache purge landed at each hook of the REAL cache (set, replace, re-store, remove, purge) keeps entries, bytes and totals exact and never files ours as evictions")
+    func shellExactUnderPressureAtEachHook() {
+        /// What one run saw; a class so the hook closure can update it.
+        final class Run {
+            var steps = 0, inserts = 0, pressured = 0
+            var inWindow = false
+            var canariesLostBeforePurge = 0
+            var atPurge: (snap: ThumbnailMemoryCache.Snapshot, held: Int)?
+        }
+        let script = ["a", "b", "c"], canaries = (0..<10).map { "canary\($0)" }
+        let misfileWindows: Set<ThumbnailMemoryCache.Step> = [.setAccounted, .removeMarked, .purgeMarked]
+        func run(pressureAt: Int?) -> (ThumbnailMemoryCache, Run) {
+            let cache = ThumbnailMemoryCache(), r = Run()
+            for k in canaries { cache.setObject(Self.image(1, 1), forKey: k as NSString, cost: 4) }
+            cache.stepHook = { step in
+                defer { r.steps += 1 }
+                if step == .setLookedUp { r.inserts += 1 }
+                if r.steps == pressureAt {
+                    for k in script where cache.contains(k) {
+                        cache.evictAsNSCacheWould(forKey: k as NSString)
+                        r.pressured += 1
+                        if misfileWindows.contains(step) { r.inWindow = true }
+                    }
+                }
+                if step == .purgeBegan {
+                    r.canariesLostBeforePurge = canaries.filter { !cache.contains($0) }.count
+                    r.atPurge = (cache.snapshot, (script + canaries).filter(cache.contains).count)
+                }
             }
+            let same = Self.image(1, 1)
+            cache.setObject(Self.image(1, 1), forKey: "a", cost: 4)
+            cache.setObject(same, forKey: "a", cost: 4)                 // replace
+            cache.setObject(same, forKey: "a", cost: 4)                 // same object: no-op
+            cache.setObject(Self.image(1, 1), forKey: "b", cost: 4)
+            cache.removeObject(forKey: "a")
+            cache.removeObject(forKey: "never-stored")
+            cache.setObject(Self.image(1, 1), forKey: "c", cost: 4)
+            cache.removeAllObjects()
+            cache.stepHook = nil
+            withExtendedLifetime(same) {}
+            return (cache, r)
         }
-        /// NSCache removing an entry because WE asked.
-        mutating func ourExit(_ k: String) {
-            guard let cur = held[k] else { return }
-            held[k] = nil; ours += 1
-            ledger.willEvict(ObjectIdentifier(cur), cost: 4)
-        }
-        mutating func set(_ k: String, _ o: Obj) {
-            pressure(inWindow: false)
-            if let cur = held[k], cur === o { return }     // the shell's same-object no-op
-            let old = held[k].map(ObjectIdentifier.init)
-            ledger.willSet(replacing: old, cost: 4)
-            pressure(inWindow: true)
-            if let cur = held[k], cur !== o { ourExit(k) }
-            if held[k] == nil { inserts += 1 }
-            held[k] = o
-            pressure(inWindow: true)
-            ledger.didSet(replacing: old)
-        }
-        mutating func remove(_ k: String) {
-            pressure(inWindow: false)
-            guard let o = held[k] else { return }
-            ledger.willRemove(ObjectIdentifier(o))
-            pressure(inWindow: true)
-            ourExit(k)
-            ledger.didRemove(ObjectIdentifier(o))
-        }
-        mutating func removeAll() {
-            pressure(inWindow: false)
-            ledger.willPurge()
-            pressure(inWindow: true)
-            for k in held.keys { ourExit(k) }
-            ledger.didPurge()
+        let (_, quiet) = run(pressureAt: nil)
+        #expect(quiet.steps > 10)
+        for at in [nil] + Array(0..<quiet.steps) {
+            let (cache, r) = run(pressureAt: at)
+            let s = cache.snapshot, total = canaries.count + r.inserts
+            // Always: everything accounted for, nothing held after the purge.
+            #expect(s.entries == 0 && s.bytesHeld == 0, "pressure at \(String(describing: at)): \(s)")
+            #expect(s.entries + s.evictions + s.removals == total, "pressure at \(String(describing: at)): \(s)")
+            if let p = r.atPurge {
+                #expect(p.snap.entries == p.held && p.snap.bytesHeld == 4 * p.held,
+                        "pressure at \(String(describing: at)): \(p)")
+            }
+            // A lost canary = this machine's own pressure evicted too: the
+            // split cannot be judged for this run.
+            guard r.canariesLostBeforePurge == 0 else { continue }
+            if r.inWindow {
+                #expect(s.evictions <= r.pressured, "pressure at \(String(describing: at)): \(s)")
+            } else {
+                #expect(s.evictions == r.pressured, "ours filed as evictions? pressure at \(String(describing: at)): \(s)")
+            }
         }
     }
 
-    @Test("Ledger: a pressure eviction at EVERY step of a replace/re-store/remove/purge script keeps entries, bytes and the totals exact, and never files ours as evictions")
-    func ledgerExactUnderPressureAtEveryStep() {
-        func run(_ at: Int?) -> ModelCache {
-            var m = ModelCache(pressureAt: at)
-            let o = (0..<5).map { _ in Obj() }
-            m.set("a", o[0]); m.set("a", o[1]); m.set("a", o[1]); m.set("b", o[2])
-            m.remove("a"); m.remove("never"); m.set("c", o[3]); m.removeAll(); m.set("d", o[4])
-            withExtendedLifetime(o) {}
-            return m
-        }
-        let quiet = run(nil)
-        #expect(quiet.ledger.snapshot == Snap(entries: 1, bytesHeld: 4, evictions: 0, removals: 4))
-        for at in 0..<quiet.hook {
-            let m = run(at)
-            let s = m.ledger.snapshot
-            #expect(s.entries == m.held.count, "pressure at hook \(at): \(s)")
-            #expect(s.bytesHeld == 4 * m.held.count, "pressure at hook \(at): \(s)")
-            #expect(s.entries + s.evictions + s.removals == m.inserts, "pressure at hook \(at): \(s)")
-            #expect(m.ledger.outgoing.isEmpty && m.ledger.purging == 0, "pressure at hook \(at)")
-            // Ours are never evictions; NSCache's are evictions except in
-            // the documented in-flight window.
-            #expect(s.removals >= m.ours, "pressure at hook \(at): \(s), ours \(m.ours)")
-            if m.pressureInWindow {
-                #expect(s.evictions <= m.pressured, "pressure at hook \(at): \(s)")
-            } else {
-                #expect(s.evictions == m.pressured && s.removals == m.ours, "pressure at hook \(at): \(s)")
-            }
-        }
+    @Test("Shell: on the REAL cache, our replace, removeObject and removeAllObjects do not raise evictions")
+    func realCacheOursAreNotEvictions() {
+        let cache = ThumbnailMemoryCache()
+        let canaries = (0..<50).map { "canary\($0)" }, targets = (0..<50).map { "target\($0)" }
+        for k in canaries + targets { cache.setObject(Self.image(1, 1), forKey: k as NSString, cost: 4) }
+        let held = targets.filter(cache.contains)
+        // Too pressured to judge: NSCache already threw most of them away.
+        guard held.count >= 40 else { return }
+        let canariesBefore = canaries.filter(cache.contains).count
+        let before = cache.snapshot
+        for k in held.prefix(25) { cache.setObject(Self.image(1, 1), forKey: k as NSString, cost: 4) }
+        for k in held.dropFirst(25) { cache.removeObject(forKey: k as NSString) }
+        let after = cache.snapshot
+        let canariesLost = canariesBefore - canaries.filter(cache.contains).count
+        // Pressure that took targets would take canaries too.
+        #expect(after.evictions - before.evictions <= canariesLost + 2, "before \(before), after \(after)")
+        #expect(after.removals - before.removals >= held.count - canariesLost - 2, "before \(before), after \(after)")
+        let beforePurge = cache.snapshot
+        cache.removeAllObjects()
+        let afterPurge = cache.snapshot
+        #expect(afterPurge.evictions - beforePurge.evictions <= 1, "before \(beforePurge), after \(afterPurge)")
+        #expect(afterPurge.entries == 0)
     }
 
     // MARK: - OUTCOME line
@@ -571,6 +579,7 @@ struct ThumbnailPrecacheTests {
         let paths = (0..<3).map { dir.appendingPathComponent("clip\($0).mov").path }
         // One row is already in L1 from an earlier pass — the evidence probe
         // must count it although this pass stores nothing.
+        let evictionsBeforeStore = model.previewService.thumbnailCache.snapshot.evictions
         model.storePrecachedThumbnail(PreviewTestImages.solid(red: 0, green: 1, blue: 0), forPath: paths[0])
         let evictionsAtStart = model.previewService.thumbnailCache.snapshot.evictions
         let sink = InMemoryLogSink()
@@ -601,9 +610,12 @@ struct ThumbnailPrecacheTests {
         if let n {
             #expect(n >= heldNow && n <= 1, "\(outcomes)")
             if cache.snapshot.evictions == evictionsAtStart { #expect(n == heldNow, "\(outcomes)") }
-            // Forced pressure dropped the entry inside its own store: the
-            // once-written row must read 0, not 1.
-            if regime == .pressure { #expect(n == 0, "\(outcomes)") }
+            // NSCache dropped the entry (the pressure regime's limits are
+            // not strict, so only when it actually evicted): the once-
+            // written row must read 0, not 1.
+            if cache.snapshot.evictions > evictionsBeforeStore, !cache.contains(paths[0]) {
+                #expect(n == 0, "\(outcomes)")
+            }
         }
         // MFO: the START line goes through the same sink, before the OUTCOME.
         let starts = sink.lines.enumerated().filter { $0.element.contains("Thumbnail prewarm START") && $0.element.contains(label) }
@@ -658,7 +670,9 @@ struct ThumbnailPrecacheTests {
         #expect(probed <= 100_000)
         Self.expectLedgerMatchesEvidence(cache, keys: keys, costEach: 4, inserts: 100_000)
         #expect(cache.snapshot.removals == 0)
-        if regime == .pressure { #expect(cache.snapshot.entries <= 1) }
+        // Limits are not strict: only when NSCache did evict under the
+        // squeeze does it hold at most the 1-entry count limit.
+        if regime == .pressure, cache.snapshot.evictions > 0 { #expect(cache.snapshot.entries <= 1) }
         #expect(elapsed < .seconds(5), "100k sets + probes took \(elapsed)")
     }
 
@@ -676,8 +690,8 @@ struct ThumbnailPrecacheTests {
         let service = SourceTree.strippingComments(try SourceTree.appCode(named: "PreviewService.swift"))
         #expect(service.contains("cache.totalCostLimit = ThumbnailCachePolicy.costLimitBytes"))
         #expect(service.contains("let thumbnailCache: ThumbnailMemoryCache"))
-        // The ledger sweep's ModelCache mirrors this shell order; the same-
-        // object no-op is what keeps it exact under pressure (2026-11-24).
+        // The same-object no-op is what keeps the ledger exact under
+        // pressure (2026-11-24).
         #expect(service.contains("if let old, old === obj { return }"))
     }
 }

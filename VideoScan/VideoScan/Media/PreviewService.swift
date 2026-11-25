@@ -515,18 +515,21 @@ final class PreviewService {
 /// sides computed from the image's own pixel size (never the caller's
 /// `cost:`, so a 0-cost caller cannot drift it). Re-storing the object the
 /// key already holds is a no-op (NSCache would fire no delegate call for
-/// it). Our own replacements and
-/// removals are told apart from NSCache's evictions by the identity of the
+/// it); so a same-object re-store with a different `cost:` no longer
+/// updates NSCache's cost for it (no production caller does that). Our own
+/// replacements and removals are told apart from NSCache's evictions by the
+/// identity of the
 /// outgoing object (held alive by the override across the super call, so
 /// the identity is unique) — the fast→best upgrade is not an eviction.
 ///
 /// Writers: on the main actor (storePrecachedThumbnail, the interactive
 /// preview path, invalidateThumbnailCacheEntry — all @MainActor today).
-/// The ledger is exact only for serialised writers: the look-up of the
-/// outgoing object and super's replace are check-then-act. A memory-
-/// pressure purge landing between the two can file one entry as a removal
-/// instead of an eviction (entries/bytesHeld stay exact; the sweep test
-/// ledgerExactUnderPressureAtEveryStep pins both). Two CONCURRENT
+/// The ledger is exact only for serialised writers. Three misfile windows:
+/// a memory-pressure purge landing after we mark the outgoing object and
+/// before super acts — in setObject (replace), removeObject, or during
+/// removeAllObjects — files that entry as a removal instead of an eviction
+/// (entries/bytesHeld stay exact; shellExactUnderPressureAtEachHook drives
+/// the real class through every window and pins both). Two CONCURRENT
 /// setters on one key are not supported: they can misfile and drift the
 /// counts by one. Moving a writer off the main actor means revisiting this.
 ///
@@ -534,7 +537,7 @@ final class PreviewService {
 /// our setObject (M5 Ultra suite 2026-11-24, ~16 GB swap: every set was
 /// evicted at once). entries/bytesHeld stay exact — every exit, whoever
 /// causes it, goes through willEvict — and only the evictions/removals
-/// split can misfile, in the one window described above.
+/// split can misfile, in the three windows described above.
 ///
 /// Memory: a handful of integers plus, transiently, the identities of the
 /// objects being replaced right now (≤ concurrent setters). Thread-safety:
@@ -610,6 +613,23 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
 
     private let ledger = OSAllocatedUnfairLock(initialState: Ledger())
 
+    /// The points between the shell's steps where an NSCache purge can land.
+    enum Step: Sendable, CaseIterable {
+        case setLookedUp, setAccounted, setStored
+        case removeLookedUp, removeMarked, removeDone
+        case purgeBegan, purgeMarked
+    }
+
+    /// TEST SEAM, nil in production: called at each Step so a test can land
+    /// a purge (`evictAsNSCacheWould`) in every window of the real class.
+    /// Set once before use, from the writer's thread. Cost when nil: one
+    /// optional load per step.
+    var stepHook: ((Step) -> Void)?
+
+    /// TEST SEAM: removes `key` through NSCache's own path, skipping our
+    /// overrides — to the ledger it is exactly a memory-pressure eviction.
+    func evictAsNSCacheWould(forKey key: NSString) { super.removeObject(forKey: key) }
+
     override init() {
         super.init()
         delegate = self
@@ -643,13 +663,16 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
         // Every production writer builds a fresh NSImage, so this changes
         // nothing a caller sees.)
         if let old, old === obj { return }
+        stepHook?(.setLookedUp)
         let added = Self.cost(of: obj)
         // Account BEFORE super, in one lock section: NSCache may evict the
         // new object inside its own setObject (cost > limit, measured
         // 2026-11-19) and the delegate's − must find the + already there.
         let oldID = old.map(ObjectIdentifier.init)
         ledger.withLock { $0.willSet(replacing: oldID, cost: added) }
+        stepHook?(.setAccounted)
         super.setObject(obj, forKey: key, cost: g)
+        stepHook?(.setStored)
         ledger.withLock { $0.didSet(replacing: oldID) }
         withExtendedLifetime(old) {}
     }
@@ -657,14 +680,19 @@ final class ThumbnailMemoryCache: NSCache<NSString, NSImage>, NSCacheDelegate, @
     override func removeObject(forKey key: NSString) {
         let old = object(forKey: key)
         let oldID = old.map(ObjectIdentifier.init)
+        stepHook?(.removeLookedUp)
         if let oldID { ledger.withLock { $0.willRemove(oldID) } }
+        stepHook?(.removeMarked)
         super.removeObject(forKey: key)
+        stepHook?(.removeDone)
         if let oldID { ledger.withLock { $0.didRemove(oldID) } }
         withExtendedLifetime(old) {}
     }
 
     override func removeAllObjects() {
+        stepHook?(.purgeBegan)
         ledger.withLock { $0.willPurge() }
+        stepHook?(.purgeMarked)
         super.removeAllObjects()
         ledger.withLock { $0.didPurge() }
     }
