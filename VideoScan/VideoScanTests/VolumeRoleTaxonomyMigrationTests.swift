@@ -715,6 +715,58 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(MasterArchiveIcon.testHostRefusals.count == before + 1)
     }
 
+    // Codex 2026-11-24 closing pass (cycle #363). P1: an allowed parent was trusted by spelling — a real
+    // ~/Library/Caches that is a symlink to /Volumes (or to the home) made /Volumes (or the home) an allowed
+    // parent, so a marked /Volumes/FamilyArchive (or App Support) pinned. P2: a root spelled through the Data
+    // volume's firmlink (/System/Volumes/Data/…) kept that spelling through realpath and never matched its
+    // parent, so legitimate scratch was refused. Everything here is a fake world inside test scratch; the
+    // real ~/Library/Caches is never touched (the parents list and the home are injected).
+
+    @Test func iconGuard_allowedParentResolvingToVolumesOrHome_isDropped() throws {
+        let fm = FileManager.default
+        let world = TestScratch.reserved("roletax-parents-")
+        let home = world.appendingPathComponent("home", isDirectory: true)
+        let caches = home.appendingPathComponent("Library/Caches", isDirectory: true)
+        let appSupportRoot = home.appendingPathComponent("Library/Application Support/run/tmp", isDirectory: true)
+        let cacheRoot = caches.appendingPathComponent("run/tmp", isDirectory: true)
+        for dir in [appSupportRoot, cacheRoot] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data().write(to: dir.appendingPathComponent(TestHostScratch.rootMarkerName))
+        }
+        let toHome = world.appendingPathComponent("caches-to-home").path
+        let toVolumes = world.appendingPathComponent("caches-to-volumes").path
+        try fm.createSymbolicLink(atPath: toHome, withDestinationPath: home.path)
+        try fm.createSymbolicLink(atPath: toVolumes, withDestinationPath: "/Volumes")
+        defer { unlink(toHome); unlink(toVolumes) }   // the links themselves, never followed
+        let protection = TestHostScratch.PinnedRoot.Protection.forHome(home.path)
+
+        #expect(TestHostScratch.PinnedRoot.usableParents([toVolumes], protection: protection).isEmpty,
+                "a parent whose destination is /Volumes is dropped")
+        #expect(TestHostScratch.PinnedRoot.usableParents([toHome], protection: protection).isEmpty,
+                "a parent whose destination is the home is dropped")
+        #expect(TestHostScratch.PinnedRoot.pin(appSupportRoot, allowedParents: [toHome], protection: protection) == nil,
+                "a marked App Support folder never pins through a parent that resolves to the home")
+        #expect(protection.isProtected(try #require(TestHostScratch.realPath(appSupportRoot))),
+                "belt and braces: the root itself is protected")
+        #expect(TestHostScratch.PinnedRoot.pin(cacheRoot, allowedParents: [caches.path], protection: protection) != nil,
+                "control: a marked folder under the real Caches pins")
+    }
+
+    @Test func iconGuard_firmlinkSpelledRoot_pinsByIdentity() throws {
+        let root = TestScratch.reserved("roletax-firmlink-")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(TestHostScratch.rootMarkerName))
+        let real = try #require(TestHostScratch.realPath(root))
+        let parent = try #require(TestHostScratch.realPath(TestScratch.tempRoot))
+        let spelled = "/System/Volumes/Data" + real
+        try #require(FileManager.default.fileExists(atPath: spelled), "precondition: the scratch lives on the Data volume")
+        let pin = try #require(TestHostScratch.PinnedRoot.pin(URL(fileURLWithPath: spelled, isDirectory: true),
+                                                              allowedParents: [parent]),
+                               "a firmlink-spelled marked root pins by identity")
+        #expect(pin.resolvedPath == real, "stored in the spelling candidates canonicalize to")
+        #expect(MasterArchiveIcon.isInsidePinnedRoot(real + "/Breen_Family_Archive", pin: pin))
+    }
+
     /// Sensor: under a runner (a marked VIDEOSCAN_TEST_TMP) this process's own root IS pinned — else the guard
     /// would silently fall back to the user temp dir and every test that badges runner scratch would be refused.
     @Test func iconGuard_runnerRootIsPinnedInThisProcess() {
@@ -727,17 +779,27 @@ struct VolumeRoleTaxonomyMigrationTests {
         }
     }
 
-    @Test func iconGuard_pinRefusesARootOutsideTheScratchParents() {
-        let parents = ["/private/var/folders/xx/T", "/private/tmp", realHome + "/Library/Caches"]
-        for bad in ["/", "/Users", realHome, realHome + "/Library", realHome + "/Library/Application Support/VideoScan/tmp",
-                    realHome + "/Movies/tmp", "/Volumes", "/Volumes/FamilyArchive/tmp", "/private/tmp",
-                    "/private/tmpX/tmp", realHome + "/Library/CachesX/tmp"] {
-            #expect(!TestHostScratch.PinnedRoot.isAllowedLocation(bad, allowedParents: parents), "\(bad)")
+    /// The real protection (lstat only — nothing is created or changed outside scratch): `/`, /Users, the home,
+    /// ~/Library, App Support, Preferences, Logs and /Volumes are protected; the temp dirs and Caches are not. And a
+    /// marked scratch root pins only under an allowed parent.
+    @Test func iconGuard_pinRefusesARootOutsideTheScratchParents() throws {
+        let protection = TestHostScratch.PinnedRoot.Protection.real
+        for bad in ["/", "/Users", realHome, realHome + "/Library", realHome + "/Library/Application Support",
+                    realHome + "/Library/Application Support/VideoScan/tmp", realHome + "/Library/Preferences",
+                    realHome + "/Library/Logs/VideoScan", "/Volumes", "/Volumes/FamilyArchive/tmp"] {
+            let resolved = TestHostScratch.realPath(URL(fileURLWithPath: bad)) ?? bad
+            #expect(protection.isProtected(resolved), "\(bad)")
         }
-        for good in ["/private/var/folders/xx/T/videoscan-sealed-home-1/tmp", "/private/tmp/claude-501/run/home/tmp",
+        let temp = try #require(TestHostScratch.realPath(URL(fileURLWithPath: NSTemporaryDirectory())))
+        for good in [temp + "/videoscan-sealed-home-x/tmp", "/private/tmp/run/home/tmp",
                      realHome + "/Library/Caches/videoscan-xctest-shards/run/home/tmp"] {
-            #expect(TestHostScratch.PinnedRoot.isAllowedLocation(good, allowedParents: parents), "\(good)")
+            #expect(!protection.isProtected(good), "\(good)")
         }
+        let root = TestScratch.reserved("roletax-noparent-")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(TestHostScratch.rootMarkerName))
+        #expect(TestHostScratch.PinnedRoot.pin(root, allowedParents: []) == nil, "no allowed parent: never pinned")
+        #expect(TestHostScratch.PinnedRoot.pin(root, allowedParents: [root.path]) == nil, "the parent itself is not inside it")
     }
 
     @Test func m3_adoptImportedDesignation_rerunsMigration() {

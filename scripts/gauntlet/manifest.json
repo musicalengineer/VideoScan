@@ -32545,6 +32545,8 @@
         "bundleSnapshot_legacyStringsMigrate",
         "bundleSnapshot_roundTripPreservesEveryRole",
         "homeFolderPathPredicate",
+        "iconGuard_allowedParentResolvingToVolumesOrHome_isDropped",
+        "iconGuard_firmlinkSpelledRoot_pinsByIdentity",
         "iconGuard_pinRefusesARootOutsideTheScratchParents",
         "iconGuard_runnerRootIsPinnedInThisProcess",
         "iconGuard_symlinkThenDotDotIsRefused",

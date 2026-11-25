@@ -116,17 +116,23 @@ public enum TestHostScratch {
     /// when it is the runner's and missing).
     public static var testTempRoot: URL { rootAndPin.root }
 
-    /// The test temp root as a path guard may trust it (Codex 2026-11-24, cycle #361 P1): the validated
-    /// directory's IDENTITY, taken once, not its URL. A guard that re-resolved the root's URL on every call
-    /// admitted every path once the root was replaced by a symlink to `/` (or the home, or the archive). So:
-    ///   * `resolvedPath` is the realpath taken when the marker was checked — callers compare a candidate's
-    ///     canonical path against this STRING and never resolve the root again;
+    /// The test temp root as a path guard may trust it (Codex 2026-11-24, cycle #361 P1; closing pass #363):
+    /// the validated directory's IDENTITY, taken once, not its URL. A guard that re-resolved the root's URL on
+    /// every call admitted every path once the root was replaced by a symlink to `/` (or the home, or the
+    /// archive). So:
+    ///   * `resolvedPath` is the realpath taken when the marker was checked (a firmlinked
+    ///     /System/Volumes/Data/… spelling is shortened to the one candidates canonicalize to, only when both
+    ///     name the same directory) — callers compare a candidate's canonical path against this STRING and never
+    ///     resolve the root again;
     ///   * `device`/`inode` are the directory's (st_dev, st_ino) at that moment — `isIntact` re-lstat()s
     ///     `resolvedPath` and refuses unless it is still that same real directory (not a symlink, not a
     ///     replacement folder);
-    ///   * the root must sit strictly inside a scratch parent (`defaultAllowedParents`: the per-user temp dir,
-    ///     /private/tmp, the real ~/Library/Caches) — so `/`, a home, the real Library or App Support, any
-    ///     /Volumes path (the archive) is never pinned, marker or not.
+    ///   * the root must lie strictly inside a USABLE scratch parent, matched by identity, not spelling (#363
+    ///     P2: firmlinked spellings of one directory differ as strings, never as (dev, ino)). The candidates are
+    ///     the per-user temp dir, /private/tmp and the real account's ~/Library/Caches; each is realpath'd and
+    ///     dropped when its DESTINATION is protected (#363 P1: a Caches symlinked to /Volumes or to the home
+    ///     made those allowed parents);
+    ///   * the root itself must not be protected (belt and braces): see `Protection`.
     /// Residual: the check and the caller's later system call are two calls; a guard against test bugs, not
     /// an adversary racing the test. ≈ C++: keep the (dev, ino) of the file you validated, not its pathname.
     public struct PinnedRoot: Sendable, Equatable {
@@ -134,24 +140,74 @@ public enum TestHostScratch {
         public let device: UInt64
         public let inode: UInt64
 
-        /// nil unless `url` resolves to a real directory carrying the runner's marker, inside an allowed parent.
-        public static func pin(_ url: URL, allowedParents: [String] = defaultAllowedParents()) -> PinnedRoot? {
-            guard let resolved = TestHostScratch.realPath(url), resolved != "/",
-                  isAllowedLocation(resolved, allowedParents: allowedParents),
-                  let first = identity(resolved) else { return nil }
+        /// A directory's identity: (st_dev, st_ino).
+        struct FileID: Hashable, Sendable {
+            let device: UInt64
+            let inode: UInt64
+        }
+
+        /// What a test temp root, or a parent it may sit in, must never be — decided by identity:
+        ///   * the home, or anything that CONTAINS the home, its Library/Application Support, Library/Preferences,
+        ///     Library/Logs, or /Volumes (`/`, /Users, the home, ~/Library, /Volumes itself);
+        ///   * anything INSIDE Application Support, Preferences, Logs (the real catalog, defaults, logs), or
+        ///     inside /Volumes (every external drive and the archive; the boot volume's /Volumes alias is a
+        ///     symlink that realpath turns into `/`, protected by the first rule).
+        /// The real home comes from the password database, not $HOME (a sealed run moves HOME); a test injects a
+        /// fake one. Memory: two small sets of identities (a few dozen entries).
+        public struct Protection: Sendable {
+            let containsProtected: Set<FileID>
+            let protectedTrees: Set<FileID>
+
+            public static func forHome(_ home: String) -> Protection {
+                let h = TestHostScratch.realPath(home) ?? home
+                let library = (h as NSString).appendingPathComponent("Library")
+                let trees = ["Application Support", "Preferences", "Logs"]
+                    .map { (library as NSString).appendingPathComponent($0) } + ["/Volumes"]
+                let resolvedTrees = trees.compactMap { TestHostScratch.realPath($0) }
+                var contains = Set<FileID>()
+                for path in [h] + resolvedTrees {
+                    contains.formUnion(PinnedRoot.selfAndAncestorIDs(path))
+                }
+                return Protection(containsProtected: contains,
+                                  protectedTrees: Set(resolvedTrees.compactMap { PinnedRoot.fileID($0) }))
+            }
+
+            public static var real: Protection { forHome(PinnedRoot.realHome() ?? "/var/empty") }
+
+            /// `resolved` (a realpath; it need not exist yet) is protected.
+            public func isProtected(_ resolved: String) -> Bool {
+                if let me = PinnedRoot.fileID(resolved), containsProtected.contains(me) { return true }
+                return PinnedRoot.selfAndAncestorIDs(resolved).contains { protectedTrees.contains($0) }
+            }
+        }
+
+        /// Each spelling realpath'd; dropped when it does not resolve or its destination is protected.
+        public static func usableParents(_ spellings: [String], protection: Protection) -> [String] {
+            spellings.compactMap { TestHostScratch.realPath($0) }.filter { !protection.isProtected($0) }
+        }
+
+        /// nil unless `url` resolves to a real, unprotected directory carrying the runner's marker, strictly
+        /// inside a usable parent (by identity).
+        public static func pin(_ url: URL, allowedParents: [String] = defaultAllowedParents(),
+                               protection: Protection = .real) -> PinnedRoot? {
+            guard let raw = TestHostScratch.realPath(url), let first = fileID(raw) else { return nil }
+            let resolved = shortenedFirmlink(raw, id: first)
+            guard resolved != "/", !protection.isProtected(resolved) else { return nil }
+            let parents = Set(usableParents(allowedParents, protection: protection).compactMap { fileID($0) })
+            let strictAncestors = selfAndAncestorIDs((resolved as NSString).deletingLastPathComponent)
+            guard strictAncestors.contains(where: { parents.contains($0) }) else { return nil }
             var st = stat()
             let marker = (resolved as NSString).appendingPathComponent(rootMarkerName)
             // The same directory before and after the marker check.
             guard lstat(marker, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
-                  let second = identity(resolved), second == first else { return nil }
-            return PinnedRoot(resolvedPath: resolved, device: first.0, inode: first.1)
+                  fileID(resolved) == first else { return nil }
+            return PinnedRoot(resolvedPath: resolved, device: first.device, inode: first.inode)
         }
 
         /// `resolvedPath` still names the directory that was pinned: lstat (a symlink fails), a directory,
         /// same (dev, ino).
         public var isIntact: Bool {
-            guard let now = PinnedRoot.identity(resolvedPath) else { return false }
-            return now == (device, inode)
+            PinnedRoot.fileID(resolvedPath) == FileID(device: device, inode: inode)
         }
 
         /// `canonical` (already realpath'd by the caller) is the root or below it, and the root is intact.
@@ -160,31 +216,49 @@ public enum TestHostScratch {
             return canonical == resolvedPath || canonical.hasPrefix(resolvedPath + "/")
         }
 
-        /// Pure: `resolved` lies STRICTLY inside one of `allowedParents` (each compared slash-delimited, so
-        /// /private/tmpX is not inside /private/tmp, and the parent itself is not allowed).
-        public static func isAllowedLocation(_ resolved: String, allowedParents: [String]) -> Bool {
-            allowedParents.contains { parent in
-                let p = parent.hasSuffix("/") ? String(parent.dropLast()) : parent
-                return !p.isEmpty && p != "/" && resolved.hasPrefix(p + "/")
-            }
-        }
-
         /// Where a runner may put the test temp root: the per-user temp dir (sealed_home.py, core_lane.py
-        /// mkdtemp), /private/tmp, and the REAL account's ~/Library/Caches (xctest_shards.py's run folders) —
-        /// each realpath'd. The real home comes from the password database, not $HOME (a sealed run moves HOME).
+        /// mkdtemp), /private/tmp, and the REAL account's ~/Library/Caches (xctest_shards.py's run folders).
+        /// Spellings only: `usableParents` resolves and vets them.
         public static func defaultAllowedParents() -> [String] {
             var parents = [NSTemporaryDirectory(), "/private/tmp"]
-            if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-                parents.append((String(cString: dir) as NSString).appendingPathComponent("Library/Caches"))
+            if let home = realHome() {
+                parents.append((home as NSString).appendingPathComponent("Library/Caches"))
             }
-            return parents.compactMap { TestHostScratch.realPath($0) }
+            return parents
         }
 
-        /// (st_dev, st_ino) of `path` when lstat() finds a real directory there (never through a final symlink).
-        static func identity(_ path: String) -> (UInt64, UInt64)? {
+        /// The account's home from the password database (not $HOME).
+        static func realHome() -> String? {
+            guard let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir else { return nil }
+            return String(cString: dir)
+        }
+
+        /// /System/Volumes/Data/<x> → /<x> when both name the same directory (the Data volume's firmlinks), so
+        /// the pin is stored in the spelling candidates canonicalize to; otherwise unchanged.
+        static func shortenedFirmlink(_ path: String, id: FileID) -> String {
+            let prefix = "/System/Volumes/Data"
+            guard path.hasPrefix(prefix + "/") else { return path }
+            let short = String(path.dropFirst(prefix.count))
+            return fileID(short) == id ? short : path
+        }
+
+        /// The identity of `path` when lstat() finds a real directory there (never through a final symlink).
+        static func fileID(_ path: String) -> FileID? {
             var st = stat()
             guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return nil }
-            return (UInt64(bitPattern: Int64(st.st_dev)), UInt64(st.st_ino))
+            return FileID(device: UInt64(bitPattern: Int64(st.st_dev)), inode: UInt64(st.st_ino))
+        }
+
+        /// Identities of `path` and every ancestor up to `/` that exists as a real directory.
+        static func selfAndAncestorIDs(_ path: String) -> [FileID] {
+            var ids: [FileID] = []
+            var p = path
+            while true {
+                if let id = fileID(p) { ids.append(id) }
+                if p == "/" || p.isEmpty { break }
+                p = (p as NSString).deletingLastPathComponent
+            }
+            return ids
         }
     }
 
