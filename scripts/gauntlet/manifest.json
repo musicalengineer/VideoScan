@@ -39221,6 +39221,7 @@
         "ISOLATION_textThatIsNotARecordIsUnreadableWithWords",
         "ISOLATION_wrongTypesAndForeignValuesAreProblemsNeverValues",
         "SCALE_twoThousandRowsReadInUnderASecond",
+        "TRUTH_aStoredConflictReadsBackWithTheCopiesValuesNeverAsNothingSet",
         "aDateConfidenceWithoutADateIsIgnored",
         "aResolveWritesOnlyTheResolutionColumnsAndASecondSaysAlreadyResolved",
         "aWholeRecordReadsItsCuratedMembers",
@@ -39232,9 +39233,11 @@
       "path": "VideoScan/VideoScanTests/HeldBackReviewTests.swift",
       "stage": "regression",
       "suites": [
-        "HeldBackReviewTests"
+        "HeldBackReviewTests",
+        "HeldBackRound2Tests"
       ],
       "tests": [
+        "alreadyBackBindsToTheFileNow",
         "alreadyBackNeedsIdentity",
         "alreadyPresentIsDurable",
         "archivedSiblingKeepsDate",
@@ -39250,7 +39253,9 @@
         "offersWords",
         "proofBindsToDestination",
         "sampledCollisionIsReal",
-        "sampledIsLikely"
+        "sampledIsLikely",
+        "storedConflictIsNeverNothingSet",
+        "storedConflictSurvivesRelaunchAndIsNeverCarried"
       ]
     },
     {
@@ -43347,9 +43352,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1071,
+      "expected_floor": 1074,
       "name": "regression",
-      "package_expected_floor": 362,
+      "package_expected_floor": 363,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43418,6 +43423,7 @@
       "selectors": [
         "VideoScanTests/AdvJunkDeleteHeldTests",
         "VideoScanTests/HeldBackReviewTests",
+        "VideoScanTests/HeldBackRound2Tests",
         "VideoScanTests/AdvRelocateBucketBHeldTests",
         "VideoScanTests/AdvRelocateBucketBPresentFileTests",
         "VideoScanTests/AdvRelocateClosingSummaryTests",

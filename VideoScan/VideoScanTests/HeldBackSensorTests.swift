@@ -37,7 +37,9 @@ struct HeldBackSensorTests {
     func sheetConfirmsAndStaysO1() throws {
         let code = try SourceTree.appCode(named: "HeldBackSheet.swift")
         #expect(code.components(separatedBy: "store.carry(").count == 2, "one carry call")
-        #expect(code.contains("Button(\"Carry\") { finish(store.carry(p)) }"), "only the confirmation's Carry, with the preview it showed")
+        #expect(code.contains("Button(\"Carry\") { Task { finish(await store.carry(p)) } }"), "only the confirmation's Carry, with the preview it showed")
+        #expect(code.contains("await store.previewCarryNow("), "the confirmation's preview reads the stored conflicts first (Codex #389 P1)")
+        #expect(!code.contains("store.previewCarry("), "never a preview judged without the stored conflicts")
         #expect(!code.contains("records"))
         #expect(!code.contains("model."))
     }

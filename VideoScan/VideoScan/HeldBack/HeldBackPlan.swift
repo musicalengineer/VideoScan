@@ -8,9 +8,18 @@
 // What it decides, from evidence only (CLAUDE.md rule 1):
 //   * WHERE each held-back row's file is now — `classify`:
 //       resolved            the row was closed (its note says how)
-//       alreadyBack         a regular file is at the recorded path AND the
+//       alreadyBack         a regular file is at the recorded path, the
 //                           live record there has the row's whole-file
-//                           SHA-256 (content identity — never the path alone)
+//                           SHA-256 (content identity — never the path
+//                           alone), AND that record's stored identity stamp
+//                           still describes the file NOW (ContentFixity
+//                           .describesFileNow: volume UUID, inode, size,
+//                           mtime, ctime — Codex #389 P0: two stored digests
+//                           say nothing about a file replaced since)
+//       pathMayHaveChanged  the same, but the stamp no longer describes the
+//                           file (or there is none): "a catalogued file is
+//                           at that path; it may have changed since it was
+//                           last hashed" — Find Moved Copies may read it
 //       pathTaken           a regular file is at the recorded path and a
 //                           live record has that path, but its stored
 //                           SHA-256 is not the row's (or one is missing):
@@ -38,7 +47,10 @@
 //     CONTENT as it is now (tag, date and place are stored per content and
 //     every copy shows them): carry (no copy has one), already (the copies
 //     have this value), conflict (a copy has another value — shown, never
-//     overwritten), archived (a date never goes on while ANY copy of the
+//     overwritten), storedConflict (the store's display row says the copies
+//     DISAGREE — conflict = 1, so every loaded copy shows the field empty;
+//     never "nothing set", never carried, the row stays open — Codex #389
+//     P1), archived (a date never goes on while ANY copy of the
 //     content is archived; Update… only). `HeldBackBatch.resolve`: two
 //     selected rows offering different values for one content carry
 //     neither (batchConflict).
@@ -72,6 +84,9 @@ struct HeldBackLive: Sendable, Equatable {
     var userPlaceConfidence: String?
     /// `VideoScanModel.isDateReadOnly` — archived: no writer but Update… dates it.
     var dateReadOnly: Bool
+    /// The record's stored whole-file fixity (digest + the stat stamp it was
+    /// taken at): "already back" only while this still describes the file.
+    var fixity: ContentFixity?
 
     @MainActor
     init(_ r: VideoRecord, dateReadOnly: Bool) {
@@ -80,6 +95,7 @@ struct HeldBackLive: Sendable, Equatable {
         sizeBytes = r.sizeBytes
         fullPath = r.fullPath
         digest = CatalogCommit.digest(of: r)
+        fixity = r.contentFixity
         disposition = r.mediaDisposition
         userDate = r.userDate
         userDateConfidence = r.userDateConfidence
@@ -90,7 +106,8 @@ struct HeldBackLive: Sendable, Equatable {
 
     init(id: UUID, filename: String, sizeBytes: Int64, fullPath: String, digest: String?,
          disposition: MediaDisposition = .unreviewed, userDate: String? = nil, userDateConfidence: String? = nil,
-         userPlace: String? = nil, userPlaceConfidence: String? = nil, dateReadOnly: Bool = false) {
+         userPlace: String? = nil, userPlaceConfidence: String? = nil, dateReadOnly: Bool = false,
+         fixity: ContentFixity? = nil) {
         self.id = id
         self.filename = filename
         self.sizeBytes = sizeBytes
@@ -102,6 +119,7 @@ struct HeldBackLive: Sendable, Equatable {
         self.userPlace = userPlace
         self.userPlaceConfidence = userPlaceConfidence
         self.dateReadOnly = dateReadOnly
+        self.fixity = fixity
     }
 }
 
@@ -157,6 +175,9 @@ struct HeldBackLiveIndex: Sendable {
 enum HeldBackWhere: Sendable, Equatable {
     case resolved(note: String)
     case alreadyBack(recordID: UUID)
+    /// The live record at the path stores this row's digest, but its stored
+    /// stamp no longer describes the file (Codex #389 P0): it may have changed.
+    case pathMayHaveChanged(recordID: UUID, candidates: [UUID])
     /// A live record has the path, but not the row's content (or it cannot be compared).
     case pathTaken(recordID: UUID, candidates: [UUID])
     case onDiskNotCatalogued
@@ -170,6 +191,7 @@ enum HeldBackWhere: Sendable, Equatable {
         switch self {
         case .resolved: return .resolved
         case .alreadyBack: return .alreadyBack
+        case .pathMayHaveChanged: return .pathMayHaveChanged
         case .pathTaken: return .pathTaken
         case .onDiskNotCatalogued: return .onDiskNotCatalogued
         case .goneLikelyMoved: return .goneLikelyMoved
@@ -182,12 +204,13 @@ enum HeldBackWhere: Sendable, Equatable {
 
 /// The list's groups, in the order the sheet shows them.
 enum HeldBackGroup: String, CaseIterable, Sendable, Identifiable {
-    case alreadyBack, pathTaken, onDiskNotCatalogued, goneLikelyMoved, goneNoMatch, couldNotCheck, driveNotConnected, resolved
+    case alreadyBack, pathMayHaveChanged, pathTaken, onDiskNotCatalogued, goneLikelyMoved, goneNoMatch, couldNotCheck, driveNotConnected, resolved
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .alreadyBack: return "On disk, and already back in the catalog"
+        case .pathMayHaveChanged: return "On disk — " + HeldBackWords.mayHaveChanged
         case .pathTaken: return "On disk — another catalogued file is at that path"
         case .onDiskNotCatalogued: return "On disk, not in the catalog"
         case .goneLikelyMoved: return "Gone from that path — a file with the same name and size is in the catalog"
@@ -201,7 +224,11 @@ enum HeldBackGroup: String, CaseIterable, Sendable, Identifiable {
     /// What the evidence behind the group is, in words (the truth line).
     var evidence: String {
         switch self {
-        case .alreadyBack: return "A file exists at the recorded path now, and the live catalog row at that path has this row's whole-file SHA-256."
+        case .alreadyBack: return "A file exists at the recorded path now; the live catalog row at that path has this row's whole-file SHA-256, "
+            + "and the file's stamp (volume, inode, size, modified and changed times) is still the one that hash was taken at."
+        case .pathMayHaveChanged: return "A file exists at the recorded path now and the live catalog row at that path has this row's whole-file SHA-256, "
+            + "but the file's stamp (volume, inode, size, modified and changed times) is no longer the one that hash was taken at — "
+            + "it may have been replaced or edited since. Find Moved Copies reads every byte to check."
         case .pathTaken: return "A file exists at the recorded path now and a live catalog row has that path, but its stored SHA-256 is not this row's (or one of them has none), so it is not called the same file. Find Moved Copies checks same-name, same-size files by content."
         case .onDiskNotCatalogued: return "A file exists at the recorded path now; no live catalog row has that path."
         case .goneLikelyMoved: return "Nothing at the recorded path now (its drive is connected). Same name and size is a lead, not proof — Find Moved Copies checks the content."
@@ -245,6 +272,11 @@ struct HeldBackDisk: Sendable {
     var driveOnline: @Sendable (String) -> Bool
     /// What is at `path` (lstat; links refused).
     var probe: @Sendable (String) -> HeldBackProbe
+    /// True when `fixity` (a record's stored digest + stamp) still describes
+    /// the file at `path` NOW — the persistent digest policy, one stat.
+    var describesNow: @Sendable (ContentFixity, String) -> Bool = { fixity, path in
+        fixity.describesFileNow(FileIdentityStamp.capture(path: path))
+    }
 
     static let live = HeldBackDisk(
         driveOnline: { VolumeReachability.isVolumeReachable(path: $0) },
@@ -273,7 +305,9 @@ struct HeldBackEntry: Sendable, Identifiable, Equatable {
 enum HeldBackClassifier {
 
     /// Every row → its entry. Rows in qid order; the disk is asked once per
-    /// open row (a stat), never for a row whose drive is not connected.
+    /// open row (an lstat) — twice when a catalogued record of the row's
+    /// content is at the path (its stamp re-checked) — never for a row whose
+    /// drive is not connected.
     /// O(rows) with O(1) index lookups.
     static func classify(_ rows: [CatalogRow.HeldBackRow], live: HeldBackLiveIndex, disk: HeldBackDisk) -> [HeldBackEntry] {
         rows.map { row in
@@ -291,9 +325,17 @@ enum HeldBackClassifier {
         case .notRegular(let why), .couldNotCheck(let why):
             return .couldNotCheck(reason: why)
         case .regularFile:
-            guard let id = live.byPath[HeldBackLiveIndex.pathKey(row.fullPath)] else { return .onDiskNotCatalogued }
-            if let occupant = live.byID[id], sameContent(row.digest, occupant.digest) { return .alreadyBack(recordID: id) }
-            return .pathTaken(recordID: id, candidates: leads(row, live: live))
+            guard let id = live.byPath[HeldBackLiveIndex.pathKey(row.fullPath)], let occupant = live.byID[id] else {
+                return .onDiskNotCatalogued
+            }
+            guard sameContent(row.digest, occupant.digest) else { return .pathTaken(recordID: id, candidates: leads(row, live: live)) }
+            // Codex #389 P0: two STORED digests agreeing says nothing about
+            // the file there now — only the stored stamp still describing it does.
+            if let fixity = occupant.fixity, sameContent(fixity.digest, row.digest), disk.describesNow(fixity, row.fullPath) {
+                return .alreadyBack(recordID: id)
+            }
+            let candidates = leads(row, live: live)
+            return .pathMayHaveChanged(recordID: id, candidates: candidates.contains(id) ? candidates : candidates + [id])
         case .absent:
             let candidates = leads(row, live: live)
             return candidates.isEmpty ? .goneNoMatch : .goneLikelyMoved(candidates: candidates)
@@ -432,9 +474,15 @@ enum HeldBackFieldOffer: Sendable, Equatable {
     /// Another selected row offers a different value for the same content:
     /// neither is carried (Codex #385 #4).
     case batchConflict(String, others: [String])
+    /// The store says the copies of this content DISAGREE (display row
+    /// `conflict = 1`; every loaded copy shows the field empty): `values`
+    /// are what the copies hold. Never carried — Rick resolves it in the
+    /// Inspector first (Codex #389 P1).
+    case storedConflict(String, values: [String])
 
     var carries: Bool { if case .carry = self { return true } else { return false } }
     var isBatchConflict: Bool { if case .batchConflict = self { return true } else { return false } }
+    var isStoredConflict: Bool { if case .storedConflict = self { return true } else { return false } }
 }
 
 struct HeldBackFields: Sendable, Equatable {
@@ -445,6 +493,8 @@ struct HeldBackFields: Sendable, Equatable {
     var all: [HeldBackFieldOffer] { [tag, date, place].compactMap { $0 } }
     var carriesAny: Bool { all.contains { $0.carries } }
     var hasBatchConflict: Bool { all.contains { $0.isBatchConflict } }
+    /// A field the copies disagree on in the store: its row never closes.
+    var hasStoredConflict: Bool { all.contains { $0.isStoredConflict } }
     /// Nothing left to write, but every value the old row had is already
     /// on the content: confirming only closes the held-back row.
     var allAlready: Bool {
@@ -455,20 +505,25 @@ struct HeldBackFields: Sendable, Equatable {
     /// `copies`: the other live records of the destination's content — they
     /// show the same stored values, so any value on any of them counts as
     /// "set" (never overwritten). `live.dateReadOnly` is content-wide
-    /// (HeldBackLiveIndex.project); a copy's flag counts too.
-    static func evaluate(old: HeldBackCurated, live: HeldBackLive, copies: [HeldBackLive] = []) -> HeldBackFields {
+    /// (HeldBackLiveIndex.project); a copy's flag counts too. `stored`: the
+    /// content's display rows the store holds with `conflict = 1` (read from
+    /// catalog.sqlite — a loaded record shows those fields EMPTY, so they
+    /// would otherwise look like "nothing set"); such a field is never carried.
+    static func evaluate(old: HeldBackCurated, live: HeldBackLive, copies: [HeldBackLive] = [],
+                         stored: CatalogRow.HeldBackStoredConflicts = .init()) -> HeldBackFields {
         var out = HeldBackFields()
         let all = [live] + copies
         if let tag = old.disposition, tag != .unreviewed {
             let mine = live.disposition != .unreviewed ? live.disposition.rawValue : nil
-            out.tag = judge(tag.rawValue, mine: mine, values: all.map(\.disposition).filter { $0 != .unreviewed }.map(\.rawValue))
+            out.tag = stored.tag.map { .storedConflict(tag.rawValue, values: $0) }
+                ?? judge(tag.rawValue, mine: mine, values: all.map(\.disposition).filter { $0 != .unreviewed }.map(\.rawValue))
         }
         if let date = old.userDate {
             if all.contains(where: \.dateReadOnly) { out.date = .archived(date) }
-            else { out.date = judge(date, mine: live.userDate, values: all.compactMap(\.userDate)) }
+            else { out.date = stored.date.map { .storedConflict(date, values: $0) } ?? judge(date, mine: live.userDate, values: all.compactMap(\.userDate)) }
         }
         if let place = old.userPlace {
-            out.place = judge(place, mine: live.userPlace, values: all.compactMap(\.userPlace))
+            out.place = stored.place.map { .storedConflict(place, values: $0) } ?? judge(place, mine: live.userPlace, values: all.compactMap(\.userPlace))
         }
         return out
     }
@@ -527,20 +582,21 @@ struct HeldBackOffer: Sendable, Identifiable, Equatable {
 
     /// Build the offer for a proven pair, judged against `live` (and its copies) now.
     static func make(entry: HeldBackEntry, old: HeldBackCurated, live: HeldBackLive, copies: [HeldBackLive] = [],
+                     stored: CatalogRow.HeldBackStoredConflicts = .init(),
                      evidence: HeldBackEvidence, stamp: FileIdentityStamp) -> HeldBackOffer {
         HeldBackOffer(qid: entry.qid, recordID: live.id, liveName: live.filename, livePath: live.fullPath,
                       oldName: entry.filename, oldPath: entry.fullPath, evidence: evidence, stamp: stamp,
                       destinationDigest: live.digest, old: old, fields: HeldBackFields(), blocked: nil)
-            .rejudged(live: live, copies: copies)
+            .rejudged(live: live, copies: copies, stored: stored)
     }
 
     /// The same pair with its fields judged against `live` as it is now.
-    func rejudged(live: HeldBackLive, copies: [HeldBackLive]) -> HeldBackOffer {
+    func rejudged(live: HeldBackLive, copies: [HeldBackLive], stored: CatalogRow.HeldBackStoredConflicts = .init()) -> HeldBackOffer {
         var o = self
-        o.fields = HeldBackFields.evaluate(old: old, live: live, copies: copies)
+        o.fields = HeldBackFields.evaluate(old: old, live: live, copies: copies, stored: stored)
         if destinationDigest == nil { o.blocked = HeldBackWords.needsFullHash }
         else if live.digest != destinationDigest { o.blocked = HeldBackWords.identityChanged }
-        else if !o.fields.carriesAny && !o.fields.allAlready { o.blocked = HeldBackWords.onlyConflicts }
+        else if !o.fields.carriesAny && !o.fields.allAlready { o.blocked = HeldBackWords.nothingCarried(o.fields) }
         else { o.blocked = nil }
         return o
     }
@@ -564,7 +620,8 @@ struct HeldBackJobPlan: Sendable, Equatable {
 
     var candidateCount: Int { tasks.reduce(0) { $0 + $1.candidates.count } }
 
-    /// The rows worth proving: gone (or their path taken by other content),
+    /// The rows worth proving: gone (or their path taken by other content,
+    /// or held by a catalogued file that may have changed since it was hashed),
     /// a name+size lead, an old record that reads and carries a tag / date /
     /// place, no integrity finding (the DDL lets only `resolvedByRule` close
     /// those — the row stays as history).
@@ -575,6 +632,7 @@ struct HeldBackJobPlan: Sendable, Equatable {
             switch e.whereNow {
             case .goneLikelyMoved(let c): ids = c
             case .pathTaken(_, let c) where !c.isEmpty: ids = c
+            case .pathMayHaveChanged(_, let c) where !c.isEmpty: ids = c
             default: continue
             }
             guard let old = e.curatedRead else { plan.skippedUnreadable += 1; continue }
@@ -602,6 +660,19 @@ enum HeldBackWords {
     static let onlyConflicts = "every value differs from what you already set on the live file — nothing is overwritten"
     static let identityChanged = "the live file's catalog row no longer records the content that was checked — run Find Moved Copies again"
     static let batchOnly = "its values differ from another selected row's for the same content — neither is carried, and the row stays open"
+    /// Codex #389 P0: the occupant's digest cannot be bound to the file now.
+    static let conflictsUnread = "whether copies of this file disagree could not be read from the catalog — nothing is carried; try again"
+    static let mayHaveChanged = "a catalogued file is at that path; it may have changed since it was last hashed — Find Moved Copies can check"
+    /// Codex #389 P1: "copies of this file disagree (1980 / 1992) — resolve it in the Inspector first".
+    static func copiesDisagree(_ values: [String]) -> String {
+        "copies of this file disagree" + (values.isEmpty ? "" : " (\(values.joined(separator: " / ")))") + " — resolve it in the Inspector first"
+    }
+
+    /// Why a pair carries nothing and closes nothing (the most specific reason).
+    static func nothingCarried(_ f: HeldBackFields) -> String {
+        for offer in f.all { if case .storedConflict(_, let values) = offer { return copiesDisagree(values) } }
+        return f.hasBatchConflict ? batchOnly : onlyConflicts
+    }
 
     /// "Held back at import: 2,110 — why"
     static func statusLine(_ open: Int) -> String {
@@ -661,6 +732,8 @@ enum HeldBackWords {
         case .archived(let v): return "\(name): \(v) — a copy of this content is archived; its date changes only with Update…"
         case .batchConflict(let v, let others):
             return "\(name): \(v) — another selected row offers \(others.joined(separator: ", ")) for the same content; neither is carried"
+        case .storedConflict(let v, let values):
+            return "\(name): \(v) — \(copiesDisagree(values)); not carried"
         }
     }
 
@@ -700,7 +773,8 @@ enum HeldBackWords {
         }
         for item in p.items.prefix(limit) { lines.append(previewLine(item)) }
         if p.items.count > limit { lines.append("… and \(p.items.count - limit) more (each is named in the log when carried)") }
-        lines.append("Nothing you already set is changed, and no date is written while any copy of the content is archived. "
+        lines.append("Nothing you already set is changed, nothing the copies of a file disagree on is carried, "
+                     + "and no date is written while any copy of the content is archived. "
                      + "Each held-back row whose values are then in the catalog is closed and kept as history.")
         return lines.joined(separator: "\n")
     }

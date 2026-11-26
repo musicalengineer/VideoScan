@@ -42,14 +42,24 @@ enum HeldBackFixture {
 
     static func live(_ name: String, path: String, size: Int64 = 100, digest: String? = String(repeating: "a", count: 64),
                      disposition: MediaDisposition = .unreviewed, date: String? = nil, place: String? = nil,
-                     archived: Bool = false) -> HeldBackLive {
+                     archived: Bool = false, fixity: ContentFixity? = nil) -> HeldBackLive {
         HeldBackLive(id: UUID(), filename: name, sizeBytes: size, fullPath: path, digest: digest, disposition: disposition,
-                     userDate: date, userPlace: place, dateReadOnly: archived)
+                     userDate: date, userPlace: place, dateReadOnly: archived, fixity: fixity)
+    }
+
+    /// An invented stored fixity for `digest` (the stamp is never stat'ed:
+    /// the pure tests inject `describesNow`).
+    static func fixity(_ digest: String, size: Int64 = 100) -> ContentFixity {
+        ContentFixity(digest: digest, byteCount: size,
+                      stamp: FileIdentityStamp(device: 1, inode: 2, size: size, mtimeNs: 3, ctimeNs: 4, volumeUUID: "V"))
     }
 
     /// Drive "Online" is mounted; "Offline" is not; `files` exist (regular files), the rest are absent.
-    static func disk(_ files: Set<String>) -> HeldBackDisk {
-        HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, probe: { files.contains($0) ? .regularFile : .absent })
+    /// `unchanged`: the paths whose stored stamp still describes the file (default: every present file).
+    static func disk(_ files: Set<String>, unchanged: Set<String>? = nil) -> HeldBackDisk {
+        let same = unchanged ?? files
+        return HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, probe: { files.contains($0) ? .regularFile : .absent },
+                            describesNow: { _, path in same.contains(path) })
     }
 
     static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -75,10 +85,11 @@ struct HeldBackPlanTests {
     @Test("LOGIC: each row lands in the group its evidence says")
     func groups() {
         let a = String(repeating: "a", count: 64), b = String(repeating: "b", count: 64)
-        let back = F.live("back.mov", path: "/Volumes/Online/a/back.mov", digest: a)
+        let back = F.live("back.mov", path: "/Volumes/Online/a/back.mov", digest: a, fixity: F.fixity(a))
+        let touched = F.live("touched.mov", path: "/Volumes/Online/a/touched.mov", digest: a, fixity: F.fixity(a))
         let other = F.live("taken.mov", path: "/Volumes/Online/a/taken.mov", digest: b)
         let moved = F.live("moved.mov", path: "/Volumes/Online/new/moved.mov")
-        let index = HeldBackLiveIndex([back, other, moved])
+        let index = HeldBackLiveIndex([back, other, moved, touched])
         let rows = [
             F.row(1, path: "/Volumes/Online/a/back.mov", digest: a),
             F.row(2, path: "/Volumes/Online/a/loose.mov"),
@@ -88,14 +99,16 @@ struct HeldBackPlanTests {
             F.row(6, path: "/Volumes/Online/a/done.mov", resolvedNote: "carried"),
             F.row(7, path: "/Volumes/Online/a/taken.mov", digest: a),
             F.row(8, path: "/Volumes/Online/a/denied.mov"),
+            F.row(9, path: "/Volumes/Online/a/touched.mov", digest: a),
         ]
-        let present: Set<String> = ["/Volumes/Online/a/back.mov", "/Volumes/Online/a/loose.mov", "/Volumes/Online/a/taken.mov"]
+        let present: Set<String> = ["/Volumes/Online/a/back.mov", "/Volumes/Online/a/loose.mov", "/Volumes/Online/a/taken.mov",
+                                    "/Volumes/Online/a/touched.mov"]
         let disk = HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, probe: { path in
             if path.hasSuffix("denied.mov") { return .couldNotCheck("Permission denied (errno 13)") }
             return present.contains(path) ? .regularFile : .absent
-        })
+        }, describesNow: { _, path in path.hasSuffix("back.mov") })
         let entries = HeldBackClassifier.classify(rows, live: index, disk: disk)
-        #expect(entries[0].whereNow == .alreadyBack(recordID: back.id), "same path AND same whole-file SHA-256")
+        #expect(entries[0].whereNow == .alreadyBack(recordID: back.id), "same path, same whole-file SHA-256, AND its stamp still describes the file")
         #expect(entries[1].whereNow == .onDiskNotCatalogued)
         #expect(entries[2].whereNow == .goneLikelyMoved(candidates: [moved.id]))
         #expect(entries[3].whereNow == .goneNoMatch, "same name, different size is no lead")
@@ -103,6 +116,8 @@ struct HeldBackPlanTests {
         #expect(entries[5].whereNow == .resolved(note: "carried"))
         #expect(entries[6].whereNow == .pathTaken(recordID: other.id, candidates: [other.id]), "a path is not an identity; the occupant is only a name + size lead")
         #expect(entries[7].whereNow == .couldNotCheck(reason: "Permission denied (errno 13)"))
+        #expect(entries[8].whereNow == .pathMayHaveChanged(recordID: touched.id, candidates: [touched.id]),
+                "same stored digest, but the stamp no longer describes the file: it may have changed (Codex #389 P0)")
         #expect(HeldBackClassifier.grouped(entries).map(\.group) == HeldBackGroup.allCases)
     }
 
@@ -343,8 +358,8 @@ struct HeldBackScene {
 
     /// Carry exactly what the confirmation would show now (preview → carry).
     @discardableResult
-    func carryNow(_ ids: Set<String>) -> HeldBackStore.CarryOutcome {
-        store.carry(store.previewCarry(ids))
+    func carryNow(_ ids: Set<String>) async -> HeldBackStore.CarryOutcome {
+        await store.carry(await store.previewCarryNow(ids))
     }
 
     func generation() async throws -> Int {
@@ -386,7 +401,7 @@ struct HeldBackCarryTests {
         #expect(try await s.openCountInDatabase() == open)
         #expect(record.mediaDisposition == .unreviewed)
         #expect(record.userDate == nil)
-        #expect(s.carryNow([]) == .refused("nothing was selected"))
+        #expect(await s.carryNow([]) == .refused("nothing was selected"))
         #expect(try await s.generation() == generation)
     }
 
@@ -396,7 +411,7 @@ struct HeldBackCarryTests {
         let record = try s.liveRecord()
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
-        let outcome = s.carryNow([offer.id])
+        let outcome = await s.carryNow([offer.id])
         #expect(outcome == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.mediaDisposition == .important)
         #expect(record.userDate == "1992-06")
@@ -426,7 +441,7 @@ struct HeldBackCarryTests {
         #expect(s.model.saveCatalogNow())
         let offer = try s.offer(Self.old, onto: record)
         #expect(offer.fields.date == .conflict(old: "1992-06", live: "1980"))
-        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(await s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userDate == "1980")
         #expect(record.mediaDisposition == .important)
         #expect(try await s.scene.reloaded(.healthy).userDate == "1980")
@@ -441,7 +456,7 @@ struct HeldBackCarryTests {
         record.userPlace = "Boston"                           // Rick types a place; the 2 s timer is pending
         record.userPlaceConfidence = UserPlaceConfidence.known.rawValue
         s.model.saveCatalogDebounced()
-        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(await s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userPlace == "Boston")
         #expect(try await s.scene.reloaded(.healthy).userPlace == "Boston", "his edit was committed with the carry, not replaced")
     }
@@ -453,7 +468,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
         #expect(await s.model.catalogStore.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
-        let outcome = s.carryNow([offer.id])
+        let outcome = await s.carryNow([offer.id])
         _ = s.model.catalogStore.releaseWriteHold()
         guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(why.contains("held"), Comment(rawValue: why))
@@ -469,7 +484,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let generation = try await s.generation()
         s.model.applyReadOnlyMode(true)
-        guard case .refused(let why) = s.carryNow([offer.id]) else { Issue.record("expected refused"); return }
+        guard case .refused(let why) = await s.carryNow([offer.id]) else { Issue.record("expected refused"); return }
         #expect(why.contains("read-only"), Comment(rawValue: why))
         #expect(record.mediaDisposition == .unreviewed)
         #expect(try await s.generation() == generation)
@@ -483,7 +498,7 @@ struct HeldBackCarryTests {
         #expect(s.model.saveCatalogNow())
         let offer = try s.offer(Self.old, onto: record)
         #expect(offer.fields.date == .archived("1992-06"))
-        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(await s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userDate == nil)
         #expect(record.mediaDisposition == .important)
     }
@@ -495,7 +510,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
         try Data(repeating: 6, count: 2_000).write(to: URL(fileURLWithPath: record.fullPath))
-        #expect(s.carryNow([offer.id]) == .carried(carried: 0, closed: 0, skipped: 1))
+        #expect(await s.carryNow([offer.id]) == .carried(carried: 0, closed: 0, skipped: 1))
         #expect(s.store.lastCarryLines.first?.contains("changed") == true)
         #expect(record.mediaDisposition == .unreviewed)
         #expect(try await s.openCountInDatabase() == open)

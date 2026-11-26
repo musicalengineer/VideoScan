@@ -89,6 +89,27 @@ extension CatalogRow {
         }
     }
 
+    /// Codex #389 P1: the curated fields of ONE content whose copies
+    /// disagree — the display row says `conflict = 1` and shows nothing, so
+    /// a loaded record reads them as empty. Each non-nil member is a field
+    /// in conflict, with the distinct values the copies hold (each file's
+    /// newest `row_knowledge` write, else its imported `knowledge_sources`
+    /// value; sorted; may be empty when none can be named). A carry never
+    /// treats such a field as "nothing set".
+    public struct HeldBackStoredConflicts: Sendable, Equatable {
+        public var tag: [String]?
+        public var date: [String]?
+        public var place: [String]?
+
+        public init(tag: [String]? = nil, date: [String]? = nil, place: [String]? = nil) {
+            self.tag = tag
+            self.date = date
+            self.place = place
+        }
+
+        public var isEmpty: Bool { tag == nil && date == nil && place == nil }
+    }
+
     /// What `resolveHeldBack` did.
     public enum HeldBackLanding: Sendable, Equatable {
         case resolved
@@ -108,6 +129,11 @@ public protocol CatalogHeldBackReading {
     func heldBackRows(_ visit: (CatalogRow.HeldBackRow) throws -> Void) throws
     /// Open (unresolved) rows — Catalog Status's number. One indexed count.
     func heldBackOpenCount() throws -> Int
+    /// Codex #389 P1: for each digest, the tag / date / place display rows
+    /// stored with `conflict = 1` and the values its copies hold. Digests
+    /// with no conflict are absent. Three primary-key reads per digest, plus
+    /// one indexed read per conflicted field.
+    func heldBackStoredConflicts(digests: [String]) throws -> [String: CatalogRow.HeldBackStoredConflicts]
 }
 
 /// The one writer: a confirmed carry closes its row, inside one `writeBlocking`.

@@ -6,7 +6,7 @@
 // Nothing here writes. The list reads `store.sections` (computed once per
 // load, never in this body — no O(records) work here); Find Moved Copies is
 // the MFO job; Carry Selected… asks the store what WOULD be written now
-// (`previewCarry`), shows exactly that — the Confirmed Junk warning included —
+// (`previewCarryNow`), shows exactly that — the Confirmed Junk warning included —
 // and on Carry hands that preview to the store's one writer, which writes
 // only if it is still what would be written (else it is shown again).
 //
@@ -51,7 +51,7 @@ struct HeldBackSheet: View {
         .accessibilityIdentifier("sheet.heldBack")
         .task { if store.listState == .idle { await store.loadList() } }
         .confirmationDialog(pending.map(HeldBackWords.confirmTitle) ?? "", isPresented: $confirming, presenting: pending) { p in
-            Button("Carry") { finish(store.carry(p)) }
+            Button("Carry") { Task { finish(await store.carry(p)) } }
             Button("Cancel", role: .cancel) { pending = nil }
         } message: { p in
             Text(HeldBackWords.confirmMessage(p, changed: pendingChanged))
@@ -177,9 +177,12 @@ struct HeldBackSheet: View {
             if let jobNote { Text(jobNote).font(.caption).foregroundStyle(.secondary) }
             Spacer()
             Button(HeldBackWords.carryButton) {
-                pending = store.previewCarry(selected)
-                pendingChanged = false
-                confirming = true
+                let ids = selected
+                Task {
+                    pending = await store.previewCarryNow(ids)   // stored conflicts read first (Codex #389 P1)
+                    pendingChanged = false
+                    confirming = true
+                }
             }
                 .disabled(selected.isEmpty || isReadOnly || store.writeRefusal != nil)
                 .help(store.writeRefusal ?? "Asks once more, then carries the ticked values.")

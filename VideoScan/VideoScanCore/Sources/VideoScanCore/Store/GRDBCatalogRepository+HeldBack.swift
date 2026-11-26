@@ -33,6 +33,44 @@ extension GRDBRecordHandle {
     func heldBackOpenCount() throws -> Int {
         try Int.fetchOne(db, sql: "SELECT count(*) FROM quarantine WHERE resolved_at IS NULL") ?? 0
     }
+
+    /// Codex #389 P1. Per digest: the three display rows' `conflict` flags
+    /// (primary-key reads), then for each conflicted field the distinct
+    /// values its copies hold — each file's NEWEST `row_knowledge` write of
+    /// that field for this content, else (no app write) its imported
+    /// `knowledge_sources` value. 'Unreviewed' is no tag. Bounded by the
+    /// caller's selection (a handful of digests); nothing O(catalog) held.
+    func heldBackStoredConflicts(digests: [String]) throws -> [String: CatalogRow.HeldBackStoredConflicts] {
+        var out: [String: CatalogRow.HeldBackStoredConflicts] = [:]
+        for digest in Set(digests.map { $0.lowercased() }) {
+            guard let flags = try Row.fetchOne(db, sql: """
+                SELECT (SELECT conflict FROM dispositions WHERE digest = ?1),
+                       (SELECT conflict FROM user_dates   WHERE digest = ?1),
+                       (SELECT conflict FROM user_places  WHERE digest = ?1)
+                """, arguments: [digest]) else { continue }
+            var c = CatalogRow.HeldBackStoredConflicts()
+            if (flags[0] as Int64?) == 1 { c.tag = try copyValues(digest: digest, field: "mediaDisposition").filter { $0 != "Unreviewed" } }
+            if (flags[1] as Int64?) == 1 { c.date = try copyValues(digest: digest, field: "userDate") }
+            if (flags[2] as Int64?) == 1 { c.place = try copyValues(digest: digest, field: "userPlace") }
+            if !c.isEmpty { out[digest] = c }
+        }
+        return out
+    }
+
+    private func copyValues(digest: String, field: String) throws -> [String] {
+        try String.fetchAll(db, sql: """
+            SELECT DISTINCT v FROM (
+              SELECT json_extract(rk.value_json, '$') AS v FROM row_knowledge rk
+               WHERE rk.digest = ?1 AND rk.field = ?2
+                 AND rk.write_id = (SELECT max(r2.write_id) FROM row_knowledge r2
+                                     WHERE r2.file_id = rk.file_id AND r2.field = ?2)
+              UNION ALL
+              SELECT json_extract(ks.value_json, '$') FROM knowledge_sources ks
+               WHERE ks.digest = ?1 AND ks.field = ?2
+                 AND NOT EXISTS (SELECT 1 FROM row_knowledge r3 WHERE r3.file_id = ks.json_row_id AND r3.field = ?2)
+            ) WHERE typeof(v) = 'text' AND length(trim(v)) > 0 ORDER BY v
+            """, arguments: [digest, field])
+    }
 }
 
 extension GRDBReader: CatalogHeldBackReading {}

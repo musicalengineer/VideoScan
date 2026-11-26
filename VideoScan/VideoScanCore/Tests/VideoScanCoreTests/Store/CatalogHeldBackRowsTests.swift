@@ -10,6 +10,9 @@
 //             poisoned raw_row text (not JSON, not an object, wrong member
 //             types, dates this app never writes) is said, never guessed;
 //   SCALE     2,110 rows (today's count) read in well under a second.
+//   TRUTH     (Codex #389 P1) a tag / date / place stored with conflict = 1
+//             reads back as a conflict with the values the copies hold
+//             (each file's newest write), never as "nothing set".
 // Invented fixtures only — no real path or name.
 
 import Foundation
@@ -158,6 +161,36 @@ struct CatalogHeldBackRowsTests {
         }
         guard case .refused = outcome else { Issue.record("expected the DDL to refuse, got \(outcome)"); return }
         #expect(try await repository.read { try $0.heldBackOpenCount() } == 2, "row 1's resolve rolled back with the refusal")
+        await repository.close()
+    }
+
+    @Test func TRUTH_aStoredConflictReadsBackWithTheCopiesValuesNeverAsNothingSet() async throws {
+        let (fixture, repository) = try await seeded()
+        defer { fixture.remove() }
+        let second = "00000000-0000-4000-8000-0000000000F2"
+        let outcome = await repository.write(as: .ui) { tx in
+            var copy = Self.fileRow()
+            copy.id = second
+            copy.fullPath = "/Volumes/Invented/copy/clip1.mov"
+            copy.pathFold = CatalogRecordDTO.pathFold(copy.fullPath)
+            copy.directory = "/Volumes/Invented/copy"
+            try tx.insertFile(copy, volumeCaseSensitive: false)
+            func write(_ file: String, _ field: String, _ value: CatalogJSONValue) throws {
+                try tx.appendRowKnowledge(.init(fileID: file, digest: Self.digestA, field: field, value: value, setAt: 1, source: "app:ui"))
+            }
+            try write(Self.fileID, "userDate", .string("1975"))       // superseded by the next write of the same file
+            try write(Self.fileID, "userDate", .string("1980"))
+            try write(second, "userDate", .string("1992"))
+            try tx.writeDisplayConflict(digest: Self.digestA, field: .userDate)
+            try write(Self.fileID, "mediaDisposition", .string("Important"))
+            try write(second, "mediaDisposition", .string("Confirmed Junk"))
+            try tx.writeDisplayConflict(digest: Self.digestA, field: .mediaDisposition)
+        }
+        try #require(outcome == .committed(generation: 2))
+        let other = String(repeating: "b", count: 64)
+        let read = try await repository.read { try $0.heldBackStoredConflicts(digests: [Self.digestA, other]) }
+        #expect(read == [Self.digestA: .init(tag: ["Confirmed Junk", "Important"], date: ["1980", "1992"], place: nil)],
+                "\(read)")
         await repository.close()
     }
 

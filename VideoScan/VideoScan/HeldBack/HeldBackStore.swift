@@ -19,11 +19,21 @@
 //     against the CONTENT — the record and every copy of its digest (tag,
 //     date and place are stored per content) — so a value Rick set on any
 //     copy is never overwritten, and no date goes on while ANY copy is
-//     archived (#3). Then the whole selection is judged together: rows
+//     archived (#3). The content's STORED conflicts are read from
+//     catalog.sqlite first (`previewCarryNow`; Codex #389 P1): a field whose
+//     display row says the copies disagree (conflict = 1) loads EMPTY on
+//     every copy, so memory alone would call it "nothing set" — it is shown
+//     as "copies of this file disagree (1980 / 1992) — resolve it in the
+//     Inspector first", never carried, and its row stays open. A content
+//     whose conflicts could not be read is not carried at all (fail closed).
+//     Then the whole selection is judged together: rows
 //     offering different values for one content carry neither (#4).
 //   carry(preview) —
 //   1. refuse before mutating: no catalog, a read-only / viewer session, a
 //      job's write hold, a blocked or reopening store → nothing changes;
+//      the stored conflicts are read again (the one await — everything
+//      after it runs on the main actor without a suspension, so nothing
+//      the commit door writes can interleave with the judgement);
 //   2. the preview is computed again; if it differs from what Rick confirmed
 //      the carry returns `.reconfirm(new)` and writes nothing (the sheet
 //      shows the new one);
@@ -143,6 +153,13 @@ final class HeldBackStore: ObservableObject {
     @Published private(set) var offers: [HeldBackOffer] = []
     /// The last carry's per-pair lines (the sheet shows them under the button).
     @Published private(set) var lastCarryLines: [String] = []
+    /// Codex #389 P1: per destination digest, the curated fields the store
+    /// holds with `conflict = 1` (absent = none). Read from catalog.sqlite by
+    /// `refreshStoredConflicts`; bounded by the offers (≈ 100 B each).
+    private(set) var storedConflicts: [String: CatalogRow.HeldBackStoredConflicts] = [:]
+    /// The digests `storedConflicts` answers for (a digest never read is not
+    /// judged: its pairs are not carried).
+    private(set) var conflictsRead: Set<String> = []
 
     private(set) var backing: HeldBackCatalogBacking?
     /// The session's records (the model's `records`).
@@ -162,8 +179,35 @@ final class HeldBackStore: ObservableObject {
         self.backing = backing
         entries = []
         offers = []
+        storedConflicts = [:]
+        conflictsRead = []
         listState = .idle
         openCount = nil
+    }
+
+    /// Codex #389 P1: read the stored conflicts of these digests NOW (one
+    /// read, off the main actor). nil = read; else the words (the digests
+    /// stay unread, so their pairs are not carried).
+    @discardableResult
+    func refreshStoredConflicts(_ digests: Set<String>) async -> String? {
+        let keys = Set(digests.map { $0.lowercased() })
+        guard !keys.isEmpty else { return nil }
+        guard let backing else { return "the catalog is not open" }
+        do {
+            let read = try await backing.repository.read { try $0.heldBackStoredConflicts(digests: Array(keys)) }
+            for key in keys { storedConflicts[key] = read[key] }
+            conflictsRead.formUnion(keys)
+            return nil
+        } catch {
+            conflictsRead.subtract(keys)
+            let words = String(describing: error)
+            note("held back at import: could not read whether copies of \(keys.count) file(s) disagree (\(words)) — those pairs are not carried")
+            return words
+        }
+    }
+
+    private func stored(_ digest: String?) -> CatalogRow.HeldBackStoredConflicts {
+        digest.flatMap { storedConflicts[$0.lowercased()] } ?? .init()
     }
 
     /// One indexed count off the main actor. nil = read; else the words.
@@ -218,6 +262,11 @@ final class HeldBackStore: ObservableObject {
     func setOffers(_ offers: [HeldBackOffer]) {
         self.offers = offers
         rejudgeOffers()
+        let digests = Set(offers.compactMap(\.destinationDigest))
+        Task { [weak self] in
+            guard let self, await self.refreshStoredConflicts(digests) == nil else { return }
+            self.rejudgeOffers()
+        }
     }
 
     /// Every offer's fields judged again against the live records now (one
@@ -231,7 +280,7 @@ final class HeldBackStore: ObservableObject {
                 gone.blocked = "the live file is no longer in the catalog"
                 return gone
             }
-            return o.rejudged(live: live, copies: index.copies(of: live))
+            return o.rejudged(live: live, copies: index.copies(of: live), stored: stored(o.destinationDigest))
         }
     }
 
@@ -243,8 +292,16 @@ final class HeldBackStore: ObservableObject {
         return backing.writeRefusal()
     }
 
-    /// What a carry of these offers would write NOW. Writes nothing; the
-    /// confirmation shows it, and `carry` refuses anything else. See the header.
+    /// The stored conflicts read now, then the preview: what the
+    /// confirmation shows (Carry Selected…).
+    func previewCarryNow(_ ids: Set<String>) async -> HeldBackCarryPreview {
+        await refreshStoredConflicts(Set(offers.filter { ids.contains($0.id) }.compactMap(\.destinationDigest)))
+        return previewCarry(ids)
+    }
+
+    /// What a carry of these offers would write NOW, judged with the stored
+    /// conflicts last read (`previewCarryNow` reads them first). Writes
+    /// nothing; the confirmation shows it, and `carry` refuses anything else.
     func previewCarry(_ ids: Set<String>) -> HeldBackCarryPreview {
         let chosen = offers.filter { ids.contains($0.id) }.sorted { ($0.qid, $0.recordID.uuidString) < ($1.qid, $1.recordID.uuidString) }
         let copies = copiesByDigest(Set(chosen.compactMap(\.destinationDigest)))
@@ -265,7 +322,7 @@ final class HeldBackStore: ObservableObject {
             let fields = resolved[j]
             items[entry.index].fields = fields
             if !fields.carriesAny && !fields.allAlready {
-                items[entry.index].skipped = fields.hasBatchConflict ? HeldBackWords.batchOnly : HeldBackWords.onlyConflicts
+                items[entry.index].skipped = HeldBackWords.nothingCarried(fields)
             }
         }
         return HeldBackCarryPreview(ids: ids, items: items)
@@ -275,10 +332,17 @@ final class HeldBackStore: ObservableObject {
     /// written without this call, nothing is written if what would be
     /// written changed, and nothing Rick already set is overwritten.
     @discardableResult
-    func carry(_ preview: HeldBackCarryPreview, now: Date = Date()) -> CarryOutcome {
+    func carry(_ preview: HeldBackCarryPreview, now: Date = Date()) async -> CarryOutcome {
         note("START carry from held-back rows — \(preview.items.count) confirmed pair(s)")
         guard !preview.ids.isEmpty else { return refuse("nothing was selected") }
         guard let backing else { return refuse("the catalog is not open for writing in this session") }
+        if let why = backing.writeRefusal() { return refuse(why) }
+        // Codex #389 P1: the stored conflicts, read again now. The ONLY
+        // suspension: from here to the commit nothing else runs on the main actor.
+        let digests = Set(offers.filter { preview.ids.contains($0.id) }.compactMap(\.destinationDigest))
+        if let why = await refreshStoredConflicts(digests) {
+            return refuse("could not read whether copies of the chosen files disagree (\(why))")
+        }
         if let why = backing.writeRefusal() { return refuse(why) }
         let current = previewCarry(preview.ids)
         guard current == preview else {
@@ -437,10 +501,11 @@ final class HeldBackStore: ObservableObject {
         guard FileIdentityStamp.capture(path: record.fullPath) == offer.stamp else {
             return .failure("the live file changed (or its drive was reconnected) since it was checked — run Find Moved Copies again")
         }
+        guard conflictsRead.contains(proven.lowercased()) else { return .failure(HeldBackWords.conflictsUnread) }
         let readOnly = isDateReadOnly(record) || copies.contains { isDateReadOnly($0) }
         let live = HeldBackLive(record, dateReadOnly: readOnly)
         let others = copies.filter { $0.id != record.id && $0.removal == nil }.map { HeldBackLive($0, dateReadOnly: readOnly) }
-        return .success(HeldBackFields.evaluate(old: offer.old, live: live, copies: others))
+        return .success(HeldBackFields.evaluate(old: offer.old, live: live, copies: others, stored: stored(proven)))
     }
 
     /// Write the `.carry` fields onto `record`. Returns which of date / place changed.
@@ -571,8 +636,9 @@ struct HeldBackCarryPreview: Equatable, Sendable {
         }
 
         /// Its held-back row may close (every value landed or was already there,
-        /// or Rick's own differing value is kept) — never with a batch conflict.
-        var closesRow: Bool { skipped == nil && !fields.hasBatchConflict }
+        /// or Rick's own differing value is kept) — never with a batch
+        /// conflict, never while the copies disagree on a field it carries.
+        var closesRow: Bool { skipped == nil && !fields.hasBatchConflict && !fields.hasStoredConflict }
         var setsConfirmedJunk: Bool { skipped == nil && fields.setsConfirmedJunk }
     }
 
