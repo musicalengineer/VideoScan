@@ -56,6 +56,7 @@ struct RelocateSummarySheetTests {
         r.directory = (fullPath as NSString).deletingLastPathComponent
         r.sizeBytes = size
         r.partialMD5 = md5
+        FixtureDigest.stampFromDisk(r)   // GH #523: Bucket E needs the whole-file digest
         return r
     }
 
@@ -458,7 +459,7 @@ struct RelocateSummarySheetTests {
 
         let result = RelocateReconcile.reconcile(
             records: [src],
-            allCatalogRecords: [src, retiredWitness, unreliableWitness],
+            allCatalogRecords: FixtureDigest.stamped([src, retiredWitness, unreliableWitness]),
             sourceVolumeRootPath: "/Volumes/SourceDrive",
             destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
             sourceFiles: [],
@@ -489,7 +490,7 @@ struct RelocateSummarySheetTests {
         }
         let result2 = RelocateReconcile.reconcile(
             records: [src],
-            allCatalogRecords: [src, retiredWitness, unreliableWitness, safeWitness],
+            allCatalogRecords: FixtureDigest.stamped([src, retiredWitness, unreliableWitness, safeWitness]),
             sourceVolumeRootPath: "/Volumes/SourceDrive",
             destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
             sourceFiles: [],
@@ -542,7 +543,7 @@ struct RelocateSummarySheetTests {
 
         let result = RelocateReconcile.reconcile(
             records: [src],
-            allCatalogRecords: [src] + witnessRecords,
+            allCatalogRecords: FixtureDigest.stamped([src] + witnessRecords),
             sourceVolumeRootPath: "/Volumes/Src",
             destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
             sourceFiles: [],
@@ -603,7 +604,7 @@ struct RelocateSummarySheetTests {
 
         let result = RelocateReconcile.reconcile(
             records: [src],
-            allCatalogRecords: [src, mybook, mini2tb, flaky],
+            allCatalogRecords: FixtureDigest.stamped([src, mybook, mini2tb, flaky]),
             sourceVolumeRootPath: "/Volumes/Src",
             destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
             sourceFiles: [],

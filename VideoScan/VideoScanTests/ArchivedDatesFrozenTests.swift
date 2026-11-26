@@ -165,6 +165,7 @@ struct ArchivedDatesFrozenTests {
             t.partialMD5 = "aa11"; t.sizeBytes = 4_242
             let donor = record("/Volumes/Donor/tapes", "clip.mov")
             donor.partialMD5 = "aa11"; donor.sizeBytes = 4_242
+            FixtureDigest.stamp(t); FixtureDigest.stamp(donor)   // GH #523: same whole-file digest
             donor.inferredRecordDate = utc(1991, 6, 21); donor.inferredDateConfidence = 0.75
             donor.inferredDateReason = "on-screen date 1991-06-21"
             others = [donor]
@@ -277,7 +278,13 @@ struct ArchivedDatesFrozenTests {
         #expect(b.inferredDateSource == VideoScanModel.InferredDateSource.footageShared(from: a))
     }
 
-    /// Rule 2: an archived file with its own date donates to a same-bytes twin.
+    /// Rule 2 beside an archived file. Until GH #528 / #523 an archived file
+    /// with its own date DONATED to a same-bytes twin. Now a same-bytes twin
+    /// (same whole-file digest) of archived content is itself date-fixed —
+    /// the catalog keeps one date per content, so its stored date IS the
+    /// archived copy's — and rule 2 writes nothing onto it; the archived
+    /// file's own date is untouched. (A sample twin — same partialMD5, no
+    /// digest — is not the same content and shares nothing either.)
     @Test func propagationDonatesFromAnArchivedRecord() throws {
         let sb = try Sandbox("donor-2")
         let a = Self.target(archived: true)
@@ -286,11 +293,13 @@ struct ArchivedDatesFrozenTests {
         a.inferredDateReason = "on-screen date 1991-06-21"
         let b = Self.record("/Volumes/Src/tapes", "clip.mov")
         b.partialMD5 = "bb22"; b.sizeBytes = 9_999
+        FixtureDigest.stamp(a); FixtureDigest.stamp(b)
         sb.model.records = [a, b]
         let aBefore = DateFields(a)
+        #expect(sb.model.isDateReadOnly(b), "the twin of archived content is fixed by it")
         let r = sb.model.catchUpInferredDates(trigger: "test")
-        #expect(r.propagated == 1)
-        #expect(b.inferredDateSource == VideoScanModel.InferredDateSource.propagated(from: a))
+        #expect(r.propagated == 0)
+        #expect(b.inferredDateSource == nil && b.inferredRecordDate == nil)
         #expect(DateFields(a) == aBefore)
     }
 

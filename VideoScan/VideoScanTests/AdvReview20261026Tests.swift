@@ -244,10 +244,12 @@ struct RelocateSummaryProofTests {
     }
 
     /// No full SHA-256 on record at all (partial MD5 only): not proven.
+    /// GH #523: such a "backup" is no Bucket E witness any more — Migrate
+    /// copies the file instead of skipping it (a sample is not identity).
     @Test func anUnhashedBackupIsNotProven() async throws {
         let s = try await migrate(trust: .reliable, hashed: false)
-        try #require(s.safelyRedundantCount == 1)
-        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+        #expect(s.safelyRedundantCount == 0, "a partialMD5-only witness never skips the copy")
+        #expect(s.succeededCount == 1, "the file is copied instead (copied \(s.succeededCount))")
     }
 
     /// Codex closing pass F1 (recipe): source A has no stored hash and an

@@ -382,7 +382,7 @@ struct DossierArchivedAdmissionTests {
         let sb = try F.Sandbox("carry-bytes")
         defer { sb.cleanup() }
         let donor = sb.record("test_twin_a.mov", stage: .cataloged)
-        donor.partialMD5 = "md5-carry"; donor.sizeBytes = 4_242
+        donor.partialMD5 = "md5-carry"; donor.sizeBytes = 4_242; FixtureDigest.stamp(donor)
         donor.sceneCaptions = [SceneCaption(timestamp: 1, text: "Thanksgiving dinner")]
         donor.sceneCaptionModel = "vlm-x"
         donor.audioTranscript = "next to him we have Mr. Glenn Hudson"
@@ -390,7 +390,7 @@ struct DossierArchivedAdmissionTests {
         donor.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
         donor.dossierProcessedBy = "vlm-x+whisper-x"
         let twin = sb.record("test_twin_b.mov", stage: .archived)
-        twin.partialMD5 = "md5-carry"; twin.sizeBytes = 4_242
+        twin.partialMD5 = "md5-carry"; twin.sizeBytes = 4_242; FixtureDigest.stamp(twin)
         twin.inferredRecordDate = F.utc(1984); twin.inferredDateReason = "filed as 1984"
         sb.model.records = [donor, twin]
         let before = try F.persisted(twin)
@@ -455,7 +455,7 @@ struct DossierArchivedAdmissionTests {
         // Video-only: this serial run has no transcriber, so only a
         // captions-only recipient may inherit (QA P2-a channel coverage).
         for r in [a, b] {
-            r.partialMD5 = "md5-pair"; r.sizeBytes = 77
+            r.partialMD5 = "md5-pair"; r.sizeBytes = 77; FixtureDigest.stamp(r)
             r.streamTypeRaw = StreamType.videoOnly.rawValue
         }
         sb.model.records = [a, b]
@@ -479,7 +479,7 @@ struct DossierArchivedAdmissionTests {
         donor.audioTranscript = whisperRan ? "" : nil
         donor.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let twin = sb.record("test_silent_b.mov", stage: .archived)
-        for r in [donor, twin] { r.partialMD5 = "md5-silent"; r.sizeBytes = 55 }
+        for r in [donor, twin] { r.partialMD5 = "md5-silent"; r.sizeBytes = 55; FixtureDigest.stamp(r) }
         sb.model.records = [donor, twin]
         let stub = StubDossierRunner(modelID: "stub-silent")
         let orch = CaptionOrchestrator(runnerFactory: { stub })

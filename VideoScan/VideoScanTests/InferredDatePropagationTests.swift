@@ -68,7 +68,8 @@ struct InferredDatePropagationTests {
         userDate: String? = nil,
         embedded: Date? = nil,
         streamType: StreamType = .videoAndAudio,
-        dossierProcessedAt: Date? = nil
+        dossierProcessedAt: Date? = nil,
+        hashed: Bool = true
     ) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
@@ -88,6 +89,9 @@ struct InferredDatePropagationTests {
         r.userDate = userDate
         r.embeddedCreationDate = embedded
         r.dossierProcessedAt = dossierProcessedAt
+        // GH #523: a fixture's md5 (+ size, + contentHash) names its content;
+        // the row carries the matching whole-file digest unless `hashed: false`.
+        if hashed { FixtureDigest.stamp(r) }
         return r
     }
 
@@ -378,15 +382,17 @@ struct InferredDatePropagationTests {
         let donor = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa", groupID: g,
                                inferred: Self.june21_1991, confidence: 0.95)
         let padded = makeRecord(path: "/W/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb", groupID: g)
-        let unhashed = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, groupID: g)
+        let unhashed = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, groupID: g, hashed: false)
         model.records = [donor, padded, unhashed]
         let result = model.catchUpInferredDates(trigger: "test")
-        #expect(VideoScanModel.contentGroupKey(donor) == VideoScanModel.contentGroupKey(padded), "same bucket …")
-        #expect(!VideoScanModel.haveVerifiedSameContent(donor, padded), "… but not the same bytes")
+        // GH #523: the bucket IS the whole-file digest — a partialMD5 twin with
+        // other bytes is not even in the same bucket.
+        #expect(VideoScanModel.contentGroupKey(donor) != VideoScanModel.contentGroupKey(padded), "different digests, different buckets")
+        #expect(!VideoScanModel.haveVerifiedSameContent(donor, padded), "… and not the same bytes")
         #expect(padded.inferredRecordDate == nil, "conflicting full hashes never exchange a date")
-        #expect(unhashed.inferredRecordDate == Self.june21_1991,
-                "no content hash to conflict: partialMD5 + size is the verified identity")
-        #expect(result.propagated == 1)
+        #expect(unhashed.inferredRecordDate == nil,
+                "GH #523: no whole-file digest, no identity — partialMD5 + size is a sample (it shared before)")
+        #expect(result.propagated == 0)
         #expect(!VideoScanModel.propagateInferredDate(from: donor, to: padded), "the single-write guard agrees")
     }
 
@@ -425,10 +431,8 @@ struct InferredDatePropagationTests {
         #expect(grouped.inferredRecordDate == Self.june21_1991)
         #expect(ungrouped.inferredRecordDate == Self.june21_1991, "verified twins share without a group")
         #expect(groupedOnly.inferredRecordDate == nil, "a group alone is not identity")
-        // The key is never the group.
-        if case .duplicateGroup = VideoScanModel.contentGroupKey(donor) {
-            Issue.record("contentGroupKey must never be a duplicateGroup")
-        }
+        // The key is never the group (GH #523: it is the whole-file digest).
+        #expect(VideoScanModel.contentGroupKey(donor) == VideoScanModel.contentKey(of: donor))
     }
 
     // MARK: - codex #1433: a propagated date never donates again
@@ -444,6 +448,7 @@ struct InferredDatePropagationTests {
         let a = makeRecord(path: "/V/a.mxf", md5: "m", size: 100, contentHash: "v1:aaaa",
                            inferred: Self.june21_1991, confidence: 0.95)
         let b = makeRecord(path: "/W/a.mxf", md5: "m", size: 100)
+        b.contentFixity = a.contentFixity   // GH #523: B holds A's whole-file digest (no segmented hash)
         let c = makeRecord(path: "/X/a.mxf", md5: "m", size: 100, contentHash: "v1:bbbb")
         model.records = [a, b, c]
 
@@ -500,6 +505,7 @@ struct InferredDatePropagationTests {
         let verified = makeRecord(path: "/W/a.mov", md5: "m", size: 1, groupID: g,
                                   inferred: Self.june21_1991, confidence: 0.95,
                                   source: "propagated from \(donor.id.uuidString)")
+        verified.contentFixity = donor.contentFixity   // GH #523: the donor's whole-file digest
         let heuristic = makeRecord(path: "/X/a.mkv", md5: "x", size: 30, contentHash: "v1:xxxx", groupID: g,
                                    inferred: Self.june21_1991, confidence: 0.95,
                                    source: "propagated from \(donor.id.uuidString)")
@@ -514,7 +520,8 @@ struct InferredDatePropagationTests {
                                 source: VideoScanModel.InferredDateSource.folderYear)
         let userDated = makeRecord(path: "/U/a.mov", md5: "u", size: 30, groupID: g,
                                    inferred: Self.june21_1991, confidence: 0.95,
-                                   source: "propagated from \(donor.id.uuidString)", userDate: "1992")
+                                   source: "propagated from \(donor.id.uuidString)", userDate: "1992",
+                                   hashed: false)   // never fully hashed: unwound by the sample rule, not a digest conflict
         model.records = [donor, verified, heuristic, orphan, own, folder, userDated]
         return (donor, verified, heuristic, orphan, own, folder, userDated)
     }
@@ -863,6 +870,8 @@ struct InferredDatePropagationTests {
         #expect(!pfDatesAgree(Self.june21_1991, pfJanuaryFirst(of: 1991) ?? .distantPast, at: .month))
     }
 
+    /// GH #523: the segmented `contentHash` is a sample — equal ones share
+    /// nothing without a whole-file digest; the same digest shares.
     @Test func propagation_byContentHash() throws {
         let dir = try scratchDir("chash")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -871,6 +880,9 @@ struct InferredDatePropagationTests {
                                inferred: Self.june21_1991, confidence: 0.85)
         let twin = makeRecord(path: "/W/a.mov", contentHash: "v1:abc")
         model.records = [donor, twin]
+        #expect(model.catchUpInferredDates(trigger: "test").propagated == 0, "a sampled hash is not identity")
+        #expect(twin.inferredRecordDate == nil)
+        for r in [donor, twin] { r.sizeBytes = 10; r.contentFixity = ArchivedTwinDateWritersTests.fixity(String(repeating: "ab", count: 32), 10) }
         #expect(model.catchUpInferredDates(trigger: "test").propagated == 1)
         #expect(twin.inferredRecordDate == Self.june21_1991)
     }
@@ -1270,6 +1282,7 @@ struct InferredDatePropagationPersistenceAndScaleTests {
         r.inferredDateConfidence = confidence
         r.inferredDateSource = source
         r.userDate = userDate
+        FixtureDigest.stamp(r)   // GH #523: md5 + size name the content → its whole-file digest
         return r
     }
 
@@ -1432,7 +1445,7 @@ struct NV12InvariantCount: Equatable {
 /// read as a propagation gap.
 @MainActor
 func nv12InvariantCount(_ model: VideoScanModel) -> NV12InvariantCount {
-    var byKey: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+    var byKey: [String: [VideoRecord]] = [:]
     for rec in model.records where VideoScanModel.isEligibleForDateInference(rec) {
         if let k = VideoScanModel.contentGroupKey(rec) { byKey[k, default: []].append(rec) }
     }
@@ -1442,7 +1455,7 @@ func nv12InvariantCount(_ model: VideoScanModel) -> NV12InvariantCount {
         guard !donors.isEmpty else { continue }
         for rec in members where rec.inferredRecordDate == nil && rec.userDate == nil {
             if donors.contains(where: { VideoScanModel.haveVerifiedSameContent($0, rec) }) {
-                if model.isArchiveElement(rec) {
+                if model.isDateReadOnly(rec) {   // archived, or a copy of archived content (GH #528)
                     count.archivedNeverReceive += 1
                 } else {
                     count.leftBehind += 1
@@ -1473,6 +1486,7 @@ struct InferredDatePropagationInvariantTests {
         r.streamTypeRaw = StreamType.videoAndAudio.rawValue
         r.inferredRecordDate = inferred
         r.inferredDateConfidence = confidence
+        FixtureDigest.stamp(r)   // GH #523: md5 + size (+ contentHash) name the content
         return r
     }
 
@@ -1494,6 +1508,7 @@ struct InferredDatePropagationInvariantTests {
         let source = record("/Volumes/Src/tape.mkv", md5: "37f1", size: 36_000,
                             inferred: InferredDatePropagationTests.june21_1991, confidence: 0.55)
         let copy = record("/Volumes/Archive/1991/tape.mkv", md5: "37f1", size: 36_000, contentHash: "v1:e962")
+        copy.contentFixity = source.contentFixity   // GH #523: the same whole-file digest
         copy.derivationKind = ArchivePromotion.derivationKind
         copy.derivedFrom = source.id
         model.records = [source, copy]
@@ -1513,6 +1528,7 @@ struct InferredDatePropagationInvariantTests {
         let source = record("/Volumes/Src/tape.mkv", md5: "37f1", size: 36_000,
                             inferred: InferredDatePropagationTests.june21_1991, confidence: 0.55)
         let twin = record("/Volumes/Other/tape.mkv", md5: "37f1", size: 36_000, contentHash: "v1:e962")
+        twin.contentFixity = source.contentFixity   // GH #523: the same whole-file digest
         model.records = [source, twin]
 
         let r = model.catchUpInferredDates(trigger: "test")

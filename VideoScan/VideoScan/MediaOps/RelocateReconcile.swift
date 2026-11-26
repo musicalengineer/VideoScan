@@ -14,7 +14,7 @@ import Foundation
 //   B. manuallyDeleted  — gone; no size+hash match found anywhere
 //   C. sourceSideMove   — found elsewhere on source by size+hash; path rewrite then migrate
 //   D. adopted          — found at planned destination by size+hash; path rewrite, skip copy
-//   E. safelyRedundant  — same (size, partialMD5) exists on a THIRD volume
+//   E. safelyRedundant  — same (size, whole-file SHA-256) exists on a THIRD volume
 //                         (not source, not dest) AND at least one witness
 //                         lives on a *safe* host volume (not retired, not
 //                         unreliable); catalog-only mark-as-deleted with
@@ -26,6 +26,15 @@ import Foundation
 // those 739 onto LaCie — they're already safe elsewhere. Mark them as
 // deleted in the catalog with a witness list and let Rick retire the
 // drive without burning a full copy cycle.
+//
+// **Identity (GH #523, 2026-11-25):** a witness is the SAME CONTENT only by
+// the whole-file SHA-256 under the commit's digest rule
+// (`CatalogCommit.digest(of:)`, carried as `ReconcileRecordInput.
+// contentDigest`), never by (size, partialMD5) — a head+tail sample: on
+// Rick's catalog 12 partialMD5 groups held several whole-file digests. A
+// record or a witness with no whole-file digest never makes Bucket E: the
+// record falls through to the copy path (A) — refuse rather than guess, and
+// the safe direction (a copy too many, never a lost only copy).
 //
 // **Safety filter (added 2026-05-30):** Rick flagged that "backup on
 // Mini2TB" isn't reassuring when Mini2TB itself is mid-retirement. A
@@ -94,7 +103,7 @@ struct ReconcileResult: Equatable {
     /// `materialize`; absent when the source had no usable fixity.
     var adoptionSources: [UUID: ContentCopyProof.Claim] = [:]
 
-    /// Same (size, partialMD5) exists on a volume that is neither the
+    /// Same (size, whole-file SHA-256) exists on a volume that is neither the
     /// source nor the destination, AND at least one witness lives on a
     /// safe host volume (see `WitnessSafety`). Catalog-only mutation —
     /// file on the failing source drive is NEVER touched. Witnesses
@@ -279,6 +288,11 @@ struct ReconcileRecordInput: Sendable, Equatable, Identifiable {
     let fullPath: String
     let partialMD5: String
     let sizeBytes: Int64
+    /// The whole-file SHA-256 the catalog stores the row under
+    /// (`CatalogCommit.digest(of:)`), or nil (not fully hashed, or fixities
+    /// that disagree / do not cover the file). Bucket E's ONLY identity
+    /// (GH #523). No default on purpose: every construction site decides.
+    let contentDigest: String?
     /// Non-nil ⇒ already relocated once (drives the previouslyRelocated bucket).
     let originalFullPath: String?
     /// The catalog still believes this file exists: not purged (trashed,
@@ -352,6 +366,7 @@ extension VideoRecord {
             fullPath: fullPath,
             partialMD5: partialMD5,
             sizeBytes: sizeBytes,
+            contentDigest: CatalogCommit.digest(of: self),
             originalFullPath: originalFullPath,
             isLive: isLiveRelocateWitness
         )
@@ -587,7 +602,7 @@ enum RelocateReconcile {
     ///
     /// - Parameter records: in-scope record projections (under source root).
     /// - Parameter witnesses: projections of the entire catalog, used to
-    ///   build the (size, partialMD5) → other-volume witness index for
+    ///   build the (size, whole-file digest) → other-volume witness index for
     ///   Bucket E. Pass `records` itself for no cross-volume check.
     /// All other parameters match `reconcile`.
     /// - Parameter progress: optional per-record progress sink
@@ -619,7 +634,8 @@ enum RelocateReconcile {
         var destIndex: [Int64: [String]] = [:]
         for f in destFiles { destIndex[f.size, default: []].append(f.path) }
 
-        // Build the "other-volume witness" index: (sizeBytes, partialMD5) →
+        // Build the "other-volume witness" index: (sizeBytes, whole-file
+        // SHA-256 — GH #523, never the partialMD5 sample) →
         // [fullPath on a third volume]. Excludes records whose fullPath lives
         // under sourceVolumeRootPath or under destinationRoot.path — those
         // aren't "other volumes" by definition. Only built when the rule is
@@ -647,10 +663,11 @@ enum RelocateReconcile {
                 // stamp in place), but it can never vouch.
                 if !other.isLive { continue }
                 // Skip records that lack the data we'd match on — no
-                // hash or zero bytes is too weak a signal to declare safe.
-                if other.partialMD5.isEmpty { continue }
+                // whole-file digest or zero bytes is too weak a signal to
+                // declare safe (GH #523: a partialMD5 is a sample).
+                guard let digest = other.contentDigest else { continue }
                 if other.sizeBytes <= 0 { continue }
-                let key = WitnessKey(size: other.sizeBytes, md5: other.partialMD5)
+                let key = WitnessKey(size: other.sizeBytes, digest: digest)
                 witnessIndex[key, default: []].append(other.fullPath)
             }
         }
@@ -787,8 +804,8 @@ enum RelocateReconcile {
         resolveVolumeSafety: VolumeSafetyResolver,
         proof: WitnessProof
     ) -> SafelyRedundantPlanEntry? {
-        guard !rec.partialMD5.isEmpty, rec.sizeBytes > 0 else { return nil }
-        let key = WitnessKey(size: rec.sizeBytes, md5: rec.partialMD5)
+        guard let digest = rec.contentDigest, rec.sizeBytes > 0 else { return nil }
+        let key = WitnessKey(size: rec.sizeBytes, digest: digest)
         guard let allWitnesses = witnessIndex[key], !allWitnesses.isEmpty else { return nil }
         let ranked = allWitnesses.map { p -> SafeWitnessInfo in
             let s = resolveVolumeSafety(p)
@@ -859,7 +876,8 @@ enum RelocateReconcile {
     /// `operator==` and `std::hash` specialization for.
     private struct WitnessKey: Hashable {
         let size: Int64
-        let md5: String
+        /// Whole-file SHA-256 (GH #523), lowercase hex.
+        let digest: String
     }
 
     private static func fileSize(at path: String) -> Int64? {
