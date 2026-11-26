@@ -407,13 +407,22 @@ public struct AudioFingerprint: Sendable {
                      "AudioFingerprint.compute: PCM is \(pcm.sampleRate) Hz, recipe expects \(parameters.sampleRate)")
         let gain = normalisingGain(pcm.samples, parameters: parameters)
         let active = activeSeconds(pcm.samples, sampleRate: pcm.sampleRate, gain: gain, parameters: parameters)
-        let peaks = SpectralPeakPicker(parameters: parameters)?.peaks(in: pcm.samples, gain: gain) ?? []
-        let landmarks = LandmarkPairer.pair(peaks, parameters: parameters)
+        let loud = loudSeconds(pcm.samples, sampleRate: pcm.sampleRate)
+        // Programme evidence first (GH #345): a recording with no second
+        // whose peak at gain 1 clears `silenceCeilingDBFS` is measured
+        // silence, and its print holds NO landmark. Without this the ×100
+        // normalising gain lifted a −68 dBFS tonal floor (wow on a faint
+        // hum or bleed) to −28 dBFS, where it paired into landmarks and the
+        // stamp read "heard sound" on three really silent archived files.
+        // The peak picker is skipped outright, so the cost is one level pass.
+        let landmarks = loud == 0 ? (hashes: [UInt32](), times: [UInt32]())
+            : LandmarkPairer.pair(SpectralPeakPicker(parameters: parameters)?.peaks(in: pcm.samples, gain: gain) ?? [],
+                                  parameters: parameters)
         return AudioFingerprint(recipeID: parameters.recipeID, sampleRate: pcm.sampleRate,
                                 hopSamples: parameters.hopSamples, frameSize: parameters.frameSize,
                                 durationSeconds: pcm.durationSeconds, complete: !pcm.reachedCap,
                                 activeSeconds: active, hashes: landmarks.hashes, times: landmarks.times,
-                                secondsAboveSilenceCeiling: loudSeconds(pcm.samples, sampleRate: pcm.sampleRate))
+                                secondsAboveSilenceCeiling: loud)
     }
 
     /// One-second blocks whose peak |sample| (gain 1) is above

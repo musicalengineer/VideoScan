@@ -4144,8 +4144,12 @@
         "QARedSilenceFloorTests"
       ],
       "tests": [
+        "absoluteLevelOutranksLandmarks",
         "ditherIsSilence",
-        "lowHissIsSilence"
+        "loudToneIsSound",
+        "lowHissIsSilence",
+        "tonalFloorIsSilence",
+        "tonalFloorThroughTheDecoder"
       ]
     },
     {
