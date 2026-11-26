@@ -62,6 +62,9 @@ public struct ProbeOutcome: Sendable {
     /// off-actor `cached.wasCacheHit = …; cached.scanContext = …` mutation.
     public var wasCacheHit: Bool = false
     public var scanContext: ScanContext = ScanContext()
+    /// The probed file's identity stamp (GH #434) — transient, recaptured
+    /// every scan, never cached. → `VideoRecord.scanIdentityStamp`.
+    public var identityStamp: FileIdentityStamp?
 
     /// True when the probe engine's magic-byte content sniff rejected an
     /// extensionless / unknown-extension candidate BEFORE ffprobe ran
@@ -135,6 +138,7 @@ extension ProbeOutcome {
         probe           = ProbeResult(scanDerivedFrom: rec)
         wasCacheHit     = rec.wasCacheHit
         scanContext     = rec.scanContext
+        identityStamp   = rec.scanIdentityStamp
     }
 }
 
@@ -164,5 +168,6 @@ extension VideoRecord {
         apply(o.probe)              // the 19 ffprobe metadata fields
         wasCacheHit     = o.wasCacheHit
         scanContext     = o.scanContext
+        scanIdentityStamp = o.identityStamp
     }
 }

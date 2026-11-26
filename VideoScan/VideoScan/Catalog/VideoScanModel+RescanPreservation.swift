@@ -481,6 +481,22 @@ struct RescanPreservedFields: Sendable {
         return true
     }
 
+    /// GH #434 — may the live row's whole-file digest follow the file onto
+    /// this rescan's fresh record? Only when the stamp the probe took NOW is
+    /// still the file the digest was computed from, by the persistent
+    /// digest policy (`describesFileNow`: sha256, the stored stamp carries
+    /// ctime and a volume UUID, same volume UUID + inode + size + mtime +
+    /// ctime, and not racily clean — DECISIONS 2026-10-26), and the stamp's
+    /// size is the size the fresh record carries (the commit binds the
+    /// digest to it). Anything else → nil: the file is hashed again.
+    /// A sampled hash or a path never qualifies (rule 6).
+    @MainActor
+    static func carriedContentFixity(live: ContentFixity?, onto rec: VideoRecord) -> ContentFixity? {
+        guard let live, let stamp = rec.scanIdentityStamp, stamp.size == rec.sizeBytes,
+              live.describesFileNow(stamp) else { return nil }
+        return live
+    }
+
     /// The guard applied to a concrete fresh record.
     @MainActor
     func fixityCarry(onto rec: VideoRecord) -> FixityCarry {

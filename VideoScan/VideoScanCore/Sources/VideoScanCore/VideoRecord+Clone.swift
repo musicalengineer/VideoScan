@@ -79,6 +79,7 @@ extension VideoRecord {
         c.originalFullPath = originalFullPath
         c.originVolume = originVolume
         c.wasCacheHit = wasCacheHit
+        c.scanIdentityStamp = scanIdentityStamp
         c.avidClipName = avidClipName
         c.avidMobID = avidMobID
         c.avidMaterialUUID = avidMaterialUUID
