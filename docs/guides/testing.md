@@ -324,8 +324,13 @@ pending" is unblocked once its source has been read against these points:
    through `CatalogStore.shared` (test hosts make it inert); stores and
    ledgers are built on a per-test folder (`ShowAgainSandbox`,
    `CutoverScene`, `CatalogStore(directory:)`).
-2. **Preferences** — no `UserDefaults.standard` writes (the runner's `HOME`
-   and `CFFIXED_USER_HOME` redirect them anyway; suites must not rely on it).
+2. **Preferences** — no `UserDefaults.standard` writes. The sealed `HOME` /
+   `CFFIXED_USER_HOME` do NOT redirect them: cfprefsd writes the real user's
+   `~/Library/Preferences`, so a hosted test's `.standard` is Rick's real plist
+   (2026-11-25, `archivist.ollamaHosts` left at `poison.invalid`). Poison in memory
+   with `TestPreferences.overriding`/`begin`, persist into `TestPreferences.scratch`,
+   read the real value with `TestPreferences.persistedAppValue`;
+   `TestDefaultsWriteSensorTests` (sensor lane) holds it.
 3. **Volumes** — `/Volumes/...` strings are synthetic record paths only;
    nothing under `/Volumes` is opened, stat'ed for a verdict or written.
 4. **Temp** — every folder or file name carries a UUID (Swift Testing runs a

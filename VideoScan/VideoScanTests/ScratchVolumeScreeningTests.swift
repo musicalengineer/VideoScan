@@ -122,15 +122,11 @@ struct ScratchVolumeScreeningTests {
                  mt: "scr\(id)_m", py: "scr\(id)_py", cap: "scr\(id)_c",
                  notes: "scr\(id)_n", retAt: "scr\(id)_rA",
                  retRsn: "scr\(id)_rR", retWit: "scr\(id)_rW")
-        defer {
-            for key in [k.paths, k.dates, k.phases, k.roles, k.trust, k.fs,
-                        k.mt, k.py, k.cap, k.notes, k.retAt, k.retRsn, k.retWit] {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
-        }
+        let prefs = TestPreferences.scratch("ScratchVolume")
+        defer { prefs.remove() }
 
         // Poison: saved list carries the RAM disk alongside a real volume.
-        UserDefaults.standard.set(
+        prefs.defaults.set(
             ["/Volumes/VideoScan_Temp", "/Volumes/TestKeeper"],
             forKey: k.paths
         )
@@ -144,15 +140,14 @@ struct ScratchVolumeScreeningTests {
             savedCapacityKey: k.cap, savedNotesKey: k.notes,
             savedRetiredAtKey: k.retAt,
             savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit
-        )
+            savedRetiredWitnessesKey: k.retWit, defaults: prefs.defaults)
         #expect(restored.map(\.searchPath) == ["/Volumes/TestKeeper"])
 
         // Healing: persisting the screened list rewrites the stored paths
         // without the scratch entry (this is what restoreScanTargets does
         // right after restore when it detects pollution).
-        ScanTargetPersistence.persistPaths(restored, key: k.paths)
-        #expect(UserDefaults.standard.stringArray(forKey: k.paths) == ["/Volumes/TestKeeper"])
+        ScanTargetPersistence.persistPaths(restored, key: k.paths, defaults: prefs.defaults)
+        #expect(prefs.defaults.stringArray(forKey: k.paths) == ["/Volumes/TestKeeper"])
     }
 
     // MARK: - Resume path sensor: a stale checkpoint can't resurrect scratch

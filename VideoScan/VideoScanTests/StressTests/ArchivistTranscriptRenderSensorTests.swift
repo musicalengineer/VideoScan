@@ -379,16 +379,13 @@ struct ArchivistTranscriptRenderSensorTests {
     /// Rick's exact repro: "help" (the long multi-line card) read aloud, then
     /// Stop mid-utterance, with a 100-message transcript mounted.
     @Test func stopSpeakingHelpCardReturnsImmediatelyAndPublishesOnce() async throws {
-        let defaults = UserDefaults.standard
-        let savedVoice = defaults.object(forKey: HallieSpeaker.voiceKey)
         // Force the Apple path (never launches the Kokoro helper in a test):
-        // any non-neural identifier → selectedNeuralVoice() == nil.
-        defaults.set(HallieSpeaker.bestVoice()?.identifier ?? "com.apple.voice.compact.en-US.Samantha",
-                     forKey: HallieSpeaker.voiceKey)
-        defer {
-            if let savedVoice { defaults.set(savedVoice, forKey: HallieSpeaker.voiceKey) }
-            else { defaults.removeObject(forKey: HallieSpeaker.voiceKey) }
-        }
+        // any non-neural identifier → selectedNeuralVoice() == nil. In memory
+        // only (TestPreferences): no plist is written.
+        let appleVoice = TestPreferences.begin([
+            HallieSpeaker.voiceKey: HallieSpeaker.bestVoice()?.identifier ?? "com.apple.voice.compact.en-US.Samantha",
+        ])
+        defer { appleVoice.end() }
 
         let store = TranscriptStore()
         store.messages = Self.transcript(count: 100)

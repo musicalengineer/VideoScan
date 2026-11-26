@@ -454,32 +454,8 @@ struct DuplicateCrossVolumeDeleteTests {
             DuplicateKeeperSettings.workingCopyCleanupKey,
             DuplicateKeeperSettings.lastElectionKey,
         ]
-        let standard = UserDefaults.standard
-        var originalValues: [String: Any] = [:]
-        for key in realKeys {
-            if let value = standard.object(forKey: key) {
-                originalValues[key] = value
-            }
-        }
-        defer {
-            for key in realKeys {
-                if let value = originalValues[key] {
-                    standard.set(value, forKey: key)
-                } else {
-                    standard.removeObject(forKey: key)
-                }
-            }
-        }
-
-        func realSnapshot() -> NSDictionary {
-            var values: [String: Any] = [:]
-            for key in realKeys {
-                if let value = standard.object(forKey: key) {
-                    values[key] = value
-                }
-            }
-            return NSDictionary(dictionary: values)
-        }
+        // What the real plist holds — READ only (TestPreferences); a test never writes it.
+        func realSnapshot() -> NSDictionary { TestPreferences.persistedAppValues(forKeys: realKeys) }
 
         let realBefore = realSnapshot()
         #expect(DuplicateKeeperSettings.restored(from: d) == DuplicateKeeperSettings())
@@ -492,15 +468,19 @@ struct DuplicateCrossVolumeDeleteTests {
         injected.save(to: d)
         #expect(DuplicateKeeperSettings.restored(from: d) == injected,
                 "every setting must round-trip through the named suite")
-        #expect(realBefore.isEqual(to: realSnapshot() as! [AnyHashable: Any]),
+        #expect(realBefore == realSnapshot(),
                 "injected save changed a real duplicate-keeper preference")
 
         // Poison every real key with a non-default, run-unique value. The
         // model must still initialize from its test-host seed, then refuse
         // to write its own distinct values back to these poisoned keys.
-        standard.set(["Poison-\(token)"], forKey: DuplicateKeeperSettings.precedenceKey)
-        standard.set(true, forKey: DuplicateKeeperSettings.workingCopyCleanupKey)
-        standard.set("poison-election-\(token)", forKey: DuplicateKeeperSettings.lastElectionKey)
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let poisoned = TestPreferences.begin([
+            DuplicateKeeperSettings.precedenceKey: ["Poison-\(token)"],
+            DuplicateKeeperSettings.workingCopyCleanupKey: true,
+            DuplicateKeeperSettings.lastElectionKey: "poison-election-\(token)",
+        ])
+        defer { poisoned.end() }
         let poisonBeforeModel = realSnapshot()
 
         let model = VideoScanModel()
@@ -510,8 +490,8 @@ struct DuplicateCrossVolumeDeleteTests {
         model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = false
         model.duplicateKeeperSettings.lastElectionDescriptor = "model-election-\(token)"
         model.saveDuplicateKeeperSettings()
-        #expect(poisonBeforeModel.isEqual(to: realSnapshot() as! [AnyHashable: Any]),
-                "test-host model save changed a poisoned real preference")
+        #expect(poisonBeforeModel == realSnapshot(),
+                "test-host model save changed a real preference")
     }
 
     /// The exact UI strings Rick specified — all in WorkingCopyCleanupText.

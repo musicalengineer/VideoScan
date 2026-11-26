@@ -192,15 +192,10 @@ struct CaptionOrchestratorQueueTests {
     func poisonedStandardDefaultsIgnored() {
         let key = CaptionOrchestrator.queuedVolumesPrefsKey
         let poison = ["/Volumes/PoisonA/", "/Volumes/PoisonB/"]
-        let original = UserDefaults.standard.stringArray(forKey: key)
-        UserDefaults.standard.set(poison, forKey: key)
-        defer {
-            if let original {
-                UserDefaults.standard.set(original, forKey: key)
-            } else {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
-        }
+        let onDiskBefore = TestPreferences.persistedAppValue(forKey: key) as? [String]
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let poisoned = TestPreferences.begin([key: poison])
+        defer { poisoned.end() }
 
         let model = VideoScanModel()
         let orch = CaptionOrchestrator()   // defaults: .standard, in a test host
@@ -209,7 +204,7 @@ struct CaptionOrchestratorQueueTests {
 
         orch.currentStatus = .running(progress: 0.5, currentFile: "x", etaSec: nil)
         orch.enqueueAnalyze(volumePrefix: "/Volumes/TestOnly/", model: model)
-        #expect(UserDefaults.standard.stringArray(forKey: key) == poison,
+        #expect(TestPreferences.persistedAppValue(forKey: key) as? [String] == onDiskBefore,
                 "test-host orchestrator must not write the user's live prefs")
         orch.currentStatus = .idle
     }

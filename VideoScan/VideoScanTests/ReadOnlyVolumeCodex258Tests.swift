@@ -243,19 +243,20 @@ struct ReadOnlyVolumeCodex258Tests {
     /// mark that never learned where it lives is protected as it was.
     @Test func whatTheMarkLearnedIsStoredAdditively() throws {
         let key = "test.codex258.readonly.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let prefs = TestPreferences.scratch("ReadOnlyCodex258")
+        defer { prefs.remove() }
         let at = Date(timeIntervalSince1970: 1_790_000_000)
         let learned = scanTarget("/Users/test/test_media")
         learned.readOnlyMark = VolumeReadOnlyMark(markedAt: at, volumeUUID: "TEST-U", resolvedPath: "/Volumes/TestMarked",
                                                   mountPoint: "/Volumes/TestMarked")
         let plain = scanTarget("/Volumes/TestPlain")
         plain.readOnlyMark = VolumeReadOnlyMark(markedAt: at, volumeUUID: "TEST-P")
-        ScanTargetPersistence.persistReadOnlyMarks([learned, plain], key: key)
-        let back = ScanTargetPersistence.readOnlyMarks(forKey: key)
+        ScanTargetPersistence.persistReadOnlyMarks([learned, plain], key: key, defaults: prefs.defaults)
+        let back = ScanTargetPersistence.readOnlyMarks(forKey: key, defaults: prefs.defaults)
         #expect(back[learned.searchPath] == learned.readOnlyMark && back[plain.searchPath] == plain.readOnlyMark)
         // An entry written before the fields existed.
-        UserDefaults.standard.set([plain.searchPath: ["markedAt": at, "volumeUUID": "TEST-P"]], forKey: key)
-        #expect(ScanTargetPersistence.readOnlyMarks(forKey: key)[plain.searchPath]
+        prefs.defaults.set([plain.searchPath: ["markedAt": at, "volumeUUID": "TEST-P"]], forKey: key)
+        #expect(ScanTargetPersistence.readOnlyMarks(forKey: key, defaults: prefs.defaults)[plain.searchPath]
                 == VolumeReadOnlyMark(markedAt: at, volumeUUID: "TEST-P", resolvedPath: nil, mountPoint: nil))
 
         // The bundle's volume snapshot: round trip, and an older bundle.

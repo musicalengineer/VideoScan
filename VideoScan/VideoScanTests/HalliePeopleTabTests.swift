@@ -430,17 +430,18 @@ struct HalliePeopleTabTests {
 
     @Test func poisonedPreferencesCannotAddNamesToTheCatalogRoster() {
         let key = "HalliePeopleTabTests.poison.\(UUID().uuidString)"
-        let defaults = UserDefaults.standard
-        defaults.set(["Private Preferences Person", "Tree Only Secret"], forKey: key)
-        defer { defaults.removeObject(forKey: key) }
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let poisoned = TestPreferences.begin([key: ["Private Preferences Person", "Tree Only Secret"]])
+        defer { poisoned.end() }
 
         let result = Tab.rosterAnswer(
             profiles: [dad], graph: nil, cyberBrain: nil, scope: .catalog)
         #expect(result.prose.contains("Dad"))
         #expect(!result.prose.contains("Private Preferences Person"))
         #expect(!result.prose.contains("Tree Only Secret"))
-        #expect(defaults.array(forKey: key)?.count == 2,
+        #expect(UserDefaults.standard.array(forKey: key)?.count == 2,
                 "pure roster code must neither read nor mutate global preferences")
+        #expect(TestPreferences.persistedAppValue(forKey: key) == nil)
     }
 
     @Test func corruptHugeNamesAndAliasesStayInsideTheGraphemeSafeBudget() {

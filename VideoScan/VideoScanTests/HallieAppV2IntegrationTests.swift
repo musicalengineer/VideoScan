@@ -3,7 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
-// serialized: one test writes UserDefaults.standard (the Ollama hosts key) and restores it; one asserts a 100k-record wall-clock budget (red beside its siblings 2026-11-21)
+// serialized: one test poisons the Ollama hosts key (in memory, TestPreferences); one asserts a 100k-record wall-clock budget (red beside its siblings 2026-11-21)
 @Suite("Hallie app QueryAST-v2 integration", .serialized)
 struct HallieAppV2IntegrationTests {
     private enum FixtureError: Error {
@@ -463,17 +463,9 @@ struct HallieAppV2IntegrationTests {
     }
 
     @Test func injectedStateIgnoresPoisonedDefaultsAndRealArchivePaths() async throws {
-        let priorHosts = UserDefaults.standard.object(
-            forKey: OllamaEndpoints.hostsKey)
-        UserDefaults.standard.set("poison.invalid", forKey: OllamaEndpoints.hostsKey)
-        defer {
-            if let priorHosts {
-                UserDefaults.standard.set(priorHosts,
-                                          forKey: OllamaEndpoints.hostsKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: OllamaEndpoints.hostsKey)
-            }
-        }
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let hostsPoison = TestPreferences.begin([OllamaEndpoints.hostsKey: "poison.invalid"])
+        defer { hostsPoison.end() }
 
         let ast = ArchivistQueryAST.graph(.init(
             people: ["Fixture Person"], operation: .biography))
