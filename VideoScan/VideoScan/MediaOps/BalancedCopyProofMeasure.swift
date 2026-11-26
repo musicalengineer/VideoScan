@@ -34,6 +34,10 @@
 //        · `astats`, named for the run so nothing in a file can forge its
 //          lines, reads every channel's peak of every sound track of the
 //          original — before the kept channel is picked.
+//        · Each picture also feeds a closed-caption detector (`sidedata`
+//          select A53 → first frame only → `showinfo`, named for the run →
+//          `nullsink`): whether FFmpeg's decoder found CEA-608/708 captions
+//          in ANY frame, read from one log record. No output stream.
 //        · `-xerror -err_detect explode`; logged at `repeat+level+verbose`
 //          because ffmpeg's per-stream read counts exist only there. Any
 //          line at error/fatal/panic, any line with no level that is not an
@@ -42,8 +46,8 @@
 //          parser: BalancedCopyProofReadLog.swift).
 //
 // Memory, whatever the size of the media: two or three ffprobe JSON
-// documents (1 MiB cap each); the packet ledger (two SHA-256 states and
-// three integers per stream); the frame ledger (one SHA-256 state per
+// documents (1 MiB cap each); the packet ledger (two SHA-256 states,
+// three integers, one file position and one flag per stream); the frame ledger (one SHA-256 state per
 // output stream, at most `soundSegmentLimit` × 16 bytes of timeline); one
 // decode pass's log at a time (256 KiB cap). Under 4 MiB here. The ffmpeg
 // child holds a few decoded frames and one second of sound per channel.
@@ -68,18 +72,19 @@ extension BalancedCopyProof {
         ["-v", "error", "-show_data_hash", "sha256", "-show_streams", "-show_format", "-show_chapters", "-of", "json", input]
     }
 
-    /// ffprobe request for the length each QuickTime track STORES: the same
-    /// header read with the edit list ignored.
+    /// ffprobe request for the length — and the frame count — each QuickTime
+    /// track STORES: the same header read with the edit list ignored.
     static func storedArgs(input: String) -> [String] {
-        ["-v", "error", "-ignore_editlist", "1", "-show_entries", "stream=index,duration", "-of", "json", input]
+        ["-v", "error", "-ignore_editlist", "1", "-show_entries", "stream=index,duration,nb_frames", "-of", "json", input]
     }
 
     /// ffprobe request for every packet of one file, one CSV line each:
-    /// "stream_index,pts,duration,size,SHA256:<hex>" and, after those, the
-    /// packet's side data when it has any. Reads the whole file.
+    /// "stream_index,pts,duration,size,pos,SHA256:<hex>" (pos "N/A" when the
+    /// demuxer states none) and, after those, the packet's side data when it
+    /// has any. Reads the whole file.
     static func packetArgs(input: String) -> [String] {
         ["-v", "error", "-show_packets", "-show_data_hash", "sha256",
-         "-show_entries", "packet=stream_index,pts,duration,size,data_hash", "-of", "csv=p=0", input]
+         "-show_entries", "packet=stream_index,pts,duration,size,pos,data_hash", "-of", "csv=p=0", input]
     }
 
     private struct ProbedStream: Decodable {
@@ -92,6 +97,7 @@ extension BalancedCopyProof {
         let sample_rate: String?
         let sample_fmt: String?
         let duration: String?
+        let nb_frames: String?
         let time_base: String?
         let extradata_hash: String?
         let width: Int?
@@ -202,19 +208,24 @@ extension BalancedCopyProof {
         return layout
     }
 
-    /// `layout` with every stream's STORED length written in from the
-    /// edit-list-ignoring header read. nil = that read is not ffprobe's, or
-    /// does not state a length for every stream it lists.
+    /// `layout` with every stream's STORED length (and, for carried streams,
+    /// stored frame count) written in from the edit-list-ignoring header
+    /// read. nil = that read is not ffprobe's, or does not list every stream.
     static func withStoredLengths(_ layout: FileLayout, fromProbeJSON data: Data) -> FileLayout? {
         guard let report = try? JSONDecoder().decode(ProbeReport.self, from: data), let streams = report.streams,
               streams.count == layout.carried.count + layout.sound.count else { return nil }
         var stored: [Int: Double] = [:]
+        var frames: [Int: Int] = [:]
         for s in streams {
             guard let index = s.index else { return nil }
             stored[index] = seconds(s.duration)
+            frames[index] = s.nb_frames.flatMap { Int($0) }
         }
         var out = layout
-        for i in out.carried.indices { out.carried[i].storedSeconds = stored[out.carried[i].index] }
+        for i in out.carried.indices {
+            out.carried[i].storedSeconds = stored[out.carried[i].index]
+            out.carried[i].storedFrames = frames[out.carried[i].index]
+        }
         for i in out.sound.indices { out.sound[i].storedSeconds = stored[out.sound[i].index] }
         return out
     }
@@ -229,6 +240,9 @@ extension BalancedCopyProof {
         var timingSHA256: String
         /// SHA-256 over "<size> <payload sha256>[ <packet side data>]\n" per packet.
         var packetSHA256: String
+        /// Every packet was read from further into the file than the one
+        /// before it (see `CarriedStream.positionsRise`). An empty stream: true.
+        var positionsRise = true
     }
 
     /// `ticks × numerator/denominator` as a reduced fraction "p/q" (q > 0).
@@ -267,6 +281,9 @@ extension BalancedCopyProof {
             var packets = 0
             var timing = SHA256()
             var payload = SHA256()
+            /// The file position of the last packet, and whether every one so far rose.
+            var lastPosition: Int64?
+            var positionsRise = true
         }
         private let lock = NSLock()
         private var streams: [Int: Stream] = [:]
@@ -294,20 +311,27 @@ extension BalancedCopyProof {
         }
 
         private func fold(_ line: String) -> Bool {
-            // Five fields, then — only when a packet carries side data (a
+            // Six fields, then — only when a packet carries side data (a
             // palette, new extradata, skipped samples) — that side data,
             // which is folded with the packet's bytes.
-            let fields = line.split(separator: ",", maxSplits: 5, omittingEmptySubsequences: false)
-            guard fields.count >= 5, let index = Int(fields[0]), var stream = streams[index] else { return false }
-            let sideData = fields.count > 5 ? " " + fields[5] : ""
+            let fields = line.split(separator: ",", maxSplits: 6, omittingEmptySubsequences: false)
+            guard fields.count >= 6, let index = Int(fields[0]), var stream = streams[index] else { return false }
+            let sideData = fields.count > 6 ? " " + fields[6] : ""
             stream.packets += 1
+            // A position that is not stated ("N/A") vouches for nothing: it breaks the rise.
+            let position = Int64(fields[4])
+            if let position, stream.lastPosition.map({ position > $0 }) ?? true {
+                stream.lastPosition = position
+            } else {
+                stream.positionsRise = false
+            }
             if stream.folded {
                 guard let pts = Int64(fields[1]), let duration = Int64(fields[2]), let size = Int64(fields[3]), size >= 0,
                       stream.numerator > 0,
                       let at = BalancedCopyProof.fraction(ticks: pts, numerator: stream.numerator, denominator: stream.denominator),
                       let lasting = BalancedCopyProof.fraction(ticks: duration, numerator: stream.numerator,
                                                               denominator: stream.denominator),
-                      fields[4].hasPrefix("SHA256:"), let payload = BalancedCopyProof.digest(fields[4].dropFirst(7)) else {
+                      fields[5].hasPrefix("SHA256:"), let payload = BalancedCopyProof.digest(fields[5].dropFirst(7)) else {
                     return false
                 }
                 stream.timing.update(data: Data("\(at) \(lasting)\n".utf8))
@@ -331,7 +355,7 @@ extension BalancedCopyProof {
             defer { lock.unlock() }
             return streams.mapValues {
                 PacketSequence(packets: $0.packets, timingSHA256: BalancedCopyProof.hex($0.timing),
-                               packetSHA256: BalancedCopyProof.hex($0.payload))
+                               packetSHA256: BalancedCopyProof.hex($0.payload), positionsRise: $0.positionsRise)
             }
         }
     }
@@ -344,8 +368,13 @@ extension BalancedCopyProof {
             out.carried[i].packets = found?.packets
             out.carried[i].packetSHA256 = found?.packetSHA256
             out.carried[i].timingSHA256 = found?.timingSHA256
+            out.carried[i].positionsRise = found?.positionsRise
         }
-        for i in out.sound.indices { out.sound[i].packets = sequences[out.sound[i].index]?.packets }
+        for i in out.sound.indices {
+            let found = sequences[out.sound[i].index]
+            out.sound[i].packets = found?.packets
+            out.sound[i].positionsRise = found?.positionsRise
+        }
         return out
     }
 
@@ -368,7 +397,7 @@ extension BalancedCopyProof {
         /// Sound streams whose every channel's peak is measured (the
         /// original's: the kept one and any spare). Empty for the copy.
         var measured: [Int] = []
-        /// Names this run's astats instances.
+        /// Names this run's astats and showinfo instances.
         var runTag: String = ""
 
         /// What each framehash output stream holds, in map order.
@@ -381,6 +410,15 @@ extension BalancedCopyProof {
         "astats@\(plan.runTag)s\(stream)=measure_perchannel=Peak_level:measure_overall=none"
     }
 
+    /// The closed-caption detector on one picture: a branch that keeps only
+    /// frames carrying A53 caption side data, stops after the first, and has
+    /// `showinfo` (named for the run) log that one. Pass-through of a frame
+    /// reference — no pixel is converted, copied or hashed; the branch ends in
+    /// `nullsink`, so it adds no output stream (GH #483 item 2).
+    static func captionDetector(_ plan: DecodePlan, picture: Int) -> String {
+        "[k\(picture)]sidedata=mode=select:type=A53_CC,trim=end_frame=1,showinfo@\(plan.runTag)c\(picture),nullsink"
+    }
+
     /// The filter graph of one decode pass (see the file header).
     static func decodeFilter(_ plan: DecodePlan) -> String {
         let packed = packedSampleFormat(plan.sampleFormat)
@@ -389,7 +427,10 @@ extension BalancedCopyProof {
         func pick(_ channel: Int) -> String {
             "aresample=osf=\(packed)p,channelmap=map=\(channel):channel_layout=mono,aresample=osf=\(packed)"
         }
-        var parts = plan.pictures.map { "[0:\($0.index)]format=pix_fmts=\($0.pixelFormat)[p\($0.index)]" }
+        var parts = plan.pictures.flatMap {
+            ["[0:\($0.index)]format=pix_fmts=\($0.pixelFormat),split=2[p\($0.index)][k\($0.index)]",
+             captionDetector(plan, picture: $0.index)]
+        }
         let branches = ["[t]"] + plan.channels.indices.map { "[c\($0)]" }
         var head = "[0:\(plan.soundIndex)]aformat=sample_fmts=\(plan.sampleFormat):sample_rates=\(plan.sampleRateHz),"
         if plan.measured.contains(plan.soundIndex) { head += peakFilter(plan, stream: plan.soundIndex) + "," }
@@ -748,7 +789,7 @@ extension BalancedCopyProof {
             runTag: AstatsOutputParser.newRunTag())
         let copy = DecodePlan(
             pictures: pictures(facts.balanced), soundIndex: copySound.index, sampleFormat: copySound.sampleFormat,
-            sampleRateHz: copySound.sampleRateHz, channels: [0, 1])
+            sampleRateHz: copySound.sampleRateHz, channels: [0, 1], runTag: AstatsOutputParser.newRunTag())
         facts.originalRead = try await played(
             files.original, bytes: files.stamps[0].size, called: "the original", layout: facts.original,
             inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape), plan: source, hashCodec: codec,

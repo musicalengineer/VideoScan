@@ -453,9 +453,22 @@ extension BalancedCopyProof {
                 codec: original.codec, originalIndex: original.index, balancedIndex: copy.index,
                 frames: a.frames, framesSHA256: ours,
                 packetIdentical: stored.count == copied.count && stored.bytes == copied.bytes && stored.times == copied.times,
-                packetSHA256: stored.bytes, packets: stored.count))
+                packetSHA256: stored.bytes, packets: stored.count,
+                captioned: captionsCompared(original: original, copy: copy,
+                                            captioned: (facts.originalRead?.captioned, facts.balancedRead?.captioned))))
         }
         return .held(out)
+    }
+
+    /// Both decode passes found closed captions in this picture AND the two
+    /// files' decoder configurations (extradata) are the same bytes — the
+    /// only case in which identical packets also compare the captions. A
+    /// caption SEI can ride in the configuration itself (HEVC `hvcC` prefix
+    /// SEI), outside every packet (Codex #394).
+    static func captionsCompared(original: CarriedStream, copy: CarriedStream,
+                                 captioned: (original: Set<Int>?, copy: Set<Int>?)) -> Bool {
+        captioned.original?.contains(original.index) == true && captioned.copy?.contains(copy.index) == true
+            && original.configuration.extradataSHA256 == copy.configuration.extradataSHA256
     }
 
     /// The channel the copy leaves behind must have held nothing: its
@@ -568,8 +581,10 @@ extension BalancedCopyProof {
     /// any of it — the other file may hold the same thing, another thing or
     /// nothing — so each is named for the file that holds it, and nothing
     /// here is ever compared (re-scoped 2026-11-17 after Codex #307/#308).
-    /// `played` = how long each decoded stream played, by stream index.
-    static func ancillaries(of file: FileLayout, heldBy holder: Difference.Holder, played: [Int: Double]) -> [Difference] {
+    /// `played` = how long each decoded stream played, by stream index;
+    /// `shown` = how many frames each decoded picture showed.
+    static func ancillaries(of file: FileLayout, heldBy holder: Difference.Holder, played: [Int: Double],
+                            shown: [Int: Int] = [:]) -> [Difference] {
         var out: [Difference] = []
         func add(_ kind: Difference.Kind, _ what: String) {
             out.append(Difference(kind: kind, heldBy: holder, what: what + " — not compared with the other file"))
@@ -579,9 +594,38 @@ extension BalancedCopyProof {
         // decoded; any other track against the length its header states.
         let lengths = file.carried.map { ($0.isPicture ? "picture" : $0.kind, $0.index, $0.storedSeconds, $0.statedSeconds) }
             + file.sound.map { ("sound", $0.index, $0.storedSeconds, $0.statedSeconds) }
+        var storedNotPlayed: Set<Int> = []
         for (thing, index, stored, stated) in lengths {
             guard let stored, let plays = played[index] ?? stated, stored - plays > timingSlackCeilingSeconds else { continue }
             add(.playback, "stored \(thing) (stream \(index)) an edit list does not play: \(length(stored)) stored, \(length(plays)) played")
+            storedNotPlayed.insert(index)
+        }
+        // Stored but not played with NOTHING shortened (GH #483 item 1): an edit
+        // list that plays stored media twice can hide as much as it repeats. A
+        // decoded stream whose packets did not keep moving forward through the
+        // file, or whose index stores (or whose packets read) more frames than
+        // the decode pass SHOWED, may hold media nobody compared: a frame
+        // whose composition time falls outside the edit is read in file order
+        // and decoded, then dropped (Codex #394: 50 packets read in rising
+        // order, 49 shown, the played length unchanged). nil facts claim nothing.
+        if file.hasEditLists {
+            let decoded = file.pictures.map { ("picture", $0.index, $0.positionsRise, $0.storedFrames, $0.packets) }
+                + file.sound.map { ("sound", $0.index, $0.positionsRise, Int?.none, $0.packets) }
+            for (thing, index, rises, storedFrames, packets) in decoded where !storedNotPlayed.contains(index) {
+                let seen = thing == "picture" ? shown[index] : nil
+                if rises == false {
+                    add(.playback, "hidden \(thing) in the edit list (stream \(index)): it plays stored \(thing) more than once "
+                        + "or out of order, so \(thing) it stores and never plays cannot be ruled out")
+                } else if let seen, let storedFrames, storedFrames > seen {
+                    add(.playback, "hidden \(thing) in the edit list (stream \(index)): \(storedFrames) frames stored, \(seen) shown")
+                } else if let seen, let packets, packets > seen {
+                    add(.playback, "hidden \(thing) in the edit list (stream \(index)): \(packets) packets read, "
+                        + "\(seen) frames shown")
+                } else if let storedFrames, let packets, storedFrames > packets {
+                    add(.playback, "hidden \(thing) in the edit list (stream \(index)): \(storedFrames) frames stored, "
+                        + "\(packets) handed to the decoder")
+                }
+            }
         }
         let flags = (file.carried.map { ($0.index, $0.flags) } + file.sound.map { ($0.index, $0.flags) })
             .filter { !$0.1.isEmpty }.sorted { $0.0 < $1.0 }
@@ -595,10 +639,78 @@ extension BalancedCopyProof {
         return out
     }
 
+    /// What a paired picture's packets carry BESIDES the picture, when the
+    /// two files' packets are not identical (GH #483 item 2): closed captions
+    /// (CEA-608/708 in A53 SEI / MPEG-2 user data) and any other data inside
+    /// the stream. The decoded pixels do not show it and nothing compared it,
+    /// so it is named for the original — as captions when the decode pass
+    /// found them — and, when the copy's frames carried captions, for the
+    /// copy too. `captioned` = the decode pass's finding per file (nil = not
+    /// looked for).
+    static func inPacketData(original: CarriedStream, copy: CarriedStream,
+                             captioned: (original: Set<Int>?, copy: Set<Int>?)) -> [Difference] {
+        let i = original.index
+        let suffix = " — not compared with the other file"
+        var out: [Difference] = []
+        if captioned.original?.contains(i) == true {
+            out.append(Difference(kind: .captions, heldBy: .original,
+                                  what: "closed captions (CEA-608/708) inside picture stream \(i)'s packets, and whatever else "
+                                    + "those packets carry besides the picture" + suffix))
+        } else {
+            let looked = captioned.original == nil ? "closed captions were not looked for"
+                : "FFmpeg found no closed captions in its frames"
+            out.append(Difference(kind: .encoding, heldBy: .original,
+                                  what: "whatever picture stream \(i)'s packets carry besides the picture (\(looked))" + suffix))
+        }
+        if captioned.copy?.contains(copy.index) == true {
+            out.append(Difference(kind: .captions, heldBy: .balancedCopy,
+                                  what: "closed captions (CEA-608/708) inside picture stream \(copy.index)'s packets" + suffix))
+        }
+        return out
+    }
+
+    /// Closed captions in a picture whose packets ARE identical, when the
+    /// caption verdicts disagree or the decoder configurations differ: the
+    /// captions can ride in the configuration (HEVC `hvcC` prefix SEI), which
+    /// the packets do not include, so they were not compared (Codex #394).
+    /// Named for each file whose decode found them; nothing when
+    /// `captionsCompared` holds or neither file's decode found any.
+    static func configurationCaptions(original: CarriedStream, copy: CarriedStream,
+                                      captioned: (original: Set<Int>?, copy: Set<Int>?)) -> [Difference] {
+        guard !captionsCompared(original: original, copy: copy, captioned: captioned) else { return [] }
+        let suffix = " — not compared with the other file"
+        let sameConfiguration = original.configuration.extradataSHA256 == copy.configuration.extradataSHA256
+        let inOriginal = captioned.original?.contains(original.index)
+        let inCopy = captioned.copy?.contains(copy.index)
+        func why(other: String, found: Bool?) -> String {
+            switch found {
+            case true?: return "both files' frames carry captions, but the decoder configuration (extradata) that can carry "
+                + "them is written differently"
+            case false?: return "\(other)'s frames carry none though the picture packets are identical"
+                + (sameConfiguration ? "" : " (captions can ride in the decoder configuration, written differently)")
+            case nil: return "\(other)'s frames were not looked at for captions"
+            }
+        }
+        var out: [Difference] = []
+        if inOriginal == true {
+            out.append(Difference(kind: .captions, heldBy: .original,
+                                  what: "closed captions (CEA-608/708) in picture stream \(original.index); "
+                                    + why(other: "the balanced copy", found: inCopy) + suffix))
+        }
+        if inCopy == true {
+            out.append(Difference(kind: .captions, heldBy: .balancedCopy,
+                                  what: "closed captions (CEA-608/708) in picture stream \(copy.index); "
+                                    + why(other: "the original", found: inOriginal) + suffix))
+        }
+        return out
+    }
+
     /// How one paired PICTURE is stored differently though every decoded
-    /// frame is the same: codec or packets, a colour range tag only one
+    /// frame is the same: codec or packets — with what those packets carry
+    /// besides the picture, named per file — a colour range tag only one
     /// file states (displayed the same), then decoder configuration.
-    private static func storageDifferences(original: CarriedStream, copy: CarriedStream, held: Evidence.Stream) -> [Difference] {
+    private static func storageDifferences(original: CarriedStream, copy: CarriedStream, held: Evidence.Stream,
+                                           captioned: (original: Set<Int>?, copy: Set<Int>?)) -> [Difference] {
         var out: [Difference] = []
         let every = "every decoded frame is the same"
         if original.codec != copy.codec {
@@ -610,6 +722,11 @@ extension BalancedCopyProof {
                                   what: "picture stream \(original.index) (\(original.codec)) is not stored in the same "
                                     + "packets (\(original.packets ?? 0) in the original, \(copy.packets ?? 0) in the "
                                     + "balanced copy); \(every)"))
+        }
+        if !held.packetIdentical || original.codec != copy.codec {
+            out += inPacketData(original: original, copy: copy, captioned: captioned)
+        } else {
+            out += configurationCaptions(original: original, copy: copy, captioned: captioned)
         }
         if original.configuration.statesRangeOnOneSideOnly(against: copy.configuration) {
             let (holder, stated, other): (Difference.Holder, String, String) = original.configuration.colorRange.isEmpty
@@ -640,17 +757,19 @@ extension BalancedCopyProof {
     /// Everything that is not "the same" between two files that PLAY the
     /// same. About the pictures (compared): container, encoding, decoder
     /// configuration. About everything else (NOT compared): what each file
-    /// holds, per file. Order: tracks, container, encoding, decoder
-    /// configuration, playback instructions, metadata; the original first.
+    /// holds, per file. Order: tracks, closed captions, container, encoding,
+    /// decoder configuration, playback instructions, metadata; the original first.
     static func differences(_ facts: Facts, pairing: Pairing, kept: SoundStream, copySound: SoundStream,
                             streams: [Evidence.Stream], spare: [Difference]) -> [Difference] {
         var all = spare
         // A spare DV track was MEASURED, and is named by `spareCheck`; the other sound tracks of the original are those.
         all += ancillaries(of: facts.original, heldBy: .original,
-                           played: played(facts.original, read: facts.originalRead, kept: kept))
+                           played: played(facts.original, read: facts.originalRead, kept: kept),
+                           shown: (facts.originalRead?.pictures ?? [:]).mapValues(\.frames))
         all += earlyEndingHeader(of: facts.original, read: facts.originalRead, kept: kept)
         all += ancillaries(of: facts.balanced, heldBy: .balancedCopy,
-                           played: played(facts.balanced, read: facts.balancedRead, kept: copySound))
+                           played: played(facts.balanced, read: facts.balancedRead, kept: copySound),
+                           shown: (facts.balancedRead?.pictures ?? [:]).mapValues(\.frames))
         if facts.original.container != facts.balanced.container {
             func word(_ file: FileLayout) -> String { file.container.split(separator: ",").first.map(String.init) ?? "unknown" }
             all.append(Difference(kind: .container, heldBy: nil,
@@ -658,9 +777,10 @@ extension BalancedCopyProof {
         }
         for (pair, held) in zip(pairing.pictures, streams) {
             all += storageDifferences(original: facts.original.carried[pair.original],
-                                      copy: facts.balanced.carried[pair.balanced], held: held)
+                                      copy: facts.balanced.carried[pair.balanced], held: held,
+                                      captioned: (facts.originalRead?.captioned, facts.balancedRead?.captioned))
         }
-        let order: [Difference.Kind] = [.track, .container, .encoding, .decoderConfiguration, .playback, .metadata]
+        let order: [Difference.Kind] = [.track, .captions, .container, .encoding, .decoderConfiguration, .playback, .metadata]
         return order.flatMap { kind in all.filter { $0.kind == kind } }
     }
 
@@ -752,8 +872,9 @@ extension BalancedCopyProof {
 
     private static func evidenceDetail(_ e: Evidence) -> String {
         let streams = e.streams.map { s -> String in
-            let packets = s.packetIdentical
-                ? "stored packets identical, sha256 \(s.packetSHA256) (\(s.packets))" : "stored packets differ"
+            let packets = (s.packetIdentical
+                ? "stored packets identical, sha256 \(s.packetSHA256) (\(s.packets))" : "stored packets differ")
+                + (s.captioned && s.packetIdentical ? ", closed captions inside them compared byte for byte" : "")
             return "picture \(s.originalIndex)→\(s.balancedIndex): \(s.frames) decoded frames, each one's time, duration "
                 + "and pixels equal, sha256 \(s.framesSHA256); \(packets)"
         }

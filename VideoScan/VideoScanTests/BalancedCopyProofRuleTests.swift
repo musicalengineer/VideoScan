@@ -94,7 +94,7 @@ struct BalancedCopyProofRuleTests {
 
     @Test("PACKETS: the fold tells apart another time, another duration, another boundary, another order — and nothing else")
     func packetLedgerFold() throws {
-        let base = ["0,0,512,100,\(Self.a)", "1,0,1024,4096,\(Self.b)", "0,512,512,200,\(Self.b)"]
+        let base = ["0,0,512,100,N/A,\(Self.a)", "1,0,1024,4096,N/A,\(Self.b)", "0,512,512,200,N/A,\(Self.b)"]
         let good = sequences(base)
         #expect(good.fault == nil)
         let video = try #require(good.found[0])
@@ -103,7 +103,7 @@ struct BalancedCopyProofRuleTests {
         #expect(video.timingSHA256 != Proof.emptySHA256 && video.timingSHA256 != video.packetSHA256)
         // The sound is counted, not folded: its lines change nothing of the picture's digests …
         #expect(good.found[1]?.packetSHA256 == Proof.emptySHA256)
-        #expect(sequences(base + ["1,1024,768,3072,\(Self.a)"]).found[0] == video)
+        #expect(sequences(base + ["1,1024,768,3072,N/A,\(Self.a)"]).found[0] == video)
         // … and a stream with no packet at all has count 0 and the digests of nothing.
         #expect(sequences([]).found[0] == Proof.PacketSequence(packets: 0, timingSHA256: Proof.emptySHA256,
                                                                packetSHA256: Proof.emptySHA256))
@@ -112,23 +112,23 @@ struct BalancedCopyProofRuleTests {
             sequences(lines, carried: [(0, timeBase)]).found[0]
         }
         // Another presentation time, or duration: the times digest moves, the bytes digest does not.
-        for changed in [["0,0,512,100,\(Self.a)", "0,1024,512,200,\(Self.b)"],
-                        ["0,0,1024,100,\(Self.a)", "0,512,512,200,\(Self.b)"]] {
+        for changed in [["0,0,512,100,N/A,\(Self.a)", "0,1024,512,200,N/A,\(Self.b)"],
+                        ["0,0,1024,100,N/A,\(Self.a)", "0,512,512,200,N/A,\(Self.b)"]] {
             let other = try #require(fold(changed))
             #expect(other.timingSHA256 != video.timingSHA256 && other.packetSHA256 == video.packetSHA256)
         }
         // Another boundary (the same 300 bytes as 150 + 150), another payload, another order: the bytes digest moves.
-        for changed in [["0,0,512,150,\(Self.a)", "0,512,512,150,\(Self.b)"],
-                        ["0,0,512,100,\(Self.b)", "0,512,512,200,\(Self.b)"],
-                        ["0,0,512,200,\(Self.b)", "0,512,512,100,\(Self.a)"]] {
+        for changed in [["0,0,512,150,N/A,\(Self.a)", "0,512,512,150,N/A,\(Self.b)"],
+                        ["0,0,512,100,N/A,\(Self.b)", "0,512,512,200,N/A,\(Self.b)"],
+                        ["0,0,512,200,N/A,\(Self.b)", "0,512,512,100,N/A,\(Self.a)"]] {
             let other = try #require(fold(changed))
             #expect(other.packetSHA256 != video.packetSHA256 && other.timingSHA256 == video.timingSHA256)
         }
         // The same instants in another time base are the SAME: raw DV 1/60000 against QuickTime 1/30000.
-        let rawDV = try #require(fold(["0,0,2002,100,\(Self.a)", "0,2002,2002,200,\(Self.b)"], timeBase: "1/60000"))
-        let movie = try #require(fold(["0,0,1001,100,\(Self.a)", "0,1001,1001,200,\(Self.b)"], timeBase: "1/30000"))
+        let rawDV = try #require(fold(["0,0,2002,100,N/A,\(Self.a)", "0,2002,2002,200,N/A,\(Self.b)"], timeBase: "1/60000"))
+        let movie = try #require(fold(["0,0,1001,100,N/A,\(Self.a)", "0,1001,1001,200,N/A,\(Self.b)"], timeBase: "1/30000"))
         #expect(rawDV == movie)
-        let oneTickOff = try #require(fold(["0,0,1001,100,\(Self.a)", "0,1002,1001,200,\(Self.b)"], timeBase: "1/30000"))
+        let oneTickOff = try #require(fold(["0,0,1001,100,N/A,\(Self.a)", "0,1002,1001,200,N/A,\(Self.b)"], timeBase: "1/30000"))
         #expect(oneTickOff.timingSHA256 != movie.timingSHA256, "one tick (33 µs) is a difference: no tolerance")
         #expect(Proof.fraction(ticks: 2002, numerator: 1, denominator: 60_000) == "1001/30000")
         #expect(Proof.fraction(ticks: 60, numerator: 1001, denominator: 30_000) == "1001/500")
@@ -140,10 +140,10 @@ struct BalancedCopyProofRuleTests {
 
     @Test("PACKETS: a line that cannot be read ends the proof — the first one is kept, nothing after it counts")
     func packetLedgerFaults() {
-        let good = "0,0,512,100,\(Self.a)"
-        for bad in ["0,N/A,512,100,\(Self.a)", "0,0,N/A,100,\(Self.a)", "0,0,512,100",
-                    "7,0,512,100,\(Self.a)", "x,0,512,100,\(Self.a)", "0,0,512,-1,\(Self.a)", "0,0,512,100,MD5:abcd",
-                    "0,0,512,100,SHA256:zz", "0,0,512,100,\(Self.a)0", "garbage"] {
+        let good = "0,0,512,100,N/A,\(Self.a)"
+        for bad in ["0,N/A,512,100,N/A,\(Self.a)", "0,0,N/A,100,N/A,\(Self.a)", "0,0,512,100",
+                    "7,0,512,100,N/A,\(Self.a)", "x,0,512,100,N/A,\(Self.a)", "0,0,512,-1,N/A,\(Self.a)", "0,0,512,100,N/A,MD5:abcd",
+                    "0,0,512,100,N/A,SHA256:zz", "0,0,512,100,N/A,\(Self.a)0", "garbage"] {
             let result = sequences([good, bad, good])
             #expect(result.fault == bad)
             #expect(result.found[0]?.packets == 1, "nothing is folded after a fault: \(bad)")
@@ -157,7 +157,7 @@ struct BalancedCopyProofRuleTests {
         #expect(withSide.fault == nil && withSide.found[0]?.packetSHA256 != plain?.packetSHA256)
         #expect(withSide.found[0]?.timingSHA256 == plain?.timingSHA256)
         // The sound's lines need only name their stream: its times are not folded (some are N/A in AVI).
-        #expect(sequences(["1,N/A,N/A,4096,\(Self.b)"]).fault == nil)
+        #expect(sequences(["1,N/A,N/A,4096,N/A,\(Self.b)"]).fault == nil)
         #expect(sequences(["", good]).fault == nil, "an empty line is not a packet")
     }
 
@@ -314,8 +314,8 @@ struct BalancedCopyProofRuleTests {
         let clock = ContinuousClock()
         let elapsed = clock.measure {
             for i in 0..<108_000 {
-                packets.note("0,\(i),1,120000,\(Self.a)")
-                packets.note("1,\(i * 1600),1600,6400,\(Self.b)")
+                packets.note("0,\(i),1,120000,\(i * 126_400),\(Self.a)")
+                packets.note("1,\(i * 1600),1600,6400,\(i * 126_400 + 120_000),\(Self.b)")
                 frames.note(Self.frame(0, i, 1, 518_400))
                 frames.note(Self.frame(1, i * 1600, 1600, 3200))
                 if i.isMultiple(of: 30) { frames.note(Self.frame(2, i * 1600, 48_000, 96_000)) }

@@ -78,6 +78,23 @@
 // file that holds it (`Difference.heldBy`, "… — not compared with the other
 // file"), whether or not the other file holds something like it.
 //
+// Two holdings need more than the header to be seen (GH #483, Codex #310):
+//   - HIDDEN PICTURE OR SOUND BEHIND A REPEATING EDIT LIST. A QuickTime edit
+//     list that plays the same stored second twice hides another stored
+//     second without shortening anything, so "stored longer than played"
+//     cannot see it. The packet pass reads each packet's file position: a
+//     picture or sound whose packets do not keep moving forward through the
+//     file — or one whose index stores more frames than the edit list hands
+//     the decoder — is named "hidden picture/sound in the edit list" for the
+//     file that holds it.
+//   - CLOSED CAPTIONS INSIDE THE PICTURE (CEA-608/708 in A53 SEI or MPEG-2
+//     user data): not a track, and not in the decoded pixels. Where the
+//     picture packets are identical they were compared byte for byte, and
+//     the evidence says so. Where they are NOT, whatever the packets carry
+//     besides the picture was not compared, and is named for the original —
+//     as "closed captions" when the decode pass found them (an A53 side-data
+//     detector on every decoded frame), else as the packets' other data.
+//
 // So `.proven` means: plays the same, AND neither file holds ANYTHING
 // outside (a) and (b) — no other track, no hidden media, no track flag, no
 // chapter mark, no tag — AND same container, picture packets identical,
@@ -289,6 +306,15 @@ enum BalancedCopyProof {
         /// the edit list IGNORED — what is stored, played or not. nil = not
         /// that kind of container.
         var storedSeconds: Double?
+        /// QuickTime family only: the samples (frames) the index holds with
+        /// the edit list ignored. nil = not that kind of container, or unstated.
+        var storedFrames: Int?
+        /// The packet pass: every packet of this stream was read from further
+        /// into the file than the one before it. false = one came from the
+        /// same place or earlier — in a QuickTime file, an edit list that plays
+        /// stored media more than once or out of order (GH #483 item 1) — or
+        /// stated no position. nil = not read.
+        var positionsRise: Bool?
         var configuration = PictureConfiguration()
         var tags: [String: String] = [:]
         /// The ffprobe `disposition` flags that are set ("default",
@@ -331,6 +357,8 @@ enum BalancedCopyProof {
         var tags: [String: String] = [:]
         /// See `CarriedStream.flags`.
         var flags: Set<String> = []
+        /// See `CarriedStream.positionsRise`.
+        var positionsRise: Bool?
 
         /// One sample period, or one tick of the time base when that is
         /// coarser, capped at 1 ms.
@@ -414,6 +442,10 @@ enum BalancedCopyProof {
         var channelSHA256: [String] = []
         /// Samples behind each of those digests.
         var channelSamples: [Int64] = []
+        /// Input picture streams some of whose decoded frames carried closed
+        /// captions (FFmpeg's A53 side data: CEA-608/708 from H.264/HEVC SEI or
+        /// MPEG-2 user data). nil = not looked for (GH #483 item 2).
+        var captioned: Set<Int>?
 
         /// Samples on the timeline. nil = not read, or a total that does not
         /// fit in 64 bits (no file has one; a count that cannot be held is no
@@ -455,7 +487,7 @@ enum BalancedCopyProof {
     /// file holds outside the picture and the kept sound (never compared).
     struct Difference: Sendable, Equatable {
         enum Kind: String, Sendable {
-            case track, container, encoding, decoderConfiguration = "decoder configuration"
+            case track, captions = "closed captions", container, encoding, decoderConfiguration = "decoder configuration"
             case playback = "playback instructions", metadata
         }
         enum Holder: String, Sendable {
@@ -468,7 +500,8 @@ enum BalancedCopyProof {
         /// a colour range tag the other file does not state, compared and
         /// found to display the same). nil = not a holding at all: the two
         /// files store the same pictures differently (container, encoding,
-        /// decoder configuration).
+        /// decoder configuration). An `encoding` difference WITH a holder is
+        /// what that file's picture packets carry besides the picture.
         var heldBy: Holder?
         /// Plain words.
         var what: String
@@ -491,6 +524,12 @@ enum BalancedCopyProof {
             /// The original's packet digest and count.
             var packetSHA256: String
             var packets: Int
+            /// FFmpeg found closed captions in BOTH files' decoded frames and
+            /// the two decoder configurations (extradata) are the same bytes
+            /// (`BalancedCopyProof.captionsCompared`). Captions ride in the
+            /// packets or the configuration, so they were compared byte for
+            /// byte only where this AND `packetIdentical` hold.
+            var captioned = false
         }
         /// The original's channel that is NOT in the copy, as measured.
         struct Discarded: Sendable, Equatable {

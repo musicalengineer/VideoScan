@@ -232,14 +232,23 @@ struct BalancedCopyProofDecisionTests {
             kind: .container, heldBy: nil, what: "the original is a dv file, the balanced copy a mov file")])
         // Another codec, every decoded frame the same.
         let codec = Proof.decide(Self.facts { $0.balanced.carried = [Self.video(codec: "ffv1", hash: Self.otherHash)] })
+        // GH #483 item 2: what the original's packets carry besides the picture was not compared — named for it.
         #expect(Self.differs(codec) == ["[encoding] picture stream 0 is stored as prores in the original and as ffv1 in the "
-                                        + "balanced copy; every decoded frame is the same"])
+                                        + "balanced copy; every decoded frame is the same",
+                                        "[encoding] the original holds whatever picture stream 0's packets carry besides the "
+                                        + "picture (closed captions were not looked for) — not compared with the other file"])
         #expect(codec.evidence?.streams[0].packetIdentical == false)
         // The same codec in other packets: bytes, count or times.
         for change in [{ $0.packetSHA256 = Self.otherHash }, { $0.packets = 75 }, { $0.timingSHA256 = Self.otherTimesHash }]
             as [(inout Proof.CarriedStream) -> Void] {
-            let stored = Proof.decide(Self.facts { change(&$0.balanced.carried[0]) })
-            #expect(stored.differences.map(\.kind) == [.encoding] && stored.differences[0].heldBy == nil, "\(stored)")
+            let decided = Proof.decide(Self.facts { change(&$0.balanced.carried[0]) })
+            // 75 packets read in a QuickTime copy that showed 50 frames: that copy's hidden picture is named too (Codex #394).
+            let hidden = decided.differences.filter { $0.what.hasPrefix("hidden picture in the edit list") }
+            #expect(hidden.map(\.heldBy) == (decided.evidence?.streams[0].packets == 50 && decided.differences.contains {
+                $0.what.contains("75 in the balanced copy") } ? [.balancedCopy] : []), "\(decided)")
+            let stored = (differences: decided.differences.filter { !$0.what.hasPrefix("hidden picture") }, evidence: decided.evidence)
+            #expect(stored.differences.map(\.kind) == [.encoding, .encoding], "\(decided)")
+            #expect(stored.differences.map(\.heldBy) == [nil, .original], "the packets' other data is the original's (GH #483)")
             #expect(stored.differences[0].what.hasPrefix("picture stream 0 (prores) is not stored in the same packets"))
             #expect(stored.evidence?.streams[0].packetIdentical == false)
         }
@@ -673,6 +682,9 @@ struct BalancedCopyProofDecisionTests {
             ("extradata", { $0.original.carried[0].configuration.extradataSHA256 = "SHA256:ab" }),
             ("hidden picture", { $0.original.carried[0].storedSeconds = 9 }),
             ("hidden sound", { $0.balanced.sound[0].storedSeconds = 9 }),
+            ("hidden picture behind a repeating edit list", { $0.original.carried[0].positionsRise = false }),
+            ("hidden sound behind a repeating edit list", { $0.original.sound[0].positionsRise = false }),
+            ("stored frames never handed to the decoder", { $0.original.carried[0].storedFrames = 60 }),
             ("format tag", { $0.balanced.tags["note"] = "balanced" }),
             ("stream tag", { $0.original.carried[0].tags["timecode"] = "01:00:00:00" }),
             ("sound tag", { $0.balanced.sound[0].tags["handler_name"] = "x" }),
@@ -685,7 +697,11 @@ struct BalancedCopyProofDecisionTests {
                 Issue.record("\(name): expected same content with a named difference, got \(outcome)")
                 continue
             }
-            #expect(differs.count == 1 && !outcome.isProven, "\(name): \(differs)")
+            // Picture packets that differ also name what the original's packets carry besides the picture (GH #483).
+            let packetsDiffer = ["codec", "packet bytes", "packet count", "packet times"].contains(name)
+            // 75 packets read in a QuickTime original that showed 50 frames also names its hidden picture (Codex #394).
+            let hiddenToo = name == "packet count" ? 1 : 0
+            #expect(differs.count == (packetsDiffer ? 2 : 1) + hiddenToo && !outcome.isProven, "\(name): \(differs)")
             // With any refusal on top, the refusal wins.
             for (poisonName, poison) in Self.poisons {
                 var f = Self.facts(change)
@@ -906,10 +922,10 @@ struct BalancedCopyProofDecisionTests {
                 == ["-v", "error", "-show_data_hash", "sha256", "-show_streams", "-show_format", "-show_chapters", "-of", "json",
                     "/in/a.mov"])
         #expect(Proof.storedArgs(input: "/in/a.mov")
-                == ["-v", "error", "-ignore_editlist", "1", "-show_entries", "stream=index,duration", "-of", "json", "/in/a.mov"])
+                == ["-v", "error", "-ignore_editlist", "1", "-show_entries", "stream=index,duration,nb_frames", "-of", "json", "/in/a.mov"])
         #expect(Proof.packetArgs(input: "/in/a.mov")
                 == ["-v", "error", "-show_packets", "-show_data_hash", "sha256", "-show_entries",
-                    "packet=stream_index,pts,duration,size,data_hash", "-of", "csv=p=0", "/in/a.mov"])
+                    "packet=stream_index,pts,duration,size,pos,data_hash", "-of", "csv=p=0", "/in/a.mov"])
     }
 
     @Test("hashCodec: each decoded sample format maps to the raw PCM codec that holds it exactly; unknown is nil")
@@ -940,7 +956,8 @@ struct BalancedCopyProofDecisionTests {
             "-v", "repeat+level+verbose", "-nostdin", "-nostats", "-hide_banner", "-xerror", "-err_detect", "explode",
             "-noauto_conversion_filters", "-copyts", "-r", "30000/1001", "-i", "/in/tape.dv",
             "-filter_complex",
-            "[0:0]format=pix_fmts=yuv411p[p0];"
+            "[0:0]format=pix_fmts=yuv411p,split=2[p0][k0];"
+                + "[k0]sidedata=mode=select:type=A53_CC,trim=end_frame=1,showinfo@vsabcc0,nullsink;"
                 + "[0:1]aformat=sample_fmts=s16:sample_rates=48000,astats@vsabcs1\(peak),asplit=2[t][c0];"
                 + "[t]\(pick)[timeline];[c0]\(pick),asetnsamples=n=48000:p=0[ch0];"
                 + "[0:2]astats@vsabcs2\(peak),anullsink",
@@ -964,7 +981,8 @@ struct BalancedCopyProofDecisionTests {
         let copy = Proof.DecodePlan(pictures: [Proof.DecodePlan.Picture(index: 0, pixelFormat: "yuv411p")], soundIndex: 1,
                                     sampleFormat: "s32", sampleRateHz: 44_100, channels: [0, 1])
         let filter = Proof.decodeFilter(copy)
-        #expect(filter == "[0:0]format=pix_fmts=yuv411p[p0];[0:1]aformat=sample_fmts=s32:sample_rates=44100,asplit=3[t][c0][c1];"
+        #expect(filter == "[0:0]format=pix_fmts=yuv411p,split=2[p0][k0];"
+                + "[k0]sidedata=mode=select:type=A53_CC,trim=end_frame=1,showinfo@c0,nullsink;[0:1]aformat=sample_fmts=s32:sample_rates=44100,asplit=3[t][c0][c1];"
                 + "[t]aresample=osf=s32p,channelmap=map=0:channel_layout=mono,aresample=osf=s32[timeline];"
                 + "[c0]aresample=osf=s32p,channelmap=map=0:channel_layout=mono,aresample=osf=s32,asetnsamples=n=44100:p=0[ch0];"
                 + "[c1]aresample=osf=s32p,channelmap=map=1:channel_layout=mono,aresample=osf=s32,asetnsamples=n=44100:p=0[ch1]")
@@ -977,7 +995,9 @@ struct BalancedCopyProofDecisionTests {
         #expect(!wav.contains("rawvideo") && !wav.contains("-fps_mode") && wav.last == "-")
         let two = Proof.DecodePlan(pictures: [.init(index: 0, pixelFormat: "a"), .init(index: 3, pixelFormat: "b")],
                                    soundIndex: 1, sampleFormat: "fltp", sampleRateHz: 48_000, channels: [0])
-        #expect(Proof.decodeFilter(two).hasPrefix("[0:0]format=pix_fmts=a[p0];[0:3]format=pix_fmts=b[p3];"
+        let detector = "sidedata=mode=select:type=A53_CC,trim=end_frame=1,showinfo@"
+        #expect(Proof.decodeFilter(two).hasPrefix("[0:0]format=pix_fmts=a,split=2[p0][k0];[k0]\(detector)c0,nullsink;"
+                                                  + "[0:3]format=pix_fmts=b,split=2[p3][k3];[k3]\(detector)c3,nullsink;"
                                                   + "[0:1]aformat=sample_fmts=fltp:sample_rates=48000,asplit=2"))
         #expect(Proof.decodeFilter(two).contains("aresample=osf=fltp,channelmap=map=0:channel_layout=mono,aresample=osf=flt"))
         #expect(two.roles == [.picture(input: 0), .picture(input: 3), .timeline, .channel(0)])

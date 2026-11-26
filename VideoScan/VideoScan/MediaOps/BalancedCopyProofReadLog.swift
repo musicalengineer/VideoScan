@@ -97,9 +97,13 @@ extension BalancedCopyProof {
     /// Read one decode pass's whole log into the log's half of a
     /// `ReadReport`. Success = every line was one `-v error` would have kept
     /// quiet, the log ends with ffmpeg's own clean exit line, and no stream
-    /// is accounted for twice. `runTag` names this run's astats instances.
+    /// is accounted for twice. `runTag` names this run's astats instances
+    /// and its caption detectors (`captioned`: the picture streams whose
+    /// detector logged a frame; nil when `runTag` is empty).
     static func readReport(fromStderr text: String, runTag: String) -> Result<ReadReport, ReadFault> {
         var report = ReadReport()
+        // Without a run tag no detector line can be told from a forged one: captions were not looked for.
+        report.captioned = runTag.isEmpty ? nil : []
         var announced: [Int: Int] = [:]
         var last: LogRecord?
         for line in text.split(whereSeparator: \.isNewline) where !line.allSatisfy(\.isWhitespace) {
@@ -114,28 +118,72 @@ extension BalancedCopyProof {
             // can be held: the pass is refused (Codex #308-1).
             guard !record.payload.hasPrefix(reconfiguredPayload) else { return .failure(ReadFault(line: String(line))) }
             last = record
-            let peaks = "astats@\(runTag)s"
-            if !runTag.isEmpty, let component = record.components.first, component.hasPrefix(peaks) {
-                guard let stream = Int(component.dropFirst(peaks.count).prefix(while: { $0.isASCII && $0.isNumber })),
-                      notePeak(record.payload, stream: stream, announced: &announced, in: &report) else {
-                    return .failure(ReadFault(line: String(line)))
-                }
-            } else if let read = streamCount(fromPayload: record.payload, side: "Input", counting: " packets read") {
-                let entry = StreamRead(packets: read.count, decodeErrors: read.decodeErrors)
-                guard report.streams.updateValue(entry, forKey: read.index) == nil else {
-                    return .failure(ReadFault(line: String(line)))
-                }
-            } else if let wrote = streamCount(fromPayload: record.payload, side: "Output", counting: " packets muxed") {
-                guard report.muxed.updateValue(wrote.count, forKey: wrote.index) == nil else {
-                    return .failure(ReadFault(line: String(line)))
-                }
+            let noted: Bool
+            if let instance = runInstance(of: record, runTag: runTag) {
+                noted = note(instance, record, announced: &announced, in: &report)
+            } else {
+                noted = noteStreamCount(record.payload, in: &report)
             }
+            guard noted else { return .failure(ReadFault(line: String(line))) }
         }
         guard let last, last.payload == cleanExitPayload else {
             return .failure(ReadFault(line: text.split(whereSeparator: \.isNewline).last.map(String.init)
                                         ?? "ffmpeg reported nothing about what it read"))
         }
         return .success(report)
+    }
+
+    /// One of THIS run's named filter instances (≈ a C++ tagged union):
+    /// astats on sound stream N, the caption detector on picture N, or one
+    /// of them with no stream number (an unreadable log).
+    enum RunInstance: Equatable {
+        case peaks(stream: Int)
+        case captions(picture: Int)
+        case unnumbered
+    }
+
+    /// Which of this run's named instances wrote `record`. nil = none of
+    /// them — and always nil without a run tag, where a named line could be
+    /// forged by anything the file makes ffmpeg print.
+    static func runInstance(of record: LogRecord, runTag: String) -> RunInstance? {
+        guard !runTag.isEmpty, let component = record.components.first else { return nil }
+        let named: [(String, (Int) -> RunInstance)] = [("astats@\(runTag)s", RunInstance.peaks),
+                                                       ("showinfo@\(runTag)c", RunInstance.captions)]
+        for (prefix, instance) in named where component.hasPrefix(prefix) {
+            let digits = component.dropFirst(prefix.count).prefix(while: { $0.isASCII && $0.isNumber })
+            return Int(digits).map(instance) ?? .unnumbered
+        }
+        return nil
+    }
+
+    /// One record of a named instance into the report. false = the log
+    /// does not vouch for the read.
+    private static func note(_ instance: RunInstance, _ record: LogRecord, announced: inout [Int: Int],
+                             in report: inout ReadReport) -> Bool {
+        switch instance {
+        case .unnumbered:
+            return false
+        case .peaks(let stream):
+            return notePeak(record.payload, stream: stream, announced: &announced, in: &report)
+        case .captions(let picture):
+            // The detector logs only a frame that carried captions; "n:" opens that frame's record.
+            if record.payload.hasPrefix("n:") { report.captioned?.insert(picture) }
+            return true
+        }
+    }
+
+    /// ffmpeg's own per-stream account — packets read of an input stream,
+    /// packets muxed of an output stream — into the report. false = a
+    /// stream accounted for twice. Any other record changes nothing.
+    private static func noteStreamCount(_ payload: Substring, in report: inout ReadReport) -> Bool {
+        if let read = streamCount(fromPayload: payload, side: "Input", counting: " packets read") {
+            let entry = StreamRead(packets: read.count, decodeErrors: read.decodeErrors)
+            return report.streams.updateValue(entry, forKey: read.index) == nil
+        }
+        if let wrote = streamCount(fromPayload: payload, side: "Output", counting: " packets muxed") {
+            return report.muxed.updateValue(wrote.count, forKey: wrote.index) == nil
+        }
+        return true
     }
 
     /// One line of a run's astats for one sound stream: "Channel: N" opens
