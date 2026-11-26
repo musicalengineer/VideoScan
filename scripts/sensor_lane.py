@@ -62,7 +62,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))      # scripts/ — also when loaded by importlib (tests)
 from warning_ratchet import check as ratchet_check            # noqa: E402
@@ -462,8 +462,55 @@ PAR_FAIL_RE = re.compile(r"^(?:Test )?case '(.+?)' failed on ", re.M)
 PAR_PASS_RE = re.compile(r"^(?:Test )?case '.+?' passed on ", re.M)
 
 
-def count(log: str) -> Tuple[int, int, List[str]]:
+# GH #454 (2026-11-07): a parallel result line torn MID-NAME ("eShellCLITests/
+# eileens…()' passed on …", its front glued to another host's line) matched no
+# pattern: 690 sensors ran and passed, the lane counted 689. Such a fragment is
+# recovered only where that is safe: its name is the tail of exactly ONE
+# expected sensor that has no verdict line of its own. Anything else is not
+# guessed, and every expected sensor must end with a verdict (passed, failed,
+# skipped, or named in "Failing tests:"): one without is RED by name. A
+# parameterized sensor prints one line per argument, so the check is per
+# sensor, never "lines == sensors".
+# "recorded an expected failure" is a test inside withKnownIssue: a verdict, not
+# counted as passed (it never was), but never "no verdict" either.
+TORN_VERDICT_RE = re.compile(r"^(?!(?:Test )?case ')(.*?)' (passed|failed|skipped|recorded an expected failure) "
+                             r"on '[^']*\(\d+\)'", re.M)
+PAR_VERDICT_RE = re.compile(r"^(?:Test )?case '(.+?)' (?:passed|failed|skipped|recorded an expected failure) on ", re.M)
+
+
+def _sensor_key(name: str) -> str:
+    """'VideoScanTests/Suite/f(_:)' or 'Suite/f()' or 'Suite.f()' -> 'Suite/f': how a verdict names its sensor."""
+    name = re.sub(r"\(.*$", "", name.strip())
+    name = name[len("VideoScanTests/"):] if name.startswith("VideoScanTests/") else name
+    return name.replace(".", "/") if "/" not in name else name
+
+
+def _verdicts(log: str, expected: Sequence[str]) -> Tuple[int, List[str], List[str]]:
+    """(torn passes recovered, torn failures recovered (sensor names), sensors with no verdict) — see TORN_VERDICT_RE."""
+    want = {_sensor_key(e): e[len("VideoScanTests/"):] if e.startswith("VideoScanTests/") else e for e in expected}
+    seen = {_sensor_key(n) for n in PAR_VERDICT_RE.findall(log)}
+    seen |= {_sensor_key(e) for m in FAILING_BLOCK_RE.finditer(log) for e in m.group(1).splitlines() if e.strip()}
+    passes, fails = 0, []
+    for m in TORN_VERDICT_RE.finditer(log):
+        tail = re.search(r"[\w/]+(?:\([^()]*\))?$", m.group(1))
+        base = _sensor_key(tail.group(0)) if tail else ""
+        fits = [k for k in want if k not in seen and base and (k == base or k.endswith(base))]
+        if len(fits) != 1:
+            continue                                  # no sensor, or more than one: never guessed
+        seen.add(fits[0])
+        if m.group(2) == "passed":
+            passes += 1
+        elif m.group(2) == "failed":
+            fails.append(want[fits[0]])
+    missing = sorted(f"{want[k]}: no verdict line in the log" for k in want if k not in seen)
+    return passes, fails, missing
+
+
+def count(log: str, expected: Optional[Sequence[str]] = None) -> Tuple[int, int, List[str]]:
     """(passed, failed, failing names) from an xcodebuild / swift test log.
+    `expected` (the app half's sensor ids): recover a torn verdict line where
+    exactly one sensor fits, and count a sensor with no verdict as failed,
+    named "<id>: no verdict line in the log" (GH #454).
     With parallel testing xcodebuild reports EVERY test (XCTest and Swift
     Testing) as "Test case '<Suite>/<f>()' passed|failed on '<Mac> (pid)'";
     without it, Swift Testing prints "✔/✘ Test …" and XCTest "Test Case '-[…]'".
@@ -503,6 +550,12 @@ def count(log: str) -> Tuple[int, int, List[str]]:
         for entry in m.group(1).splitlines():
             if entry.strip():
                 names.add(entry.strip())
+    if expected:
+        torn_passes, torn_fails, missing = _verdicts(log, expected)
+        passed += torn_passes
+        names.update(torn_fails)
+        names.update(missing)
+        failed += len(torn_fails) + len(missing)
     return max(passed, 0), failed, sorted(names)
 
 
@@ -529,7 +582,7 @@ def run_app(sensors: List[Sensor], log_dir: Path, dd: Path) -> Tuple[int, int, L
             "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS=",
             "ONLY_ACTIVE_ARCH=YES"]
     args += [f"-only-testing:{s.xcode_id}" for s in sensors]
-    return _run([sealed(args)], log_dir / "sensor-lane-app.log")
+    return _run([sealed(args)], log_dir / "sensor-lane-app.log", [s.xcode_id for s in sensors])
 
 
 def run_core(sensors: List[Sensor], log_dir: Path) -> Tuple[int, int, List[str], int, float]:
@@ -541,8 +594,10 @@ def run_core(sensors: List[Sensor], log_dir: Path) -> Tuple[int, int, List[str],
     return _run([build, sealed(test, plain=True)], log_dir / "sensor-lane-core.log")
 
 
-def _run(cmds: List[List[str]], log_path: Path) -> Tuple[int, int, List[str], int, float]:
-    """Each command in turn into one log, stopping at the first that fails."""
+def _run(cmds: List[List[str]], log_path: Path,
+         expected: Optional[Sequence[str]] = None) -> Tuple[int, int, List[str], int, float]:
+    """Each command in turn into one log, stopping at the first that fails.
+    `expected`: the sensor ids every one of which must end with a verdict (count)."""
     t0 = time.monotonic()
     rc = 0
     with open(log_path, "w") as fh:
@@ -553,7 +608,7 @@ def _run(cmds: List[List[str]], log_path: Path) -> Tuple[int, int, List[str], in
                 break
     elapsed = time.monotonic() - t0
     log = log_path.read_text(errors="replace")
-    passed, failed, names = count(log)
+    passed, failed, names = count(log, expected)
     return passed, failed, names, rc, elapsed
 
 

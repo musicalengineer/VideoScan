@@ -36607,10 +36607,13 @@
       "tests": [
         "test_a_failed_core_build_does_not_run_the_tests",
         "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_line_torn_mid_name_is_recovered_when_exactly_one_sensor_fits",
         "test_a_manifest_that_cannot_be_checked_is_an_error_not_a_pass",
         "test_a_manifest_that_matches_the_source_has_no_errors",
+        "test_a_sensor_with_no_verdict_line_is_red_and_named",
         "test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh",
         "test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error",
+        "test_a_torn_fragment_that_fits_two_sensors_or_one_already_judged_is_not_guessed",
         "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
