@@ -659,6 +659,23 @@ struct CheckMediaSoundContinuityTests {
         }
     }
 
+    @Test("#515 Codex round 2: a healthy PCM .mkv whose COMMENT tag reads 'Reconfiguring filter graph because …' is not a rebuilt graph — every sample decoded, the row is a measurement",
+          .enabled(if: VerifyAudioTestMedia.toolsAvailable), .timeLimit(.minutes(2)))
+    func aCommentTagIsNotAReconfiguration() async throws {
+        let dir = try VerifyAudioTestMedia.makeScratchDir("cmreconfig_comment")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("test_cm_reconfig_comment.mkv").path
+        try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", "-c:a", "pcm_s16le",
+                                        "-metadata", "COMMENT=\(AstatsOutputParser.graphReconfiguredMarker) audio parameters changed"],
+                                       output: path)
+        let facts = try #require(try? await CheckMediaProbe.facts(path: path).get())
+        let result = try await CheckMediaProbe.soundContinuity(path: path, facts: facts)
+        guard case .success(let report) = result else { Issue.record("not run: \(result)"); return }
+        #expect(report.graphReconfigured == false, "a metadata dump line marked the pass reconfigured")
+        let row = R.checkSoundContinuity(result, facts: facts)
+        if case .notRun(let why) = row.verdict { Issue.record("a COMMENT tag made the row 'not run': \(why)") }
+    }
+
     @Test("#515 rule: ffmpeg's 'Reconfiguring filter graph' line on the continuity pass marks the report; a marked report is not whole, with or without a stated length")
     func aReconfigurationLineMarksTheReport() {
         var a = SoundContinuityAnalyzer(channels: 2, sampleRate: 48_000)
@@ -668,6 +685,12 @@ struct CheckMediaSoundContinuityTests {
         b.consume(showInfoLine: "[af#0:0 @ 0x6000] \(AstatsOutputParser.graphReconfiguredMarker) audio parameters changed to 96000 Hz, stereo, fltp")
         let marked = b.finish()
         #expect(marked.graphReconfigured)
+        var tagged = SoundContinuityAnalyzer(channels: 2, sampleRate: 48_000)
+        tagged.consume(showInfoLine: "    COMMENT         : \(AstatsOutputParser.graphReconfiguredMarker) audio parameters changed")
+        #expect(tagged.finish().graphReconfigured == false, "a metadata dump line is not ffmpeg's diagnostic")
+        #expect(AstatsOutputParser.isGraphReconfiguredLine("\(AstatsOutputParser.graphReconfiguredMarker) audio parameters changed"),
+                "an ffmpeg that logs with no context prefix")
+        #expect(!AstatsOutputParser.isGraphReconfiguredLine("[Parsed_ashowinfo_1 @ 0x6000] text: \(AstatsOutputParser.graphReconfiguredMarker)"))
         #expect(CheckMediaProbe.shortDecode(report: marked, sampleRate: 48_000, statedSeconds: nil)
                 == .reconfigured(statedSeconds: nil))
         var whole = marked

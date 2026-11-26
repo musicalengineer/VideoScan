@@ -95,4 +95,60 @@ struct QARedSilenceFloorTests {
             #expect(AudioFingerprintStamp.reading(of: fp) == .silence, "\(file): \(AudioFingerprintStamp.reading(of: fp))")
         }
     }
+
+    @Test("#345 Codex round 2: anti-phase stereo (left a −21 dBFS wandering tone, right its near-inverse) has a −68 dBFS mono mix — the source channels are loud, so the print keeps its landmarks and its stamp says heard sound",
+          .timeLimit(.minutes(2)))
+    func antiPhaseStereoIsSound() async throws {
+        try #require(FileManager.default.isExecutableFile(atPath: FFmpegLocator.ffmpegPath), "ffmpeg is needed")
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_antiphase_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Codex's shape: L = 3000/32768 · tone, R = −2976/32768 · tone.
+        let tone = "sin(2*PI*(440*t+30*sin(2*PI*0.7*t)))"
+        let out = dir.appendingPathComponent("test_antiphase.mkv")
+        let made = await ProcessRunner.runProcess(
+            executable: FFmpegLocator.ffmpegPath,
+            arguments: ["-nostdin", "-v", "error", "-y", "-f", "lavfi",
+                        "-i", "aevalsrc=0.0915527*\(tone)|-0.0908203*\(tone):s=8000:d=10",
+                        "-c:a", "pcm_s16le", out.path],
+            deadlineSeconds: 120)
+        try #require(made.exitCode == 0, "ffmpeg exit \(made.exitCode) \(made.stderr.suffix(300))")
+        let pcm = try await AudioPCMDecoder().decode(path: out.path)
+        let mixPeak = pcm.samples.map { abs(Int($0)) }.max() ?? 0
+        #expect(mixPeak <= 40, "the mono mix must be near-silent for this case to bite (peak \(mixPeak))")
+        let fp = AudioFingerprint.compute(pcm)
+        #expect(fp.landmarkCount > 0, "matching evidence must survive: \(fp.landmarkCount) landmarks")
+        #expect(AudioFingerprintStamp.reading(of: fp) == .printable, "\(AudioFingerprintStamp.reading(of: fp))")
+        #expect(AudioFingerprintStamp.fingerprinted(fp, contentDigest: "sha256:ab", sizeBytes: 1_000)
+                    .hearing(headerHasAudio: true) == .heardSound)
+    }
+
+    @Test("#345 Codex round 2 rule: silence needs the SOURCE channels quiet too — a quiet mix over a −21 dBFS source keeps its landmarks and is not measured per second; a −70 dBFS source is silence; an unmeasured source is never silence")
+    func silenceNeedsQuietSourceChannels() {
+        let quietMix = Self.tonalFloor(peak: 12)
+        let loudSource = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: quietMix, sourceLevel: .peakDBFS(-21)))
+        #expect(loudSource.landmarkCount > 0)
+        #expect(loudSource.secondsAboveSilenceCeiling == nil, "0 would claim silence the source contradicts")
+        #expect(AudioFingerprintStamp.reading(of: loudSource) == .printable)
+        let quietSource = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: quietMix, sourceLevel: .peakDBFS(-70)))
+        #expect(quietSource.landmarkCount == 0 && AudioFingerprintStamp.reading(of: quietSource) == .silence)
+        let unmeasured = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: quietMix, sourceLevel: .unmeasured))
+        #expect(AudioFingerprintStamp.reading(of: unmeasured) != .silence)
+        let zeros = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: [Int16](repeating: 0, count: 16_000),
+                                                      sourceLevel: .peakDBFS(-.infinity)))
+        #expect(AudioFingerprintStamp.reading(of: zeros) == .silence, "digital zeros on every channel")
+    }
+
+    @Test("#345 Codex round 2: the decoder reads only its own astats instance's peak lines — the loudest wins, '-inf' is −∞, an indented metadata line or garbage is never a measurement")
+    func sourceLevelParse() {
+        let tag = "[astats@vsprint @ 0x7805040900] "
+        #expect(AudioSourceLevel.parse(stderr: "\(tag)Channel: 1\n\(tag)Peak level dB: -20.9\n\(tag)Channel: 2\n\(tag)Peak level dB: -63.0\n")
+                == .peakDBFS(-20.9))
+        #expect(AudioSourceLevel.parse(stderr: "\(tag)Peak level dB: -inf\n") == .peakDBFS(-.infinity))
+        #expect(AudioSourceLevel.parse(stderr: "    COMMENT         : [astats@vsprint @ 0x1] Peak level dB: -90\n") == .unmeasured)
+        #expect(AudioSourceLevel.parse(stderr: "[astats@other @ 0x1] Peak level dB: -90\n") == .unmeasured)
+        #expect(AudioSourceLevel.parse(stderr: "\(tag)Peak level dB: -90\n\(tag)Peak level dB: nan\n") == .unmeasured)
+        #expect(AudioSourceLevel.parse(stderr: "") == .unmeasured)
+    }
 }

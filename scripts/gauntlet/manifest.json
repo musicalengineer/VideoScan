@@ -4145,9 +4145,12 @@
       ],
       "tests": [
         "absoluteLevelOutranksLandmarks",
+        "antiPhaseStereoIsSound",
         "ditherIsSilence",
         "loudToneIsSound",
         "lowHissIsSilence",
+        "silenceNeedsQuietSourceChannels",
+        "sourceLevelParse",
         "tonalFloorIsSilence",
         "tonalFloorThroughTheDecoder"
       ]
@@ -13073,6 +13076,7 @@
         "CheckMediaLayoutRealFileTests"
       ],
       "tests": [
+        "aCommentTagIsNotAReconfiguration",
         "aDecodeThatEndsEarlyIsNotEverySample",
         "aReconfigurationLineMarksTheReport",
         "aReconfiguredSoundIsNotEverySample",

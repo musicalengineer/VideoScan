@@ -3,7 +3,19 @@
 // PCM in memory, over a pipe, with every failure a named outcome.
 //
 // The ffmpeg call is
-//   ffmpeg -nostdin -v error [-ss S] -i <file> -vn -ac 1 -ar 8000 -t T -f s16le -
+//   ffmpeg -nostdin -hide_banner -nostats -v info [-ss S] -i <file> -vn
+//          -af astats@vsprint=measure_perchannel=Peak_level:measure_overall=none
+//          -ac 1 -ar 8000 -t T -f s16le -
+// The astats instance sits BEFORE the mono downmix (ffmpeg appends the -ac /
+// -ar conversion after the user's filters), so its per-channel peaks are the
+// SOURCE channels' (GH #345, Codex round 2: anti-phase stereo at −21 dBFS
+// per channel sums to a −68 dBFS mono mix — the mix alone is no evidence of
+// silence). `-v info` is what makes astats print its summary; only lines
+// that start with the instance's own "[astats@vsprint @ " prefix are read
+// (a metadata dump line is indented, so a tag cannot forge one).
+// ProcessRunner keeps the HEAD of stderr (256 KB): a damaged file that floods
+// stderr with decode errors may lose the summary — it is then `.unmeasured`,
+// which is never evidence of silence (the conservative side).
 // read from stdout through ProcessRunner.runProcess's raw-bytes callback
 // (`stdoutData`, `stdoutLimitBytes: 0`), the house shell-out primitive: the
 // pipe is drained continuously (a child can never block on a full pipe), a
@@ -38,6 +50,9 @@ import Foundation
 public struct AudioPCM: Sendable, Equatable {
     public let sampleRate: Int
     public let samples: [Int16]
+    /// How loud the SOURCE channels were before the mono downmix — the only
+    /// evidence that may call a recording silent (GH #345, Codex round 2).
+    public let sourceLevel: AudioSourceLevel
     /// True when the decode filled the limit it was given (`maxSeconds`,
     /// or a `Window.durationSeconds`): `samples` are then a PREFIX of the
     /// recording (or a window of it), not the whole. A fingerprint made
@@ -46,10 +61,14 @@ public struct AudioPCM: Sendable, Equatable {
     /// cap also reads as capped — the honest, conservative side.)
     public let reachedCap: Bool
 
-    public init(sampleRate: Int, samples: [Int16], reachedCap: Bool = false) {
+    /// `sourceLevel` defaults to `.samplesAreSource`: PCM built by hand is
+    /// its own source. The decoder always says what it measured.
+    public init(sampleRate: Int, samples: [Int16], reachedCap: Bool = false,
+                sourceLevel: AudioSourceLevel = .samplesAreSource) {
         self.sampleRate = sampleRate
         self.samples = samples
         self.reachedCap = reachedCap
+        self.sourceLevel = sourceLevel
     }
 
     /// Seconds of audio actually analysed (= `samples.count / sampleRate`).
@@ -57,6 +76,51 @@ public struct AudioPCM: Sendable, Equatable {
         sampleRate > 0 ? Double(samples.count) / Double(sampleRate) : 0
     }
     public var analyzedSeconds: Double { durationSeconds }
+}
+
+/// The source channels' loudness behind a mono `AudioPCM`.
+/// (For Rick: a tagged union ≈ std::variant<SamplesAreSource, double, Unmeasured>.)
+public enum AudioSourceLevel: Sendable, Equatable {
+    /// The samples ARE the source (hand-built mono PCM, tests).
+    case samplesAreSource
+    /// The loudest source channel's peak over the decoded span, dBFS
+    /// (−∞ = digital zeros), measured before the downmix.
+    case peakDBFS(Double)
+    /// Decoded, but ffmpeg printed no per-channel peak: never evidence of
+    /// silence.
+    case unmeasured
+
+    /// True only when this is evidence that no source channel's peak
+    /// clears `ceilingDBFS`.
+    public func isAtOrBelow(_ ceilingDBFS: Double) -> Bool {
+        switch self {
+        case .samplesAreSource: return true
+        case .peakDBFS(let p): return p <= ceilingDBFS
+        case .unmeasured: return false
+        }
+    }
+
+    /// The astats instance the decoder names (`arguments`).
+    static let astatsTag = "vsprint"
+
+    /// The loudest "Peak level dB:" among the lines THIS decoder's astats
+    /// instance logged (prefix "[astats@vsprint @ " at the start of the
+    /// line), or `.unmeasured`. Several summaries (a graph ffmpeg rebuilt
+    /// re-creates the filter) → the loudest. "-inf" → −∞. Pure.
+    static func parse(stderr: String) -> AudioSourceLevel {
+        let prefix = "[astats@\(astatsTag) @ "
+        var loudest: Double?
+        for line in stderr.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) where line.hasPrefix(prefix) {
+            guard let close = line.range(of: "] ") else { continue }
+            let payload = line[close.upperBound...]
+            guard payload.hasPrefix("Peak level dB:") else { continue }
+            let text = payload.dropFirst("Peak level dB:".count).trimmingCharacters(in: .whitespaces)
+            let value: Double? = text == "-inf" ? -.infinity : Double(text)
+            guard let value, !value.isNaN else { return .unmeasured }   // garbage: refuse rather than guess
+            loudest = max(loudest ?? -.infinity, value)
+        }
+        return loudest.map { .peakDBFS($0) } ?? .unmeasured
+    }
 }
 
 public struct AudioPCMDecoder: Sendable {
@@ -111,11 +175,13 @@ public struct AudioPCMDecoder: Sendable {
     /// BEFORE `-i` (input seek: exact for audio, and cheap); `-t` is the
     /// smaller of the window and the cap, always present; the output is `-`.
     public static func arguments(path: String, window: Window, sampleRate: Int, maxSeconds: Double) -> [String] {
-        var args = ["-nostdin", "-v", "error"]
+        var args = ["-nostdin", "-hide_banner", "-nostats", "-v", "info"]
         if let start = window.startSeconds {
             args += ["-ss", Self.seconds(start)]
         }
-        args += ["-i", path, "-vn", "-ac", "1", "-ar", String(sampleRate)]
+        args += ["-i", path, "-vn",
+                 "-af", "astats@\(AudioSourceLevel.astatsTag)=measure_perchannel=Peak_level:measure_overall=none",
+                 "-ac", "1", "-ar", String(sampleRate)]
         let limit = min(window.durationSeconds ?? maxSeconds, maxSeconds)
         args += ["-t", Self.seconds(limit), "-f", "s16le", "-"]
         return args
@@ -152,7 +218,8 @@ public struct AudioPCMDecoder: Sendable {
         // Exactly the cap's worth of samples means ffmpeg was stopped by
         // `-t` (or the sink dropped the rest): the file goes on past what
         // was analysed, as far as anyone can tell.
-        return AudioPCM(sampleRate: sampleRate, samples: samples, reachedCap: samples.count >= capSamples)
+        return AudioPCM(sampleRate: sampleRate, samples: samples, reachedCap: samples.count >= capSamples,
+                        sourceLevel: AudioSourceLevel.parse(stderr: result.stderr))
     }
 }
 

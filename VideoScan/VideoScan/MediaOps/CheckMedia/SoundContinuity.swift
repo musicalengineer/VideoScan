@@ -448,8 +448,9 @@ struct SoundContinuityAnalyzer {
     mutating func consume(showInfoLine line: String) -> Double? {
         guard let f = SoundTimeline.frame(fromShowInfo: line) else {
             // The levels pass's rule (GH #515): a rebuilt graph means the
-            // sound changed shape partway; one line is enough.
-            if line.contains(AstatsOutputParser.graphReconfiguredMarker) { report.graphReconfigured = true }
+            // sound changed shape partway; one line is enough — ffmpeg's own
+            // diagnostic only, never a metadata dump line (Codex round 2).
+            if AstatsOutputParser.isGraphReconfiguredLine(line) { report.graphReconfigured = true }
             loudness = loudness.adding(line: line)
             return nil
         }

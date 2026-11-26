@@ -227,8 +227,11 @@ public struct AudioFingerprint: Sendable {
     public let times: [UInt32]
     /// ABSOLUTE loudness, measured by `compute` on the decoded PCM at gain 1
     /// (before normalisation): how many one-second blocks have a peak above
-    /// `silenceCeilingDBFS`. 0 = decoded and measured silent. nil = not
-    /// measured (a print decoded from a VSAF blob, or built by hand).
+    /// `silenceCeilingDBFS`. 0 = decoded and measured silent (the mix AND
+    /// every source channel, `AudioPCM.sourceLevel`). nil = not measured (a
+    /// print decoded from a VSAF blob, or built by hand), or a quiet mono mix
+    /// over a loud source channel (anti-phase stereo — GH #345 Codex round 2:
+    /// heard, but not countable per second from the mix).
     ///
     /// NOT `activeSeconds`: that bitmap is judged AFTER normalisation (gain
     /// up to ×100 = +40 dB), so it calls −92 dBFS dither "audible" — right
@@ -407,14 +410,21 @@ public struct AudioFingerprint: Sendable {
                      "AudioFingerprint.compute: PCM is \(pcm.sampleRate) Hz, recipe expects \(parameters.sampleRate)")
         let gain = normalisingGain(pcm.samples, parameters: parameters)
         let active = activeSeconds(pcm.samples, sampleRate: pcm.sampleRate, gain: gain, parameters: parameters)
-        let loud = loudSeconds(pcm.samples, sampleRate: pcm.sampleRate)
+        let mixLoud = loudSeconds(pcm.samples, sampleRate: pcm.sampleRate)
         // Programme evidence first (GH #345): a recording with no second
-        // whose peak at gain 1 clears `silenceCeilingDBFS` is measured
-        // silence, and its print holds NO landmark. Without this the ×100
-        // normalising gain lifted a −68 dBFS tonal floor (wow on a faint
-        // hum or bleed) to −28 dBFS, where it paired into landmarks and the
-        // stamp read "heard sound" on three really silent archived files.
-        // The peak picker is skipped outright, so the cost is one level pass.
+        // whose peak at gain 1 clears `silenceCeilingDBFS` — in the mono mix
+        // AND on every SOURCE channel (`pcm.sourceLevel`, measured before
+        // the downmix) — is measured silence, and its print holds NO
+        // landmark. Without this the ×100 normalising gain lifted a −68 dBFS
+        // tonal floor (wow on a faint hum or bleed) to −28 dBFS, where it
+        // paired into landmarks and the stamp read "heard sound" on three
+        // really silent archived files. The mix alone is no evidence (Codex
+        // round 2: anti-phase stereo at −21 dBFS per channel sums to a
+        // −68 dBFS mix): a loud source channel keeps today's print from the
+        // normalised mix, and a quiet mix over a loud source is "not
+        // measured" per second (nil), never 0. Silent input skips the picker.
+        let sourceQuiet = pcm.sourceLevel.isAtOrBelow(Double(silenceCeilingDBFS))
+        let loud: Int? = mixLoud > 0 ? mixLoud : (sourceQuiet ? 0 : nil)
         let landmarks = loud == 0 ? (hashes: [UInt32](), times: [UInt32]())
             : LandmarkPairer.pair(SpectralPeakPicker(parameters: parameters)?.peaks(in: pcm.samples, gain: gain) ?? [],
                                   parameters: parameters)
