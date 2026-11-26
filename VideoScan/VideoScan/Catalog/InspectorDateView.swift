@@ -24,6 +24,15 @@ import SwiftUI
 // set aside as ingest"). Rick's rule: the machine shows its reasoning,
 // he confirms — the Save field above is the confirmation.
 //
+// GH #221 (rule 3, "Archived means fixed"): for a record the date seam calls
+// read-only (`model.isDateReadOnly` — Archived stage or a Master Archive
+// file) there is no field: the section shows the date the archive filed it
+// under and an Update… button that opens the SAME sheet as the Archive tab's
+// right-click (one engine: `openArchiveUpdate` → ArchiveUpdateSheet →
+// `closeArchiveUpdate`), because only Update… moves the folder, filename and
+// manifest row with the date. Every write goes through InspectorDateEdit,
+// which refuses a read-only record as well (belt and braces).
+//
 // The parent embeds this with `.id(record.id)` so @State (draft text,
 // confidence toggle) reseeds when the selection changes — otherwise
 // SwiftUI would keep the previous record's draft in the same view slot.
@@ -44,6 +53,10 @@ struct InspectorDateView: View {
     /// Bump to force a redraw after mutating the (non-observable)
     /// record — same refreshTick idiom as InspectorFamilyTagsView.
     @State private var refreshTick = 0
+    /// Update… from the Inspector (archived rows): the sheet's preview while
+    /// it is open, or why it was not offered.
+    @State private var updatePreview: ArchiveUpdatePreview?
+    @State private var updateRefusal: String?
 
     init(record: VideoRecord) {
         self.record = record
@@ -54,57 +67,16 @@ struct InspectorDateView: View {
         _isKnown = State(initialValue: record.userDateStatus == .known)
     }
 
+    /// The seam's verdict — O(1) (an enum compare, a string compare, a prefix test).
+    private var dateIsFixed: Bool { model.isDateReadOnly(record) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("When was this? A year is plenty.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 6) {
-                TextField("1992  ·  6/1992  ·  6/14/1992", text: $entryText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(maxWidth: 150)
-                    .onSubmit(saveEntry)
-                    // Gauntlet flow 3 hooks (set-a-date) — test-only, UI unchanged.
-                    .accessibilityIdentifier("inspector.date.field")
-                Button("Save") { saveEntry() }
-                    .controlSize(.small)
-                    .accessibilityIdentifier("inspector.date.save")
-                if record.userDate != nil {
-                    Button("Clear") { clearEntry() }
-                        .controlSize(.small)
-                        .help("Forget this date — the file goes back to needing one")
-                        .accessibilityIdentifier("inspector.date.clear")
-                }
+            if dateIsFixed {
+                archivedFixedSection
+            } else {
+                editableSection
             }
-
-            Picker("", selection: $isKnown) {
-                Text("Best guess").tag(false)
-                Text("I'm sure").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(maxWidth: 180)
-            .help("\"I'm sure\" means you're certain at the precision you entered — a bare year marked sure means the YEAR is certain.")
-            .onChange(of: isKnown) {
-                // Flipping confidence on an already-saved date saves
-                // immediately; with no saved date it just sets the
-                // default for the next Save.
-                guard record.userDate != nil else { return }
-                saveEntry()
-            }
-            .accessibilityIdentifier("inspector.date.confidencePicker")
-
-            if entryRejected {
-                Text("Hmm, couldn't read that — try 1992, 6/1992, or 6/14/1992.")
-                    .font(.system(size: 10))
-                    .foregroundColor(.orange)
-                    .accessibilityIdentifier("inspector.date.rejected")
-            }
-
-            statusLine
 
             // Background step 1 (DECISIONS 2026-11-01): the era job's
             // observation, its own line under Rick's — never a date.
@@ -131,6 +103,105 @@ struct InspectorDateView: View {
             }
         }
         .padding(.vertical, 4)
+        .sheet(item: $updatePreview) { preview in
+            ArchiveUpdateSheet(preview: preview)
+                // Every close path releases the one-editor claim.
+                .onDisappear { model.closeArchiveUpdate(preview) }
+        }
+        .alert("Update…", isPresented: Binding(get: { updateRefusal != nil }, set: { if !$0 { updateRefusal = nil } })) {
+            Button("OK", role: .cancel) { updateRefusal = nil }
+        } message: {
+            Text(updateRefusal ?? "")
+        }
+    }
+
+    // MARK: Archived: the filed date and Update… (GH #221)
+
+    @ViewBuilder
+    private var archivedFixedSection: some View {
+        Text(Self.archivedFiledText(record))
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("inspector.date.archived")
+        Button("Update…") { openUpdate() }
+            .controlSize(.small)
+            .help("Change this archived file's name or date. The folder, the filename and the archive's index move with the date.")
+            .accessibilityIdentifier("inspector.date.update")
+    }
+
+    /// The archived row's words (pure, tested without a view host).
+    nonisolated static func archivedFiledText(_ record: VideoRecord) -> String {
+        let fixed = "Archived, so the date is fixed. Use Update… to change it."
+        guard let date = record.userDate else { return "No date of yours on this file. " + fixed }
+        let how = record.userDateStatus == .known ? "you're sure" : "best guess"
+        return "Filed as \(date) (\(how)). " + fixed
+    }
+
+    /// Same one-editor claim and sheet as the Archive tab's right-click.
+    private func openUpdate() {
+        let id = record.id
+        Task {
+            switch await model.openArchiveUpdate(recordID: id) {
+            case .success(let p): updatePreview = p
+            case .failure(let r): updateRefusal = r.message
+            }
+        }
+    }
+
+    // MARK: Editable (not archived)
+
+    @ViewBuilder
+    private var editableSection: some View {
+        Text("When was this? A year is plenty.")
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+
+        HStack(spacing: 6) {
+            TextField("1992  ·  6/1992  ·  6/14/1992", text: $entryText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+                .frame(maxWidth: 150)
+                .onSubmit(saveEntry)
+                // Gauntlet flow 3 hooks (set-a-date) — test-only, UI unchanged.
+                .accessibilityIdentifier("inspector.date.field")
+            Button("Save") { saveEntry() }
+                .controlSize(.small)
+                .accessibilityIdentifier("inspector.date.save")
+            if record.userDate != nil {
+                Button("Clear") { clearEntry() }
+                    .controlSize(.small)
+                    .help("Forget this date — the file goes back to needing one")
+                    .accessibilityIdentifier("inspector.date.clear")
+            }
+        }
+
+        Picker("", selection: $isKnown) {
+            Text("Best guess").tag(false)
+            Text("I'm sure").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(maxWidth: 180)
+        .help("\"I'm sure\" means you're certain at the precision you entered — a bare year marked sure means the YEAR is certain.")
+        .onChange(of: isKnown) {
+            // Flipping confidence on an already-saved date saves
+            // immediately; with no saved date it just sets the
+            // default for the next Save.
+            guard record.userDate != nil else { return }
+            saveEntry()
+        }
+        .accessibilityIdentifier("inspector.date.confidencePicker")
+
+        if entryRejected {
+            Text("Hmm, couldn't read that — try 1992, 6/1992, or 6/14/1992.")
+                .font(.system(size: 10))
+                .foregroundColor(.orange)
+                .accessibilityIdentifier("inspector.date.rejected")
+        }
+
+        statusLine
     }
 
     /// "yyyy-MM-dd HH:mm" in UTC — the tag is a UTC instant and the archive
@@ -244,30 +315,37 @@ struct InspectorDateView: View {
     // MARK: Mutations
 
     private func saveEntry() {
-        let trimmed = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Emptying the field and hitting Save/Return is a clear.
-        guard !trimmed.isEmpty else {
-            if record.userDate != nil { clearEntry() }
-            return
-        }
-        guard let canonical = UserDateEntry.canonicalize(trimmed) else {
-            entryRejected = true
-            return
-        }
-        entryRejected = false
-        entryText = canonical   // reflect the normalized form back
-        record.userDate = canonical
-        record.userDateConfidence = (isKnown ? UserDateConfidence.known
-                                             : UserDateConfidence.estimated).rawValue
-        save()
+        let typed = entryText
+        apply(InspectorDateEdit.save(entry: typed, known: isKnown, to: record, readOnly: dateIsFixed), typed: typed)
     }
 
     private func clearEntry() {
-        entryText = ""
-        entryRejected = false
-        record.userDate = nil
-        record.userDateConfidence = nil   // meaningless without a date
-        save()
+        apply(InspectorDateEdit.clear(record, readOnly: dateIsFixed), typed: "a cleared date")
+    }
+
+    /// The edit's outcome → the field, the catalog save, the ledger line.
+    private func apply(_ outcome: InspectorDateEdit.Outcome, typed: String) {
+        switch outcome {
+        case .saved(let canonical):
+            entryRejected = false
+            entryText = canonical   // reflect the normalized form back
+            save()
+        case .cleared:
+            entryText = ""
+            entryRejected = false
+            save()
+        case .unreadable:
+            entryRejected = true
+        case .refusedArchived:
+            // Only reachable if the row became archived while the field was
+            // on screen: nothing written, one audit line, the field reseeds.
+            model.noteDateLeftAsFiled(record, writer: "Inspector", declined: typed)
+            entryText = record.userDate ?? ""
+            entryRejected = false
+            refreshTick &+= 1
+        case .unchanged:
+            entryRejected = false
+        }
     }
 
     /// Explicit save through the normal catalog path: redraw this view,

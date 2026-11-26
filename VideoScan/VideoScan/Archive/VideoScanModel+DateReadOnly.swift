@@ -23,9 +23,11 @@
 // Exempt by design (they ARE the filing / Rick's hand, not a background
 // writer): Promote registering the archive copy it just made
 // (PromoteToArchiveJob+Steps, registerPromotedCopy), the Update… flow,
-// the Inspector's "When was this?" field, rescan preservation (it restores
-// the record's OWN preserved values), and the Archive Angel's restore of a
-// stamp it wrote itself on a promote that did not land.
+// rescan preservation (it restores the record's OWN preserved values), and
+// the Archive Angel's restore of a stamp it wrote itself on a promote that
+// did not land. The Inspector's "When was this?" field is NOT exempt (GH
+// #221, rule 3): it writes through InspectorDateEdit, which refuses a
+// read-only record, and an archived row shows its filed date + Update….
 //
 // (For Rick: this is a const member predicate — `bool isDateReadOnly(const
 // VideoRecord&) const` — and the static helpers take it as a
