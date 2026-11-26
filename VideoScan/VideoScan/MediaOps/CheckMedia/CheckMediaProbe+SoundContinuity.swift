@@ -13,7 +13,9 @@ import Foundation
 //
 // ffmpeg exits 0 on a file whose tail is missing, so the pass is a
 // measurement only when the samples it received cover the length the header
-// states (GH #470); otherwise every row that rides this decode is "not run".
+// states (GH #470), and only when ffmpeg did not rebuild the filter graph
+// partway (GH #515: the sound's rate, format or layout changed — stated length
+// or not); otherwise every row that rides this decode is "not run".
 //
 // Read-only on the media. Reads only the sound for mov/mp4 (the demuxer
 // skips discarded picture samples by index); for mxf/mkv/avi it reads the
@@ -78,8 +80,14 @@ extension CheckMediaProbe {
 
     /// The continuity decode held against the stream's stated length: the
     /// short decode, or nil when it covered the stream (or the header states
-    /// no length — then there is nothing to compare against). Pure.
+    /// no length — then there is nothing to compare against). A pass whose
+    /// filter graph ffmpeg rebuilt is never whole, stated length or not
+    /// (GH #515 — the levels pass's rule, `AudioShortDecode.reconfigured`):
+    /// the detectors read two differently-shaped streams as one (measured:
+    /// a 48→96 kHz change read "564 jumps in the sound's timing", a
+    /// stereo→mono change "Every sample decoded"). Pure.
     static func shortDecode(report: SoundContinuityReport, sampleRate: Int, statedSeconds: Double?) -> AudioShortDecode? {
+        if report.graphReconfigured { return .reconfigured(statedSeconds: statedSeconds) }
         let decoded = Int64((report.seconds * Double(sampleRate)).rounded())
         guard let statedSeconds,
               let missing = AudioBalanceProbe.shortDecodeSeconds(decodedSamples: decoded, sampleRateHz: sampleRate,

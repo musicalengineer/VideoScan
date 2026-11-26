@@ -212,6 +212,20 @@ enum AstatsOutputParser {
     /// VerifyAudioReconfigurationTests fails if an ffmpeg stops logging it.
     static let graphReconfiguredMarker = "Reconfiguring filter graph because"
 
+    /// Is this stderr line ffmpeg's OWN reconfiguration diagnostic — the
+    /// marker at the start of the line, or right after one log-context
+    /// prefix "[<context> @ 0x<address>] " (ffmpeg 9: "[af#0:0 @ 0x…]")?
+    /// A metadata dump line ("    COMMENT : Reconfiguring filter graph
+    /// because …") is indented and never matches (GH #515, Codex round 2).
+    /// Pure.
+    static func isGraphReconfiguredLine<S: StringProtocol>(_ line: S) -> Bool {
+        if line.hasPrefix(graphReconfiguredMarker) { return true }
+        guard line.hasPrefix("["), let close = line.range(of: "] ") else { return false }
+        let context = line[line.index(after: line.startIndex)..<close.lowerBound]
+        guard context.contains(" @ 0x"), !context.contains("]") else { return false }
+        return line[close.upperBound...].hasPrefix(graphReconfiguredMarker)
+    }
+
     /// The payloads of the lines THIS run's astats instance logged, in order.
     static func taggedPayloads(fromStderr text: String, runTag: String) -> [Substring] {
         let prefix = "[astats@\(runTag) @ "

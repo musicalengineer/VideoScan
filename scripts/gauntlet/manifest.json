@@ -4144,8 +4144,15 @@
         "QARedSilenceFloorTests"
       ],
       "tests": [
+        "absoluteLevelOutranksLandmarks",
+        "antiPhaseStereoIsSound",
         "ditherIsSilence",
-        "lowHissIsSilence"
+        "loudToneIsSound",
+        "lowHissIsSilence",
+        "silenceNeedsQuietSourceChannels",
+        "sourceLevelParse",
+        "tonalFloorIsSilence",
+        "tonalFloorThroughTheDecoder"
       ]
     },
     {
@@ -13069,7 +13076,10 @@
         "CheckMediaLayoutRealFileTests"
       ],
       "tests": [
+        "aCommentTagIsNotAReconfiguration",
         "aDecodeThatEndsEarlyIsNotEverySample",
+        "aReconfigurationLineMarksTheReport",
+        "aReconfiguredSoundIsNotEverySample",
         "allSoundAtTheEndIsAProblem",
         "argumentsAreReadOnlyAndNamed",
         "cleanToneHasNothing",

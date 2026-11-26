@@ -73,6 +73,11 @@ struct SoundContinuityReport: Sendable, Equatable {
     var oneSidedQuiet: [QuietLog] = []
     /// DC offset, clipping runs, channel relation, loudness (SoundLevels.swift).
     var levels = SoundLevelReport()
+    /// ffmpeg rebuilt the filter graph partway (`AstatsOutputParser
+    /// .graphReconfiguredMarker`: the sound's rate, format or layout
+    /// changed): the detectors saw two differently-shaped streams as one,
+    /// so nothing here is a measurement of the file (GH #515).
+    var graphReconfigured = false
 
     /// Dropouts, replays and timing jumps — the stutter family.
     var stutterEvents: Int { dropouts.occurrences + repeatedBlocks.occurrences + timingJumps.occurrences }
@@ -442,6 +447,10 @@ struct SoundContinuityAnalyzer {
     @discardableResult
     mutating func consume(showInfoLine line: String) -> Double? {
         guard let f = SoundTimeline.frame(fromShowInfo: line) else {
+            // The levels pass's rule (GH #515): a rebuilt graph means the
+            // sound changed shape partway; one line is enough — ffmpeg's own
+            // diagnostic only, never a metadata dump line (Codex round 2).
+            if AstatsOutputParser.isGraphReconfiguredLine(line) { report.graphReconfigured = true }
             loudness = loudness.adding(line: line)
             return nil
         }
