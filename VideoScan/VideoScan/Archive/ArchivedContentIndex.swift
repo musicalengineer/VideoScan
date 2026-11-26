@@ -21,9 +21,12 @@
 //
 // When it rebuilds: lazily, on the first lookup after its answer can have
 // changed — the records array was replaced or appended (`invalidate()`,
-// from `records.didSet`), any row's archive facts changed in place
+// from `records.didSet`), any INDEXED row's archive facts changed in place
 // (`VideoRecord.archiveFactsGeneration`: stage, derivation, path, removal,
-// size, either fixity), or the Master Archive root moved. A date writer's
+// size, either fixity — a rebuild marks every row it reads
+// `tracksArchiveFacts`, so a snapshot clone or the commit's loaded copy of a
+// stored row never invalidates it; Codex round 2, P2), or the Master
+// Archive root moved. A date writer's
 // loop over 100k rows does ONE rebuild, not one per row (it writes dates,
 // which bump nothing here). Each hit is re-verified live (still archived,
 // still live, same digest) so a stale bucket can never say "fixed" wrongly.
@@ -84,8 +87,12 @@ final class ArchivedContentIndex {
         guard builtFor != stamp else { return }
         var map: [String: [VideoRecord]] = [:]
         var sizeSet: Set<Int64> = []
-        for rec in records where rec.removal == nil && isFixedItself(rec) {
-            guard let digest = CatalogCommit.digest(of: rec) else { continue }
+        for rec in records {
+            // Every row the answer reads is tracked: its archive-fact writes
+            // move the generation; a clone or a detached load never does
+            // (Codex round 2, P2).
+            rec.tracksArchiveFacts = true
+            guard rec.removal == nil, isFixedItself(rec), let digest = CatalogCommit.digest(of: rec) else { continue }
             map[digest, default: []].append(rec)
             sizeSet.insert(rec.sizeBytes)
         }

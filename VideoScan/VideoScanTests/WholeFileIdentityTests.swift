@@ -160,6 +160,7 @@ struct WholeFileIdentityTests {
             sourceFiles: [ReconcileFileEntry(path: source.fullPath, size: source.sizeBytes)], destFiles: [],
             skipDupsOnOtherVolumes: true,
             witnessOnDisk: { _, _ in true }, witnessIndependent: { _, _, _ in true },
+            witnessSameBytes: { _, _, _, _ in true },   // made-up paths: identity by digest alone here
             hash: { _ in sampleMD5 })
     }
 
@@ -220,6 +221,79 @@ struct WholeFileIdentityTests {
         #expect(plan.safelyRedundant.isEmpty, "the third-volume file differs inside: Migrate must copy")
         #expect(plan.readyIDs == [source.id])
     }
+
+    /// Codex round 2 (#523 P1): the digests on record agree, but the
+    /// witness was rewritten AFTER it was hashed — same length, one interior
+    /// byte. Classification matched the stored digests and the apply-time
+    /// re-proof checked only presence, size and drive, so Migrate skipped the
+    /// source with no identical copy anywhere. A witness vouches only when
+    /// its stored fixity still describes the file NOW (ContentCopyProof —
+    /// volume UUID, inode, size, mtime, ctime), and the source's likewise.
+    @Test("RED before #523 round 2 (MEDIA): a witness rewritten after hashing (same length, one interior byte) is no Bucket E witness — at classification, at the apply-time re-proof, and in a real Migrate, which copies the source")
+    func bucketEWitnessMutatedAfterHashing() async throws {
+        typealias P = RelocateSummaryProofTests
+        let rig = try P.Rig(); defer { rig.cleanup() }
+        let size = 8 * 1024 * 1024
+        var bytes = Data(count: size)
+        for i in 0..<size { bytes[i] = UInt8((i &* 37) % 241) }
+        let src = rig.source.appendingPathComponent("tape.mov"), copy = rig.backup.appendingPathComponent("tape.mov")
+        try bytes.write(to: src); try bytes.write(to: copy)
+        let source = P.row(src, hashed: true), witness = P.row(copy, hashed: true)
+        try #require(source.contentFixity?.isUsableForVerification == true
+                     && witness.contentFixity?.isUsableForVerification == true, "the fixture needs real, usable stamps")
+        try #require(CatalogCommit.digest(of: source) == CatalogCommit.digest(of: witness))
+
+        func classify() -> ReconcileResult {
+            RelocateReconcile.reconcile(
+                records: [source], allCatalogRecords: [source, witness],
+                sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
+                sourceFiles: [ReconcileFileEntry(path: src.path, size: Int64(size))], destFiles: [],
+                skipDupsOnOtherVolumes: true, witnessIndependent: RelocateReconcile.witnessIsNotTheSourceFile,
+                hash: { FileHasher.partialMD5(path: $0) })
+        }
+        var before = classify()
+        try #require(before.safelyRedundant.map(\.rec.id) == [source.id], "control: an untouched hashed copy is a witness")
+
+        // Rewrite one interior byte of the witness in place, length unchanged.
+        let handle = try FileHandle(forUpdating: copy)
+        try handle.seek(toOffset: UInt64(size / 2))
+        try handle.write(contentsOf: Data([bytes[size / 2] ^ 0xFF]))
+        try handle.close()
+        try #require(FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? Int == size)
+
+        let after = classify()
+        #expect(after.safelyRedundant.isEmpty, "classification: the stored digest no longer describes the witness")
+        #expect(after.ready.map(\.id) == [source.id], "the source goes down the copy path")
+
+        let model = VideoScanModel()
+        model.records = [source, witness]
+        model.reproveSafelyRedundantBeforeApply(&before, proof: RelocateReconcile.WitnessProof(
+            independent: RelocateReconcile.witnessIsNotTheSourceFile, sourceRoot: rig.source.path))
+        #expect(before.safelyRedundant.isEmpty, "apply-time re-proof: a plan made before the rewrite is not trusted")
+        #expect(before.ready.map(\.id) == [source.id])
+
+        // A real Migrate: the source is COPIED, and the copy is the source's bytes.
+        let migrate = VideoScanModel()
+        migrate.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
+        migrate.catalogStore = CatalogStore(directory: rig.catalog)
+        migrate.records = [source, witness]
+        let safe = CatalogScanTarget(searchPath: rig.backup.path)
+        safe.role = .backup; safe.trust = .reliable
+        migrate.scanTargets = [CatalogScanTarget(searchPath: rig.source.path), safe]
+        migrate.catalogStore.saveNow(records: migrate.records)
+        migrate.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
+                                               maxConcurrency: 1, dryRun: false,
+                                               skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
+        let deadline = Date().addingTimeInterval(P.summaryLivenessBound)
+        while migrate.pendingRelocateSummary == nil && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let s = try #require(migrate.pendingRelocateSummary)
+        #expect(s.safelyRedundantCount == 0, "no Bucket E skip on a rewritten witness")
+        #expect(s.succeededCount == 1, "the source is copied (copied \(s.succeededCount))")
+        let landed = rig.dest.appendingPathComponent("tape.mov")
+        #expect(FileManager.default.contents(atPath: landed.path) == bytes, "the destination holds the source's bytes")
+    }
 }
 
 // MARK: - Fixture helper (GH #523)
@@ -261,11 +335,15 @@ enum FixtureDigest {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Stamp `r` with the real digest of its file when it exists, else as `stamp`.
+    /// Stamp `r` with the real digest of its file when it exists — bound to
+    /// the file's real stat stamp (volume UUID, inode, size, mtime, ctime),
+    /// as a full hash in the app leaves it, so Bucket E's "still the same
+    /// bytes NOW" check (Codex round 2, #523) can pass — else as `stamp`.
     @MainActor
     static func stampFromDisk(_ r: VideoRecord) {
         if r.sizeBytes > 0, let d = sha256(ofFileAt: r.fullPath) {
-            r.contentFixity = ArchivedTwinDateWritersTests.fixity(d, r.sizeBytes)
+            r.contentFixity = ContentFixity.captured(path: r.fullPath, digest: d, byteCount: r.sizeBytes)
+                ?? ArchivedTwinDateWritersTests.fixity(d, r.sizeBytes)
         } else {
             stamp(r)
         }

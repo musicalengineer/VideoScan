@@ -79,6 +79,9 @@ struct RelocateSummarySheetTests {
     /// Classify-logic tests use made-up /Volumes paths: presence is pinned
     /// separately in RelocateWitnessLivenessTests.
     private static let assumeWitnessOnDisk: WitnessPresenceProbe = { _, _ in true }
+    /// Made-up paths have no file to stamp: the bytes-now check (Codex round 2,
+    /// #523) is pinned on real files in WholeFileIdentityTests / RelocateWitnessLivenessTests.
+    private static let assumeSameBytes: WitnessBytesProbe = { _, _, _, _ in true }
 
     /// Poll until the summary sheet binding is populated (the run has
     /// completed AND the min-visible pad has elapsed). Single timeout
@@ -466,7 +469,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
-            witnessOnDisk: Self.assumeWitnessOnDisk,
+            witnessOnDisk: Self.assumeWitnessOnDisk, witnessSameBytes: Self.assumeSameBytes,
             hash: { _ in "" }
         )
 
@@ -497,7 +500,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolverWithSafe,
-            witnessOnDisk: Self.assumeWitnessOnDisk,
+            witnessOnDisk: Self.assumeWitnessOnDisk, witnessSameBytes: Self.assumeSameBytes,
             hash: { _ in "" }
         )
         #expect(result2.safelyRedundant.count == 1)
@@ -550,7 +553,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
-            witnessOnDisk: Self.assumeWitnessOnDisk,
+            witnessOnDisk: Self.assumeWitnessOnDisk, witnessSameBytes: Self.assumeSameBytes,
             hash: { _ in "" }
         )
         let entry = try #require(result.safelyRedundant.first)
@@ -611,7 +614,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
-            witnessOnDisk: Self.assumeWitnessOnDisk,
+            witnessOnDisk: Self.assumeWitnessOnDisk, witnessSameBytes: Self.assumeSameBytes,
             hash: { _ in "" }
         )
         let entry = try #require(result.safelyRedundant.first)
@@ -902,11 +905,12 @@ struct RelocateSummarySheetTests {
         // what we expect — defends against a future find/replace pass
         // accidentally removing the renamed term too.
         #expect(headlineTitleFor(dry) == "Dry-run preview")
-        // These fixtures' backups carry a partial MD5 only (no full SHA-256
-        // on record), so since Codex #150 F1 they are not proven and the
-        // run says so; the proven words are pinned by
+        // These fixtures' rows carry the full SHA-256 bound to each file's
+        // real stat stamp (FixtureDigest.stampFromDisk, Codex round 2 #523 —
+        // a Bucket E witness must still BE those bytes), so the backup is
+        // proven and the run says so; the unproven words are pinned by
         // RelocateSummaryProofTests and RelocateSummaryHeadlineTests.
-        #expect(headlineTitleFor(allSafe) == "Some files are not proven safe yet")
-        #expect(headlineTitleFor(mixed) == "Some files are not proven safe yet")
+        #expect(headlineTitleFor(allSafe) == "Your files are safe")
+        #expect(headlineTitleFor(mixed) == "Files copied and verified")
     }
 }

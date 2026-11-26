@@ -21,8 +21,11 @@ import VideoScanCore
 //              budget with ONE rebuild; a 100k commit refusal pass in budget
 //   isolation  poisoned state — two fixities that disagree, a fixity that
 //              does not cover the size, a stale archive root: no twin
-//   sensor     an in-place write of every archive fact moves the generation
-//              (a fact added without a bump would leave the index stale)
+//   sensor     an in-place write of every archive fact on an indexed row
+//              moves the generation (a fact added without a bump would
+//              leave the index stale); a clone starts untracked
+//   scale      (round 2, P2) a notes-only save — the commit's loaded copy of
+//              the stored row — and a snapshot clone rebuild nothing
 //   media      n/a here — no media file is opened (the MEDIA pin is
 //              ArchivedTwinDateWritersTests.linkRepairedCopyOntoATwin)
 
@@ -88,6 +91,36 @@ struct ArchivedContentIndexTests {
         model.records.append(Self.row("x.mov", digest: nil))
         _ = model.isDateReadOnly(twin)
         #expect(model.archivedContentIndex.rebuildCount == built + 2, "an array change rebuilds")
+    }
+
+    /// Codex round 2 (#528 P2): the generation was process-wide, so the
+    /// commit's own `VideoRecord(loaded:)` (the stored row it diffs against)
+    /// and any `snapshotClone()` bumped it — a notes-only save forced an
+    /// O(records) rebuild at the next Inspector render.
+    @Test("RED before #528 round 2 (SCALE): a notes-only save and a snapshot clone do not rebuild the index; an archive fact on a live row still does")
+    func aNotesOnlySaveDoesNotRebuild() async throws {
+        let scene = try CutoverScene.make("t528_p2_rebuild"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let model = scene.model
+        let original = try scene.record(.curatedConflictA)
+        let copy = try scene.record(.curatedConflictB)
+        copy.lifecycleStage = .archived
+        #expect(model.saveCatalogNow())
+        #expect(model.isDateReadOnly(original), "the fixture: a twin of archived content")
+        let built = model.archivedContentIndex.rebuildCount
+
+        original.userNotes = "a note, nothing about the archive"
+        #expect(model.saveCatalogNow())
+        let clone = copy.snapshotClone()
+        clone.lifecycleStage = .cataloged; clone.fullPath = "/Volumes/TestClone528/x.mov"   // a detached copy's facts
+        #expect(model.isDateReadOnly(original))
+        #expect(model.archivedContentIndex.rebuildCount == built,
+                "a notes-only save and a detached clone rebuilt the index \(model.archivedContentIndex.rebuildCount - built)×")
+
+        copy.lifecycleStage = .cataloged                      // a LIVE row's archive fact
+        #expect(!model.isDateReadOnly(original), "an in-place change on a live row is still seen")
+        #expect(model.archivedContentIndex.rebuildCount == built + 1)
+        if let c = model.catalogCutover.committer { await c.repository.close() }
     }
 
     @Test("TRUTH: a promoted copy inside the archive root fixes its twin; a twin's 'left as filed' line names the archived copy")
@@ -238,9 +271,15 @@ struct ArchivedContentIndexTests {
 
     // MARK: Sensor
 
-    @Test("SENSOR: every archive fact written in place moves VideoRecord.archiveFactsGeneration")
+    @Test("SENSOR: every archive fact written in place on an indexed row moves VideoRecord.archiveFactsGeneration")
     func everyArchiveFactBumps() {
         let r = VideoRecord()
+        let model = VideoScanModel()
+        model.records = [r]
+        #expect(!r.tracksArchiveFacts, "untracked until an index reads it")
+        _ = model.isDateReadOnly(r)                               // the index rebuilds over it
+        #expect(r.tracksArchiveFacts, "a rebuild tracks every row it reads")
+        #expect(!r.snapshotClone().tracksArchiveFacts, "a clone starts untracked (round 2, P2)")
         let writes: [(String, () -> Void)] = [
             ("lifecycleStage", { r.lifecycleStage = .archived }),
             ("derivationKind", { r.derivationKind = ArchivePromotion.derivationKind }),

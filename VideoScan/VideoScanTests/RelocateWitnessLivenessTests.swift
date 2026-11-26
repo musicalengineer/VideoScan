@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - RelocateWitnessLivenessTests
@@ -55,6 +56,10 @@ struct RelocateWitnessLivenessTests {
             r.fullPath = url.path
             r.sizeBytes = size
             r.partialMD5 = md5
+            // The real SHA-256 bound to the file's stat stamp (#523: Bucket E's identity).
+            if let digest = FixtureDigest.sha256(ofFileAt: url.path) {
+                r.contentFixity = ContentFixity.captured(path: url.path, digest: digest, byteCount: size)
+            }
             return r
         }
 
@@ -324,7 +329,11 @@ struct RelocateWitnessLivenessTests {
         let source = fx.record(at: fx.srcFile)
         let witness = fx.record(at: fx.witnessFile)
         var result = fx.reconcile(source: source, witness: witness)
-        VideoScanModel().reproveSafelyRedundantBeforeApply(&result, proof: fx.separateDrivesProof)
+        // The re-proof reads the witness's fixity from the catalog as it is
+        // NOW (Codex round 2, #523), so the witness must be a catalog row.
+        let model = VideoScanModel()
+        model.records = [source, witness]
+        model.reproveSafelyRedundantBeforeApply(&result, proof: fx.separateDrivesProof)
         #expect(result.safelyRedundant.map(\.rec.id) == [source.id])
         #expect(result.ready.isEmpty)
     }
@@ -342,7 +351,9 @@ struct RelocateWitnessLivenessTests {
         }
         let entries = [entry("a", size: 10), entry("b", size: 10), entry("c", size: 10), entry("a", size: 11)]
         let split = RelocateReconcile.reproveSafelyRedundant(
-            entries, proof: .init(onDisk: probe, independent: { _, _, _ in true }, sourceRoot: "/src"))
+            entries, proof: .init(onDisk: probe, independent: { _, _, _ in true }, sameBytes: { _, _, _, _ in true },
+                                  sourceRoot: "/src"),
+            fixityOf: { _ in nil })
         #expect(split.proven.map(\.rec.fullPath) == ["/src/a", "/src/c"])
         #expect(split.refused.map(\.rec.fullPath) == ["/src/b", "/src/a"])
         #expect(split.refused.last?.rec.sizeBytes == 11, "a witness at another size is not this file")

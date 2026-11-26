@@ -293,6 +293,12 @@ struct ReconcileRecordInput: Sendable, Equatable, Identifiable {
     /// that disagree / do not cover the file). Bucket E's ONLY identity
     /// (GH #523). No default on purpose: every construction site decides.
     let contentDigest: String?
+    /// The stored whole-file fixity that digest came from, with the stat
+    /// stamp of the file it described — nil when the digest is known only
+    /// from a stamp-less read-back (`archiveFixity`) or not at all. Bucket E
+    /// asks it whether the file is STILL those bytes (Codex round 2, #523):
+    /// a digest on record says what the file WAS. No default on purpose.
+    let contentFixity: ContentFixity?
     /// Non-nil ⇒ already relocated once (drives the previouslyRelocated bucket).
     let originalFullPath: String?
     /// The catalog still believes this file exists: not purged (trashed,
@@ -318,6 +324,15 @@ typealias WitnessPresenceProbe = @Sendable (_ path: String, _ expectedBytes: Int
 /// `witnessIsNotTheSourceFile`.
 typealias WitnessIndependenceProbe = @Sendable (_ witnessPath: String, _ sourcePath: String,
                                                _ sourceRoot: String) -> Bool
+
+/// "Does the witness hold the source's bytes NOW?" — both stored fixities
+/// still describe their files (ContentCopyProof, the one engine for that
+/// question: same SHA-256 and size on record, and each stamp — volume UUID,
+/// inode, size, mtime, ctime — reproduces now). A missing fixity on either
+/// side is "no". Injected so classify tests with synthetic paths can run;
+/// production uses `RelocateReconcile.witnessHoldsTheSourceBytesNow`.
+typealias WitnessBytesProbe = @Sendable (_ witnessPath: String, _ witnessFixity: ContentFixity?,
+                                        _ sourcePath: String, _ sourceFixity: ContentFixity?) -> Bool
 
 /// Sendable, id-keyed classification produced by `reconcilePlan`. Mirrors
 /// `ReconcileResult` one-for-one but references records by `UUID` instead
@@ -367,9 +382,19 @@ extension VideoRecord {
             partialMD5: partialMD5,
             sizeBytes: sizeBytes,
             contentDigest: CatalogCommit.digest(of: self),
+            contentFixity: relocateIdentityFixity,
             originalFullPath: originalFullPath,
             isLive: isLiveRelocateWitness
         )
+    }
+
+    /// The stored `contentFixity` when it is the evidence for this row's
+    /// whole-file digest (`CatalogCommit.digest(of:)`), else nil — the
+    /// stamp Bucket E checks against the file now (Codex round 2, #523).
+    var relocateIdentityFixity: ContentFixity? {
+        guard let f = contentFixity, let digest = CatalogCommit.digest(of: self),
+              f.digest.lowercased() == digest else { return nil }
+        return f
     }
 
     /// May this row vouch for another copy of the same content? False once
@@ -467,6 +492,23 @@ enum RelocateReconcile {
         return !(DeviceID.from(ws.st_dev) == DeviceID.from(ss.st_dev) && ws.st_ino == ss.st_ino)
     }
 
+    /// Production bytes probe (Codex round 2, #523): ContentCopyProof's
+    /// stamped-claim rule on the two stored fixities — same SHA-256 and size
+    /// on record (`sameDigest`), and each stamp still describing its file
+    /// now (`describesFileNow`: usable for verification, the persistent
+    /// digest policy, racily-clean rule included). A witness rewritten after
+    /// it was hashed, a source rewritten since, a stamp without a volume UUID
+    /// or a read-back-only digest: not proven, so the record is copied. It
+    /// never READS a file (stamped claims only — the stamp-less double-read
+    /// path stays with ContentCopyProof.verdict's callers), so it carries no
+    /// read-fault hook. Cost: one open + fstat + fgetattrlist per file;
+    /// memory: none retained.
+    static let witnessHoldsTheSourceBytesNow: WitnessBytesProbe = { witness, witnessFixity, source, sourceFixity in
+        guard let witnessFixity, let sourceFixity, ContentCopyProof.sameDigest(sourceFixity, witnessFixity) else { return false }
+        return ContentCopyProof.describesFileNow(sourceFixity, path: source)
+            && ContentCopyProof.describesFileNow(witnessFixity, path: witness)
+    }
+
     static let witnessIsOnDisk: WitnessPresenceProbe = { path, expectedBytes in
         var sb = stat()
         guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return false }
@@ -525,6 +567,7 @@ enum RelocateReconcile {
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         witnessOnDisk: @escaping WitnessPresenceProbe = witnessIsOnDisk,
         witnessIndependent: @escaping WitnessIndependenceProbe = witnessIsOffTheSourceDrive,
+        witnessSameBytes: @escaping WitnessBytesProbe = witnessHoldsTheSourceBytesNow,
         hash: (String) -> String
     ) -> ReconcileResult {
         let plan = reconcilePlan(
@@ -539,6 +582,7 @@ enum RelocateReconcile {
             resolveVolumeSafety: resolveVolumeSafety,
             witnessOnDisk: witnessOnDisk,
             witnessIndependent: witnessIndependent,
+            witnessSameBytes: witnessSameBytes,
             hash: hash
         )
         return materialize(plan, scope: records)
@@ -622,6 +666,7 @@ enum RelocateReconcile {
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         witnessOnDisk: @escaping WitnessPresenceProbe = witnessIsOnDisk,
         witnessIndependent: @escaping WitnessIndependenceProbe = witnessIsOffTheSourceDrive,
+        witnessSameBytes: @escaping WitnessBytesProbe = witnessHoldsTheSourceBytesNow,
         hash: (String) -> String,
         progress: ((_ done: Int, _ total: Int) -> Void)? = nil
     ) -> ReconcilePlan {
@@ -644,7 +689,7 @@ enum RelocateReconcile {
         // Memory: keyed on (Int64, String) tuple-as-struct; at ~64B/entry
         // and a worst-case catalog of ~50K records, this is a few MB. Bounded
         // by `witnesses.count`. No streaming concerns.
-        var witnessIndex: [WitnessKey: [String]] = [:]
+        var witnessIndex: [WitnessKey: [WitnessRef]] = [:]
         if skipDupsOnOtherVolumes {
             let srcPrefix = sourceVolumeRootPath.hasSuffix("/")
                 ? sourceVolumeRootPath
@@ -668,7 +713,7 @@ enum RelocateReconcile {
                 guard let digest = other.contentDigest else { continue }
                 if other.sizeBytes <= 0 { continue }
                 let key = WitnessKey(size: other.sizeBytes, digest: digest)
-                witnessIndex[key, default: []].append(other.fullPath)
+                witnessIndex[key, default: []].append(WitnessRef(path: other.fullPath, fixity: other.contentFixity))
             }
         }
 
@@ -754,6 +799,7 @@ enum RelocateReconcile {
                                                 resolveVolumeSafety: resolveVolumeSafety,
                                                 proof: WitnessProof(onDisk: witnessOnDisk,
                                                                     independent: witnessIndependent,
+                                                                    sameBytes: witnessSameBytes,
                                                                     sourceRoot: sourceVolumeRootPath)) {
                 plan.safelyRedundant.append(entry)
                 continue
@@ -800,22 +846,26 @@ enum RelocateReconcile {
     /// justify the bucket.
     private static func safelyRedundantEntry(
         for rec: ReconcileRecordInput,
-        witnessIndex: [WitnessKey: [String]],
+        witnessIndex: [WitnessKey: [WitnessRef]],
         resolveVolumeSafety: VolumeSafetyResolver,
         proof: WitnessProof
     ) -> SafelyRedundantPlanEntry? {
         guard let digest = rec.contentDigest, rec.sizeBytes > 0 else { return nil }
         let key = WitnessKey(size: rec.sizeBytes, digest: digest)
         guard let allWitnesses = witnessIndex[key], !allWitnesses.isEmpty else { return nil }
-        let ranked = allWitnesses.map { p -> SafeWitnessInfo in
-            let s = resolveVolumeSafety(p)
-            return SafeWitnessInfo(path: p, role: s.role, trust: s.trust, isRetired: s.isRetired)
+        var fixityByPath: [String: ContentFixity] = [:]
+        for w in allWitnesses { if let f = w.fixity { fixityByPath[w.path] = f } }
+        let ranked = allWitnesses.map { ref -> SafeWitnessInfo in
+            let s = resolveVolumeSafety(ref.path)
+            return SafeWitnessInfo(path: ref.path, role: s.role, trust: s.trust, isRetired: s.isRetired)
         }.sorted { $0.safetyScore > $1.safetyScore }
-        // Host safety first (cheap), then one stat per safe witness.
+        // Host safety first (cheap), then the stats per safe witness: on
+        // disk, independent, and still the bytes its digest describes.
         var safe: [SafeWitnessInfo] = []
         var degraded: [SafeWitnessInfo] = []
         for w in ranked {
-            if w.isSafe && proof.vouches(w.path, sourcePath: rec.fullPath, bytes: rec.sizeBytes) {
+            if w.isSafe && proof.vouches(w.path, witnessFixity: fixityByPath[w.path], source: rec.fullPath,
+                                         sourceFixity: rec.contentFixity, bytes: rec.sizeBytes) {
                 safe.append(w)
             } else {
                 degraded.append(w)
@@ -836,19 +886,25 @@ enum RelocateReconcile {
     /// run minutes before the apply on a slow drive, and a file can move or
     /// a drive can be unplugged in between. Immediately before a record is
     /// marked deleted, at least one of its safe witnesses must still be on
-    /// disk at the recorded size. Entries that cannot be re-proven are
+    /// disk at the recorded size, independent of the source drive, AND
+    /// (Codex round 2, #523) still hold the source's bytes: its stored
+    /// fixity — looked up NOW by `fixityOf(path)` — and the source's both
+    /// describe their files now. Entries that cannot be re-proven are
     /// returned as `refused` so the caller sends them down the copy path
     /// (Bucket A) instead — refuse over guess. Order is preserved.
     static func reproveSafelyRedundant(
         _ entries: [SafelyRedundantEntry],
-        proof: WitnessProof
+        proof: WitnessProof,
+        fixityOf: (String) -> ContentFixity?
     ) -> (proven: [SafelyRedundantEntry], refused: [SafelyRedundantEntry]) {
         var proven: [SafelyRedundantEntry] = []
         var refused: [SafelyRedundantEntry] = []
         for entry in entries {
             let rec = entry.rec
+            let sourceFixity = rec.relocateIdentityFixity
             if entry.safeWitnesses.contains(where: {
-                proof.vouches($0.path, sourcePath: rec.fullPath, bytes: rec.sizeBytes)
+                proof.vouches($0.path, witnessFixity: fixityOf($0.path), source: rec.fullPath,
+                              sourceFixity: sourceFixity, bytes: rec.sizeBytes)
             }) {
                 proven.append(entry)
             } else {
@@ -858,17 +914,35 @@ enum RelocateReconcile {
         return (proven, refused)
     }
 
-    /// Both witness checks, bound to the drive being emptied. A witness
-    /// vouches only if it is on disk now at the recorded size AND it is an
-    /// independent copy (not the source file, not on the source drive).
+    /// The witness checks, bound to the drive being emptied. A witness
+    /// vouches only if it is on disk now at the recorded size, it is an
+    /// independent copy (not the source file, not on the source drive) AND
+    /// it still holds the source's bytes (Codex round 2, #523: a digest on
+    /// record says what a file WAS; ContentCopyProof says whether it still is).
     struct WitnessProof: Sendable {
         var onDisk: WitnessPresenceProbe = RelocateReconcile.witnessIsOnDisk
         var independent: WitnessIndependenceProbe = RelocateReconcile.witnessIsOffTheSourceDrive
+        var sameBytes: WitnessBytesProbe = RelocateReconcile.witnessHoldsTheSourceBytesNow
         let sourceRoot: String
 
+        /// The whole proof: present, independent, the same bytes now.
+        func vouches(_ witness: String, witnessFixity: ContentFixity?, source: String,
+                     sourceFixity: ContentFixity?, bytes: Int64) -> Bool {
+            vouches(witness, sourcePath: source, bytes: bytes)
+                && sameBytes(witness, witnessFixity, source, sourceFixity)
+        }
+
+        /// The location half alone (present + independent) — never enough
+        /// for Bucket E by itself.
         func vouches(_ witness: String, sourcePath: String, bytes: Int64) -> Bool {
             onDisk(witness, bytes) && independent(witness, sourcePath, sourceRoot)
         }
+    }
+
+    /// One witness row in the index: its path and the fixity behind its digest.
+    private struct WitnessRef {
+        let path: String
+        let fixity: ContentFixity?
     }
 
     /// Composite key for the witness index. Swift `struct` with `Hashable`

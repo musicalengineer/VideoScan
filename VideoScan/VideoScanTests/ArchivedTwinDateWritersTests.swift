@@ -363,4 +363,69 @@ struct ArchivedTwinDateWritersTests {
         #expect(backOriginal.userNotes == "typed just before the date")
         if let c = fresh.catalogCutover.committer { await c.repository.close() }
     }
+
+    /// The five inferred-date fields (one `inferred_dates` row per digest).
+    private struct Inferred: Equatable {
+        let date: Date?, confidence: Float?, source: String?, range: InferredDateRange?, reason: String?
+        init(_ r: VideoRecord) {
+            date = r.inferredRecordDate; confidence = r.inferredDateConfidence; source = r.inferredDateSource
+            range = r.inferredDateRange; reason = r.inferredDateReason
+        }
+        func put(on r: VideoRecord) {
+            r.inferredRecordDate = date; r.inferredDateConfidence = confidence; r.inferredDateSource = source
+            r.inferredDateRange = range; r.inferredDateReason = reason
+        }
+        init(date: Date?, confidence: Float?, source: String?, range: InferredDateRange?, reason: String?) {
+            self.date = date; self.confidence = confidence; self.source = source; self.range = range; self.reason = reason
+        }
+    }
+
+    /// Codex round 2 (#528 P1): identity arrives AFTER inference. A row
+    /// with no whole-file digest is no twin, so every inference writer may
+    /// date it (legitimately, by the seam); when it later acquires the
+    /// archived content's digest, its first commit replaced that content's
+    /// `inferred_dates` row (CatalogCommitBody.writeDerived) — the archived
+    /// copy showed the newcomer's guess after relaunch.
+    @Test("RED before #528 round 2 (WRITER): an unhashed newcomer inferred 1992, then hashed to archived content's digest — the commit keeps the archived copy's five inferred fields; relaunch shows them on both")
+    func commitRefusesATwinsInferredDate() async throws {
+        let scene = try CutoverScene.make("t528_inferred"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try #require(scene.model.catalogCutover.isSQLiteAuthority)
+        let model = scene.model
+        let original = try scene.record(.curatedConflictA)
+        let copy = try scene.record(.curatedConflictB)
+        let filed = Inferred(date: F.utc(1984), confidence: 0.95, source: "catch-up",
+                             range: InferredDateRange(year: 1984), reason: "spoken now-cue 'it is 1984'")
+        filed.put(on: original); filed.put(on: copy)        // one content, one inferred date (as a load gives)
+        #expect(model.saveCatalogNow())
+        copy.lifecycleStage = .archived
+        #expect(model.saveCatalogNow())
+        try #require(Inferred(copy) == filed, "the fixture's archived copy holds the content's inferred date")
+
+        // A newcomer: not hashed yet (pending row), so not a twin of anything.
+        let newcomer = try scene.freshCopy(of: .curatedConflictA, path: "/Volumes/Fixture/New/1992/tape.mov")
+        Inferred(date: nil, confidence: nil, source: nil, range: nil, reason: nil).put(on: newcomer)
+        model.records.append(newcomer)
+        #expect(model.saveCatalogNow())
+        #expect(!model.isDateReadOnly(newcomer), "no whole-file digest: no twin, its dates are its own")
+        let guess = Inferred(date: F.utc(1992), confidence: 0.30, source: "folder-year",
+                             range: InferredDateRange(year: 1992), reason: "folder /1992/")
+        guess.put(on: newcomer)                               // the folder-year lane, legitimately
+        #expect(model.saveCatalogNow())
+
+        // Its hash lands: it IS the archived content.
+        newcomer.sizeBytes = copy.sizeBytes
+        newcomer.contentFixity = copy.contentFixity ?? original.contentFixity
+        try #require(CatalogCommit.digest(of: newcomer) == CatalogCommit.digest(of: copy))
+        #expect(model.saveCatalogNow())
+        #expect(Inferred(copy) == filed, "in memory: the archived copy keeps its inferred date")
+        #expect(Inferred(newcomer) == filed, "the newcomer is put to the content's filed inferred date")
+
+        let fresh = try await relaunch(scene)
+        let backCopy = try #require(fresh.records.first { $0.id == copy.id })
+        let backNew = try #require(fresh.records.first { $0.id == newcomer.id })
+        #expect(Inferred(backCopy) == filed, "relaunch: the archived copy keeps all five inferred fields")
+        #expect(Inferred(backNew) == filed)
+        if let c = fresh.catalogCutover.committer { await c.repository.close() }
+    }
 }

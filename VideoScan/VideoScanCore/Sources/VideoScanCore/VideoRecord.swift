@@ -46,13 +46,32 @@ public class VideoRecord: Identifiable, Decodable {
     /// GH #528: bumped by any write of a fact that decides "this row is a
     /// LIVE ARCHIVED copy of content D" — `lifecycleStage`, `derivationKind`,
     /// `fullPath`, `removal`, `sizeBytes`, `contentFixity`, `archiveFixity` —
-    /// on any row, so the app's archived-content index (digest → archived
-    /// copy, the date seam's twin leg) rebuilds exactly when its answer can
-    /// have changed, never per lookup. As identityGeneration; decode never bumps.
+    /// on a TRACKED row (`tracksArchiveFacts`), so the app's archived-content
+    /// index (digest → archived copy, the date seam's twin leg) rebuilds
+    /// exactly when its answer can have changed, never per lookup. As
+    /// identityGeneration; decode never bumps.
+    ///
+    /// Codex round 2 (P2): only rows the index has indexed bump it. A
+    /// `snapshotClone()`, the commit's `VideoRecord(loaded:)` (the stored row
+    /// it diffs against) or any other detached record sets these facts on a
+    /// fresh object that no index reads; counting those made a notes-only
+    /// save force an O(records) rebuild at the next Inspector render.
     private static let archiveFactsGenerationLock = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     public static var archiveFactsGeneration: UInt64 { archiveFactsGenerationLock.withLock { $0 } }
     @inline(__always)
     private static func bumpArchiveFactsGeneration() { archiveFactsGenerationLock.withLock { $0 &+= 1 } }
+
+    /// True once an archived-content index has indexed THIS object (it sets
+    /// it on every row of its rebuild pass): from then on a write of one of
+    /// its archive facts moves `archiveFactsGeneration`. Runtime only — never
+    /// encoded, decoded or cloned, so a clone or a freshly loaded record
+    /// starts untracked (≈ a C++ `mutable` observer flag outside the
+    /// value's identity). A row that joins the model's array later is
+    /// indexed by the rebuild the array change triggers.
+    public var tracksArchiveFacts = false
+
+    @inline(__always)
+    private func archiveFactChanged() { if tracksArchiveFacts { Self.bumpArchiveFactsGeneration() } }
 
     /// The current identity generation; compare two reads to learn whether
     /// any record's filename / fullPath / purgedAt changed in between.
@@ -85,7 +104,7 @@ public class VideoRecord: Identifiable, Decodable {
     public var streamTypeRaw: String = ""
     public var size: String = ""
     public var sizeBytes: Int64 = 0 {
-        didSet { Self.bumpArchiveFactsGeneration() }
+        didSet { archiveFactChanged() }
     }
     public var duration: String = ""
     public var durationSeconds: Double = 0
@@ -151,7 +170,7 @@ public class VideoRecord: Identifiable, Decodable {
     public var fullPath: String = "" {
         didSet {
             Self.bumpIdentityGeneration()
-            Self.bumpArchiveFactsGeneration()
+            archiveFactChanged()
             // codex r4 2026-10-16 D10 / r5 P2: the audit's where-seen stamp
             // is "this path, on this volume" — ANY change of the path (a
             // move, a Relocate, a rename, a volume-rename migration) clears
@@ -258,7 +277,7 @@ public class VideoRecord: Identifiable, Decodable {
 
     // Media lifecycle
     public var lifecycleStage: LifecycleStage = .cataloged {
-        didSet { Self.bumpArchiveFactsGeneration() }
+        didSet { archiveFactChanged() }
     }
     public var mediaDisposition: MediaDisposition = .unreviewed
     public var archiveStage: ArchiveStage = .none
@@ -415,7 +434,7 @@ public class VideoRecord: Identifiable, Decodable {
         didSet {
             removedSince = removal?.since
             Self.bumpIdentityGeneration()
-            Self.bumpArchiveFactsGeneration()
+            archiveFactChanged()
         }
     }
 
@@ -559,7 +578,7 @@ public class VideoRecord: Identifiable, Decodable {
     /// nil, and the DTO only encodes the key when present, so old
     /// catalog.json files round-trip byte-identical.
     public var derivationKind: String? {
-        didSet { Self.bumpArchiveFactsGeneration() }
+        didSet { archiveFactChanged() }
     }
 
     /// Trim-specific payload (Trim Master, 2026-07-16): the source-file
@@ -720,7 +739,7 @@ public class VideoRecord: Identifiable, Decodable {
     /// nil, the DTO encodes the key only when present, old catalog.json
     /// files round-trip byte-identical.
     public var archiveFixity: ArchiveFixity? {
-        didSet { Self.bumpArchiveFactsGeneration() }
+        didSet { archiveFactChanged() }
     }
     /// Whole-file fixity for ANY record (2026-09-20, ContentFixity.swift):
     /// set whenever this app has read the file end to end — a duplicate
@@ -731,7 +750,7 @@ public class VideoRecord: Identifiable, Decodable {
     /// read in full (design #320). Additive optional — older catalogs
     /// decode nil and round-trip byte-identical.
     public var contentFixity: ContentFixity? {
-        didSet { Self.bumpArchiveFactsGeneration() }
+        didSet { archiveFactChanged() }
     }
     /// When this record landed in the Master Archive (Promote's stamp). Set
     /// ONLY by Promote on the archive copy; never overwritten by Verify
